@@ -1,0 +1,215 @@
+Database Configuration for UK Textile Project
+
+1. Database Engine and Default Connection
+----------------------------------------
+This Django project uses PostgreSQL via dj_database_url.
+
+Default database URL:
+postgresql://postgres:postgres@localhost:5432/uk_textile
+
+This means the default database settings are:
+- engine: PostgreSQL
+- user: postgres
+- password: postgres
+- host: localhost
+- port: 5432
+- database name: uk_textile
+
+The connection is loaded from environment variables in `backend/config/settings.py` using `dotenv` and `dj_database_url`.
+
+2. How to create the database
+-----------------------------
+On Windows with PostgreSQL installed, run:
+
+    createdb -U postgres -h localhost -p 5432 uk_textile
+
+If you prefer to use the `DATABASE_URL` environment variable, add it to `backend/.env`:
+
+    DATABASE_URL=postgresql://postgres:postgres@localhost:5432/uk_textile
+
+Then run Django migrations from the `backend` folder:
+
+    cd e:\UK-textile\backend
+    .\.venv\Scripts\python.exe manage.py migrate
+
+This will create all tables defined by the Django models.
+
+3. Database name and configuration files
+----------------------------------------
+- `backend/config/settings.py` is the Django settings file.
+- `backend/.env` is the local environment file loaded by `load_dotenv`.
+- The default database name is `uk_textile`.
+- Override by setting `DATABASE_URL` in `backend/.env` or system environment.
+
+4. Tables and fields
+--------------------
+The project defines the following tables and fields in `backend/api/models.py`.
+
+Table: `departments`
+- `id` (auto-generated primary key)
+- `name` TEXT, unique
+- `description` TEXT, nullable
+- `created_at` TIMESTAMP (auto now add)
+
+Table: `employees`
+- `id` (auto-generated primary key)
+- `employee_code` TEXT, unique
+- `first_name` TEXT
+- `last_name` TEXT
+- `email` TEXT, nullable
+- `phone` TEXT, nullable
+- `role` TEXT, nullable
+- `department_id` INTEGER, nullable foreign key to `departments(id)`
+- `salary_type` TEXT, default "monthly"
+- `salary_amount` DECIMAL(10,2), nullable
+- `status` TEXT, default "active"
+- `bank_name` TEXT, nullable
+- `bank_account` TEXT, nullable
+- `bank_ifsc` TEXT, nullable
+- `id_proof` TEXT, nullable
+- `pf_number` TEXT, nullable
+- `esi_number` TEXT, nullable
+- `address` TEXT, nullable
+- `join_date` TEXT, nullable
+- `password_hash` TEXT, nullable
+- `created_at` TIMESTAMP (auto now add)
+- `updated_at` TIMESTAMP (auto now)
+
+Table: `salary_records`
+- `id` (auto-generated primary key)
+- `employee_id` INTEGER foreign key to `employees(id)`
+- `month` INTEGER
+- `year` INTEGER
+- `amount` DECIMAL(10,2)
+- `type` TEXT, default "monthly"
+- `week_number` INTEGER, nullable
+- `status` TEXT, default "pending"
+- `notes` TEXT, nullable
+- `created_at` TIMESTAMP (auto now add)
+
+Table: `leave_requests`
+- `id` (auto-generated primary key)
+- `employee_id` INTEGER foreign key to `employees(id)`
+- `type` TEXT, default "casual"
+- `start_date` TEXT
+- `end_date` TEXT
+- `reason` TEXT, nullable
+- `status` TEXT, default "pending"
+- `hr_comment` TEXT, nullable
+- `created_at` TIMESTAMP (auto now add)
+
+Table: `notifications`
+- `id` (auto-generated primary key)
+- `employee_id` INTEGER foreign key to `employees(id)`
+- `type` TEXT, default "general"
+- `message` TEXT
+- `is_read` BOOLEAN, default false
+- `created_at` TIMESTAMP (auto now add)
+
+Table: `jobs`
+- `id` (auto-generated primary key)
+- `title` TEXT
+- `department_id` INTEGER, nullable foreign key to `departments(id)`
+- `description` TEXT, nullable
+- `requirements` TEXT, nullable
+- `salary_range` TEXT, nullable
+- `status` TEXT, default "open"
+- `created_at` TIMESTAMP (auto now add)
+
+Table: `applicants`
+- `id` (auto-generated primary key)
+- `job_id` INTEGER foreign key to `jobs(id)`
+- `name` TEXT
+- `email` TEXT
+- `phone` TEXT
+- `cover_letter` TEXT, nullable
+- `experience` TEXT, nullable
+- `status` TEXT, default "applied"
+- `interview_date` TEXT, nullable
+- `notes` TEXT, nullable
+- `created_at` TIMESTAMP (auto now add)
+
+Table: `attendance`
+- `id` (auto-generated primary key)
+- `employee_id` INTEGER foreign key to `employees(id)`
+- `date` TEXT
+- `present` BOOLEAN, default true
+- `hours_worked` DECIMAL(4,2), nullable
+- `notes` TEXT, nullable
+- `created_at` TIMESTAMP (auto now add)
+
+Table: `attendance_logs`
+- `id` (auto-generated primary key)
+- `employee_id` INTEGER foreign key to `employees(id)`
+- `date` DATE
+- `punch_time` TIME
+- `punch_type` TEXT, choices IN/OUT
+- `source` TEXT, default "manual"
+- `created_at` TIMESTAMP (auto now add)
+- ordering: date, punch_time
+
+Table: `session_configs`
+- `id` (auto-generated primary key)
+- `name` TEXT
+- `start_time` TIME
+- `end_time` TIME
+- `pay_amount` DECIMAL(8,2)
+- `is_overtime` BOOLEAN, default false
+- `order` INTEGER, default 0
+- ordering: order
+
+Table: `work_sessions`
+- `id` (auto-generated primary key)
+- `employee_id` INTEGER foreign key to `employees(id)`
+- `date` DATE
+- `session_config_id` INTEGER, nullable foreign key to `session_configs(id)`
+- `session_name` TEXT
+- `check_in` TIME
+- `check_out` TIME
+- `hours_worked` DECIMAL(5,2)
+- `session_amount` DECIMAL(8,2)
+- `is_overtime` BOOLEAN, default false
+- `notes` TEXT, nullable
+- `created_at` TIMESTAMP (auto now add)
+- ordering: date, check_in
+
+Table: `payrolls`
+- `id` (auto-generated primary key)
+- `employee_id` INTEGER foreign key to `employees(id)`
+- `salary_mode` TEXT, choices "monthly" or "session"
+- `month` INTEGER
+- `year` INTEGER
+- `week_number` INTEGER, nullable
+- `total_working_days` INTEGER, default 0
+- `present_days` DECIMAL(5,1), default 0
+- `absent_days` DECIMAL(5,1), default 0
+- `completed_sessions` INTEGER, default 0
+- `ot_hours` DECIMAL(5,2), default 0
+- `ot_amount` DECIMAL(8,2), default 0
+- `base_salary` DECIMAL(10,2)
+- `gross_salary` DECIMAL(10,2)
+- `deductions` DECIMAL(10,2), default 0
+- `bonus` DECIMAL(10,2), default 0
+- `final_salary` DECIMAL(10,2)
+- `status` TEXT, choices "pending" or "paid"
+- `notes` TEXT, nullable
+- `created_at` TIMESTAMP (auto now add)
+- `updated_at` TIMESTAMP (auto now)
+- unique constraint: (`employee_id`, `month`, `year`, `week_number`)
+
+5. How migrations work
+----------------------
+- The table structure is created by Django migrations in `backend/api/migrations/`.
+- Run `python manage.py makemigrations` only if you change models.
+- Run `python manage.py migrate` to apply the current schema.
+
+6. Summary
+----------
+The project stores HR, payroll, attendance, and session configuration data in PostgreSQL.
+The local default database is `uk_textile`, configured through `DATABASE_URL` or environment variables.
+To create and populate the database, use:
+
+    cd e:\UK-textile\backend
+    .\.venv\Scripts\python.exe manage.py migrate
+
+If you want, I can also add a `README` section describing the data relationships and a SQL dump script for the schema.

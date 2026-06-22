@@ -1,0 +1,744 @@
+from django.db import models
+
+
+# ──────────────────────────────────────────────
+#  Organisation Structure
+# ──────────────────────────────────────────────
+
+class Branch(models.Model):
+    name = models.TextField()
+    location = models.TextField(null=True, blank=True)
+    address = models.TextField(null=True, blank=True)
+    manager_name = models.TextField(null=True, blank=True, db_column="manager_name")
+    phone = models.TextField(null=True, blank=True)
+    is_active = models.BooleanField(default=True, db_column="is_active")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "branches"
+
+
+class Department(models.Model):
+    name = models.TextField(unique=True)
+    description = models.TextField(null=True, blank=True)
+    branch = models.ForeignKey(
+        Branch, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="branch_id", related_name="departments"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "departments"
+
+
+class Designation(models.Model):
+    title = models.TextField()
+    department = models.ForeignKey(
+        Department, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="department_id", related_name="designations"
+    )
+    level = models.TextField(default="staff")  # junior/mid/senior/manager/executive
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "designations"
+
+
+# ──────────────────────────────────────────────
+#  Employees
+# ──────────────────────────────────────────────
+
+class Employee(models.Model):
+    EMPLOYMENT_TYPE_PRODUCTION = "production"
+    EMPLOYMENT_TYPE_STAFF = "staff"
+    EMPLOYMENT_TYPES = [
+        (EMPLOYMENT_TYPE_PRODUCTION, "Production"),
+        (EMPLOYMENT_TYPE_STAFF, "Staff"),
+    ]
+    GENDER_CHOICES = [("male", "Male"), ("female", "Female"), ("other", "Other")]
+
+    employee_code = models.TextField(unique=True, db_column="employee_code")
+    first_name = models.TextField(db_column="first_name")
+    last_name = models.TextField(db_column="last_name")
+    gender = models.TextField(choices=GENDER_CHOICES, null=True, blank=True)
+    date_of_birth = models.DateField(null=True, blank=True, db_column="date_of_birth")
+    email = models.TextField(null=True, blank=True)
+    phone = models.TextField(null=True, blank=True)
+    emergency_contact = models.TextField(null=True, blank=True, db_column="emergency_contact")
+    photo_url = models.TextField(null=True, blank=True, db_column="photo_url")
+    role = models.TextField(null=True, blank=True)
+    employment_type = models.TextField(
+        choices=EMPLOYMENT_TYPES, default=EMPLOYMENT_TYPE_STAFF, db_column="employment_type"
+    )
+    department = models.ForeignKey(
+        Department, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="department_id", related_name="employees",
+    )
+    designation = models.ForeignKey(
+        Designation, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="designation_id", related_name="employees",
+    )
+    branch = models.ForeignKey(
+        Branch, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="branch_id", related_name="employees",
+    )
+    reporting_manager = models.ForeignKey(
+        "self", on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="reporting_manager_id", related_name="subordinates",
+    )
+    salary_type = models.TextField(default="monthly", db_column="salary_type")
+    salary_amount = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True, db_column="salary_amount"
+    )
+    status = models.TextField(default="active")
+    bank_name = models.TextField(null=True, blank=True, db_column="bank_name")
+    bank_account = models.TextField(null=True, blank=True, db_column="bank_account")
+    bank_ifsc = models.TextField(null=True, blank=True, db_column="bank_ifsc")
+    id_proof = models.TextField(null=True, blank=True, db_column="id_proof")
+    pf_number = models.TextField(null=True, blank=True, db_column="pf_number")
+    esi_number = models.TextField(null=True, blank=True, db_column="esi_number")
+    uan_number = models.TextField(null=True, blank=True, db_column="uan_number")
+    address = models.TextField(null=True, blank=True)
+    join_date = models.TextField(null=True, blank=True, db_column="join_date")
+    probation_end_date = models.DateField(null=True, blank=True, db_column="probation_end_date")
+    confirmation_date = models.DateField(null=True, blank=True, db_column="confirmation_date")
+    password_hash = models.TextField(null=True, blank=True, db_column="password_hash")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "employees"
+
+
+# ──────────────────────────────────────────────
+#  Shift Management
+# ──────────────────────────────────────────────
+
+class ShiftTemplate(models.Model):
+    SHIFT_TYPE_PRODUCTION = "production"
+    SHIFT_TYPE_STAFF = "staff"
+    SHIFT_TYPES = [(SHIFT_TYPE_PRODUCTION, "Production"), (SHIFT_TYPE_STAFF, "Staff")]
+    GENDER_RULE_ALL = "all"
+    GENDER_RULE_MALE = "male"
+    GENDER_RULE_FEMALE = "female"
+    GENDER_RULES = [
+        (GENDER_RULE_ALL, "All"),
+        (GENDER_RULE_MALE, "Male Only"),
+        (GENDER_RULE_FEMALE, "Female Only"),
+    ]
+
+    name = models.TextField()
+    shift_type = models.TextField(choices=SHIFT_TYPES, default=SHIFT_TYPE_STAFF, db_column="shift_type")
+    start_time = models.TimeField(db_column="start_time")
+    end_time = models.TimeField(db_column="end_time")
+    gender_rule = models.TextField(choices=GENDER_RULES, default=GENDER_RULE_ALL, db_column="gender_rule")
+    grace_period_minutes = models.IntegerField(default=15, db_column="grace_period_minutes")
+    department = models.ForeignKey(
+        Department, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="department_id", related_name="shifts"
+    )
+    is_default = models.BooleanField(default=False, db_column="is_default")
+    is_active = models.BooleanField(default=True, db_column="is_active")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "shift_templates"
+
+
+class EmployeeShiftAssignment(models.Model):
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="shift_assignments"
+    )
+    shift = models.ForeignKey(
+        ShiftTemplate, on_delete=models.CASCADE, db_column="shift_id", related_name="assignments"
+    )
+    effective_from = models.DateField(db_column="effective_from")
+    effective_to = models.DateField(null=True, blank=True, db_column="effective_to")
+    assigned_by = models.TextField(null=True, blank=True, db_column="assigned_by")
+    notes = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "employee_shift_assignments"
+
+
+# ──────────────────────────────────────────────
+#  Leave & Holiday
+# ──────────────────────────────────────────────
+
+class LeaveType(models.Model):
+    name = models.TextField()
+    code = models.TextField(unique=True)  # CL, SL, EL, ML, PL
+    max_days_per_year = models.IntegerField(default=12, db_column="max_days_per_year")
+    carry_forward = models.BooleanField(default=False, db_column="carry_forward")
+    max_carry_forward_days = models.IntegerField(default=0, db_column="max_carry_forward_days")
+    is_paid = models.BooleanField(default=True, db_column="is_paid")
+    applicable_gender = models.TextField(default="all", db_column="applicable_gender")  # all/male/female
+    is_active = models.BooleanField(default=True, db_column="is_active")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "leave_types"
+
+
+class LeaveBalance(models.Model):
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="leave_balances"
+    )
+    leave_type = models.ForeignKey(
+        LeaveType, on_delete=models.CASCADE, db_column="leave_type_id", related_name="balances"
+    )
+    year = models.IntegerField()
+    allocated = models.DecimalField(max_digits=5, decimal_places=1, default=0)
+    used = models.DecimalField(max_digits=5, decimal_places=1, default=0)
+    remaining = models.DecimalField(max_digits=5, decimal_places=1, default=0)
+    carried_forward = models.DecimalField(max_digits=5, decimal_places=1, default=0, db_column="carried_forward")
+
+    class Meta:
+        db_table = "leave_balances"
+        unique_together = [("employee", "leave_type", "year")]
+
+
+class Holiday(models.Model):
+    HOLIDAY_TYPE_NATIONAL = "national"
+    HOLIDAY_TYPE_REGIONAL = "regional"
+    HOLIDAY_TYPE_COMPANY = "company"
+    HOLIDAY_TYPES = [
+        (HOLIDAY_TYPE_NATIONAL, "National"),
+        (HOLIDAY_TYPE_REGIONAL, "Regional"),
+        (HOLIDAY_TYPE_COMPANY, "Company"),
+    ]
+
+    name = models.TextField()
+    date = models.DateField()
+    holiday_type = models.TextField(choices=HOLIDAY_TYPES, default=HOLIDAY_TYPE_NATIONAL, db_column="holiday_type")
+    branch = models.ForeignKey(
+        Branch, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="branch_id", related_name="holidays"
+    )
+    department = models.ForeignKey(
+        Department, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="department_id", related_name="holidays"
+    )
+    is_recurring = models.BooleanField(default=False, db_column="is_recurring")
+    description = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "holidays"
+
+
+# ──────────────────────────────────────────────
+#  Leave Requests (enhanced)
+# ──────────────────────────────────────────────
+
+class LeaveRequest(models.Model):
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="leave_requests"
+    )
+    leave_type_ref = models.ForeignKey(
+        LeaveType, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="leave_type_ref_id", related_name="requests"
+    )
+    type = models.TextField(default="casual")
+    start_date = models.TextField(db_column="start_date")
+    end_date = models.TextField(db_column="end_date")
+    total_days = models.DecimalField(max_digits=4, decimal_places=1, default=1, db_column="total_days")
+    reason = models.TextField(null=True, blank=True)
+    status = models.TextField(default="pending")  # pending/approved/rejected
+    hr_comment = models.TextField(null=True, blank=True, db_column="hr_comment")
+    approved_by = models.TextField(null=True, blank=True, db_column="approved_by")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "leave_requests"
+
+
+# ──────────────────────────────────────────────
+#  Employee Requests (from mobile app)
+# ──────────────────────────────────────────────
+
+class EmployeeRequest(models.Model):
+    REQUEST_TYPES = [
+        ("leave", "Leave Request"),
+        ("salary_enquiry", "Salary Enquiry"),
+        ("shift_correction", "Shift Correction"),
+        ("advance", "Advance Request"),
+        ("permission", "Permission Request"),
+        ("general", "General Query"),
+    ]
+    STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("in_review", "In Review"),
+        ("approved", "Approved"),
+        ("rejected", "Rejected"),
+        ("more_info", "More Info Needed"),
+    ]
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="requests"
+    )
+    request_type = models.TextField(choices=REQUEST_TYPES, db_column="request_type")
+    subject = models.TextField()
+    description = models.TextField()
+    status = models.TextField(choices=STATUS_CHOICES, default="pending")
+    hr_notes = models.TextField(null=True, blank=True, db_column="hr_notes")
+    handled_by = models.TextField(null=True, blank=True, db_column="handled_by")
+    handled_at = models.DateTimeField(null=True, blank=True, db_column="handled_at")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "employee_requests"
+
+
+# ──────────────────────────────────────────────
+#  Payroll (Enterprise)
+# ──────────────────────────────────────────────
+
+class PayrollRun(models.Model):
+    STATUS_DRAFT = "draft"
+    STATUS_PROCESSING = "processing"
+    STATUS_APPROVED = "approved"
+    STATUS_LOCKED = "locked"
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, "Draft"),
+        (STATUS_PROCESSING, "Processing"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_LOCKED, "Locked"),
+    ]
+    RUN_TYPE_MONTHLY = "monthly"
+    RUN_TYPE_BIWEEKLY = "biweekly"
+    RUN_TYPES = [(RUN_TYPE_MONTHLY, "Monthly"), (RUN_TYPE_BIWEEKLY, "Bi-Weekly")]
+
+    run_code = models.TextField(unique=True, db_column="run_code")
+    month = models.IntegerField()
+    year = models.IntegerField()
+    run_type = models.TextField(choices=RUN_TYPES, default=RUN_TYPE_MONTHLY, db_column="run_type")
+    week_number = models.IntegerField(null=True, blank=True, db_column="week_number")
+    status = models.TextField(choices=STATUS_CHOICES, default=STATUS_DRAFT)
+    total_employees = models.IntegerField(default=0, db_column="total_employees")
+    total_gross = models.DecimalField(max_digits=12, decimal_places=2, default=0, db_column="total_gross")
+    total_deductions = models.DecimalField(max_digits=12, decimal_places=2, default=0, db_column="total_deductions")
+    total_net = models.DecimalField(max_digits=12, decimal_places=2, default=0, db_column="total_net")
+    processed_by = models.TextField(null=True, blank=True, db_column="processed_by")
+    approved_by = models.TextField(null=True, blank=True, db_column="approved_by")
+    approved_at = models.DateTimeField(null=True, blank=True, db_column="approved_at")
+    locked_at = models.DateTimeField(null=True, blank=True, db_column="locked_at")
+    notes = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "payroll_runs"
+
+
+class EarningItem(models.Model):
+    ITEM_TYPES = [
+        ("basic", "Basic Salary"),
+        ("hra", "HRA"),
+        ("allowance", "Allowance"),
+        ("incentive", "Incentive"),
+        ("bonus", "Bonus"),
+        ("ot", "Overtime"),
+        ("session", "Session Pay"),
+    ]
+
+    payroll_run = models.ForeignKey(
+        PayrollRun, on_delete=models.CASCADE, db_column="payroll_run_id", related_name="earnings"
+    )
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="earnings"
+    )
+    item_type = models.TextField(choices=ITEM_TYPES, db_column="item_type")
+    label = models.TextField()
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "earning_items"
+
+
+class DeductionItem(models.Model):
+    ITEM_TYPES = [
+        ("pf", "Provident Fund"),
+        ("esi", "ESI"),
+        ("advance", "Advance Recovery"),
+        ("loan", "Loan Recovery"),
+        ("penalty", "Penalty"),
+        ("other", "Other Deduction"),
+    ]
+
+    payroll_run = models.ForeignKey(
+        PayrollRun, on_delete=models.CASCADE, db_column="payroll_run_id", related_name="deductions"
+    )
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="deductions"
+    )
+    item_type = models.TextField(choices=ITEM_TYPES, db_column="item_type")
+    label = models.TextField()
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "deduction_items"
+
+
+# ──────────────────────────────────────────────
+#  Settlement (Advances & Loans)
+# ──────────────────────────────────────────────
+
+class Advance(models.Model):
+    ADVANCE_TYPE_GENERAL = "general"
+    ADVANCE_TYPE_TERM = "term"
+    ADVANCE_TYPES = [
+        (ADVANCE_TYPE_GENERAL, "General Advance"),
+        (ADVANCE_TYPE_TERM, "Term Advance (Loan)"),
+    ]
+    STATUS_PENDING = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_REJECTED = "rejected"
+    STATUS_CLOSED = "closed"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_REJECTED, "Rejected"),
+        (STATUS_CLOSED, "Closed"),
+    ]
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="advances"
+    )
+    advance_type = models.TextField(choices=ADVANCE_TYPES, db_column="advance_type")
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    purpose = models.TextField(null=True, blank=True)
+    status = models.TextField(choices=STATUS_CHOICES, default=STATUS_PENDING)
+    approved_by = models.TextField(null=True, blank=True, db_column="approved_by")
+    approved_at = models.DateTimeField(null=True, blank=True, db_column="approved_at")
+    disbursed_at = models.DateTimeField(null=True, blank=True, db_column="disbursed_at")
+    repayment_start_month = models.IntegerField(null=True, blank=True, db_column="repayment_start_month")
+    repayment_start_year = models.IntegerField(null=True, blank=True, db_column="repayment_start_year")
+    emi_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="emi_amount")
+    total_repaid = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="total_repaid")
+    outstanding = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    notes = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "advances"
+
+
+class AdvanceRepayment(models.Model):
+    advance = models.ForeignKey(
+        Advance, on_delete=models.CASCADE, db_column="advance_id", related_name="repayments"
+    )
+    month = models.IntegerField()
+    year = models.IntegerField()
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    payroll_run = models.ForeignKey(
+        PayrollRun, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="payroll_run_id", related_name="advance_repayments"
+    )
+    notes = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "advance_repayments"
+
+
+# ──────────────────────────────────────────────
+#  Salary Slips
+# ──────────────────────────────────────────────
+
+class SalarySlip(models.Model):
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="salary_slips"
+    )
+    payroll_run = models.ForeignKey(
+        PayrollRun, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="payroll_run_id", related_name="salary_slips"
+    )
+    month = models.IntegerField()
+    year = models.IntegerField()
+    slip_number = models.TextField(unique=True, db_column="slip_number")
+    basic = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    hra = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    allowances = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    incentives = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    bonuses = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    ot_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="ot_amount")
+    gross_salary = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="gross_salary")
+    pf_deduction = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="pf_deduction")
+    esi_deduction = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="esi_deduction")
+    advance_deduction = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="advance_deduction")
+    other_deductions = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="other_deductions")
+    total_deductions = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="total_deductions")
+    net_salary = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="net_salary")
+    working_days = models.IntegerField(default=0, db_column="working_days")
+    present_days = models.DecimalField(max_digits=4, decimal_places=1, default=0, db_column="present_days")
+    absent_days = models.DecimalField(max_digits=4, decimal_places=1, default=0, db_column="absent_days")
+    generated_at = models.DateTimeField(auto_now_add=True, db_column="generated_at")
+    emailed_at = models.DateTimeField(null=True, blank=True, db_column="emailed_at")
+
+    class Meta:
+        db_table = "salary_slips"
+        unique_together = [("employee", "month", "year")]
+
+
+# ──────────────────────────────────────────────
+#  User Management & RBAC
+# ──────────────────────────────────────────────
+
+class Role(models.Model):
+    name = models.TextField(unique=True)  # HR Admin, HR Executive, Payroll Officer, etc.
+    description = models.TextField(null=True, blank=True)
+    permissions = models.JSONField(default=dict)  # {module: {view, create, edit, delete, approve}}
+    is_system = models.BooleanField(default=False, db_column="is_system")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "roles"
+
+
+class HRUser(models.Model):
+    username = models.TextField(unique=True)
+    email = models.TextField(null=True, blank=True)
+    full_name = models.TextField(null=True, blank=True, db_column="full_name")
+    password_hash = models.TextField(db_column="password_hash")
+    role = models.ForeignKey(
+        Role, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="role_id", related_name="users"
+    )
+    department = models.ForeignKey(
+        Department, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="department_id", related_name="hr_users"
+    )
+    branch = models.ForeignKey(
+        Branch, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="branch_id", related_name="hr_users"
+    )
+    is_active = models.BooleanField(default=True, db_column="is_active")
+    is_super_admin = models.BooleanField(default=False, db_column="is_super_admin")
+    last_login = models.DateTimeField(null=True, blank=True, db_column="last_login")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "hr_users"
+
+
+# ──────────────────────────────────────────────
+#  Audit Logs
+# ──────────────────────────────────────────────
+
+class AuditLog(models.Model):
+    ACTION_CHOICES = [
+        ("login", "Login"),
+        ("logout", "Logout"),
+        ("create", "Create"),
+        ("update", "Update"),
+        ("delete", "Delete"),
+        ("approve", "Approve"),
+        ("reject", "Reject"),
+        ("export", "Export"),
+        ("lock", "Lock"),
+    ]
+
+    user_type = models.TextField(default="hr", db_column="user_type")  # hr/employee/erp
+    user_id = models.IntegerField(null=True, blank=True, db_column="user_id")
+    user_name = models.TextField(db_column="user_name")
+    action = models.TextField(choices=ACTION_CHOICES)
+    module = models.TextField()  # employees, payroll, leave, etc.
+    record_id = models.IntegerField(null=True, blank=True, db_column="record_id")
+    record_description = models.TextField(null=True, blank=True, db_column="record_description")
+    old_values = models.JSONField(null=True, blank=True, db_column="old_values")
+    new_values = models.JSONField(null=True, blank=True, db_column="new_values")
+    ip_address = models.TextField(null=True, blank=True, db_column="ip_address")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "audit_logs"
+        ordering = ["-created_at"]
+
+
+# ──────────────────────────────────────────────
+#  Notifications
+# ──────────────────────────────────────────────
+
+class Notification(models.Model):
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="notifications"
+    )
+    type = models.TextField(default="general")
+    message = models.TextField()
+    is_read = models.BooleanField(default=False, db_column="is_read")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "notifications"
+
+
+# ──────────────────────────────────────────────
+#  Recruitment
+# ──────────────────────────────────────────────
+
+class Job(models.Model):
+    title = models.TextField()
+    department = models.ForeignKey(
+        Department, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="department_id", related_name="jobs",
+    )
+    description = models.TextField(null=True, blank=True)
+    requirements = models.TextField(null=True, blank=True)
+    salary_range = models.TextField(null=True, blank=True, db_column="salary_range")
+    status = models.TextField(default="open")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "jobs"
+
+
+class Applicant(models.Model):
+    job = models.ForeignKey(Job, on_delete=models.CASCADE, db_column="job_id", related_name="applicants")
+    name = models.TextField()
+    email = models.TextField()
+    phone = models.TextField()
+    cover_letter = models.TextField(null=True, blank=True, db_column="cover_letter")
+    experience = models.TextField(null=True, blank=True)
+    status = models.TextField(default="applied")
+    interview_date = models.TextField(null=True, blank=True, db_column="interview_date")
+    notes = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "applicants"
+
+
+# ──────────────────────────────────────────────
+#  Attendance
+# ──────────────────────────────────────────────
+
+class Attendance(models.Model):
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="attendance_records"
+    )
+    date = models.TextField()
+    present = models.BooleanField(default=True)
+    hours_worked = models.DecimalField(
+        max_digits=4, decimal_places=2, null=True, blank=True, db_column="hours_worked"
+    )
+    notes = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "attendance"
+
+
+class AttendanceLog(models.Model):
+    PUNCH_IN = "IN"
+    PUNCH_OUT = "OUT"
+    PUNCH_CHOICES = [(PUNCH_IN, "In"), (PUNCH_OUT, "Out")]
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="attendance_logs",
+    )
+    date = models.DateField()
+    punch_time = models.TimeField(db_column="punch_time")
+    punch_type = models.TextField(choices=PUNCH_CHOICES, db_column="punch_type")
+    source = models.TextField(default="manual")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "attendance_logs"
+        ordering = ["date", "punch_time"]
+
+
+class SessionConfig(models.Model):
+    name = models.TextField()
+    start_time = models.TimeField(db_column="start_time")
+    end_time = models.TimeField(db_column="end_time")
+    pay_amount = models.DecimalField(max_digits=8, decimal_places=2, db_column="pay_amount")
+    is_overtime = models.BooleanField(default=False, db_column="is_overtime")
+    order = models.IntegerField(default=0)
+
+    class Meta:
+        db_table = "session_configs"
+        ordering = ["order"]
+
+
+class WorkSession(models.Model):
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="work_sessions",
+    )
+    date = models.DateField()
+    session_config = models.ForeignKey(
+        SessionConfig, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="session_config_id", related_name="work_sessions",
+    )
+    session_name = models.TextField(db_column="session_name")
+    check_in = models.TimeField(db_column="check_in")
+    check_out = models.TimeField(db_column="check_out")
+    hours_worked = models.DecimalField(max_digits=5, decimal_places=2, db_column="hours_worked")
+    session_amount = models.DecimalField(max_digits=8, decimal_places=2, db_column="session_amount")
+    is_overtime = models.BooleanField(default=False, db_column="is_overtime")
+    notes = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "work_sessions"
+        ordering = ["date", "check_in"]
+
+
+class Payroll(models.Model):
+    SALARY_MODE_MONTHLY = "monthly"
+    SALARY_MODE_SESSION = "session"
+    MODE_CHOICES = [(SALARY_MODE_MONTHLY, "Monthly"), (SALARY_MODE_SESSION, "Session-based")]
+    STATUS_PENDING = "pending"
+    STATUS_PAID = "paid"
+    STATUS_CHOICES = [(STATUS_PENDING, "Pending"), (STATUS_PAID, "Paid")]
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="payrolls",
+    )
+    salary_mode = models.TextField(choices=MODE_CHOICES, db_column="salary_mode")
+    month = models.IntegerField()
+    year = models.IntegerField()
+    week_number = models.IntegerField(null=True, blank=True, db_column="week_number")
+    total_working_days = models.IntegerField(default=0, db_column="total_working_days")
+    present_days = models.DecimalField(max_digits=5, decimal_places=1, default=0, db_column="present_days")
+    absent_days = models.DecimalField(max_digits=5, decimal_places=1, default=0, db_column="absent_days")
+    completed_sessions = models.IntegerField(default=0, db_column="completed_sessions")
+    ot_hours = models.DecimalField(max_digits=5, decimal_places=2, default=0, db_column="ot_hours")
+    ot_amount = models.DecimalField(max_digits=8, decimal_places=2, default=0, db_column="ot_amount")
+    base_salary = models.DecimalField(max_digits=10, decimal_places=2, db_column="base_salary")
+    gross_salary = models.DecimalField(max_digits=10, decimal_places=2, db_column="gross_salary")
+    deductions = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    bonus = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    final_salary = models.DecimalField(max_digits=10, decimal_places=2, db_column="final_salary")
+    status = models.TextField(choices=STATUS_CHOICES, default=STATUS_PENDING)
+    notes = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "payrolls"
+        unique_together = [("employee", "month", "year", "week_number")]
+
+
+class SalaryRecord(models.Model):
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="salary_records"
+    )
+    month = models.IntegerField()
+    year = models.IntegerField()
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    type = models.TextField(default="monthly")
+    week_number = models.IntegerField(null=True, blank=True, db_column="week_number")
+    status = models.TextField(default="pending")
+    notes = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "salary_records"
