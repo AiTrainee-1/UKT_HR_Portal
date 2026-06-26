@@ -174,10 +174,19 @@ def _departments_create(request: Request) -> Response:
     return Response(department_json(dept, 0), status=201)
 
 
-@api_view(["DELETE"])
+@api_view(["GET", "DELETE"])
 @require_hr
 def delete_department(request: Request, pk: int) -> Response:
-    Department.objects.filter(id=pk).delete()
+    try:
+        dept = Department.objects.get(pk=pk)
+    except Department.DoesNotExist:
+        return _error("Department not found", 404)
+
+    if request.method == "GET":
+        emp_count = dept.employees.count()
+        return Response(department_json(dept, emp_count))
+
+    dept.delete()
     return Response({"message": "Department deleted"})
 
 
@@ -185,11 +194,11 @@ def delete_department(request: Request, pk: int) -> Response:
 
 
 def _employee_queryset():
-    return Employee.objects.select_related("department")
+    return Employee.objects.select_related("department", "designation")
 
 
 def _serialize_employee(emp: Employee) -> dict:
-    dept_name = emp.department.name if emp.department_id else None
+    dept_name = emp.department.name if emp.department_id and emp.department else None
     return employee_json(emp, dept_name)
 
 
@@ -203,40 +212,66 @@ def employees(request: Request) -> Response:
 def _employees_list(request: Request) -> Response:
     qs = _employee_queryset()
     dept_id = request.query_params.get("departmentId")
+    desig_id = request.query_params.get("designationId")
     emp_status = request.query_params.get("status")
     salary_type = request.query_params.get("salaryType")
+    search = request.query_params.get("search", "").strip()
     if dept_id:
         qs = qs.filter(department_id=int(dept_id))
+    if desig_id:
+        qs = qs.filter(designation_id=int(desig_id))
     if emp_status:
         qs = qs.filter(status=emp_status)
     if salary_type:
         qs = qs.filter(salary_type=salary_type)
+    if search:
+        qs = qs.filter(Q(employee_code__icontains=search) | Q(phone__icontains=search))
     return Response([_serialize_employee(e) for e in qs])
 
 
 def _employees_create(request: Request) -> Response:
     data = request.data
-    dept_name = data.get("department", "").strip()
+
+    # Resolve department: prefer departmentId (int FK), fall back to name string
     dept = None
-    
-    if dept_name:
-        dept, _ = Department.objects.get_or_create(name=dept_name)
-    
+    if data.get("departmentId"):
+        dept = Department.objects.filter(pk=int(data["departmentId"])).first()
+    elif data.get("department", "").strip():
+        dept, _ = Department.objects.get_or_create(name=data["department"].strip())
+
+    # Resolve designation
+    desig = None
+    if data.get("designationId"):
+        from .models import Designation as _Desig
+        desig = _Desig.objects.filter(pk=int(data["designationId"])).first()
+
     emp = Employee.objects.create(
         employee_code=generate_employee_code(),
         first_name=data.get("firstName"),
         last_name=data.get("lastName"),
+        gender=data.get("gender"),
+        date_of_birth=data.get("dateOfBirth") or None,
         email=data.get("email"),
         phone=data.get("phone"),
         role=data.get("role"),
+        employment_type=data.get("employmentType", "staff"),
         department=dept,
+        designation=desig,
         salary_type=data.get("salaryType", "monthly"),
         salary_amount=parse_decimal(data.get("salaryAmount")),
         bank_name=data.get("bankName"),
         bank_account=data.get("bankAccount"),
         bank_ifsc=data.get("bankIfsc"),
+        pf_number=data.get("pfNumber"),
+        esi_number=data.get("esiNumber"),
+        id_proof=data.get("idProof"),
+        address=data.get("address"),
         join_date=data.get("joinDate"),
     )
+    # Auto-assign production shift if applicable
+    from .shift_views import auto_assign_production_shift
+    auto_assign_production_shift(emp)
+
     emp = _employee_queryset().get(pk=emp.pk)
     return Response(_serialize_employee(emp), status=201)
 
@@ -261,20 +296,31 @@ def _employee_update(request: Request, pk: int) -> Response:
     emp = _employee_queryset().filter(pk=pk).first()
     if not emp:
         return _error("Employee not found", 404)
-    
-    # Handle department separately
-    if "department" in request.data:
+
+    # Handle department: prefer departmentId (int FK), fall back to name string
+    if "departmentId" in request.data:
+        raw = request.data.get("departmentId")
+        emp.department_id = int(raw) if raw else None
+    elif "department" in request.data:
         dept_name = request.data.get("department", "").strip()
         if dept_name:
             dept, _ = Department.objects.get_or_create(name=dept_name)
             emp.department = dept
-    
+
+    # Handle designation
+    if "designationId" in request.data:
+        raw = request.data.get("designationId")
+        emp.designation_id = int(raw) if raw else None
+
     field_map = {
         "firstName": "first_name",
         "lastName": "last_name",
+        "gender": "gender",
+        "dateOfBirth": "date_of_birth",
         "email": "email",
         "phone": "phone",
         "role": "role",
+        "employmentType": "employment_type",
         "salaryType": "salary_type",
         "salaryAmount": "salary_amount",
         "status": "status",
@@ -292,8 +338,16 @@ def _employee_update(request: Request, pk: int) -> Response:
             value = request.data[json_key]
             if model_key == "salary_amount":
                 value = parse_decimal(value)
+            elif model_key == "date_of_birth":
+                value = value or None
             setattr(emp, model_key, value)
     emp.save()
+    # If employee type was changed to production, try to auto-assign a production shift
+    if request.data.get("employmentType") == "production":
+        from .shift_views import auto_assign_production_shift
+        emp_fresh = Employee.objects.get(pk=pk)
+        auto_assign_production_shift(emp_fresh)
+
     emp = _employee_queryset().get(pk=pk)
     return Response(_serialize_employee(emp))
 
@@ -540,13 +594,44 @@ def _leave_requests_create(request: Request) -> Response:
 @api_view(["PATCH"])
 @require_hr
 def update_leave_status(request: Request, pk: int) -> Response:
+    from .models import LeaveBalance
     record = LeaveRequest.objects.filter(pk=pk).first()
     if not record:
         return _error("Not found", 404)
-    record.status = request.data.get("status")
+
+    old_status = record.status
+    new_status = request.data.get("status", old_status)
+    record.status = new_status
     if "hrComment" in request.data:
         record.hr_comment = request.data["hrComment"]
     record.save()
+
+    if new_status == "approved" and old_status != "approved":
+        days = Decimal(str(record.total_days or 1))
+        try:
+            year = int(record.start_date[:4])
+        except Exception:
+            year = date.today().year
+        qs = LeaveBalance.objects.filter(employee_id=record.employee_id, year=year)
+        if record.leave_type_ref_id:
+            qs = qs.filter(leave_type_id=record.leave_type_ref_id)
+        for lb in qs:
+            lb.used = Decimal(str(lb.used)) + days
+            lb.remaining = max(Decimal("0"), Decimal(str(lb.remaining)) - days)
+            lb.save()
+        Notification.objects.create(
+            employee_id=record.employee_id,
+            type="leave",
+            message=f"Your leave request ({record.start_date} → {record.end_date}) has been approved.",
+        )
+
+    elif new_status == "rejected" and old_status != "rejected":
+        Notification.objects.create(
+            employee_id=record.employee_id,
+            type="leave",
+            message=f"Your leave request ({record.start_date} → {record.end_date}) has been rejected.",
+        )
+
     return Response(_leave_with_name(record))
 
 
@@ -785,6 +870,11 @@ def hr_dashboard_summary(_request: Request) -> Response:
     )
     open_jobs = Job.objects.filter(status="open").count()
     pending_applicants = Applicant.objects.filter(status="applied").count()
+    gender_stats = Employee.objects.filter(status="active").aggregate(
+        male=Count("id", filter=Q(gender="male")),
+        female=Count("id", filter=Q(gender="female")),
+        other=Count("id", filter=~Q(gender__in=["male", "female"])),
+    )
     return Response(
         {
             "totalEmployees": emp_stats["total"] or 0,
@@ -797,6 +887,9 @@ def hr_dashboard_summary(_request: Request) -> Response:
             "weeklySalaryTotal": float(salary_stats["weekly_total"] or 0),
             "openJobs": open_jobs,
             "pendingApplicants": pending_applicants,
+            "maleEmployees": gender_stats["male"] or 0,
+            "femaleEmployees": gender_stats["female"] or 0,
+            "otherEmployees": gender_stats["other"] or 0,
         }
     )
 

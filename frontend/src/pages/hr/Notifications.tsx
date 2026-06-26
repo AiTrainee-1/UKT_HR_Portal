@@ -78,7 +78,7 @@ export default function Notifications() {
 
   return (
     <HrLayout>
-      <div className="min-h-[calc(100vh-140px)] flex flex-col justify-between gap-6 max-w-3xl">
+      <div className="min-h-[calc(100vh-140px)] flex flex-col justify-between gap-6">
         <div className="space-y-5 flex-1">
           <div className="flex items-center justify-between">
           <div>

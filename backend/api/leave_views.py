@@ -1,9 +1,11 @@
+from datetime import date as date_type
+
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import require_hr
-from .models import LeaveType, LeaveBalance, Holiday, LeaveRequest, Employee
+from .models import LeaveType, LeaveBalance, Holiday, LeaveRequest, Employee, Notification, EmployeePermission
 
 
 def leave_type_json(lt):
@@ -160,9 +162,14 @@ def holidays(request: Request) -> Response:
     if not data.get("name") or not data.get("date"):
         return Response({"error": "name and date are required"}, status=400)
 
+    try:
+        parsed_date = date_type.fromisoformat(data["date"])
+    except (ValueError, TypeError):
+        return Response({"error": "Invalid date format"}, status=400)
+
     h = Holiday.objects.create(
         name=data["name"],
-        date=data["date"],
+        date=parsed_date,
         holiday_type=data.get("holidayType", "national"),
         branch_id=data.get("branchId"),
         department_id=data.get("departmentId"),
@@ -198,36 +205,76 @@ def holiday_detail(request: Request, pk: int) -> Response:
 
 # ── Approved Requests (Employee Mobile Requests) ─────────────────────────────
 
-@api_view(["GET"])
-@require_hr
+def _req_json(r):
+    emp = r.employee
+    return {
+        "id": r.id,
+        "employeeId": emp.id,
+        "employeeName": f"{emp.first_name} {emp.last_name}",
+        "employeeCode": emp.employee_code,
+        "requestType": r.request_type,
+        "subject": r.subject,
+        "description": r.description,
+        "status": r.status,
+        "hrNotes": r.hr_notes,
+        "handledBy": r.handled_by,
+        "handledAt": r.handled_at.isoformat() if r.handled_at else None,
+        "createdAt": r.created_at.isoformat() if r.created_at else None,
+    }
+
+
+@api_view(["GET", "POST"])
 def employee_requests(request: Request) -> Response:
     from .models import EmployeeRequest
-    req_type = request.query_params.get("requestType")
-    req_status = request.query_params.get("status")
-    qs = EmployeeRequest.objects.select_related("employee").order_by("-created_at")
-    if req_type:
-        qs = qs.filter(request_type=req_type)
-    if req_status:
-        qs = qs.filter(status=req_status)
+    from .auth import require_auth
 
-    def req_json(r):
-        emp = r.employee
-        return {
-            "id": r.id,
-            "employeeId": emp.id,
-            "employeeName": f"{emp.first_name} {emp.last_name}",
-            "employeeCode": emp.employee_code,
-            "requestType": r.request_type,
-            "subject": r.subject,
-            "description": r.description,
-            "status": r.status,
-            "hrNotes": r.hr_notes,
-            "handledBy": r.handled_by,
-            "handledAt": r.handled_at.isoformat() if r.handled_at else None,
-            "createdAt": r.created_at.isoformat() if r.created_at else None,
-        }
+    if request.method == "POST":
+        return require_auth(_employee_request_create)(request)
 
-    return Response([req_json(r) for r in qs])
+    @require_hr
+    def _get(req):
+        req_type = req.query_params.get("requestType")
+        req_status = req.query_params.get("status")
+        qs = EmployeeRequest.objects.select_related("employee").order_by("-created_at")
+        if req_type:
+            qs = qs.filter(request_type=req_type)
+        if req_status:
+            qs = qs.filter(status=req_status)
+        return Response([_req_json(r) for r in qs])
+
+    return _get(request)
+
+
+def _employee_request_create(request: Request) -> Response:
+    from .models import EmployeeRequest
+    data = request.data
+    emp_id = data.get("employeeId")
+    if not emp_id:
+        return Response({"error": "employeeId is required"}, status=400)
+    if not data.get("subject") or not data.get("requestType"):
+        return Response({"error": "subject and requestType are required"}, status=400)
+
+    try:
+        emp = Employee.objects.get(pk=emp_id)
+    except Employee.DoesNotExist:
+        return Response({"error": "Employee not found"}, status=404)
+
+    from .models import EmployeeRequest
+    er = EmployeeRequest.objects.create(
+        employee=emp,
+        request_type=data["requestType"],
+        subject=data["subject"],
+        description=data.get("description", ""),
+    )
+
+    label = dict(EmployeeRequest.REQUEST_TYPES).get(data["requestType"], data["requestType"])
+    Notification.objects.create(
+        employee=emp,
+        type="employee_request",
+        message=f"New {label} submitted by {emp.first_name} {emp.last_name}: '{data['subject']}'",
+    )
+
+    return Response(_req_json(er), status=201)
 
 
 @api_view(["PUT"])
@@ -250,3 +297,121 @@ def employee_request_action(request: Request, pk: int) -> Response:
     er.handled_at = datetime.utcnow()
     er.save()
     return Response({"id": er.id, "status": er.status})
+
+
+# ── Employee Permissions ──────────────────────────────────────────────────────
+
+MONTHLY_PERMISSION_LIMIT = 3
+
+
+def _permission_json(p, monthly_used=None):
+    emp = p.employee
+    return {
+        "id": p.id,
+        "employeeId": emp.id,
+        "employeeName": f"{emp.first_name} {emp.last_name}",
+        "employeeCode": emp.employee_code,
+        "date": p.date.isoformat() if p.date else None,
+        "permissionTime": p.permission_time.strftime("%H:%M") if p.permission_time else None,
+        "reason": p.reason,
+        "status": p.status,
+        "hrComment": p.hr_comment,
+        "approvedBy": p.approved_by,
+        "createdAt": p.created_at.isoformat() if p.created_at else None,
+        "monthlyUsed": monthly_used,
+        "monthlyLimit": MONTHLY_PERMISSION_LIMIT,
+    }
+
+
+@api_view(["GET", "POST"])
+@require_hr
+def employee_permissions(request: Request) -> Response:
+    if request.method == "GET":
+        qs = EmployeePermission.objects.select_related("employee").order_by("-date", "-created_at")
+        if emp_id := request.query_params.get("employeeId"):
+            qs = qs.filter(employee_id=emp_id)
+        if status := request.query_params.get("status"):
+            qs = qs.filter(status=status)
+        if month := request.query_params.get("month"):
+            qs = qs.filter(date__month=month)
+        if year := request.query_params.get("year"):
+            qs = qs.filter(date__year=year)
+        return Response([_permission_json(p) for p in qs])
+
+    data = request.data
+    emp_id = data.get("employeeId")
+    perm_date = data.get("date")
+    if not emp_id or not perm_date:
+        return Response({"error": "employeeId and date are required"}, status=400)
+
+    try:
+        parsed_date = date_type.fromisoformat(perm_date)
+    except (ValueError, TypeError):
+        return Response({"error": "Invalid date format"}, status=400)
+
+    try:
+        emp = Employee.objects.get(pk=emp_id)
+    except Employee.DoesNotExist:
+        return Response({"error": "Employee not found"}, status=404)
+
+    month_used = EmployeePermission.objects.filter(
+        employee=emp,
+        date__year=parsed_date.year,
+        date__month=parsed_date.month,
+        status__in=["pending", "approved"],
+    ).count()
+
+    if month_used >= MONTHLY_PERMISSION_LIMIT:
+        return Response(
+            {"error": f"Employee has already used {MONTHLY_PERMISSION_LIMIT} permissions this month"},
+            status=400,
+        )
+
+    perm_time = data.get("permissionTime") or None
+    if perm_time:
+        from datetime import time as time_type
+        try:
+            h, m = perm_time.split(":")
+            perm_time = time_type(int(h), int(m))
+        except Exception:
+            return Response({"error": "Invalid permissionTime format (HH:MM)"}, status=400)
+
+    p = EmployeePermission.objects.create(
+        employee=emp,
+        date=parsed_date,
+        permission_time=perm_time,
+        reason=data.get("reason"),
+        status=data.get("status", "pending"),
+    )
+
+    month_used_after = EmployeePermission.objects.filter(
+        employee=emp,
+        date__year=parsed_date.year,
+        date__month=parsed_date.month,
+        status__in=["pending", "approved"],
+    ).count()
+
+    return Response(_permission_json(p, monthly_used=month_used_after), status=201)
+
+
+@api_view(["PUT", "DELETE"])
+@require_hr
+def employee_permission_detail(request: Request, pk: int) -> Response:
+    try:
+        p = EmployeePermission.objects.select_related("employee").get(pk=pk)
+    except EmployeePermission.DoesNotExist:
+        return Response({"error": "Permission not found"}, status=404)
+
+    if request.method == "DELETE":
+        p.delete()
+        return Response(status=204)
+
+    data = request.data
+    if "status" in data:
+        p.status = data["status"]
+    if "hrComment" in data:
+        p.hr_comment = data["hrComment"]
+    if "approvedBy" in data:
+        p.approved_by = data["approvedBy"]
+    p.save()
+    return Response(_permission_json(p))

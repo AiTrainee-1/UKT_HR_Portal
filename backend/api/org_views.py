@@ -1,3 +1,4 @@
+from django.db.models import Count
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -19,8 +20,8 @@ def branch_json(b):
     }
 
 
-def designation_json(d):
-    return {
+def designation_json(d, employee_count: int | None = None):
+    data = {
         "id": d.id,
         "title": d.title,
         "departmentId": d.department_id,
@@ -28,6 +29,9 @@ def designation_json(d):
         "level": d.level,
         "createdAt": d.created_at.isoformat() if d.created_at else None,
     }
+    if employee_count is not None:
+        data["employeeCount"] = employee_count
+    return data
 
 
 # ── Branches ──────────────────────────────────────────────────────────────────
@@ -87,10 +91,12 @@ def branch_detail(request: Request, pk: int) -> Response:
 def designations(request: Request) -> Response:
     if request.method == "GET":
         dept_id = request.query_params.get("departmentId")
-        qs = Designation.objects.select_related("department").order_by("title")
+        qs = Designation.objects.select_related("department").annotate(
+            employee_count=Count("employees")
+        ).order_by("title")
         if dept_id:
             qs = qs.filter(department_id=dept_id)
-        return Response([designation_json(d) for d in qs])
+        return Response([designation_json(d, d.employee_count) for d in qs])
 
     data = request.data
     if not data.get("title"):
@@ -104,13 +110,17 @@ def designations(request: Request) -> Response:
     return Response(designation_json(d), status=201)
 
 
-@api_view(["PUT", "DELETE"])
+@api_view(["GET", "PUT", "DELETE"])
 @require_hr
 def designation_detail(request: Request, pk: int) -> Response:
     try:
         d = Designation.objects.select_related("department").get(pk=pk)
     except Designation.DoesNotExist:
         return Response({"error": "Designation not found"}, status=404)
+
+    if request.method == "GET":
+        emp_count = d.employees.count()
+        return Response(designation_json(d, emp_count))
 
     if request.method == "PUT":
         data = request.data
@@ -120,7 +130,8 @@ def designation_detail(request: Request, pk: int) -> Response:
             if field in data:
                 setattr(d, attr, data[field])
         d.save()
-        return Response(designation_json(d))
+        emp_count = d.employees.count()
+        return Response(designation_json(d, emp_count))
 
     d.delete()
     return Response(status=204)

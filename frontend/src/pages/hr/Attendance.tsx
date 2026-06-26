@@ -1,594 +1,707 @@
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import HrLayout from "@/components/HrLayout";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import {
-  Pagination,
-  PaginationContent,
-  PaginationItem,
-  PaginationLink,
-  PaginationNext,
-  PaginationPrevious,
-} from "@/components/ui/pagination";
-import { ChartContainer } from "@/components/ui/chart";
-import { BarChart, Bar, Line, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell } from "recharts";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import {
-  useListAttendance, useRecordAttendance, useListEmployees, getListAttendanceQueryKey
-} from "@/lib/api-client";
-import { useQueryClient } from "@tanstack/react-query";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
-import { Plus } from "lucide-react";
-import EmployeeSearchSelect from "@/components/EmployeeSearchSelect";
-import Loader from "@/components/Loader";
+import { useQueryClient } from "@tanstack/react-query";
+import { ChartContainer } from "@/components/ui/chart";
+import {
+  BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
+  ResponsiveContainer, LineChart, Line, Legend,
+} from "recharts";
+import {
+  useAttendanceSummary, useAttendanceDaily, useAttendanceMonthlyTrend,
+  useAttendanceEmployeeHistory, useCreateManualAttendance,
+  getAttendanceSummaryQueryKey, getAttendanceDailyQueryKey,
+  getAttendanceMonthlyTrendQueryKey,
+} from "@/lib/api-client";
+import {
+  Users, UserCheck, UserX, Clock, CalendarDays, Plus,
+  Factory, Briefcase, Fingerprint, PenLine, ChevronRight,
+} from "lucide-react";
 
-const schema = z.object({
-  employeeId: z.string().min(1, "Employee required"),
-  date: z.string().min(1, "Date required"),
-  hoursWorked: z.string().optional(),
-  notes: z.string().optional(),
-});
-type FormData = z.infer<typeof schema>;
+// ── Helpers ────────────────────────────────────────────────────────────────
 
-export default function Attendance() {
-  const [open, setOpen] = useState(false);
-  const [present, setPresent] = useState(true);
-  const [empFilter, setEmpFilter] = useState("all");
-  const [yearFilter, setYearFilter] = useState(String(new Date().getFullYear()));
-  const queryClient = useQueryClient();
-  const { toast } = useToast();
-  const [page, setPage] = useState(1);
+const today = () => new Date().toISOString().slice(0, 10);
+const currentMonth = () => new Date().getMonth() + 1;
+const currentYear = () => new Date().getFullYear();
 
-  const { data: records, isLoading } = useListAttendance({
-    employeeId: empFilter !== "all" ? Number(empFilter) : undefined,
-    year: yearFilter ? Number(yearFilter) : undefined,
-  });
-  const { data: employees } = useListEmployees({});
-  const mutation = useRecordAttendance();
+const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-  const PAGE_SIZE = 10;
-  const totalRecords = records?.length ?? 0;
-  const totalPages = Math.max(1, Math.ceil(totalRecords / PAGE_SIZE));
-  const paginatedRecords = records ? records.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE) : [];
+const STATUS_CFG: Record<string, { label: string; className: string }> = {
+  present:  { label: "Present",  className: "bg-green-100 text-green-800 border-green-200" },
+  manual:   { label: "Manual",   className: "bg-blue-100 text-blue-800 border-blue-200" },
+  on_leave: { label: "On Leave", className: "bg-purple-100 text-purple-800 border-purple-200" },
+  absent:   { label: "Absent",   className: "bg-red-100 text-red-800 border-red-200" },
+};
 
-  useEffect(() => {
-    setPage(1);
-  }, [empFilter, yearFilter]);
+// ── Sub-components ─────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    if (page > totalPages) {
-      setPage(totalPages);
-    }
-  }, [page, totalPages]);
-
-  const now = new Date();
-  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-
-  const totalEmployees = employees?.length ?? 0;
-  const presentToday = records?.reduce((count, rec) => (rec.date === today && rec.present ? count + 1 : count), 0) ?? 0;
-  const recordedToday = records?.filter((rec) => rec.date === today).length ?? 0;
-  const absentToday = records?.reduce((count, rec) => (rec.date === today && !rec.present ? count + 1 : count), 0) ?? 0;
-  const attendanceCompletion = totalEmployees > 0 ? Math.round((presentToday / totalEmployees) * 100) : 0;
-
-  const attendanceTrend = useMemo(() => {
-    if (!records?.length || totalEmployees === 0) {
-      return [];
-    }
-
-    const grouped = new Map<string, { date: string; present: number; absent: number }>();
-
-    records.forEach((rec) => {
-      const existing = grouped.get(rec.date) ?? { date: rec.date, present: 0, absent: 0 };
-      if (rec.present) {
-        existing.present += 1;
-      } else {
-        existing.absent += 1;
-      }
-      grouped.set(rec.date, existing);
-    });
-
-    return Array.from(grouped.values())
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .slice(-7)
-      .map((item) => ({
-        ...item,
-        absent: item.absent,
-      }));
-  }, [records, totalEmployees]);
-
-  const weeklyAttendance = useMemo(() => {
-    if (!records?.length || totalEmployees === 0) return [];
-
-    const weeklyMap = new Map<string, { week: string; present: number; absent: number }>();
-    records
-      .map((rec) => ({ ...rec, dateObj: new Date(rec.date) }))
-      .sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime())
-      .forEach((rec) => {
-        const start = new Date(rec.dateObj);
-        const dayOfWeek = start.getDay();
-        start.setDate(start.getDate() - dayOfWeek);
-        start.setHours(0, 0, 0, 0);
-        const key = start.toISOString().slice(0, 10);
-        const label = `${String(start.getDate()).padStart(2, "0")}/${String(start.getMonth() + 1).padStart(2, "0")}`;
-        const existing = weeklyMap.get(key) ?? { week: label, present: 0, absent: 0 };
-        if (rec.present) {
-          existing.present += 1;
-        } else {
-          existing.absent += 1;
-        }
-        weeklyMap.set(key, existing);
-      });
-
-    const weeks = Array.from(weeklyMap.entries())
-      .sort(([aKey], [bKey]) => aKey.localeCompare(bKey))
-      .map(([, value]) => value);
-    return weeks.slice(-4).map((item, index, array) => ({
-      ...item,
-      absent: item.absent,
-      change: index === 0 ? 0 : item.present - array[index - 1].present,
-    }));
-  }, [records, totalEmployees]);
-
-  const monthlyAttendance = useMemo(() => {
-    if (!records?.length || totalEmployees === 0) return [];
-
-    const monthlyMap = new Map<string, { month: string; present: number; absent: number }>();
-    records
-      .map((rec) => ({ ...rec, dateObj: new Date(rec.date) }))
-      .sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime())
-      .forEach((rec) => {
-        const date = rec.dateObj;
-        const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-        const label = date.toLocaleString("en-IN", { month: "short", year: "numeric" });
-        const existing = monthlyMap.get(key) ?? { month: label, present: 0, absent: 0 };
-        if (rec.present) {
-          existing.present += 1;
-        } else {
-          existing.absent += 1;
-        }
-        monthlyMap.set(key, existing);
-      });
-
-    const months = Array.from(monthlyMap.entries())
-      .sort(([aKey], [bKey]) => aKey.localeCompare(bKey))
-      .map(([, value]) => value);
-    return months.slice(-6).map((item, index, array) => ({
-      ...item,
-      absent: item.absent,
-      change: index === 0 ? 0 : item.present - array[index - 1].present,
-    }));
-  }, [records, totalEmployees]);
-
-  const form = useForm<FormData>({
-    resolver: zodResolver(schema),
-    defaultValues: { date: today, hoursWorked: "8" },
-  });
-
-  const onSubmit = (data: FormData) => {
-    mutation.mutate(
-      {
-        data: {
-          employeeId: Number(data.employeeId),
-          date: data.date,
-          present,
-          hoursWorked: data.hoursWorked ? Number(data.hoursWorked) : undefined,
-          notes: data.notes,
-        }
-      },
-      {
-        onSuccess: () => {
-          toast({ title: "Attendance recorded" });
-          queryClient.invalidateQueries({ queryKey: getListAttendanceQueryKey() });
-          setOpen(false);
-          form.reset({ date: today, hoursWorked: "8" });
-        },
-        onError: (err: unknown) => {
-          const msg = (err as { data?: { error?: string } })?.data?.error ?? "Failed to record attendance.";
-          toast({ title: "Error", description: msg, variant: "destructive" });
-        },
-      }
-    );
-  };
-
+function SummaryCard({
+  icon: Icon,
+  label,
+  value,
+  color,
+  detail1,
+  detail2,
+  isLoading,
+}: {
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  label: string;
+  value: number | string;
+  color: string;
+  detail1?: { label: string; value: number | string };
+  detail2?: { label: string; value: number | string };
+  isLoading?: boolean;
+}) {
   if (isLoading) {
     return (
-      <HrLayout>
-        <div className="flex items-center justify-center min-h-[calc(100vh-140px)]">
-          <Loader />
+      <Card className="border">
+        <CardContent className="p-5">
+          <Skeleton className="h-4 w-24 mb-3" />
+          <Skeleton className="h-8 w-16 mb-3" />
+          <Skeleton className="h-3 w-32" />
+        </CardContent>
+      </Card>
+    );
+  }
+  return (
+    <Card className="border">
+      <CardContent className="p-5">
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">{label}</p>
+          <div className={`p-1.5 rounded-lg ${color}`}>
+            <Icon size={15} className="text-white" />
+          </div>
         </div>
-      </HrLayout>
+        <p className="text-3xl font-black text-gray-900 mb-3">{value}</p>
+        {(detail1 || detail2) && (
+          <div className="flex gap-4 text-xs text-gray-500">
+            {detail1 && <span><span className="font-semibold text-gray-700">{detail1.value}</span> {detail1.label}</span>}
+            {detail2 && <span><span className="font-semibold text-gray-700">{detail2.value}</span> {detail2.label}</span>}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function YesterdayCard({ data, isLoading }: { data?: { date: string; present: number; absent: number; late: number; onLeave: number }; isLoading?: boolean }) {
+  return (
+    <Card className="border bg-slate-50">
+      <CardContent className="p-5">
+        <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">
+          Yesterday Overview
+          {data?.date && <span className="ml-2 normal-case font-normal text-gray-400">({data.date})</span>}
+        </p>
+        {isLoading ? (
+          <div className="space-y-2">
+            {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-4 w-full" />)}
+          </div>
+        ) : data ? (
+          <div className="space-y-2">
+            {[
+              { label: "Present",  value: data.present,  color: "text-green-700" },
+              { label: "Absent",   value: data.absent,   color: "text-red-600" },
+              { label: "Late",     value: data.late,     color: "text-amber-600" },
+              { label: "On Leave", value: data.onLeave,  color: "text-purple-600" },
+            ].map(({ label, value, color }) => (
+              <div key={label} className="flex items-center justify-between">
+                <span className="text-xs text-gray-500">{label}</span>
+                <span className={`text-sm font-bold ${color}`}>{value}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-gray-400">No data</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function EmployeeTable({
+  records,
+  isLoading,
+  onClickEmployee,
+}: {
+  records: ReturnType<typeof useAttendanceDaily>["data"];
+  isLoading: boolean;
+  onClickEmployee: (id: number) => void;
+}) {
+  if (isLoading) {
+    return (
+      <div className="space-y-2">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="flex gap-3 p-3">
+            <Skeleton className="h-5 w-32" />
+            <Skeleton className="h-5 w-20" />
+            <Skeleton className="h-5 w-24" />
+            <Skeleton className="h-5 w-16" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (!records || records.length === 0) {
+    return (
+      <div className="text-center py-12 text-muted-foreground text-sm">
+        No employee records for this date.
+      </div>
     );
   }
 
   return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b bg-gray-50">
+            <th className="text-left px-4 py-2.5 font-semibold text-xs text-gray-500 uppercase tracking-wider">Employee</th>
+            <th className="text-left px-4 py-2.5 font-semibold text-xs text-gray-500 uppercase tracking-wider">Code</th>
+            <th className="text-left px-4 py-2.5 font-semibold text-xs text-gray-500 uppercase tracking-wider hidden md:table-cell">Department</th>
+            <th className="text-left px-4 py-2.5 font-semibold text-xs text-gray-500 uppercase tracking-wider">Status</th>
+            <th className="text-left px-4 py-2.5 font-semibold text-xs text-gray-500 uppercase tracking-wider">First Punch</th>
+            <th className="text-left px-4 py-2.5 font-semibold text-xs text-gray-500 uppercase tracking-wider hidden lg:table-cell">Last Punch</th>
+            <th className="text-left px-4 py-2.5 font-semibold text-xs text-gray-500 uppercase tracking-wider hidden lg:table-cell">Source</th>
+            <th className="px-4 py-2.5"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {records.map((rec) => {
+            const cfg = STATUS_CFG[rec.status] ?? STATUS_CFG.absent;
+            return (
+              <tr
+                key={rec.employeeId}
+                className="border-b hover:bg-gray-50 cursor-pointer transition-colors"
+                onClick={() => onClickEmployee(rec.employeeId)}
+              >
+                <td className="px-4 py-3 font-medium text-gray-900">{rec.employeeName}</td>
+                <td className="px-4 py-3 text-gray-500 text-xs font-mono">{rec.employeeCode}</td>
+                <td className="px-4 py-3 text-gray-500 hidden md:table-cell">{rec.department ?? "—"}</td>
+                <td className="px-4 py-3">
+                  <Badge className={`text-xs border ${cfg.className}`}>{cfg.label}</Badge>
+                </td>
+                <td className="px-4 py-3 font-mono text-xs text-gray-700">
+                  {rec.firstPunch ?? <span className="text-gray-300">—</span>}
+                </td>
+                <td className="px-4 py-3 font-mono text-xs text-gray-700 hidden lg:table-cell">
+                  {rec.lastPunch ?? <span className="text-gray-300">—</span>}
+                </td>
+                <td className="px-4 py-3 hidden lg:table-cell">
+                  {rec.source ? (
+                    <span className="flex items-center gap-1 text-xs text-gray-400">
+                      {rec.source.startsWith("biometric") ? <Fingerprint size={11} /> : <PenLine size={11} />}
+                      {rec.source.startsWith("biometric") ? "Biometric" : "Manual"}
+                    </span>
+                  ) : <span className="text-gray-300">—</span>}
+                </td>
+                <td className="px-4 py-3">
+                  <ChevronRight size={14} className="text-gray-300" />
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── Main Page ──────────────────────────────────────────────────────────────
+
+export default function AttendancePage() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const [selectedDate, setSelectedDate] = useState(today());
+  const [selectedMonth, setSelectedMonth] = useState(currentMonth());
+  const [selectedYear, setSelectedYear] = useState(currentYear());
+  const [activeTab, setActiveTab] = useState<"all" | "production" | "staff">("all");
+
+  const [showManualDialog, setShowManualDialog] = useState(false);
+  const [manualForm, setManualForm] = useState({
+    employeeId: "",
+    date: today(),
+    punchTime: "",
+    punchType: "IN",
+    notes: "",
+    hoursWorked: "",
+  });
+
+  const [detailEmpId, setDetailEmpId] = useState<number | null>(null);
+
+  // Queries
+  const { data: summary, isLoading: summaryLoading } = useAttendanceSummary(selectedDate);
+  const { data: dailyList, isLoading: dailyLoading } = useAttendanceDaily(selectedDate);
+  const { data: monthlyTrend } = useAttendanceMonthlyTrend(selectedYear, selectedMonth);
+  const { data: empDetail, isLoading: empDetailLoading } = useAttendanceEmployeeHistory(
+    detailEmpId, selectedMonth, selectedYear,
+  );
+  const createManual = useCreateManualAttendance();
+
+  // Derived lists
+  const allRecords = dailyList ?? [];
+  const productionRecords = allRecords.filter((r) => r.employmentType === "production");
+  const staffRecords = allRecords.filter((r) => r.employmentType === "staff");
+
+  const activeRecords =
+    activeTab === "production" ? productionRecords
+    : activeTab === "staff" ? staffRecords
+    : allRecords;
+
+  // Today vs Yesterday comparison data
+  const comparisonData = summary
+    ? [
+        {
+          label: "Yesterday",
+          present: summary.yesterday.present,
+          absent: summary.yesterday.absent,
+          late: summary.yesterday.late,
+          onLeave: summary.yesterday.onLeave,
+        },
+        {
+          label: "Today",
+          present: summary.presentToday,
+          absent: summary.notPunched,
+          late: 0,
+          onLeave: 0,
+        },
+      ]
+    : [];
+
+  const addManualAttendance = async () => {
+    if (!manualForm.employeeId || !manualForm.date) {
+      toast({ title: "Employee ID and date are required", variant: "destructive" });
+      return;
+    }
+    try {
+      await createManual.mutateAsync({
+        employeeId: Number(manualForm.employeeId),
+        date: manualForm.date,
+        punchTime: manualForm.punchTime || undefined,
+        punchType: manualForm.punchType,
+        notes: manualForm.notes || undefined,
+        hoursWorked: manualForm.hoursWorked ? Number(manualForm.hoursWorked) : undefined,
+      });
+    } catch (err: any) {
+      toast({ title: err?.message ?? "Failed to add attendance", variant: "destructive" });
+      return;
+    }
+    toast({ title: "Attendance recorded successfully" });
+    setShowManualDialog(false);
+    setManualForm({ employeeId: "", date: today(), punchTime: "", punchType: "IN", notes: "", hoursWorked: "" });
+    queryClient.invalidateQueries({ queryKey: getAttendanceSummaryQueryKey(selectedDate) });
+    queryClient.invalidateQueries({ queryKey: getAttendanceDailyQueryKey(selectedDate) });
+    queryClient.invalidateQueries({ queryKey: getAttendanceMonthlyTrendQueryKey(selectedYear, selectedMonth) });
+  };
+
+  return (
     <HrLayout>
-      <div className="min-h-[calc(100vh-140px)] flex flex-col justify-between gap-6">
-        <div className="space-y-5 flex-1">
-          <div className="flex items-center justify-between">
+      <div className="space-y-5">
+
+        {/* ── Header ── */}
+        <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
-            <h2 className="text-2xl font-black">Attendance</h2>
-            <p className="text-muted-foreground text-sm mt-0.5">{records?.length ?? 0} records</p>
-          </div>
-          <Button onClick={() => setOpen(true)} data-testid="button-record-attendance">
-            <Plus size={16} className="mr-2" /> Record Attendance
-          </Button>
-        </div>
-
-        <div className="grid gap-4 xl:grid-cols-[1fr_1.25fr]">
-          <Card>
-            <CardContent className="p-4 space-y-4">
-              <div>
-                <p className="text-sm uppercase tracking-wider text-muted-foreground">Today's attendance</p>
-                <p className="text-3xl font-black mt-2">{presentToday} of {totalEmployees}</p>
-              </div>
-              <div className="grid grid-cols-3 gap-3 text-sm">
-                <div className="rounded-lg border border-border bg-muted p-3 text-center">
-                  <p className="text-muted-foreground">Present</p>
-                  <p className="mt-2 text-lg font-semibold text-emerald-700">{presentToday}</p>
-                </div>
-                <div className="rounded-lg border border-border bg-muted p-3 text-center">
-                  <p className="text-muted-foreground">Absent</p>
-                  <p className="mt-2 text-lg font-semibold text-rose-700">{absentToday}</p>
-                </div>
-                <div className="rounded-lg border border-border bg-muted p-3 text-center">
-                  <p className="text-muted-foreground">Completion</p>
-                  <p className="mt-2 text-lg font-semibold">{attendanceCompletion}%</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-4">
-              <div className="mb-4 flex items-center justify-between">
-                <div>
-                  <p className="text-sm uppercase tracking-wider text-muted-foreground">Present vs Absent</p>
-                  <p className="text-xs text-muted-foreground">Based on total employee count</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-2xl font-black">{attendanceCompletion}%</p>
-                </div>
-              </div>
-              <ChartContainer
-                config={{ present: { color: "#22c55e" }, absent: { color: "#f59e0b" } }}
-                className="h-56"
-              >
-                <PieChart>
-                  <Pie
-                    data={[
-                      { name: "Present", value: presentToday },
-                      { name: "Absent", value: absentToday },
-                    ]}
-                    dataKey="value"
-                    nameKey="name"
-                    innerRadius={42}
-                    outerRadius={72}
-                    paddingAngle={4}
-                    labelLine={false}
-                    label={({ percent }) => `${Math.round(percent * 100)}%`}
-                  >
-                    <Cell fill="#22c55e" />
-                    <Cell fill="#f59e0b" />
-                  </Pie>
-                  <Tooltip formatter={(value: number) => [value, "Employees"]} />
-                </PieChart>
-              </ChartContainer>
-              <div className="grid grid-cols-2 gap-3 mt-4 text-sm">
-                <div className="rounded-lg border border-border bg-muted p-3">
-                  <p className="text-muted-foreground">Present</p>
-                  <p className="mt-2 font-semibold text-emerald-700">{presentToday}</p>
-                </div>
-                <div className="rounded-lg border border-border bg-muted p-3">
-                  <p className="text-muted-foreground">Absent</p>
-                  <p className="mt-2 font-semibold text-rose-700">{absentToday}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="mb-4 flex items-center justify-between">
-              <div>
-                <p className="text-sm uppercase tracking-wider text-muted-foreground">Last 7 days attendance</p>
-                <p className="text-xs text-muted-foreground">Present employees versus total headcount</p>
-              </div>
-              <p className="text-sm text-muted-foreground">{totalEmployees} total employees</p>
-            </div>
-            {attendanceTrend.length > 0 ? (
-              <ChartContainer
-                config={{ present: { color: "#22c55e" }, absent: { color: "#f59e0b" } }}
-                className="h-72"
-              >
-                <BarChart data={attendanceTrend} margin={{ top: 8, right: 0, left: -12, bottom: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="date" tickFormatter={(value) => value.slice(-5)} />
-                  <YAxis allowDecimals={false} />
-                  <Tooltip formatter={(value: number) => [value, "Employees"]} />
-                  <Bar dataKey="present" stackId="a" fill="#22c55e" />
-                  <Bar dataKey="absent" stackId="a" fill="#f59e0b" />
-                </BarChart>
-              </ChartContainer>
-            ) : (
-              <div className="flex h-72 items-center justify-center rounded-lg border border-border bg-muted text-sm text-muted-foreground">
-                No attendance data available for charting.
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <div className="grid gap-4 xl:grid-cols-2">
-          <Card>
-            <CardContent className="p-4">
-              <div className="mb-4 flex items-center justify-between">
-                <div>
-                  <p className="text-sm uppercase tracking-wider text-muted-foreground">Weekly attendance diff</p>
-                  <p className="text-xs text-muted-foreground">Last 4 weeks present versus absent</p>
-                </div>
-                <p className="text-sm text-muted-foreground">Total employees: {totalEmployees}</p>
-              </div>
-              {weeklyAttendance.length > 0 ? (
-                <ChartContainer
-                  config={{ present: { color: "#22c55e" }, absent: { color: "#f59e0b" }, change: { color: "#0ea5e9" } }}
-                  className="h-72"
-                >
-                  <BarChart data={weeklyAttendance} margin={{ top: 8, right: 0, left: -12, bottom: 8 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="week" />
-                    <YAxis allowDecimals={false} />
-                    <Tooltip formatter={(value: number) => [value, "Employees"]} />
-                    <Bar dataKey="present" stackId="a" fill="#22c55e" />
-                    <Bar dataKey="absent" stackId="a" fill="#f59e0b" />
-                    <Line type="monotone" dataKey="change" stroke="#0ea5e9" strokeWidth={2} dot={{ r: 3 }} />
-                  </BarChart>
-                </ChartContainer>
-              ) : (
-                <div className="flex h-72 items-center justify-center rounded-lg border border-border bg-muted text-sm text-muted-foreground">
-                  No weekly attendance data available.
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-4">
-              <div className="mb-4 flex items-center justify-between">
-                <div>
-                  <p className="text-sm uppercase tracking-wider text-muted-foreground">Monthly attendance diff</p>
-                  <p className="text-xs text-muted-foreground">Last 6 months present versus absent</p>
-                </div>
-                <p className="text-sm text-muted-foreground">Total employees: {totalEmployees}</p>
-              </div>
-              {monthlyAttendance.length > 0 ? (
-                <ChartContainer
-                  config={{ present: { color: "#22c55e" }, absent: { color: "#f59e0b" }, change: { color: "#0ea5e9" } }}
-                  className="h-72"
-                >
-                  <BarChart data={monthlyAttendance} margin={{ top: 8, right: 0, left: -12, bottom: 8 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="month" />
-                    <YAxis allowDecimals={false} />
-                    <Tooltip formatter={(value: number) => [value, "Employees"]} />
-                    <Bar dataKey="present" stackId="a" fill="#22c55e" />
-                    <Bar dataKey="absent" stackId="a" fill="#f59e0b" />
-                    <Line type="monotone" dataKey="change" stroke="#0ea5e9" strokeWidth={2} dot={{ r: 3 }} />
-                  </BarChart>
-                </ChartContainer>
-              ) : (
-                <div className="flex h-72 items-center justify-center rounded-lg border border-border bg-muted text-sm text-muted-foreground">
-                  No monthly attendance data available.
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Filters */}
-        <Card>
-          <CardContent className="p-4 flex flex-wrap gap-3">
-            <div className="w-64">
-              <EmployeeSearchSelect
-                employees={employees}
-                value={empFilter}
-                onChange={setEmpFilter}
-                allowAll={true}
-                allPlaceholder="All Employees"
-                dataTestId="select-employee"
-              />
-            </div>
-            <Input
-              type="number"
-              className="w-28"
-              placeholder="Year"
-              value={yearFilter}
-              onChange={(e) => setYearFilter(e.target.value)}
-              data-testid="input-year-filter"
-            />
-            {(empFilter !== "all") && (
-              <Button variant="ghost" size="sm" onClick={() => { setEmpFilter("all"); }} data-testid="button-clear-filters">
-                Clear
-              </Button>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Table */}
-        <Card>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="pl-4">Employee</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Hours</TableHead>
-                  <TableHead className="hidden md:table-cell pr-4">Notes</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {isLoading ? (
-                  Array.from({ length: 6 }).map((_, i) => (
-                    <TableRow key={i}>{Array.from({ length: 5 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
-                  ))
-                ) : records && records.length > 0 ? (
-                  paginatedRecords.map((rec) => (
-                    <TableRow key={rec.id} data-testid={`row-attendance-${rec.id}`}>
-                      <TableCell className="pl-4 font-medium text-sm">
-                        {employees?.find((e) => e.id === rec.employeeId)
-                          ? `${employees.find((e) => e.id === rec.employeeId)!.firstName} ${employees.find((e) => e.id === rec.employeeId)!.lastName}`
-                          : `Employee #${rec.employeeId}`}
-                      </TableCell>
-                      <TableCell className="text-sm">{rec.date}</TableCell>
-                      <TableCell>
-                        <Badge className={rec.present ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}>
-                          {rec.present ? "Present" : "Absent"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{rec.hoursWorked ?? "—"}</TableCell>
-                      <TableCell className="hidden md:table-cell text-sm text-muted-foreground pr-4">{rec.notes ?? "—"}</TableCell>
-                    </TableRow>
-                  ))
-                ) : (
-                  <TableRow><TableCell colSpan={5} className="text-center py-12 text-muted-foreground">No attendance records</TableCell></TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      </div>
-
-        {records && records.length > PAGE_SIZE && (
-          <div className="flex flex-row gap-3 px-4 py-3 items-center justify-between border-t bg-card rounded-lg shadow-sm shrink-0">
-            <p className="text-sm text-muted-foreground">
-              Showing {paginatedRecords.length} of {records.length} records
+            <h2 className="text-2xl font-black text-gray-900">Attendance</h2>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              Real-time attendance tracking · AiFace-Mars biometric integration
             </p>
-            <Pagination className="mt-2 sm:mt-0">
-              <PaginationPrevious
-                href="#"
-                className={page === 1 ? "pointer-events-none opacity-50" : undefined}
-                onClick={(event) => {
-                  event.preventDefault();
-                  if (page > 1) {
-                    setPage(page - 1);
-                  }
-                }}
-              />
-              <PaginationContent>
-                {(() => {
-                  const visible = 3; // show at most 3 page numbers
-                  if (totalPages <= visible) {
-                    return Array.from({ length: totalPages }, (_, index) => {
-                      const pageNumber = index + 1;
-                      return (
-                        <PaginationItem key={pageNumber}>
-                          <PaginationLink
-                            href="#"
-                            isActive={pageNumber === page}
-                            onClick={(event) => {
-                              event.preventDefault();
-                              setPage(pageNumber);
-                            }}
-                          >
-                            {pageNumber}
-                          </PaginationLink>
-                        </PaginationItem>
-                      );
-                    });
-                  }
-
-                  let start = Math.max(1, page - Math.floor(visible / 2));
-                  let end = Math.min(totalPages, start + visible - 1);
-                  if (end - start + 1 < visible) {
-                    start = Math.max(1, end - visible + 1);
-                  }
-
-                  const items = [] as React.JSX.Element[];
-                  for (let p = start; p <= end; p++) {
-                    const pageNumber = p;
-                    items.push(
-                      <PaginationItem key={pageNumber}>
-                        <PaginationLink
-                          href="#"
-                          isActive={pageNumber === page}
-                          onClick={(event) => {
-                            event.preventDefault();
-                            setPage(pageNumber);
-                          }}
-                        >
-                          {pageNumber}
-                        </PaginationLink>
-                      </PaginationItem>
-                    );
-                  }
-
-                  return items;
-                })()}
-              </PaginationContent>
-              <PaginationNext
-                href="#"
-                className={page === totalPages ? "pointer-events-none opacity-50" : undefined}
-                onClick={(event) => {
-                  event.preventDefault();
-                  if (page < totalPages) {
-                    setPage(page + 1);
-                  }
-                }}
-              />
-            </Pagination>
           </div>
-        )}
+          <div className="flex items-center gap-2">
+            <Input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="h-9 text-sm w-40"
+            />
+            <Button onClick={() => setShowManualDialog(true)} className="gap-2 h-9">
+              <Plus size={14} /> Add Attendance
+            </Button>
+          </div>
+        </div>
+
+        {/* ── Summary Cards ── */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <SummaryCard
+            icon={Users}
+            label="Total Employees"
+            value={summary?.totalEmployees ?? "—"}
+            color="bg-gray-700"
+            detail1={{ label: "Production", value: summary?.productionTotal ?? "—" }}
+            detail2={{ label: "Staff", value: summary?.staffTotal ?? "—" }}
+            isLoading={summaryLoading}
+          />
+          <SummaryCard
+            icon={UserCheck}
+            label="Present Today"
+            value={summary?.presentToday ?? "—"}
+            color="bg-green-600"
+            detail1={{ label: "Biometric", value: summary?.biometricPresent ?? "—" }}
+            detail2={{ label: "Manual", value: summary?.manualPresent ?? "—" }}
+            isLoading={summaryLoading}
+          />
+          <SummaryCard
+            icon={UserX}
+            label="Not Punched"
+            value={summary?.notPunched ?? "—"}
+            color="bg-red-500"
+            detail1={{ label: "Production", value: summary?.productionNotPunched ?? "—" }}
+            detail2={{ label: "Staff", value: summary?.staffNotPunched ?? "—" }}
+            isLoading={summaryLoading}
+          />
+          <YesterdayCard data={summary?.yesterday} isLoading={summaryLoading} />
+        </div>
+
+        {/* ── Charts ── */}
+        <div className="grid lg:grid-cols-2 gap-4">
+
+          {/* Today vs Yesterday */}
+          <Card className="border">
+            <CardHeader className="pb-2 pt-4 px-4">
+              <CardTitle className="text-sm font-semibold text-gray-700">Today vs Yesterday</CardTitle>
+              <p className="text-xs text-muted-foreground">Present / Absent / Late comparison</p>
+            </CardHeader>
+            <CardContent className="px-4 pb-4">
+              {comparisonData.length > 0 ? (
+                <ChartContainer
+                  config={{
+                    present: { color: "#22c55e" },
+                    absent:  { color: "#ef4444" },
+                    late:    { color: "#f59e0b" },
+                    onLeave: { color: "#a855f7" },
+                  }}
+                  className="h-56"
+                >
+                  <BarChart data={comparisonData} margin={{ top: 4, right: 8, left: -20, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+                    <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+                    <Tooltip />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Bar dataKey="present"  fill="#22c55e" name="Present"  radius={[3,3,0,0]} />
+                    <Bar dataKey="absent"   fill="#ef4444" name="Absent"   radius={[3,3,0,0]} />
+                    <Bar dataKey="late"     fill="#f59e0b" name="Late"     radius={[3,3,0,0]} />
+                    <Bar dataKey="onLeave"  fill="#a855f7" name="On Leave" radius={[3,3,0,0]} />
+                  </BarChart>
+                </ChartContainer>
+              ) : (
+                <div className="h-56 flex items-center justify-center text-sm text-muted-foreground">
+                  No data available
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Monthly Trend */}
+          <Card className="border">
+            <CardHeader className="pb-2 pt-4 px-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-sm font-semibold text-gray-700">Monthly Trend</CardTitle>
+                  <p className="text-xs text-muted-foreground">Daily present vs absent</p>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <select
+                    value={selectedMonth}
+                    onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                    className="h-7 rounded-md border px-1.5 text-xs bg-background"
+                  >
+                    {MONTH_NAMES.map((m, i) => (
+                      <option key={i} value={i + 1}>{m}</option>
+                    ))}
+                  </select>
+                  <Input
+                    type="number"
+                    value={selectedYear}
+                    onChange={(e) => setSelectedYear(Number(e.target.value))}
+                    className="w-16 h-7 text-xs"
+                    min={2020} max={2030}
+                  />
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="px-4 pb-4">
+              {(monthlyTrend ?? []).length > 0 ? (
+                <ChartContainer
+                  config={{ present: { color: "#22c55e" }, absent: { color: "#ef4444" } }}
+                  className="h-56"
+                >
+                  <BarChart
+                    data={monthlyTrend}
+                    margin={{ top: 4, right: 8, left: -20, bottom: 4 }}
+                    barCategoryGap="20%"
+                  >
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis
+                      dataKey="day"
+                      tick={{ fontSize: 10 }}
+                      interval={4}
+                    />
+                    <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+                    <Tooltip
+                      labelFormatter={(v) => {
+                        const item = monthlyTrend?.find((d) => d.day === v);
+                        return item?.date ?? String(v);
+                      }}
+                    />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Bar dataKey="present" stackId="a" fill="#22c55e" name="Present" />
+                    <Bar dataKey="absent"  stackId="a" fill="#ef4444" name="Absent"  radius={[3,3,0,0]} />
+                  </BarChart>
+                </ChartContainer>
+              ) : (
+                <div className="h-56 flex items-center justify-center text-sm text-muted-foreground">
+                  No data for this month
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* ── Employee Table ── */}
+        <Card className="border">
+          <CardHeader className="pb-0 pt-4 px-4">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div>
+                <CardTitle className="text-sm font-semibold text-gray-700">
+                  Employee Attendance — {selectedDate}
+                </CardTitle>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Click any row to view full attendance history
+                </p>
+              </div>
+              <div className="flex items-center gap-3 text-xs text-gray-500">
+                <span className="flex items-center gap-1">
+                  <div className="w-2 h-2 rounded-full bg-green-500" /> Present: {allRecords.filter(r => r.status === "present" || r.status === "manual").length}
+                </span>
+                <span className="flex items-center gap-1">
+                  <div className="w-2 h-2 rounded-full bg-red-500" /> Absent: {allRecords.filter(r => r.status === "absent").length}
+                </span>
+                <span className="flex items-center gap-1">
+                  <div className="w-2 h-2 rounded-full bg-purple-500" /> On Leave: {allRecords.filter(r => r.status === "on_leave").length}
+                </span>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0 mt-3">
+            <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)}>
+              <div className="px-4 border-b">
+                <TabsList className="bg-transparent h-9 p-0 gap-1">
+                  <TabsTrigger
+                    value="all"
+                    className="h-8 text-xs rounded-none border-b-2 border-transparent data-[state=active]:border-gray-900 data-[state=active]:bg-transparent"
+                  >
+                    <Users size={12} className="mr-1" /> All ({allRecords.length})
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="production"
+                    className="h-8 text-xs rounded-none border-b-2 border-transparent data-[state=active]:border-gray-900 data-[state=active]:bg-transparent"
+                  >
+                    <Factory size={12} className="mr-1" /> Production ({productionRecords.length})
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="staff"
+                    className="h-8 text-xs rounded-none border-b-2 border-transparent data-[state=active]:border-gray-900 data-[state=active]:bg-transparent"
+                  >
+                    <Briefcase size={12} className="mr-1" /> Staff ({staffRecords.length})
+                  </TabsTrigger>
+                </TabsList>
+              </div>
+              <TabsContent value={activeTab} className="mt-0">
+                <EmployeeTable
+                  records={activeRecords}
+                  isLoading={dailyLoading}
+                  onClickEmployee={(id) => setDetailEmpId(id)}
+                />
+              </TabsContent>
+            </Tabs>
+          </CardContent>
+        </Card>
+
       </div>
 
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader><DialogTitle>Record Attendance</DialogTitle></DialogHeader>
-          <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-              <FormField control={form.control} name="employeeId" render={({ field }) => (
-                <FormItem className="flex flex-col"><FormLabel>Employee</FormLabel>
-                  <FormControl>
-                    <EmployeeSearchSelect
-                      employees={employees}
-                      value={field.value}
-                      onChange={field.onChange}
-                      placeholder="Select employee"
-                      dataTestId="select-employee-form"
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )} />
-              <FormField control={form.control} name="date" render={({ field }) => (
-                <FormItem><FormLabel>Date</FormLabel><FormControl><Input type="date" data-testid="input-date" {...field} /></FormControl><FormMessage /></FormItem>
-              )} />
-              <div className="flex items-center gap-3">
-                <Switch checked={present} onCheckedChange={setPresent} id="present-switch" data-testid="switch-present" />
-                <Label htmlFor="present-switch" className="font-medium">{present ? "Present" : "Absent"}</Label>
+      {/* ── Manual Attendance Dialog ── */}
+      <Dialog open={showManualDialog} onOpenChange={setShowManualDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add Attendance Manually</DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground -mt-2">
+            Use this when the biometric device missed a punch. Verify with CCTV before adding.
+          </p>
+          <div className="space-y-4 pt-1">
+            <div className="space-y-1.5">
+              <Label>Employee ID</Label>
+              <Input
+                type="number"
+                placeholder="Enter Employee ID"
+                value={manualForm.employeeId}
+                onChange={(e) => setManualForm((f) => ({ ...f, employeeId: e.target.value }))}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Date</Label>
+                <Input
+                  type="date"
+                  value={manualForm.date}
+                  onChange={(e) => setManualForm((f) => ({ ...f, date: e.target.value }))}
+                />
               </div>
-              {present && (
-                <FormField control={form.control} name="hoursWorked" render={({ field }) => (
-                  <FormItem><FormLabel>Hours Worked</FormLabel><FormControl><Input type="number" min="0" max="24" data-testid="input-hours" {...field} /></FormControl><FormMessage /></FormItem>
-                )} />
-              )}
-              <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setOpen(false)} data-testid="button-cancel">Cancel</Button>
-                <Button type="submit" disabled={mutation.isPending} data-testid="button-save">
-                  {mutation.isPending ? "Saving..." : "Save"}
-                </Button>
-              </DialogFooter>
-            </form>
-          </Form>
+              <div className="space-y-1.5">
+                <Label>Punch Time (optional)</Label>
+                <Input
+                  type="time"
+                  value={manualForm.punchTime}
+                  onChange={(e) => setManualForm((f) => ({ ...f, punchTime: e.target.value }))}
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Punch Type</Label>
+                <select
+                  value={manualForm.punchType}
+                  onChange={(e) => setManualForm((f) => ({ ...f, punchType: e.target.value }))}
+                  className="w-full h-9 rounded-md border px-3 text-sm bg-background"
+                >
+                  <option value="IN">Check In</option>
+                  <option value="OUT">Check Out</option>
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Hours Worked (optional)</Label>
+                <Input
+                  type="number"
+                  min="0" max="24" step="0.5"
+                  placeholder="e.g. 8"
+                  value={manualForm.hoursWorked}
+                  onChange={(e) => setManualForm((f) => ({ ...f, hoursWorked: e.target.value }))}
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Notes (optional)</Label>
+              <Input
+                placeholder="e.g. CCTV verified – entry gate 2"
+                value={manualForm.notes}
+                onChange={(e) => setManualForm((f) => ({ ...f, notes: e.target.value }))}
+              />
+            </div>
+            <div className="flex gap-3 pt-1">
+              <Button variant="outline" className="flex-1" onClick={() => setShowManualDialog(false)}>
+                Cancel
+              </Button>
+              <Button className="flex-1" onClick={addManualAttendance} disabled={createManual.isPending}>
+                {createManual.isPending ? "Saving…" : "Save Attendance"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Employee Detail Dialog ── */}
+      <Dialog open={!!detailEmpId} onOpenChange={(open) => { if (!open) setDetailEmpId(null); }}>
+        <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>
+              {empDetail ? `${empDetail.employee.name} — Attendance History` : "Attendance History"}
+            </DialogTitle>
+          </DialogHeader>
+
+          {empDetailLoading ? (
+            <div className="space-y-3 py-4">
+              {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
+            </div>
+          ) : empDetail ? (
+            <div className="flex flex-col gap-4 overflow-hidden">
+              {/* Employee info bar */}
+              <div className="flex items-center gap-4 p-3 bg-gray-50 rounded-lg text-sm flex-wrap">
+                <span className="text-gray-500">Code: <strong className="text-gray-800 font-mono">{empDetail.employee.code}</strong></span>
+                {empDetail.employee.department && (
+                  <span className="text-gray-500">Dept: <strong className="text-gray-800">{empDetail.employee.department}</strong></span>
+                )}
+                <span className="text-gray-500">Type: <strong className="text-gray-800 capitalize">{empDetail.employee.employmentType}</strong></span>
+                <span className="flex gap-3 ml-auto">
+                  <span className="text-green-700 font-semibold">{empDetail.totalPresent} Present</span>
+                  <span className="text-red-600 font-semibold">{empDetail.totalAbsent} Absent</span>
+                </span>
+              </div>
+
+              {/* Filter controls */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <select
+                  value={selectedMonth}
+                  onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                  className="h-8 rounded-md border px-2 text-xs bg-background"
+                >
+                  {MONTH_NAMES.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+                </select>
+                <Input
+                  type="number"
+                  value={selectedYear}
+                  onChange={(e) => setSelectedYear(Number(e.target.value))}
+                  className="w-20 h-8 text-xs"
+                  min={2020} max={2030}
+                />
+              </div>
+
+              {/* Records table */}
+              <div className="overflow-y-auto flex-1">
+                {empDetail.records.length === 0 ? (
+                  <p className="text-center py-8 text-muted-foreground text-sm">No attendance records found.</p>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-white">
+                      <tr className="border-b">
+                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Date</th>
+                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Status</th>
+                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">First In</th>
+                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Last Out</th>
+                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Punches</th>
+                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Source</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {empDetail.records.map((rec) => (
+                        <tr key={rec.date} className="border-b hover:bg-gray-50">
+                          <td className="py-2.5 px-3 font-mono text-xs text-gray-700">{rec.date}</td>
+                          <td className="py-2.5 px-3">
+                            <Badge className={`text-xs border ${rec.present ? "bg-green-100 text-green-800 border-green-200" : "bg-red-100 text-red-800 border-red-200"}`}>
+                              {rec.present ? "Present" : "Absent"}
+                            </Badge>
+                          </td>
+                          <td className="py-2.5 px-3 font-mono text-xs text-gray-700">
+                            {rec.firstPunch ?? <span className="text-gray-300">—</span>}
+                          </td>
+                          <td className="py-2.5 px-3 font-mono text-xs text-gray-700">
+                            {rec.lastPunch ?? <span className="text-gray-300">—</span>}
+                          </td>
+                          <td className="py-2.5 px-3 text-center text-xs text-gray-500">
+                            {rec.totalPunches > 0 ? rec.totalPunches : "—"}
+                          </td>
+                          <td className="py-2.5 px-3 text-xs text-gray-400 hidden md:table-cell">
+                            {rec.source?.startsWith("biometric") ? (
+                              <span className="flex items-center gap-1"><Fingerprint size={11} /> Biometric</span>
+                            ) : rec.source === "manual" ? (
+                              <span className="flex items-center gap-1"><PenLine size={11} /> Manual</span>
+                            ) : "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          ) : null}
         </DialogContent>
       </Dialog>
     </HrLayout>

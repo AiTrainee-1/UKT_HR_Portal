@@ -43,7 +43,7 @@ export default function EmployeeDetail() {
 
   return (
     <HrLayout>
-      <div className="max-w-4xl space-y-5">
+      <div className="space-y-5">
         {/* Header */}
         <div className="flex items-start gap-3">
           <Button variant="ghost" size="icon" onClick={() => navigate("/hr/employees")} data-testid="button-back">

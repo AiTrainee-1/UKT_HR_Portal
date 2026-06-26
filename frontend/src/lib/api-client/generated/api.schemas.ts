@@ -103,9 +103,19 @@ export interface Employee {
   /** @nullable */
   role?: string | null;
   /** @nullable */
+  gender?: string | null;
+  /** @nullable */
+  dateOfBirth?: string | null;
+  /** @nullable */
+  employmentType?: string | null;
+  /** @nullable */
   departmentId?: number | null;
   /** @nullable */
   departmentName?: string | null;
+  /** @nullable */
+  designationId?: number | null;
+  /** @nullable */
+  designationTitle?: string | null;
   salaryType: EmployeeSalaryType;
   /** @nullable */
   salaryAmount?: number | null;
@@ -536,8 +546,10 @@ export interface SalaryTrend {
 
 export type ListEmployeesParams = {
 departmentId?: number;
+designationId?: number;
 status?: string;
 salaryType?: string;
+search?: string;
 };
 
 export type ListSalaryRecordsParams = {

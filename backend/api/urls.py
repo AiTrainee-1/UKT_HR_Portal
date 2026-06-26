@@ -4,12 +4,14 @@ from . import views
 from .shift_views import (
     shift_templates, shift_template_detail,
     shift_assignments, shift_assignment_detail,
+    bulk_shift_assignments, sync_production_shifts,
 )
 from .leave_views import (
     leave_types, leave_type_detail,
     leave_balances, allocate_leave,
     holidays, holiday_detail,
     employee_requests, employee_request_action,
+    employee_permissions, employee_permission_detail,
 )
 from .settlement_views import (
     advances, advance_detail, advance_repayments,
@@ -28,6 +30,10 @@ from .org_views import (
 )
 from .reports_views import (
     attendance_report, leave_report, payroll_report, employee_report,
+)
+from .attendance_views import (
+    attendance_summary, attendance_daily, attendance_monthly_trend,
+    attendance_employee_history, biometric_punch, manual_attendance,
 )
 
 urlpatterns = [
@@ -57,6 +63,8 @@ urlpatterns = [
     path("shifts", shift_templates),
     path("shifts/<int:pk>", shift_template_detail),
     path("shift-assignments", shift_assignments),
+    path("shift-assignments/bulk", bulk_shift_assignments),
+    path("shift-assignments/sync-production", sync_production_shifts),
     path("shift-assignments/<int:pk>", shift_assignment_detail),
 
     # ── Leave & Holiday ─────────────────────────────────────────────────────
@@ -72,6 +80,10 @@ urlpatterns = [
     # ── Approved Requests (Mobile App) ──────────────────────────────────────
     path("employee-requests", employee_requests),
     path("employee-requests/<int:pk>/action", employee_request_action),
+
+    # ── Employee Permissions ─────────────────────────────────────────────────
+    path("permissions", employee_permissions),
+    path("permissions/<int:pk>", employee_permission_detail),
 
     # ── Salary Records (legacy) ──────────────────────────────────────────────
     path("salary-records", views.salary_records),
@@ -100,6 +112,12 @@ urlpatterns = [
 
     # ── Attendance ──────────────────────────────────────────────────────────
     path("attendance", views.attendance),
+    path("attendance/summary", attendance_summary),
+    path("attendance/daily", attendance_daily),
+    path("attendance/monthly-trend", attendance_monthly_trend),
+    path("attendance/employee/<int:pk>", attendance_employee_history),
+    path("attendance/manual", manual_attendance),
+    path("biometric/punch", biometric_punch),
 
     # ── Dashboard ───────────────────────────────────────────────────────────
     path("dashboard/hr-summary", views.hr_dashboard_summary),

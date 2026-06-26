@@ -24,7 +24,6 @@ python -m venv .venv
 pip install -r requirements.txt
 copy .env.example .env
 python manage.py migrate
-python manage.py runserver 8080
 ```
 
 ### 3. Frontend
@@ -32,7 +31,8 @@ python manage.py runserver 8080
 ```bash
 cd frontend
 npm install
-copy .env.example .env
+copy .env.example .envpython manage.py runserver 8080
+
 npm run dev
 ```
 

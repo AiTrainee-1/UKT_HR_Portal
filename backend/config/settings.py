@@ -1,13 +1,13 @@
 import os
 from pathlib import Path
 
-import dj_database_url
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-only-change-me")
+BIOMETRIC_API_KEY = os.environ.get("BIOMETRIC_API_KEY", "")
 DEBUG = os.environ.get("DEBUG", "true").lower() in ("1", "true", "yes")
 ALLOWED_HOSTS = [
     h.strip()
@@ -26,6 +26,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "api.middleware.DatabaseHealthMiddleware",
     "django.middleware.common.CommonMiddleware",
 ]
 
@@ -33,13 +34,14 @@ ROOT_URLCONF = "config.urls"
 WSGI_APPLICATION = "config.wsgi.application"
 
 DATABASES = {
-    "default": dj_database_url.config(
-        default=os.environ.get(
-            "DATABASE_URL",
-            "postgresql://postgres:postgres@localhost:5432/uk_textile",
-        ),
-        conn_max_age=600,
-    )
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.environ.get("DB_NAME", "UKTex_DB"),
+        "USER": os.environ.get("DB_USER", "postgres"),
+        "PASSWORD": os.environ.get("DB_PASSWORD", ""),
+        "HOST": os.environ.get("DB_HOST", "localhost"),
+        "PORT": os.environ.get("DB_PORT", "5432"),
+    }
 }
 
 LANGUAGE_CODE = "en-us"

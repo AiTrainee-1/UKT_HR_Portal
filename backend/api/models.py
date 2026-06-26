@@ -461,6 +461,7 @@ class SalarySlip(models.Model):
     )
     month = models.IntegerField()
     year = models.IntegerField()
+    week_number = models.IntegerField(null=True, blank=True, db_column="week_number")
     slip_number = models.TextField(unique=True, db_column="slip_number")
     basic = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     hra = models.DecimalField(max_digits=10, decimal_places=2, default=0)
@@ -483,7 +484,7 @@ class SalarySlip(models.Model):
 
     class Meta:
         db_table = "salary_slips"
-        unique_together = [("employee", "month", "year")]
+        unique_together = [("employee", "month", "year", "week_number")]
 
 
 # ──────────────────────────────────────────────
@@ -561,6 +562,37 @@ class AuditLog(models.Model):
     class Meta:
         db_table = "audit_logs"
         ordering = ["-created_at"]
+
+
+# ──────────────────────────────────────────────
+#  Employee Permissions
+# ──────────────────────────────────────────────
+
+class EmployeePermission(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_REJECTED = "rejected"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE,
+        db_column="employee_id", related_name="permissions"
+    )
+    date = models.DateField()
+    permission_time = models.TimeField(null=True, blank=True, db_column="permission_time")
+    reason = models.TextField(null=True, blank=True)
+    status = models.TextField(choices=STATUS_CHOICES, default=STATUS_PENDING)
+    hr_comment = models.TextField(null=True, blank=True, db_column="hr_comment")
+    approved_by = models.TextField(null=True, blank=True, db_column="approved_by")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "employee_permissions"
 
 
 # ──────────────────────────────────────────────

@@ -30,16 +30,24 @@ def department_json(dept, employee_count: int | None = None) -> dict:
 
 
 def employee_json(emp, department_name: str | None = None) -> dict:
+    designation_title = None
+    if hasattr(emp, "designation") and emp.designation_id and emp.designation:
+        designation_title = emp.designation.title
     return {
         "id": emp.id,
         "employeeCode": emp.employee_code,
         "firstName": emp.first_name,
         "lastName": emp.last_name,
+        "gender": emp.gender,
+        "dateOfBirth": emp.date_of_birth.isoformat() if emp.date_of_birth else None,
         "email": emp.email,
         "phone": emp.phone,
         "role": emp.role,
+        "employmentType": emp.employment_type,
         "departmentId": emp.department_id,
         "departmentName": department_name,
+        "designationId": emp.designation_id,
+        "designationTitle": designation_title,
         "salaryType": emp.salary_type,
         "salaryAmount": _float_or_none(emp.salary_amount),
         "status": emp.status,
