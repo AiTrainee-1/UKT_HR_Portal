@@ -59,6 +59,7 @@ const navGroups: NavGroupData[] = [
     heading: 'Payroll',
     items: [
       { path: '/hr/payroll', label: 'Payroll', icon: IndianRupee },
+      { path: '/hr/salary-slip', label: 'Salary Slip', icon: FileText },
       { path: '/hr/settlement', label: 'Settlement', icon: Wallet },
       { path: '/hr/reports', label: 'Reports', icon: BarChart3 },
     ],
@@ -69,7 +70,7 @@ const navGroups: NavGroupData[] = [
       { path: '/hr/user-management', label: 'User Management', icon: Shield },
       { path: '/hr/activity-logs', label: 'Activity Logs', icon: Activity },
       { path: '/hr/settings', label: 'Settings', icon: Settings },
-      { path: '/hr/salary-slip', label: 'Salary Slip', icon: FileText },
+      
     ],
   },
 ];

@@ -100,6 +100,8 @@ class Employee(models.Model):
     uan_number = models.TextField(null=True, blank=True, db_column="uan_number")
     address = models.TextField(null=True, blank=True)
     join_date = models.TextField(null=True, blank=True, db_column="join_date")
+    father_name = models.TextField(null=True, blank=True, db_column="father_name")
+    mother_name = models.TextField(null=True, blank=True, db_column="mother_name")
     probation_end_date = models.DateField(null=True, blank=True, db_column="probation_end_date")
     confirmation_date = models.DateField(null=True, blank=True, db_column="confirmation_date")
     password_hash = models.TextField(null=True, blank=True, db_column="password_hash")
@@ -156,6 +158,10 @@ class EmployeeShiftAssignment(models.Model):
     effective_to = models.DateField(null=True, blank=True, db_column="effective_to")
     assigned_by = models.TextField(null=True, blank=True, db_column="assigned_by")
     notes = models.TextField(null=True, blank=True)
+    # Per-employee schedule overrides (only set when individual differs from shift template)
+    custom_start_time = models.TimeField(null=True, blank=True, db_column="custom_start_time")
+    custom_end_time = models.TimeField(null=True, blank=True, db_column="custom_end_time")
+    saturday_off = models.BooleanField(default=False, db_column="saturday_off")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
 
     class Meta:
@@ -430,12 +436,22 @@ class Advance(models.Model):
 
 
 class AdvanceRepayment(models.Model):
+    PAYMENT_CASH = "cash"
+    PAYMENT_GPAY = "gpay"
+    PAYMENT_METHODS = [
+        (PAYMENT_CASH, "Hand Cash"),
+        (PAYMENT_GPAY, "GPay"),
+    ]
+
     advance = models.ForeignKey(
         Advance, on_delete=models.CASCADE, db_column="advance_id", related_name="repayments"
     )
     month = models.IntegerField()
     year = models.IntegerField()
     amount = models.DecimalField(max_digits=10, decimal_places=2)
+    payment_method = models.TextField(
+        choices=PAYMENT_METHODS, default=PAYMENT_CASH, db_column="payment_method"
+    )
     payroll_run = models.ForeignKey(
         PayrollRun, on_delete=models.SET_NULL, null=True, blank=True,
         db_column="payroll_run_id", related_name="advance_repayments"
@@ -479,6 +495,12 @@ class SalarySlip(models.Model):
     working_days = models.IntegerField(default=0, db_column="working_days")
     present_days = models.DecimalField(max_digits=4, decimal_places=1, default=0, db_column="present_days")
     absent_days = models.DecimalField(max_digits=4, decimal_places=1, default=0, db_column="absent_days")
+    paid_leave_days = models.DecimalField(max_digits=4, decimal_places=1, default=0, db_column="paid_leave_days")
+    unpaid_leave_days = models.DecimalField(max_digits=4, decimal_places=1, default=0, db_column="unpaid_leave_days")
+    late_days = models.IntegerField(default=0, db_column="late_days")
+    completed_sessions = models.IntegerField(default=0, db_column="completed_sessions")
+    # Full day-by-day breakdown for traceability — stored as JSON
+    breakdown_details = models.JSONField(null=True, blank=True, db_column="breakdown_details")
     generated_at = models.DateTimeField(auto_now_add=True, db_column="generated_at")
     emailed_at = models.DateTimeField(null=True, blank=True, db_column="emailed_at")
 
@@ -691,6 +713,10 @@ class SessionConfig(models.Model):
     name = models.TextField()
     start_time = models.TimeField(db_column="start_time")
     end_time = models.TimeField(db_column="end_time")
+    # Minimum checkout time for the session to be counted as completed.
+    # Morning session: 12:40 (must leave after morning ends).
+    # Afternoon session: 17:30 (must stay until at least 5:30 PM).
+    minimum_checkout_time = models.TimeField(null=True, blank=True, db_column="minimum_checkout_time")
     pay_amount = models.DecimalField(max_digits=8, decimal_places=2, db_column="pay_amount")
     is_overtime = models.BooleanField(default=False, db_column="is_overtime")
     order = models.IntegerField(default=0)
@@ -757,6 +783,73 @@ class Payroll(models.Model):
     class Meta:
         db_table = "payrolls"
         unique_together = [("employee", "month", "year", "week_number")]
+
+
+class PayrollSettings(models.Model):
+    """Singleton — always fetch/update the row with pk=1."""
+    # 0 means "do not deduct" — default off so HR explicitly enables
+
+    # ── Staff deductions ──────────────────────────────────────────────────
+    pf_rate = models.DecimalField(
+        max_digits=5, decimal_places=2, default=0,
+        db_column="pf_rate", help_text="Staff employee PF % (e.g. 12). 0 = disabled."
+    )
+    esi_rate = models.DecimalField(
+        max_digits=5, decimal_places=2, default=0,
+        db_column="esi_rate", help_text="Staff employee ESI % (e.g. 0.75). 0 = disabled."
+    )
+    esi_applicable_below = models.DecimalField(
+        max_digits=10, decimal_places=2, default=21000,
+        db_column="esi_applicable_below",
+        help_text="Staff: ESI applies only when full monthly salary is below this amount."
+    )
+
+    # ── Production deductions ─────────────────────────────────────────────
+    prod_pf_rate = models.DecimalField(
+        max_digits=5, decimal_places=2, default=0,
+        db_column="prod_pf_rate", help_text="Production employee PF % (e.g. 12). 0 = disabled."
+    )
+    prod_esi_rate = models.DecimalField(
+        max_digits=5, decimal_places=2, default=0,
+        db_column="prod_esi_rate", help_text="Production employee ESI % (e.g. 0.75). 0 = disabled."
+    )
+    prod_esi_applicable_below = models.DecimalField(
+        max_digits=10, decimal_places=2, default=21000,
+        db_column="prod_esi_applicable_below",
+        help_text="Production: ESI applies only when monthly-equivalent earnings are below this amount."
+    )
+
+    # ── General ───────────────────────────────────────────────────────────
+    pay_day = models.IntegerField(
+        default=5, db_column="pay_day",
+        help_text="Day of month when salaries are disbursed."
+    )
+    production_pay_type = models.TextField(
+        default="biweekly", db_column="production_pay_type",
+        help_text="biweekly or monthly"
+    )
+    slip_company_name = models.TextField(default="UK TEXTILES - H.O", db_column="slip_company_name")
+    slip_company_address = models.TextField(default="TIRUPUR", db_column="slip_company_address")
+    min_wage_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="min_wage_rate")
+    signature_image = models.TextField(null=True, blank=True, db_column="signature_image")
+
+    # ── SMTP / Email ──────────────────────────────────────────────────────
+    smtp_host = models.TextField(default="smtp.gmail.com", db_column="smtp_host")
+    smtp_port = models.IntegerField(default=587, db_column="smtp_port")
+    smtp_username = models.TextField(blank=True, default="", db_column="smtp_username")
+    smtp_password = models.TextField(blank=True, default="", db_column="smtp_password")
+    smtp_from_email = models.TextField(blank=True, default="", db_column="smtp_from_email")
+    smtp_from_name = models.TextField(default="UKTextiles HR", db_column="smtp_from_name")
+
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "payroll_settings"
+
+    @classmethod
+    def get(cls) -> "PayrollSettings":
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
 
 
 class SalaryRecord(models.Model):

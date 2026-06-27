@@ -87,6 +87,19 @@ def assignment_json(a):
         "endTime": shift.end_time.strftime("%H:%M") if shift and shift.end_time else None,
         "genderRule": shift.gender_rule if shift else None,
         "gracePeriodMinutes": shift.grace_period_minutes if shift else None,
+        # per-employee overrides (null = use shift template value)
+        "customStartTime": a.custom_start_time.strftime("%H:%M") if a.custom_start_time else None,
+        "customEndTime": a.custom_end_time.strftime("%H:%M") if a.custom_end_time else None,
+        "saturdayOff": a.saturday_off,
+        # effective times shown to HR (override takes precedence)
+        "effectiveStartTime": (
+            a.custom_start_time.strftime("%H:%M") if a.custom_start_time
+            else (shift.start_time.strftime("%H:%M") if shift and shift.start_time else None)
+        ),
+        "effectiveEndTime": (
+            a.custom_end_time.strftime("%H:%M") if a.custom_end_time
+            else (shift.end_time.strftime("%H:%M") if shift and shift.end_time else None)
+        ),
         # assignment meta
         "effectiveFrom": a.effective_from.isoformat() if a.effective_from else None,
         "effectiveTo": a.effective_to.isoformat() if a.effective_to else None,
@@ -194,6 +207,11 @@ def shift_assignments(request: Request) -> Response:
     except (Employee.DoesNotExist, ShiftTemplate.DoesNotExist) as e:
         return Response({"error": str(e)}, status=404)
 
+    from datetime import time as time_type
+
+    def _parse_time(val):
+        return time_type.fromisoformat(val) if val else None
+
     assignment = EmployeeShiftAssignment.objects.create(
         employee=emp,
         shift=shift,
@@ -201,6 +219,9 @@ def shift_assignments(request: Request) -> Response:
         effective_to=data.get("effectiveTo"),
         assigned_by=data.get("assignedBy", "HR"),
         notes=data.get("notes"),
+        custom_start_time=_parse_time(data.get("customStartTime")),
+        custom_end_time=_parse_time(data.get("customEndTime")),
+        saturday_off=bool(data.get("saturdayOff", False)),
     )
     return Response(assignment_json(assignment), status=201)
 
@@ -251,6 +272,15 @@ def bulk_shift_assignments(request: Request) -> Response:
     if gender_rule and gender_rule != "all":
         qs = qs.filter(gender=gender_rule)
 
+    from datetime import time as time_type
+
+    def _parse_time(val):
+        return time_type.fromisoformat(val) if val else None
+
+    custom_start = _parse_time(data.get("customStartTime"))
+    custom_end = _parse_time(data.get("customEndTime"))
+    saturday_off = bool(data.get("saturdayOff", False))
+
     created_count = 0
     for emp in qs:
         EmployeeShiftAssignment.objects.filter(
@@ -262,6 +292,9 @@ def bulk_shift_assignments(request: Request) -> Response:
             effective_from=effective_from,
             assigned_by=data.get("assignedBy", "HR"),
             notes=data.get("notes"),
+            custom_start_time=custom_start,
+            custom_end_time=custom_end,
+            saturday_off=saturday_off,
         )
         created_count += 1
 
@@ -297,6 +330,7 @@ def shift_assignment_detail(request: Request, pk: int) -> Response:
         return Response({"error": "Assignment not found"}, status=404)
 
     if request.method == "PUT":
+        from datetime import time as time_type
         data = request.data
         for field, attr in [
             ("shiftId", "shift_id"), ("effectiveFrom", "effective_from"),
@@ -304,6 +338,14 @@ def shift_assignment_detail(request: Request, pk: int) -> Response:
         ]:
             if field in data:
                 setattr(assignment, attr, data[field])
+        if "customStartTime" in data:
+            raw = data["customStartTime"]
+            assignment.custom_start_time = time_type.fromisoformat(raw) if raw else None
+        if "customEndTime" in data:
+            raw = data["customEndTime"]
+            assignment.custom_end_time = time_type.fromisoformat(raw) if raw else None
+        if "saturdayOff" in data:
+            assignment.saturday_off = bool(data["saturdayOff"])
         assignment.save()
         return Response(assignment_json(assignment))
 

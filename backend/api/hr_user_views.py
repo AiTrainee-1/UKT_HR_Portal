@@ -1,5 +1,8 @@
 import bcrypt
-from datetime import datetime
+from datetime import datetime, timedelta
+
+from django.utils import timezone
+from django.db.models import Count
 
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
@@ -7,6 +10,7 @@ from rest_framework.response import Response
 
 from .auth import require_hr
 from .models import HRUser, Role, AuditLog
+from .audit_utils import log_action
 
 
 def role_json(r):
@@ -76,6 +80,7 @@ def roles(request: Request) -> Response:
         description=data.get("description"),
         permissions=data.get("permissions", {}),
     )
+    log_action(request, "create", "user_management", record_id=role.id, description=f"Created role: {role.name}")
     return Response(role_json(role), status=201)
 
 
@@ -99,10 +104,12 @@ def role_detail(request: Request, pk: int) -> Response:
         if "permissions" in data:
             role.permissions = data["permissions"]
         role.save()
+        log_action(request, "update", "user_management", record_id=role.id, description=f"Updated role: {role.name}")
         return Response(role_json(role))
 
     if role.is_system:
         return Response({"error": "Cannot delete system roles"}, status=400)
+    log_action(request, "delete", "user_management", record_id=role.id, description=f"Deleted role: {role.name}")
     role.delete()
     return Response(status=204)
 
@@ -132,6 +139,7 @@ def hr_users(request: Request) -> Response:
         department_id=data.get("departmentId"),
         branch_id=data.get("branchId"),
     )
+    log_action(request, "create", "user_management", record_id=user.id, description=f"Created HR user: {user.username}")
     return Response(hr_user_json(user), status=201)
 
 
@@ -158,10 +166,12 @@ def hr_user_detail(request: Request, pk: int) -> Response:
         if data.get("password"):
             u.password_hash = bcrypt.hashpw(data["password"].encode(), bcrypt.gensalt()).decode()
         u.save()
+        log_action(request, "update", "user_management", record_id=u.id, description=f"Updated HR user: {u.username}")
         return Response(hr_user_json(u))
 
     if u.is_super_admin:
         return Response({"error": "Cannot delete super admin"}, status=400)
+    log_action(request, "delete", "user_management", record_id=u.id, description=f"Deleted HR user: {u.username}")
     u.delete()
     return Response(status=204)
 
@@ -199,4 +209,40 @@ def audit_logs(request: Request) -> Response:
         "page": page,
         "pageSize": page_size,
         "results": [audit_log_json(log) for log in logs],
+    })
+
+
+@api_view(["GET"])
+@require_hr
+def audit_logs_stats(request: Request) -> Response:
+    now = timezone.now()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=now.weekday())
+
+    all_logs = AuditLog.objects.all()
+    today_count = all_logs.filter(created_at__gte=today_start).count()
+    week_count = all_logs.filter(created_at__gte=week_start).count()
+    total_count = all_logs.count()
+
+    by_module = list(
+        all_logs.values("module").annotate(count=Count("id")).order_by("-count")[:8]
+    )
+    by_action = list(
+        all_logs.values("action").annotate(count=Count("id")).order_by("-count")
+    )
+    recent_users = list(
+        all_logs.order_by("-created_at")
+        .values("user_name", "created_at")[:5]
+    )
+
+    return Response({
+        "today": today_count,
+        "thisWeek": week_count,
+        "total": total_count,
+        "byModule": {item["module"]: item["count"] for item in by_module},
+        "byAction": {item["action"]: item["count"] for item in by_action},
+        "recentUsers": [
+            {"name": r["user_name"], "at": r["created_at"].isoformat()}
+            for r in recent_users
+        ],
     })

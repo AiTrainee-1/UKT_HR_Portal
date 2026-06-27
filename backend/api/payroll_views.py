@@ -1,15 +1,18 @@
 """
-Enterprise Payroll Engine for UK-Textile HRMS
-Provides:
-  • Session config CRUD
-  • Excel / manual punch-log upload
-  • Punch-pair → WorkSession processing engine
-  • Payroll generation (monthly + session-based)
-  • Payroll CRUD
+Enterprise Payroll Engine — UKTextiles HRMS
+============================================
+Two salary modes:
+  • Staff    → monthly, pro-rated by working days (leave-aware, late-tracking)
+  • Production → bi-weekly, session-based (morning + afternoon sessions)
+
+All calculations are stored with full day-by-day breakdown in SalarySlip.breakdown_details
+so every rupee can be explained to the employee.
 """
+import calendar
 import io
+from collections import defaultdict
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
@@ -17,29 +20,719 @@ from rest_framework.response import Response
 
 from .auth import require_hr
 from .models import (
+    Advance,
+    AdvanceRepayment,
     Attendance,
     AttendanceLog,
     Employee,
+    EmployeeShiftAssignment,
+    Holiday,
+    LeaveRequest,
     Payroll,
+    PayrollSettings,
+    SalarySlip,
     SessionConfig,
     WorkSession,
 )
 
 
-def _error(message: str, code: int = 400) -> Response:
-    return Response({"error": message}, status=code)
+# ─────────────────────────────────────────────────────────────────────────────
+#  Utilities
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _error(msg: str, code: int = 400) -> Response:
+    return Response({"error": msg}, status=code)
+
+
+def _d2(value) -> Decimal:
+    """Round to 2 decimal places."""
+    return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _time_to_str(t: time | None) -> str | None:
+    return t.strftime("%H:%M") if t else None
+
+
+def _compute_hours(check_in: time, check_out: time) -> Decimal:
+    dt_in = datetime.combine(date.today(), check_in)
+    dt_out = datetime.combine(date.today(), check_out)
+    if dt_out <= dt_in:
+        dt_out += timedelta(days=1)
+    return _d2((dt_out - dt_in).total_seconds() / 3600)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Helper serialisers for payroll models
+#  Shift assignment lookup
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_active_assignment(emp: Employee, ref_date: date) -> EmployeeShiftAssignment | None:
+    """Return the shift assignment active on ref_date, or the most recent one."""
+    qs = (
+        EmployeeShiftAssignment.objects
+        .select_related("shift")
+        .filter(employee=emp, effective_from__lte=ref_date)
+        .filter(models_effective_to_null_or_after(ref_date))
+        .order_by("-effective_from")
+    )
+    return qs.first()
+
+
+def models_effective_to_null_or_after(ref_date: date):
+    """Returns a Q object: effective_to is null OR effective_to >= ref_date."""
+    from django.db.models import Q
+    return Q(effective_to__isnull=True) | Q(effective_to__gte=ref_date)
+
+
+def _effective_shift_times(assignment: EmployeeShiftAssignment):
+    """Return (start_time, end_time, grace_minutes, saturday_off) for an assignment."""
+    shift = assignment.shift
+    start = assignment.custom_start_time or shift.start_time
+    end = assignment.custom_end_time or shift.end_time
+    grace = shift.grace_period_minutes or 15
+    sat_off = assignment.saturday_off
+    return start, end, grace, sat_off
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Working-day calendar (staff)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_working_days(month: int, year: int, saturday_off: bool, holiday_dates: set[date]) -> list[date]:
+    """
+    Return all working dates in the month for a staff employee.
+    Excludes: Sundays (always), Saturdays (if saturday_off), public holidays.
+    """
+    first = date(year, month, 1)
+    last = date(year, month, calendar.monthrange(year, month)[1])
+    days = []
+    cur = first
+    while cur <= last:
+        wd = cur.weekday()  # 0=Mon … 6=Sun
+        if wd == 6:  # Sunday
+            cur += timedelta(days=1)
+            continue
+        if wd == 5 and saturday_off:
+            cur += timedelta(days=1)
+            continue
+        if cur in holiday_dates:
+            cur += timedelta(days=1)
+            continue
+        days.append(cur)
+        cur += timedelta(days=1)
+    return days
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Per-day attendance status classifier (staff)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _check_leave(day: date, approved_leaves: list) -> dict | None:
+    """Return leave status dict if this day falls within an approved leave, else None."""
+    for lr in approved_leaves:
+        start_str = str(lr.start_date)
+        end_str = str(lr.end_date)
+        if start_str <= day.isoformat() <= end_str:
+            is_paid = lr.leave_type_ref.is_paid if lr.leave_type_ref else True
+            return {
+                "status": "paid_leave" if is_paid else "unpaid_leave",
+                "is_late": False,
+                "first_in": None,
+                "last_out": None,
+                "leave_type": lr.leave_type_ref.name if lr.leave_type_ref else lr.type,
+            }
+    return None
+
+
+def _classify_day(
+    day: date,
+    logs_by_date: dict[date, list],          # AttendanceLog punch records (biometric/excel)
+    attendance_by_date: dict[str, object],    # Attendance simple records (manual)
+    approved_leaves: list,
+    shift_start: time,
+    grace_minutes: int,
+) -> dict:
+    """
+    Classify a working day into: present | paid_leave | unpaid_leave | absent.
+
+    Priority order:
+      1. Approved leave → paid_leave / unpaid_leave
+      2. AttendanceLog punch records (if they exist for this day) → present with late detection
+      3. Attendance simple record (present=True) → present without late detection
+      4. No data → absent
+    """
+    leave = _check_leave(day, approved_leaves)
+    if leave:
+        return leave
+
+    # AttendanceLog (punch-based): biometric, Excel, or manual punch entry
+    day_logs = logs_by_date.get(day, [])
+    in_logs = [l for l in day_logs if l.punch_type == "IN"]
+    out_logs = [l for l in day_logs if l.punch_type == "OUT"]
+
+    if in_logs:
+        first_in = min(l.punch_time for l in in_logs)
+        last_out = max(l.punch_time for l in out_logs) if out_logs else None
+
+        total_grace_secs = grace_minutes * 60
+        shift_start_secs = shift_start.hour * 3600 + shift_start.minute * 60
+        first_in_secs = first_in.hour * 3600 + first_in.minute * 60
+        is_late = (first_in_secs - shift_start_secs) > total_grace_secs
+
+        return {
+            "status": "present",
+            "is_late": is_late,
+            "first_in": first_in.strftime("%H:%M"),
+            "last_out": last_out.strftime("%H:%M") if last_out else None,
+            "leave_type": None,
+        }
+
+    # Attendance simple record (present boolean — manual attendance module)
+    att = attendance_by_date.get(day.isoformat())
+    if att and att.present:
+        return {
+            "status": "present",
+            "is_late": False,   # can't detect late without punch time
+            "first_in": None,
+            "last_out": None,
+            "leave_type": None,
+        }
+
+    return {"status": "absent", "is_late": False, "first_in": None, "last_out": None, "leave_type": None}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Advance deductions helper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _pending_advance_repayments(emp: Employee, month: int, year: int) -> tuple[Decimal, list[dict]]:
+    """
+    Find all pending advance repayments due in this month and return
+    (total_amount, list_of_details).
+    """
+    repayments = (
+        AdvanceRepayment.objects
+        .select_related("advance")
+        .filter(advance__employee=emp, month=month, year=year, payroll_run__isnull=True)
+    )
+    total = Decimal("0")
+    details = []
+    for r in repayments:
+        total += r.amount
+        details.append({
+            "advanceId": r.advance_id,
+            "repaymentId": r.id,
+            "amount": float(r.amount),
+            "notes": r.notes,
+        })
+    return total, details
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  STAFF payroll engine
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None:
+    """
+    Pro-rated monthly payroll for a staff employee.
+    Returns a dict with 'payroll' and 'slip' keys (model instances).
+    Returns None if the employee has no salary configured.
+    """
+    if not emp.salary_amount:
+        return None
+
+    # 1. Get shift assignment for middle of month (representative date)
+    mid_month = date(year, month, 15)
+    assignment = _get_active_assignment(emp, mid_month)
+    shift_start = time(9, 0)  # default 9:00 AM
+    grace_minutes = 15
+    saturday_off = False
+
+    if assignment:
+        shift_start, _, grace_minutes, saturday_off = _effective_shift_times(assignment)
+        shift_name = assignment.shift.name
+        shift_id = assignment.shift_id
+    else:
+        shift_name = "Default"
+        shift_id = None
+
+    # 2. Get holidays for this month
+    holiday_dates = set(
+        Holiday.objects.filter(date__year=year, date__month=month).values_list("date", flat=True)
+    )
+
+    # 3. Build working-day calendar
+    working_days_list = _build_working_days(month, year, saturday_off, holiday_dates)
+    total_working_days = len(working_days_list)
+
+    if total_working_days == 0:
+        return None
+
+    # 4a. Fetch AttendanceLog punch records (biometric / Excel import)
+    logs = AttendanceLog.objects.filter(employee=emp, date__year=year, date__month=month)
+    logs_by_date: dict[date, list] = defaultdict(list)
+    for log in logs:
+        logs_by_date[log.date].append(log)
+
+    # 4b. Fetch Attendance simple records (manual attendance module — present boolean)
+    #     Attendance.date is stored as TEXT ("YYYY-MM-DD"), filter by string prefix
+    att_qs = Attendance.objects.filter(
+        employee=emp,
+        date__gte=f"{year}-{str(month).zfill(2)}-01",
+        date__lte=f"{year}-{str(month).zfill(2)}-31",
+    )
+    attendance_by_date: dict[str, Attendance] = {a.date: a for a in att_qs}
+
+    # 5. Fetch approved leave requests that overlap this month
+    month_start = date(year, month, 1)
+    month_end = date(year, month, calendar.monthrange(year, month)[1])
+    approved_leaves = list(
+        LeaveRequest.objects
+        .select_related("leave_type_ref")
+        .filter(
+            employee=emp,
+            status="approved",
+            start_date__lte=month_end.isoformat(),
+            end_date__gte=month_start.isoformat(),
+        )
+    )
+
+    # 6. Classify each working day
+    DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    days_detail = []
+    present_count = 0
+    paid_leave_count = 0
+    unpaid_leave_count = 0
+    absent_count = 0
+    late_count = 0
+
+    for d in working_days_list:
+        info = _classify_day(d, logs_by_date, attendance_by_date, approved_leaves, shift_start, grace_minutes)
+        status = info["status"]
+        is_late = info["is_late"]
+
+        if status == "present":
+            present_count += 1
+            if is_late:
+                late_count += 1
+        elif status == "paid_leave":
+            paid_leave_count += 1
+        elif status == "unpaid_leave":
+            unpaid_leave_count += 1
+        else:
+            absent_count += 1
+
+        days_detail.append({
+            "date": d.isoformat(),
+            "day": DAY_NAMES[d.weekday()],
+            "status": status,
+            "isLate": is_late,
+            "firstIn": info["first_in"],
+            "lastOut": info["last_out"],
+            "leaveType": info["leave_type"],
+        })
+
+    # 7. Salary calculation
+    # Effective present days = actual present + paid leave (unpaid leave = absent for pay)
+    effective_days = Decimal(str(present_count + paid_leave_count))
+    daily_rate = _d2(emp.salary_amount / Decimal(str(total_working_days)))
+    base_gross = _d2(daily_rate * effective_days)
+
+    # Basic = 50% of full monthly salary (not prorated — this is the component base)
+    basic_full = _d2(emp.salary_amount * Decimal("0.50"))
+    hra_full = _d2(emp.salary_amount * Decimal("0.20"))
+
+    # Prorate basic and HRA by the same factor
+    prorate_factor = effective_days / Decimal(str(total_working_days))
+    basic = _d2(basic_full * prorate_factor)
+    hra = _d2(hra_full * prorate_factor)
+    allowances = _d2(base_gross - basic - hra)
+
+    # PF / ESI — read live from PayrollSettings (0 = disabled)
+    ps = PayrollSettings.get()
+    pf_rate     = ps.pf_rate / Decimal("100")          # e.g. 12 -> 0.12
+    esi_rate    = ps.esi_rate / Decimal("100")          # e.g. 0.75 -> 0.0075
+    esi_ceiling = ps.esi_applicable_below
+
+    pf_deduction = _d2(basic * pf_rate) if pf_rate > 0 else Decimal("0")
+
+    monthly_gross_equivalent = _d2(emp.salary_amount)
+    esi_deduction = (
+        _d2(base_gross * esi_rate)
+        if esi_rate > 0 and monthly_gross_equivalent <= esi_ceiling
+        else Decimal("0")
+    )
+
+    # 8. Advances
+    advance_total, advance_details = _pending_advance_repayments(emp, month, year)
+
+    total_deductions = _d2(pf_deduction + esi_deduction + advance_total)
+    net_salary = _d2(base_gross - total_deductions)
+
+    # 9. Build breakdown JSON (full traceability)
+    breakdown = {
+        "type": "staff",
+        "shift": {
+            "id": shift_id,
+            "name": shift_name,
+            "startTime": shift_start.strftime("%H:%M"),
+            "gracePeriodMinutes": grace_minutes,
+            "saturdayOff": saturday_off,
+        },
+        "days": days_detail,
+        "summary": {
+            "totalWorkingDays": total_working_days,
+            "presentDays": present_count,
+            "paidLeaveDays": paid_leave_count,
+            "unpaidLeaveDays": unpaid_leave_count,
+            "absentDays": absent_count,
+            "lateDays": late_count,
+            "effectivePaidDays": float(effective_days),
+        },
+        "earnings": {
+            "monthlySalary": float(emp.salary_amount),
+            "dailyRate": float(daily_rate),
+            "effectiveDays": float(effective_days),
+            "basic": float(basic),
+            "hra": float(hra),
+            "allowances": float(allowances),
+            "grossSalary": float(base_gross),
+        },
+        "deductions": {
+            "pf": float(pf_deduction),
+            "pfRate": float(ps.pf_rate),
+            "esi": float(esi_deduction),
+            "esiRate": float(ps.esi_rate),
+            "esiApplicableBelow": float(esi_ceiling),
+            "advances": float(advance_total),
+            "advanceDetails": advance_details,
+            "total": float(total_deductions),
+        },
+        "netSalary": float(net_salary),
+    }
+
+    # 10. Upsert Payroll record
+    payroll, _ = Payroll.objects.update_or_create(
+        employee=emp, month=month, year=year, week_number=None,
+        defaults=dict(
+            salary_mode="monthly",
+            total_working_days=total_working_days,
+            present_days=Decimal(str(present_count + paid_leave_count)),
+            absent_days=Decimal(str(absent_count + unpaid_leave_count)),
+            completed_sessions=0,
+            ot_hours=Decimal("0"),
+            ot_amount=Decimal("0"),
+            base_salary=emp.salary_amount,
+            gross_salary=base_gross,
+            deductions=total_deductions,
+            bonus=Decimal("0"),
+            final_salary=net_salary,
+            status="pending",
+            notes=(
+                f"Staff monthly: {present_count} present + {paid_leave_count} paid leave "
+                f"= {float(effective_days)} effective days / {total_working_days} working days. "
+                f"Late: {late_count}. Absent: {absent_count}. Unpaid leave: {unpaid_leave_count}."
+            ),
+        ),
+    )
+
+    # 11. Upsert SalarySlip
+    slip_number = f"SS/{emp.employee_code}/{year}/{str(month).zfill(2)}"
+    slip, _ = SalarySlip.objects.update_or_create(
+        employee=emp, month=month, year=year, week_number=None,
+        defaults=dict(
+            payroll_run=None,
+            slip_number=slip_number,
+            basic=basic,
+            hra=hra,
+            allowances=allowances,
+            incentives=Decimal("0"),
+            bonuses=Decimal("0"),
+            ot_amount=Decimal("0"),
+            gross_salary=base_gross,
+            pf_deduction=pf_deduction,
+            esi_deduction=esi_deduction,
+            advance_deduction=advance_total,
+            other_deductions=Decimal("0"),
+            total_deductions=total_deductions,
+            net_salary=net_salary,
+            working_days=total_working_days,
+            present_days=Decimal(str(present_count)),
+            absent_days=Decimal(str(absent_count + unpaid_leave_count)),
+            paid_leave_days=Decimal(str(paid_leave_count)),
+            unpaid_leave_days=Decimal(str(unpaid_leave_count)),
+            late_days=late_count,
+            completed_sessions=0,
+            breakdown_details=breakdown,
+        ),
+    )
+
+    return {"payroll": payroll, "slip": slip}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  PRODUCTION payroll engine (bi-weekly, session-based)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _session_completed(first_in: time, last_out: time | None, min_checkout: time) -> bool:
+    """
+    A session is counted as completed when:
+      - The employee arrived on or before min_checkout time
+      - AND punched out on or after min_checkout time
+    This handles:
+      Morning session (min_checkout=12:40): arrived by 12:40 AND left after 12:40
+      Afternoon session (min_checkout=17:30): arrived by 17:30 AND left after 17:30
+    """
+    if last_out is None:
+        return False
+    in_secs = first_in.hour * 3600 + first_in.minute * 60
+    out_secs = last_out.hour * 3600 + last_out.minute * 60
+    cutoff_secs = min_checkout.hour * 3600 + min_checkout.minute * 60
+    return in_secs <= cutoff_secs and out_secs >= cutoff_secs
+
+
+def _get_biweekly_range(month: int, year: int, week_number: int) -> tuple[date, date]:
+    """
+    Two pay periods per month:
+      week_number=1 → "Week 1 & 2"  → 1st–15th
+      week_number=2 → "Week 3 & 4"  → 16th–last day
+    """
+    if week_number == 1:
+        return date(year, month, 1), date(year, month, 15)
+    else:
+        return date(year, month, 16), date(year, month, calendar.monthrange(year, month)[1])
+
+
+def _generate_production_payroll(emp: Employee, month: int, year: int, week_number: int) -> dict | None:
+    """
+    Session-based bi-weekly payroll for production employees.
+    week_number: 1 (days 1-15) or 2 (days 16-end).
+    """
+    # 1. Load session configs ordered by start time
+    session_configs = list(SessionConfig.objects.filter(is_overtime=False).order_by("order"))
+    if not session_configs:
+        return None  # No sessions configured
+
+    # Ensure every session has a minimum_checkout_time (fall back to end_time)
+    for sc in session_configs:
+        if not sc.minimum_checkout_time:
+            sc.minimum_checkout_time = sc.end_time
+
+    date_from, date_to = _get_biweekly_range(month, year, week_number)
+
+    # 2. Fetch attendance logs for the period
+    logs = AttendanceLog.objects.filter(
+        employee=emp,
+        date__gte=date_from,
+        date__lte=date_to,
+    ).order_by("date", "punch_time")
+
+    logs_by_date: dict[date, list] = defaultdict(list)
+    for log in logs:
+        logs_by_date[log.date].append(log)
+
+    # 3. Delete existing WorkSessions for this period (re-process)
+    WorkSession.objects.filter(
+        employee=emp,
+        date__gte=date_from,
+        date__lte=date_to,
+    ).delete()
+
+    # 4. Iterate over every calendar day in the period
+    DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    days_detail = []
+    total_sessions = 0
+    total_amount = Decimal("0")
+    days_worked = 0
+
+    cur = date_from
+    while cur <= date_to:
+        day_logs = logs_by_date.get(cur, [])
+        in_logs = [l for l in day_logs if l.punch_type == "IN"]
+        out_logs = [l for l in day_logs if l.punch_type == "OUT"]
+
+        first_in = min(l.punch_time for l in in_logs) if in_logs else None
+        last_out = max(l.punch_time for l in out_logs) if out_logs else None
+
+        day_sessions_done = []
+        day_session_amount = Decimal("0")
+
+        if first_in is not None:
+            days_worked += 1
+            for sc in session_configs:
+                completed = _session_completed(first_in, last_out, sc.minimum_checkout_time)
+                if completed:
+                    day_sessions_done.append({
+                        "sessionId": sc.id,
+                        "sessionName": sc.name,
+                        "completed": True,
+                        "rate": float(sc.pay_amount),
+                    })
+                    day_session_amount += sc.pay_amount
+                    total_sessions += 1
+                    total_amount += sc.pay_amount
+
+                    # Create WorkSession record for each completed session
+                    # Use session config times as check_in/check_out proxies
+                    WorkSession.objects.create(
+                        employee=emp,
+                        date=cur,
+                        session_config=sc,
+                        session_name=sc.name,
+                        check_in=first_in,
+                        check_out=last_out,
+                        hours_worked=_compute_hours(first_in, last_out),
+                        session_amount=sc.pay_amount,
+                        is_overtime=sc.is_overtime,
+                    )
+
+        days_detail.append({
+            "date": cur.isoformat(),
+            "day": DAY_NAMES[cur.weekday()],
+            "firstIn": first_in.strftime("%H:%M") if first_in else None,
+            "lastOut": last_out.strftime("%H:%M") if last_out else None,
+            "sessions": day_sessions_done,
+            "totalSessions": len(day_sessions_done),
+            "sessionAmount": float(day_session_amount),
+            "present": first_in is not None,
+        })
+        cur += timedelta(days=1)
+
+    # 5. PF / ESI for production — read from PayrollSettings
+    ps = PayrollSettings.get()
+    prod_pf_rate  = ps.prod_pf_rate / Decimal("100")
+    prod_esi_rate = ps.prod_esi_rate / Decimal("100")
+    prod_esi_ceil = ps.prod_esi_applicable_below
+
+    # PF on gross session earnings
+    pf_deduction = _d2(total_amount * prod_pf_rate) if prod_pf_rate > 0 else Decimal("0")
+
+    # ESI — check monthly-equivalent earnings against ceiling
+    monthly_equiv = _d2(total_amount * 2)  # biweekly * 2 = monthly estimate
+    esi_deduction = (
+        _d2(total_amount * prod_esi_rate)
+        if prod_esi_rate > 0 and monthly_equiv <= prod_esi_ceil
+        else Decimal("0")
+    )
+
+    # 6. Advances
+    advance_total, advance_details = _pending_advance_repayments(emp, month, year)
+
+    total_deductions = _d2(pf_deduction + esi_deduction + advance_total)
+    net_salary = _d2(total_amount - total_deductions)
+
+    # 7. Build session config summary for breakdown
+    sessions_config_summary = [
+        {
+            "id": sc.id,
+            "name": sc.name,
+            "startTime": _time_to_str(sc.start_time),
+            "endTime": _time_to_str(sc.end_time),
+            "minCheckout": _time_to_str(sc.minimum_checkout_time),
+            "rate": float(sc.pay_amount),
+        }
+        for sc in session_configs
+    ]
+
+    breakdown = {
+        "type": "production",
+        "weekNumber": week_number,
+        "dateFrom": date_from.isoformat(),
+        "dateTo": date_to.isoformat(),
+        "sessionConfigs": sessions_config_summary,
+        "days": days_detail,
+        "summary": {
+            "totalDays": (date_to - date_from).days + 1,
+            "daysWorked": days_worked,
+            "daysAbsent": (date_to - date_from).days + 1 - days_worked,
+            "totalSessions": total_sessions,
+        },
+        "earnings": {
+            "totalSessions": total_sessions,
+            "grossSalary": float(total_amount),
+        },
+        "deductions": {
+            "pf": float(pf_deduction),
+            "pfRate": float(ps.prod_pf_rate),
+            "esi": float(esi_deduction),
+            "esiRate": float(ps.prod_esi_rate),
+            "esiApplicableBelow": float(prod_esi_ceil),
+            "monthlyEquivalent": float(monthly_equiv),
+            "advances": float(advance_total),
+            "advanceDetails": advance_details,
+            "total": float(total_deductions),
+        },
+        "netSalary": float(net_salary),
+    }
+
+    # 8. Upsert Payroll record
+    payroll, _ = Payroll.objects.update_or_create(
+        employee=emp, month=month, year=year, week_number=week_number,
+        defaults=dict(
+            salary_mode="session",
+            total_working_days=(date_to - date_from).days + 1,
+            present_days=Decimal(str(days_worked)),
+            absent_days=Decimal(str((date_to - date_from).days + 1 - days_worked)),
+            completed_sessions=total_sessions,
+            ot_hours=Decimal("0"),
+            ot_amount=Decimal("0"),
+            base_salary=total_amount,
+            gross_salary=total_amount,
+            deductions=total_deductions,
+            bonus=Decimal("0"),
+            final_salary=net_salary,
+            status="pending",
+            notes=(
+                f"Production week {week_number} ({date_from} to {date_to}): "
+                f"{days_worked} days worked, {total_sessions} sessions completed = Rs{total_amount}."
+            ),
+        ),
+    )
+
+    # 9. Upsert SalarySlip
+    slip_number = f"SS/{emp.employee_code}/{year}/{str(month).zfill(2)}/W{week_number}"
+    slip, _ = SalarySlip.objects.update_or_create(
+        employee=emp, month=month, year=year, week_number=week_number,
+        defaults=dict(
+            payroll_run=None,
+            slip_number=slip_number,
+            basic=total_amount,
+            hra=Decimal("0"),
+            allowances=Decimal("0"),
+            incentives=Decimal("0"),
+            bonuses=Decimal("0"),
+            ot_amount=Decimal("0"),
+            gross_salary=total_amount,
+            pf_deduction=pf_deduction,
+            esi_deduction=esi_deduction,
+            advance_deduction=advance_total,
+            other_deductions=Decimal("0"),
+            total_deductions=total_deductions,
+            net_salary=net_salary,
+            working_days=(date_to - date_from).days + 1,
+            present_days=Decimal(str(days_worked)),
+            absent_days=Decimal(str((date_to - date_from).days + 1 - days_worked)),
+            paid_leave_days=Decimal("0"),
+            unpaid_leave_days=Decimal("0"),
+            late_days=0,
+            completed_sessions=total_sessions,
+            breakdown_details=breakdown,
+        ),
+    )
+
+    return {"payroll": payroll, "slip": slip}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Serialisers
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _session_config_json(sc: SessionConfig) -> dict:
     return {
         "id": sc.id,
         "name": sc.name,
-        "startTime": sc.start_time.strftime("%H:%M"),
-        "endTime": sc.end_time.strftime("%H:%M"),
+        "startTime": _time_to_str(sc.start_time),
+        "endTime": _time_to_str(sc.end_time),
+        "minimumCheckoutTime": _time_to_str(sc.minimum_checkout_time),
         "payAmount": float(sc.pay_amount),
         "isOvertime": sc.is_overtime,
         "order": sc.order,
@@ -117,11 +810,18 @@ def _create_session_config(request: Request) -> Response:
         start = time.fromisoformat(d["startTime"])
         end = time.fromisoformat(d["endTime"])
     except (KeyError, ValueError):
-        return _error("startTime and endTime required (HH:MM format)")
+        return _error("startTime and endTime required (HH:MM)")
+    min_co = None
+    if d.get("minimumCheckoutTime"):
+        try:
+            min_co = time.fromisoformat(d["minimumCheckoutTime"])
+        except ValueError:
+            return _error("minimumCheckoutTime must be HH:MM")
     sc = SessionConfig.objects.create(
         name=d.get("name", "Session"),
         start_time=start,
         end_time=end,
+        minimum_checkout_time=min_co,
         pay_amount=Decimal(str(d.get("payAmount", 0))),
         is_overtime=bool(d.get("isOvertime", False)),
         order=int(d.get("order", 99)),
@@ -145,6 +845,9 @@ def session_config_detail(request: Request, pk: int) -> Response:
         sc.start_time = time.fromisoformat(d["startTime"])
     if "endTime" in d:
         sc.end_time = time.fromisoformat(d["endTime"])
+    if "minimumCheckoutTime" in d:
+        raw = d["minimumCheckoutTime"]
+        sc.minimum_checkout_time = time.fromisoformat(raw) if raw else None
     if "payAmount" in d:
         sc.pay_amount = Decimal(str(d["payAmount"]))
     if "isOvertime" in d:
@@ -156,7 +859,7 @@ def session_config_detail(request: Request, pk: int) -> Response:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Attendance Logs (punch-level)
+#  Attendance Logs
 # ─────────────────────────────────────────────────────────────────────────────
 
 @api_view(["GET", "POST"])
@@ -178,7 +881,6 @@ def attendance_logs(request: Request) -> Response:
             qs = qs.filter(date__month=int(month))
         return Response([_att_log_json(l) for l in qs[:500]])
 
-    # POST – single manual punch entry
     d = request.data
     try:
         log_date = date.fromisoformat(d["date"])
@@ -201,24 +903,17 @@ def upload_attendance_excel(request: Request) -> Response:
     """
     Parse an Excel file with columns:
       Employee ID | Employee Name | Date | Time | Type
-    Date format: DD-MM-YYYY or YYYY-MM-DD
-    Time format: HH:MM
-    Type: IN or OUT
     """
     file = request.FILES.get("file")
     if not file:
         return _error("No file uploaded. Send as multipart/form-data with key 'file'.")
-
     try:
         import pandas as pd
         df = pd.read_excel(io.BytesIO(file.read()))
     except Exception as e:
         return _error(f"Failed to read Excel: {e}")
 
-    # Normalise column names
     df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
-
-    # Detect columns
     id_col = next((c for c in df.columns if "employee" in c and "id" in c), None)
     date_col = next((c for c in df.columns if "date" in c), None)
     time_col = next((c for c in df.columns if "time" in c), None)
@@ -243,7 +938,6 @@ def upload_attendance_excel(request: Request) -> Response:
                 skipped += 1
                 continue
 
-            # Parse date
             raw_date = str(row[date_col]).strip()
             for fmt in ("%d-%m-%Y", "%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"):
                 try:
@@ -256,7 +950,6 @@ def upload_attendance_excel(request: Request) -> Response:
                 skipped += 1
                 continue
 
-            # Parse time
             raw_time = str(row[time_col]).strip()
             if ":" not in raw_time:
                 raw_time = raw_time[:2] + ":" + raw_time[2:]
@@ -282,114 +975,12 @@ def upload_attendance_excel(request: Request) -> Response:
         "message": f"Imported {created} punch logs, skipped {skipped}.",
         "created": created,
         "skipped": skipped,
-        "errors": errors[:20],  # Return at most 20 errors
+        "errors": errors[:20],
     }, status=201)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Session Processing Engine – converts punch pairs → WorkSessions
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _match_session_config(check_in: time, check_out: time) -> SessionConfig | None:
-    """Match an IN/OUT pair to the closest SessionConfig by start_time proximity."""
-    configs = SessionConfig.objects.all()
-    best = None
-    best_delta = timedelta(hours=999)
-    for cfg in configs:
-        delta = abs(
-            timedelta(hours=check_in.hour, minutes=check_in.minute)
-            - timedelta(hours=cfg.start_time.hour, minutes=cfg.start_time.minute)
-        )
-        if delta < best_delta:
-            best_delta = delta
-            best = cfg
-    # Only match if within 90 minutes
-    return best if best_delta <= timedelta(minutes=90) else None
-
-
-def _compute_hours(check_in: time, check_out: time) -> Decimal:
-    dt_in = datetime.combine(date.today(), check_in)
-    dt_out = datetime.combine(date.today(), check_out)
-    if dt_out <= dt_in:
-        dt_out += timedelta(days=1)  # crosses midnight
-    diff = (dt_out - dt_in).total_seconds() / 3600
-    return Decimal(str(round(diff, 2)))
-
-
-@api_view(["POST"])
-@require_hr
-def process_punch_sessions(request: Request) -> Response:
-    """
-    Convert AttendanceLogs (IN/OUT pairs) into WorkSessions.
-    Accepts: { month, year, employeeId? }
-    """
-    month = request.data.get("month")
-    year = request.data.get("year")
-    emp_filter_id = request.data.get("employeeId")
-
-    if not month or not year:
-        return _error("month and year are required")
-
-    try:
-        month, year = int(month), int(year)
-    except ValueError:
-        return _error("month and year must be integers")
-
-    qs = AttendanceLog.objects.filter(date__year=year, date__month=month).order_by("employee_id", "date", "punch_time")
-    if emp_filter_id:
-        qs = qs.filter(employee_id=int(emp_filter_id))
-
-    # Delete existing WorkSessions for this period (re-process)
-    ws_qs = WorkSession.objects.filter(date__year=year, date__month=month)
-    if emp_filter_id:
-        ws_qs = ws_qs.filter(employee_id=int(emp_filter_id))
-    ws_qs.delete()
-
-    # Group logs by employee → date
-    from collections import defaultdict
-    grouped: dict[int, dict[date, list[AttendanceLog]]] = defaultdict(lambda: defaultdict(list))
-    for log in qs:
-        grouped[log.employee_id][log.date].append(log)
-
-    created_count = 0
-    for emp_id, date_logs in grouped.items():
-        emp = Employee.objects.filter(id=emp_id).first()
-        if not emp:
-            continue
-        for log_date, logs in date_logs.items():
-            ins = [l for l in logs if l.punch_type == "IN"]
-            outs = [l for l in logs if l.punch_type == "OUT"]
-            # Pair IN→OUT sequentially
-            pairs = list(zip(ins, outs))
-            for in_log, out_log in pairs:
-                check_in = in_log.punch_time
-                check_out = out_log.punch_time
-                hours = _compute_hours(check_in, check_out)
-                cfg = _match_session_config(check_in, check_out)
-                session_name = cfg.name if cfg else "Custom"
-                session_amount = cfg.pay_amount if cfg else (hours * Decimal("80"))
-                is_ot = cfg.is_overtime if cfg else False
-                WorkSession.objects.create(
-                    employee=emp,
-                    date=log_date,
-                    session_config=cfg,
-                    session_name=session_name,
-                    check_in=check_in,
-                    check_out=check_out,
-                    hours_worked=hours,
-                    session_amount=session_amount,
-                    is_overtime=is_ot,
-                )
-                created_count += 1
-
-    return Response({
-        "message": f"Processed sessions for {month}/{year}. Created {created_count} work sessions.",
-        "created": created_count,
-    })
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Work Sessions – list / edit
+#  Work Sessions — list / edit
 # ─────────────────────────────────────────────────────────────────────────────
 
 @api_view(["GET"])
@@ -440,156 +1031,8 @@ def work_session_detail(request: Request, pk: int) -> Response:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Payroll Engine – generate / list / update
+#  Payroll list
 # ─────────────────────────────────────────────────────────────────────────────
-
-def _generate_monthly_payroll(emp: Employee, month: int, year: int) -> Payroll | None:
-    """Monthly payroll engine: full/half day based on session presence."""
-    prefix = f"{year}-{month:02d}"
-
-    # Count days with attendance logs (each day the employee punched)
-    from collections import defaultdict
-    log_qs = AttendanceLog.objects.filter(
-        employee=emp, date__year=year, date__month=month
-    ).order_by("date", "punch_time")
-
-    # Group by date → list of logs
-    day_logs: dict[date, list] = defaultdict(list)
-    for log in log_qs:
-        day_logs[log.date].append(log)
-
-    total_days = len(day_logs)
-    if total_days == 0:
-        # Fallback to old simple attendance table
-        present_count = Attendance.objects.filter(
-            employee=emp, date__startswith=prefix, present=True
-        ).count()
-        total_count = Attendance.objects.filter(employee=emp, date__startswith=prefix).count()
-        if total_count == 0:
-            return None
-        present_days = Decimal(str(present_count))
-        absent_days = Decimal(str(total_count - present_count))
-        total_days = total_count
-    else:
-        present_days = Decimal("0")
-        for _date, logs in day_logs.items():
-            ins = [l for l in logs if l.punch_type == "IN"]
-            outs = [l for l in logs if l.punch_type == "OUT"]
-            sessions_today = min(len(ins), len(outs))
-            if sessions_today >= 2:
-                present_days += Decimal("1")    # Full day
-            elif sessions_today == 1:
-                present_days += Decimal("0.5")  # Half day
-        absent_days = Decimal(str(total_days)) - present_days
-
-    if not emp.salary_amount:
-        return None
-
-    per_day = emp.salary_amount / Decimal("26")
-    gross = (per_day * present_days).quantize(Decimal("0.01"))
-
-    # OT – count any sessions with is_overtime=True
-    ot_sessions = WorkSession.objects.filter(
-        employee=emp, date__year=year, date__month=month, is_overtime=True
-    )
-    ot_amount = sum(ws.session_amount for ws in ot_sessions) or Decimal("0")
-    ot_hours = sum(ws.hours_worked for ws in ot_sessions) or Decimal("0")
-
-    final = (gross + ot_amount).quantize(Decimal("0.01"))
-
-    lookup = {
-        "employee": emp,
-        "month": month,
-        "year": year,
-        "week_number": None,
-    }
-    existing_payrolls = Payroll.objects.filter(**lookup).order_by("id")
-    if existing_payrolls.count() > 1:
-        existing_payrolls.exclude(pk=existing_payrolls.first().pk).delete()
-    existing = existing_payrolls.first()
-    if existing and existing.status == Payroll.STATUS_PAID:
-        return existing
-
-    payroll, _ = Payroll.objects.update_or_create(
-        **lookup,
-        defaults=dict(
-            salary_mode="monthly",
-            total_working_days=total_days,
-            present_days=present_days,
-            absent_days=absent_days,
-            completed_sessions=int(present_days * 2),
-            ot_hours=ot_hours,
-            ot_amount=ot_amount,
-            base_salary=emp.salary_amount,
-            gross_salary=gross,
-            deductions=Decimal("0"),
-            bonus=Decimal("0"),
-            final_salary=final,
-            status="pending",
-            notes=(
-                f"Monthly payroll: {present_days} days present ({absent_days} absent) "
-                f"out of {total_days} working days. OT: {ot_hours}h = ₹{ot_amount}"
-            ),
-        ),
-    )
-    return payroll
-
-
-def _generate_session_payroll(emp: Employee, month: int, year: int) -> Payroll | None:
-    """Session-based payroll engine for tailors/weekly workers."""
-    sessions = WorkSession.objects.filter(
-        employee=emp, date__year=year, date__month=month
-    )
-    if not sessions.exists():
-        return None
-
-    total_amount = sum(ws.session_amount for ws in sessions)
-    ot_sessions = [ws for ws in sessions if ws.is_overtime]
-    ot_amount = sum(ws.session_amount for ws in ot_sessions)
-    ot_hours = sum(ws.hours_worked for ws in ot_sessions)
-    total_hours = sum(ws.hours_worked for ws in sessions)
-
-    # Attendance days (distinct dates with sessions)
-    distinct_dates = sessions.values("date").distinct().count()
-
-    lookup = {
-        "employee": emp,
-        "month": month,
-        "year": year,
-        "week_number": None,
-    }
-    existing_payrolls = Payroll.objects.filter(**lookup).order_by("id")
-    if existing_payrolls.count() > 1:
-        existing_payrolls.exclude(pk=existing_payrolls.first().pk).delete()
-    existing = existing_payrolls.first()
-    if existing and existing.status == Payroll.STATUS_PAID:
-        return existing
-
-    payroll, _ = Payroll.objects.update_or_create(
-        **lookup,
-        defaults=dict(
-            salary_mode="session",
-            total_working_days=distinct_dates,
-            present_days=Decimal(str(distinct_dates)),
-            absent_days=Decimal("0"),
-            completed_sessions=sessions.count(),
-            ot_hours=ot_hours,
-            ot_amount=ot_amount,
-            base_salary=Decimal(str(total_amount)),
-            gross_salary=Decimal(str(total_amount)),
-            deductions=Decimal("0"),
-            bonus=Decimal("0"),
-            final_salary=Decimal(str(total_amount)).quantize(Decimal("0.01")),
-            status="pending",
-            notes=(
-                f"Session payroll: {sessions.count()} sessions, "
-                f"{float(total_hours):.1f}h total, "
-                f"OT: {float(ot_hours):.1f}h = ₹{float(ot_amount):.2f}"
-            ),
-        ),
-    )
-    return payroll
-
 
 @api_view(["GET"])
 @require_hr
@@ -611,16 +1054,40 @@ def payroll_list(request: Request) -> Response:
     for p in qs:
         emp = p.employee
         name = f"{emp.first_name} {emp.last_name}" if emp else None
-        result.append(_payroll_json(p, name))
+        row = _payroll_json(p, name)
+        # Include bank details for Excel export
+        row["bankAccount"] = emp.bank_account or ""
+        row["bankIfsc"] = emp.bank_ifsc or ""
+        row["bankName"] = emp.bank_name or ""
+        row["employeeCode"] = emp.employee_code or ""
+        row["email"] = emp.email or ""
+        result.append(row)
     return Response(result)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Generate payroll (main entry point)
+# ─────────────────────────────────────────────────────────────────────────────
 
 @api_view(["POST"])
 @require_hr
 def generate_payroll(request: Request) -> Response:
-    """Generate payrolls for all active employees for the given month/year."""
-    month = request.data.get("month")
-    year = request.data.get("year")
+    """
+    Generate payrolls for all active employees.
+
+    Body:
+      { month, year, runType: "monthly"|"biweekly", weekNumber: 1|2 }
+
+    runType="monthly"  → generates staff (monthly) only
+    runType="biweekly" → generates production (session-based) only, for the given weekNumber
+    If runType is omitted, generates BOTH in one call (staff monthly + production week 1 and 2).
+    """
+    data = request.data
+    month = data.get("month")
+    year = data.get("year")
+    run_type = data.get("runType", "all")
+    week_number = data.get("weekNumber")
+
     if not month or not year:
         return _error("month and year are required")
     try:
@@ -628,40 +1095,63 @@ def generate_payroll(request: Request) -> Response:
     except ValueError:
         return _error("month and year must be integers")
 
+    if run_type == "biweekly":
+        if not week_number or int(week_number) not in (1, 2):
+            return _error("weekNumber (1 or 2) is required for biweekly run")
+        week_number = int(week_number)
+
     employees = Employee.objects.filter(status="active")
     generated = []
     skipped = []
 
     for emp in employees:
+        emp_name = f"{emp.first_name} {emp.last_name}"
         try:
-            # Determine mode from salary_type field
-            mode = emp.salary_type  # "monthly" or "weekly" / "session"
-            if mode == "monthly":
-                p = _generate_monthly_payroll(emp, month, year)
-            else:
-                p = _generate_session_payroll(emp, month, year)
+            if emp.employment_type == "staff" and run_type in ("monthly", "all"):
+                result = _generate_staff_payroll(emp, month, year)
+                if result:
+                    generated.append(_payroll_json(result["payroll"], emp_name))
+                else:
+                    skipped.append({"employeeId": emp.id, "name": emp_name, "reason": "No salary configured"})
 
-            if p:
-                emp_name = f"{emp.first_name} {emp.last_name}"
-                generated.append(_payroll_json(p, emp_name))
-            else:
-                skipped.append({"employeeId": emp.id, "reason": "No attendance data found"})
+            elif emp.employment_type == "production" and run_type in ("biweekly", "all"):
+                wk = week_number if run_type == "biweekly" else None
+                weeks_to_run = [wk] if wk else [1, 2]
+                for wk in weeks_to_run:
+                    result = _generate_production_payroll(emp, month, year, wk)
+                    if result:
+                        generated.append(_payroll_json(result["payroll"], emp_name))
+                    else:
+                        skipped.append({
+                            "employeeId": emp.id, "name": emp_name,
+                            "reason": "No session configs found — configure Session Config first",
+                        })
         except Exception as e:
-            skipped.append({"employeeId": emp.id, "reason": str(e)})
+            skipped.append({"employeeId": emp.id, "name": emp_name, "reason": str(e)})
 
+    from .audit_utils import log_action as _log
+    _log(request, "create", "payroll", description=(
+        f"Generated payroll {month}/{year} [{run_type}] — "
+        f"{len(generated)} generated, {len(skipped)} skipped"
+    ))
     return Response({
-        "message": f"Payroll generated for {month}/{year}. {len(generated)} computed, {len(skipped)} skipped.",
+        "message": (
+            f"Payroll generated for {month}/{year}. "
+            f"{len(generated)} records computed, {len(skipped)} skipped."
+        ),
         "generated": len(generated),
         "skipped": len(skipped),
-        "payrolls": generated,
         "skippedDetails": skipped,
     }, status=201)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Payroll detail PATCH (status / bonus / deductions)
+# ─────────────────────────────────────────────────────────────────────────────
+
 @api_view(["PATCH"])
 @require_hr
 def payroll_detail(request: Request, pk: int) -> Response:
-    """Update payroll status, bonus, deductions."""
     p = Payroll.objects.select_related("employee").filter(pk=pk).first()
     if not p:
         return _error("Not found", 404)
@@ -674,8 +1164,259 @@ def payroll_detail(request: Request, pk: int) -> Response:
         p.deductions = Decimal(str(d["deductions"]))
     if "notes" in d:
         p.notes = d["notes"]
-    # Recompute final
-    p.final_salary = (p.gross_salary + p.bonus - p.deductions).quantize(Decimal("0.01"))
+    p.final_salary = _d2(p.gross_salary + p.bonus - p.deductions)
     p.save()
     emp = p.employee
     return Response(_payroll_json(p, f"{emp.first_name} {emp.last_name}" if emp else None))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Payroll breakdown — full traceability for one employee-month
+# ─────────────────────────────────────────────────────────────────────────────
+
+@api_view(["GET"])
+@require_hr
+def payroll_breakdown(request: Request, pk: int) -> Response:
+    """Return the full day-by-day breakdown stored in the associated SalarySlip."""
+    p = Payroll.objects.select_related("employee").filter(pk=pk).first()
+    if not p:
+        return _error("Not found", 404)
+
+    slip = SalarySlip.objects.filter(
+        employee=p.employee, month=p.month, year=p.year, week_number=p.week_number
+    ).first()
+
+    emp = p.employee
+    emp_info = {
+        "id": emp.id,
+        "code": emp.employee_code,
+        "name": f"{emp.first_name} {emp.last_name}",
+        "department": emp.department.name if emp.department else None,
+        "designation": emp.designation.title if emp.designation else None,
+        "employmentType": emp.employment_type,
+        "salary": float(emp.salary_amount or 0),
+    }
+
+    breakdown = slip.breakdown_details if slip else None
+
+    return Response({
+        "payrollId": p.id,
+        "employee": emp_info,
+        "month": p.month,
+        "year": p.year,
+        "weekNumber": p.week_number,
+        "salaryMode": p.salary_mode,
+        "status": p.status,
+        "summary": {
+            "grossSalary": float(p.gross_salary),
+            "deductions": float(p.deductions),
+            "bonus": float(p.bonus),
+            "netSalary": float(p.final_salary),
+        },
+        "breakdown": breakdown,
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Seed test attendance data (dev/staging use only)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@api_view(["POST"])
+@require_hr
+def seed_attendance(request: Request) -> Response:
+    """
+    Create realistic test attendance records for all active employees.
+
+    Body (all optional):
+      { month, year, days: 10, includeLateDays: 2, includeAbsentDays: 1 }
+
+    Creates records in BOTH Attendance (simple) AND AttendanceLog (punch-based)
+    so the payroll engine can detect presence AND late arrivals.
+    """
+    data = request.data
+    month = int(data.get("month", date.today().month))
+    year = int(data.get("year", date.today().year))
+    target_days = int(data.get("days", 10))
+    late_day_count = int(data.get("includeLateDays", 1))
+    absent_day_count = int(data.get("includeAbsentDays", 1))
+
+    employees = Employee.objects.filter(status="active")
+    holiday_dates: set[date] = set(
+        Holiday.objects.filter(date__year=year, date__month=month).values_list("date", flat=True)
+    )
+
+    # Build all working days in month (Mon–Sat) excluding holidays
+    first_day = date(year, month, 1)
+    last_day = date(year, month, calendar.monthrange(year, month)[1])
+    all_working = []
+    cur = first_day
+    while cur <= last_day and cur <= date.today():
+        if cur.weekday() < 6 and cur not in holiday_dates:
+            all_working.append(cur)
+        cur += timedelta(days=1)
+
+    # Limit to the requested number of days
+    seed_days = all_working[:target_days]
+    if not seed_days:
+        return _error(f"No working days found in {month}/{year} up to today.")
+
+    # Designate which seeded days are late or absent
+    absent_days_set: set[date] = set(seed_days[-absent_day_count:]) if absent_day_count else set()
+    late_days_list = [d for d in seed_days if d not in absent_days_set][-late_day_count:] if late_day_count else []
+    late_days_set: set[date] = set(late_days_list)
+
+    created_att = 0
+    created_logs = 0
+    skipped = 0
+
+    for emp in employees:
+        # Get shift info for realistic punch times
+        assignment = _get_active_assignment(emp, seed_days[0])
+        if assignment:
+            shift_start, shift_end, _, _ = _effective_shift_times(assignment)
+        else:
+            shift_start = time(9, 0)
+            shift_end = time(20, 0) if emp.employment_type == "production" else time(19, 0)
+
+        for d in seed_days:
+            date_str = d.isoformat()
+
+            # Skip if already exists
+            if Attendance.objects.filter(employee=emp, date=date_str).exists():
+                skipped += 1
+                continue
+
+            is_absent = d in absent_days_set
+            is_late = d in late_days_set
+
+            if is_absent:
+                Attendance.objects.create(employee=emp, date=date_str, present=False)
+                created_att += 1
+                continue
+
+            # Present day — create Attendance record
+            Attendance.objects.create(employee=emp, date=date_str, present=True, hours_worked=Decimal("8.00"))
+            created_att += 1
+
+            # Create AttendanceLog punch-in
+            if is_late:
+                # Late by 25 min (beyond typical 15-min grace)
+                in_h = shift_start.hour
+                in_m = shift_start.minute + 25
+                if in_m >= 60:
+                    in_h += 1
+                    in_m -= 60
+                punch_in = time(in_h, in_m)
+            else:
+                # On time — arrive 5 min before shift
+                in_h = shift_start.hour
+                in_m = max(0, shift_start.minute - 5)
+                punch_in = time(in_h, in_m)
+
+            punch_out = shift_end
+
+            AttendanceLog.objects.create(
+                employee=emp, date=d, punch_time=punch_in, punch_type="IN", source="seed"
+            )
+            AttendanceLog.objects.create(
+                employee=emp, date=d, punch_time=punch_out, punch_type="OUT", source="seed"
+            )
+            created_logs += 2
+
+    return Response({
+        "message": (
+            f"Seeded attendance for {len(employees)} employees × {len(seed_days)} days "
+            f"({absent_day_count} absent, {late_day_count} late)."
+        ),
+        "attendanceRecordsCreated": created_att,
+        "punchLogsCreated": created_logs,
+        "skipped": skipped,
+        "days": [d.isoformat() for d in seed_days],
+        "absentDays": [d.isoformat() for d in absent_days_set],
+        "lateDays": [d.isoformat() for d in late_days_set],
+    }, status=201)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Payroll Settings (singleton — PF/ESI rates, pay day, production pay type)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _ps_response(ps) -> dict:
+    return {
+        # Staff
+        "pfRate": float(ps.pf_rate),
+        "esiRate": float(ps.esi_rate),
+        "esiApplicableBelow": float(ps.esi_applicable_below),
+        # Production
+        "prodPfRate": float(ps.prod_pf_rate),
+        "prodEsiRate": float(ps.prod_esi_rate),
+        "prodEsiApplicableBelow": float(ps.prod_esi_applicable_below),
+        # General
+        "payDay": ps.pay_day,
+        "productionPayType": ps.production_pay_type,
+        # Salary slip header & signature
+        "slipCompanyName": ps.slip_company_name,
+        "slipCompanyAddress": ps.slip_company_address,
+        "minWageRate": float(ps.min_wage_rate),
+        "signatureImage": ps.signature_image,
+        # SMTP / Email
+        "smtpHost": ps.smtp_host,
+        "smtpPort": ps.smtp_port,
+        "smtpUsername": ps.smtp_username,
+        "smtpPassword": ps.smtp_password,
+        "smtpFromEmail": ps.smtp_from_email,
+        "smtpFromName": ps.smtp_from_name,
+        "updatedAt": ps.updated_at.isoformat() if ps.updated_at else None,
+    }
+
+
+@api_view(["GET", "PUT"])
+@require_hr
+def payroll_settings_view(request: Request) -> Response:
+    ps = PayrollSettings.get()
+
+    if request.method == "GET":
+        return Response(_ps_response(ps))
+
+    data = request.data
+    field_map = {
+        "pfRate": ("pf_rate", Decimal),
+        "esiRate": ("esi_rate", Decimal),
+        "esiApplicableBelow": ("esi_applicable_below", Decimal),
+        "prodPfRate": ("prod_pf_rate", Decimal),
+        "prodEsiRate": ("prod_esi_rate", Decimal),
+        "prodEsiApplicableBelow": ("prod_esi_applicable_below", Decimal),
+        "payDay": ("pay_day", int),
+        "productionPayType": ("production_pay_type", str),
+        "slipCompanyName": ("slip_company_name", str),
+        "slipCompanyAddress": ("slip_company_address", str),
+        "minWageRate": ("min_wage_rate", Decimal),
+        "signatureImage": ("signature_image", str),
+        "smtpHost": ("smtp_host", str),
+        "smtpPort": ("smtp_port", int),
+        "smtpUsername": ("smtp_username", str),
+        "smtpPassword": ("smtp_password", str),
+        "smtpFromEmail": ("smtp_from_email", str),
+        "smtpFromName": ("smtp_from_name", str),
+    }
+    for key, (attr, cast) in field_map.items():
+        if key in data:
+            val = data[key]
+            setattr(ps, attr, Decimal(str(val)) if cast is Decimal else cast(val))
+    ps.save()
+
+    return Response(_ps_response(ps))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Legacy: process_punch_sessions kept for backward compatibility
+# ─────────────────────────────────────────────────────────────────────────────
+
+@api_view(["POST"])
+@require_hr
+def process_punch_sessions(request: Request) -> Response:
+    """Legacy endpoint. The new engine handles this automatically during payroll generation."""
+    return Response({
+        "message": "Session processing is now handled automatically by the payroll engine. "
+                   "Use POST /api/payroll/generate with runType='biweekly' to generate production payroll.",
+    })

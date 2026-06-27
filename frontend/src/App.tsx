@@ -84,7 +84,7 @@ function ProtectedRoute({
   }
 
   if (!isAuthenticated || !user) {
-    navigate("/login");
+    navigate("/");
     return null;
   }
 

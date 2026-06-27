@@ -14,6 +14,7 @@ from rest_framework.response import Response
 
 from .auth import require_auth, require_hr
 from .jwt_utils import sign_token
+from .audit_utils import log_action
 from .models import (
     Applicant,
     Attendance,
@@ -59,11 +60,6 @@ def _error(message: str, code: int = 400) -> Response:
     return Response({"error": message}, status=code)
 
 
-def generate_employee_code() -> str:
-    year = str(datetime.now().year)[-2:]
-    count = Employee.objects.count()
-    return f"{count + 1}/{year}"
-
 
 def _employee_name(emp_id: int) -> str | None:
     emp = Employee.objects.filter(id=emp_id).first()
@@ -86,8 +82,12 @@ def hr_login(request: Request) -> Response:
     username = request.data.get("username")
     password = request.data.get("password")
     if username != settings.HR_USERNAME or password != settings.HR_PASSWORD:
+        log_action(request, "login_failed", "auth", description=f"Failed login for: {username}")
         return _error("Invalid credentials", 401)
     token = sign_token({"role": "hr", "name": "HR Admin"})
+    # Write audit log after constructing the fake jwt_user
+    request.jwt_user = {"role": "hr", "name": "HR Admin"}
+    log_action(request, "login", "auth", description="HR Admin logged in")
     return Response(
         {"token": token, "role": "hr", "employeeId": None, "name": "HR Admin"}
     )
@@ -245,8 +245,14 @@ def _employees_create(request: Request) -> Response:
         from .models import Designation as _Desig
         desig = _Desig.objects.filter(pk=int(data["designationId"])).first()
 
+    employee_code = (data.get("employeeCode") or "").strip()
+    if not employee_code:
+        return _error("Employee code is required")
+    if Employee.objects.filter(employee_code=employee_code).exists():
+        return _error("Employee code already exists")
+
     emp = Employee.objects.create(
-        employee_code=generate_employee_code(),
+        employee_code=employee_code,
         first_name=data.get("firstName"),
         last_name=data.get("lastName"),
         gender=data.get("gender"),
@@ -267,12 +273,16 @@ def _employees_create(request: Request) -> Response:
         id_proof=data.get("idProof"),
         address=data.get("address"),
         join_date=data.get("joinDate"),
+        father_name=data.get("fatherName"),
+        mother_name=data.get("motherName"),
     )
     # Auto-assign production shift if applicable
     from .shift_views import auto_assign_production_shift
     auto_assign_production_shift(emp)
 
     emp = _employee_queryset().get(pk=emp.pk)
+    log_action(request, "create", "employees", record_id=emp.id,
+               description=f"Created employee {emp.employee_code} — {emp.first_name} {emp.last_name}")
     return Response(_serialize_employee(emp), status=201)
 
 
@@ -312,6 +322,14 @@ def _employee_update(request: Request, pk: int) -> Response:
         raw = request.data.get("designationId")
         emp.designation_id = int(raw) if raw else None
 
+    if "employeeCode" in request.data:
+        new_code = (request.data["employeeCode"] or "").strip()
+        if not new_code:
+            return _error("Employee code is required")
+        if Employee.objects.filter(employee_code=new_code).exclude(pk=pk).exists():
+            return _error("Employee code already exists")
+        emp.employee_code = new_code
+
     field_map = {
         "firstName": "first_name",
         "lastName": "last_name",
@@ -332,6 +350,8 @@ def _employee_update(request: Request, pk: int) -> Response:
         "esiNumber": "esi_number",
         "address": "address",
         "joinDate": "join_date",
+        "fatherName": "father_name",
+        "motherName": "mother_name",
     }
     for json_key, model_key in field_map.items():
         if json_key in request.data:
@@ -349,11 +369,16 @@ def _employee_update(request: Request, pk: int) -> Response:
         auto_assign_production_shift(emp_fresh)
 
     emp = _employee_queryset().get(pk=pk)
+    log_action(request, "update", "employees", record_id=pk,
+               description=f"Updated employee {emp.employee_code} — {emp.first_name} {emp.last_name}")
     return Response(_serialize_employee(emp))
 
 
-def _employee_delete(_request: Request, pk: int) -> Response:
+def _employee_delete(request: Request, pk: int) -> Response:
+    emp = Employee.objects.filter(id=pk).first()
+    name = f"{emp.employee_code} — {emp.first_name} {emp.last_name}" if emp else str(pk)
     Employee.objects.filter(id=pk).delete()
+    log_action(request, "delete", "employees", record_id=pk, description=f"Deleted employee {name}")
     return Response({"message": "Employee deleted"})
 
 

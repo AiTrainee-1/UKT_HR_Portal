@@ -21,6 +21,7 @@ import { z } from "zod";
 import { ArrowLeft } from "lucide-react";
 
 const schema = z.object({
+  employeeCode: z.string().min(1, "Employee code is required"),
   firstName: z.string().min(1, "First name is required"),
   lastName: z.string().min(1, "Last name is required"),
   email: z.string().email("Valid email required").or(z.literal("")).optional(),
@@ -40,6 +41,8 @@ const schema = z.object({
   esiNumber: z.string().optional(),
   address: z.string().optional(),
   idProof: z.string().optional(),
+  fatherName: z.string().optional(),
+  motherName: z.string().optional(),
 });
 
 type FormData = z.infer<typeof schema>;
@@ -69,6 +72,7 @@ export default function NewEmployee() {
     mutation.mutate(
       {
         data: {
+          employeeCode: data.employeeCode,
           firstName: data.firstName,
           lastName: data.lastName,
           email: data.email || undefined,
@@ -88,6 +92,8 @@ export default function NewEmployee() {
           esiNumber: data.esiNumber || undefined,
           address: data.address || undefined,
           idProof: data.idProof || undefined,
+          fatherName: data.fatherName || undefined,
+          motherName: data.motherName || undefined,
         } as any,
       },
       {
@@ -126,6 +132,9 @@ export default function NewEmployee() {
                 <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground">Basic Information</CardTitle>
               </CardHeader>
               <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <FormField control={form.control} name="employeeCode" render={({ field }) => (
+                  <FormItem className="sm:col-span-2"><FormLabel>Employee Code *</FormLabel><FormControl><Input placeholder="e.g. 1570 or EMP001" {...field} /></FormControl><FormMessage /></FormItem>
+                )} />
                 <FormField control={form.control} name="firstName" render={({ field }) => (
                   <FormItem><FormLabel>First Name *</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
@@ -270,6 +279,21 @@ export default function NewEmployee() {
                 )} />
                 <FormField control={form.control} name="idProof" render={({ field }) => (
                   <FormItem><FormLabel>ID Proof</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
+                )} />
+              </CardContent>
+            </Card>
+
+            {/* Family Information */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground">Family Information</CardTitle>
+              </CardHeader>
+              <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <FormField control={form.control} name="fatherName" render={({ field }) => (
+                  <FormItem><FormLabel>Father's Name</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
+                )} />
+                <FormField control={form.control} name="motherName" render={({ field }) => (
+                  <FormItem><FormLabel>Mother's Name</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
               </CardContent>
             </Card>

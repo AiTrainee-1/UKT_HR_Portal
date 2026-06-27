@@ -19,21 +19,32 @@ from .settlement_views import (
 from .hr_user_views import (
     roles, role_detail,
     hr_users, hr_user_detail,
-    audit_logs,
+    audit_logs, audit_logs_stats,
 )
 from .salary_slip_views import (
-    salary_slips, generate_salary_slip, employee_salary_slips,
+    salary_slips, salary_slip_detail, email_salary_slip, employee_salary_slips,
 )
 from .org_views import (
     branches, branch_detail,
     designations, designation_detail,
 )
 from .reports_views import (
-    attendance_report, leave_report, payroll_report, employee_report,
+    attendance_report, attendance_summary_report,
+    leave_report, leave_balance_report,
+    payroll_report, pf_esi_report,
+    employee_report, headcount_report,
+    settlement_report, new_joinings_report,
 )
 from .attendance_views import (
     attendance_summary, attendance_daily, attendance_monthly_trend,
     attendance_employee_history, biometric_punch, manual_attendance,
+)
+from .payroll_views import (
+    session_configs, session_config_detail,
+    attendance_logs, upload_attendance_excel, process_punch_sessions,
+    work_sessions, work_session_detail,
+    payroll_list, generate_payroll, payroll_detail, payroll_breakdown,
+    seed_attendance, payroll_settings_view,
 )
 
 urlpatterns = [
@@ -97,7 +108,8 @@ urlpatterns = [
 
     # ── Salary Slips ────────────────────────────────────────────────────────
     path("salary-slips", salary_slips),
-    path("salary-slips/generate", generate_salary_slip),
+    path("salary-slips/<int:pk>", salary_slip_detail),
+    path("salary-slips/<int:pk>/email", email_salary_slip),
     path("my/salary-slips", employee_salary_slips),
 
     # ── Notifications ───────────────────────────────────────────────────────
@@ -126,16 +138,19 @@ urlpatterns = [
     path("dashboard/salary-trends", views.salary_trends),
 
     # ── Enterprise Payroll Engine ────────────────────────────────────────────
-    path("session-configs", views.session_configs),
-    path("session-configs/<int:pk>", views.session_config_detail),
-    path("attendance-logs", views.attendance_logs),
-    path("attendance-logs/upload-excel", views.upload_attendance_excel),
-    path("attendance-logs/process-sessions", views.process_punch_sessions),
-    path("work-sessions", views.work_sessions),
-    path("work-sessions/<int:pk>", views.work_session_detail),
-    path("payroll", views.payroll_list),
-    path("payroll/generate", views.generate_payroll),
-    path("payroll/<int:pk>", views.payroll_detail),
+    path("payroll-settings", payroll_settings_view),
+    path("session-configs", session_configs),
+    path("session-configs/<int:pk>", session_config_detail),
+    path("attendance-logs", attendance_logs),
+    path("attendance-logs/upload-excel", upload_attendance_excel),
+    path("attendance-logs/process-sessions", process_punch_sessions),
+    path("attendance-logs/seed", seed_attendance),
+    path("work-sessions", work_sessions),
+    path("work-sessions/<int:pk>", work_session_detail),
+    path("payroll", payroll_list),
+    path("payroll/generate", generate_payroll),
+    path("payroll/<int:pk>/breakdown", payroll_breakdown),
+    path("payroll/<int:pk>", payroll_detail),
 
     # ── User Management ─────────────────────────────────────────────────────
     path("roles", roles),
@@ -145,10 +160,17 @@ urlpatterns = [
 
     # ── Audit Logs ───────────────────────────────────────────────────────────
     path("audit-logs", audit_logs),
+    path("audit-logs/stats", audit_logs_stats),
 
     # ── Reports ──────────────────────────────────────────────────────────────
-    path("reports/attendance", attendance_report),
-    path("reports/leave", leave_report),
-    path("reports/payroll", payroll_report),
-    path("reports/employees", employee_report),
+    path("reports/attendance-log",      attendance_report),
+    path("reports/attendance-summary",  attendance_summary_report),
+    path("reports/leave",               leave_report),
+    path("reports/leave-balance",       leave_balance_report),
+    path("reports/payroll",             payroll_report),
+    path("reports/pf-esi",              pf_esi_report),
+    path("reports/employees",           employee_report),
+    path("reports/headcount",           headcount_report),
+    path("reports/settlement",          settlement_report),
+    path("reports/new-joinings",        new_joinings_report),
 ]

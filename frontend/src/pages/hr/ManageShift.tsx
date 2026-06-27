@@ -22,7 +22,7 @@ import {
 } from "@/lib/api-client";
 import {
   useBulkAssignShift, useSearchEmployees, useListShiftAssignments,
-  useDeleteShiftAssignment, getShiftAssignmentsQueryKey,
+  useDeleteShiftAssignment, useUpdateShiftAssignment, getShiftAssignmentsQueryKey,
   useSyncProductionShifts,
   type ShiftAssignment,
 } from "@/lib/api-client";
@@ -242,6 +242,15 @@ function AssignedGroupCard({ group, onRemove }: {
                         <p className="text-xs text-muted-foreground">Since</p>
                         <p className="text-xs font-medium">{emp.effectiveFrom}</p>
                       </div>
+                      {(emp.customStartTime || emp.customEndTime || emp.saturdayOff) && (
+                        <Badge className="text-xs bg-blue-100 text-blue-700 border-blue-200 hidden md:flex" title={[
+                          emp.customStartTime ? `Start: ${emp.customStartTime}` : null,
+                          emp.customEndTime ? `End: ${emp.customEndTime}` : null,
+                          emp.saturdayOff ? "Sat off" : null,
+                        ].filter(Boolean).join(" · ")}>
+                          Custom
+                        </Badge>
+                      )}
                       {emp.employmentType === "production" ? (
                         <Badge className="text-xs bg-amber-100 text-amber-700 border-amber-200 hidden sm:flex">Production</Badge>
                       ) : (
@@ -417,6 +426,9 @@ function AssignIndividualDialog({ staffShifts, onClose }: { staffShifts: ShiftTe
   const [search, setSearch] = useState("");
   const [selectedEmpId, setSelectedEmpId] = useState<number | null>(null);
   const [selectedEmpName, setSelectedEmpName] = useState("");
+  const [customStartTime, setCustomStartTime] = useState("");
+  const [customEndTime, setCustomEndTime] = useState("");
+  const [saturdayOff, setSaturdayOff] = useState(false);
   const { data: results, isFetching } = useSearchEmployees(search);
   const bulkMutation = useBulkAssignShift();
 
@@ -428,7 +440,14 @@ function AssignIndividualDialog({ staffShifts, onClose }: { staffShifts: ShiftTe
     }
     let res: { assigned: number; shiftName: string } | null = null;
     try {
-      res = await bulkMutation.mutateAsync({ shiftId: Number(shiftId), effectiveFrom, employeeIds: [selectedEmpId] });
+      res = await bulkMutation.mutateAsync({
+        shiftId: Number(shiftId),
+        effectiveFrom,
+        employeeIds: [selectedEmpId],
+        customStartTime: customStartTime || null,
+        customEndTime: customEndTime || null,
+        saturdayOff,
+      });
     } catch {
       toast({ title: "Failed to assign shift", variant: "destructive" });
       return;
@@ -440,7 +459,7 @@ function AssignIndividualDialog({ staffShifts, onClose }: { staffShifts: ShiftTe
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-lg">
         <DialogHeader><DialogTitle>Assign Shift — Individual Employee</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
@@ -454,6 +473,36 @@ function AssignIndividualDialog({ staffShifts, onClose }: { staffShifts: ShiftTe
             <Label>Effective From</Label>
             <Input type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} />
           </div>
+
+          {/* Individual schedule overrides */}
+          <div className="rounded-lg border border-dashed border-blue-200 bg-blue-50/40 p-3 space-y-3">
+            <p className="text-xs font-semibold text-blue-800">
+              Schedule Overrides <span className="font-normal text-blue-600">(optional — leave blank to use shift defaults)</span>
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">Custom Start Time</Label>
+                <Input type="time" value={customStartTime} onChange={(e) => setCustomStartTime(e.target.value)} className="h-8 text-sm" />
+                <p className="text-xs text-muted-foreground">e.g. 10:00 AM start</p>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Custom End Time</Label>
+                <Input type="time" value={customEndTime} onChange={(e) => setCustomEndTime(e.target.value)} className="h-8 text-sm" />
+                <p className="text-xs text-muted-foreground">e.g. 17:30 or 19:00</p>
+              </div>
+            </div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={saturdayOff}
+                onChange={(e) => setSaturdayOff(e.target.checked)}
+                className="w-4 h-4 rounded accent-blue-600"
+              />
+              <span className="text-sm text-gray-700">Saturday Off</span>
+              <span className="text-xs text-muted-foreground">(Mon–Fri only, skip Saturdays in payroll)</span>
+            </label>
+          </div>
+
           <div className="space-y-1.5">
             <Label>Search Employee (ID or Phone)</Label>
             <div className="relative">
@@ -470,7 +519,7 @@ function AssignIndividualDialog({ staffShifts, onClose }: { staffShifts: ShiftTe
               <button className="ml-auto text-xs text-green-600 underline" onClick={() => { setSelectedEmpId(null); setSelectedEmpName(""); setSearch(""); }}>Change</button>
             </div>
           ) : (
-            <div className="space-y-2 max-h-48 overflow-y-auto">
+            <div className="space-y-2 max-h-40 overflow-y-auto">
               {isFetching && <p className="text-xs text-center text-muted-foreground py-3">Searching…</p>}
               {!isFetching && search.length >= 2 && filteredResults.length === 0 && <p className="text-xs text-center text-muted-foreground py-3">No staff employees found</p>}
               {filteredResults.map((emp) => (

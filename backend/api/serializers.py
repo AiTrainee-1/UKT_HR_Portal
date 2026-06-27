@@ -59,6 +59,8 @@ def employee_json(emp, department_name: str | None = None) -> dict:
         "esiNumber": emp.esi_number,
         "address": emp.address,
         "joinDate": emp.join_date,
+        "fatherName": emp.father_name,
+        "motherName": emp.mother_name,
         "hasPassword": bool(emp.password_hash),
         "createdAt": _dt(emp.created_at),
     }

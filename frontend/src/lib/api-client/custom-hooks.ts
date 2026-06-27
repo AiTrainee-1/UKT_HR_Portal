@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UseQueryOptions } from "@tanstack/react-query";
 import { customFetch } from "./custom-fetch";
 
@@ -54,11 +54,29 @@ export type EmployeeRequest = {
   createdAt?: string | null;
 };
 
+export type AdvanceRepaymentItem = {
+  id: number;
+  advanceId: number;
+  month: number;
+  year: number;
+  amount: number;
+  paymentMethod: "cash" | "gpay";
+  payrollRunId?: number | null;
+  notes?: string | null;
+  createdAt?: string | null;
+};
+
+export type OverdueMonth = { year: number; month: number; label: string };
+
 export type Advance = {
   id: number;
   employeeId: number;
   employeeCode: string;
   employeeName: string;
+  employeeDepartment?: string | null;
+  employeeDesignation?: string | null;
+  employeePhone?: string | null;
+  employeeEmail?: string | null;
   advanceType: "general" | "term";
   amount: number;
   purpose: string;
@@ -73,6 +91,9 @@ export type Advance = {
   outstanding: number;
   notes?: string | null;
   createdAt?: string | null;
+  updatedAt?: string | null;
+  repayments?: AdvanceRepaymentItem[];
+  overdueMonths?: OverdueMonth[];
 };
 
 export type Role = {
@@ -360,6 +381,35 @@ export const useUpdateAdvance = () =>
       }),
   });
 
+export const getAdvanceDetailQueryKey = (id: number) => ["advance-detail", id];
+
+export const useAdvanceDetail = (id: number | null) =>
+  useQuery({
+    queryKey: getAdvanceDetailQueryKey(id ?? 0),
+    queryFn: () => customFetch<Advance>(`/api/advances/${id}`),
+    enabled: id !== null && id > 0,
+  });
+
+export const useCreateAdvanceRepayment = () =>
+  useMutation({
+    mutationFn: ({
+      advanceId, data,
+    }: {
+      advanceId: number;
+      data: {
+        month: number;
+        year: number;
+        amount: number;
+        paymentMethod?: string;
+        notes?: string;
+      };
+    }) =>
+      customFetch<{ repayment: AdvanceRepaymentItem; advance: Advance }>(
+        `/api/advances/${advanceId}/repayments`,
+        { method: "POST", body: JSON.stringify(data) },
+      ),
+  });
+
 // ── Roles ─────────────────────────────────────────────────────────────────────
 
 export const listRoles = () => customFetch<Role[]>("/api/roles");
@@ -390,6 +440,15 @@ export const useDeleteRole = () =>
   useMutation({
     mutationFn: (id: number) =>
       customFetch<void>(`/api/roles/${id}`, { method: "DELETE" }),
+  });
+
+export const useUpdateRole = () =>
+  useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Partial<Role> }) =>
+      customFetch<Role>(`/api/roles/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
   });
 
 // ── HR Users ──────────────────────────────────────────────────────────────────
@@ -442,6 +501,22 @@ export const useDeleteHrUser = () =>
   });
 
 // ── Audit Logs ────────────────────────────────────────────────────────────────
+
+export type AuditLogStats = {
+  today: number;
+  thisWeek: number;
+  total: number;
+  byModule: Record<string, number>;
+  byAction: Record<string, number>;
+  recentUsers: { name: string; at: string }[];
+};
+
+export const useAuditLogStats = () =>
+  useQuery<AuditLogStats>({
+    queryKey: ["/api/audit-logs/stats"],
+    queryFn: () => customFetch<AuditLogStats>("/api/audit-logs/stats"),
+    refetchInterval: 30000,
+  });
 
 export const listAuditLogs = (params?: {
   module?: string;
@@ -530,6 +605,13 @@ export type ShiftAssignment = {
   endTime?: string | null;
   genderRule?: string | null;
   gracePeriodMinutes?: number | null;
+  // per-employee overrides
+  customStartTime?: string | null;
+  customEndTime?: string | null;
+  saturdayOff: boolean;
+  // effective (override ?? shift template)
+  effectiveStartTime?: string | null;
+  effectiveEndTime?: string | null;
   // assignment meta
   effectiveFrom: string;
   effectiveTo?: string | null;
@@ -562,6 +644,24 @@ export const useDeleteShiftAssignment = () =>
       customFetch<void>(`/api/shift-assignments/${id}`, { method: "DELETE" }),
   });
 
+export const useUpdateShiftAssignment = () =>
+  useMutation({
+    mutationFn: ({ id, data }: {
+      id: number;
+      data: Partial<{
+        customStartTime: string | null;
+        customEndTime: string | null;
+        saturdayOff: boolean;
+        notes: string;
+        effectiveTo: string | null;
+      }>;
+    }) =>
+      customFetch<ShiftAssignment>(`/api/shift-assignments/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
+  });
+
 export type BulkAssignPayload = {
   shiftId: number;
   effectiveFrom: string;
@@ -571,6 +671,9 @@ export type BulkAssignPayload = {
   employmentType?: "production" | "staff";
   genderRule?: "all" | "male" | "female";
   notes?: string;
+  customStartTime?: string | null;
+  customEndTime?: string | null;
+  saturdayOff?: boolean;
 };
 
 export const useBulkAssignShift = () =>
@@ -864,6 +967,14 @@ export const useDeletePermission = () =>
 
 // ── Salary Slips ──────────────────────────────────────────────────────────────
 
+export type SlipLeaveBalance = {
+  leaveType: string;
+  leaveCode: string;
+  allocated: number;
+  used: number;
+  remaining: number;
+};
+
 export type SalarySlipItem = {
   id: number;
   employeeId: number;
@@ -871,9 +982,19 @@ export type SalarySlipItem = {
   employeeName: string;
   departmentName?: string | null;
   designationTitle?: string | null;
+  fatherName?: string;
+  motherName?: string;
+  joinDate?: string;
+  pfNumber?: string;
+  esiNumber?: string;
+  bankAccount?: string;
+  bankIfsc?: string;
+  bankName?: string;
+  employmentType?: string;
   payrollRunId?: number | null;
   month: number;
   year: number;
+  weekNumber?: number | null;
   slipNumber: string;
   basic: number;
   hra: number;
@@ -891,24 +1012,135 @@ export type SalarySlipItem = {
   workingDays: number;
   presentDays: number;
   absentDays: number;
+  paidLeaveDays: number;
+  unpaidLeaveDays: number;
+  lateDays: number;
+  completedSessions: number;
+  leaveBalances?: SlipLeaveBalance[];
+  breakdownDetails?: PayrollBreakdown | null;
+  // Company/slip settings (injected by backend)
+  slipCompanyName?: string;
+  slipCompanyAddress?: string;
+  minWageRate?: number;
+  signatureImage?: string;
   generatedAt?: string | null;
   emailedAt?: string | null;
+};
+
+// ── Payroll Breakdown (full traceability) ─────────────────────────────────────
+
+export type PayrollBreakdownDay = {
+  date: string;
+  day: string;
+  // staff-only fields
+  status?: "present" | "absent" | "paid_leave" | "unpaid_leave";
+  isLate?: boolean;
+  firstIn?: string | null;
+  lastOut?: string | null;
+  leaveType?: string | null;
+  // production-only fields
+  sessions?: { sessionId: number; sessionName: string; completed: boolean; rate: number }[];
+  totalSessions?: number;
+  sessionAmount?: number;
+  present?: boolean;
+};
+
+export type PayrollBreakdown = {
+  type: "staff" | "production";
+  // staff
+  shift?: {
+    id?: number | null;
+    name: string;
+    startTime: string;
+    gracePeriodMinutes: number;
+    saturdayOff: boolean;
+  };
+  // production
+  weekNumber?: number;
+  dateFrom?: string;
+  dateTo?: string;
+  sessionConfigs?: {
+    id: number; name: string; startTime: string; endTime: string; minCheckout: string; rate: number;
+  }[];
+  days: PayrollBreakdownDay[];
+  summary: {
+    // staff
+    totalWorkingDays?: number;
+    presentDays?: number;
+    paidLeaveDays?: number;
+    unpaidLeaveDays?: number;
+    absentDays?: number;
+    lateDays?: number;
+    effectivePaidDays?: number;
+    // production
+    totalDays?: number;
+    daysWorked?: number;
+    daysAbsent?: number;
+    totalSessions?: number;
+  };
+  earnings: {
+    monthlySalary?: number;
+    dailyRate?: number;
+    effectiveDays?: number;
+    basic?: number;
+    hra?: number;
+    allowances?: number;
+    grossSalary: number;
+    totalSessions?: number;
+  };
+  deductions: {
+    pf?: number;
+    esi?: number;
+    advances: number;
+    advanceDetails: { advanceId: number; repaymentId: number; amount: number; notes?: string | null }[];
+    total: number;
+  };
+  netSalary: number;
+};
+
+export type PayrollBreakdownResponse = {
+  payrollId: number;
+  employee: {
+    id: number;
+    code: string;
+    name: string;
+    department?: string | null;
+    designation?: string | null;
+    employmentType: string;
+    salary: number;
+  };
+  month: number;
+  year: number;
+  weekNumber?: number | null;
+  salaryMode: string;
+  status: string;
+  summary: {
+    grossSalary: number;
+    deductions: number;
+    bonus: number;
+    netSalary: number;
+  };
+  breakdown: PayrollBreakdown | null;
 };
 
 export const getListSalarySlipsQueryKey = (params?: {
   employeeId?: number;
   month?: number;
   year?: number;
+  weekNumber?: number;
+  employmentType?: string;
 }) => ["/api/salary-slips", params] as const;
 
 export const useListSalarySlips = <TData = SalarySlipItem[]>(
-  params?: { employeeId?: number; month?: number; year?: number },
+  params?: { employeeId?: number; month?: number; year?: number; weekNumber?: number; employmentType?: string },
   options?: UseQueryOptions<SalarySlipItem[], unknown, TData>,
 ) => {
   const qs = new URLSearchParams();
-  if (params?.employeeId) qs.set("employeeId", String(params.employeeId));
-  if (params?.month) qs.set("month", String(params.month));
-  if (params?.year) qs.set("year", String(params.year));
+  if (params?.employeeId)     qs.set("employeeId",      String(params.employeeId));
+  if (params?.month)          qs.set("month",            String(params.month));
+  if (params?.year)           qs.set("year",             String(params.year));
+  if (params?.weekNumber)     qs.set("weekNumber",       String(params.weekNumber));
+  if (params?.employmentType) qs.set("employmentType",   params.employmentType);
   const q = qs.toString();
   return useQuery<SalarySlipItem[], unknown, TData>({
     queryKey: getListSalarySlipsQueryKey(params),
@@ -923,6 +1155,11 @@ export type PayrollRunItem = {
   id: number;
   employeeId: number;
   employeeName?: string | null;
+  employeeCode?: string | null;
+  email?: string | null;
+  bankAccount?: string | null;
+  bankIfsc?: string | null;
+  bankName?: string | null;
   salaryMode: string;
   month: number;
   year: number;
@@ -969,10 +1206,150 @@ export const useListPayrollRuns = <TData = PayrollRunItem[]>(
 
 export const useGeneratePayroll = () =>
   useMutation({
-    mutationFn: (data: { month: number; year: number }) =>
-      customFetch<{ message: string; generated: number; skipped: number }>("/api/payroll/generate", {
+    mutationFn: (data: {
+      month: number;
+      year: number;
+      runType?: "monthly" | "biweekly" | "all";
+      weekNumber?: number;
+    }) =>
+      customFetch<{ message: string; generated: number; skipped: number; skippedDetails: { employeeId: number; name: string; reason: string }[] }>("/api/payroll/generate", {
         method: "POST",
         body: JSON.stringify(data),
+      }),
+  });
+
+export const useUpdatePayrollRecord = () =>
+  useMutation({
+    mutationFn: ({ id, data }: {
+      id: number;
+      data: Partial<{ status: string; bonus: number; deductions: number; notes: string }>;
+    }) =>
+      customFetch<PayrollRunItem>(`/api/payroll/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+  });
+
+export const getPayrollBreakdownQueryKey = (id: number) =>
+  ["/api/payroll", id, "breakdown"] as const;
+
+export const usePayrollBreakdown = (id: number | null) =>
+  useQuery<PayrollBreakdownResponse>({
+    queryKey: getPayrollBreakdownQueryKey(id ?? 0),
+    queryFn: () => customFetch<PayrollBreakdownResponse>(`/api/payroll/${id}/breakdown`),
+    enabled: !!id,
+  });
+
+// ── Session Configs ───────────────────────────────────────────────────────────
+
+export type SessionConfigItem = {
+  id: number;
+  name: string;
+  startTime: string;
+  endTime: string;
+  minimumCheckoutTime?: string | null;
+  payAmount: number;
+  isOvertime: boolean;
+  order: number;
+};
+
+export const getSessionConfigsQueryKey = () => ["/api/session-configs"] as const;
+
+export const useSessionConfigs = () =>
+  useQuery<SessionConfigItem[]>({
+    queryKey: getSessionConfigsQueryKey(),
+    queryFn: () => customFetch<SessionConfigItem[]>("/api/session-configs"),
+  });
+
+export const useCreateSessionConfig = () =>
+  useMutation({
+    mutationFn: (data: {
+      name: string;
+      startTime: string;
+      endTime: string;
+      minimumCheckoutTime?: string | null;
+      payAmount: number;
+      isOvertime?: boolean;
+      order?: number;
+    }) =>
+      customFetch<SessionConfigItem>("/api/session-configs", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+  });
+
+export const useUpdateSessionConfig = () =>
+  useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Partial<SessionConfigItem> }) =>
+      customFetch<SessionConfigItem>(`/api/session-configs/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+  });
+
+export const useDeleteSessionConfig = () =>
+  useMutation({
+    mutationFn: (id: number) =>
+      customFetch<void>(`/api/session-configs/${id}`, { method: "DELETE" }),
+  });
+
+// ── Payroll Settings (singleton — PF/ESI rates) ───────────────────────────────
+
+export type PayrollSettingsItem = {
+  // Staff deductions
+  pfRate: number;
+  esiRate: number;
+  esiApplicableBelow: number;
+  // Production deductions
+  prodPfRate: number;
+  prodEsiRate: number;
+  prodEsiApplicableBelow: number;
+  // General
+  payDay: number;
+  productionPayType: string;
+  // Salary slip header & signature
+  slipCompanyName: string;
+  slipCompanyAddress: string;
+  minWageRate: number;
+  signatureImage: string | null;
+  // SMTP / Email
+  smtpHost: string;
+  smtpPort: number;
+  smtpUsername: string;
+  smtpPassword: string;
+  smtpFromEmail: string;
+  smtpFromName: string;
+  updatedAt: string | null;
+};
+
+export const getPayrollSettingsQueryKey = () => ["/api/payroll-settings"] as const;
+
+export const usePayrollSettings = () =>
+  useQuery<PayrollSettingsItem>({
+    queryKey: getPayrollSettingsQueryKey(),
+    queryFn: () => customFetch<PayrollSettingsItem>("/api/payroll-settings"),
+  });
+
+export const useUpdatePayrollSettings = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Partial<PayrollSettingsItem>) =>
+      customFetch<PayrollSettingsItem>("/api/payroll-settings", {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getPayrollSettingsQueryKey() });
+    },
+  });
+};
+
+export const useEmailSalarySlip = () =>
+  useMutation({
+    mutationFn: ({ id, toEmail }: { id: number; toEmail?: string }) =>
+      customFetch<{ ok: boolean; sentTo: string }>(`/api/salary-slips/${id}/email`, {
+        method: "POST",
+        body: JSON.stringify({ toEmail }),
       }),
   });
 

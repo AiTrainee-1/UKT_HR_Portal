@@ -1,4 +1,5 @@
-from datetime import datetime
+from datetime import datetime, date
+from calendar import monthrange
 
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
@@ -8,13 +9,50 @@ from .auth import require_hr
 from .models import Advance, AdvanceRepayment, Employee
 
 
-def advance_json(a):
+MONTH_NAMES = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+]
+
+
+def _overdue_months(adv: Advance) -> list[dict]:
+    """
+    Returns a list of months (with year) where no repayment was recorded,
+    starting from repayment_start_month up to (but not including) current month.
+    """
+    if not adv.repayment_start_month or not adv.repayment_start_year:
+        return []
+    if adv.status not in ("approved",):
+        return []
+
+    paid_keys = set()
+    for r in adv.repayments.all():
+        paid_keys.add((r.year, r.month))
+
+    today = date.today()
+    overdue = []
+    y, m = adv.repayment_start_year, adv.repayment_start_month
+    while (y, m) < (today.year, today.month):
+        if (y, m) not in paid_keys:
+            overdue.append({"year": y, "month": m, "label": f"{MONTH_NAMES[m - 1]} {y}"})
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+    return overdue
+
+
+def advance_json(a: Advance, include_repayments: bool = False) -> dict:
     emp = a.employee
-    return {
+    data = {
         "id": a.id,
         "employeeId": emp.id,
         "employeeCode": emp.employee_code,
         "employeeName": f"{emp.first_name} {emp.last_name}",
+        "employeeDepartment": emp.department.name if emp.department_id else None,
+        "employeeDesignation": emp.designation.title if emp.designation_id else None,
+        "employeePhone": emp.phone,
+        "employeeEmail": emp.email,
         "advanceType": a.advance_type,
         "amount": float(a.amount),
         "purpose": a.purpose,
@@ -29,16 +67,22 @@ def advance_json(a):
         "outstanding": float(a.outstanding),
         "notes": a.notes,
         "createdAt": a.created_at.isoformat() if a.created_at else None,
+        "updatedAt": a.updated_at.isoformat() if a.updated_at else None,
     }
+    if include_repayments:
+        data["repayments"] = [repayment_json(r) for r in a.repayments.order_by("-year", "-month", "-id")]
+        data["overdueMonths"] = _overdue_months(a)
+    return data
 
 
-def repayment_json(r):
+def repayment_json(r: AdvanceRepayment) -> dict:
     return {
         "id": r.id,
         "advanceId": r.advance_id,
         "month": r.month,
         "year": r.year,
         "amount": float(r.amount),
+        "paymentMethod": r.payment_method,
         "payrollRunId": r.payroll_run_id,
         "notes": r.notes,
         "createdAt": r.created_at.isoformat() if r.created_at else None,
@@ -52,15 +96,24 @@ def advances(request: Request) -> Response:
         emp_id = request.query_params.get("employeeId")
         advance_type = request.query_params.get("advanceType")
         adv_status = request.query_params.get("status")
-        qs = Advance.objects.select_related("employee").order_by("-created_at")
+        qs = (
+            Advance.objects
+            .select_related("employee", "employee__department", "employee__designation")
+            .prefetch_related("repayments")
+            .order_by("-created_at")
+        )
         if emp_id:
             qs = qs.filter(employee_id=emp_id)
         if advance_type:
             qs = qs.filter(advance_type=advance_type)
         if adv_status:
-            qs = qs.filter(status=adv_status)
+            if adv_status == "active":
+                qs = qs.filter(status="approved")
+            else:
+                qs = qs.filter(status=adv_status)
         return Response([advance_json(a) for a in qs])
 
+    # POST — create new advance
     data = request.data
     if not data.get("employeeId") or not data.get("amount") or not data.get("advanceType"):
         return Response({"error": "employeeId, amount, advanceType are required"}, status=400)
@@ -91,18 +144,26 @@ def advances(request: Request) -> Response:
 @require_hr
 def advance_detail(request: Request, pk: int) -> Response:
     try:
-        adv = Advance.objects.select_related("employee").get(pk=pk)
+        adv = (
+            Advance.objects
+            .select_related("employee", "employee__department", "employee__designation")
+            .prefetch_related("repayments")
+            .get(pk=pk)
+        )
     except Advance.DoesNotExist:
         return Response({"error": "Advance not found"}, status=404)
 
     if request.method == "GET":
-        return Response(advance_json(adv))
+        return Response(advance_json(adv, include_repayments=True))
 
     if request.method == "PUT":
         data = request.data
         for field, attr in [
-            ("status", "status"), ("approvedBy", "approved_by"), ("notes", "notes"),
-            ("emiAmount", "emi_amount"), ("repaymentStartMonth", "repayment_start_month"),
+            ("status", "status"),
+            ("approvedBy", "approved_by"),
+            ("notes", "notes"),
+            ("emiAmount", "emi_amount"),
+            ("repaymentStartMonth", "repayment_start_month"),
             ("repaymentStartYear", "repayment_start_year"),
         ]:
             if field in data:
@@ -120,14 +181,20 @@ def advance_detail(request: Request, pk: int) -> Response:
 @require_hr
 def advance_repayments(request: Request, pk: int) -> Response:
     try:
-        adv = Advance.objects.get(pk=pk)
+        adv = (
+            Advance.objects
+            .select_related("employee", "employee__department", "employee__designation")
+            .prefetch_related("repayments")
+            .get(pk=pk)
+        )
     except Advance.DoesNotExist:
         return Response({"error": "Advance not found"}, status=404)
 
     if request.method == "GET":
-        reps = AdvanceRepayment.objects.filter(advance=adv).order_by("-year", "-month")
+        reps = adv.repayments.order_by("-year", "-month", "-id")
         return Response([repayment_json(r) for r in reps])
 
+    # POST — record a payment
     data = request.data
     month = data.get("month")
     year = data.get("year")
@@ -135,12 +202,27 @@ def advance_repayments(request: Request, pk: int) -> Response:
     if not month or not year or not amount:
         return Response({"error": "month, year, amount required"}, status=400)
 
+    payment_method = data.get("paymentMethod", "cash")
+    if payment_method not in ("cash", "gpay"):
+        payment_method = "cash"
+
     rep = AdvanceRepayment.objects.create(
-        advance=adv, month=month, year=year, amount=amount, notes=data.get("notes")
+        advance=adv,
+        month=int(month),
+        year=int(year),
+        amount=amount,
+        payment_method=payment_method,
+        notes=data.get("notes"),
     )
+
+    # Update running totals
     adv.total_repaid = float(adv.total_repaid) + amount
-    adv.outstanding = max(0, float(adv.amount) - float(adv.total_repaid))
+    adv.outstanding = max(0.0, float(adv.amount) - float(adv.total_repaid))
     if adv.outstanding == 0:
         adv.status = "closed"
     adv.save()
-    return Response(repayment_json(rep), status=201)
+
+    return Response({
+        "repayment": repayment_json(rep),
+        "advance": advance_json(adv, include_repayments=True),
+    }, status=201)
