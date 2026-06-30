@@ -368,8 +368,8 @@ function printSlips(slips: SalarySlipItem[]) {
 function SlipModal({ slip, onClose, onPrint }: { slip: SalarySlipItem; onClose: () => void; onPrint: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
-        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
+      <div className="clay-card rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 py-3" style={{ borderBottom: "1px solid rgba(0,100,150,0.07)" }}>
           <span className="font-semibold text-gray-800 text-sm">
             Salary Slip — {slip.employeeName} · {MONTHS_SHORT[slip.month-1]} {slip.year}
           </span>
@@ -491,7 +491,7 @@ export default function SalarySlip() {
         </div>
 
         {/* ── Filters ─────────────────────────────────────────────── */}
-        <div className="flex flex-wrap items-center gap-3 bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3">
+        <div className="flex flex-wrap items-center gap-3 clay-card rounded-2xl px-4 py-3">
           <div className="flex flex-col gap-1">
             <span className="text-xs text-gray-400">Month</span>
             <select
@@ -525,18 +525,15 @@ export default function SalarySlip() {
         </div>
 
         {/* ── Tabs ─────────────────────────────────────────────────── */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="clay-card rounded-2xl overflow-hidden">
           {/* Main tab bar */}
-          <div className="flex border-b border-gray-100">
+          <div className="clay-tabs-list">
             {(["staff","production"] as const).map(t => (
               <button
                 key={t}
                 onClick={() => { setTab(t); setProdWeek(""); }}
-                className={`flex items-center gap-2 px-6 py-3.5 text-sm font-medium border-b-2 transition-colors capitalize ${
-                  tab === t
-                    ? "border-blue-600 text-blue-600 bg-blue-50/50"
-                    : "border-transparent text-gray-500 hover:text-gray-800"
-                }`}
+                data-state={tab === t ? "active" : "inactive"}
+                className="clay-tabs-trigger flex items-center gap-2 capitalize"
               >
                 <Users size={14} />
                 {t === "staff" ? "Staff" : "Production"}

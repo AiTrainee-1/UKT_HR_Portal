@@ -283,8 +283,8 @@ export default function ActivityLogs() {
         </Card>
 
         {/* ── Log table ──────────────────────────────────────────────────── */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-          <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+        <div className="clay-card rounded-2xl overflow-hidden">
+          <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid rgba(0,100,150,0.07)" }}>
             <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
               {isLoading ? "Loading…" : `${total.toLocaleString()} event${total !== 1 ? "s" : ""}`}
             </span>

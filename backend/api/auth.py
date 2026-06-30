@@ -37,3 +37,15 @@ def require_hr(view_func):
         return view_func(request, *args, **kwargs)
 
     return wrapper
+
+
+def get_token_employee_id(request: Request) -> int | None:
+    """If the logged-in user is an employee, return their employeeId from the JWT. HR returns None."""
+    user = getattr(request, "jwt_user", {})
+    if user.get("role") == "employee":
+        return user.get("employeeId")
+    return None
+
+
+def is_hr(request: Request) -> bool:
+    return getattr(request, "jwt_user", {}).get("role") == "hr"

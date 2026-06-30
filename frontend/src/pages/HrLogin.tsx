@@ -2,11 +2,7 @@ import { useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
 import { useHrLogin } from "@/lib/api-client";
-import { motion } from "framer-motion";
-import { Shield, Eye, EyeOff, ArrowLeft } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Eye, EyeOff, ArrowLeft, Lock, User } from "lucide-react";
 
 export default function HrLogin() {
   const [, navigate] = useLocation();
@@ -37,119 +33,200 @@ export default function HrLogin() {
 
   return (
     <div
-      className="min-h-screen relative overflow-hidden flex items-center justify-center"
-      style={{ background: "linear-gradient(135deg, #0f1923 0%, #1a2a3a 40%, #0d2137 70%, #0a1628 100%)" }}
+      className="min-h-screen relative overflow-hidden flex items-center justify-center p-4"
+      style={{
+        background: "linear-gradient(135deg, #f0f5fa 0%, #e8f2f8 40%, #eef4fc 100%)",
+        fontFamily: "'Hanken Grotesk', 'Inter', sans-serif",
+      }}
     >
-      {/* Background glows */}
+      {/* ── Ambient blobs ── */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-[-20%] right-[-10%] w-[500px] h-[500px] rounded-full opacity-10"
-          style={{ background: "radial-gradient(circle, #f97316 0%, transparent 70%)" }} />
-        <div className="absolute bottom-[-10%] left-[-10%] w-[400px] h-[400px] rounded-full opacity-10"
-          style={{ background: "radial-gradient(circle, #fb923c 0%, transparent 70%)" }} />
-        <div className="absolute inset-0 opacity-[0.03]" style={{
-          backgroundImage: "linear-gradient(rgba(255,255,255,0.5) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.5) 1px, transparent 1px)",
-          backgroundSize: "60px 60px",
-        }} />
+        <div
+          className="blob-animate absolute top-[-15%] right-[-10%] w-[520px] h-[520px] rounded-full opacity-30"
+          style={{ background: "radial-gradient(circle at 40% 40%, #4FB8F0 0%, transparent 65%)" }}
+        />
+        <div
+          className="blob-animate absolute bottom-[-15%] left-[-10%] w-[480px] h-[480px] rounded-full opacity-20"
+          style={{
+            background: "radial-gradient(circle at 60% 60%, #006496 0%, transparent 65%)",
+            animationDelay: "3s",
+          }}
+        />
+        <div
+          className="blob-animate absolute top-[40%] left-[30%] w-[300px] h-[300px] rounded-full opacity-15"
+          style={{
+            background: "radial-gradient(circle, #5dbbff 0%, transparent 65%)",
+            animationDelay: "6s",
+          }}
+        />
       </div>
 
-      <div className="relative w-full max-w-md px-6">
+      <div className="relative w-full max-w-md">
+        {/* Back button */}
         <button
           onClick={() => navigate("/")}
-          className="flex items-center gap-2 text-white/40 hover:text-white/70 text-sm mb-8 transition-colors"
+          className="flex items-center gap-1.5 text-sm mb-6 transition-all hover:translate-x-[-2px]"
+          style={{ color: "rgba(0,100,150,0.55)" }}
         >
-          <ArrowLeft size={16} /> Back to Portal Selection
+          <ArrowLeft size={15} strokeWidth={2} />
+          <span className="font-medium">Back to Portal Selection</span>
         </button>
 
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-          className="rounded-2xl p-8"
+        {/* ── Login Card ── */}
+        <div
+          className="rounded-3xl p-8 clay-fade-in"
           style={{
-            background: "rgba(255,255,255,0.04)",
-            backdropFilter: "blur(20px)",
-            border: "1px solid rgba(255,255,255,0.1)",
-            boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
+            background: "#ffffff",
+            boxShadow:
+              "16px 16px 32px rgba(0,100,150,0.12), -8px -8px 24px rgba(255,255,255,0.9), inset 4px 4px 10px rgba(255,255,255,0.7), inset -4px -4px 12px rgba(0,100,150,0.04)",
           }}
         >
+          {/* Logo + Title */}
           <div className="text-center mb-8">
-            <div className="flex items-center justify-center mb-4">
+            <div className="flex justify-center mb-4">
               <div
-                className="w-12 h-12 rounded-xl flex items-center justify-center"
-                style={{ background: "linear-gradient(135deg, #f97316, #fb923c)" }}
+                className="relative p-3 rounded-2xl"
+                style={{
+                  background: "#f6fafe",
+                  boxShadow:
+                    "6px 6px 14px rgba(0,100,150,0.1), -4px -4px 10px rgba(255,255,255,0.9), inset 2px 2px 6px rgba(255,255,255,0.7)",
+                }}
               >
-                <Shield size={22} className="text-white" />
+                <svg viewBox="0 0 1536 1024" className="h-16 w-auto" aria-label="UKTextiles Logo">
+                  <defs>
+                    <mask id="ukt-login-ring-gap">
+                      <rect x="0" y="0" width="1536" height="1024" fill="white" />
+                      <ellipse cx="793" cy="512" rx="595" ry="382" fill="black" />
+                    </mask>
+                  </defs>
+                  <ellipse cx="793" cy="512" rx="608" ry="391" fill="#4FB8F0" mask="url(#ukt-login-ring-gap)" />
+                  <ellipse cx="793" cy="512" rx="585" ry="375" fill="#4FB8F0" />
+                  <path
+                    fill="#FFFFFF"
+                    d="M 447,215 L 448,642 L 452,674 L 461,710 L 476,744 L 493,768 L 510,784 L 524,793 L 556,805 L 582,809 L 616,809 L 642,804 L 668,793 L 691,774 L 708,750 L 727,707 L 836,804 L 923,805 L 771,669 L 824,494 L 905,267 L 974,266 L 975,805 L 1027,805 L 1027,267 L 1124,266 L 1124,216 L 875,216 L 777,487 L 733,629 L 732,216 L 681,216 L 681,638 L 677,673 L 667,710 L 658,727 L 641,745 L 618,755 L 586,756 L 559,749 L 539,736 L 519,711 L 507,682 L 499,633 L 499,215 Z"
+                  />
+                </svg>
               </div>
             </div>
-            <h2 className="text-2xl font-black text-white">HR Portal</h2>
-            <p className="text-white/40 text-sm mt-1">UKTextiles HR Management System</p>
+            <h2
+              className="text-2xl font-black tracking-tight"
+              style={{ color: "#006496" }}
+            >
+              HR Portal
+            </h2>
+            <p className="text-sm mt-1 font-medium" style={{ color: "rgba(0,100,150,0.5)" }}>
+              UKTextiles HR Management System
+            </p>
           </div>
 
+          {/* Form */}
           <form onSubmit={handleLogin} className="space-y-5">
-            <div className="space-y-1.5">
-              <Label className="text-white/70 text-sm font-medium">Username</Label>
-              <Input
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="Enter HR username"
-                required
-                data-testid="input-username"
-                className="h-11 text-sm"
-                style={{
-                  background: "rgba(255,255,255,0.06)",
-                  border: "1px solid rgba(255,255,255,0.1)",
-                  color: "white",
-                }}
-              />
+            {/* Username */}
+            <div className="space-y-2">
+              <label
+                className="text-[13px] font-semibold block"
+                style={{ color: "rgba(0,60,100,0.7)" }}
+              >
+                Username
+              </label>
+              <div className="relative">
+                <User
+                  size={15}
+                  className="absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                  style={{ color: "rgba(0,100,150,0.4)" }}
+                  strokeWidth={1.8}
+                />
+                <input
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="Enter HR username"
+                  required
+                  data-testid="input-username"
+                  className="w-full h-11 pl-9 pr-4 rounded-xl text-sm font-medium outline-none transition-all clay-input"
+                  style={{ color: "#1a3a4a" }}
+                />
+              </div>
             </div>
 
-            <div className="space-y-1.5">
-              <Label className="text-white/70 text-sm font-medium">Password</Label>
+            {/* Password */}
+            <div className="space-y-2">
+              <label
+                className="text-[13px] font-semibold block"
+                style={{ color: "rgba(0,60,100,0.7)" }}
+              >
+                Password
+              </label>
               <div className="relative">
-                <Input
+                <Lock
+                  size={15}
+                  className="absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                  style={{ color: "rgba(0,100,150,0.4)" }}
+                  strokeWidth={1.8}
+                />
+                <input
                   type={showPassword ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Enter password"
                   required
                   data-testid="input-password"
-                  className="h-11 text-sm pr-10"
-                  style={{
-                    background: "rgba(255,255,255,0.06)",
-                    border: "1px solid rgba(255,255,255,0.1)",
-                    color: "white",
-                  }}
+                  className="w-full h-11 pl-9 pr-11 rounded-xl text-sm font-medium outline-none transition-all clay-input"
+                  style={{ color: "#1a3a4a" }}
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword((s) => !s)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/70"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 transition-colors"
+                  style={{ color: "rgba(0,100,150,0.4)" }}
                 >
-                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  {showPassword ? <EyeOff size={15} strokeWidth={1.8} /> : <Eye size={15} strokeWidth={1.8} />}
                 </button>
               </div>
             </div>
 
+            {/* Error */}
             {error && (
               <div
-                className="text-sm p-3 rounded-lg text-red-300"
-                style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)" }}
+                className="text-sm p-3 rounded-xl font-medium"
+                style={{
+                  background: "rgba(239,68,68,0.07)",
+                  color: "#dc2626",
+                  boxShadow: "inset 3px 3px 8px rgba(220,38,38,0.08), inset -3px -3px 8px rgba(255,255,255,0.9)",
+                }}
               >
                 {error}
               </div>
             )}
 
-            <Button
+            {/* Submit */}
+            <button
               type="submit"
               data-testid="button-submit"
               disabled={mutation.isPending}
-              className="w-full h-11 font-bold text-sm border-none"
-              style={{ background: "linear-gradient(135deg, #f97316, #fb923c)" }}
+              className="w-full h-11 rounded-xl text-sm font-bold text-white transition-all disabled:opacity-60 clay-btn"
+              style={{
+                background: "linear-gradient(135deg, #006496 0%, #0096c7 100%)",
+              }}
             >
-              {mutation.isPending ? "Signing in…" : "Sign In to HR Portal"}
-            </Button>
+              {mutation.isPending ? (
+                <span className="flex items-center justify-center gap-2">
+                  <svg className="animate-spin h-4 w-4 text-white" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8z"/>
+                  </svg>
+                  Signing in…
+                </span>
+              ) : (
+                "Sign In to HR Portal"
+              )}
+            </button>
           </form>
-        </motion.div>
+
+          {/* Footer note */}
+          <p className="text-center text-[11px] mt-6 font-medium" style={{ color: "rgba(0,100,150,0.35)" }}>
+            Secured · UKTextiles Enterprise HR System
+          </p>
+        </div>
       </div>
     </div>
   );

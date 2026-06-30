@@ -17,13 +17,15 @@ import {
 } from "recharts";
 import {
   useAttendanceSummary, useAttendanceDaily, useAttendanceMonthlyTrend,
-  useAttendanceEmployeeHistory, useCreateManualAttendance,
+  useAttendanceEmployeeHistory, useCreateManualAttendance, useListEmployees,
   getAttendanceSummaryQueryKey, getAttendanceDailyQueryKey,
   getAttendanceMonthlyTrendQueryKey,
 } from "@/lib/api-client";
+import { useSyncBiometric } from "@/lib/api-client/custom-hooks";
+import EmployeeSearchSelect from "@/components/EmployeeSearchSelect";
 import {
   Users, UserCheck, UserX, Clock, CalendarDays, Plus,
-  Factory, Briefcase, Fingerprint, PenLine, ChevronRight,
+  Factory, Briefcase, Fingerprint, PenLine, ChevronRight, RefreshCw,
 } from "lucide-react";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -236,6 +238,28 @@ export default function AttendancePage() {
   });
 
   const [detailEmpId, setDetailEmpId] = useState<number | null>(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+
+  const { data: employees } = useListEmployees({ status: "active" });
+
+  const syncMutation = useSyncBiometric();
+
+  const handleSync = async () => {
+    try {
+      const result = await syncMutation.mutateAsync("today");
+      if (result.ok) {
+        setLastSyncedAt(new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }));
+        toast({ title: `Sync complete — ${result.created ?? 0} new records` });
+        queryClient.invalidateQueries({ queryKey: getAttendanceSummaryQueryKey(selectedDate) });
+        queryClient.invalidateQueries({ queryKey: getAttendanceDailyQueryKey(selectedDate) });
+        queryClient.invalidateQueries({ queryKey: getAttendanceMonthlyTrendQueryKey(selectedYear, selectedMonth) });
+      } else {
+        toast({ title: "Sync failed", description: result.error ?? "Device unreachable", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Sync failed", description: "Could not reach device", variant: "destructive" });
+    }
+  };
 
   // Queries
   const { data: summary, isLoading: summaryLoading } = useAttendanceSummary(selectedDate);
@@ -278,7 +302,7 @@ export default function AttendancePage() {
 
   const addManualAttendance = async () => {
     if (!manualForm.employeeId || !manualForm.date) {
-      toast({ title: "Employee ID and date are required", variant: "destructive" });
+      toast({ title: "Please select an employee and date", variant: "destructive" });
       return;
     }
     try {
@@ -314,7 +338,19 @@ export default function AttendancePage() {
               Real-time attendance tracking · AiFace-Mars biometric integration
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              onClick={handleSync}
+              disabled={syncMutation.isPending}
+              className="gap-2 h-9 border-cyan-200 text-cyan-700 hover:bg-cyan-50"
+            >
+              <RefreshCw size={14} className={syncMutation.isPending ? "animate-spin" : ""} />
+              {syncMutation.isPending ? "Syncing…" : "Auto Sync"}
+              {lastSyncedAt && !syncMutation.isPending && (
+                <span className="text-[10px] text-cyan-500 font-normal">· {lastSyncedAt}</span>
+              )}
+            </Button>
             <Input
               type="date"
               value={selectedDate}
@@ -538,12 +574,11 @@ export default function AttendancePage() {
           </p>
           <div className="space-y-4 pt-1">
             <div className="space-y-1.5">
-              <Label>Employee ID</Label>
-              <Input
-                type="number"
-                placeholder="Enter Employee ID"
+              <Label>Employee</Label>
+              <EmployeeSearchSelect
+                employees={employees}
                 value={manualForm.employeeId}
-                onChange={(e) => setManualForm((f) => ({ ...f, employeeId: e.target.value }))}
+                onChange={(v) => setManualForm((f) => ({ ...f, employeeId: v }))}
               />
             </div>
             <div className="grid grid-cols-2 gap-3">

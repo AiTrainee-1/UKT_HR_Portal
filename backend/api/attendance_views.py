@@ -1,16 +1,20 @@
 import calendar
+import logging
 from collections import defaultdict
 from datetime import date as date_type, datetime, time as time_type, timedelta
+from io import StringIO
 
 from django.db.models import Count, Q
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from .auth import require_hr
+from .auth import require_hr, require_auth, get_token_employee_id
 from .models import (
     Attendance, AttendanceLog, Employee, EmployeeShiftAssignment, LeaveRequest,
 )
+
+logger = logging.getLogger(__name__)
 
 # API key the AiFace-Mars device must send in the X-Device-Key header.
 # Set BIOMETRIC_API_KEY in your .env file — never hardcode this value.
@@ -260,27 +264,35 @@ def attendance_monthly_trend(request: Request) -> Response:
 # ── Employee attendance history ───────────────────────────────────────────────
 
 @api_view(["GET"])
-@require_hr
+@require_auth
 def attendance_employee_history(request: Request, pk: int) -> Response:
+    # Employees can only view their own attendance
+    token_emp_id = get_token_employee_id(request)
+    if token_emp_id and token_emp_id != pk:
+        return Response({"error": "Access denied"}, status=403)
     try:
         emp = Employee.objects.select_related("department", "designation").get(pk=pk)
     except Employee.DoesNotExist:
         return Response({"error": "Employee not found"}, status=404)
 
-    month = request.query_params.get("month")
-    year = request.query_params.get("year")
+    today = date_type.today()
+    month = int(request.query_params.get("month") or today.month)
+    year  = int(request.query_params.get("year")  or today.year)
+    _, days_in_month = calendar.monthrange(year, month)
 
-    logs_qs = AttendanceLog.objects.filter(employee_id=pk).order_by("date", "punch_time")
-    att_qs = Attendance.objects.filter(employee_id=pk).order_by("-date")
+    # Punch logs for the month
+    logs_qs = AttendanceLog.objects.filter(
+        employee_id=pk, date__year=year, date__month=month,
+    ).order_by("date", "punch_time")
 
-    if year:
-        logs_qs = logs_qs.filter(date__year=int(year))
-        att_qs = att_qs.filter(date__startswith=str(year))
-    if month and year:
-        logs_qs = logs_qs.filter(date__month=int(month))
-        prefix = f"{year}-{str(month).zfill(2)}"
-        att_qs = att_qs.filter(date__startswith=prefix)
+    # Manual attendance records
+    prefix = f"{year}-{str(month).zfill(2)}"
+    att_qs = Attendance.objects.filter(employee_id=pk, date__startswith=prefix)
 
+    # Approved leaves that overlap with this month
+    leave_qs = LeaveRequest.objects.filter(employee_id=pk, status="approved")
+
+    # Build punch map
     by_date: dict[str, list] = defaultdict(list)
     for log in logs_qs:
         by_date[str(log.date)].append({
@@ -291,39 +303,82 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
 
     manual_by_date = {str(a.date): a for a in att_qs}
 
-    all_dates = sorted(set(list(by_date.keys()) + list(manual_by_date.keys())), reverse=True)
+    # Build leave date map
+    leave_dates: dict[str, str] = {}
+    for leave in leave_qs:
+        try:
+            start = date_type.fromisoformat(str(leave.start_date))
+            end   = date_type.fromisoformat(str(leave.end_date))
+            cur   = start
+            while cur <= end:
+                if cur.year == year and cur.month == month:
+                    leave_dates[cur.isoformat()] = leave.type
+                cur += timedelta(days=1)
+        except Exception:
+            pass
 
     records = []
-    for date_str in all_dates:
-        punches = by_date.get(date_str, [])
-        manual = manual_by_date.get(date_str)
-        first_in = next((p["time"] for p in punches if p["type"] == "IN"), None)
-        last_out = next((p["time"] for p in reversed(punches) if p["type"] == "OUT"), None)
-        present = bool(punches) or bool(manual and manual.present)
+    present_count = absent_count = on_leave_count = 0
+
+    for day in range(1, days_in_month + 1):
+        cur_date = date_type(year, month, day)
+        date_str = cur_date.isoformat()
+        is_sunday = cur_date.weekday() == 6
+        is_future = cur_date > today
+
+        punches   = by_date.get(date_str, [])
+        manual    = manual_by_date.get(date_str)
+        first_in  = next((p["time"] for p in punches if p["type"] == "IN"), None)
+        last_out  = next((p["time"] for p in reversed(punches) if p["type"] == "OUT"), None)
+        has_punch = bool(punches) or bool(manual and manual.present)
+
+        if is_sunday:
+            status = "holiday"
+        elif is_future:
+            status = "future"
+        elif date_str in leave_dates:
+            status = "on_leave"
+            on_leave_count += 1
+        elif has_punch:
+            status = "present"
+            present_count += 1
+        else:
+            status = "absent"
+            absent_count += 1
+
         records.append({
-            "date": date_str,
-            "present": present,
-            "firstPunch": first_in,
-            "lastPunch": last_out,
+            "date":        date_str,
+            "day":         cur_date.strftime("%a"),
+            "status":      status,
+            "present":     has_punch,
+            "firstPunch":  first_in,
+            "lastPunch":   last_out,
             "totalPunches": len(punches),
-            "punches": punches,
+            "punches":     punches,
+            "leaveType":   leave_dates.get(date_str),
             "hoursWorked": str(manual.hours_worked) if manual and manual.hours_worked else None,
-            "source": punches[0]["source"] if punches else ("manual" if manual else None),
-            "notes": manual.notes if manual else None,
+            "source":      punches[0]["source"] if punches else ("manual" if manual else None),
+            "notes":       manual.notes if manual else None,
         })
 
     return Response({
         "employee": {
-            "id": emp.id,
-            "code": emp.employee_code,
-            "name": f"{emp.first_name} {emp.last_name}",
-            "department": emp.department.name if emp.department else None,
-            "designation": emp.designation.title if emp.designation else None,
+            "id":             emp.id,
+            "code":           emp.employee_code,
+            "name":           f"{emp.first_name} {emp.last_name}",
+            "department":     emp.department.name if emp.department else None,
+            "designation":    emp.designation.title if emp.designation else None,
             "employmentType": emp.employment_type,
         },
+        "month": month,
+        "year":  year,
+        "summary": {
+            "present": present_count,
+            "absent":  absent_count,
+            "onLeave": on_leave_count,
+            "late":    0,
+        },
         "records": records,
-        "totalPresent": sum(1 for r in records if r["present"]),
-        "totalAbsent": sum(1 for r in records if not r["present"]),
     })
 
 
@@ -471,3 +526,49 @@ def manual_attendance(request: Request) -> Response:
         "employee": f"{emp.first_name} {emp.last_name}",
         "date": str(d),
     }, status=201)
+
+
+# ── Biometric Sync ────────────────────────────────────────────────────────────
+
+def run_biometric_sync(mode: str = "today") -> dict:
+    """
+    Run the biometric sync and return a summary dict.
+    mode: "today" | "days3" | "all"
+    """
+    from django.core.management import call_command
+    from django.core.management.base import CommandError
+
+    out = StringIO()
+    kwargs: dict = {"stdout": out, "stderr": out}
+    if mode == "today":
+        kwargs["today"] = True
+    elif mode == "all":
+        kwargs["sync_all"] = True
+    else:
+        kwargs["days"] = 3
+
+    try:
+        call_command("sync_biometric", **kwargs)
+        output = out.getvalue()
+        created = 0
+        for line in output.splitlines():
+            if "New records created" in line:
+                try:
+                    created = int(line.split(":")[-1].strip())
+                except ValueError:
+                    pass
+        return {"ok": True, "created": created, "output": output, "syncedAt": datetime.utcnow().isoformat() + "Z"}
+    except CommandError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        logger.exception("Biometric sync failed")
+        return {"ok": False, "error": str(e)}
+
+
+@api_view(["POST"])
+@require_hr
+def sync_biometric_api(request: Request) -> Response:
+    mode = request.data.get("mode", "today")   # "today" | "days3" | "all"
+    result = run_biometric_sync(mode)
+    status_code = 200 if result["ok"] else 502
+    return Response(result, status=status_code)

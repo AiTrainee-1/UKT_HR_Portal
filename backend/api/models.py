@@ -867,3 +867,55 @@ class SalaryRecord(models.Model):
 
     class Meta:
         db_table = "salary_records"
+
+
+# ──────────────────────────────────────────────
+#  Department Managers (User Management)
+# ──────────────────────────────────────────────
+
+class DepartmentManager(models.Model):
+    """An employee designated as a department-level approver via User Management."""
+    employee = models.OneToOneField(
+        Employee, on_delete=models.CASCADE,
+        related_name="manager_profile", db_column="employee_id",
+    )
+    can_approve_leaves = models.BooleanField(default=True, db_column="can_approve_leaves")
+    can_approve_permissions = models.BooleanField(default=True, db_column="can_approve_permissions")
+    is_active = models.BooleanField(default=True, db_column="is_active")
+    notes = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "department_managers"
+
+
+class ManagerDepartmentAssignment(models.Model):
+    manager = models.ForeignKey(
+        DepartmentManager, on_delete=models.CASCADE,
+        related_name="department_assignments", db_column="manager_id",
+    )
+    department = models.ForeignKey(
+        Department, on_delete=models.CASCADE,
+        related_name="manager_assignments", db_column="department_id",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "manager_department_assignments"
+        unique_together = [["manager", "department"]]
+
+
+class ManagerEmployeeAssignment(models.Model):
+    manager = models.ForeignKey(
+        DepartmentManager, on_delete=models.CASCADE,
+        related_name="employee_assignments", db_column="manager_id",
+    )
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE,
+        related_name="direct_manager_assignments", db_column="employee_id",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "manager_employee_assignments"
+        unique_together = [["manager", "employee"]]

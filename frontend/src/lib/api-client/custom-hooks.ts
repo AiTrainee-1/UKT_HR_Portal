@@ -965,6 +965,31 @@ export const useDeletePermission = () =>
       customFetch<void>(`/api/permissions/${id}`, { method: "DELETE" }),
   });
 
+export const useDeleteLeaveRequest = () =>
+  useMutation({
+    mutationFn: (id: number) =>
+      customFetch<void>(`/api/leave-requests/${id}`, { method: "DELETE" }),
+  });
+
+// ── Biometric Sync ────────────────────────────────────────────────────────────
+
+export type SyncResult = {
+  ok: boolean;
+  created?: number;
+  output?: string;
+  syncedAt?: string;
+  error?: string;
+};
+
+export const useSyncBiometric = () =>
+  useMutation({
+    mutationFn: (mode: "today" | "days3" | "all" = "today") =>
+      customFetch<SyncResult>("/api/attendance/sync-biometric", {
+        method: "POST",
+        body: JSON.stringify({ mode }),
+      }),
+  });
+
 // ── Salary Slips ──────────────────────────────────────────────────────────────
 
 export type SlipLeaveBalance = {
@@ -1352,6 +1377,177 @@ export const useEmailSalarySlip = () =>
         body: JSON.stringify({ toEmail }),
       }),
   });
+
+// ── Department Manager Types ──────────────────────────────────────────────────
+
+export type AssignedDepartment = {
+  id: number;
+  name: string;
+  assignedAt?: string | null;
+};
+
+export type AssignedEmployee = {
+  id: number;
+  employeeCode: string;
+  name: string;
+  department?: string | null;
+  designation?: string | null;
+  assignedAt?: string | null;
+};
+
+export type DepartmentManagerItem = {
+  id: number;
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department?: string | null;
+  designation?: string | null;
+  canApproveLeaves: boolean;
+  canApprovePermissions: boolean;
+  isActive: boolean;
+  notes?: string | null;
+  createdAt?: string | null;
+  departmentCount: number;
+  employeeCount: number;
+  assignedDepartments?: AssignedDepartment[];
+  assignedEmployees?: AssignedEmployee[];
+  // mobile-only fields
+  isManager?: boolean;
+  canSubmitLeave?: boolean;
+  pendingApprovalsCount?: number;
+};
+
+export const getDepartmentManagersQueryKey = () => ["department-managers"] as const;
+export const getDepartmentManagerQueryKey = (id: number) => ["department-managers", id] as const;
+
+export const useListDepartmentManagers = () =>
+  useQuery({
+    queryKey: getDepartmentManagersQueryKey(),
+    queryFn: () => customFetch<DepartmentManagerItem[]>("/api/department-managers"),
+  });
+
+export const useGetDepartmentManager = (id: number | null) =>
+  useQuery({
+    queryKey: getDepartmentManagerQueryKey(id!),
+    queryFn: () => customFetch<DepartmentManagerItem>(`/api/department-managers/${id}`),
+    enabled: !!id,
+  });
+
+export const useCreateDepartmentManager = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: {
+      employeeCode: string;
+      canApproveLeaves?: boolean;
+      canApprovePermissions?: boolean;
+      notes?: string;
+    }) =>
+      customFetch<DepartmentManagerItem>("/api/department-managers", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getDepartmentManagersQueryKey() });
+    },
+  });
+};
+
+export const useUpdateDepartmentManager = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      data,
+    }: {
+      id: number;
+      data: Partial<{
+        canApproveLeaves: boolean;
+        canApprovePermissions: boolean;
+        isActive: boolean;
+        notes: string;
+      }>;
+    }) =>
+      customFetch<DepartmentManagerItem>(`/api/department-managers/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: (_r, { id }) => {
+      queryClient.invalidateQueries({ queryKey: getDepartmentManagersQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getDepartmentManagerQueryKey(id) });
+    },
+  });
+};
+
+export const useDeleteDepartmentManager = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      customFetch(`/api/department-managers/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getDepartmentManagersQueryKey() });
+    },
+  });
+};
+
+export const useAssignDepartmentToManager = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ managerId, departmentId }: { managerId: number; departmentId: number }) =>
+      customFetch(`/api/department-managers/${managerId}/departments`, {
+        method: "POST",
+        body: JSON.stringify({ departmentId }),
+      }),
+    onSuccess: (_r, { managerId }) => {
+      queryClient.invalidateQueries({ queryKey: getDepartmentManagerQueryKey(managerId) });
+      queryClient.invalidateQueries({ queryKey: getDepartmentManagersQueryKey() });
+    },
+  });
+};
+
+export const useRemoveDepartmentFromManager = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ managerId, departmentId }: { managerId: number; departmentId: number }) =>
+      customFetch(`/api/department-managers/${managerId}/departments`, {
+        method: "DELETE",
+        body: JSON.stringify({ departmentId }),
+      }),
+    onSuccess: (_r, { managerId }) => {
+      queryClient.invalidateQueries({ queryKey: getDepartmentManagerQueryKey(managerId) });
+      queryClient.invalidateQueries({ queryKey: getDepartmentManagersQueryKey() });
+    },
+  });
+};
+
+export const useAssignEmployeeToManager = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ managerId, employeeCode }: { managerId: number; employeeCode: string }) =>
+      customFetch(`/api/department-managers/${managerId}/employees`, {
+        method: "POST",
+        body: JSON.stringify({ employeeCode }),
+      }),
+    onSuccess: (_r, { managerId }) => {
+      queryClient.invalidateQueries({ queryKey: getDepartmentManagerQueryKey(managerId) });
+      queryClient.invalidateQueries({ queryKey: getDepartmentManagersQueryKey() });
+    },
+  });
+};
+
+export const useRemoveEmployeeFromManager = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ managerId, employeeId }: { managerId: number; employeeId: number }) =>
+      customFetch(`/api/department-managers/${managerId}/employees`, {
+        method: "DELETE",
+        body: JSON.stringify({ employeeId }),
+      }),
+    onSuccess: (_r, { managerId }) => {
+      queryClient.invalidateQueries({ queryKey: getDepartmentManagerQueryKey(managerId) });
+      queryClient.invalidateQueries({ queryKey: getDepartmentManagersQueryKey() });
+    },
+  });
+};
 
 // ── Report Download Utility ───────────────────────────────────────────────────
 

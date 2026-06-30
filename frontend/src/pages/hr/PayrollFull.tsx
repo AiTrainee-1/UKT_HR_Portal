@@ -807,7 +807,7 @@ function PayrollRow({ run, onViewBreakdown, onMarkPaid }: {
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <p className="font-bold text-sm text-gray-900 truncate">{run.employeeName ?? `Employee #${run.employeeId}`}</p>
+          <p className="font-bold text-sm text-gray-900 truncate">{run.employeeName ?? run.employeeCode ?? `#${run.employeeId}`}</p>
           <Badge className={`text-xs border ${s.cls}`}>{s.label}</Badge>
           <Badge className={`text-xs ${isProduction ? "bg-amber-100 text-amber-700 border-amber-200" : "bg-green-100 text-green-700 border-green-200"}`}>
             {isProduction ? "Production" : "Staff"}

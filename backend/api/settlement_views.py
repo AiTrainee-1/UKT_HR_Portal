@@ -5,7 +5,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from .auth import require_hr
+from .auth import require_hr, require_auth, get_token_employee_id, is_hr
 from .models import Advance, AdvanceRepayment, Employee
 
 
@@ -90,10 +90,14 @@ def repayment_json(r: AdvanceRepayment) -> dict:
 
 
 @api_view(["GET", "POST"])
-@require_hr
+@require_auth
 def advances(request: Request) -> Response:
     if request.method == "GET":
         emp_id = request.query_params.get("employeeId")
+        # Employees can only view their own advances
+        token_emp_id = get_token_employee_id(request)
+        if token_emp_id:
+            emp_id = str(token_emp_id)
         advance_type = request.query_params.get("advanceType")
         adv_status = request.query_params.get("status")
         qs = (
@@ -113,6 +117,8 @@ def advances(request: Request) -> Response:
                 qs = qs.filter(status=adv_status)
         return Response([advance_json(a) for a in qs])
 
+    if not is_hr(request):
+        return Response({"error": "HR access required"}, status=403)
     # POST — create new advance
     data = request.data
     if not data.get("employeeId") or not data.get("amount") or not data.get("advanceType"):

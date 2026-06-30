@@ -6,7 +6,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework import status
 
-from .auth import require_hr
+from .auth import require_hr, require_auth, get_token_employee_id, is_hr
 from .models import ShiftTemplate, EmployeeShiftAssignment, Employee, Department
 
 
@@ -173,10 +173,14 @@ def shift_template_detail(request: Request, pk: int) -> Response:
 
 
 @api_view(["GET", "POST"])
-@require_hr
+@require_auth
 def shift_assignments(request: Request) -> Response:
     if request.method == "GET":
         emp_id = request.query_params.get("employeeId")
+        # Employees can only view their own shift assignment
+        token_emp_id = get_token_employee_id(request)
+        if token_emp_id:
+            emp_id = str(token_emp_id)
         shift_id = request.query_params.get("shiftId")
         active_only = request.query_params.get("activeOnly") in ("true", "1")
         emp_type = request.query_params.get("employmentType")
@@ -195,6 +199,8 @@ def shift_assignments(request: Request) -> Response:
             qs = qs.filter(employee__employment_type=emp_type)
         return Response([assignment_json(a) for a in qs])
 
+    if not is_hr(request):
+        return Response({"error": "HR access required"}, status=403)
     data = request.data
     required = ["employeeId", "shiftId", "effectiveFrom"]
     for f in required:

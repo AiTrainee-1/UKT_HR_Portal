@@ -1,3 +1,4 @@
+import calendar
 import io
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -21,7 +22,9 @@ from .models import (
     AttendanceLog,
     Department,
     Employee,
+    EmployeePermission,
     Job,
+    LeaveBalance,
     LeaveRequest,
     Notification,
     Payroll,
@@ -583,7 +586,9 @@ def calculate_salary_records(request: Request) -> Response:
 
 
 def _leave_with_name(record: LeaveRequest) -> dict:
-    return leave_request_json(record, _employee_name(record.employee_id))
+    emp = getattr(record, "employee", None)
+    name = f"{emp.first_name} {emp.last_name}" if emp else _employee_name(record.employee_id)
+    return leave_request_json(record, name)
 
 
 @api_view(["GET", "POST"])
@@ -593,24 +598,66 @@ def leave_requests(request: Request) -> Response:
     return require_auth(_leave_requests_create)(request)
 
 
+def _resolve_employee_filter(params) -> int | None:
+    """Return employee pk from either ?employeeId=N or ?employeeCode=XXXX."""
+    if code := params.get("employeeCode") or params.get("employee_code"):
+        emp = Employee.objects.filter(employee_code=code).first()
+        return emp.id if emp else None
+    if eid := params.get("employeeId") or params.get("employee_id"):
+        return int(eid)
+    return None
+
+
 def _leave_requests_list(request: Request) -> Response:
-    qs = LeaveRequest.objects.select_related("employee").order_by("-id")
-    employee_id = request.query_params.get("employeeId")
+    qs = LeaveRequest.objects.select_related("employee__department", "employee__designation").order_by("-id")
+    employee_id = _resolve_employee_filter(request.query_params)
     leave_status = request.query_params.get("status")
     if employee_id:
-        qs = qs.filter(employee_id=int(employee_id))
+        qs = qs.filter(employee_id=employee_id)
     if leave_status:
         qs = qs.filter(status=leave_status)
     return Response([_leave_with_name(r) for r in qs])
 
 
+def _count_leave_days(start_str, end_str) -> int:
+    """Count working days (Mon–Sat) between start and end inclusive."""
+    try:
+        start = date.fromisoformat(str(start_str))
+        end   = date.fromisoformat(str(end_str))
+    except Exception:
+        return 1
+    count = 0
+    cur = start
+    while cur <= end:
+        if cur.weekday() != 6:   # skip Sunday
+            count += 1
+        cur += timedelta(days=1)
+    return max(1, count)
+
+
 def _leave_requests_create(request: Request) -> Response:
     data = request.data
+    # Accept employeeCode, camelCase, or snake_case
+    employee_id = None
+    if code := data.get("employeeCode") or data.get("employee_code"):
+        emp = Employee.objects.filter(employee_code=code).first()
+        employee_id = emp.id if emp else None
+    if not employee_id:
+        employee_id = data.get("employeeId") or data.get("employee_id")
+    start_date  = data.get("startDate")  or data.get("start_date")
+    end_date    = data.get("endDate")    or data.get("end_date") or start_date
+    leave_type  = data.get("type") or data.get("leave_type", "casual")
+
+    if not employee_id or not start_date:
+        return Response({"error": "employeeId and startDate are required"}, status=400)
+
+    total_days = _count_leave_days(start_date, end_date)
     record = LeaveRequest.objects.create(
-        employee_id=data.get("employeeId"),
-        type=data.get("type", "casual"),
-        start_date=data.get("startDate"),
-        end_date=data.get("endDate"),
+        employee_id=employee_id,
+        type=leave_type,
+        start_date=start_date,
+        end_date=end_date,
+        total_days=total_days,
         reason=data.get("reason"),
     )
     return Response(_leave_with_name(record), status=201)
@@ -658,6 +705,16 @@ def update_leave_status(request: Request, pk: int) -> Response:
         )
 
     return Response(_leave_with_name(record))
+
+
+@api_view(["DELETE"])
+@require_hr
+def delete_leave_request(request: Request, pk: int) -> Response:
+    record = LeaveRequest.objects.filter(pk=pk).first()
+    if not record:
+        return _error("Not found", 404)
+    record.delete()
+    return Response(status=204)
 
 
 # --- Notifications ---
@@ -922,21 +979,62 @@ def hr_dashboard_summary(_request: Request) -> Response:
 @api_view(["GET"])
 @require_auth
 def employee_dashboard_summary(request: Request) -> Response:
-    employee_id = request.query_params.get("employeeId") or request.jwt_user.get(
-        "employeeId"
-    )
+    employee_id = request.query_params.get("employeeId") or request.jwt_user.get("employeeId")
     if not employee_id:
         return _error("employeeId required", 400)
     employee_id = int(employee_id)
-    attendance = Attendance.objects.filter(employee_id=employee_id)
-    total_working_days = attendance.count()
-    present_days = attendance.filter(present=True).count()
-    leave_stats = {
-        row["status"]: row["count"]
-        for row in LeaveRequest.objects.filter(employee_id=employee_id)
-        .values("status")
-        .annotate(count=Count("id"))
-    }
+
+    today = date.today()
+    month, year = today.month, today.year
+    prefix = f"{year}-{str(month).zfill(2)}"
+
+    # Present days — from biometric logs + manual attendance
+    present_dates: set = set()
+    for d in AttendanceLog.objects.filter(
+        employee_id=employee_id, date__year=year, date__month=month,
+    ).values_list("date", flat=True).distinct():
+        present_dates.add(d)
+    for d_str in Attendance.objects.filter(
+        employee_id=employee_id, date__startswith=prefix, present=True,
+    ).values_list("date", flat=True):
+        try:
+            present_dates.add(date.fromisoformat(d_str))
+        except Exception:
+            pass
+    present_days = len(present_dates)
+
+    # Working days so far this month (Mon–Sat, up to today)
+    working_days_so_far = sum(
+        1 for d in range(1, today.day + 1)
+        if date(year, month, d).weekday() != 6
+    )
+
+    # Approved leave days this month
+    leave_days_this_month = 0
+    approved_leaves = LeaveRequest.objects.filter(employee_id=employee_id, status="approved")
+    for lv in approved_leaves:
+        try:
+            start = date.fromisoformat(str(lv.start_date))
+            end   = date.fromisoformat(str(lv.end_date))
+            cur   = start
+            while cur <= end:
+                if cur.year == year and cur.month == month and cur <= today:
+                    leave_days_this_month += 1
+                cur += timedelta(days=1)
+        except Exception:
+            pass
+
+    absent_days = max(0, working_days_so_far - present_days - leave_days_this_month)
+
+    # Leave balance (sum of remaining across all leave types this year)
+    leave_balance = LeaveBalance.objects.filter(
+        employee_id=employee_id, year=year,
+    ).aggregate(total=Sum("remaining"))["total"] or 0
+
+    # Pending requests = pending leaves + pending permissions
+    pending_leaves = LeaveRequest.objects.filter(employee_id=employee_id, status="pending").count()
+    pending_perms  = EmployeePermission.objects.filter(employee_id=employee_id, status="pending").count()
+
     payrolls = Payroll.objects.filter(employee_id=employee_id).order_by("-year", "-month")[:6]
     if payrolls.exists():
         recent = [_salary_from_payroll(p) for p in payrolls]
@@ -946,16 +1044,45 @@ def employee_dashboard_summary(request: Request) -> Response:
             for r in SalaryRecord.objects.filter(employee_id=employee_id)
             .order_by("-year", "-month")[:6]
         ]
-    return Response(
-        {
-            "employeeId": employee_id,
-            "totalWorkingDays": total_working_days,
-            "presentDays": present_days,
-            "pendingLeaves": leave_stats.get("pending", 0),
-            "approvedLeaves": leave_stats.get("approved", 0),
-            "recentSalaries": recent,
-        }
-    )
+
+    # Manager access flags
+    from .models import DepartmentManager
+    from django.db.models import Q as DQ
+    manager_profile = None
+    try:
+        manager_profile = DepartmentManager.objects.prefetch_related(
+            "department_assignments", "employee_assignments"
+        ).get(employee_id=employee_id, is_active=True)
+    except DepartmentManager.DoesNotExist:
+        pass
+
+    is_manager = manager_profile is not None
+    pending_approvals_count = 0
+    if is_manager:
+        dept_ids = [da.department_id for da in manager_profile.department_assignments.all()]
+        direct_ids = [ea.employee_id for ea in manager_profile.employee_assignments.all()]
+        emp_filter = DQ(employee_id__in=direct_ids)
+        if dept_ids:
+            emp_filter |= DQ(employee__department_id__in=dept_ids)
+        pending_approvals_count = (
+            LeaveRequest.objects.filter(emp_filter, status="pending").count()
+            + EmployeePermission.objects.filter(emp_filter, status="pending").count()
+        )
+
+    return Response({
+        "employeeId":     employee_id,
+        "presentDays":    present_days,
+        "absentDays":     absent_days,
+        "leaveDays":      leave_days_this_month,
+        "leaveBalance":   float(leave_balance),
+        "pendingRequests": pending_leaves + pending_perms,
+        "pendingLeaves":  pending_leaves,
+        "approvedLeaves": approved_leaves.count(),
+        "recentSalaries": recent,
+        "isManager":      is_manager,
+        "canSubmitLeave": is_manager,
+        "pendingApprovalsCount": pending_approvals_count,
+    })
 
 
 @api_view(["GET"])

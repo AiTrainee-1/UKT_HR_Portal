@@ -28,6 +28,12 @@ from .org_views import (
     branches, branch_detail,
     designations, designation_detail,
 )
+from .manager_views import (
+    department_managers, department_manager_detail,
+    manager_department_assignments, manager_employee_assignments,
+    manager_me, manager_pending_requests,
+    manager_update_leave_status, manager_update_permission_status,
+)
 from .reports_views import (
     attendance_report, attendance_summary_report,
     leave_report, leave_balance_report,
@@ -38,6 +44,7 @@ from .reports_views import (
 from .attendance_views import (
     attendance_summary, attendance_daily, attendance_monthly_trend,
     attendance_employee_history, biometric_punch, manual_attendance,
+    sync_biometric_api,
 )
 from .payroll_views import (
     session_configs, session_config_detail,
@@ -87,6 +94,7 @@ urlpatterns = [
     path("holidays/<int:pk>", holiday_detail),
     path("leave-requests", views.leave_requests),
     path("leave-requests/<int:pk>/status", views.update_leave_status),
+    path("leave-requests/<int:pk>", views.delete_leave_request),
 
     # ── Approved Requests (Mobile App) ──────────────────────────────────────
     path("employee-requests", employee_requests),
@@ -129,6 +137,7 @@ urlpatterns = [
     path("attendance/monthly-trend", attendance_monthly_trend),
     path("attendance/employee/<int:pk>", attendance_employee_history),
     path("attendance/manual", manual_attendance),
+    path("attendance/sync-biometric", sync_biometric_api),
     path("biometric/punch", biometric_punch),
 
     # ── Dashboard ───────────────────────────────────────────────────────────
@@ -157,6 +166,18 @@ urlpatterns = [
     path("roles/<int:pk>", role_detail),
     path("hr-users", hr_users),
     path("hr-users/<int:pk>", hr_user_detail),
+
+    # ── Department Managers ──────────────────────────────────────────────────
+    path("department-managers", department_managers),
+    path("department-managers/<int:pk>", department_manager_detail),
+    path("department-managers/<int:pk>/departments", manager_department_assignments),
+    path("department-managers/<int:pk>/employees", manager_employee_assignments),
+
+    # ── Mobile: Manager profile + approvals ──────────────────────────────────
+    path("manager/me", manager_me),
+    path("manager/pending-requests", manager_pending_requests),
+    path("manager/leave-requests/<int:pk>/status", manager_update_leave_status),
+    path("manager/permissions/<int:pk>/status", manager_update_permission_status),
 
     # ── Audit Logs ───────────────────────────────────────────────────────────
     path("audit-logs", audit_logs),

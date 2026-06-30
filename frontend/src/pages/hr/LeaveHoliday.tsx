@@ -14,13 +14,16 @@ import {
   getListHolidaysQueryKey,
   useListPermissions, useCreatePermission, useUpdatePermissionStatus, useDeletePermission,
   getListPermissionsQueryKey,
+  useListEmployees,
 } from "@/lib/api-client";
 import {
-  useListLeaveRequests, useUpdateLeaveStatus,
+  useListLeaveRequests, useUpdateLeaveStatus, useDeleteLeaveRequest,
   getListLeaveRequestsQueryKey,
 } from "@/lib/api-client";
 import { useQueryClient } from "@tanstack/react-query";
-import { Calendar, Plus, Trash2, CheckCircle, XCircle, Gift, Clock } from "lucide-react";
+import { Calendar, Plus, Trash2, CheckCircle, XCircle, Gift, Clock, User, Building2, Briefcase, FileText } from "lucide-react";
+import EmployeeSearchSelect from "@/components/EmployeeSearchSelect";
+import { Separator } from "@/components/ui/separator";
 
 const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
   pending:  { label: "Pending",  className: "bg-amber-50 text-amber-700 border-amber-200" },
@@ -31,15 +34,21 @@ const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
 export default function LeaveHoliday() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const defaultTab = new URLSearchParams(window.location.search).get("tab") ?? "leaves";
+  const [activeTab, setActiveTab] = useState(defaultTab);
   const [showHolidayDialog, setShowHolidayDialog] = useState(false);
+  const [selectedLeave, setSelectedLeave] = useState<any | null>(null);
+  const [selectedPerm, setSelectedPerm] = useState<any | null>(null);
   const [holidayForm, setHolidayForm] = useState({ name: "", date: "", holidayType: "national", description: "" });
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
 
   const [permFilterStatus, setPermFilterStatus] = useState("all");
-  const [permFilterMonth, setPermFilterMonth] = useState(new Date().getMonth() + 1);
+  const [permFilterMonth, setPermFilterMonth] = useState<number | "all">("all");
   const [permFilterYear, setPermFilterYear] = useState(new Date().getFullYear());
   const [showPermDialog, setShowPermDialog] = useState(false);
+
+  const { data: employees } = useListEmployees({ status: "active" });
   const [permForm, setPermForm] = useState({
     employeeId: "",
     date: new Date().toISOString().slice(0, 10),
@@ -51,10 +60,11 @@ export default function LeaveHoliday() {
   const { data: holidays, isLoading: holidaysLoading } = useListHolidays({ year: filterYear });
   const { data: permissions, isLoading: permissionsLoading } = useListPermissions({
     ...(permFilterStatus !== "all" ? { status: permFilterStatus } : {}),
-    month: permFilterMonth,
+    ...(permFilterMonth !== "all" ? { month: permFilterMonth } : {}),
     year: permFilterYear,
   });
   const updateLeaveMutation = useUpdateLeaveStatus();
+  const deleteLeaveMutation = useDeleteLeaveRequest();
   const createHolidayMutation = useCreateHoliday();
   const deleteHolidayMutation = useDeleteHoliday();
   const createPermMutation = useCreatePermission();
@@ -73,6 +83,17 @@ export default function LeaveHoliday() {
       return;
     }
     toast({ title: `Leave request ${status}` });
+    queryClient.invalidateQueries({ queryKey: getListLeaveRequestsQueryKey() });
+  };
+
+  const deleteLeaveRequest = async (id: number) => {
+    try {
+      await deleteLeaveMutation.mutateAsync(id);
+    } catch {
+      toast({ title: "Failed to delete leave request", variant: "destructive" });
+      return;
+    }
+    toast({ title: "Leave request deleted" });
     queryClient.invalidateQueries({ queryKey: getListLeaveRequestsQueryKey() });
   };
 
@@ -111,13 +132,13 @@ export default function LeaveHoliday() {
 
   const permQueryKey = getListPermissionsQueryKey({
     ...(permFilterStatus !== "all" ? { status: permFilterStatus } : {}),
-    month: permFilterMonth,
+    ...(permFilterMonth !== "all" ? { month: permFilterMonth as number } : {}),
     year: permFilterYear,
   });
 
   const addPermission = async () => {
     if (!permForm.employeeId || !permForm.date) {
-      toast({ title: "Employee ID and date are required", variant: "destructive" });
+      toast({ title: "Please select an employee and date", variant: "destructive" });
       return;
     }
     try {
@@ -170,14 +191,25 @@ export default function LeaveHoliday() {
           </div>
         </div>
 
-        {/* Summary */}
+        {/* Summary — changes based on active tab */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {[
+          {(activeTab === "permissions" ? [
+            { label: "Pending",   value: (permissions ?? []).filter(p => p.status === "pending").length,  color: "text-amber-700 bg-amber-50 border-amber-100" },
+            { label: "Approved",  value: (permissions ?? []).filter(p => p.status === "approved").length, color: "text-green-700 bg-green-50 border-green-100" },
+            { label: "Rejected",  value: (permissions ?? []).filter(p => p.status === "rejected").length, color: "text-red-700 bg-red-50 border-red-100" },
+            { label: "Total",     value: (permissions ?? []).length,                                      color: "text-gray-700 bg-gray-50 border-gray-100" },
+          ] : activeTab === "holidays" ? [
+            { label: "Holidays",  value: (holidays ?? []).length,  color: "text-blue-700 bg-blue-50 border-blue-100" },
+            { label: "Pending Leaves",  value: (leaves ?? []).filter(l => l.status === "pending").length,  color: "text-amber-700 bg-amber-50 border-amber-100" },
+            { label: "Pending Perms",   value: (permissions ?? []).filter(p => p.status === "pending").length, color: "text-cyan-700 bg-cyan-50 border-cyan-100" },
+            { label: "",          value: null, color: "text-gray-700 bg-gray-50 border-gray-100" },
+          ] : [
             { label: "Pending",  value: (leaves ?? []).filter(l => l.status === "pending").length,  color: "text-amber-700 bg-amber-50 border-amber-100" },
             { label: "Approved", value: (leaves ?? []).filter(l => l.status === "approved").length, color: "text-green-700 bg-green-50 border-green-100" },
             { label: "Rejected", value: (leaves ?? []).filter(l => l.status === "rejected").length, color: "text-red-700 bg-red-50 border-red-100" },
             { label: "Holidays", value: (holidays ?? []).length,                                     color: "text-blue-700 bg-blue-50 border-blue-100" },
-          ].map(s => (
+          ]).map(s => (
+            s.value === null ? <div key={s.label} /> :
             <Card key={s.label} className={`border ${s.color.split(" ").slice(1).join(" ")}`}>
               <CardContent className="p-4">
                 <p className={`text-2xl font-black ${s.color.split(" ")[0]}`}>{s.value}</p>
@@ -187,7 +219,7 @@ export default function LeaveHoliday() {
           ))}
         </div>
 
-        <Tabs defaultValue="leaves">
+        <Tabs defaultValue={defaultTab} onValueChange={setActiveTab}>
           <TabsList className="bg-gray-100">
             <TabsTrigger value="leaves" className="gap-2">
               <Calendar size={14} /> Leave Requests
@@ -228,43 +260,53 @@ export default function LeaveHoliday() {
               ) : (
                 filteredLeaves.map(leave => {
                   const cfg = STATUS_CONFIG[leave.status] ?? STATUS_CONFIG.pending;
-                  const days = leave.startDate && leave.endDate
+                  const days = (leave as any).totalDays ?? (leave.startDate && leave.endDate
                     ? Math.round((new Date(leave.endDate).getTime() - new Date(leave.startDate).getTime()) / 86400000) + 1
-                    : 1;
+                    : 1);
+                  const isSingleDay = leave.startDate === leave.endDate;
                   return (
-                    <Card key={leave.id} className="border hover:shadow-sm transition-shadow">
+                    <Card key={leave.id}
+                      className="border hover:shadow-sm transition-shadow cursor-pointer"
+                      onClick={() => setSelectedLeave({ ...leave, totalDays: days })}>
                       <CardContent className="p-4">
                         <div className="flex items-start justify-between gap-3">
-                          <div className="flex-1">
+                          <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <p className="font-bold text-sm text-gray-900">{leave.employeeName ?? `Employee #${leave.employeeId}`}</p>
+                              <p className="font-bold text-sm text-gray-900">{leave.employeeName ?? (leave as any).employeeCode ?? `#${leave.employeeId}`}</p>
                               <Badge className={`text-xs border ${cfg.className}`}>{cfg.label}</Badge>
                               <Badge variant="outline" className="text-xs capitalize">{leave.type}</Badge>
                             </div>
                             <p className="text-xs text-gray-500 mt-1">
-                              {leave.startDate} → {leave.endDate} &nbsp;·&nbsp; {days} day{days !== 1 ? "s" : ""}
+                              {isSingleDay
+                                ? new Date(leave.startDate).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "long", year: "numeric" })
+                                : `${leave.startDate} → ${leave.endDate}`}
+                              &nbsp;·&nbsp; {days} day{days !== 1 ? "s" : ""}
                             </p>
-                            {leave.reason && <p className="text-xs text-gray-500 mt-0.5">{leave.reason}</p>}
-                            {leave.hrComment && (
-                              <p className="text-xs text-blue-600 mt-0.5 italic">HR: {leave.hrComment}</p>
-                            )}
+                            {leave.reason && <p className="text-xs text-gray-400 mt-0.5 truncate">{leave.reason}</p>}
                           </div>
-                          {leave.status === "pending" && (
-                            <div className="flex items-center gap-2 shrink-0">
-                              <Button size="sm" variant="outline"
-                                className="h-8 gap-1 text-green-700 border-green-200 hover:bg-green-50"
-                                onClick={() => updateLeaveStatus(leave.id, "approved")}
-                                disabled={updateLeaveMutation.isPending}>
-                                <CheckCircle size={13} /> Approve
-                              </Button>
-                              <Button size="sm" variant="outline"
-                                className="h-8 gap-1 text-red-600 border-red-200 hover:bg-red-50"
-                                onClick={() => updateLeaveStatus(leave.id, "rejected")}
-                                disabled={updateLeaveMutation.isPending}>
-                                <XCircle size={13} /> Reject
-                              </Button>
-                            </div>
-                          )}
+                          <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+                            {leave.status === "pending" && (
+                              <>
+                                <Button size="sm" variant="outline"
+                                  className="h-8 gap-1 text-green-700 border-green-200 hover:bg-green-50"
+                                  onClick={() => updateLeaveStatus(leave.id, "approved")}
+                                  disabled={updateLeaveMutation.isPending}>
+                                  <CheckCircle size={13} /> Approve
+                                </Button>
+                                <Button size="sm" variant="outline"
+                                  className="h-8 gap-1 text-red-600 border-red-200 hover:bg-red-50"
+                                  onClick={() => updateLeaveStatus(leave.id, "rejected")}
+                                  disabled={updateLeaveMutation.isPending}>
+                                  <XCircle size={13} /> Reject
+                                </Button>
+                              </>
+                            )}
+                            <Button variant="ghost" size="icon" className="h-7 w-7 text-red-400 hover:text-red-600"
+                              onClick={() => deleteLeaveRequest(leave.id)}
+                              disabled={deleteLeaveMutation.isPending}>
+                              <Trash2 size={13} />
+                            </Button>
+                          </div>
                         </div>
                       </CardContent>
                     </Card>
@@ -289,8 +331,9 @@ export default function LeaveHoliday() {
                 <div className="flex items-center gap-1 ml-2">
                   <select
                     value={permFilterMonth}
-                    onChange={e => setPermFilterMonth(Number(e.target.value))}
+                    onChange={e => setPermFilterMonth(e.target.value === "all" ? "all" : Number(e.target.value))}
                     className="h-8 rounded-md border px-2 text-xs bg-background">
+                    <option value="all">All Months</option>
                     {["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"].map((m, i) => (
                       <option key={i} value={i + 1}>{m}</option>
                     ))}
@@ -327,10 +370,12 @@ export default function LeaveHoliday() {
                 {(permissions ?? []).map(p => {
                   const cfg = STATUS_CONFIG[p.status] ?? STATUS_CONFIG.pending;
                   return (
-                    <Card key={p.id} className="border hover:shadow-sm transition-shadow">
+                    <Card key={p.id}
+                      className="border hover:shadow-sm transition-shadow cursor-pointer"
+                      onClick={() => setSelectedPerm(p)}>
                       <CardContent className="p-4">
                         <div className="flex items-start justify-between gap-3">
-                          <div className="flex-1">
+                          <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap mb-1">
                               <p className="font-bold text-sm text-gray-900">{p.employeeName}</p>
                               <span className="text-xs text-gray-400">{p.employeeCode}</span>
@@ -340,7 +385,7 @@ export default function LeaveHoliday() {
                               {new Date(p.date).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "long", year: "numeric" })}
                               {p.permissionTime && <span className="ml-2">at {p.permissionTime}</span>}
                             </p>
-                            {p.reason && <p className="text-xs text-gray-500 mt-0.5">{p.reason}</p>}
+                            {p.reason && <p className="text-xs text-gray-400 mt-0.5 truncate">{p.reason}</p>}
                             {p.hrComment && <p className="text-xs text-blue-600 mt-0.5 italic">HR: {p.hrComment}</p>}
                             {p.monthlyUsed != null && (
                               <div className="flex items-center gap-2 mt-2">
@@ -353,7 +398,7 @@ export default function LeaveHoliday() {
                               </div>
                             )}
                           </div>
-                          <div className="flex items-center gap-1 shrink-0">
+                          <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
                             {p.status === "pending" && (
                               <>
                                 <Button size="sm" variant="outline"
@@ -392,12 +437,11 @@ export default function LeaveHoliday() {
                 <div className="space-y-4 py-2">
                   <p className="text-xs text-muted-foreground">Each employee is allowed up to 3 permissions per month (1 hour each).</p>
                   <div className="space-y-1.5">
-                    <Label>Employee ID</Label>
-                    <Input
-                      type="number"
-                      placeholder="Enter Employee ID"
+                    <Label>Employee</Label>
+                    <EmployeeSearchSelect
+                      employees={employees}
                       value={permForm.employeeId}
-                      onChange={e => setPermForm(f => ({ ...f, employeeId: e.target.value }))}
+                      onChange={v => setPermForm(f => ({ ...f, employeeId: v }))}
                     />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
@@ -536,6 +580,251 @@ export default function LeaveHoliday() {
             </div>
           </DialogContent>
         </Dialog>
+
+        {/* ── Leave Request Detail Dialog ─────────────────────────────────── */}
+        {selectedLeave && (
+          <Dialog open onOpenChange={() => setSelectedLeave(null)}>
+            <DialogContent className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Leave Request Details</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4 py-1">
+                {/* Employee info */}
+                <div className="rounded-xl border bg-gray-50 p-4 space-y-3">
+                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Employee</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="flex items-start gap-2">
+                      <User size={14} className="mt-0.5 text-gray-400 shrink-0" />
+                      <div>
+                        <p className="text-xs text-gray-400">Name</p>
+                        <p className="text-sm font-semibold text-gray-900">{selectedLeave.employeeName ?? "—"}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <FileText size={14} className="mt-0.5 text-gray-400 shrink-0" />
+                      <div>
+                        <p className="text-xs text-gray-400">Employee ID</p>
+                        <p className="text-sm font-semibold text-gray-900">{selectedLeave.employeeCode ?? `#${selectedLeave.employeeId}`}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <Building2 size={14} className="mt-0.5 text-gray-400 shrink-0" />
+                      <div>
+                        <p className="text-xs text-gray-400">Department</p>
+                        <p className="text-sm font-semibold text-gray-900">{selectedLeave.department ?? "—"}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <Briefcase size={14} className="mt-0.5 text-gray-400 shrink-0" />
+                      <div>
+                        <p className="text-xs text-gray-400">Designation</p>
+                        <p className="text-sm font-semibold text-gray-900">{selectedLeave.designation ?? "—"}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <Separator />
+
+                {/* Leave details */}
+                <div className="space-y-3">
+                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Leave Details</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <p className="text-xs text-gray-400">Leave Type</p>
+                      <p className="text-sm font-semibold capitalize text-gray-900">{selectedLeave.type}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-400">Status</p>
+                      <Badge className={`text-xs border ${(STATUS_CONFIG[selectedLeave.status] ?? STATUS_CONFIG.pending).className}`}>
+                        {(STATUS_CONFIG[selectedLeave.status] ?? STATUS_CONFIG.pending).label}
+                      </Badge>
+                    </div>
+                    {selectedLeave.startDate === selectedLeave.endDate ? (
+                      <div className="col-span-2">
+                        <p className="text-xs text-gray-400">Date</p>
+                        <p className="text-sm font-semibold text-gray-900">
+                          {new Date(selectedLeave.startDate).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+                          <span className="ml-2 text-xs font-normal text-gray-400">(1 day)</span>
+                        </p>
+                      </div>
+                    ) : (
+                      <>
+                        <div>
+                          <p className="text-xs text-gray-400">From</p>
+                          <p className="text-sm font-semibold text-gray-900">
+                            {new Date(selectedLeave.startDate).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "long", year: "numeric" })}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-400">To</p>
+                          <p className="text-sm font-semibold text-gray-900">
+                            {new Date(selectedLeave.endDate).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "long", year: "numeric" })}
+                          </p>
+                        </div>
+                      </>
+                    )}
+                    <div>
+                      <p className="text-xs text-gray-400">Working Days</p>
+                      <p className="text-sm font-semibold text-gray-900">
+                        {selectedLeave.totalDays ?? 1} day{(selectedLeave.totalDays ?? 1) !== 1 ? "s" : ""}
+                      </p>
+                    </div>
+                  </div>
+                  {selectedLeave.reason && (
+                    <div>
+                      <p className="text-xs text-gray-400 mb-1">Reason</p>
+                      <p className="text-sm text-gray-700 bg-gray-50 rounded-lg p-3 border">{selectedLeave.reason}</p>
+                    </div>
+                  )}
+                  {selectedLeave.hrComment && (
+                    <div>
+                      <p className="text-xs text-gray-400 mb-1">HR Comment</p>
+                      <p className="text-sm text-blue-700 bg-blue-50 rounded-lg p-3 border border-blue-100">{selectedLeave.hrComment}</p>
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-300">
+                    Submitted: {selectedLeave.createdAt ? new Date(selectedLeave.createdAt).toLocaleString("en-IN") : "—"}
+                  </p>
+                </div>
+
+                {/* Actions */}
+                {selectedLeave.status === "pending" && (
+                  <div className="flex gap-2 pt-1">
+                    <Button className="flex-1 gap-1 bg-green-600 hover:bg-green-700"
+                      onClick={() => { updateLeaveStatus(selectedLeave.id, "approved"); setSelectedLeave(null); }}
+                      disabled={updateLeaveMutation.isPending}>
+                      <CheckCircle size={14} /> Approve
+                    </Button>
+                    <Button variant="outline" className="flex-1 gap-1 text-red-600 border-red-200 hover:bg-red-50"
+                      onClick={() => { updateLeaveStatus(selectedLeave.id, "rejected"); setSelectedLeave(null); }}
+                      disabled={updateLeaveMutation.isPending}>
+                      <XCircle size={14} /> Reject
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </DialogContent>
+          </Dialog>
+        )}
+
+        {/* ── Permission Detail Dialog ────────────────────────────────────── */}
+        {selectedPerm && (
+          <Dialog open onOpenChange={() => setSelectedPerm(null)}>
+            <DialogContent className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Permission Request Details</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4 py-1">
+                {/* Employee info */}
+                <div className="rounded-xl border bg-gray-50 p-4 space-y-3">
+                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Employee</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="flex items-start gap-2">
+                      <User size={14} className="mt-0.5 text-gray-400 shrink-0" />
+                      <div>
+                        <p className="text-xs text-gray-400">Name</p>
+                        <p className="text-sm font-semibold text-gray-900">{selectedPerm.employeeName}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <FileText size={14} className="mt-0.5 text-gray-400 shrink-0" />
+                      <div>
+                        <p className="text-xs text-gray-400">Employee ID</p>
+                        <p className="text-sm font-semibold text-gray-900">{selectedPerm.employeeCode ?? `#${selectedPerm.employeeId}`}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <Building2 size={14} className="mt-0.5 text-gray-400 shrink-0" />
+                      <div>
+                        <p className="text-xs text-gray-400">Department</p>
+                        <p className="text-sm font-semibold text-gray-900">{selectedPerm.department ?? "—"}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <Briefcase size={14} className="mt-0.5 text-gray-400 shrink-0" />
+                      <div>
+                        <p className="text-xs text-gray-400">Designation</p>
+                        <p className="text-sm font-semibold text-gray-900">{selectedPerm.designation ?? "—"}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <Separator />
+
+                {/* Permission details */}
+                <div className="space-y-3">
+                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Permission Details</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <p className="text-xs text-gray-400">Date</p>
+                      <p className="text-sm font-semibold text-gray-900">
+                        {selectedPerm.date
+                          ? new Date(selectedPerm.date).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "long", year: "numeric" })
+                          : "—"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-400">Time</p>
+                      <p className="text-sm font-semibold text-gray-900">{selectedPerm.permissionTime ?? "Not specified"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-400">Status</p>
+                      <Badge className={`text-xs border ${(STATUS_CONFIG[selectedPerm.status] ?? STATUS_CONFIG.pending).className}`}>
+                        {(STATUS_CONFIG[selectedPerm.status] ?? STATUS_CONFIG.pending).label}
+                      </Badge>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-400">Monthly Usage</p>
+                      {selectedPerm.monthlyUsed != null ? (
+                        <div className="flex items-center gap-2 mt-1">
+                          <div className="flex gap-0.5">
+                            {Array.from({ length: selectedPerm.monthlyLimit }).map((_: any, i: number) => (
+                              <div key={i} className={`w-4 h-1.5 rounded-full ${i < selectedPerm.monthlyUsed ? "bg-amber-400" : "bg-gray-200"}`} />
+                            ))}
+                          </div>
+                          <span className="text-xs text-gray-500">{selectedPerm.monthlyUsed}/{selectedPerm.monthlyLimit}</span>
+                        </div>
+                      ) : <p className="text-sm font-semibold text-gray-900">—</p>}
+                    </div>
+                  </div>
+                  {selectedPerm.reason && (
+                    <div>
+                      <p className="text-xs text-gray-400 mb-1">Reason</p>
+                      <p className="text-sm text-gray-700 bg-gray-50 rounded-lg p-3 border">{selectedPerm.reason}</p>
+                    </div>
+                  )}
+                  {selectedPerm.hrComment && (
+                    <div>
+                      <p className="text-xs text-gray-400 mb-1">HR Comment</p>
+                      <p className="text-sm text-blue-700 bg-blue-50 rounded-lg p-3 border border-blue-100">{selectedPerm.hrComment}</p>
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-300">
+                    Submitted: {selectedPerm.createdAt ? new Date(selectedPerm.createdAt).toLocaleString("en-IN") : "—"}
+                  </p>
+                </div>
+
+                {/* Actions */}
+                {selectedPerm.status === "pending" && (
+                  <div className="flex gap-2 pt-1">
+                    <Button className="flex-1 gap-1 bg-green-600 hover:bg-green-700"
+                      onClick={() => { updatePermStatus(selectedPerm.id, "approved"); setSelectedPerm(null); }}
+                      disabled={updatePermMutation.isPending}>
+                      <CheckCircle size={14} /> Approve
+                    </Button>
+                    <Button variant="outline" className="flex-1 gap-1 text-red-600 border-red-200 hover:bg-red-50"
+                      onClick={() => { updatePermStatus(selectedPerm.id, "rejected"); setSelectedPerm(null); }}
+                      disabled={updatePermMutation.isPending}>
+                      <XCircle size={14} /> Reject
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </DialogContent>
+          </Dialog>
+        )}
       </div>
     </HrLayout>
   );

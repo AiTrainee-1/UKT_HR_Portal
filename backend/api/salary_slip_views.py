@@ -8,7 +8,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from .auth import require_hr, require_auth
+from .auth import require_hr, require_auth, get_token_employee_id
 from .models import SalarySlip, Employee, PayrollSettings, LeaveBalance
 
 MONTHS = ["","January","February","March","April","May","June",
@@ -272,7 +272,7 @@ def salary_slips(request: Request) -> Response:
 
 
 @api_view(["GET"])
-@require_hr
+@require_auth
 def salary_slip_detail(request: Request, pk: int) -> Response:
     try:
         s = (
@@ -282,6 +282,10 @@ def salary_slip_detail(request: Request, pk: int) -> Response:
         )
     except SalarySlip.DoesNotExist:
         return Response({"error": "Not found"}, status=404)
+    # Employees can only view their own salary slips
+    token_emp_id = get_token_employee_id(request)
+    if token_emp_id and s.employee_id != token_emp_id:
+        return Response({"error": "Access denied"}, status=403)
     return Response(slip_json(s, include_settings=True))
 
 

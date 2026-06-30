@@ -4,7 +4,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from .auth import require_hr
+from .auth import require_hr, require_auth, get_token_employee_id, is_hr
 from .models import LeaveType, LeaveBalance, Holiday, LeaveRequest, Employee, Notification, EmployeePermission
 
 
@@ -55,11 +55,13 @@ def holiday_json(h):
 # ── Leave Types ──────────────────────────────────────────────────────────────
 
 @api_view(["GET", "POST"])
-@require_hr
+@require_auth
 def leave_types(request: Request) -> Response:
     if request.method == "GET":
         qs = LeaveType.objects.filter(is_active=True).order_by("name")
         return Response([leave_type_json(lt) for lt in qs])
+    if not is_hr(request):
+        return Response({"error": "HR access required"}, status=403)
 
     data = request.data
     if not data.get("name") or not data.get("code"):
@@ -108,10 +110,14 @@ def leave_type_detail(request: Request, pk: int) -> Response:
 # ── Leave Balances ───────────────────────────────────────────────────────────
 
 @api_view(["GET"])
-@require_hr
+@require_auth
 def leave_balances(request: Request) -> Response:
     emp_id = request.query_params.get("employeeId")
     year = request.query_params.get("year")
+    # Employees can only see their own balance
+    token_emp_id = get_token_employee_id(request)
+    if token_emp_id:
+        emp_id = token_emp_id
     qs = LeaveBalance.objects.select_related("leave_type").order_by("employee_id", "leave_type__name")
     if emp_id:
         qs = qs.filter(employee_id=emp_id)
@@ -146,7 +152,7 @@ def allocate_leave(request: Request) -> Response:
 # ── Holidays ─────────────────────────────────────────────────────────────────
 
 @api_view(["GET", "POST"])
-@require_hr
+@require_auth
 def holidays(request: Request) -> Response:
     if request.method == "GET":
         year = request.query_params.get("year")
@@ -157,6 +163,8 @@ def holidays(request: Request) -> Response:
         if branch_id:
             qs = qs.filter(branch_id=branch_id)
         return Response([holiday_json(h) for h in qs])
+    if not is_hr(request):
+        return Response({"error": "HR access required"}, status=403)
 
     data = request.data
     if not data.get("name") or not data.get("date"):
@@ -311,6 +319,8 @@ def _permission_json(p, monthly_used=None):
         "employeeId": emp.id,
         "employeeName": f"{emp.first_name} {emp.last_name}",
         "employeeCode": emp.employee_code,
+        "department": emp.department.name if emp.department_id and emp.department else None,
+        "designation": emp.designation.title if emp.designation_id and emp.designation else None,
         "date": p.date.isoformat() if p.date else None,
         "permissionTime": p.permission_time.strftime("%H:%M") if p.permission_time else None,
         "reason": p.reason,
@@ -324,11 +334,21 @@ def _permission_json(p, monthly_used=None):
 
 
 @api_view(["GET", "POST"])
-@require_hr
+@require_auth
 def employee_permissions(request: Request) -> Response:
     if request.method == "GET":
-        qs = EmployeePermission.objects.select_related("employee").order_by("-date", "-created_at")
-        if emp_id := request.query_params.get("employeeId"):
+        qs = EmployeePermission.objects.select_related("employee__department", "employee__designation").order_by("-date", "-created_at")
+        # Resolve employee by code or ID; employees can only see their own
+        token_emp_id = get_token_employee_id(request)
+        if token_emp_id:
+            emp_id = token_emp_id
+        elif code := request.query_params.get("employeeCode") or request.query_params.get("employee_code"):
+            from .models import Employee as _Emp
+            found = _Emp.objects.filter(employee_code=code).first()
+            emp_id = found.id if found else None
+        else:
+            emp_id = request.query_params.get("employeeId") or request.query_params.get("employee_id")
+        if emp_id:
             qs = qs.filter(employee_id=emp_id)
         if status := request.query_params.get("status"):
             qs = qs.filter(status=status)
@@ -339,8 +359,18 @@ def employee_permissions(request: Request) -> Response:
         return Response([_permission_json(p) for p in qs])
 
     data = request.data
-    emp_id = data.get("employeeId")
-    perm_date = data.get("date")
+    # Accept employeeCode, camelCase, or snake_case
+    emp_id    = None
+    if code := data.get("employeeCode") or data.get("employee_code"):
+        found = Employee.objects.filter(employee_code=code).first()
+        emp_id = found.id if found else None
+    if not emp_id:
+        emp_id = data.get("employeeId") or data.get("employee_id")
+    perm_date = data.get("date") or data.get("permission_date")
+    # Employees can only submit permissions for themselves
+    token_emp_id = get_token_employee_id(request)
+    if token_emp_id and str(token_emp_id) != str(emp_id):
+        return Response({"error": "You can only submit permissions for yourself"}, status=403)
     if not emp_id or not perm_date:
         return Response({"error": "employeeId and date are required"}, status=400)
 
@@ -367,7 +397,7 @@ def employee_permissions(request: Request) -> Response:
             status=400,
         )
 
-    perm_time = data.get("permissionTime") or None
+    perm_time = data.get("permissionTime") or data.get("permission_time") or None
     if perm_time:
         from datetime import time as time_type
         try:

@@ -83,13 +83,22 @@ def salary_record_json(record, employee_name: str | None = None) -> dict:
 
 
 def leave_request_json(record, employee_name: str | None = None) -> dict:
+    emp = getattr(record, "employee", None)
+    # Auto-derive name from the joined employee when caller doesn't supply it
+    resolved_name = employee_name or (
+        f"{emp.first_name} {emp.last_name}" if emp else None
+    )
     return {
         "id": record.id,
         "employeeId": record.employee_id,
-        "employeeName": employee_name,
+        "employeeName": resolved_name,
+        "employeeCode": emp.employee_code if emp else None,
+        "department": emp.department.name if emp and emp.department_id and emp.department else None,
+        "designation": emp.designation.title if emp and emp.designation_id and emp.designation else None,
         "type": record.type,
         "startDate": record.start_date,
         "endDate": record.end_date,
+        "totalDays": float(record.total_days) if record.total_days is not None else 1,
         "reason": record.reason,
         "status": record.status,
         "hrComment": record.hr_comment,

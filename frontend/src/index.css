@@ -2,6 +2,210 @@
 @import "tw-animate-css";
 @plugin "@tailwindcss/typography";
 
+/* ── UKT Clay Tab System ────────────────────────────────────────── */
+
+/* Tab list: transparent, underline-rail */
+.clay-tabs-list {
+  background: transparent !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  height: auto !important;
+  gap: 0 !important;
+  display: flex !important;
+  border-bottom: 2px solid rgba(0, 100, 150, 0.09) !important;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.clay-tabs-list::-webkit-scrollbar { display: none; }
+
+/* Tab trigger base */
+.clay-tabs-trigger {
+  position: relative !important;
+  padding: 9px 16px !important;
+  height: auto !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.01em;
+  color: rgba(0, 80, 120, 0.5) !important;
+  background: transparent !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  border: none !important;
+  white-space: nowrap;
+  margin-bottom: -2px; /* sit on the rail border */
+  transition: color 0.2s ease !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px;
+}
+
+/* Animated underline via ::after */
+.clay-tabs-trigger::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 10px;
+  right: 10px;
+  height: 2.5px;
+  background: linear-gradient(90deg, #006496, #0096c7);
+  border-radius: 2px 2px 0 0;
+  transform: scaleX(0);
+  transform-origin: center;
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Active state */
+.clay-tabs-trigger[data-state='active'] {
+  color: #006496 !important;
+  font-weight: 700 !important;
+}
+.clay-tabs-trigger[data-state='active']::after {
+  transform: scaleX(1);
+}
+
+/* Hover state */
+.clay-tabs-trigger:hover:not([data-state='active']) {
+  color: rgba(0, 100, 150, 0.75) !important;
+  background: rgba(0, 100, 150, 0.04) !important;
+}
+
+/* Icons inside tabs inherit color */
+.clay-tabs-trigger svg {
+  color: inherit;
+  transition: color 0.2s ease;
+}
+
+/* ── UKT Claymorphism Design System ────────────────────────────── */
+
+/* Clay card — soft 3D paper effect */
+.clay-card {
+  background: #ffffff;
+  box-shadow:
+    10px 10px 20px rgba(0, 100, 150, 0.10),
+    -5px -5px 15px rgba(255, 255, 255, 0.85),
+    inset 3px 3px 6px rgba(255, 255, 255, 0.7),
+    inset -3px -3px 8px rgba(0, 100, 150, 0.04);
+  transition: box-shadow 0.25s ease, transform 0.2s ease;
+}
+.clay-card:hover {
+  box-shadow:
+    14px 14px 28px rgba(0, 100, 150, 0.12),
+    -6px -6px 18px rgba(255, 255, 255, 0.9),
+    inset 3px 3px 6px rgba(255, 255, 255, 0.7),
+    inset -3px -3px 8px rgba(0, 100, 150, 0.05);
+}
+
+/* Clay panel — for sidebars and larger surfaces */
+.clay-panel {
+  background: #f6fafe;
+  box-shadow:
+    8px 0 20px rgba(0, 100, 150, 0.08),
+    inset -2px 0 6px rgba(255, 255, 255, 0.6);
+}
+
+/* Clay button — elevated tactile button */
+.clay-btn {
+  box-shadow:
+    6px 6px 14px rgba(0, 100, 150, 0.18),
+    -3px -3px 10px rgba(255, 255, 255, 0.7),
+    inset 2px 2px 4px rgba(255, 255, 255, 0.35),
+    inset -2px -2px 6px rgba(0, 0, 0, 0.12);
+  transition: all 0.18s ease;
+}
+.clay-btn:hover {
+  box-shadow:
+    8px 8px 18px rgba(0, 100, 150, 0.22),
+    -4px -4px 12px rgba(255, 255, 255, 0.75),
+    inset 2px 2px 4px rgba(255, 255, 255, 0.35),
+    inset -2px -2px 6px rgba(0, 0, 0, 0.12);
+  transform: translateY(-1px);
+}
+.clay-btn:active {
+  box-shadow:
+    3px 3px 8px rgba(0, 100, 150, 0.12),
+    -2px -2px 6px rgba(255, 255, 255, 0.6),
+    inset 3px 3px 8px rgba(0, 0, 0, 0.12),
+    inset -3px -3px 8px rgba(255, 255, 255, 0.4);
+  transform: scale(0.98) translateY(0);
+}
+
+/* Clay input — sunken inset look */
+.clay-input {
+  background: #f0f4f8;
+  box-shadow:
+    inset 4px 4px 8px rgba(0, 100, 150, 0.08),
+    inset -4px -4px 8px rgba(255, 255, 255, 0.9);
+  border: none !important;
+  transition: box-shadow 0.2s ease;
+}
+.clay-input:focus {
+  box-shadow:
+    inset 5px 5px 10px rgba(0, 100, 150, 0.12),
+    inset -5px -5px 10px rgba(255, 255, 255, 0.95),
+    0 0 0 2px rgba(0, 100, 150, 0.15);
+  outline: none;
+}
+
+/* Clay nav active item */
+.clay-nav-active {
+  background: linear-gradient(135deg, #006496, #0080bf);
+  color: #ffffff;
+  box-shadow:
+    6px 6px 14px rgba(0, 100, 150, 0.25),
+    -2px -2px 8px rgba(255, 255, 255, 0.4),
+    inset 2px 2px 4px rgba(255, 255, 255, 0.2),
+    inset -2px -2px 6px rgba(0, 0, 0, 0.15);
+}
+
+/* Clay badge */
+.clay-badge {
+  box-shadow:
+    3px 3px 8px rgba(0, 100, 150, 0.2),
+    -2px -2px 6px rgba(255, 255, 255, 0.8),
+    inset 1px 1px 3px rgba(255, 255, 255, 0.5);
+}
+
+/* Page background */
+.ukt-bg {
+  background: linear-gradient(135deg, #f6fafe 0%, #eef4fa 50%, #f0f6fc 100%);
+  min-height: 100vh;
+}
+
+/* Gradient text for headings */
+.text-ukt-gradient {
+  background: linear-gradient(135deg, #006496, #0096c7);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Subtle entrance animation */
+@keyframes clay-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.clay-fade-in { animation: clay-fade-in 0.35s ease forwards; }
+
+/* Animated blob */
+@keyframes blob-float {
+  0%, 100% { transform: translate(0,0) scale(1); }
+  33%       { transform: translate(20px,-20px) scale(1.05); }
+  66%       { transform: translate(-15px,10px) scale(0.97); }
+}
+.blob-animate { animation: blob-float 8s ease-in-out infinite; }
+
+/* Skeleton clay pulse */
+@keyframes clay-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.55; }
+}
+.clay-skeleton {
+  background: linear-gradient(90deg, #e8f0f7 25%, #d4e4f0 50%, #e8f0f7 75%);
+  background-size: 200% 100%;
+  animation: clay-pulse 1.5s ease-in-out infinite;
+  border-radius: 0.75rem;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -78,52 +282,52 @@
     --elevate-1: rgba(0,0,0, .08);
     --elevate-2: rgba(0,0,0, .15);
 
-    --background: 210 20% 98%;
-    --foreground: 222 47% 11%;
-    --border: 214 32% 91%;
-    
+    --background: 210 50% 97%;  /* #f0f5fa — UKT light blue-grey */
+    --foreground: 201 60% 12%; /* #0d2a38 — deep UKT navy */
+    --border: 210 30% 88%;
+
     --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
-    --card-border: 214 32% 91%;
+    --card-foreground: 201 60% 15%;
+    --card-border: 210 30% 90%;
     
-    --sidebar: 222 47% 11%;
-    --sidebar-foreground: 210 40% 98%;
-    --sidebar-border: 217 33% 17%;
-    --sidebar-primary: 25 95% 53%; /* Strengthened primary color */
-    --sidebar-primary-foreground: 222 47% 11%;
-    --sidebar-accent: 217 33% 17%;
-    --sidebar-accent-foreground: 210 40% 98%;
-    --sidebar-ring: 25 95% 53%;
-    
+    --sidebar: 210 50% 98%;
+    --sidebar-foreground: 201 100% 18%;
+    --sidebar-border: 210 30% 90%;
+    --sidebar-primary: 201 100% 29%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 210 40% 94%;
+    --sidebar-accent-foreground: 201 100% 18%;
+    --sidebar-ring: 201 100% 29%;
+
     --popover: 0 0% 100%;
     --popover-foreground: 222 47% 11%;
     --popover-border: 214 32% 91%;
-    
-    --primary: 25 95% 53%; /* Strengthened primary color */
-    --primary-foreground: 210 40% 98%;
-    
-    --secondary: 210 40% 92%; /* Strengthened secondary color */
-    --secondary-foreground: 222 47% 12%;
-    
+
+    --primary: 201 100% 29%; /* UKT Blue #006496 */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 210 40% 92%;
+    --secondary-foreground: 201 60% 20%;
+
     --muted: 210 40% 94%;
     --muted-foreground: 215.4 16.3% 46.9%;
-    
-    --accent: 25 95% 53%; /* Strengthened accent color */
-    --accent-foreground: 222 47% 11%;
-    
+
+    --accent: 201 100% 29%; /* UKT Blue */
+    --accent-foreground: 0 0% 100%;
+
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
-    
-    --input: 214.3 31.8% 91.4%;
-    --ring: 25 95% 53%;
-    
-    --chart-1: 12 76% 61%;
-    --chart-2: 173 58% 39%;
-    --chart-3: 197 37% 24%;
+
+    --input: 210 30% 90%;
+    --ring: 201 100% 29%;
+
+    --chart-1: 201 100% 29%;
+    --chart-2: 199 100% 38%;
+    --chart-3: 197 60% 55%;
     --chart-4: 43 74% 66%;
     --chart-5: 27 87% 67%;
-    
-    --app-font-sans: 'Inter', sans-serif;
+
+    --app-font-sans: 'Hanken Grotesk', 'Inter', sans-serif;
     --app-font-serif: Georgia, serif;
     --app-font-mono: Menlo, monospace;
     --radius: .5rem; /* 8px */
