@@ -114,16 +114,25 @@ class Command(BaseCommand):
                 conn.disconnect()
 
         # Build employee lookup: user_id (string) → Employee
-        # eSSL stores whatever you entered as Person ID when enrolling.
-        # We match against employee_code first, then against numeric ID.
+        # Match priority:
+        #   1. biometric_device_id (explicit HR-to-device mapping)
+        #   2. employee_code exact match
+        #   3. numeric PK exact match (str)
+        #   4. numeric PK after stripping leading zeros ("001" → 1)
+        active_employees = list(Employee.objects.filter(status="active"))
+
+        all_employees_by_device_id = {
+            str(e.biometric_device_id).strip(): e
+            for e in active_employees
+            if e.biometric_device_id
+        }
         all_employees = {
             str(e.employee_code): e
-            for e in Employee.objects.filter(status="active")
+            for e in active_employees
         }
-        # Also index by numeric pk for devices using numeric IDs
         all_employees_by_id = {
             str(e.id): e
-            for e in Employee.objects.filter(status="active")
+            for e in active_employees
         }
 
         created   = 0
@@ -141,7 +150,14 @@ class Command(BaseCommand):
                 continue
 
             uid = str(rec.user_id).strip()
-            emp = all_employees.get(uid) or all_employees_by_id.get(uid)
+            emp = (
+                all_employees_by_device_id.get(uid)
+                or all_employees.get(uid)
+                or all_employees_by_id.get(uid)
+            )
+            # Numeric fallback: "001" → try matching employee pk=1
+            if not emp and uid.isdigit():
+                emp = all_employees_by_id.get(str(int(uid)))
 
             if not emp:
                 not_found.add(uid)

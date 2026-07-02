@@ -104,6 +104,7 @@ class Employee(models.Model):
     mother_name = models.TextField(null=True, blank=True, db_column="mother_name")
     probation_end_date = models.DateField(null=True, blank=True, db_column="probation_end_date")
     confirmation_date = models.DateField(null=True, blank=True, db_column="confirmation_date")
+    biometric_device_id = models.TextField(null=True, blank=True, db_column="biometric_device_id")
     password_hash = models.TextField(null=True, blank=True, db_column="password_hash")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
@@ -135,6 +136,10 @@ class ShiftTemplate(models.Model):
     end_time = models.TimeField(db_column="end_time")
     gender_rule = models.TextField(choices=GENDER_RULES, default=GENDER_RULE_ALL, db_column="gender_rule")
     grace_period_minutes = models.IntegerField(default=15, db_column="grace_period_minutes")
+    # Staff-only: 4-punch day structure (null on production shifts)
+    first_half_end = models.TimeField(null=True, blank=True, db_column="first_half_end")
+    lunch_duration_minutes = models.IntegerField(default=60, db_column="lunch_duration_minutes")
+    lunch_grace_minutes = models.IntegerField(default=10, db_column="lunch_grace_minutes")
     department = models.ForeignKey(
         Department, on_delete=models.SET_NULL, null=True, blank=True,
         db_column="department_id", related_name="shifts"
@@ -424,6 +429,7 @@ class Advance(models.Model):
     disbursed_at = models.DateTimeField(null=True, blank=True, db_column="disbursed_at")
     repayment_start_month = models.IntegerField(null=True, blank=True, db_column="repayment_start_month")
     repayment_start_year = models.IntegerField(null=True, blank=True, db_column="repayment_start_year")
+    repayment_months = models.IntegerField(null=True, blank=True, db_column="repayment_months")
     emi_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="emi_amount")
     total_repaid = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="total_repaid")
     outstanding = models.DecimalField(max_digits=10, decimal_places=2, default=0)
@@ -438,9 +444,11 @@ class Advance(models.Model):
 class AdvanceRepayment(models.Model):
     PAYMENT_CASH = "cash"
     PAYMENT_GPAY = "gpay"
+    PAYMENT_PAYROLL = "payroll"
     PAYMENT_METHODS = [
         (PAYMENT_CASH, "Hand Cash"),
         (PAYMENT_GPAY, "GPay"),
+        (PAYMENT_PAYROLL, "Payroll Deduction"),
     ]
 
     advance = models.ForeignKey(
@@ -450,8 +458,9 @@ class AdvanceRepayment(models.Model):
     year = models.IntegerField()
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     payment_method = models.TextField(
-        choices=PAYMENT_METHODS, default=PAYMENT_CASH, db_column="payment_method"
+        choices=PAYMENT_METHODS, default=PAYMENT_PAYROLL, db_column="payment_method"
     )
+    is_processed = models.BooleanField(default=False, db_column="is_processed")
     payroll_run = models.ForeignKey(
         PayrollRun, on_delete=models.SET_NULL, null=True, blank=True,
         db_column="payroll_run_id", related_name="advance_repayments"
@@ -671,6 +680,66 @@ class Applicant(models.Model):
 
 
 # ──────────────────────────────────────────────
+#  Resignation Requests
+# ──────────────────────────────────────────────
+
+class ResignationRequest(models.Model):
+    # Status flow: pending → dept_approved → approved
+    #              pending → rejected (by dept head)
+    #              dept_approved → rejected (by HR)
+    STATUS_PENDING = "pending"
+    STATUS_DEPT_APPROVED = "dept_approved"
+    STATUS_APPROVED = "approved"
+    STATUS_REJECTED = "rejected"
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id",
+        related_name="resignation_requests",
+    )
+    reason = models.TextField(null=True, blank=True)
+    last_working_date = models.DateField(null=True, blank=True, db_column="last_working_date")
+    survey_q1_answer = models.TextField(null=True, blank=True, db_column="survey_q1_answer")
+    survey_q2_answer = models.TextField(null=True, blank=True, db_column="survey_q2_answer")
+    survey_q3_answer = models.TextField(null=True, blank=True, db_column="survey_q3_answer")
+    status = models.TextField(default=STATUS_PENDING)
+    # Dept head stage
+    dept_head = models.ForeignKey(
+        Employee, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="dept_head_id", related_name="resignation_reviews",
+    )
+    dept_head_status = models.TextField(null=True, blank=True, db_column="dept_head_status")
+    dept_head_comment = models.TextField(null=True, blank=True, db_column="dept_head_comment")
+    dept_head_approved_at = models.DateTimeField(null=True, blank=True, db_column="dept_head_approved_at")
+    # HR stage
+    hr_comment = models.TextField(null=True, blank=True, db_column="hr_comment")
+    approved_by = models.TextField(null=True, blank=True, db_column="approved_by")
+    approved_at = models.DateTimeField(null=True, blank=True, db_column="approved_at")
+    # Track which stage rejected
+    rejected_by = models.TextField(null=True, blank=True, db_column="rejected_by")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "resignation_requests"
+
+
+# ──────────────────────────────────────────────
+#  Department Headcount (Required Staffing)
+# ──────────────────────────────────────────────
+
+class DepartmentHeadcount(models.Model):
+    department = models.OneToOneField(
+        Department, on_delete=models.CASCADE, db_column="department_id",
+        related_name="headcount",
+    )
+    required_count = models.IntegerField(default=0, db_column="required_count")
+    notes = models.TextField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "department_headcounts"
+
+
+# ──────────────────────────────────────────────
 #  Attendance
 # ──────────────────────────────────────────────
 
@@ -707,6 +776,54 @@ class AttendanceLog(models.Model):
     class Meta:
         db_table = "attendance_logs"
         ordering = ["date", "punch_time"]
+
+
+class DailyShiftLog(models.Model):
+    """Computed 4-punch result per staff employee per day."""
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="daily_shift_logs"
+    )
+    date = models.DateField()
+    shift = models.ForeignKey(
+        ShiftTemplate, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="shift_id", related_name="daily_logs"
+    )
+    punch1 = models.TimeField(null=True, blank=True)   # morning IN
+    punch2 = models.TimeField(null=True, blank=True)   # lunch OUT
+    punch3 = models.TimeField(null=True, blank=True)   # lunch IN (return)
+    punch4 = models.TimeField(null=True, blank=True)   # evening OUT
+    total_punches = models.IntegerField(default=0)
+    first_half = models.BooleanField(default=False)
+    second_half = models.BooleanField(default=False)
+    shifts_completed = models.DecimalField(max_digits=3, decimal_places=2, default=0)
+    late_morning = models.BooleanField(default=False)
+    late_return = models.BooleanField(default=False)
+    late_reason = models.TextField(null=True, blank=True)
+    computed_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "daily_shift_logs"
+        unique_together = [["employee", "date"]]
+
+
+class MonthlyShiftSummary(models.Model):
+    """Aggregated late + shift summary per employee per month, used by payroll."""
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="monthly_shift_summaries"
+    )
+    year = models.IntegerField()
+    month = models.IntegerField()
+    total_shifts = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    total_late_count = models.IntegerField(default=0)
+    permissions_used = models.IntegerField(default=0)       # of 3 free
+    billable_late_count = models.IntegerField(default=0)    # after 3 free
+    shift_deductions = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    salary_deduction_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "monthly_shift_summaries"
+        unique_together = [["employee", "year", "month"]]
 
 
 class SessionConfig(models.Model):
@@ -832,6 +949,8 @@ class PayrollSettings(models.Model):
     slip_company_address = models.TextField(default="TIRUPUR", db_column="slip_company_address")
     min_wage_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="min_wage_rate")
     signature_image = models.TextField(null=True, blank=True, db_column="signature_image")
+    company_logo = models.TextField(null=True, blank=True, db_column="company_logo")
+    authorized_signature = models.TextField(null=True, blank=True, db_column="authorized_signature")
 
     # ── SMTP / Email ──────────────────────────────────────────────────────
     smtp_host = models.TextField(default="smtp.gmail.com", db_column="smtp_host")
@@ -881,6 +1000,7 @@ class DepartmentManager(models.Model):
     )
     can_approve_leaves = models.BooleanField(default=True, db_column="can_approve_leaves")
     can_approve_permissions = models.BooleanField(default=True, db_column="can_approve_permissions")
+    can_approve_resignations = models.BooleanField(default=True, db_column="can_approve_resignations")
     is_active = models.BooleanField(default=True, db_column="is_active")
     notes = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")

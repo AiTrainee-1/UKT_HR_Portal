@@ -45,7 +45,7 @@ const sessionConfigSchema = z.object({
 
 export default function Salary() {
   const { toast } = useToast();
-  const { data: employees } = useListEmployees({});
+  const { data: employees } = useListEmployees({ status: "active" });
   
   // Tabs
   const [activeTab, setActiveTab] = useState<"payroll" | "punches" | "sessions" | "configs">("payroll");
@@ -62,6 +62,10 @@ export default function Salary() {
   const [sessions, setSessions] = useState<any[]>([]);
   const [configs, setConfigs] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // Generate Payroll dialog month/year (separate from display filter)
+  const [genMonth, setGenMonth] = useState(String(new Date().getMonth() + 1));
+  const [genYear, setGenYear] = useState(String(new Date().getFullYear()));
 
   // Dialog open states
   const [runPayrollOpen, setRunPayrollOpen] = useState(false);
@@ -99,10 +103,12 @@ export default function Salary() {
   });
 
   // Fetch functions using customFetch
-  const fetchPayrolls = async () => {
+  const fetchPayrolls = async (overrideMonth?: string, overrideYear?: string) => {
     try {
       setLoading(true);
-      let url = `/api/payroll?month=${monthFilter}&year=${yearFilter}`;
+      const m = overrideMonth ?? monthFilter;
+      const y = overrideYear ?? yearFilter;
+      let url = `/api/payroll?month=${m}&year=${y}`;
       if (empFilter !== "all") url += `&employeeId=${empFilter}`;
       if (statusFilter !== "all") url += `&status=${statusFilter}`;
       const data = await customFetch<any[]>(url);
@@ -165,13 +171,16 @@ export default function Salary() {
       setLoading(true);
       const res = await customFetch<any>("/api/payroll/generate", {
         method: "POST",
-        body: JSON.stringify({ month: Number(monthFilter), year: Number(yearFilter) }),
+        body: JSON.stringify({ month: Number(genMonth), year: Number(genYear) }),
       });
       toast({
         title: "Success",
         description: res.message || "Payroll generated successfully.",
       });
-      fetchPayrolls();
+      // Switch display filter to the generated month and fetch immediately
+      setMonthFilter(genMonth);
+      setYearFilter(genYear);
+      fetchPayrolls(genMonth, genYear);
       setRunPayrollOpen(false);
     } catch (err: any) {
       toast({
@@ -396,7 +405,7 @@ export default function Salary() {
           
           <div className="flex flex-wrap gap-2">
             {activeTab === "payroll" && (
-              <Button onClick={() => setRunPayrollOpen(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition duration-200">
+              <Button onClick={() => { setGenMonth(monthFilter); setGenYear(yearFilter); setRunPayrollOpen(true); }} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition duration-200">
                 <Cpu size={16} className="mr-2 animate-pulse" />
                 Generate Period Payroll
               </Button>
@@ -936,9 +945,39 @@ export default function Salary() {
               Automated Payroll Processing
             </DialogTitle>
           </DialogHeader>
-          <div className="py-4 space-y-3">
+          <div className="py-4 space-y-4">
+            <div className="flex gap-3">
+              <div className="flex-1">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Payroll Month</label>
+                <Select value={genMonth} onValueChange={setGenMonth}>
+                  <SelectTrigger className="font-medium">
+                    <SelectValue placeholder="Month" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: 12 }, (_, i) => (
+                      <SelectItem key={i+1} value={String(i+1)}>
+                        {new Date(2000, i).toLocaleDateString("en-US", { month: "long" })}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Year</label>
+                <Select value={genYear} onValueChange={setGenYear}>
+                  <SelectTrigger className="w-28 font-medium">
+                    <SelectValue placeholder="Year" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {["2025", "2026", "2027", "2028"].map(yr => (
+                      <SelectItem key={yr} value={yr}>{yr}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
             <p className="text-sm text-slate-500">
-              Run calculations for all active employees for <strong>{new Date(2000, Number(monthFilter)-1).toLocaleDateString("en-US", { month: "long" })} {yearFilter}</strong>.
+              Run calculations for all active employees for <strong>{new Date(2000, Number(genMonth)-1).toLocaleDateString("en-US", { month: "long" })} {genYear}</strong>.
             </p>
             <div className="bg-slate-50 p-3 rounded-lg border text-xs text-slate-600 space-y-1.5">
               <div>• <strong>Monthly Staff:</strong> Pro-rated salary = (Base / 26) * present days</div>

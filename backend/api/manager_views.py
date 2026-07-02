@@ -8,6 +8,7 @@ from .auth import require_hr, require_auth, get_token_employee_id
 from .models import (
     Employee, Department,
     DepartmentManager, ManagerDepartmentAssignment, ManagerEmployeeAssignment,
+    ResignationRequest,
 )
 
 
@@ -28,6 +29,7 @@ def _manager_json(m, include_assignments=False):
         "designation": emp.designation.title if emp.designation_id and emp.designation else None,
         "canApproveLeaves": m.can_approve_leaves,
         "canApprovePermissions": m.can_approve_permissions,
+        "canApproveResignations": m.can_approve_resignations,
         "isActive": m.is_active,
         "notes": m.notes,
         "createdAt": m.created_at.isoformat() if m.created_at else None,
@@ -99,6 +101,7 @@ def department_managers(request: Request) -> Response:
         employee=emp,
         can_approve_leaves=bool(data.get("canApproveLeaves", True)),
         can_approve_permissions=bool(data.get("canApprovePermissions", True)),
+        can_approve_resignations=bool(data.get("canApproveResignations", True)),
         notes=data.get("notes"),
     )
     return Response(_manager_json(m, include_assignments=True), status=201)
@@ -130,6 +133,8 @@ def department_manager_detail(request: Request, pk: int) -> Response:
         m.can_approve_leaves = bool(data["canApproveLeaves"])
     if "canApprovePermissions" in data:
         m.can_approve_permissions = bool(data["canApprovePermissions"])
+    if "canApproveResignations" in data:
+        m.can_approve_resignations = bool(data["canApproveResignations"])
     if "isActive" in data:
         m.is_active = bool(data["isActive"])
     if "notes" in data:
@@ -245,15 +250,22 @@ def manager_me(request: Request) -> Response:
     if dept_ids:
         emp_filter |= Q(employee__department_id__in=dept_ids)
 
-    pending_count = (
-        LeaveRequest.objects.filter(emp_filter, status="pending").count()
-        + EmployeePermission.objects.filter(emp_filter, status="pending").count()
+    pending_leaves = LeaveRequest.objects.filter(emp_filter, status="pending").count()
+    pending_perms = EmployeePermission.objects.filter(emp_filter, status="pending").count()
+    pending_resignations = (
+        ResignationRequest.objects.filter(emp_filter, status="pending").count()
+        if m.can_approve_resignations else 0
     )
+    pending_count = pending_leaves + pending_perms + pending_resignations
 
     return Response({
         "isManager": True,
         "canSubmitLeave": True,
+        "canApproveResignations": m.can_approve_resignations,
         "pendingApprovalsCount": pending_count,
+        "pendingLeavesCount": pending_leaves,
+        "pendingPermissionsCount": pending_perms,
+        "pendingResignationsCount": pending_resignations,
         **_manager_json(m, include_assignments=True),
     })
 
@@ -327,12 +339,24 @@ def manager_pending_requests(request: Request) -> Response:
         }
         return data
 
+    from .recruitment_views import _resignation_json
+    resign_qs = ResignationRequest.objects.select_related(
+        "employee", "employee__department", "employee__designation", "dept_head"
+    ).filter(emp_filter)
+    if status_filter != "all" and m.can_approve_resignations:
+        resign_qs = resign_qs.filter(status=status_filter)
+    elif not m.can_approve_resignations:
+        resign_qs = ResignationRequest.objects.none()
+    resign_qs = resign_qs.order_by("-created_at")
+
     return Response({
         "leaveRequests": [_leave_with_emp(r) for r in leave_qs],
         "permissions": [_perm_with_emp(p) for p in perm_qs],
+        "resignations": [_resignation_json(r) for r in resign_qs],
         "totalPending": (
             LeaveRequest.objects.filter(emp_filter, status="pending").count()
             + EmployeePermission.objects.filter(emp_filter, status="pending").count()
+            + (ResignationRequest.objects.filter(emp_filter, status="pending").count() if m.can_approve_resignations else 0)
         ),
     })
 

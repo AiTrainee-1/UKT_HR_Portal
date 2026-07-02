@@ -143,7 +143,7 @@ function DeptCard({
   const assignMutation = useAssignEmployee();
 
   const { data: employees, isLoading: empLoading } = useListEmployees(
-    { departmentId: dept.id } as any,
+    { departmentId: dept.id, status: "active" } as any,
     { query: { enabled: expanded } } as any,
   );
 

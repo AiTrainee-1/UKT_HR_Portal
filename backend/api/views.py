@@ -152,7 +152,9 @@ def auth_me(request: Request) -> Response:
 def departments(request: Request) -> Response:
     if request.method == "GET":
         rows = (
-            Department.objects.annotate(employee_count=Count("employees"))
+            Department.objects.annotate(
+                employee_count=Count("employees", filter=Q(employees__status="active"))
+            )
             .order_by("id")
             .values("id", "name", "description", "employee_count")
         )
@@ -186,7 +188,7 @@ def delete_department(request: Request, pk: int) -> Response:
         return _error("Department not found", 404)
 
     if request.method == "GET":
-        emp_count = dept.employees.count()
+        emp_count = dept.employees.filter(status="active").count()
         return Response(department_json(dept, emp_count))
 
     dept.delete()
@@ -278,6 +280,7 @@ def _employees_create(request: Request) -> Response:
         join_date=data.get("joinDate"),
         father_name=data.get("fatherName"),
         mother_name=data.get("motherName"),
+        biometric_device_id=data.get("biometricDeviceId"),
     )
     # Auto-assign production shift if applicable
     from .shift_views import auto_assign_production_shift
@@ -355,6 +358,7 @@ def _employee_update(request: Request, pk: int) -> Response:
         "joinDate": "join_date",
         "fatherName": "father_name",
         "motherName": "mother_name",
+        "biometricDeviceId": "biometric_device_id",
     }
     for json_key, model_key in field_map.items():
         if json_key in request.data:

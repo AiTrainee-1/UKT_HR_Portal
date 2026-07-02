@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
+import { useLocation } from "wouter";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -26,6 +27,7 @@ import EmployeeSearchSelect from "@/components/EmployeeSearchSelect";
 import {
   Users, UserCheck, UserX, Clock, CalendarDays, Plus,
   Factory, Briefcase, Fingerprint, PenLine, ChevronRight, RefreshCw,
+  Search, ChevronDown, ClipboardList, AlertTriangle, CheckCircle2, XCircle,
 } from "lucide-react";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -221,6 +223,7 @@ function EmployeeTable({
 export default function AttendancePage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [, navigate] = useLocation();
 
   const [selectedDate, setSelectedDate] = useState(today());
   const [selectedMonth, setSelectedMonth] = useState(currentMonth());
@@ -239,20 +242,47 @@ export default function AttendancePage() {
 
   const [detailEmpId, setDetailEmpId] = useState<number | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [syncMode, setSyncMode] = useState<"today" | "days3" | "days7" | "month" | "prevmonth" | "all">("today");
+  const [showSyncMenu, setShowSyncMenu] = useState(false);
+  const [historySearch, setHistorySearch] = useState("");
+  const syncMenuRef = useRef<HTMLDivElement>(null);
 
   const { data: employees } = useListEmployees({ status: "active" });
 
   const syncMutation = useSyncBiometric();
 
-  const handleSync = async () => {
+  const SYNC_MODES = [
+    { key: "today",     label: "Today only" },
+    { key: "days3",     label: "Last 3 days" },
+    { key: "days7",     label: "Last 7 days" },
+    { key: "month",     label: "This month" },
+    { key: "prevmonth", label: "Previous month" },
+    { key: "all",       label: "All records (first-time import)" },
+  ] as const;
+
+  const syncModeLabel = SYNC_MODES.find(m => m.key === syncMode)?.label ?? "Today only";
+
+  const handleSync = async (modeOverride?: string) => {
+    const mode = modeOverride ?? syncMode;
+    setShowSyncMenu(false);
     try {
-      const result = await syncMutation.mutateAsync("today");
+      const result = await syncMutation.mutateAsync(mode as any);
       if (result.ok) {
         setLastSyncedAt(new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }));
-        toast({ title: `Sync complete — ${result.created ?? 0} new records` });
+        const unmatched: string[] = result.unmatchedDeviceIds ?? [];
+        toast({
+          title: `Sync complete — ${result.created ?? 0} new records`,
+          description: unmatched.length > 0
+            ? `⚠ ${unmatched.length} device ID(s) had no matching employee: ${unmatched.join(", ")}. Fix enrollment IDs to match employee codes.`
+            : undefined,
+          variant: unmatched.length > 0 ? "destructive" : "default",
+        });
         queryClient.invalidateQueries({ queryKey: getAttendanceSummaryQueryKey(selectedDate) });
         queryClient.invalidateQueries({ queryKey: getAttendanceDailyQueryKey(selectedDate) });
         queryClient.invalidateQueries({ queryKey: getAttendanceMonthlyTrendQueryKey(selectedYear, selectedMonth) });
+        if (detailEmpId) {
+          queryClient.invalidateQueries({ queryKey: ["attendance-employee", detailEmpId] });
+        }
       } else {
         toast({ title: "Sync failed", description: result.error ?? "Device unreachable", variant: "destructive" });
       }
@@ -339,18 +369,45 @@ export default function AttendancePage() {
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            <Button
-              variant="outline"
-              onClick={handleSync}
-              disabled={syncMutation.isPending}
-              className="gap-2 h-9 border-cyan-200 text-cyan-700 hover:bg-cyan-50"
-            >
-              <RefreshCw size={14} className={syncMutation.isPending ? "animate-spin" : ""} />
-              {syncMutation.isPending ? "Syncing…" : "Auto Sync"}
-              {lastSyncedAt && !syncMutation.isPending && (
-                <span className="text-[10px] text-cyan-500 font-normal">· {lastSyncedAt}</span>
+            {/* Sync split-button */}
+            <div ref={syncMenuRef} className="relative flex items-center">
+              <Button
+                variant="outline"
+                onClick={() => handleSync()}
+                disabled={syncMutation.isPending}
+                className="gap-2 h-9 border-cyan-200 text-cyan-700 hover:bg-cyan-50 rounded-r-none border-r-0"
+              >
+                <RefreshCw size={14} className={syncMutation.isPending ? "animate-spin" : ""} />
+                {syncMutation.isPending ? "Syncing…" : "Sync Biometric"}
+                {lastSyncedAt && !syncMutation.isPending && (
+                  <span className="text-[10px] text-cyan-500 font-normal">· {lastSyncedAt}</span>
+                )}
+              </Button>
+              <button
+                onClick={() => setShowSyncMenu(v => !v)}
+                className="h-9 px-2 border border-l-0 border-cyan-200 rounded-r-md text-cyan-700 hover:bg-cyan-50 flex items-center"
+                title={syncModeLabel}
+              >
+                <ChevronDown size={13} />
+              </button>
+              {showSyncMenu && (
+                <div className="absolute top-full right-0 mt-1 z-50 bg-white border rounded-xl shadow-lg overflow-hidden min-w-[200px]">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400 px-3 pt-2.5 pb-1">Sync range</p>
+                  {SYNC_MODES.map(m => (
+                    <button
+                      key={m.key}
+                      onClick={() => { setSyncMode(m.key); handleSync(m.key); }}
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-cyan-50 transition-colors ${
+                        syncMode === m.key ? "text-cyan-700 font-semibold bg-cyan-50" : "text-gray-700"
+                      }`}
+                    >
+                      {m.label}
+                      {m.key === "all" && <span className="block text-[10px] text-amber-500">⚠ May take a long time</span>}
+                    </button>
+                  ))}
+                </div>
               )}
-            </Button>
+            </div>
             <Input
               type="date"
               value={selectedDate}
@@ -501,6 +558,25 @@ export default function AttendancePage() {
           </Card>
         </div>
 
+        {/* ── Report Log Card ── */}
+        <Card
+          className="border border-dashed border-indigo-200 bg-indigo-50/30 cursor-pointer hover:bg-indigo-50/60 transition-colors"
+          onClick={() => navigate("/hr/attendance/report-log")}
+        >
+          <CardContent className="p-4 flex items-center gap-4">
+            <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center shrink-0">
+              <ClipboardList size={18} className="text-white" />
+            </div>
+            <div className="flex-1">
+              <p className="font-bold text-gray-900 text-sm">Report Log</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                View daily 4-punch breakdown, shift completion, late detection, and monthly late penalty summary
+              </p>
+            </div>
+            <ChevronRight size={16} className="text-gray-400 shrink-0" />
+          </CardContent>
+        </Card>
+
         {/* ── Employee Table ── */}
         <Card className="border">
           <CardHeader className="pb-0 pt-4 px-4">
@@ -562,6 +638,8 @@ export default function AttendancePage() {
         </Card>
 
       </div>
+
+      {/* ── Report Log is a full page at /hr/attendance/report-log ── */}
 
       {/* ── Manual Attendance Dialog ── */}
       <Dialog open={showManualDialog} onOpenChange={setShowManualDialog}>
@@ -643,13 +721,72 @@ export default function AttendancePage() {
       </Dialog>
 
       {/* ── Employee Detail Dialog ── */}
-      <Dialog open={!!detailEmpId} onOpenChange={(open) => { if (!open) setDetailEmpId(null); }}>
+      <Dialog open={!!detailEmpId} onOpenChange={(open) => { if (!open) { setDetailEmpId(null); setHistorySearch(""); } }}>
         <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
           <DialogHeader>
             <DialogTitle>
               {empDetail ? `${empDetail.employee.name} — Attendance History` : "Attendance History"}
             </DialogTitle>
           </DialogHeader>
+
+          {/* Direct employee-code search */}
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+              <Input
+                className="pl-8 h-8 text-xs"
+                placeholder="Search by employee code or name…"
+                value={historySearch}
+                onChange={e => setHistorySearch(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === "Enter") {
+                    const q = historySearch.trim().toLowerCase();
+                    const found = (employees ?? []).find(
+                      emp => emp.employeeCode.toLowerCase() === q ||
+                             `${emp.firstName} ${emp.lastName}`.toLowerCase().includes(q)
+                    );
+                    if (found) { setDetailEmpId(found.id); setHistorySearch(""); }
+                  }
+                }}
+              />
+            </div>
+            {historySearch.trim() && (() => {
+              const q = historySearch.trim().toLowerCase();
+              const matches = (employees ?? []).filter(
+                emp => emp.employeeCode.toLowerCase().includes(q) ||
+                       `${emp.firstName} ${emp.lastName}`.toLowerCase().includes(q)
+              ).slice(0, 5);
+              return matches.length > 0 ? (
+                <div className="absolute z-50 mt-8 left-6 right-6 bg-white border rounded-xl shadow-lg overflow-hidden">
+                  {matches.map(emp => (
+                    <button
+                      key={emp.id}
+                      className="w-full flex items-center gap-2 px-3 py-2 hover:bg-gray-50 text-left text-sm"
+                      onClick={() => { setDetailEmpId(emp.id); setHistorySearch(""); }}
+                    >
+                      <span className="font-mono text-xs text-gray-400 w-16 shrink-0">{emp.employeeCode}</span>
+                      <span className="font-medium">{emp.firstName} {emp.lastName}</span>
+                      {emp.departmentName && <span className="text-xs text-gray-400 ml-auto">{emp.departmentName}</span>}
+                    </button>
+                  ))}
+                </div>
+              ) : null;
+            })()}
+            <select
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(Number(e.target.value))}
+              className="h-8 rounded-md border px-2 text-xs bg-background"
+            >
+              {MONTH_NAMES.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+            </select>
+            <Input
+              type="number"
+              value={selectedYear}
+              onChange={(e) => setSelectedYear(Number(e.target.value))}
+              className="w-20 h-8 text-xs"
+              min={2020} max={2030}
+            />
+          </div>
 
           {empDetailLoading ? (
             <div className="space-y-3 py-4">
@@ -667,25 +804,10 @@ export default function AttendancePage() {
                 <span className="flex gap-3 ml-auto">
                   <span className="text-green-700 font-semibold">{empDetail.totalPresent} Present</span>
                   <span className="text-red-600 font-semibold">{empDetail.totalAbsent} Absent</span>
+                  {empDetail.summary.onLeave > 0 && (
+                    <span className="text-purple-600 font-semibold">{empDetail.summary.onLeave} On Leave</span>
+                  )}
                 </span>
-              </div>
-
-              {/* Filter controls */}
-              <div className="flex items-center gap-2 flex-wrap">
-                <select
-                  value={selectedMonth}
-                  onChange={(e) => setSelectedMonth(Number(e.target.value))}
-                  className="h-8 rounded-md border px-2 text-xs bg-background"
-                >
-                  {MONTH_NAMES.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
-                </select>
-                <Input
-                  type="number"
-                  value={selectedYear}
-                  onChange={(e) => setSelectedYear(Number(e.target.value))}
-                  className="w-20 h-8 text-xs"
-                  min={2020} max={2030}
-                />
               </div>
 
               {/* Records table */}

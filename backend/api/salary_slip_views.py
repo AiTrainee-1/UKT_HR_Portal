@@ -220,6 +220,8 @@ def _render_slip_html(s: SalarySlip, ps: PayrollSettings) -> str:
 
 
 def _num_to_words(n: int) -> str:
+    if n < 0:
+        return "Rs. ZERO"
     ones = ["","ONE","TWO","THREE","FOUR","FIVE","SIX","SEVEN","EIGHT","NINE","TEN",
             "ELEVEN","TWELVE","THIRTEEN","FOURTEEN","FIFTEEN","SIXTEEN","SEVENTEEN","EIGHTEEN","NINETEEN"]
     tens = ["","","TWENTY","THIRTY","FORTY","FIFTY","SIXTY","SEVENTY","EIGHTY","NINETY"]

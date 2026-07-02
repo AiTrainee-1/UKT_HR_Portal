@@ -25,7 +25,11 @@ import Leave from "@/pages/hr/Leave";
 import Salary from "@/pages/hr/Salary";
 import HrNotifications from "@/pages/hr/Notifications";
 import Interviews from "@/pages/hr/Interviews";
+import RecruitmentDashboard from "@/pages/hr/recruitment/RecruitmentDashboard";
+import Resignations from "@/pages/hr/recruitment/Resignations";
+import RequiredRoles from "@/pages/hr/recruitment/RequiredRoles";
 import Attendance from "@/pages/hr/Attendance";
+import AttendanceReportLog from "@/pages/hr/AttendanceReportLog";
 import Departments from "@/pages/hr/Departments";
 import Designations from "@/pages/hr/Designations";
 import Branches from "@/pages/hr/Branches";
@@ -154,6 +158,9 @@ function Router() {
       <Route path="/hr/branches">
         {() => <ProtectedRoute component={Branches} allowedRoles={["hr"]} />}
       </Route>
+      <Route path="/hr/attendance/report-log">
+        {() => <ProtectedRoute component={AttendanceReportLog} allowedRoles={["hr"]} />}
+      </Route>
       <Route path="/hr/attendance">
         {() => <ProtectedRoute component={Attendance} allowedRoles={["hr"]} />}
       </Route>
@@ -195,6 +202,15 @@ function Router() {
       </Route>
       <Route path="/hr/interviews">
         {() => <ProtectedRoute component={Interviews} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/recruitment/dashboard">
+        {() => <ProtectedRoute component={RecruitmentDashboard} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/recruitment/resignations">
+        {() => <ProtectedRoute component={Resignations} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/recruitment/required-roles">
+        {() => <ProtectedRoute component={RequiredRoles} allowedRoles={["hr"]} />}
       </Route>
 
       {/* ── Employee Routes ───────────────────────────────────── */}

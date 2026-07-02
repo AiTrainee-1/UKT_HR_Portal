@@ -45,6 +45,7 @@ const schema = z.object({
   idProof: z.string().optional(),
   fatherName: z.string().optional(),
   motherName: z.string().optional(),
+  biometricDeviceId: z.string().optional(),
 });
 
 type FormData = z.infer<typeof schema>;
@@ -99,6 +100,7 @@ export default function EditEmployee() {
         idProof: employee.idProof ?? "",
         fatherName: (employee as any).fatherName ?? "",
         motherName: (employee as any).motherName ?? "",
+        biometricDeviceId: (employee as any).biometricDeviceId ?? "",
       });
     }
   }, [employee, form]);
@@ -130,6 +132,7 @@ export default function EditEmployee() {
           idProof: data.idProof || undefined,
           fatherName: data.fatherName || undefined,
           motherName: data.motherName || undefined,
+          biometricDeviceId: data.biometricDeviceId || undefined,
         } as any,
       },
       {
@@ -313,6 +316,27 @@ export default function EditEmployee() {
                 )} />
                 <FormField control={form.control} name="salaryAmount" render={({ field }) => (
                   <FormItem><FormLabel>Amount (₹) *</FormLabel><FormControl><Input type="number" data-testid="input-salary-amount" {...field} /></FormControl><FormMessage /></FormItem>
+                )} />
+              </CardContent>
+            </Card>
+
+            {/* Biometric Device */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground">Biometric Device</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <FormField control={form.control} name="biometricDeviceId" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Device Enrollment ID</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g. 001 or 1570 — the ID used on the eSSL device" {...field} />
+                    </FormControl>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Enter the exact User ID this employee was enrolled with on the biometric device. Check the device: Main Menu → User Mgt → All Users.
+                    </p>
+                    <FormMessage />
+                  </FormItem>
                 )} />
               </CardContent>
             </Card>

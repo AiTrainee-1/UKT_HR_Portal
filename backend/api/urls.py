@@ -28,6 +28,13 @@ from .org_views import (
     branches, branch_detail,
     designations, designation_detail,
 )
+from .recruitment_views import (
+    recruitment_dashboard,
+    resignations, my_resignation, resignation_action, resignation_delete,
+    manager_resignation_action, manager_pending_resignations,
+    resignation_pdf, resignation_email,
+    department_headcount, department_headcount_detail,
+)
 from .manager_views import (
     department_managers, department_manager_detail,
     manager_department_assignments, manager_employee_assignments,
@@ -44,7 +51,8 @@ from .reports_views import (
 from .attendance_views import (
     attendance_summary, attendance_daily, attendance_monthly_trend,
     attendance_employee_history, biometric_punch, manual_attendance,
-    sync_biometric_api,
+    sync_biometric_api, attendance_report_log, compute_shift_logs,
+    attendance_late_summary, employee_shift_monthly_stats,
 )
 from .payroll_views import (
     session_configs, session_config_detail,
@@ -129,6 +137,17 @@ urlpatterns = [
     path("jobs/<int:pk>", views.job_detail),
     path("applicants", views.applicants),
     path("applicants/<int:pk>/status", views.update_applicant_status),
+    path("recruitment/dashboard", recruitment_dashboard),
+    path("recruitment/resignations", resignations),
+    path("recruitment/resignations/<int:pk>/action", resignation_action),
+    path("recruitment/resignations/<int:pk>/delete", resignation_delete),
+    path("recruitment/resignations/<int:pk>/pdf", resignation_pdf),
+    path("recruitment/resignations/<int:pk>/email", resignation_email),
+    path("recruitment/department-headcount", department_headcount),
+    path("recruitment/department-headcount/<int:pk>", department_headcount_detail),
+    path("my/resignation", my_resignation),
+    path("manager/resignations", manager_pending_resignations),
+    path("manager/resignations/<int:pk>/action", manager_resignation_action),
 
     # ── Attendance ──────────────────────────────────────────────────────────
     path("attendance", views.attendance),
@@ -138,6 +157,10 @@ urlpatterns = [
     path("attendance/employee/<int:pk>", attendance_employee_history),
     path("attendance/manual", manual_attendance),
     path("attendance/sync-biometric", sync_biometric_api),
+    path("attendance/report-log", attendance_report_log),
+    path("attendance/compute-shifts", compute_shift_logs),
+    path("attendance/late-summary", attendance_late_summary),
+    path("attendance/employee-shift-stats", employee_shift_monthly_stats),
     path("biometric/punch", biometric_punch),
 
     # ── Dashboard ───────────────────────────────────────────────────────────

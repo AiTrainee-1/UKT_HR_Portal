@@ -56,6 +56,10 @@ def shift_json(shift):
         "endTime": shift.end_time.strftime("%H:%M") if shift.end_time else None,
         "genderRule": shift.gender_rule,
         "gracePeriodMinutes": shift.grace_period_minutes,
+        # Staff 4-punch fields
+        "firstHalfEnd": shift.first_half_end.strftime("%H:%M") if shift.first_half_end else None,
+        "lunchDurationMinutes": shift.lunch_duration_minutes,
+        "lunchGraceMinutes": shift.lunch_grace_minutes,
         "departmentId": shift.department_id,
         "departmentName": shift.department.name if shift.department else None,
         "isDefault": shift.is_default,
@@ -128,6 +132,7 @@ def shift_templates(request: Request) -> Response:
         if not data.get(field):
             return Response({"error": f"{field} is required"}, status=400)
 
+    first_half_end_raw = data.get("firstHalfEnd")
     shift = ShiftTemplate.objects.create(
         name=data["name"],
         shift_type=data["shiftType"],
@@ -135,6 +140,9 @@ def shift_templates(request: Request) -> Response:
         end_time=data["endTime"],
         gender_rule=data.get("genderRule", "all"),
         grace_period_minutes=int(data.get("gracePeriodMinutes", 15)),
+        first_half_end=first_half_end_raw if first_half_end_raw else None,
+        lunch_duration_minutes=int(data.get("lunchDurationMinutes", 60)),
+        lunch_grace_minutes=int(data.get("lunchGraceMinutes", 10)),
         department_id=data.get("departmentId"),
         is_default=bool(data.get("isDefault", False)),
     )
@@ -161,9 +169,14 @@ def shift_template_detail(request: Request, pk: int) -> Response:
             ("endTime", "end_time"), ("genderRule", "gender_rule"),
             ("gracePeriodMinutes", "grace_period_minutes"), ("departmentId", "department_id"),
             ("isDefault", "is_default"), ("isActive", "is_active"),
+            ("lunchDurationMinutes", "lunch_duration_minutes"),
+            ("lunchGraceMinutes", "lunch_grace_minutes"),
         ]:
             if field in data:
                 setattr(shift, attr, data[field])
+        if "firstHalfEnd" in data:
+            raw = data["firstHalfEnd"]
+            shift.first_half_end = raw if raw else None
         shift.save()
         shift.refresh_from_db()
         return Response(shift_json(shift))
@@ -187,6 +200,7 @@ def shift_assignments(request: Request) -> Response:
         qs = (
             EmployeeShiftAssignment.objects
             .select_related("employee__department", "employee__designation", "shift")
+            .filter(employee__status="active")
             .order_by("shift__name", "employee__first_name")
         )
         if emp_id:
@@ -275,8 +289,11 @@ def bulk_shift_assignments(request: Request) -> Response:
     if employment_type:
         qs = qs.filter(employment_type=employment_type)
 
-    if gender_rule and gender_rule != "all":
-        qs = qs.filter(gender=gender_rule)
+    # Enforce gender rule: use the caller's override first, then fall back to
+    # the shift template's own gender_rule so assignments never cross genders.
+    effective_gender_rule = gender_rule if (gender_rule and gender_rule != "all") else shift.gender_rule
+    if effective_gender_rule and effective_gender_rule != "all":
+        qs = qs.filter(gender=effective_gender_rule)
 
     from datetime import time as time_type
 

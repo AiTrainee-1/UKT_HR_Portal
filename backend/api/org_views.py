@@ -1,4 +1,4 @@
-from django.db.models import Count
+from django.db.models import Count, Q
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -92,7 +92,7 @@ def designations(request: Request) -> Response:
     if request.method == "GET":
         dept_id = request.query_params.get("departmentId")
         qs = Designation.objects.select_related("department").annotate(
-            employee_count=Count("employees")
+            employee_count=Count("employees", filter=Q(employees__status="active"))
         ).order_by("title")
         if dept_id:
             qs = qs.filter(department_id=dept_id)
@@ -119,7 +119,7 @@ def designation_detail(request: Request, pk: int) -> Response:
         return Response({"error": "Designation not found"}, status=404)
 
     if request.method == "GET":
-        emp_count = d.employees.count()
+        emp_count = d.employees.filter(status="active").count()
         return Response(designation_json(d, emp_count))
 
     if request.method == "PUT":
@@ -130,7 +130,7 @@ def designation_detail(request: Request, pk: int) -> Response:
             if field in data:
                 setattr(d, attr, data[field])
         d.save()
-        emp_count = d.employees.count()
+        emp_count = d.employees.filter(status="active").count()
         return Response(designation_json(d, emp_count))
 
     d.delete()

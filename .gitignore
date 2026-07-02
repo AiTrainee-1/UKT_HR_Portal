@@ -37,3 +37,8 @@ secrets.txt
 # Django
 backend/db.sqlite3
 backend/staticfiles/
+
+# Server runtime — environment-specific, not version-controlled
+nginx/
+cloudflared/
+www/

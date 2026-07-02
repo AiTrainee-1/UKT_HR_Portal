@@ -60,13 +60,12 @@ export type AdvanceRepaymentItem = {
   month: number;
   year: number;
   amount: number;
-  paymentMethod: "cash" | "gpay";
+  paymentMethod: "cash" | "gpay" | "payroll";
+  isProcessed: boolean;
   payrollRunId?: number | null;
   notes?: string | null;
   createdAt?: string | null;
 };
-
-export type OverdueMonth = { year: number; month: number; label: string };
 
 export type Advance = {
   id: number;
@@ -86,6 +85,7 @@ export type Advance = {
   disbursedAt?: string | null;
   repaymentStartMonth?: number | null;
   repaymentStartYear?: number | null;
+  repaymentMonths?: number | null;
   emiAmount: number;
   totalRepaid: number;
   outstanding: number;
@@ -93,7 +93,6 @@ export type Advance = {
   createdAt?: string | null;
   updatedAt?: string | null;
   repayments?: AdvanceRepaymentItem[];
-  overdueMonths?: OverdueMonth[];
 };
 
 export type Role = {
@@ -360,8 +359,9 @@ export const useCreateAdvance = () =>
       employeeId: number;
       advanceType: string;
       amount: number;
-      purpose: string;
-      emiAmount: number;
+      purpose?: string;
+      emiAmount?: number;
+      repaymentMonths?: number;
       repaymentStartMonth?: number;
       repaymentStartYear?: number;
       notes?: string;
@@ -370,6 +370,12 @@ export const useCreateAdvance = () =>
         method: "POST",
         body: JSON.stringify(data),
       }),
+  });
+
+export const useDeleteAdvance = () =>
+  useMutation({
+    mutationFn: (id: number) =>
+      customFetch<void>(`/api/advances/${id}`, { method: "DELETE" }),
   });
 
 export const useUpdateAdvance = () =>
@@ -555,7 +561,7 @@ export const useSearchEmployees = (search: string, enabled = true) =>
   useQuery({
     queryKey: getSearchEmployeesQueryKey(search),
     queryFn: () => {
-      const qs = new URLSearchParams({ search });
+      const qs = new URLSearchParams({ search, status: "active" });
       return customFetch<import("./generated/api.schemas").Employee[]>(`/api/employees?${qs}`);
     },
     enabled: enabled && search.trim().length >= 2,
@@ -801,8 +807,13 @@ export type AttendanceEmployeeHistory = {
     designation?: string | null;
     employmentType: string;
   };
+  month: number;
+  year: number;
+  summary: { present: number; absent: number; onLeave: number; late: number };
   records: {
     date: string;
+    day: string;
+    status: string;
     present: boolean;
     firstPunch?: string | null;
     lastPunch?: string | null;
@@ -811,6 +822,7 @@ export type AttendanceEmployeeHistory = {
     hoursWorked?: string | null;
     source?: string | null;
     notes?: string | null;
+    leaveType?: string | null;
   }[];
   totalPresent: number;
   totalAbsent: number;
@@ -979,15 +991,147 @@ export type SyncResult = {
   output?: string;
   syncedAt?: string;
   error?: string;
+  unmatchedDeviceIds?: string[];
+};
+
+// ── Report Log types ──────────────────────────────────────────────────────────
+
+export type ShiftLogEntry = {
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department?: string | null;
+  designation?: string | null;
+  employmentType: string;
+  date: string;
+  shiftName?: string | null;
+  punch1?: string | null;   // morning IN
+  punch2?: string | null;   // lunch OUT
+  punch3?: string | null;   // lunch IN
+  punch4?: string | null;   // evening OUT
+  totalPunches: number;
+  firstHalf: boolean;
+  secondHalf: boolean;
+  shiftsCompleted: string;  // Decimal as string, e.g. "1.00"
+  lateMorning: boolean;
+  lateReturn: boolean;
+  lateReason?: string | null;
+  computedAt?: string | null;
+};
+
+export type LateSummaryEmployee = {
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department?: string | null;
+  totalShifts: string;
+  halfShiftDays: number;
+  totalLateCount: number;
+  permissionsUsed: number;
+  billableLateCount: number;
+  shiftDeductions: string;
+  salaryDeductionAmount: string;
+};
+
+export type EmployeeShiftMonthlyStats = {
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department?: string | null;
+  designation?: string | null;
+  month: number;
+  year: number;
+  presentDays: number;
+  halfShiftDays: number;
+  fullShiftDays: number;
+  totalEffectiveShifts: string;
+  lateMorningDays: number;
+  lateReturnDays: number;
+  totalLateCount: number;
+  leaveDays: number;
+  summary?: {
+    totalShifts: string;
+    totalLateCount: number;
+    billableLateCount: number;
+    shiftDeductions: string;
+    salaryDeductionAmount: string;
+  } | null;
+  dailyLogs: {
+    date: string;
+    shiftsCompleted: string;
+    isHalfShift: boolean;
+    lateMorning: boolean;
+    lateReturn: boolean;
+    punch1?: string | null;
+    punch4?: string | null;
+  }[];
+};
+
+export type LateSummaryResponse = {
+  month: number;
+  year: number;
+  employees: LateSummaryEmployee[];
 };
 
 export const useSyncBiometric = () =>
   useMutation({
-    mutationFn: (mode: "today" | "days3" | "all" = "today") =>
+    mutationFn: (mode: "today" | "days3" | "days7" | "month" | "prevmonth" | "all" = "today") =>
       customFetch<SyncResult>("/api/attendance/sync-biometric", {
         method: "POST",
         body: JSON.stringify({ mode }),
       }),
+  });
+
+export const getReportLogQueryKey = (params: { date?: string; month?: number; year?: number; employeeId?: number }) =>
+  ["/api/attendance/report-log", params] as const;
+
+export const useAttendanceReportLog = (params: { date?: string; month?: number; year?: number; employeeId?: number }, enabled = true) =>
+  useQuery<ShiftLogEntry[]>({
+    queryKey: getReportLogQueryKey(params),
+    queryFn: () => {
+      const qs = new URLSearchParams();
+      if (params.date) qs.set("date", params.date);
+      if (params.month) qs.set("month", String(params.month));
+      if (params.year) qs.set("year", String(params.year));
+      if (params.employeeId) qs.set("employeeId", String(params.employeeId));
+      return customFetch<ShiftLogEntry[]>(`/api/attendance/report-log?${qs}`);
+    },
+    enabled,
+  });
+
+export const useComputeShiftLogs = () =>
+  useMutation({
+    mutationFn: (data: { date?: string; month?: number; year?: number; employeeId?: number }) =>
+      customFetch<{ ok: boolean; computed: number }>("/api/attendance/compute-shifts", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+  });
+
+export const getLateSummaryQueryKey = (month: number, year: number) =>
+  ["/api/attendance/late-summary", month, year] as const;
+
+export const useAttendanceLateSummary = (month: number, year: number, enabled = true) =>
+  useQuery<LateSummaryResponse>({
+    queryKey: getLateSummaryQueryKey(month, year),
+    queryFn: () =>
+      customFetch<LateSummaryResponse>(`/api/attendance/late-summary?month=${month}&year=${year}`),
+    enabled,
+  });
+
+export const useEmployeeShiftMonthlyStats = (
+  employeeId: number | null,
+  month: number,
+  year: number,
+  enabled = true,
+) =>
+  useQuery<EmployeeShiftMonthlyStats>({
+    queryKey: ["/api/attendance/employee-shift-stats", employeeId, month, year],
+    queryFn: () =>
+      customFetch<EmployeeShiftMonthlyStats>(
+        `/api/attendance/employee-shift-stats?employee_id=${employeeId}&month=${month}&year=${year}`,
+      ),
+    enabled: !!employeeId && enabled,
   });
 
 // ── Salary Slips ──────────────────────────────────────────────────────────────
@@ -1060,6 +1204,8 @@ export type PayrollBreakdownDay = {
   // staff-only fields
   status?: "present" | "absent" | "paid_leave" | "unpaid_leave";
   isLate?: boolean;
+  isHalfShift?: boolean;
+  shiftsCompleted?: number;
   firstIn?: string | null;
   lastOut?: string | null;
   leaveType?: string | null;
@@ -1096,6 +1242,8 @@ export type PayrollBreakdown = {
     unpaidLeaveDays?: number;
     absentDays?: number;
     lateDays?: number;
+    halfShiftDays?: number;
+    fullShiftDays?: number;
     effectivePaidDays?: number;
     // production
     totalDays?: number;
@@ -1118,6 +1266,13 @@ export type PayrollBreakdown = {
     esi?: number;
     advances: number;
     advanceDetails: { advanceId: number; repaymentId: number; amount: number; notes?: string | null }[];
+    lateShiftPenalty?: number;
+    lateSummary?: {
+      totalLateCount: number;
+      permissionsUsed: number;
+      billableLateCount: number;
+      shiftDeductions: number;
+    } | null;
     total: number;
   };
   netSalary: number;
@@ -1337,6 +1492,9 @@ export type PayrollSettingsItem = {
   slipCompanyAddress: string;
   minWageRate: number;
   signatureImage: string | null;
+  // Resignation letter assets
+  companyLogo: string | null;
+  authorizedSignature: string | null;
   // SMTP / Email
   smtpHost: string;
   smtpPort: number;
@@ -1404,6 +1562,7 @@ export type DepartmentManagerItem = {
   designation?: string | null;
   canApproveLeaves: boolean;
   canApprovePermissions: boolean;
+  canApproveResignations: boolean;
   isActive: boolean;
   notes?: string | null;
   createdAt?: string | null;
@@ -1415,6 +1574,7 @@ export type DepartmentManagerItem = {
   isManager?: boolean;
   canSubmitLeave?: boolean;
   pendingApprovalsCount?: number;
+  pendingResignationsCount?: number;
 };
 
 export const getDepartmentManagersQueryKey = () => ["department-managers"] as const;
@@ -1440,6 +1600,7 @@ export const useCreateDepartmentManager = () => {
       employeeCode: string;
       canApproveLeaves?: boolean;
       canApprovePermissions?: boolean;
+      canApproveResignations?: boolean;
       notes?: string;
     }) =>
       customFetch<DepartmentManagerItem>("/api/department-managers", {
@@ -1463,6 +1624,7 @@ export const useUpdateDepartmentManager = () => {
       data: Partial<{
         canApproveLeaves: boolean;
         canApprovePermissions: boolean;
+        canApproveResignations: boolean;
         isActive: boolean;
         notes: string;
       }>;
@@ -1590,3 +1752,211 @@ export async function downloadReportCsv(
   document.body.removeChild(a);
   URL.revokeObjectURL(objectUrl);
 }
+
+// ── Recruitment ───────────────────────────────────────────────────────────────
+
+export type DeptAnalysisItem = {
+  departmentId: number;
+  departmentName: string;
+  currentCount: number;
+  requiredCount: number;
+  vacancy: number;
+};
+
+export type RecentJoineeItem = {
+  id: number;
+  name: string;
+  employeeCode: string;
+  department?: string | null;
+  designation?: string | null;
+  joinDate?: string | null;
+  photoUrl?: string | null;
+};
+
+export type RecentLeaveItem = {
+  id: number;
+  employeeName: string;
+  employeeCode: string;
+  department?: string | null;
+  type: string;
+  startDate: string;
+  endDate: string;
+  status: string;
+};
+
+export type RecruitmentDashboard = {
+  totalStaffEmployees: number;
+  totalDepartments: number;
+  recentLeaves: number;
+  newJoinees: number;
+  openRoles: number;
+  pendingResignations: number;
+  positionsNeedingStaff: number;
+  departmentAnalysis: DeptAnalysisItem[];
+  recentJoineeList: RecentJoineeItem[];
+  recentLeavesList: RecentLeaveItem[];
+};
+
+export type ResignationRequest = {
+  id: number;
+  employeeId: number;
+  employeeName?: string | null;
+  employeeCode?: string | null;
+  departmentId?: number | null;
+  departmentName?: string | null;
+  reason?: string | null;
+  lastWorkingDate?: string | null;
+  surveyQ1Answer?: string | null;
+  surveyQ2Answer?: string | null;
+  surveyQ3Answer?: string | null;
+  // Status flow: pending → dept_approved → approved | rejected
+  status: "pending" | "dept_approved" | "approved" | "rejected";
+  // Dept head stage
+  deptHeadId?: number | null;
+  deptHeadName?: string | null;
+  deptHeadStatus?: "approved" | "rejected" | null;
+  deptHeadComment?: string | null;
+  deptHeadApprovedAt?: string | null;
+  // HR stage
+  hrComment?: string | null;
+  approvedBy?: string | null;
+  approvedAt?: string | null;
+  rejectedBy?: "dept_head" | "hr" | null;
+  createdAt?: string | null;
+};
+
+export type DepartmentHeadcountItem = {
+  id?: number | null;
+  departmentId: number;
+  departmentName: string;
+  currentCount: number;
+  requiredCount: number;
+  vacancy: number;
+  notes?: string | null;
+};
+
+export const getRecruitmentDashboardQueryKey = () => ["/api/recruitment/dashboard"] as const;
+
+export const useGetRecruitmentDashboard = (
+  options?: UseQueryOptions<RecruitmentDashboard>,
+) =>
+  useQuery<RecruitmentDashboard>({
+    queryKey: getRecruitmentDashboardQueryKey(),
+    queryFn: () => customFetch<RecruitmentDashboard>("/api/recruitment/dashboard"),
+    ...options,
+  });
+
+export const getListResignationsQueryKey = (status?: string) =>
+  ["/api/recruitment/resignations", status] as const;
+
+export const useListResignations = (
+  statusFilter?: string,
+  options?: UseQueryOptions<ResignationRequest[]>,
+) => {
+  const qs = statusFilter ? `?status=${statusFilter}` : "";
+  return useQuery<ResignationRequest[]>({
+    queryKey: getListResignationsQueryKey(statusFilter),
+    queryFn: () => customFetch<ResignationRequest[]>(`/api/recruitment/resignations${qs}`),
+    ...options,
+  });
+};
+
+export const useSubmitResignation = () =>
+  useMutation({
+    mutationFn: (data: {
+      reason?: string;
+      lastWorkingDate?: string;
+      surveyQ1Answer?: string;
+      surveyQ2Answer?: string;
+      surveyQ3Answer?: string;
+    }) =>
+      customFetch<ResignationRequest>("/api/recruitment/resignations", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+  });
+
+export const useResignationAction = () =>
+  useMutation({
+    mutationFn: ({ id, action, hrComment }: { id: number; action: "approve" | "reject"; hrComment?: string }) =>
+      customFetch<ResignationRequest>(`/api/recruitment/resignations/${id}/action`, {
+        method: "PATCH",
+        body: JSON.stringify({ action, hrComment }),
+      }),
+  });
+
+export const getMyResignationQueryKey = () => ["/api/my/resignation"] as const;
+
+export const useMyResignation = (options?: UseQueryOptions<ResignationRequest | null>) =>
+  useQuery<ResignationRequest | null>({
+    queryKey: getMyResignationQueryKey(),
+    queryFn: () => customFetch<ResignationRequest | null>("/api/my/resignation"),
+    ...options,
+  });
+
+export const getListDepartmentHeadcountQueryKey = () =>
+  ["/api/recruitment/department-headcount"] as const;
+
+export const useListDepartmentHeadcount = (
+  options?: UseQueryOptions<DepartmentHeadcountItem[]>,
+) =>
+  useQuery<DepartmentHeadcountItem[]>({
+    queryKey: getListDepartmentHeadcountQueryKey(),
+    queryFn: () => customFetch<DepartmentHeadcountItem[]>("/api/recruitment/department-headcount"),
+    ...options,
+  });
+
+export const useSetDepartmentHeadcount = () =>
+  useMutation({
+    mutationFn: (data: { departmentId: number; requiredCount: number; notes?: string }) =>
+      customFetch<DepartmentHeadcountItem>("/api/recruitment/department-headcount", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+  });
+
+export const useUpdateDepartmentHeadcount = () =>
+  useMutation({
+    mutationFn: ({ id, data }: { id: number; data: { requiredCount?: number; notes?: string } }) =>
+      customFetch<DepartmentHeadcountItem>(`/api/recruitment/department-headcount/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+  });
+
+export const useResignationEmail = () =>
+  useMutation({
+    mutationFn: ({ id, toEmail }: { id: number; toEmail?: string }) =>
+      customFetch<{ ok: boolean; sentTo: string; pdfAttached: boolean }>(
+        `/api/recruitment/resignations/${id}/email`,
+        { method: "POST", body: JSON.stringify({ toEmail }) },
+      ),
+  });
+
+export const useDeleteResignation = () =>
+  useMutation({
+    mutationFn: (id: number) =>
+      customFetch<void>(`/api/recruitment/resignations/${id}/delete`, { method: "DELETE" }),
+  });
+
+export const downloadResignationPdf = async (id: number, getToken: () => string | null) => {
+  const token = getToken();
+  const response = await fetch(`/api/recruitment/resignations/${id}/pdf`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error((err as any).error ?? "Failed to download PDF");
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const match = disposition.match(/filename="([^"]+)"/);
+  a.download = match ? match[1] : `resignation_${id}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};

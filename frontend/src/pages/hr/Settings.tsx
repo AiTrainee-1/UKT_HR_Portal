@@ -46,6 +46,8 @@ export default function Settings() {
     slipCompanyAddress: "TIRUPUR",
     minWageRate: 0,
     signatureImage: null as string | null,
+    companyLogo: null as string | null,
+    authorizedSignature: null as string | null,
     // SMTP
     smtpHost: "smtp.gmail.com",
     smtpPort: 587,
@@ -71,6 +73,8 @@ export default function Settings() {
         slipCompanyAddress: payrollSettingsData.slipCompanyAddress || "TIRUPUR",
         minWageRate: payrollSettingsData.minWageRate || 0,
         signatureImage: payrollSettingsData.signatureImage || null,
+        companyLogo: payrollSettingsData.companyLogo || null,
+        authorizedSignature: payrollSettingsData.authorizedSignature || null,
         smtpHost: payrollSettingsData.smtpHost || "smtp.gmail.com",
         smtpPort: payrollSettingsData.smtpPort || 587,
         smtpUsername: payrollSettingsData.smtpUsername || "",
@@ -101,6 +105,8 @@ export default function Settings() {
         slipCompanyAddress: payroll.slipCompanyAddress,
         minWageRate: payroll.minWageRate,
         signatureImage: payroll.signatureImage ?? undefined,
+        companyLogo: payroll.companyLogo ?? undefined,
+        authorizedSignature: payroll.authorizedSignature ?? undefined,
         smtpHost: payroll.smtpHost,
         smtpPort: payroll.smtpPort,
         smtpUsername: payroll.smtpUsername,
@@ -500,6 +506,90 @@ export default function Settings() {
                             const reader = new FileReader();
                             reader.onload = ev => {
                               setPayroll(p => ({ ...p, signatureImage: ev.target?.result as string }));
+                            };
+                            reader.readAsDataURL(file);
+                          }}
+                        />
+                      </label>
+                    )}
+                  </div>
+                </div>
+
+                {/* Company Logo — used on Resignation Acceptance Letter PDF */}
+                <div className="space-y-2 pt-2 border-t border-gray-100">
+                  <Label className="text-xs">Company Logo</Label>
+                  <p className="text-xs text-gray-500">Used on the Resignation Acceptance Letter PDF header.</p>
+                  <div className="flex items-start gap-4">
+                    {payroll.companyLogo ? (
+                      <div className="relative">
+                        <img
+                          src={payroll.companyLogo}
+                          alt="Company Logo"
+                          className="h-20 border border-gray-200 rounded-lg bg-white p-2 object-contain"
+                        />
+                        <button
+                          onClick={() => setPayroll(p => ({ ...p, companyLogo: null }))}
+                          className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-0.5"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ) : (
+                      <label className="flex flex-col items-center justify-center w-40 h-20 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors">
+                        <Upload size={18} className="text-gray-400 mb-1" />
+                        <span className="text-xs text-gray-400">Upload logo</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={e => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            const reader = new FileReader();
+                            reader.onload = ev => {
+                              setPayroll(p => ({ ...p, companyLogo: ev.target?.result as string }));
+                            };
+                            reader.readAsDataURL(file);
+                          }}
+                        />
+                      </label>
+                    )}
+                  </div>
+                </div>
+
+                {/* Authorised Signature for Resignation Letter */}
+                <div className="space-y-2">
+                  <Label className="text-xs">Authorised Signature (for Resignation Letter)</Label>
+                  <p className="text-xs text-gray-500">This signature appears on the Resignation Acceptance Letter PDF issued to employees.</p>
+                  <div className="flex items-start gap-4">
+                    {payroll.authorizedSignature ? (
+                      <div className="relative">
+                        <img
+                          src={payroll.authorizedSignature}
+                          alt="Authorised Signature"
+                          className="h-20 border border-gray-200 rounded-lg bg-white p-2 object-contain"
+                        />
+                        <button
+                          onClick={() => setPayroll(p => ({ ...p, authorizedSignature: null }))}
+                          className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-0.5"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ) : (
+                      <label className="flex flex-col items-center justify-center w-40 h-20 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors">
+                        <Upload size={18} className="text-gray-400 mb-1" />
+                        <span className="text-xs text-gray-400">Upload signature</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={e => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            const reader = new FileReader();
+                            reader.onload = ev => {
+                              setPayroll(p => ({ ...p, authorizedSignature: ev.target?.result as string }));
                             };
                             reader.readAsDataURL(file);
                           }}

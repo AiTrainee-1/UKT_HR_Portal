@@ -89,7 +89,7 @@ export default function Landing() {
         </p>
 
         {/* Stats */}
-        <div className="flex items-center justify-center gap-8 mt-8">
+        {/* <div className="flex items-center justify-center gap-8 mt-8">
           {[
             { value: "500+", label: "Employees" },
             { value: "12", label: "Departments" },
@@ -110,7 +110,7 @@ export default function Landing() {
               </p>
             </div>
           ))}
-        </div>
+        </div> */}
       </div>
 
       {/* ── Portal Cards ── */}

@@ -43,6 +43,7 @@ function CreateUserDialog({
   const [employeeId, setEmployeeId] = useState("");
   const [canApproveLeaves, setCanApproveLeaves] = useState(true);
   const [canApprovePermissions, setCanApprovePermissions] = useState(true);
+  const [canApproveResignations, setCanApproveResignations] = useState(true);
   const [notes, setNotes] = useState("");
 
   const { data: employees } = useListEmployees({ status: "active" });
@@ -63,6 +64,7 @@ function CreateUserDialog({
         employeeCode: emp.employeeCode!,
         canApproveLeaves,
         canApprovePermissions,
+        canApproveResignations,
         notes: notes || undefined,
       });
       toast({ title: `${emp.firstName} ${emp.lastName} added as department user` });
@@ -70,6 +72,7 @@ function CreateUserDialog({
       setNotes("");
       setCanApproveLeaves(true);
       setCanApprovePermissions(true);
+      setCanApproveResignations(true);
       onClose();
     } catch (e: any) {
       toast({
@@ -108,6 +111,7 @@ function CreateUserDialog({
               {[
                 { label: "Can approve leave requests", value: canApproveLeaves, set: setCanApproveLeaves },
                 { label: "Can approve permission requests", value: canApprovePermissions, set: setCanApprovePermissions },
+                { label: "Can approve resignations", value: canApproveResignations, set: setCanApproveResignations },
               ].map(({ label, value, set }) => (
                 <label key={label} className="flex items-center gap-2.5 cursor-pointer group">
                   <button
@@ -213,7 +217,7 @@ function ManagerDetailDialog({
     }
   };
 
-  const togglePerm = async (field: "canApproveLeaves" | "canApprovePermissions") => {
+  const togglePerm = async (field: "canApproveLeaves" | "canApprovePermissions" | "canApproveResignations") => {
     if (!manager || !managerId) return;
     await updateMutation.mutateAsync({
       id: managerId,
@@ -271,6 +275,7 @@ function ManagerDetailDialog({
                 {[
                   { key: "canApproveLeaves" as const, label: "Approve Leaves" },
                   { key: "canApprovePermissions" as const, label: "Approve Permissions" },
+                  { key: "canApproveResignations" as const, label: "Approve Resignations" },
                 ].map(({ key, label }) => (
                   <button
                     key={key}
@@ -618,6 +623,16 @@ export default function UserManagement() {
                           >
                             {m.canApprovePermissions ? <CheckCircle size={10} /> : <XCircle size={10} />}
                             Permissions
+                          </span>
+                          <span
+                            className={`flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border ${
+                              m.canApproveResignations
+                                ? "bg-green-50 text-green-700 border-green-200"
+                                : "bg-gray-50 text-gray-400 border-gray-200"
+                            }`}
+                          >
+                            {m.canApproveResignations ? <CheckCircle size={10} /> : <XCircle size={10} />}
+                            Resignations
                           </span>
                         </div>
                       </div>

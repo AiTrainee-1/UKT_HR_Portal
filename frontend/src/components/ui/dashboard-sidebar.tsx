@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { useAuth } from '@/contexts/AuthContext';
-import { useListLeaveRequests, useListPermissions } from '@/lib/api-client';
+import { useListLeaveRequests, useListPermissions, useListResignations, useListAdvances } from '@/lib/api-client';
 import {
   LayoutDashboard, Users, Clock, Calendar, CheckCircle2, IndianRupee,
   Wallet, BarChart3, Shield, Activity, Settings, FileText, LogOut,
-  ChevronRight, Search, X, Command, UserCheck,
+  ChevronRight, Search, X, Command, UserCheck, UserMinus, Banknote,
+  CalendarCheck, Bell,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -13,6 +14,7 @@ import {
 type NavChildItem = {
   path: string;
   label: string;
+  badge?: number;
 };
 
 type NavItemData = {
@@ -57,9 +59,26 @@ const navGroups: NavGroupData[] = [
     ],
   },
   {
+    heading: 'Recruitment',
+    items: [
+      {
+        path: '/hr/recruitment',
+        label: 'Recruitment',
+        icon: UserMinus,
+        children: [
+          { path: '/hr/recruitment/dashboard', label: 'Dashboard' },
+          { path: '/hr/recruitment/resignations', label: 'Resignations' },
+          { path: '/hr/recruitment/required-roles', label: 'Required Roles' },
+          { path: '/hr/interviews', label: 'Interviews' },
+        ],
+      },
+    ],
+  },
+  {
     heading: 'Payroll',
     items: [
       { path: '/hr/payroll', label: 'Payroll', icon: IndianRupee },
+      { path: '/hr/salary', label: 'Salary', icon: Banknote },
       { path: '/hr/salary-slip', label: 'Salary Slip', icon: FileText },
       { path: '/hr/settlement', label: 'Settlement', icon: Wallet },
       { path: '/hr/reports', label: 'Reports', icon: BarChart3 },
@@ -70,6 +89,7 @@ const navGroups: NavGroupData[] = [
     items: [
       { path: '/hr/user-management', label: 'User Management', icon: Shield },
       { path: '/hr/activity-logs', label: 'Activity Logs', icon: Activity },
+      { path: '/hr/notifications', label: 'Notifications', icon: Bell },
       { path: '/hr/settings', label: 'Settings', icon: Settings },
     ],
   },
@@ -172,7 +192,7 @@ function NavItem({
 
   const rowActive = 'clay-nav-active';
   const rowIdle =
-    'text-[#006496]/70 hover:text-[#006496] hover:translate-x-1';
+    'text-[#1e4d6b] hover:text-[#006496] hover:bg-[#006496]/[0.05] hover:translate-x-1';
 
   const rowClasses = `${rowBase} ${isActive || isParentActive ? rowActive : rowIdle}`;
   const rowStyle = { paddingLeft: `${level * 12 + 10}px` };
@@ -184,7 +204,7 @@ function NavItem({
           className={`w-4 h-4 shrink-0 transition-colors ${
             isActive || isParentActive
               ? 'text-white'
-              : 'text-[#006496]/50 group-hover:text-[#006496]'
+              : 'text-[#006496]/80 group-hover:text-[#006496]'
           }`}
           strokeWidth={1.8}
         />
@@ -256,7 +276,7 @@ function NavItem({
                     className={`flex items-center gap-2.5 py-[6px] pr-3 rounded-xl cursor-pointer text-[12.5px] transition-all select-none ${
                       childActive
                         ? 'font-semibold clay-nav-active'
-                        : 'text-[#006496]/60 hover:text-[#006496] hover:bg-[#006496]/05 hover:translate-x-1'
+                        : 'text-[#1e4d6b] hover:text-[#006496] hover:bg-[#006496]/05 hover:translate-x-1'
                     }`}
                     style={{ paddingLeft: `${(level + 1) * 12 + 10}px` }}
                   >
@@ -265,7 +285,18 @@ function NavItem({
                         childActive ? 'bg-white' : 'bg-[#006496]/25'
                       }`}
                     />
-                    <span className={childActive ? 'text-white' : ''}>{child.label}</span>
+                    <span className={`flex-1 ${childActive ? 'text-white' : ''}`}>{child.label}</span>
+                    {child.badge != null && child.badge > 0 && (
+                      <span className="relative flex items-center justify-center ml-1">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-50" />
+                        <span
+                          className="relative flex items-center justify-center min-w-[16px] h-[16px] px-1 text-[9px] font-bold rounded-full text-white"
+                          style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)' }}
+                        >
+                          {child.badge}
+                        </span>
+                      </span>
+                    )}
                   </div>
                 </Link>
               );
@@ -284,11 +315,19 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
   const { user, logout } = useAuth();
   const [isSearchOpen, setIsSearchOpen] = useState(false);
 
-  const { data: leaveData } = useListLeaveRequests(undefined, { query: { refetchInterval: 30_000 } } as any);
-  const { data: permData }  = useListPermissions(undefined, { refetchInterval: 30_000 } as any);
+  const { data: leaveData }  = useListLeaveRequests(undefined, { query: { refetchInterval: 30_000 } } as any);
+  const { data: permData }   = useListPermissions(undefined, { refetchInterval: 30_000 } as any);
+  const { data: resignData } = useListResignations(undefined, { refetchInterval: 30_000 } as any);
+  const { data: advanceData } = useListAdvances(undefined, { refetchInterval: 30_000 } as any);
   const pendingCount =
     ((leaveData ?? []).filter((l: any) => l.status === 'pending').length) +
     ((permData  ?? []).filter((p: any) => p.status === 'pending').length);
+  const activeResignationsCount = (resignData ?? []).filter(
+    (r: any) => r.status === 'pending' || r.status === 'dept_approved'
+  ).length;
+  const pendingAdvancesCount = (advanceData ?? []).filter(
+    (a: any) => a.status === 'pending'
+  ).length;
 
   const initials = (user?.name ?? 'H')
     .split(' ')
@@ -352,16 +391,35 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
 
       {/* ── Navigation ── */}
       <nav
-        className="flex-1 overflow-y-auto py-3 px-2.5 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col gap-0.5"
+        className="flex-1 overflow-y-auto py-3 px-2.5 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col gap-4"
       >
         {navGroups.map((group, idx) => (
           <div key={idx} className="flex flex-col gap-0.5">
+            {group.heading && (
+              <span
+                className="px-3 mb-1 text-[9.5px] font-extrabold tracking-[0.2em] uppercase"
+                style={{ color: 'rgba(0,60,100,0.45)' }}
+              >
+                {group.heading}
+              </span>
+            )}
             {group.items.map((item) => (
               <NavItem
                 key={item.path}
                 item={
                   item.path === '/hr/requests'
                     ? { ...item, badge: pendingCount || undefined }
+                    : item.path === '/hr/settlement'
+                    ? { ...item, badge: pendingAdvancesCount || undefined }
+                    : item.path === '/hr/recruitment'
+                    ? {
+                        ...item,
+                        children: item.children?.map((c) =>
+                          c.path === '/hr/recruitment/resignations'
+                            ? { ...c, badge: activeResignationsCount || undefined }
+                            : c
+                        ),
+                      }
                     : item
                 }
                 currentPath={location}

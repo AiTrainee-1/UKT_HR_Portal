@@ -139,7 +139,7 @@ function DesigCard({
   const assignMutation = useAssignEmployee();
 
   const { data: employees, isLoading: empLoading } = useListEmployees(
-    { designationId: desig.id } as any,
+    { designationId: desig.id, status: "active" } as any,
     { query: { enabled: expanded } } as any,
   );
 

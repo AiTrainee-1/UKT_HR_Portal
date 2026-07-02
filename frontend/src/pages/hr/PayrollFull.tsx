@@ -378,12 +378,13 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
                 {/* Attendance summary */}
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Attendance Summary</p>
-                  <div className="grid grid-cols-4 gap-2">
+                  <div className={`grid gap-2 ${(bd.summary.halfShiftDays ?? 0) > 0 ? "grid-cols-5" : "grid-cols-4"}`}>
                     {[
                       { label: "Working Days", value: bd.summary.totalWorkingDays, color: "text-gray-800" },
                       { label: "Present", value: bd.summary.presentDays, color: "text-green-700" },
                       { label: "Paid Leave", value: bd.summary.paidLeaveDays, color: "text-blue-700" },
                       { label: "Absent", value: (bd.summary.absentDays ?? 0) + (bd.summary.unpaidLeaveDays ?? 0), color: "text-red-700" },
+                      ...((bd.summary.halfShiftDays ?? 0) > 0 ? [{ label: "Half Shifts", value: bd.summary.halfShiftDays, color: "text-amber-700" }] : []),
                     ].map(s => (
                       <div key={s.label} className="rounded-lg border p-2 text-center">
                         <p className={`text-xl font-black ${s.color}`}>{s.value}</p>
@@ -394,6 +395,11 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
                   {(bd.summary.lateDays ?? 0) > 0 && (
                     <p className="text-xs text-amber-700 mt-2 flex items-center gap-1">
                       <Clock size={12} /> {bd.summary.lateDays} day{bd.summary.lateDays !== 1 ? "s" : ""} late (arrived after grace period)
+                    </p>
+                  )}
+                  {(bd.summary.halfShiftDays ?? 0) > 0 && (
+                    <p className="text-xs text-amber-700 mt-1 flex items-center gap-1">
+                      <AlertCircle size={12} /> {bd.summary.halfShiftDays} half-shift day{bd.summary.halfShiftDays !== 1 ? "s" : ""} — counted as {((bd.summary.halfShiftDays ?? 0) * 0.5).toFixed(2)} effective days
                     </p>
                   )}
                 </div>
@@ -415,7 +421,14 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
                       <span className="font-semibold">₹{bd.earnings.dailyRate?.toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
                     </div>
                     <div className="flex justify-between px-3 py-2 bg-blue-50/40">
-                      <span className="text-blue-800 font-medium">Effective Days (Present + Paid Leave)</span>
+                      <span className="text-blue-800 font-medium">
+                        Effective Days (Present + Paid Leave)
+                        {(bd.summary.halfShiftDays ?? 0) > 0 && (
+                          <span className="ml-1.5 text-xs font-normal text-blue-600">
+                            incl. {bd.summary.halfShiftDays} half-shift{bd.summary.halfShiftDays !== 1 ? "s" : ""} × 0.5
+                          </span>
+                        )}
+                      </span>
                       <span className="font-bold text-blue-800">{bd.summary.effectivePaidDays} days</span>
                     </div>
                     <div className="flex justify-between px-3 py-2">
@@ -457,6 +470,19 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
                       <div className="flex justify-between px-3 py-2">
                         <span className="text-gray-600">Advance Recovery ({bd.deductions.advanceDetails.length} advance{bd.deductions.advanceDetails.length !== 1 ? "s" : ""})</span>
                         <span className="font-semibold text-red-700">- ₹{bd.deductions.advances.toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                      </div>
+                    )}
+                    {(bd.deductions.lateShiftPenalty ?? 0) > 0 && (
+                      <div className="flex justify-between px-3 py-2 bg-orange-50/40">
+                        <span className="text-orange-800 font-medium">
+                          Late Shift Penalty
+                          {bd.deductions.lateSummary && (
+                            <span className="ml-1.5 font-normal text-orange-600 text-xs">
+                              ({bd.deductions.lateSummary.totalLateCount} late · {bd.deductions.lateSummary.billableLateCount} billable · {bd.deductions.lateSummary.shiftDeductions} shift{bd.deductions.lateSummary.shiftDeductions !== 1 ? "s" : ""} deducted)
+                            </span>
+                          )}
+                        </span>
+                        <span className="font-semibold text-orange-700">- ₹{(bd.deductions.lateShiftPenalty ?? 0).toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
                       </div>
                     )}
                     {bd.deductions.total === 0 && (

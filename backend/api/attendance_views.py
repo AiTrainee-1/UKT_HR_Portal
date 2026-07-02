@@ -12,6 +12,7 @@ from rest_framework.response import Response
 from .auth import require_hr, require_auth, get_token_employee_id
 from .models import (
     Attendance, AttendanceLog, Employee, EmployeeShiftAssignment, LeaveRequest,
+    DailyShiftLog, MonthlyShiftSummary,
 )
 
 logger = logging.getLogger(__name__)
@@ -378,6 +379,8 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
             "onLeave": on_leave_count,
             "late":    0,
         },
+        "totalPresent": present_count,
+        "totalAbsent":  absent_count,
         "records": records,
     })
 
@@ -533,10 +536,11 @@ def manual_attendance(request: Request) -> Response:
 def run_biometric_sync(mode: str = "today") -> dict:
     """
     Run the biometric sync and return a summary dict.
-    mode: "today" | "days3" | "all"
+    mode: "today" | "days3" | "days7" | "month" | "prevmonth" | "all"
     """
     from django.core.management import call_command
     from django.core.management.base import CommandError
+    from datetime import date as _date
 
     out = StringIO()
     kwargs: dict = {"stdout": out, "stderr": out}
@@ -544,6 +548,21 @@ def run_biometric_sync(mode: str = "today") -> dict:
         kwargs["today"] = True
     elif mode == "all":
         kwargs["sync_all"] = True
+    elif mode == "days7":
+        kwargs["days"] = 7
+    elif mode == "month":
+        # Sync from the 1st of the current month to today
+        today = _date.today()
+        days_elapsed = max(today.day, 1)
+        kwargs["days"] = days_elapsed
+    elif mode == "prevmonth":
+        # Sync from the 1st of the previous month to today
+        today = _date.today()
+        first_of_this_month = today.replace(day=1)
+        last_of_prev_month = first_of_this_month - timedelta(days=1)
+        first_of_prev_month = last_of_prev_month.replace(day=1)
+        days_back = (today - first_of_prev_month).days + 1
+        kwargs["days"] = days_back
     else:
         kwargs["days"] = 3
 
@@ -551,13 +570,24 @@ def run_biometric_sync(mode: str = "today") -> dict:
         call_command("sync_biometric", **kwargs)
         output = out.getvalue()
         created = 0
+        not_found_ids: list[str] = []
         for line in output.splitlines():
             if "New records created" in line:
                 try:
                     created = int(line.split(":")[-1].strip())
                 except ValueError:
                     pass
-        return {"ok": True, "created": created, "output": output, "syncedAt": datetime.utcnow().isoformat() + "Z"}
+            # Extract unmatched device user IDs from warning block
+            if line.strip().startswith("- '") and line.strip().endswith("'"):
+                uid = line.strip()[3:-1]
+                not_found_ids.append(uid)
+        return {
+            "ok": True,
+            "created": created,
+            "output": output,
+            "syncedAt": datetime.utcnow().isoformat() + "Z",
+            "unmatchedDeviceIds": not_found_ids,
+        }
     except CommandError as e:
         return {"ok": False, "error": str(e)}
     except Exception as e:
@@ -572,3 +602,301 @@ def sync_biometric_api(request: Request) -> Response:
     result = run_biometric_sync(mode)
     status_code = 200 if result["ok"] else 502
     return Response(result, status=status_code)
+
+
+# ── Report Log ────────────────────────────────────────────────────────────────
+
+def _shift_log_json(log: DailyShiftLog) -> dict:
+    emp = log.employee
+    shift = log.shift
+    return {
+        "employeeId": emp.id,
+        "employeeCode": emp.employee_code,
+        "employeeName": f"{emp.first_name} {emp.last_name}",
+        "department": emp.department.name if emp.department else None,
+        "designation": emp.designation.title if emp.designation else None,
+        "employmentType": emp.employment_type,
+        "date": str(log.date),
+        "shiftName": shift.name if shift else None,
+        "punch1": log.punch1.strftime("%H:%M") if log.punch1 else None,
+        "punch2": log.punch2.strftime("%H:%M") if log.punch2 else None,
+        "punch3": log.punch3.strftime("%H:%M") if log.punch3 else None,
+        "punch4": log.punch4.strftime("%H:%M") if log.punch4 else None,
+        "totalPunches": log.total_punches,
+        "firstHalf": log.first_half,
+        "secondHalf": log.second_half,
+        "shiftsCompleted": str(log.shifts_completed),
+        "lateMorning": log.late_morning,
+        "lateReturn": log.late_return,
+        "lateReason": log.late_reason,
+        "computedAt": log.computed_at.isoformat() if log.computed_at else None,
+    }
+
+
+@api_view(["GET"])
+@require_hr
+def attendance_report_log(request: Request) -> Response:
+    """
+    GET /api/attendance/report-log/?date=2026-07-01
+        → all employees with DailyShiftLog for that date
+
+    GET /api/attendance/report-log/?month=7&year=2026&employeeId=123
+        → full month log for one employee
+    """
+    date_param = request.query_params.get("date")
+    month_param = request.query_params.get("month")
+    year_param = request.query_params.get("year")
+    emp_id_param = request.query_params.get("employeeId")
+
+    qs = (
+        DailyShiftLog.objects
+        .select_related("employee__department", "employee__designation", "shift")
+        .order_by("employee__first_name", "date")
+    )
+
+    if date_param:
+        try:
+            d = date_type.fromisoformat(date_param)
+        except (ValueError, TypeError):
+            d = _today()
+        qs = qs.filter(date=d)
+        return Response([_shift_log_json(l) for l in qs])
+
+    if month_param and year_param:
+        try:
+            m = int(month_param)
+            y = int(year_param)
+        except (ValueError, TypeError):
+            return Response({"error": "Invalid month/year"}, status=400)
+        qs = qs.filter(date__year=y, date__month=m)
+        if emp_id_param:
+            qs = qs.filter(employee_id=emp_id_param)
+        return Response([_shift_log_json(l) for l in qs])
+
+    return Response({"error": "Provide date or month+year"}, status=400)
+
+
+@api_view(["POST"])
+@require_hr
+def compute_shift_logs(request: Request) -> Response:
+    """
+    POST /api/attendance/compute-shifts/
+    Body: { "date": "2026-07-01" }  — recompute for all staff that day
+    Body: { "month": 7, "year": 2026 }  — recompute entire month
+    Body: { "month": 7, "year": 2026, "employeeId": 123 }  — one employee
+    """
+    from .shift_engine import compute_daily_shift_log, compute_monthly_shift_summary, recompute_date
+    from collections import defaultdict
+
+    data = request.data
+    date_param = data.get("date")
+    month_param = data.get("month")
+    year_param = data.get("year")
+    emp_id_param = data.get("employeeId")
+
+    if date_param:
+        try:
+            d = date_type.fromisoformat(str(date_param))
+        except (ValueError, TypeError):
+            return Response({"error": "Invalid date"}, status=400)
+        count = recompute_date(d)
+        return Response({"ok": True, "computed": count, "date": str(d)})
+
+    if month_param and year_param:
+        try:
+            m = int(month_param)
+            y = int(year_param)
+        except (ValueError, TypeError):
+            return Response({"error": "Invalid month/year"}, status=400)
+
+        import calendar as cal
+        days_in_month = cal.monthrange(y, m)[1]
+        today_d = _today()
+
+        emp_qs = Employee.objects.filter(status="active", employment_type="staff")
+        if emp_id_param:
+            emp_qs = emp_qs.filter(pk=emp_id_param)
+
+        emps = list(emp_qs)
+        total_computed = 0
+
+        for day in range(1, days_in_month + 1):
+            d = date_type(y, m, day)
+            if d > today_d:
+                break
+            logs = list(
+                AttendanceLog.objects.filter(
+                    date=d,
+                    employee__in=emps,
+                ).select_related("employee")
+            )
+            by_emp: dict = defaultdict(list)
+            for log in logs:
+                by_emp[log.employee_id].append(log)
+
+            emp_map = {e.id: e for e in emps}
+            for emp in emps:
+                punches = by_emp.get(emp.id, [])
+                compute_daily_shift_log(emp, d, punches)
+                total_computed += 1
+
+        # Recompute monthly summaries
+        from decimal import Decimal
+        for emp in emps:
+            daily_rate = None
+            if emp.salary_amount:
+                _, dm = cal.monthrange(y, m)
+                daily_rate = Decimal(str(emp.salary_amount)) / dm
+            compute_monthly_shift_summary(emp, y, m, daily_rate)
+
+        return Response({
+            "ok": True,
+            "computed": total_computed,
+            "month": m,
+            "year": y,
+            "employees": len(emps),
+        })
+
+    return Response({"error": "Provide date or month+year"}, status=400)
+
+
+@api_view(["GET"])
+@require_hr
+def attendance_late_summary(request: Request) -> Response:
+    """
+    GET /api/attendance/late-summary/?month=7&year=2026
+    Returns monthly late summary for all staff employees.
+    """
+    try:
+        m = int(request.query_params.get("month", _today().month))
+        y = int(request.query_params.get("year", _today().year))
+    except (ValueError, TypeError):
+        return Response({"error": "Invalid month/year"}, status=400)
+
+    summaries = (
+        MonthlyShiftSummary.objects
+        .filter(year=y, month=m)
+        .select_related("employee__department", "employee__designation")
+        .order_by("employee__first_name")
+    )
+
+    # Pre-compute half-shift counts from DailyShiftLog for all employees in one query
+    from decimal import Decimal as _D
+    half_shift_map: dict[int, int] = {}
+    for log in DailyShiftLog.objects.filter(date__year=y, date__month=m, shifts_completed=_D("0.50")).values("employee_id"):
+        eid = log["employee_id"]
+        half_shift_map[eid] = half_shift_map.get(eid, 0) + 1
+
+    results = []
+    for s in summaries:
+        emp = s.employee
+        results.append({
+            "employeeId": emp.id,
+            "employeeCode": emp.employee_code,
+            "employeeName": f"{emp.first_name} {emp.last_name}",
+            "department": emp.department.name if emp.department else None,
+            "totalShifts": str(s.total_shifts),
+            "halfShiftDays": half_shift_map.get(emp.id, 0),
+            "totalLateCount": s.total_late_count,
+            "permissionsUsed": s.permissions_used,
+            "billableLateCount": s.billable_late_count,
+            "shiftDeductions": str(s.shift_deductions),
+            "salaryDeductionAmount": str(s.salary_deduction_amount),
+        })
+
+    return Response({"month": m, "year": y, "employees": results})
+
+
+@api_view(["GET"])
+@require_hr
+def employee_shift_monthly_stats(request: Request) -> Response:
+    """
+    GET /api/attendance/employee-shift-stats/?employee_id=X&month=M&year=Y
+    Returns detailed monthly shift stats for one employee (used by Manage Shift panel).
+    """
+    import calendar as _cal
+    from decimal import Decimal as _D
+    from django.db.models import Q as _Q
+
+    emp_id = request.query_params.get("employee_id")
+    try:
+        m = int(request.query_params.get("month", _today().month))
+        y = int(request.query_params.get("year", _today().year))
+    except (ValueError, TypeError):
+        return Response({"error": "Invalid month/year"}, status=400)
+
+    try:
+        emp = Employee.objects.select_related("department", "designation").get(pk=emp_id)
+    except (Employee.DoesNotExist, TypeError, ValueError):
+        return Response({"error": "Employee not found"}, status=404)
+
+    logs = list(DailyShiftLog.objects.filter(employee=emp, date__year=y, date__month=m).order_by("date"))
+
+    present_days = len(logs)
+    half_shift_days = sum(1 for l in logs if l.shifts_completed == _D("0.50"))
+    full_shift_days = sum(1 for l in logs if l.shifts_completed == _D("1.00"))
+    total_effective_shifts = sum(l.shifts_completed for l in logs) or _D("0")
+    late_morning_days = sum(1 for l in logs if l.late_morning)
+    late_return_days = sum(1 for l in logs if l.late_return)
+    total_late = late_morning_days + late_return_days
+
+    # Leave count for this month
+    month_start = date_type(y, m, 1)
+    month_end = date_type(y, m, _cal.monthrange(y, m)[1])
+    leave_days = 0
+    for lr in LeaveRequest.objects.filter(
+        employee=emp, status="approved",
+        start_date__lte=month_end.isoformat(),
+        end_date__gte=month_start.isoformat(),
+    ):
+        lr_start = max(date_type.fromisoformat(str(lr.start_date)), month_start)
+        lr_end = min(date_type.fromisoformat(str(lr.end_date)), month_end)
+        if lr_start <= lr_end:
+            leave_days += (lr_end - lr_start).days + 1
+
+    # MonthlyShiftSummary (may not exist if payroll not generated yet)
+    try:
+        s = MonthlyShiftSummary.objects.get(employee=emp, year=y, month=m)
+        summary_data = {
+            "totalShifts": str(s.total_shifts),
+            "totalLateCount": s.total_late_count,
+            "billableLateCount": s.billable_late_count,
+            "shiftDeductions": str(s.shift_deductions),
+            "salaryDeductionAmount": str(s.salary_deduction_amount),
+        }
+    except MonthlyShiftSummary.DoesNotExist:
+        summary_data = None
+
+    # Per-day log entries
+    daily = [
+        {
+            "date": l.date.isoformat(),
+            "shiftsCompleted": str(l.shifts_completed),
+            "isHalfShift": l.shifts_completed == _D("0.50"),
+            "lateMorning": l.late_morning,
+            "lateReturn": l.late_return,
+            "punch1": l.punch1.strftime("%H:%M") if l.punch1 else None,
+            "punch4": l.punch4.strftime("%H:%M") if l.punch4 else None,
+        }
+        for l in logs
+    ]
+
+    return Response({
+        "employeeId": emp.id,
+        "employeeCode": emp.employee_code,
+        "employeeName": f"{emp.first_name} {emp.last_name}",
+        "department": emp.department.name if emp.department else None,
+        "designation": emp.designation.title if emp.designation else None,
+        "month": m,
+        "year": y,
+        "presentDays": present_days,
+        "halfShiftDays": half_shift_days,
+        "fullShiftDays": full_shift_days,
+        "totalEffectiveShifts": str(total_effective_shifts),
+        "lateMorningDays": late_morning_days,
+        "lateReturnDays": late_return_days,
+        "totalLateCount": total_late,
+        "leaveDays": leave_days,
+        "summary": summary_data,
+        "dailyLogs": daily,
+    })

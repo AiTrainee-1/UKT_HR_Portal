@@ -67,7 +67,7 @@ function SectionTitle({ children, action, onAction }: {
 }) {
   return (
     <div className="flex items-center justify-between mb-3">
-      <h3 className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "rgba(0,100,150,0.5)" }}>
+      <h3 className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "rgba(0,60,100,0.65)" }}>
         {children}
       </h3>
       {action && (
@@ -116,8 +116,8 @@ function KpiCard({
         )}
       </div>
       <p className="text-2xl font-black leading-none" style={{ color: "#1a3a4a" }}>{value}</p>
-      <p className="text-[11px] font-semibold mt-1 truncate" style={{ color: "rgba(0,100,150,0.55)" }}>{label}</p>
-      {sub && <p className="text-[10px] mt-0.5 truncate" style={{ color: "rgba(0,100,150,0.35)" }}>{sub}</p>}
+      <p className="text-[11px] font-semibold mt-1 truncate" style={{ color: "#1e5a7a" }}>{label}</p>
+      {sub && <p className="text-[10px] mt-0.5 truncate" style={{ color: "rgba(0,60,100,0.55)" }}>{sub}</p>}
     </button>
   );
 }
@@ -264,7 +264,7 @@ export default function HrDashboard() {
     boxShadow: "6px 6px 14px rgba(0,100,150,0.1), -3px -3px 8px rgba(255,255,255,0.8)",
     color: "#1a3a4a",
   };
-  const axisStyle = { fontSize: 10, fill: "rgba(0,100,150,0.4)" };
+  const axisStyle = { fontSize: 10, fill: "rgba(0,60,100,0.65)" };
 
   return (
     <HrLayout>
@@ -279,7 +279,7 @@ export default function HrDashboard() {
             <h2 className="text-xl font-black tracking-tight" style={{ color: "#1a3a4a" }}>
               HR Dashboard
             </h2>
-            <p className="text-xs mt-0.5 font-medium" style={{ color: "rgba(0,100,150,0.45)" }}>
+            <p className="text-xs mt-0.5 font-medium" style={{ color: "rgba(0,60,100,0.65)" }}>
               {headerDate}
             </p>
           </div>
@@ -417,18 +417,18 @@ export default function HrDashboard() {
                 <RingGauge rate={prodRate} size={88} stroke={9} color={PROD_COLOR} />
                 <div className="absolute inset-0 flex flex-col items-center justify-center">
                   <span className="text-xl font-black leading-none" style={{ color: "#1a3a4a" }}>{prodRate}%</span>
-                  <span className="text-[10px] font-medium mt-0.5" style={{ color: "rgba(0,100,150,0.4)" }}>rate</span>
+                  <span className="text-[10px] font-medium mt-0.5" style={{ color: "rgba(0,60,100,0.6)" }}>rate</span>
                 </div>
               </div>
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-widest mb-1" style={{ color: "#006496" }}>Production</p>
                 <p className="text-3xl font-black leading-none" style={{ color: "#1a3a4a" }}>{prodPresent}</p>
-                <p className="text-xs mt-1" style={{ color: "rgba(0,100,150,0.5)" }}>of {prodTotal} employees</p>
+                <p className="text-xs mt-1" style={{ color: "#1e5a7a" }}>of {prodTotal} employees</p>
                 <div className="flex items-center gap-3 mt-2">
-                  <span className="text-[11px]" style={{ color: "rgba(0,100,150,0.45)" }}>
+                  <span className="text-[11px]" style={{ color: "#1e5a7a" }}>
                     Absent: <strong className="text-red-500">{prodTotal - prodPresent}</strong>
                   </span>
-                  <span className="text-[11px]" style={{ color: "rgba(0,100,150,0.45)" }}>
+                  <span className="text-[11px]" style={{ color: "#1e5a7a" }}>
                     NP: <strong className="text-amber-500">{attn?.productionNotPunched ?? 0}</strong>
                   </span>
                 </div>
@@ -441,18 +441,18 @@ export default function HrDashboard() {
                 <RingGauge rate={staffRate} size={88} stroke={9} color={STAFF_COLOR} />
                 <div className="absolute inset-0 flex flex-col items-center justify-center">
                   <span className="text-xl font-black leading-none" style={{ color: "#1a3a4a" }}>{staffRate}%</span>
-                  <span className="text-[10px] font-medium mt-0.5" style={{ color: "rgba(0,100,150,0.4)" }}>rate</span>
+                  <span className="text-[10px] font-medium mt-0.5" style={{ color: "rgba(0,60,100,0.6)" }}>rate</span>
                 </div>
               </div>
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-widest mb-1" style={{ color: "#0096c7" }}>Staff</p>
                 <p className="text-3xl font-black leading-none" style={{ color: "#1a3a4a" }}>{staffPresent}</p>
-                <p className="text-xs mt-1" style={{ color: "rgba(0,100,150,0.5)" }}>of {staffTotal} employees</p>
+                <p className="text-xs mt-1" style={{ color: "#1e5a7a" }}>of {staffTotal} employees</p>
                 <div className="flex items-center gap-3 mt-2">
-                  <span className="text-[11px]" style={{ color: "rgba(0,100,150,0.45)" }}>
+                  <span className="text-[11px]" style={{ color: "#1e5a7a" }}>
                     Absent: <strong className="text-red-500">{staffTotal - staffPresent}</strong>
                   </span>
-                  <span className="text-[11px]" style={{ color: "rgba(0,100,150,0.45)" }}>
+                  <span className="text-[11px]" style={{ color: "#1e5a7a" }}>
                     NP: <strong className="text-amber-500">{attn?.staffNotPunched ?? 0}</strong>
                   </span>
                 </div>
@@ -464,9 +464,9 @@ export default function HrDashboard() {
           {yest && (
             <div
               className="px-5 py-2.5 flex items-center gap-6 text-[11px] font-medium"
-              style={{ background: "rgba(0,100,150,0.03)", borderTop: "1px solid rgba(0,100,150,0.06)", color: "rgba(0,100,150,0.5)" }}
+              style={{ background: "rgba(0,100,150,0.03)", borderTop: "1px solid rgba(0,100,150,0.06)", color: "#1e5a7a" }}
             >
-              <span className="uppercase tracking-wide font-bold" style={{ color: "rgba(0,100,150,0.4)" }}>Yesterday:</span>
+              <span className="uppercase tracking-wide font-bold" style={{ color: "rgba(0,60,100,0.65)" }}>Yesterday:</span>
               <span>Present <strong style={{ color: "#1a3a4a" }}>{yest.present}</strong></span>
               <span>Absent <strong style={{ color: "#1a3a4a" }}>{yest.absent}</strong></span>
               <span>Late <strong style={{ color: "#1a3a4a" }}>{yest.late}</strong></span>
@@ -535,8 +535,8 @@ export default function HrDashboard() {
               <ResponsiveContainer width="100%" height={180}>
                 <LineChart data={trendData} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,100,150,0.05)" />
-                  <XAxis dataKey="day" tick={{ fontSize: 9, fill: "rgba(0,100,150,0.4)" }} tickLine={false} axisLine={false} />
-                  <YAxis tick={{ fontSize: 9, fill: "rgba(0,100,150,0.4)" }} tickLine={false} axisLine={false} />
+                  <XAxis dataKey="day" tick={{ fontSize: 9, fill: "rgba(0,60,100,0.65)" }} tickLine={false} axisLine={false} />
+                  <YAxis tick={{ fontSize: 9, fill: "rgba(0,60,100,0.65)" }} tickLine={false} axisLine={false} />
                   <Tooltip contentStyle={chartTooltipStyle} />
                   <Line type="monotone" dataKey="present" stroke={PROD_COLOR} strokeWidth={2} dot={false} name="Present" />
                   <Line type="monotone" dataKey="absent"  stroke="#ef4444" strokeWidth={1.5} dot={false} name="Absent" strokeDasharray="4 2" />
@@ -599,7 +599,7 @@ export default function HrDashboard() {
                     ))}
                   </Pie>
                   <Tooltip contentStyle={chartTooltipStyle} />
-                  <Legend iconSize={8} iconType="circle" wrapperStyle={{ fontSize: 11, color: "rgba(0,100,150,0.6)" }} />
+                  <Legend iconSize={8} iconType="circle" wrapperStyle={{ fontSize: 11, color: "#1e5a7a" }} />
                 </PieChart>
               </ResponsiveContainer>
             ) : (
@@ -611,7 +611,7 @@ export default function HrDashboard() {
               {genderData.map((g, i) => (
                 <div key={g.name} className="text-center">
                   <p className="text-lg font-black" style={{ color: GENDER_COLORS[i] }}>{g.value}</p>
-                  <p className="text-[10px]" style={{ color: "rgba(0,100,150,0.45)" }}>{g.name}</p>
+                  <p className="text-[10px]" style={{ color: "#1e5a7a" }}>{g.name}</p>
                 </div>
               ))}
             </div>
@@ -689,7 +689,7 @@ export default function HrDashboard() {
                         </div>
                         <div>
                           <p className="text-xs font-semibold leading-none" style={{ color: "#1a3a4a" }}>{h.name}</p>
-                          <p className="text-[10px] mt-0.5" style={{ color: "rgba(0,100,150,0.45)" }}>{fmtDate(h.date)}</p>
+                          <p className="text-[10px] mt-0.5" style={{ color: "#1e5a7a" }}>{fmtDate(h.date)}</p>
                         </div>
                       </div>
                       <span className="text-[10px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full">
@@ -699,7 +699,7 @@ export default function HrDashboard() {
                   ))}
                 </div>
               ) : (
-                <p className="text-xs text-center py-3" style={{ color: "rgba(0,100,150,0.35)" }}>No upcoming holidays</p>
+                <p className="text-xs text-center py-3" style={{ color: "rgba(0,60,100,0.55)" }}>No upcoming holidays</p>
               )}
             </div>
           </div>
@@ -731,8 +731,8 @@ export default function HrDashboard() {
                 <ChevronRight size={13} style={{ color: "rgba(0,100,150,0.25)" }} />
               </div>
               <p className="text-xl font-black" style={{ color: "#1a3a4a" }}>{value}</p>
-              <p className="text-[11px] font-semibold mt-0.5" style={{ color: "rgba(0,100,150,0.6)" }}>{label}</p>
-              <p className="text-[10px]" style={{ color: "rgba(0,100,150,0.35)" }}>{sub}</p>
+              <p className="text-[11px] font-semibold mt-0.5" style={{ color: "#1e4d6b" }}>{label}</p>
+              <p className="text-[10px]" style={{ color: "rgba(0,60,100,0.6)" }}>{sub}</p>
             </button>
           ))}
         </div>

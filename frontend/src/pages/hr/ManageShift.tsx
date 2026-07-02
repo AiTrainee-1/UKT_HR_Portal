@@ -26,11 +26,13 @@ import {
   useSyncProductionShifts,
   type ShiftAssignment,
 } from "@/lib/api-client";
+import { useEmployeeShiftMonthlyStats } from "@/lib/api-client/custom-hooks";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Clock, Plus, Edit, Trash2, Users, Factory, AlertCircle,
   User, UserPlus, Building2, Briefcase, Search, CheckCircle2, Zap,
   ChevronDown, ChevronRight, UserMinus, Calendar, Timer, RefreshCw,
+  BarChart2, TrendingDown,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -121,12 +123,190 @@ function groupAssignments(assignments: ShiftAssignment[]): AssignedGroup[] {
   return Array.from(map.values()).sort((a, b) => a.shiftName.localeCompare(b.shiftName));
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Employee shift stats dialog (shown when clicking an employee row)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MONTH_NAMES_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+function EmployeeShiftStatsDialog({ employeeId, employeeName, onClose }: {
+  employeeId: number;
+  employeeName: string;
+  onClose: () => void;
+}) {
+  const now = new Date();
+  const [month, setMonth] = useState(now.getMonth() + 1);
+  const [year, setYear] = useState(now.getFullYear());
+
+  const { data, isLoading } = useEmployeeShiftMonthlyStats(employeeId, month, year, true);
+
+  const statBox = (label: string, value: React.ReactNode, color: string) => (
+    <div className="rounded-lg border p-3 text-center">
+      <p className={`text-2xl font-black ${color}`}>{value}</p>
+      <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
+    </div>
+  );
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <DialogTitle className="flex items-center gap-2">
+                <BarChart2 size={18} className="text-indigo-600" />
+                {employeeName} — Shift Stats
+              </DialogTitle>
+              <p className="text-xs text-muted-foreground mt-0.5">Monthly attendance & shift breakdown</p>
+            </div>
+          </div>
+        </DialogHeader>
+
+        {/* Month / Year picker */}
+        <div className="flex items-center gap-2 pt-1">
+          <select
+            value={month}
+            onChange={(e) => setMonth(Number(e.target.value))}
+            className="h-8 rounded-md border px-2 text-xs bg-background"
+          >
+            {MONTH_NAMES_SHORT.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+          </select>
+          <Input
+            type="number"
+            value={year}
+            onChange={(e) => setYear(Number(e.target.value))}
+            className="w-20 h-8 text-xs"
+            min={2020} max={2035}
+          />
+        </div>
+
+        {isLoading ? (
+          <div className="py-12 text-center text-sm text-muted-foreground">Loading stats…</div>
+        ) : !data ? (
+          <div className="py-12 text-center text-sm text-muted-foreground">No data for this period.</div>
+        ) : (
+          <div className="space-y-4">
+            {/* Summary boxes */}
+            <div className="grid grid-cols-3 gap-2">
+              {statBox("Present Days", data.presentDays, "text-green-700")}
+              {statBox("Full Shifts", data.fullShiftDays, "text-indigo-700")}
+              {statBox("Half Shifts", data.halfShiftDays, data.halfShiftDays > 0 ? "text-amber-700" : "text-gray-400")}
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {statBox("Effective Shifts", parseFloat(data.totalEffectiveShifts).toFixed(2), "text-gray-800")}
+              {statBox("Late Count", data.totalLateCount, data.totalLateCount > 0 ? "text-red-700" : "text-gray-400")}
+              {statBox("Leave Days", data.leaveDays, data.leaveDays > 0 ? "text-blue-700" : "text-gray-400")}
+            </div>
+
+            {/* Half shift info */}
+            {data.halfShiftDays > 0 && (
+              <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-100 rounded-lg text-xs text-amber-800">
+                <AlertCircle size={14} className="text-amber-600 shrink-0 mt-0.5" />
+                <span>
+                  <strong>{data.halfShiftDays} half-shift day{data.halfShiftDays !== 1 ? "s" : ""}</strong> detected
+                  (only P1+P2 or only afternoon punches recorded).
+                  Each half shift contributes <strong>0.5</strong> effective days to salary.
+                  Salary impact: <strong>−{(data.halfShiftDays * 0.5).toFixed(2)} days</strong> vs full attendance.
+                </span>
+              </div>
+            )}
+
+            {/* Late breakdown */}
+            {data.totalLateCount > 0 && (
+              <div className="rounded-lg border divide-y text-xs">
+                <div className="px-3 py-2 flex justify-between">
+                  <span className="text-gray-600">Late morning arrivals</span>
+                  <span className="font-semibold text-amber-700">{data.lateMorningDays}</span>
+                </div>
+                <div className="px-3 py-2 flex justify-between">
+                  <span className="text-gray-600">Late lunch returns</span>
+                  <span className="font-semibold text-orange-700">{data.lateReturnDays}</span>
+                </div>
+                <div className="px-3 py-2 flex justify-between">
+                  <span className="text-gray-600">Total late events</span>
+                  <span className="font-bold text-red-700">{data.totalLateCount}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Monthly shift summary (from payroll engine) */}
+            {data.summary && (
+              <div className="rounded-lg border bg-orange-50/40 divide-y text-xs">
+                <div className="px-3 py-2 font-semibold text-gray-700 flex items-center gap-1.5">
+                  <TrendingDown size={12} className="text-orange-600" /> Payroll Penalty (from last payroll run)
+                </div>
+                <div className="px-3 py-2 flex justify-between">
+                  <span className="text-gray-600">Billable lates</span>
+                  <span className="font-semibold text-red-700">{data.summary.billableLateCount}</span>
+                </div>
+                <div className="px-3 py-2 flex justify-between">
+                  <span className="text-gray-600">Shift deductions</span>
+                  <span className="font-semibold text-red-700">{data.summary.shiftDeductions}</span>
+                </div>
+                <div className="px-3 py-2 flex justify-between">
+                  <span className="text-gray-600">Salary deduction</span>
+                  <span className="font-bold text-red-700">
+                    ₹{parseFloat(data.summary.salaryDeductionAmount).toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Day-by-day log */}
+            {data.dailyLogs.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Daily Log</p>
+                <div className="rounded-lg border overflow-hidden max-h-48 overflow-y-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-gray-50 sticky top-0">
+                      <tr>
+                        <th className="text-left px-3 py-2 font-semibold text-gray-500">Date</th>
+                        <th className="text-left px-3 py-2 font-semibold text-gray-500">IN</th>
+                        <th className="text-left px-3 py-2 font-semibold text-gray-500">OUT</th>
+                        <th className="text-left px-3 py-2 font-semibold text-gray-500">Shifts</th>
+                        <th className="text-left px-3 py-2 font-semibold text-gray-500">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.dailyLogs.map((log) => (
+                        <tr key={log.date} className={`border-t ${log.isHalfShift ? "bg-amber-50/40" : ""}`}>
+                          <td className="px-3 py-1.5 font-mono text-gray-700">{log.date}</td>
+                          <td className="px-3 py-1.5 font-mono text-gray-600">{log.punch1 ?? "—"}</td>
+                          <td className="px-3 py-1.5 font-mono text-gray-600">{log.punch4 ?? "—"}</td>
+                          <td className="px-3 py-1.5">
+                            <span className={`font-bold ${log.isHalfShift ? "text-amber-700" : "text-gray-800"}`}>{log.shiftsCompleted}</span>
+                            {log.isHalfShift && <span className="ml-1 text-[9px] bg-amber-100 text-amber-700 px-1 rounded-full">½</span>}
+                          </td>
+                          <td className="px-3 py-1.5">
+                            {(log.lateMorning || log.lateReturn) ? (
+                              <span className="text-red-600 font-semibold">{[log.lateMorning && "Late AM", log.lateReturn && "Late Ret"].filter(Boolean).join(", ")}</span>
+                            ) : <span className="text-green-600">✓</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function AssignedGroupCard({ group, onRemove }: {
   group: AssignedGroup;
   onRemove: (assignmentId: number, empName: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [empSearch, setEmpSearch] = useState("");
+  const [statsEmp, setStatsEmp] = useState<{ id: number; name: string } | null>(null);
 
   const filtered = group.members.filter((m) => {
     const q = empSearch.toLowerCase();
@@ -224,12 +404,16 @@ function AssignedGroupCard({ group, onRemove }: {
                     key={emp.id}
                     className="flex items-center justify-between gap-3 py-2 px-2 rounded-lg hover:bg-gray-50"
                   >
-                    <div className="flex items-center gap-3 min-w-0">
+                    <div
+                      className="flex items-center gap-3 min-w-0 cursor-pointer flex-1"
+                      onClick={() => setStatsEmp({ id: emp.id, name: emp.employeeName })}
+                      title="View shift statistics"
+                    >
                       <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white text-xs font-bold shrink-0">
                         {emp.employeeName.charAt(0).toUpperCase()}
                       </div>
                       <div className="min-w-0">
-                        <p className="text-sm font-semibold text-gray-800 truncate">{emp.employeeName}</p>
+                        <p className="text-sm font-semibold text-gray-800 truncate hover:text-indigo-700">{emp.employeeName}</p>
                         <p className="text-xs text-gray-400 truncate">
                           {emp.employeeCode}
                           {emp.departmentName ? ` · ${emp.departmentName}` : ""}
@@ -259,6 +443,14 @@ function AssignedGroupCard({ group, onRemove }: {
                       {emp.gender && (
                         <Badge variant="outline" className="text-xs capitalize hidden md:flex">{emp.gender}</Badge>
                       )}
+                      <Button
+                        variant="ghost" size="icon"
+                        className="h-7 w-7 text-gray-300 hover:text-indigo-600 hover:bg-indigo-50"
+                        title="View shift statistics"
+                        onClick={() => setStatsEmp({ id: emp.id, name: emp.employeeName })}
+                      >
+                        <BarChart2 size={13} />
+                      </Button>
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
                           <Button
@@ -291,6 +483,15 @@ function AssignedGroupCard({ group, onRemove }: {
                 ))
               )}
             </div>
+
+            {/* Employee stats dialog */}
+            {statsEmp && (
+              <EmployeeShiftStatsDialog
+                employeeId={statsEmp.id}
+                employeeName={statsEmp.name}
+                onClose={() => setStatsEmp(null)}
+              />
+            )}
           </div>
         )}
       </CardContent>
@@ -711,7 +912,7 @@ export default function ManageShift() {
   const [activeTab, setActiveTab] = useState<"production" | "staff" | "assigned">("production");
   const [showDialog, setShowDialog] = useState(false);
   const [editingShift, setEditingShift] = useState<ShiftTemplate | null>(null);
-  const [form, setForm] = useState({ name: "", shiftType: "production", startTime: "09:00", endTime: "17:30", genderRule: "all", gracePeriodMinutes: 15 });
+  const [form, setForm] = useState({ name: "", shiftType: "production", startTime: "09:00", endTime: "17:30", genderRule: "all", gracePeriodMinutes: 15, firstHalfEnd: "13:30", lunchDurationMinutes: 60, lunchGraceMinutes: 10 });
 
   const [staffAssignMode, setStaffAssignMode] = useState<StaffAssignMode>("individual");
   const [showAssignIndividual, setShowAssignIndividual] = useState(false);
@@ -747,13 +948,23 @@ export default function ManageShift() {
   const openCreate = () => {
     setEditingShift(null);
     const defaultType = activeTab === "assigned" ? "staff" : activeTab;
-    setForm({ name: "", shiftType: defaultType, startTime: "09:00", endTime: "17:30", genderRule: "all", gracePeriodMinutes: 15 });
+    setForm({ name: "", shiftType: defaultType, startTime: "09:00", endTime: defaultType === "staff" ? "19:00" : "20:00", genderRule: "all", gracePeriodMinutes: 15, firstHalfEnd: "13:30", lunchDurationMinutes: 60, lunchGraceMinutes: 10 });
     setShowDialog(true);
   };
 
   const openEdit = (shift: ShiftTemplate) => {
     setEditingShift(shift);
-    setForm({ name: shift.name, shiftType: shift.shiftType, startTime: shift.startTime ?? "09:00", endTime: shift.endTime ?? "17:30", genderRule: shift.genderRule, gracePeriodMinutes: shift.gracePeriodMinutes });
+    setForm({
+      name: shift.name,
+      shiftType: shift.shiftType,
+      startTime: shift.startTime ?? "09:00",
+      endTime: shift.endTime ?? "17:30",
+      genderRule: shift.genderRule,
+      gracePeriodMinutes: shift.gracePeriodMinutes,
+      firstHalfEnd: (shift as any).firstHalfEnd ?? "13:30",
+      lunchDurationMinutes: (shift as any).lunchDurationMinutes ?? 60,
+      lunchGraceMinutes: (shift as any).lunchGraceMinutes ?? 10,
+    });
     setShowDialog(true);
   };
 
@@ -771,10 +982,13 @@ export default function ManageShift() {
   const handleSave = async () => {
     if (!form.name) { toast({ title: "Shift name is required", variant: "destructive" }); return; }
     try {
+      const staffFields = form.shiftType === "staff"
+        ? { firstHalfEnd: form.firstHalfEnd || null, lunchDurationMinutes: form.lunchDurationMinutes, lunchGraceMinutes: form.lunchGraceMinutes }
+        : { firstHalfEnd: null };
       if (editingShift) {
-        await updateMutation.mutateAsync({ id: editingShift.id, data: { name: form.name, shiftType: form.shiftType, startTime: form.startTime, endTime: form.endTime, genderRule: form.genderRule, gracePeriodMinutes: form.gracePeriodMinutes } });
+        await updateMutation.mutateAsync({ id: editingShift.id, data: { name: form.name, shiftType: form.shiftType, startTime: form.startTime, endTime: form.endTime, genderRule: form.genderRule, gracePeriodMinutes: form.gracePeriodMinutes, ...staffFields } });
       } else {
-        await createMutation.mutateAsync({ name: form.name, shiftType: form.shiftType, startTime: form.startTime, endTime: form.endTime, genderRule: form.genderRule, gracePeriodMinutes: form.gracePeriodMinutes });
+        await createMutation.mutateAsync({ name: form.name, shiftType: form.shiftType, startTime: form.startTime, endTime: form.endTime, genderRule: form.genderRule, gracePeriodMinutes: form.gracePeriodMinutes, ...staffFields } as any);
       }
     } catch {
       toast({ title: "Failed to save shift", variant: "destructive" });
@@ -990,6 +1204,38 @@ export default function ManageShift() {
                 <Label>Grace Period (minutes)</Label>
                 <Input type="number" value={form.gracePeriodMinutes} onChange={(e) => setForm((f) => ({ ...f, gracePeriodMinutes: Number(e.target.value) }))} min={0} max={60} />
               </div>
+
+              {form.shiftType === "staff" && (
+                <div className="rounded-lg border border-dashed border-green-200 bg-green-50/40 p-3 space-y-3">
+                  <p className="text-xs font-semibold text-green-900">
+                    Lunch Break Settings
+                    <span className="font-normal text-green-700 ml-1">— defines the 4-punch shift structure</span>
+                  </p>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="space-y-1">
+                      <Label className="text-xs">First Half Ends</Label>
+                      <Input type="time" value={form.firstHalfEnd} onChange={(e) => setForm((f) => ({ ...f, firstHalfEnd: e.target.value }))} className="h-8 text-sm" />
+                      <p className="text-xs text-muted-foreground">Lunch starts from</p>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Lunch Duration (min)</Label>
+                      <Input type="number" value={form.lunchDurationMinutes} onChange={(e) => setForm((f) => ({ ...f, lunchDurationMinutes: Number(e.target.value) }))} min={15} max={120} className="h-8 text-sm" />
+                      <p className="text-xs text-muted-foreground">Allowed lunch time</p>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Lunch Grace (min)</Label>
+                      <Input type="number" value={form.lunchGraceMinutes} onChange={(e) => setForm((f) => ({ ...f, lunchGraceMinutes: Number(e.target.value) }))} min={0} max={30} className="h-8 text-sm" />
+                      <p className="text-xs text-muted-foreground">Late departure allowed</p>
+                    </div>
+                  </div>
+                  <div className="text-xs text-green-700 bg-white/60 rounded p-2 border border-green-100">
+                    <strong>Example:</strong> First half ends 13:30, grace 10 min → employees can go for lunch until 13:40.
+                    With 60 min lunch, they must return by <em>departure time + 60 min</em>.
+                    Late return = shift deduction after 3 free permissions/month.
+                  </div>
+                </div>
+              )}
+
               <div className="flex gap-3 pt-2">
                 <Button variant="outline" className="flex-1" onClick={() => setShowDialog(false)}>Cancel</Button>
                 <Button className="flex-1" onClick={handleSave} disabled={createMutation.isPending || updateMutation.isPending}>

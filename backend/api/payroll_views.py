@@ -28,6 +28,7 @@ from .models import (
     EmployeeShiftAssignment,
     Holiday,
     LeaveRequest,
+    MonthlyShiftSummary,
     Payroll,
     PayrollSettings,
     SalarySlip,
@@ -204,6 +205,26 @@ def _classify_day(
 #  Advance deductions helper
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _mark_repayments_processed(advance_details: list[dict]) -> None:
+    """After payroll slip is saved, mark the deducted repayments as processed."""
+    from decimal import Decimal as D
+    for detail in advance_details:
+        try:
+            rep = AdvanceRepayment.objects.select_related("advance").get(pk=detail["repaymentId"])
+            if rep.is_processed:
+                continue
+            rep.is_processed = True
+            rep.save(update_fields=["is_processed"])
+            adv = rep.advance
+            adv.total_repaid = D(str(adv.total_repaid)) + D(str(rep.amount))
+            adv.outstanding = max(D("0"), D(str(adv.amount)) - D(str(adv.total_repaid)))
+            if adv.outstanding == 0:
+                adv.status = "closed"
+            adv.save(update_fields=["total_repaid", "outstanding", "status"])
+        except AdvanceRepayment.DoesNotExist:
+            pass
+
+
 def _pending_advance_repayments(emp: Employee, month: int, year: int) -> tuple[Decimal, list[dict]]:
     """
     Find all pending advance repayments due in this month and return
@@ -212,7 +233,7 @@ def _pending_advance_repayments(emp: Employee, month: int, year: int) -> tuple[D
     repayments = (
         AdvanceRepayment.objects
         .select_related("advance")
-        .filter(advance__employee=emp, month=month, year=year, payroll_run__isnull=True)
+        .filter(advance__employee=emp, month=month, year=year, is_processed=False)
     )
     total = Decimal("0")
     details = []
@@ -282,6 +303,15 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
     )
     attendance_by_date: dict[str, Attendance] = {a.date: a for a in att_qs}
 
+    # 4c. Fetch DailyShiftLog for half-shift detection (staff 4-punch engine results)
+    from .models import DailyShiftLog as _DSL
+    shift_logs_by_date: dict[date, object] = {}
+    if emp.employment_type == "staff":
+        shift_logs_by_date = {
+            sl.date: sl
+            for sl in _DSL.objects.filter(employee=emp, date__year=year, date__month=month)
+        }
+
     # 5. Fetch approved leave requests that overlap this month
     month_start = date(year, month, 1)
     month_end = date(year, month, calendar.monthrange(year, month)[1])
@@ -304,16 +334,33 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
     unpaid_leave_count = 0
     absent_count = 0
     late_count = 0
+    half_shift_count = 0
+    full_shift_count = 0
+    effective_present = Decimal("0")  # accumulates 0.5 or 1.0 per present day
 
     for d in working_days_list:
         info = _classify_day(d, logs_by_date, attendance_by_date, approved_leaves, shift_start, grace_minutes)
         status = info["status"]
         is_late = info["is_late"]
+        is_half = False
+        day_shifts = Decimal("1.00")
 
         if status == "present":
             present_count += 1
             if is_late:
                 late_count += 1
+            # Use DailyShiftLog.shifts_completed to detect half shifts
+            sl = shift_logs_by_date.get(d)
+            if sl and sl.shifts_completed > 0:
+                day_shifts = sl.shifts_completed
+                if day_shifts == Decimal("0.50"):
+                    is_half = True
+                    half_shift_count += 1
+                else:
+                    full_shift_count += 1
+            else:
+                full_shift_count += 1
+            effective_present += day_shifts
         elif status == "paid_leave":
             paid_leave_count += 1
         elif status == "unpaid_leave":
@@ -329,11 +376,14 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
             "firstIn": info["first_in"],
             "lastOut": info["last_out"],
             "leaveType": info["leave_type"],
+            "shiftsCompleted": float(day_shifts) if status == "present" else 0.0,
+            "isHalfShift": is_half,
         })
 
     # 7. Salary calculation
-    # Effective present days = actual present + paid leave (unpaid leave = absent for pay)
-    effective_days = Decimal(str(present_count + paid_leave_count))
+    # effective_days = sum of shifts_completed for present days + paid leave days
+    # (half shift days contribute 0.5 instead of 1.0)
+    effective_days = effective_present + Decimal(str(paid_leave_count))
     daily_rate = _d2(emp.salary_amount / Decimal(str(total_working_days)))
     base_gross = _d2(daily_rate * effective_days)
 
@@ -362,10 +412,30 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
         else Decimal("0")
     )
 
-    # 8. Advances
+    # 8. Late shift penalty — always recompute from DailyShiftLog so stale
+    #    summaries from earlier (pre-engine-fix) runs don't persist.
+    late_penalty = Decimal("0")
+    late_summary_data = {
+        "totalLateCount": late_count,
+        "permissionsUsed": 0,
+        "billableLateCount": 0,
+        "shiftDeductions": 0.0,
+    }
+    from .shift_engine import compute_monthly_shift_summary
+    shift_summary = compute_monthly_shift_summary(emp, year, month, daily_rate)
+    if shift_summary and shift_summary.salary_deduction_amount > 0:
+        late_penalty = shift_summary.salary_deduction_amount
+        late_summary_data = {
+            "totalLateCount": shift_summary.total_late_count,
+            "permissionsUsed": shift_summary.permissions_used,
+            "billableLateCount": shift_summary.billable_late_count,
+            "shiftDeductions": float(shift_summary.shift_deductions),
+        }
+
+    # 9. Advances
     advance_total, advance_details = _pending_advance_repayments(emp, month, year)
 
-    total_deductions = _d2(pf_deduction + esi_deduction + advance_total)
+    total_deductions = _d2(pf_deduction + esi_deduction + advance_total + late_penalty)
     net_salary = _d2(base_gross - total_deductions)
 
     # 9. Build breakdown JSON (full traceability)
@@ -386,6 +456,8 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
             "unpaidLeaveDays": unpaid_leave_count,
             "absentDays": absent_count,
             "lateDays": late_count,
+            "halfShiftDays": half_shift_count,
+            "fullShiftDays": full_shift_count,
             "effectivePaidDays": float(effective_days),
         },
         "earnings": {
@@ -405,6 +477,8 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
             "esiApplicableBelow": float(esi_ceiling),
             "advances": float(advance_total),
             "advanceDetails": advance_details,
+            "lateShiftPenalty": float(late_penalty),
+            "lateSummary": late_summary_data,
             "total": float(total_deductions),
         },
         "netSalary": float(net_salary),
@@ -452,7 +526,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
             pf_deduction=pf_deduction,
             esi_deduction=esi_deduction,
             advance_deduction=advance_total,
-            other_deductions=Decimal("0"),
+            other_deductions=late_penalty,
             total_deductions=total_deductions,
             net_salary=net_salary,
             working_days=total_working_days,
@@ -465,6 +539,10 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
             breakdown_details=breakdown,
         ),
     )
+
+    # Mark advance repayments as processed and update advance outstanding totals
+    if advance_details:
+        _mark_repayments_processed(advance_details)
 
     return {"payroll": payroll, "slip": slip}
 
@@ -718,6 +796,10 @@ def _generate_production_payroll(emp: Employee, month: int, year: int, week_numb
             breakdown_details=breakdown,
         ),
     )
+
+    # Mark advance repayments as processed and update advance outstanding totals
+    if advance_details:
+        _mark_repayments_processed(advance_details)
 
     return {"payroll": payroll, "slip": slip}
 
@@ -1359,6 +1441,8 @@ def _ps_response(ps) -> dict:
         "slipCompanyAddress": ps.slip_company_address,
         "minWageRate": float(ps.min_wage_rate),
         "signatureImage": ps.signature_image,
+        "companyLogo": ps.company_logo,
+        "authorizedSignature": ps.authorized_signature,
         # SMTP / Email
         "smtpHost": ps.smtp_host,
         "smtpPort": ps.smtp_port,
@@ -1392,6 +1476,8 @@ def payroll_settings_view(request: Request) -> Response:
         "slipCompanyAddress": ("slip_company_address", str),
         "minWageRate": ("min_wage_rate", Decimal),
         "signatureImage": ("signature_image", str),
+        "companyLogo": ("company_logo", str),
+        "authorizedSignature": ("authorized_signature", str),
         "smtpHost": ("smtp_host", str),
         "smtpPort": ("smtp_port", int),
         "smtpUsername": ("smtp_username", str),
