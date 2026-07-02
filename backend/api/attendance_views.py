@@ -815,8 +815,8 @@ def employee_shift_monthly_stats(request: Request) -> Response:
     Returns detailed monthly shift stats for one employee (used by Manage Shift panel).
     """
     import calendar as _cal
+    from collections import defaultdict as _dd
     from decimal import Decimal as _D
-    from django.db.models import Q as _Q
 
     emp_id = request.query_params.get("employee_id")
     try:
@@ -830,20 +830,37 @@ def employee_shift_monthly_stats(request: Request) -> Response:
     except (Employee.DoesNotExist, TypeError, ValueError):
         return Response({"error": "Employee not found"}, status=404)
 
-    logs = list(DailyShiftLog.objects.filter(employee=emp, date__year=y, date__month=m).order_by("date"))
+    days_in_month = _cal.monthrange(y, m)[1]
+    today = _today()
 
-    present_days = len(logs)
-    half_shift_days = sum(1 for l in logs if l.shifts_completed == _D("0.50"))
-    full_shift_days = sum(1 for l in logs if l.shifts_completed == _D("1.00"))
-    total_effective_shifts = sum(l.shifts_completed for l in logs) or _D("0")
-    late_morning_days = sum(1 for l in logs if l.late_morning)
-    late_return_days = sum(1 for l in logs if l.late_return)
-    total_late = late_morning_days + late_return_days
+    # ── DailyShiftLog rows keyed by date ────────────────────────────────────
+    shift_logs: dict[date_type, object] = {
+        sl.date: sl
+        for sl in DailyShiftLog.objects.filter(employee=emp, date__year=y, date__month=m)
+    }
 
-    # Leave count for this month
+    # ── Raw biometric/manual punches keyed by date string ───────────────────
+    punches_by_date: dict[str, list] = _dd(list)
+    for log in AttendanceLog.objects.filter(
+        employee=emp, date__year=y, date__month=m
+    ).order_by("date", "punch_time"):
+        punches_by_date[log.date.isoformat()].append({
+            "time": log.punch_time.strftime("%H:%M"),
+            "type": log.punch_type,
+            "source": log.source,
+        })
+
+    # ── Manual attendance records ────────────────────────────────────────────
+    prefix = f"{y}-{str(m).zfill(2)}"
+    manual_by_date = {
+        str(a.date): a
+        for a in Attendance.objects.filter(employee=emp, date__startswith=prefix)
+    }
+
+    # ── Approved leave dates ─────────────────────────────────────────────────
     month_start = date_type(y, m, 1)
-    month_end = date_type(y, m, _cal.monthrange(y, m)[1])
-    leave_days = 0
+    month_end = date_type(y, m, days_in_month)
+    leave_date_map: dict[str, str] = {}
     for lr in LeaveRequest.objects.filter(
         employee=emp, status="approved",
         start_date__lte=month_end.isoformat(),
@@ -851,10 +868,86 @@ def employee_shift_monthly_stats(request: Request) -> Response:
     ):
         lr_start = max(date_type.fromisoformat(str(lr.start_date)), month_start)
         lr_end = min(date_type.fromisoformat(str(lr.end_date)), month_end)
-        if lr_start <= lr_end:
-            leave_days += (lr_end - lr_start).days + 1
+        cur = lr_start
+        while cur <= lr_end:
+            leave_date_map[cur.isoformat()] = getattr(lr, "type", "Leave")
+            cur += timedelta(days=1)
 
-    # MonthlyShiftSummary (may not exist if payroll not generated yet)
+    # ── Build full daily records for every day in month ──────────────────────
+    present_days = half_shift_days = full_shift_days = 0
+    absent_days = leave_days = late_morning_days = late_return_days = 0
+    total_effective_shifts = _D("0")
+
+    daily = []
+    for day in range(1, days_in_month + 1):
+        cur = date_type(y, m, day)
+        date_str = cur.isoformat()
+        is_sunday = cur.weekday() == 6
+        is_future = cur > today
+
+        punches = punches_by_date.get(date_str, [])
+        manual = manual_by_date.get(date_str)
+        has_punch = bool(punches) or bool(manual and manual.present)
+
+        # All punches are stored as "IN" by the biometric device;
+        # first punch = morning IN, last punch = evening OUT
+        first_in = punches[0]["time"] if punches else None
+        last_out = punches[-1]["time"] if len(punches) > 1 else None
+        source = punches[0]["source"] if punches else ("manual" if manual else None)
+
+        if is_sunday:
+            status = "holiday"
+        elif is_future:
+            status = "future"
+        elif date_str in leave_date_map:
+            status = "on_leave"
+            leave_days += 1
+        elif has_punch:
+            status = "present"
+            present_days += 1
+        else:
+            status = "absent"
+            absent_days += 1
+
+        sl = shift_logs.get(cur)
+        shifts_done = _D("0")
+        is_half = False
+        late_am = late_ret = False
+
+        if sl:
+            shifts_done = sl.shifts_completed
+            is_half = shifts_done == _D("0.50")
+            late_am = sl.late_morning
+            late_ret = sl.late_return
+            if status == "present":
+                total_effective_shifts += shifts_done
+                if is_half:
+                    half_shift_days += 1
+                elif shifts_done >= _D("1.00"):
+                    full_shift_days += 1
+        if late_am:
+            late_morning_days += 1
+        if late_ret:
+            late_return_days += 1
+
+        daily.append({
+            "date": date_str,
+            "day": cur.strftime("%a"),
+            "status": status,
+            "firstPunch": first_in,
+            "lastPunch": last_out,
+            "totalPunches": len(punches),
+            "source": source,
+            "leaveType": leave_date_map.get(date_str),
+            "shiftsCompleted": str(shifts_done) if sl else None,
+            "isHalfShift": is_half,
+            "lateMorning": late_am,
+            "lateReturn": late_ret,
+        })
+
+    total_late = late_morning_days + late_return_days
+
+    # ── MonthlyShiftSummary (payroll engine result) ──────────────────────────
     try:
         s = MonthlyShiftSummary.objects.get(employee=emp, year=y, month=m)
         summary_data = {
@@ -867,36 +960,24 @@ def employee_shift_monthly_stats(request: Request) -> Response:
     except MonthlyShiftSummary.DoesNotExist:
         summary_data = None
 
-    # Per-day log entries
-    daily = [
-        {
-            "date": l.date.isoformat(),
-            "shiftsCompleted": str(l.shifts_completed),
-            "isHalfShift": l.shifts_completed == _D("0.50"),
-            "lateMorning": l.late_morning,
-            "lateReturn": l.late_return,
-            "punch1": l.punch1.strftime("%H:%M") if l.punch1 else None,
-            "punch4": l.punch4.strftime("%H:%M") if l.punch4 else None,
-        }
-        for l in logs
-    ]
-
     return Response({
         "employeeId": emp.id,
         "employeeCode": emp.employee_code,
         "employeeName": f"{emp.first_name} {emp.last_name}",
         "department": emp.department.name if emp.department else None,
         "designation": emp.designation.title if emp.designation else None,
+        "employmentType": emp.employment_type,
         "month": m,
         "year": y,
         "presentDays": present_days,
+        "absentDays": absent_days,
+        "leaveDays": leave_days,
         "halfShiftDays": half_shift_days,
         "fullShiftDays": full_shift_days,
         "totalEffectiveShifts": str(total_effective_shifts),
         "lateMorningDays": late_morning_days,
         "lateReturnDays": late_return_days,
         "totalLateCount": total_late,
-        "leaveDays": leave_days,
         "summary": summary_data,
         "dailyLogs": daily,
     })

@@ -135,105 +135,102 @@ function EmployeeShiftStatsDialog({ employeeId, employeeName, onClose }: {
   onClose: () => void;
 }) {
   const now = new Date();
-  const [month, setMonth] = useState(now.getMonth() + 1);
-  const [year, setYear] = useState(now.getFullYear());
+  const usePrev = now.getDate() <= 10;
+  const month = usePrev ? (now.getMonth() === 0 ? 12 : now.getMonth()) : now.getMonth() + 1;
+  const year = usePrev && now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+  const monthLabel = MONTH_NAMES_SHORT[month - 1] + " " + year;
 
-  const { data, isLoading } = useEmployeeShiftMonthlyStats(employeeId, month, year, true);
+  const { data, isLoading, isError } = useEmployeeShiftMonthlyStats(employeeId, month, year, true);
 
-  const statBox = (label: string, value: React.ReactNode, color: string) => (
-    <div className="rounded-lg border p-3 text-center">
-      <p className={`text-2xl font-black ${color}`}>{value}</p>
-      <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
-    </div>
-  );
+  const statusBadge = (status: string) => {
+    switch (status) {
+      case "present":    return <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-green-100 text-green-700">Present</span>;
+      case "absent":     return <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-100 text-red-700">Absent</span>;
+      case "on_leave":   return <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 text-blue-700">Leave</span>;
+      case "holiday":    return <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-500">Holiday</span>;
+      default:           return <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-50 text-gray-400">—</span>;
+    }
+  };
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col">
         <DialogHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <DialogTitle className="flex items-center gap-2">
-                <BarChart2 size={18} className="text-indigo-600" />
-                {employeeName} — Shift Stats
-              </DialogTitle>
-              <p className="text-xs text-muted-foreground mt-0.5">Monthly attendance & shift breakdown</p>
-            </div>
-          </div>
+          <DialogTitle className="flex items-center gap-2">
+            <BarChart2 size={18} className="text-indigo-600" />
+            {employeeName} — Attendance History
+          </DialogTitle>
+          {data && (
+            <p className="text-xs text-muted-foreground">
+              Code: <strong>{data.employeeCode}</strong> &nbsp;·&nbsp;
+              Dept: <strong>{data.department ?? "—"}</strong> &nbsp;·&nbsp;
+              Type: <strong className="capitalize">{data.employmentType ?? "—"}</strong>
+              &nbsp;&nbsp;|&nbsp;&nbsp;{monthLabel}
+            </p>
+          )}
         </DialogHeader>
 
-        {/* Month / Year picker */}
-        <div className="flex items-center gap-2 pt-1">
-          <select
-            value={month}
-            onChange={(e) => setMonth(Number(e.target.value))}
-            className="h-8 rounded-md border px-2 text-xs bg-background"
-          >
-            {MONTH_NAMES_SHORT.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
-          </select>
-          <Input
-            type="number"
-            value={year}
-            onChange={(e) => setYear(Number(e.target.value))}
-            className="w-20 h-8 text-xs"
-            min={2020} max={2035}
-          />
-        </div>
-
         {isLoading ? (
-          <div className="py-12 text-center text-sm text-muted-foreground">Loading stats…</div>
+          <div className="py-12 text-center text-sm text-muted-foreground">Loading…</div>
+        ) : isError ? (
+          <div className="py-12 text-center text-sm text-red-500">Could not load data. Restart the Django server and try again.</div>
         ) : !data ? (
-          <div className="py-12 text-center text-sm text-muted-foreground">No data for this period.</div>
+          <div className="py-12 text-center text-sm text-muted-foreground">No data available.</div>
         ) : (
-          <div className="space-y-4">
-            {/* Summary boxes */}
-            <div className="grid grid-cols-3 gap-2">
-              {statBox("Present Days", data.presentDays, "text-green-700")}
-              {statBox("Full Shifts", data.fullShiftDays, "text-indigo-700")}
-              {statBox("Half Shifts", data.halfShiftDays, data.halfShiftDays > 0 ? "text-amber-700" : "text-gray-400")}
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              {statBox("Effective Shifts", parseFloat(data.totalEffectiveShifts).toFixed(2), "text-gray-800")}
-              {statBox("Late Count", data.totalLateCount, data.totalLateCount > 0 ? "text-red-700" : "text-gray-400")}
-              {statBox("Leave Days", data.leaveDays, data.leaveDays > 0 ? "text-blue-700" : "text-gray-400")}
+          <div className="flex flex-col gap-4 overflow-y-auto pr-1">
+            {/* ── Summary counts row (mirrors Attendance History header) ── */}
+            <div className="flex items-center gap-6 text-sm font-medium flex-wrap">
+              <span className="text-green-700">{data.presentDays} Present</span>
+              <span className="text-red-600">{data.absentDays} Absent</span>
+              {data.leaveDays > 0 && <span className="text-blue-600">{data.leaveDays} On Leave</span>}
+              {data.totalLateCount > 0 && <span className="text-orange-600">{data.totalLateCount} Late</span>}
+              {data.halfShiftDays > 0 && <span className="text-amber-600">{data.halfShiftDays} Half Shift</span>}
             </div>
 
-            {/* Half shift info */}
+            {/* ── Shift calculation summary ── */}
+            <div className="grid grid-cols-3 gap-2 text-xs">
+              <div className="rounded-lg border px-3 py-2 flex justify-between items-center">
+                <span className="text-muted-foreground">Full Shifts</span>
+                <span className="font-bold text-indigo-700">{data.fullShiftDays}</span>
+              </div>
+              <div className="rounded-lg border px-3 py-2 flex justify-between items-center">
+                <span className="text-muted-foreground">Half Shifts</span>
+                <span className={`font-bold ${data.halfShiftDays > 0 ? "text-amber-700" : "text-gray-400"}`}>{data.halfShiftDays}</span>
+              </div>
+              <div className="rounded-lg border px-3 py-2 flex justify-between items-center">
+                <span className="text-muted-foreground">Effective Days</span>
+                <span className="font-bold text-gray-800">{parseFloat(data.totalEffectiveShifts).toFixed(2)}</span>
+              </div>
+              <div className="rounded-lg border px-3 py-2 flex justify-between items-center">
+                <span className="text-muted-foreground">Late Morning</span>
+                <span className={`font-bold ${data.lateMorningDays > 0 ? "text-orange-600" : "text-gray-400"}`}>{data.lateMorningDays}</span>
+              </div>
+              <div className="rounded-lg border px-3 py-2 flex justify-between items-center">
+                <span className="text-muted-foreground">Late Return</span>
+                <span className={`font-bold ${data.lateReturnDays > 0 ? "text-orange-600" : "text-gray-400"}`}>{data.lateReturnDays}</span>
+              </div>
+              <div className="rounded-lg border px-3 py-2 flex justify-between items-center">
+                <span className="text-muted-foreground">Total Late</span>
+                <span className={`font-bold ${data.totalLateCount > 0 ? "text-red-700" : "text-gray-400"}`}>{data.totalLateCount}</span>
+              </div>
+            </div>
+
+            {/* Half shift salary impact note */}
             {data.halfShiftDays > 0 && (
               <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-100 rounded-lg text-xs text-amber-800">
-                <AlertCircle size={14} className="text-amber-600 shrink-0 mt-0.5" />
+                <AlertCircle size={13} className="text-amber-600 shrink-0 mt-0.5" />
                 <span>
-                  <strong>{data.halfShiftDays} half-shift day{data.halfShiftDays !== 1 ? "s" : ""}</strong> detected
-                  (only P1+P2 or only afternoon punches recorded).
-                  Each half shift contributes <strong>0.5</strong> effective days to salary.
+                  <strong>{data.halfShiftDays} half-shift day{data.halfShiftDays !== 1 ? "s" : ""}</strong> — each counts as 0.5 effective days.
                   Salary impact: <strong>−{(data.halfShiftDays * 0.5).toFixed(2)} days</strong> vs full attendance.
                 </span>
               </div>
             )}
 
-            {/* Late breakdown */}
-            {data.totalLateCount > 0 && (
-              <div className="rounded-lg border divide-y text-xs">
-                <div className="px-3 py-2 flex justify-between">
-                  <span className="text-gray-600">Late morning arrivals</span>
-                  <span className="font-semibold text-amber-700">{data.lateMorningDays}</span>
-                </div>
-                <div className="px-3 py-2 flex justify-between">
-                  <span className="text-gray-600">Late lunch returns</span>
-                  <span className="font-semibold text-orange-700">{data.lateReturnDays}</span>
-                </div>
-                <div className="px-3 py-2 flex justify-between">
-                  <span className="text-gray-600">Total late events</span>
-                  <span className="font-bold text-red-700">{data.totalLateCount}</span>
-                </div>
-              </div>
-            )}
-
-            {/* Monthly shift summary (from payroll engine) */}
+            {/* Payroll penalty */}
             {data.summary && (
               <div className="rounded-lg border bg-orange-50/40 divide-y text-xs">
                 <div className="px-3 py-2 font-semibold text-gray-700 flex items-center gap-1.5">
-                  <TrendingDown size={12} className="text-orange-600" /> Payroll Penalty (from last payroll run)
+                  <TrendingDown size={12} className="text-orange-600" /> Payroll Penalty (last payroll run)
                 </div>
                 <div className="px-3 py-2 flex justify-between">
                   <span className="text-gray-600">Billable lates</span>
@@ -252,47 +249,70 @@ function EmployeeShiftStatsDialog({ employeeId, employeeName, onClose }: {
               </div>
             )}
 
-            {/* Day-by-day log */}
-            {data.dailyLogs.length > 0 && (
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Daily Log</p>
-                <div className="rounded-lg border overflow-hidden max-h-48 overflow-y-auto">
+            {/* ── Daily attendance table (mirrors Attendance History) ── */}
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Daily Log</p>
+              <div className="rounded-lg border overflow-hidden">
+                <div className="overflow-y-auto max-h-72">
                   <table className="w-full text-xs">
-                    <thead className="bg-gray-50 sticky top-0">
+                    <thead className="bg-gray-50 sticky top-0 z-10">
                       <tr>
-                        <th className="text-left px-3 py-2 font-semibold text-gray-500">Date</th>
-                        <th className="text-left px-3 py-2 font-semibold text-gray-500">IN</th>
-                        <th className="text-left px-3 py-2 font-semibold text-gray-500">OUT</th>
-                        <th className="text-left px-3 py-2 font-semibold text-gray-500">Shifts</th>
+                        <th className="text-left px-3 py-2 font-semibold text-gray-500 w-[90px]">Date</th>
                         <th className="text-left px-3 py-2 font-semibold text-gray-500">Status</th>
+                        <th className="text-left px-3 py-2 font-semibold text-gray-500">First IN</th>
+                        <th className="text-left px-3 py-2 font-semibold text-gray-500">Last OUT</th>
+                        <th className="text-center px-3 py-2 font-semibold text-gray-500">Punches</th>
+                        <th className="text-left px-3 py-2 font-semibold text-gray-500">Notes</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {data.dailyLogs.map((log) => (
-                        <tr key={log.date} className={`border-t ${log.isHalfShift ? "bg-amber-50/40" : ""}`}>
-                          <td className="px-3 py-1.5 font-mono text-gray-700">{log.date}</td>
-                          <td className="px-3 py-1.5 font-mono text-gray-600">{log.punch1 ?? "—"}</td>
-                          <td className="px-3 py-1.5 font-mono text-gray-600">{log.punch4 ?? "—"}</td>
-                          <td className="px-3 py-1.5">
-                            <span className={`font-bold ${log.isHalfShift ? "text-amber-700" : "text-gray-800"}`}>{log.shiftsCompleted}</span>
-                            {log.isHalfShift && <span className="ml-1 text-[9px] bg-amber-100 text-amber-700 px-1 rounded-full">½</span>}
-                          </td>
-                          <td className="px-3 py-1.5">
-                            {(log.lateMorning || log.lateReturn) ? (
-                              <span className="text-red-600 font-semibold">{[log.lateMorning && "Late AM", log.lateReturn && "Late Ret"].filter(Boolean).join(", ")}</span>
-                            ) : <span className="text-green-600">✓</span>}
-                          </td>
-                        </tr>
-                      ))}
+                      {data.dailyLogs
+                        .filter((log) => log.status !== "future")
+                        .map((log) => {
+                          const rowBg = log.isHalfShift
+                            ? "bg-amber-50/50"
+                            : log.status === "absent"
+                            ? "bg-red-50/30"
+                            : log.status === "on_leave"
+                            ? "bg-blue-50/30"
+                            : log.status === "holiday"
+                            ? "bg-gray-50"
+                            : "";
+                          const notes: string[] = [];
+                          if (log.isHalfShift) notes.push("½ Shift");
+                          if (log.lateMorning) notes.push("Late AM");
+                          if (log.lateReturn)  notes.push("Late Ret");
+                          if (log.leaveType)   notes.push(log.leaveType);
+                          return (
+                            <tr key={log.date} className={`border-t ${rowBg}`}>
+                              <td className="px-3 py-1.5 font-mono text-gray-700 whitespace-nowrap">
+                                {log.date} <span className="text-gray-400 text-[10px]">{log.day}</span>
+                              </td>
+                              <td className="px-3 py-1.5">{statusBadge(log.status)}</td>
+                              <td className="px-3 py-1.5 font-mono text-gray-600">{log.firstPunch ?? "—"}</td>
+                              <td className="px-3 py-1.5 font-mono text-gray-600">{log.lastPunch ?? "—"}</td>
+                              <td className="px-3 py-1.5 text-center text-gray-700 font-medium">{log.totalPunches || "—"}</td>
+                              <td className="px-3 py-1.5">
+                                {notes.length > 0 ? (
+                                  <span className={`font-semibold ${log.isHalfShift ? "text-amber-700" : "text-orange-600"}`}>
+                                    {notes.join(", ")}
+                                  </span>
+                                ) : log.status === "present" ? (
+                                  <span className="text-green-600">✓</span>
+                                ) : null}
+                              </td>
+                            </tr>
+                          );
+                        })}
                     </tbody>
                   </table>
                 </div>
               </div>
-            )}
+            </div>
           </div>
         )}
 
-        <DialogFooter>
+        <DialogFooter className="pt-2">
           <Button variant="outline" onClick={onClose}>Close</Button>
         </DialogFooter>
       </DialogContent>

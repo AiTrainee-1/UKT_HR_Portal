@@ -393,14 +393,35 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
                     ))}
                   </div>
                   {(bd.summary.lateDays ?? 0) > 0 && (
-                    <p className="text-xs text-amber-700 mt-2 flex items-center gap-1">
-                      <Clock size={12} /> {bd.summary.lateDays} day{bd.summary.lateDays !== 1 ? "s" : ""} late (arrived after grace period)
-                    </p>
+                    <div className="mt-2 rounded-md bg-amber-50 border border-amber-100 px-3 py-2 text-xs text-amber-800 space-y-0.5">
+                      <p className="font-semibold flex items-center gap-1">
+                        <Clock size={11} /> Late Arrival Detection
+                      </p>
+                      <p>Shift starts: <strong>{bd.shift?.startTime ?? "—"}</strong> &nbsp;+&nbsp; Grace: <strong>{bd.shift?.gracePeriodMinutes ?? 0} min</strong> &nbsp;→&nbsp; Deadline: <strong>
+                        {bd.shift?.startTime && bd.shift?.gracePeriodMinutes != null
+                          ? (() => {
+                              const [h, m] = bd.shift.startTime.split(":").map(Number);
+                              const total = h * 60 + m + bd.shift.gracePeriodMinutes;
+                              return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+                            })()
+                          : "—"}
+                      </strong></p>
+                      <p>Days arrived after deadline: <strong>{bd.summary.lateDays}</strong></p>
+                    </div>
                   )}
                   {(bd.summary.halfShiftDays ?? 0) > 0 && (
-                    <p className="text-xs text-amber-700 mt-1 flex items-center gap-1">
-                      <AlertCircle size={12} /> {bd.summary.halfShiftDays} half-shift day{bd.summary.halfShiftDays !== 1 ? "s" : ""} — counted as {((bd.summary.halfShiftDays ?? 0) * 0.5).toFixed(2)} effective days
-                    </p>
+                    <div className="mt-2 rounded-md bg-amber-50 border border-amber-100 px-3 py-2 text-xs text-amber-800 space-y-0.5">
+                      <p className="font-semibold flex items-center gap-1">
+                        <AlertCircle size={11} /> Half-Shift Detection
+                      </p>
+                      <p>A half-shift is recorded when only <strong>2 punches</strong> are present (morning only: P1+P2, or afternoon only: P3+P4).</p>
+                      <p>
+                        <strong>{bd.summary.halfShiftDays}</strong> half-shift day{bd.summary.halfShiftDays !== 1 ? "s" : ""} &nbsp;×&nbsp; 0.5 &nbsp;=&nbsp;
+                        <strong> {((bd.summary.halfShiftDays ?? 0) * 0.5).toFixed(2)} effective days</strong>
+                        &nbsp;(vs {bd.summary.halfShiftDays} if full shifts)
+                      </p>
+                      <p>Salary impact: <strong>−₹{(((bd.summary.halfShiftDays ?? 0) * 0.5) * (bd.earnings?.dailyRate ?? 0)).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong> vs full attendance</p>
+                    </div>
                   )}
                 </div>
 

@@ -129,10 +129,12 @@ function AdvanceDetailDrawer({
   advanceId,
   open,
   onClose,
+  onDelete,
 }: {
   advanceId: number | null;
   open: boolean;
   onClose: () => void;
+  onDelete?: (adv: Advance) => void;
 }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -168,9 +170,20 @@ function AdvanceDetailDrawer({
         ) : (
           <div className="space-y-5 pt-2 pb-8">
             <SheetHeader className="pb-0">
-              <SheetTitle className="text-base flex items-center gap-2">
-                {adv.advanceType === "term" ? "Term Loan" : "General Advance"} — Detail
-              </SheetTitle>
+              <div className="flex items-center justify-between">
+                <SheetTitle className="text-base">
+                  {adv.advanceType === "term" ? "Term Loan" : "General Advance"} — Detail
+                </SheetTitle>
+                {onDelete && (
+                  <button
+                    onClick={() => { onDelete(adv); onClose(); }}
+                    className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                    title="Delete advance"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                )}
+              </div>
             </SheetHeader>
 
             {/* ── Employee Info ─────────────────────────────────────────── */}
@@ -795,7 +808,7 @@ export default function Settlement() {
               <div className="text-center py-10 text-muted-foreground text-sm">No active general advances.</div>
             ) : (
               generalAdvances.map(a => (
-                <AdvanceCard key={a.id} a={a} onClick={() => setSelectedId(a.id)} />
+                <AdvanceCard key={a.id} a={a} onClick={() => setSelectedId(a.id)} onDelete={() => setDeleteTarget(a)} />
               ))
             )}
           </TabsContent>
@@ -809,7 +822,7 @@ export default function Settlement() {
               <div className="text-center py-10 text-muted-foreground text-sm">No active term loans.</div>
             ) : (
               termAdvances.map(a => (
-                <AdvanceCard key={a.id} a={a} onClick={() => setSelectedId(a.id)} />
+                <AdvanceCard key={a.id} a={a} onClick={() => setSelectedId(a.id)} onDelete={() => setDeleteTarget(a)} />
               ))
             )}
           </TabsContent>
@@ -978,6 +991,7 @@ export default function Settlement() {
           advanceId={selectedId}
           open={selectedId !== null}
           onClose={() => setSelectedId(null)}
+          onDelete={adv => { setSelectedId(null); setDeleteTarget(adv); }}
         />
       </div>
     </HrLayout>

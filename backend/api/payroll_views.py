@@ -172,7 +172,13 @@ def _classify_day(
 
     if in_logs:
         first_in = min(l.punch_time for l in in_logs)
-        last_out = max(l.punch_time for l in out_logs) if out_logs else None
+        if out_logs:
+            last_out = max(l.punch_time for l in out_logs)
+        elif len(day_logs) > 1:
+            # Biometric device records all punches as "IN"; the last punch of the day is the evening checkout
+            last_out = max(l.punch_time for l in day_logs)
+        else:
+            last_out = None
 
         total_grace_secs = grace_minutes * 60
         shift_start_secs = shift_start.hour * 3600 + shift_start.minute * 60

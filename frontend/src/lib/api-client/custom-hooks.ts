@@ -1039,16 +1039,18 @@ export type EmployeeShiftMonthlyStats = {
   employeeName: string;
   department?: string | null;
   designation?: string | null;
+  employmentType?: string | null;
   month: number;
   year: number;
   presentDays: number;
+  absentDays: number;
+  leaveDays: number;
   halfShiftDays: number;
   fullShiftDays: number;
   totalEffectiveShifts: string;
   lateMorningDays: number;
   lateReturnDays: number;
   totalLateCount: number;
-  leaveDays: number;
   summary?: {
     totalShifts: string;
     totalLateCount: number;
@@ -1058,12 +1060,17 @@ export type EmployeeShiftMonthlyStats = {
   } | null;
   dailyLogs: {
     date: string;
-    shiftsCompleted: string;
+    day: string;
+    status: "present" | "absent" | "on_leave" | "holiday" | "future";
+    firstPunch?: string | null;
+    lastPunch?: string | null;
+    totalPunches: number;
+    source?: string | null;
+    leaveType?: string | null;
+    shiftsCompleted?: string | null;
     isHalfShift: boolean;
     lateMorning: boolean;
     lateReturn: boolean;
-    punch1?: string | null;
-    punch4?: string | null;
   }[];
 };
 

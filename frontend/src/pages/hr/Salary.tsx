@@ -598,7 +598,6 @@ export default function Salary() {
                       <TableHead className="font-bold text-slate-700">Mode</TableHead>
                       <TableHead className="font-bold text-slate-700">Period</TableHead>
                       <TableHead className="font-bold text-slate-700">Present (Days)</TableHead>
-                      <TableHead className="font-bold text-slate-700 font-mono">Sessions</TableHead>
                       <TableHead className="font-bold text-slate-700">Basic Rate</TableHead>
                       <TableHead className="font-bold text-slate-700">OT Pay</TableHead>
                       <TableHead className="font-bold text-slate-700">Bonus / Deduct</TableHead>
@@ -611,7 +610,7 @@ export default function Salary() {
                     {loading ? (
                       Array.from({ length: 5 }).map((_, i) => (
                         <TableRow key={i}>
-                          {Array.from({ length: 11 }).map((_, j) => (
+                          {Array.from({ length: 10 }).map((_, j) => (
                             <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>
                           ))}
                         </TableRow>
@@ -630,7 +629,6 @@ export default function Salary() {
                           </TableCell>
                           <TableCell className="text-xs font-medium text-slate-600">{rec.month}/{rec.year}</TableCell>
                           <TableCell className="text-xs font-mono font-medium text-slate-700">{rec.presentDays} Days</TableCell>
-                          <TableCell className="text-xs font-mono font-medium text-slate-700">{rec.completedSessions} shifts</TableCell>
                           <TableCell className="font-medium text-xs">₹{rec.baseSalary.toLocaleString("en-IN")}</TableCell>
                           <TableCell className="font-medium text-xs text-indigo-600">₹{rec.otAmount.toLocaleString("en-IN")}</TableCell>
                           <TableCell className="text-xs">
@@ -665,6 +663,7 @@ export default function Salary() {
                       <TableRow>
                         <TableCell colSpan={11} className="text-center py-16 text-muted-foreground">
                           No payroll computations generated for this month. Click "Generate Period Payroll" to run the wage engine.
+
                         </TableCell>
                       </TableRow>
                     )}
