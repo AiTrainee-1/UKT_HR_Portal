@@ -2,6 +2,7 @@ import calendar
 import logging
 from collections import defaultdict
 from datetime import date as date_type, datetime, time as time_type, timedelta
+from decimal import Decimal
 from io import StringIO
 
 from django.db.models import Count, Q
@@ -99,13 +100,22 @@ def _late_count(d: date_type) -> int:
 def attendance_summary(request: Request) -> Response:
     d = _parse_date(request.query_params.get("date"))
     yesterday = d - timedelta(days=1)
+    emp_type = request.query_params.get("employmentType")  # staff | production | None
 
-    total = Employee.objects.filter(status="active").count()
+    base_qs = Employee.objects.filter(status="active")
+    if emp_type:
+        base_qs = base_qs.filter(employment_type=emp_type)
+    type_ids = set(base_qs.values_list("id", flat=True)) if emp_type else None
+
+    total = base_qs.count()
     prod_total = Employee.objects.filter(status="active", employment_type="production").count()
     staff_total = Employee.objects.filter(status="active", employment_type="staff").count()
 
     bio_ids = _punched_ids(d)
     manual_ids = _manual_present_ids(d)
+    if type_ids is not None:
+        bio_ids &= type_ids
+        manual_ids &= type_ids
     present_ids = bio_ids | manual_ids
 
     # Production / Staff breakdown of present
@@ -122,8 +132,13 @@ def attendance_summary(request: Request) -> Response:
     # Yesterday stats
     y_bio = _punched_ids(yesterday)
     y_manual = _manual_present_ids(yesterday)
+    if type_ids is not None:
+        y_bio &= type_ids
+        y_manual &= type_ids
     y_present_ids = y_bio | y_manual
     y_leave = _leave_ids(yesterday)
+    if type_ids is not None:
+        y_leave &= type_ids
     y_late = _late_count(yesterday)
     y_absent = max(0, total - len(y_present_ids) - len(y_leave & (set(range(total + 1)) - y_present_ids)))
 
@@ -227,20 +242,28 @@ def attendance_daily(request: Request) -> Response:
 def attendance_monthly_trend(request: Request) -> Response:
     year = int(request.query_params.get("year", _today().year))
     month = int(request.query_params.get("month", _today().month))
+    emp_type = request.query_params.get("employmentType")
 
-    total = Employee.objects.filter(status="active").count()
+    emp_qs = Employee.objects.filter(status="active")
+    if emp_type:
+        emp_qs = emp_qs.filter(employment_type=emp_type)
+    total = emp_qs.count()
+    type_ids = set(emp_qs.values_list("id", flat=True)) if emp_type else None
 
+    log_qs = AttendanceLog.objects.filter(date__year=year, date__month=month)
+    if type_ids is not None:
+        log_qs = log_qs.filter(employee_id__in=type_ids)
     bio_daily = {
         str(row["date"]): row["cnt"]
-        for row in AttendanceLog.objects
-        .filter(date__year=year, date__month=month)
-        .values("date")
-        .annotate(cnt=Count("employee_id", distinct=True))
+        for row in log_qs.values("date").annotate(cnt=Count("employee_id", distinct=True))
     }
 
     prefix = f"{year}-{str(month).zfill(2)}"
     manual_daily: dict[str, int] = defaultdict(int)
-    for a in Attendance.objects.filter(date__startswith=prefix, present=True):
+    manual_qs = Attendance.objects.filter(date__startswith=prefix, present=True)
+    if type_ids is not None:
+        manual_qs = manual_qs.filter(employee_id__in=type_ids)
+    for a in manual_qs:
         manual_daily[a.date] += 1
 
     days_in_month = calendar.monthrange(year, month)[1]
@@ -633,21 +656,96 @@ def _shift_log_json(log: DailyShiftLog) -> dict:
     }
 
 
+def _final_record_as_log_json(r) -> dict:
+    """Map an AttendanceDayRecord (simple mode) onto the ShiftLogEntry shape."""
+    emp = r.employee
+    shifts = float(r.shifts_earned or 0)
+    return {
+        "employeeId": emp.id,
+        "employeeCode": emp.employee_code,
+        "employeeName": f"{emp.first_name} {emp.last_name}",
+        "department": emp.department.name if emp.department else None,
+        "designation": emp.designation.title if emp.designation else None,
+        "employmentType": emp.employment_type,
+        "date": str(r.date),
+        "shiftName": "Simple Mode",
+        "punch1": r.first_punch.strftime("%H:%M") if r.first_punch else None,
+        "punch2": None,
+        "punch3": None,
+        "punch4": r.last_punch.strftime("%H:%M") if r.last_punch else None,
+        "totalPunches": r.total_punches,
+        "firstHalf": shifts >= 0.5,
+        "secondHalf": shifts >= 1.0,
+        "shiftsCompleted": f"{shifts:.2f}",
+        "lateMorning": r.is_late,
+        "lateReturn": False,
+        "lateReason": r.override_note or ("Arrived after grace period" if r.is_late else None),
+        "computedAt": r.updated_at.isoformat() if r.updated_at else None,
+    }
+
+
 @api_view(["GET"])
 @require_hr
 def attendance_report_log(request: Request) -> Response:
     """
     GET /api/attendance/report-log/?date=2026-07-01
-        → all employees with DailyShiftLog for that date
+        → all employees for that date
 
     GET /api/attendance/report-log/?month=7&year=2026&employeeId=123
         → full month log for one employee
+
+    Follows the attendance mode selected in Settings:
+      strict → DailyShiftLog (4-punch engine)
+      simple → AttendanceDayRecord (morning + evening punch model)
     """
+    from .models import PayrollSettings
+    from .attendance_final import compute_day_record, compute_month_records
+
+    settings = PayrollSettings.get()
     date_param = request.query_params.get("date")
     month_param = request.query_params.get("month")
     year_param = request.query_params.get("year")
     emp_id_param = request.query_params.get("employeeId")
 
+    # ── Simple mode: final-attendance engine ─────────────────────────────
+    if settings.attendance_mode == "simple":
+        if date_param:
+            try:
+                d = date_type.fromisoformat(date_param)
+            except (ValueError, TypeError):
+                d = _today()
+            emps = list(
+                Employee.objects.filter(status="active", employment_type="staff")
+                .select_related("department", "designation")
+            )
+            rows = []
+            for emp in emps:
+                rec = compute_day_record(emp, d, settings=settings)
+                if rec.total_punches > 0 or rec.status not in ("absent", "holiday"):
+                    rows.append(_final_record_as_log_json(rec))
+            rows.sort(key=lambda r: r["employeeName"])
+            return Response(rows)
+
+        if month_param and year_param:
+            try:
+                m = int(month_param)
+                y = int(year_param)
+            except (ValueError, TypeError):
+                return Response({"error": "Invalid month/year"}, status=400)
+            emp_qs = Employee.objects.filter(status="active", employment_type="staff")
+            if emp_id_param:
+                emp_qs = emp_qs.filter(pk=emp_id_param)
+            rows = []
+            for emp in emp_qs.select_related("department", "designation"):
+                for rec in compute_month_records(emp, y, m, settings):
+                    if rec.total_punches > 0 or rec.status not in ("absent", "holiday"):
+                        rows.append(_final_record_as_log_json(rec))
+            rows.sort(key=lambda r: (r["employeeName"], r["date"]))
+            return Response(rows)
+
+        return Response({"error": "Provide date or month+year"}, status=400)
+
+    # ── Strict mode: 4-punch DailyShiftLog (existing behaviour) ──────────
     qs = (
         DailyShiftLog.objects
         .select_related("employee__department", "employee__designation", "shift")

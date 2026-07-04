@@ -43,6 +43,11 @@ import UserManagement from "@/pages/hr/UserManagement";
 import ActivityLogs from "@/pages/hr/ActivityLogs";
 import Settings from "@/pages/hr/Settings";
 import SalarySlip from "@/pages/hr/SalarySlip";
+import Promotion from "@/pages/hr/Promotion";
+import Increment from "@/pages/hr/Increment";
+import Bonus from "@/pages/hr/Bonus";
+import IdCards from "@/pages/hr/IdCards";
+import VerifyEmployee from "@/pages/VerifyEmployee";
 
 // Employee pages
 import EmployeeDashboard from "@/pages/employee/Dashboard";
@@ -131,6 +136,7 @@ function Router() {
       <Route path="/erp-login" component={ErpLogin} />
       <Route path="/set-password" component={SetPassword} />
       <Route path="/apply/job/:id" component={JobApply} />
+      <Route path="/verify/:code" component={VerifyEmployee} />
       <Route path="/db-offline" component={DatabaseOffline} />
 
       {/* ── HR Routes ─────────────────────────────────────────── */}
@@ -161,8 +167,26 @@ function Router() {
       <Route path="/hr/attendance/report-log">
         {() => <ProtectedRoute component={AttendanceReportLog} allowedRoles={["hr"]} />}
       </Route>
+      <Route path="/hr/attendance/staff">
+        {() => <ProtectedRoute component={Attendance} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/attendance/production">
+        {() => <ProtectedRoute component={Attendance} allowedRoles={["hr"]} />}
+      </Route>
       <Route path="/hr/attendance">
         {() => <ProtectedRoute component={Attendance} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/promotion">
+        {() => <ProtectedRoute component={Promotion} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/increment">
+        {() => <ProtectedRoute component={Increment} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/bonus">
+        {() => <ProtectedRoute component={Bonus} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/id-cards">
+        {() => <ProtectedRoute component={IdCards} allowedRoles={["hr"]} />}
       </Route>
       <Route path="/hr/shifts">
         {() => <ProtectedRoute component={ManageShift} allowedRoles={["hr"]} />}

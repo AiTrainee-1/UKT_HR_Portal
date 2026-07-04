@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Users, Clock, Calendar, CheckCircle2, IndianRupee,
   Wallet, BarChart3, Shield, Activity, Settings, FileText, LogOut,
   ChevronRight, Search, X, Command, UserCheck, UserMinus, Banknote,
-  CalendarCheck, Bell,
+  CalendarCheck, Bell, Award, TrendingUp, Gift, CreditCard,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -47,7 +47,16 @@ const navGroups: NavGroupData[] = [
           { path: '/hr/branches', label: 'Manage Branch' },
         ],
       },
-      { path: '/hr/attendance', label: 'Attendance', icon: UserCheck },
+      {
+        path: '/hr/attendance',
+        label: 'Attendance',
+        icon: UserCheck,
+        children: [
+          { path: '/hr/attendance/staff', label: 'Staff Attendance' },
+          { path: '/hr/attendance/production', label: 'Production Attendance' },
+          { path: '/hr/attendance/report-log', label: 'Report Log' },
+        ],
+      },
     ],
   },
   {
@@ -56,6 +65,10 @@ const navGroups: NavGroupData[] = [
       { path: '/hr/shifts', label: 'Manage Shift', icon: Clock },
       { path: '/hr/leave', label: 'Leave & Holiday', icon: Calendar },
       { path: '/hr/requests', label: 'Requests', icon: CheckCircle2 },
+      { path: '/hr/promotion', label: 'Promotion', icon: Award },
+      { path: '/hr/increment', label: 'Increment', icon: TrendingUp },
+      { path: '/hr/bonus', label: 'Bonus', icon: Gift },
+      { path: '/hr/id-cards', label: 'ID Cards', icon: CreditCard },
     ],
   },
   {

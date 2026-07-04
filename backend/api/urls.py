@@ -54,6 +54,12 @@ from .attendance_views import (
     sync_biometric_api, attendance_report_log, compute_shift_logs,
     attendance_late_summary, employee_shift_monthly_stats,
 )
+from .growth_views import (
+    employee_monthly_attendance, attendance_day_override,
+    promotions, promotion_detail,
+    increment_summary, add_increment,
+    idcard_data, verify_employee, email_idcard,
+)
 from .payroll_views import (
     session_configs, session_config_detail,
     attendance_logs, upload_attendance_excel, process_punch_sessions,
@@ -161,7 +167,18 @@ urlpatterns = [
     path("attendance/compute-shifts", compute_shift_logs),
     path("attendance/late-summary", attendance_late_summary),
     path("attendance/employee-shift-stats", employee_shift_monthly_stats),
+    path("attendance/employee-monthly", employee_monthly_attendance),
+    path("attendance/override", attendance_day_override),
     path("biometric/punch", biometric_punch),
+
+    # ── Growth: Promotions / Increments / ID Cards ─────────────────────────
+    path("promotions", promotions),
+    path("promotions/<int:pk>", promotion_detail),
+    path("increments/summary", increment_summary),
+    path("increments", add_increment),
+    path("idcard", idcard_data),
+    path("idcard/email", email_idcard),
+    path("verify-employee/<str:code>", verify_employee),
 
     # ── Dashboard ───────────────────────────────────────────────────────────
     path("dashboard/hr-summary", views.hr_dashboard_summary),

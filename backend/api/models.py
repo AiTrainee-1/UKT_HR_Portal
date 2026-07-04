@@ -105,6 +105,11 @@ class Employee(models.Model):
     probation_end_date = models.DateField(null=True, blank=True, db_column="probation_end_date")
     confirmation_date = models.DateField(null=True, blank=True, db_column="confirmation_date")
     biometric_device_id = models.TextField(null=True, blank=True, db_column="biometric_device_id")
+    blood_group = models.TextField(null=True, blank=True, db_column="blood_group")
+    initial_salary = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True, db_column="initial_salary",
+        help_text="Salary at time of joining — baseline for increment tracking."
+    )
     password_hash = models.TextField(null=True, blank=True, db_column="password_hash")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
@@ -952,6 +957,32 @@ class PayrollSettings(models.Model):
     company_logo = models.TextField(null=True, blank=True, db_column="company_logo")
     authorized_signature = models.TextField(null=True, blank=True, db_column="authorized_signature")
 
+    # ── Attendance calculation mode ───────────────────────────────────────
+    # strict = existing 4-punch engine (lunch delays, return-late detection)
+    # simple = morning punch + evening punch only; first punch after the
+    #          half-shift cutoff = half shift; no lunch tracking
+    attendance_mode = models.TextField(default="strict", db_column="attendance_mode")
+    simple_half_shift_cutoff = models.TimeField(
+        default="13:30", db_column="simple_half_shift_cutoff",
+        help_text="Simple mode: first punch after this time = half shift."
+    )
+    simple_grace_minutes = models.IntegerField(
+        default=15, db_column="simple_grace_minutes",
+        help_text="Simple mode fallback grace when employee has no shift assigned."
+    )
+
+    # ── Production attendance windows (1.5-shift day) ─────────────────────
+    prod_first_half_start = models.TimeField(default="08:30", db_column="prod_first_half_start")
+    prod_first_half_end   = models.TimeField(default="12:30", db_column="prod_first_half_end")
+    prod_second_half_start = models.TimeField(default="13:30", db_column="prod_second_half_start")
+    prod_second_half_end   = models.TimeField(default="17:30", db_column="prod_second_half_end")
+    prod_extra_start = models.TimeField(default="17:50", db_column="prod_extra_start")
+    prod_extra_end   = models.TimeField(default="20:00", db_column="prod_extra_end")
+
+    # ── Production PF/EF salary-range rules (filled in later by HR) ────────
+    # list of {"label": str, "minSalary": num, "maxSalary": num, "pfRate": num, "efRate": num}
+    prod_pf_ef_rules = models.JSONField(default=list, blank=True, db_column="prod_pf_ef_rules")
+
     # ── SMTP / Email ──────────────────────────────────────────────────────
     smtp_host = models.TextField(default="smtp.gmail.com", db_column="smtp_host")
     smtp_port = models.IntegerField(default=587, db_column="smtp_port")
@@ -1039,3 +1070,110 @@ class ManagerEmployeeAssignment(models.Model):
     class Meta:
         db_table = "manager_employee_assignments"
         unique_together = [["manager", "employee"]]
+
+
+# ──────────────────────────────────────────────
+#  Final Attendance (auto-computed + HR override)
+# ──────────────────────────────────────────────
+
+class AttendanceDayRecord(models.Model):
+    """
+    The FINAL per-day attendance verdict for one employee.
+
+    Auto-computed from punches (using the mode selected in settings), then
+    optionally overridden by HR. When source == "manual" the values here are
+    authoritative — payroll and salary always read from this table first.
+    """
+    STATUS_PRESENT = "present"
+    STATUS_ABSENT = "absent"
+    STATUS_HALF = "half_shift"
+    STATUS_LEAVE = "on_leave"
+    STATUS_HOLIDAY = "holiday"
+    STATUS_CHOICES = [
+        (STATUS_PRESENT, "Present"),
+        (STATUS_ABSENT, "Absent"),
+        (STATUS_HALF, "Half Shift"),
+        (STATUS_LEAVE, "On Leave"),
+        (STATUS_HOLIDAY, "Holiday"),
+    ]
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id",
+        related_name="attendance_day_records",
+    )
+    date = models.DateField()
+    status = models.TextField(choices=STATUS_CHOICES, default=STATUS_ABSENT)
+    is_late = models.BooleanField(default=False, db_column="is_late")
+    is_half_shift = models.BooleanField(default=False, db_column="is_half_shift")
+    early_leave = models.BooleanField(default=False, db_column="early_leave")
+    shifts_earned = models.DecimalField(
+        max_digits=3, decimal_places=2, default=0, db_column="shifts_earned",
+        help_text="0.50 per half. Staff max 1.00, production max 1.50."
+    )
+    first_punch = models.TimeField(null=True, blank=True, db_column="first_punch")
+    last_punch = models.TimeField(null=True, blank=True, db_column="last_punch")
+    total_punches = models.IntegerField(default=0, db_column="total_punches")
+    computed_mode = models.TextField(null=True, blank=True, db_column="computed_mode")  # strict/simple
+    source = models.TextField(default="auto")  # auto | manual
+    override_by = models.TextField(null=True, blank=True, db_column="override_by")
+    override_note = models.TextField(null=True, blank=True, db_column="override_note")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "attendance_day_records"
+        unique_together = [["employee", "date"]]
+        ordering = ["date"]
+
+
+# ──────────────────────────────────────────────
+#  Promotion & Increment
+# ──────────────────────────────────────────────
+
+class Promotion(models.Model):
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="promotions"
+    )
+    previous_department = models.ForeignKey(
+        Department, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="previous_department_id", related_name="+",
+    )
+    previous_designation = models.ForeignKey(
+        Designation, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="previous_designation_id", related_name="+",
+    )
+    new_department = models.ForeignKey(
+        Department, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="new_department_id", related_name="+",
+    )
+    new_designation = models.ForeignKey(
+        Designation, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="new_designation_id", related_name="+",
+    )
+    effective_date = models.DateField(db_column="effective_date")
+    notes = models.TextField(null=True, blank=True)
+    promoted_by = models.TextField(null=True, blank=True, db_column="promoted_by")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "promotions"
+        ordering = ["-effective_date", "-created_at"]
+
+
+class SalaryIncrement(models.Model):
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="increments"
+    )
+    previous_salary = models.DecimalField(max_digits=10, decimal_places=2, db_column="previous_salary")
+    new_salary = models.DecimalField(max_digits=10, decimal_places=2, db_column="new_salary")
+    percent = models.DecimalField(
+        max_digits=6, decimal_places=2, db_column="percent",
+        help_text="Increment percentage applied (e.g. 10.00)."
+    )
+    effective_date = models.DateField(db_column="effective_date")
+    notes = models.TextField(null=True, blank=True)
+    added_by = models.TextField(null=True, blank=True, db_column="added_by")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "salary_increments"
+        ordering = ["-effective_date", "-created_at"]

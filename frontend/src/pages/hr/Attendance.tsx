@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { useLocation } from "wouter";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,14 +22,14 @@ import {
   getAttendanceMonthlyTrendQueryKey,
 } from "@/lib/api-client";
 import {
-  useSyncBiometric, useAttendanceReportLog, useComputeShiftLogs,
-  useAttendanceLateSummary, type ShiftLogEntry,
+  useSyncBiometric, useAttendanceSummaryTyped, useAttendanceTrendTyped,
 } from "@/lib/api-client/custom-hooks";
 import EmployeeSearchSelect from "@/components/EmployeeSearchSelect";
+import AttendanceSearchSection from "./AttendanceSearch";
 import {
   Users, UserCheck, UserX, CalendarDays, Plus,
   Factory, Briefcase, Fingerprint, PenLine, ChevronRight, RefreshCw,
-  Search, ChevronDown, ClipboardList, AlertTriangle, CheckCircle2, XCircle,
+  Search, ChevronDown,
   TrendingUp, Calendar, ChevronLeft,
 } from "lucide-react";
 
@@ -272,432 +273,21 @@ function EmployeeTable({
   );
 }
 
-// ── Report Log Section (embedded) ─────────────────────────────────────────
-
-function ReportLogSection() {
-  const { toast } = useToast();
-  const [tab, setTab] = useState<"day" | "month" | "late">("day");
-  const [date, setDate] = useState(today());
-  const [month, setMonth] = useState(currentMonth());
-  const [year, setYear] = useState(currentYear());
-  const [empId, setEmpId] = useState<number | null>(null);
-
-  // Per-table pagination pages (reset to 1 on filter/tab changes)
-  const [dayPage,    setDayPage]    = useState(1);
-  const [monthPage,  setMonthPage]  = useState(1);
-  const [shiftPage,  setShiftPage]  = useState(1);
-  const [latePage,   setLatePage]   = useState(1);
-
-  const { data: employees } = useListEmployees({ status: "active" });
-
-  const { data: dayData, isLoading: dayLoading, refetch: refetchDay } =
-    useAttendanceReportLog({ date }, tab === "day");
-
-  const { data: monthData, isLoading: monthLoading, refetch: refetchMonth } =
-    useAttendanceReportLog(
-      { month, year, employeeId: empId ?? undefined },
-      tab === "month"
-    );
-
-  const { data: lateData, isLoading: lateLoading } =
-    useAttendanceLateSummary(month, year, tab === "late");
-
-  const computeMutation = useComputeShiftLogs();
-
-  const handleRecompute = async () => {
-    try {
-      if (tab === "day") {
-        await computeMutation.mutateAsync({ date });
-        refetchDay();
-      } else {
-        await computeMutation.mutateAsync({ month, year, employeeId: empId ?? undefined });
-        refetchMonth();
-      }
-      toast({ title: "Shift logs recomputed" });
-    } catch {
-      toast({ title: "Recompute failed", variant: "destructive" });
-    }
-  };
-
-  // Pagination helpers
-  const paginate = <T,>(items: T[], page: number) => {
-    const total = items.length;
-    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-    const safePage = Math.min(page, totalPages);
-    return { slice: items.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE), total, totalPages, safePage };
-  };
-
-  return (
-    <Card className="border">
-      <CardHeader className="pb-0 pt-4 px-4">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center shrink-0">
-              <ClipboardList size={15} className="text-white" />
-            </div>
-            <div>
-              <CardTitle className="text-sm font-bold text-gray-900">Report Log</CardTitle>
-              <p className="text-[11px] text-muted-foreground mt-0.5">4-punch breakdown · shift completion · late detection · monthly penalties</p>
-            </div>
-          </div>
-
-          {/* Toolbar */}
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* Tab toggles */}
-            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
-              {(["day", "month", "late"] as const).map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setTab(t)}
-                  className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${
-                    tab === t ? "bg-indigo-600 text-white shadow-sm" : "text-gray-600 hover:bg-gray-200"
-                  }`}
-                >
-                  {t === "day" ? "Day View" : t === "month" ? "Month View" : "Late Summary"}
-                </button>
-              ))}
-            </div>
-
-            {/* Filters */}
-            {tab === "day" && (
-              <Input
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="h-8 text-xs w-36"
-              />
-            )}
-            {(tab === "month" || tab === "late") && (
-              <>
-                <select
-                  value={month}
-                  onChange={(e) => setMonth(Number(e.target.value))}
-                  className="h-8 rounded-md border px-2 text-xs bg-background"
-                >
-                  {MONTH_NAMES.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
-                </select>
-                <Input
-                  type="number"
-                  value={year}
-                  onChange={(e) => setYear(Number(e.target.value))}
-                  className="w-20 h-8 text-xs"
-                  min={2020} max={2035}
-                />
-              </>
-            )}
-            {tab === "month" && (
-              <select
-                value={empId ?? ""}
-                onChange={(e) => setEmpId(e.target.value ? Number(e.target.value) : null)}
-                className="h-8 rounded-md border px-2 text-xs bg-background max-w-[200px]"
-              >
-                <option value="">— All staff employees —</option>
-                {(employees ?? []).filter(e => e.employmentType === "staff").map(e => (
-                  <option key={e.id} value={e.id}>
-                    {e.firstName} {e.lastName} ({e.employeeCode})
-                  </option>
-                ))}
-              </select>
-            )}
-
-            {/* Recompute */}
-            {tab !== "late" && (
-              <button
-                onClick={handleRecompute}
-                disabled={computeMutation.isPending}
-                className="h-8 px-3 text-xs border rounded-lg text-indigo-700 border-indigo-200 hover:bg-indigo-50 flex items-center gap-1.5 font-semibold"
-              >
-                <RefreshCw size={12} className={computeMutation.isPending ? "animate-spin" : ""} />
-                Recompute
-              </button>
-            )}
-          </div>
-        </div>
-      </CardHeader>
-
-      <CardContent className="p-0 mt-3">
-        {/* ── Day View ── */}
-        {tab === "day" && (() => {
-          const { slice, total, totalPages, safePage } = paginate(dayData ?? [], dayPage);
-          return dayLoading ? (
-            <div className="py-12 text-center text-sm text-muted-foreground">Loading…</div>
-          ) : !dayData || dayData.length === 0 ? (
-            <div className="py-14 text-center border-t">
-              <ClipboardList size={32} className="text-gray-200 mx-auto mb-2" />
-              <p className="text-sm text-gray-500">No shift logs for {date}.</p>
-              <p className="text-xs text-muted-foreground mt-1">Click "Recompute" to process this day's punches.</p>
-            </div>
-          ) : (
-            <>
-              <div className="overflow-x-auto border-t">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b">
-                    <tr>
-                      {["Employee", "Shift", "P1 — Morning IN", "P2 — Lunch OUT", "P3 — Return IN", "P4 — Evening OUT", "1st ½", "2nd ½", "Shifts", "Late"].map(h => (
-                        <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {slice.map((row: ShiftLogEntry) => {
-                      const isHalf = row.shiftsCompleted === "0.50";
-                      return (
-                        <tr key={row.employeeId} className={`border-b hover:bg-gray-50 transition-colors ${isHalf ? "bg-amber-50/30" : ""}`}>
-                          <td className="px-4 py-3">
-                            <p className="font-semibold text-gray-900 text-sm">{row.employeeName}</p>
-                            <p className="text-[11px] text-gray-400 font-mono">{row.employeeCode}</p>
-                          </td>
-                          <td className="px-4 py-3 text-xs text-gray-500">{row.shiftName ?? "—"}</td>
-                          <td className="px-4 py-3 font-mono text-sm">
-                            {row.punch1
-                              ? <span className={row.lateMorning ? "text-red-600 font-bold" : "text-green-700"}>{row.punch1}</span>
-                              : <span className="text-gray-300">—</span>}
-                          </td>
-                          <td className="px-4 py-3 font-mono text-sm text-gray-600">{row.punch2 ?? <span className="text-gray-300">—</span>}</td>
-                          <td className="px-4 py-3 font-mono text-sm">
-                            {row.punch3
-                              ? <span className={row.lateReturn ? "text-orange-600 font-bold" : "text-gray-700"}>{row.punch3}</span>
-                              : <span className="text-gray-300">—</span>}
-                          </td>
-                          <td className="px-4 py-3 font-mono text-sm text-gray-600">{row.punch4 ?? <span className="text-gray-300">—</span>}</td>
-                          <td className="px-4 py-3">
-                            {row.firstHalf
-                              ? <CheckCircle2 size={16} className="text-green-600" />
-                              : <XCircle size={16} className="text-gray-300" />}
-                          </td>
-                          <td className="px-4 py-3">
-                            {row.secondHalf
-                              ? <CheckCircle2 size={16} className="text-green-600" />
-                              : <XCircle size={16} className="text-gray-300" />}
-                          </td>
-                          <td className="px-4 py-3">
-                            <span className={`font-bold ${isHalf ? "text-amber-700" : "text-gray-800"}`}>{row.shiftsCompleted}</span>
-                            {isHalf && <span className="ml-1.5 text-[10px] font-semibold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">½</span>}
-                          </td>
-                          <td className="px-4 py-3">
-                            {(row.lateMorning || row.lateReturn) ? (
-                              <span className="flex items-center gap-1.5 text-red-600 font-semibold text-xs">
-                                <AlertTriangle size={13} />
-                                {[row.lateMorning && "AM", row.lateReturn && "PM"].filter(Boolean).join("+")}
-                              </span>
-                            ) : <span className="text-green-600 text-sm">✓</span>}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    {Array.from({ length: PAGE_SIZE - slice.length }).map((_, i) => (
-                      <tr key={`fill-${i}`} className="border-b">
-                        <td className="h-[61px]" colSpan={10} />
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <Pagination page={safePage} totalPages={totalPages} total={total} onPage={setDayPage} />
-            </>
-          );
-        })()}
-
-        {/* ── Month View ── */}
-        {tab === "month" && (() => {
-          const { slice, total, totalPages, safePage } = paginate(monthData ?? [], monthPage);
-          return monthLoading ? (
-            <div className="py-12 text-center text-sm text-muted-foreground">Loading…</div>
-          ) : !monthData || monthData.length === 0 ? (
-            <div className="py-14 text-center border-t">
-              <ClipboardList size={32} className="text-gray-200 mx-auto mb-2" />
-              <p className="text-sm text-gray-500">No shift logs for {MONTH_FULL[month - 1]} {year}.</p>
-              <p className="text-xs text-muted-foreground mt-1">Click "Recompute" to process the full month.</p>
-            </div>
-          ) : (
-            <>
-              <div className="overflow-x-auto border-t">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b">
-                    <tr>
-                      {["Date", "Employee", "Shift", "P1 IN", "P2 Lunch", "P3 Return", "P4 OUT", "1st ½", "2nd ½", "Shifts", "Late"].map(h => (
-                        <th key={h} className="text-left px-3 py-3 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {slice.map((row: ShiftLogEntry, i: number) => {
-                      const isHalf = row.shiftsCompleted === "0.50";
-                      return (
-                        <tr key={i} className={`border-b hover:bg-gray-50 ${isHalf ? "bg-amber-50/30" : ""}`}>
-                          <td className="px-3 py-2.5 text-xs font-mono text-gray-700">{row.date}</td>
-                          <td className="px-3 py-2.5">
-                            <p className="font-semibold text-xs text-gray-900">{row.employeeName}</p>
-                            <p className="text-[10px] font-mono text-gray-400">{row.employeeCode}</p>
-                          </td>
-                          <td className="px-3 py-2.5 text-xs text-gray-500">{row.shiftName ?? "—"}</td>
-                          <td className={`px-3 py-2.5 font-mono text-xs ${row.lateMorning ? "text-red-600 font-bold" : "text-gray-700"}`}>{row.punch1 ?? "—"}</td>
-                          <td className="px-3 py-2.5 font-mono text-xs text-gray-600">{row.punch2 ?? "—"}</td>
-                          <td className={`px-3 py-2.5 font-mono text-xs ${row.lateReturn ? "text-orange-600 font-bold" : "text-gray-700"}`}>{row.punch3 ?? "—"}</td>
-                          <td className="px-3 py-2.5 font-mono text-xs text-gray-600">{row.punch4 ?? "—"}</td>
-                          <td className="px-3 py-2.5">{row.firstHalf ? <CheckCircle2 size={13} className="text-green-600" /> : <XCircle size={13} className="text-gray-300" />}</td>
-                          <td className="px-3 py-2.5">{row.secondHalf ? <CheckCircle2 size={13} className="text-green-600" /> : <XCircle size={13} className="text-gray-300" />}</td>
-                          <td className="px-3 py-2.5">
-                            <span className={`text-xs font-bold ${isHalf ? "text-amber-700" : "text-gray-800"}`}>{row.shiftsCompleted}</span>
-                            {isHalf && <span className="ml-1 text-[9px] font-semibold bg-amber-100 text-amber-700 px-1 py-0.5 rounded-full">½</span>}
-                          </td>
-                          <td className="px-3 py-2.5 text-xs">
-                            {(row.lateMorning || row.lateReturn)
-                              ? <span title={row.lateReason ?? ""}><AlertTriangle size={13} className="text-red-500" /></span>
-                              : <span className="text-green-500">✓</span>}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    {Array.from({ length: PAGE_SIZE - slice.length }).map((_, i) => (
-                      <tr key={`fill-${i}`} className="border-b">
-                        <td className="h-[49px]" colSpan={11} />
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <Pagination page={safePage} totalPages={totalPages} total={total} onPage={setMonthPage} />
-            </>
-          );
-        })()}
-
-        {/* ── Late Summary ── */}
-        {tab === "late" && (
-          <div className="border-t">
-            <div className="flex items-start gap-2 p-3 m-4 bg-amber-50 border border-amber-100 rounded-xl text-xs text-amber-800">
-              <AlertTriangle size={14} className="text-amber-600 shrink-0 mt-0.5" />
-              <span>
-                <strong>Deduction Rule:</strong> Each employee gets 3 free lates per month.
-                Every 3 billable lates beyond that = ¼ shift deducted from salary.
-                Applied automatically when payroll is generated.
-              </span>
-            </div>
-
-            {lateLoading ? (
-              <div className="py-12 text-center text-sm text-muted-foreground">Loading…</div>
-            ) : !lateData || lateData.employees.length === 0 ? (
-              <div className="py-14 text-center">
-                <p className="text-sm text-gray-500">No late summary for {MONTH_FULL[month - 1]} {year}.</p>
-                <p className="text-xs text-muted-foreground mt-1">Switch to Month View, run Recompute first, then regenerate payroll.</p>
-              </div>
-            ) : (() => {
-              const empList = lateData.employees;
-              const sc = paginate(empList, shiftPage);
-              const lp = paginate(empList, latePage);
-              return (
-                <div className="space-y-4 px-4 pb-4">
-                  {/* Shift Completion */}
-                  <div className="rounded-xl border bg-white overflow-hidden">
-                    <div className="px-4 py-2.5 border-b bg-gray-50">
-                      <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Shift Completion Summary</p>
-                    </div>
-                    <table className="w-full text-sm">
-                      <thead className="border-b">
-                        <tr>
-                          {["Employee", "Dept", "Total Shifts", "Full Shifts", "Half Shifts", "Effective Days"].map(h => (
-                            <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {sc.slice.map((row) => {
-                          const total = parseFloat(row.totalShifts);
-                          const half  = row.halfShiftDays ?? 0;
-                          const full  = total - half * 0.5;
-                          return (
-                            <tr key={row.employeeId} className={`border-b hover:bg-gray-50 ${half > 0 ? "bg-amber-50/20" : ""}`}>
-                              <td className="px-4 py-2.5">
-                                <p className="font-semibold text-sm text-gray-900">{row.employeeName}</p>
-                                <p className="text-[11px] font-mono text-gray-400">{row.employeeCode}</p>
-                              </td>
-                              <td className="px-4 py-2.5 text-xs text-gray-600">{row.department ?? "—"}</td>
-                              <td className="px-4 py-2.5 font-bold text-sm text-indigo-700">{total.toFixed(2)}</td>
-                              <td className="px-4 py-2.5 font-bold text-sm text-green-700">{Math.floor(full)}</td>
-                              <td className="px-4 py-2.5">
-                                {half > 0
-                                  ? <span className="font-bold text-sm text-amber-700"><span className="text-xs bg-amber-100 px-1.5 py-0.5 rounded-full">½×{half}</span></span>
-                                  : <span className="text-gray-400 text-sm">0</span>}
-                              </td>
-                              <td className="px-4 py-2.5 font-bold text-sm text-gray-800">{total.toFixed(2)} days</td>
-                            </tr>
-                          );
-                        })}
-                        {Array.from({ length: PAGE_SIZE - sc.slice.length }).map((_, i) => (
-                          <tr key={`fill-${i}`} className="border-b">
-                            <td className="h-[49px]" colSpan={6} />
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    <Pagination page={sc.safePage} totalPages={sc.totalPages} total={sc.total} onPage={setShiftPage} />
-                  </div>
-
-                  {/* Late Penalty */}
-                  <div className="rounded-xl border bg-white overflow-hidden">
-                    <div className="px-4 py-2.5 border-b bg-gray-50">
-                      <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Late Penalty Summary</p>
-                    </div>
-                    <table className="w-full text-sm">
-                      <thead className="border-b">
-                        <tr>
-                          {["Employee", "Department", "Total Late", "Free (3)", "Billable", "Shift Deductions", "Salary Deduction"].map(h => (
-                            <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {lp.slice.map((row) => (
-                          <tr key={row.employeeId} className={`border-b hover:bg-gray-50 ${row.billableLateCount > 0 ? "bg-red-50/20" : ""}`}>
-                            <td className="px-4 py-3">
-                              <p className="font-semibold text-sm text-gray-900">{row.employeeName}</p>
-                              <p className="text-[11px] font-mono text-gray-400">{row.employeeCode}</p>
-                            </td>
-                            <td className="px-4 py-3 text-sm text-gray-600">{row.department ?? "—"}</td>
-                            <td className="px-4 py-3">
-                              <span className={`font-bold text-sm ${row.totalLateCount > 0 ? "text-amber-700" : "text-gray-400"}`}>{row.totalLateCount}</span>
-                            </td>
-                            <td className="px-4 py-3 text-sm text-gray-600">{row.permissionsUsed}/3</td>
-                            <td className="px-4 py-3">
-                              <span className={`font-bold text-sm ${row.billableLateCount > 0 ? "text-red-700" : "text-green-600"}`}>{row.billableLateCount}</span>
-                            </td>
-                            <td className="px-4 py-3 font-bold text-sm text-gray-800">{row.shiftDeductions}</td>
-                            <td className="px-4 py-3">
-                              <span className={`font-bold text-sm ${parseFloat(row.salaryDeductionAmount) > 0 ? "text-red-700" : "text-green-600"}`}>
-                                ₹{parseFloat(row.salaryDeductionAmount).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                        {Array.from({ length: PAGE_SIZE - lp.slice.length }).map((_, i) => (
-                          <tr key={`fill-${i}`} className="border-b">
-                            <td className="h-[53px]" colSpan={7} />
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    <Pagination page={lp.safePage} totalPages={lp.totalPages} total={lp.total} onPage={setLatePage} />
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
 // ── Main Page ──────────────────────────────────────────────────────────────
 
 export default function AttendancePage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [location, navigate] = useLocation();
 
   const [selectedDate, setSelectedDate] = useState(today());
   const [selectedMonth, setSelectedMonth] = useState(currentMonth());
   const [selectedYear, setSelectedYear] = useState(currentYear());
-  const [activeTab, setActiveTab] = useState<"all" | "production" | "staff">("all");
+  // Staff / Production sub-section — derived from the route so the sidebar
+  // stays in sync (/hr/attendance/staff | /hr/attendance/production)
+  const view: "staff" | "production" =
+    location.includes("/attendance/production") ? "production" : "staff";
+  const setView = (v: "staff" | "production") => navigate(`/hr/attendance/${v}`);
 
   const [showManualDialog, setShowManualDialog] = useState(false);
   const [manualForm, setManualForm] = useState({
@@ -759,21 +349,18 @@ export default function AttendancePage() {
     }
   };
 
-  const { data: summary, isLoading: summaryLoading } = useAttendanceSummary(selectedDate);
+  // Summary + trend are filtered server-side by the selected sub-section
+  const { data: summary, isLoading: summaryLoading } = useAttendanceSummaryTyped(selectedDate, view);
   const { data: dailyList, isLoading: dailyLoading }  = useAttendanceDaily(selectedDate);
-  const { data: monthlyTrend } = useAttendanceMonthlyTrend(selectedYear, selectedMonth);
+  const { data: monthlyTrend } = useAttendanceTrendTyped(selectedYear, selectedMonth, view);
   const { data: empDetail, isLoading: empDetailLoading } = useAttendanceEmployeeHistory(
     detailEmpId, selectedMonth, selectedYear,
   );
   const createManual = useCreateManualAttendance();
 
-  const allRecords        = dailyList ?? [];
-  const productionRecords = allRecords.filter((r) => r.employmentType === "production");
-  const staffRecords      = allRecords.filter((r) => r.employmentType === "staff");
-  const activeRecords     =
-    activeTab === "production" ? productionRecords
-    : activeTab === "staff"   ? staffRecords
-    : allRecords;
+  // Records for the active sub-section only
+  const allRecords    = (dailyList ?? []).filter((r) => r.employmentType === view);
+  const activeRecords = allRecords;
 
   const presentCount  = allRecords.filter(r => r.status === "present" || r.status === "manual").length;
   const absentCount   = allRecords.filter(r => r.status === "absent").length;
@@ -815,10 +402,27 @@ export default function AttendancePage() {
         {/* ── Header ── */}
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
-            <h2 className="text-2xl font-black text-gray-900">Attendance</h2>
+            <h2 className="text-2xl font-black text-gray-900">
+              {view === "staff" ? "Staff Attendance" : "Production Attendance"}
+            </h2>
             <p className="text-sm text-muted-foreground mt-0.5">
               Real-time tracking · AiFace-Mars biometric integration
             </p>
+            {/* Staff / Production sub-section toggle */}
+            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1 mt-2 w-fit">
+              {(["staff", "production"] as const).map(v => (
+                <button
+                  key={v}
+                  onClick={() => setView(v)}
+                  className={`px-4 py-1.5 rounded-md text-xs font-bold transition-colors flex items-center gap-1.5 ${
+                    view === v ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-800"
+                  }`}
+                >
+                  {v === "staff" ? <Briefcase size={12} /> : <Factory size={12} />}
+                  {v === "staff" ? "Staff" : "Production"}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             {/* Sync split-button */}
@@ -876,13 +480,13 @@ export default function AttendancePage() {
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
           <StatCard
             icon={Users}
-            label="Total Employees"
+            label={view === "staff" ? "Total Staff" : "Total Production"}
             value={summary?.totalEmployees ?? "—"}
             colorCls="bg-gray-700"
             sub={
               <span className="flex gap-3">
-                <span><strong className="text-gray-700">{summary?.productionTotal ?? "—"}</strong> Production</span>
                 <span><strong className="text-gray-700">{summary?.staffTotal ?? "—"}</strong> Staff</span>
+                <span><strong className="text-gray-700">{summary?.productionTotal ?? "—"}</strong> Production</span>
               </span>
             }
             isLoading={summaryLoading}
@@ -1077,8 +681,26 @@ export default function AttendancePage() {
           </Card>
         </div>
 
-        {/* ── Report Log (embedded) ── */}
-        <ReportLogSection />
+        {/* ── Employee Search + Manual Overrides ── */}
+        <AttendanceSearchSection employmentType={view} />
+
+        {/* ── Production shift structure info ── */}
+        {view === "production" && (
+          <Card className="border border-orange-100 bg-orange-50/40">
+            <CardContent className="p-4 flex items-start gap-3 text-xs text-orange-800">
+              <Factory size={16} className="shrink-0 mt-0.5 text-orange-500" />
+              <div className="space-y-1">
+                <p className="font-bold text-sm">Production 1.5-Shift Day</p>
+                <p>
+                  <strong>08:30–12:30</strong> First Half (0.5) ·{" "}
+                  <strong>13:30–17:30</strong> Second Half (0.5) ·{" "}
+                  <strong>17:50–20:00</strong> Additional Half (0.5) — up to{" "}
+                  <strong>1.5 shifts/day</strong>. Windows are configurable in Settings → Attendance.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* ── Employee Table ── */}
         <Card className="border">
@@ -1104,37 +726,11 @@ export default function AttendancePage() {
             </div>
           </CardHeader>
           <CardContent className="p-0 mt-3">
-            <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)}>
-              <div className="px-4 border-b">
-                <TabsList className="bg-transparent h-9 p-0 gap-1">
-                  <TabsTrigger
-                    value="all"
-                    className="h-8 text-xs rounded-none border-b-2 border-transparent data-[state=active]:border-gray-900 data-[state=active]:bg-transparent"
-                  >
-                    <Users size={12} className="mr-1" /> All ({allRecords.length})
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="production"
-                    className="h-8 text-xs rounded-none border-b-2 border-transparent data-[state=active]:border-gray-900 data-[state=active]:bg-transparent"
-                  >
-                    <Factory size={12} className="mr-1" /> Production ({productionRecords.length})
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="staff"
-                    className="h-8 text-xs rounded-none border-b-2 border-transparent data-[state=active]:border-gray-900 data-[state=active]:bg-transparent"
-                  >
-                    <Briefcase size={12} className="mr-1" /> Staff ({staffRecords.length})
-                  </TabsTrigger>
-                </TabsList>
-              </div>
-              <TabsContent value={activeTab} className="mt-0">
-                <EmployeeTable
-                  records={activeRecords}
-                  isLoading={dailyLoading}
-                  onClickEmployee={(id) => setDetailEmpId(id)}
-                />
-              </TabsContent>
-            </Tabs>
+            <EmployeeTable
+              records={activeRecords}
+              isLoading={dailyLoading}
+              onClickEmployee={(id) => setDetailEmpId(id)}
+            />
           </CardContent>
         </Card>
 

@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import {
   useAttendanceReportLog, useComputeShiftLogs, useAttendanceLateSummary,
+  usePayrollSettings,
   type ShiftLogEntry,
 } from "@/lib/api-client/custom-hooks";
 import { useListEmployees } from "@/lib/api-client";
@@ -34,6 +35,8 @@ export default function AttendanceReportLog() {
   const [empId, setEmpId] = useState<number | null>(null);
 
   const { data: employees } = useListEmployees({ status: "active" });
+  const { data: settings } = usePayrollSettings();
+  const simpleMode = settings?.attendanceMode === "simple";
 
   const { data: dayData, isLoading: dayLoading, refetch: refetchDay } =
     useAttendanceReportLog({ date }, tab === "day");
@@ -77,8 +80,22 @@ export default function AttendanceReportLog() {
           </div>
           <div>
             <h1 className="text-xl font-bold text-gray-900">Report Log</h1>
-            <p className="text-xs text-muted-foreground">4-punch breakdown · shift completion · late detection · monthly penalties</p>
+            <p className="text-xs text-muted-foreground">
+              {simpleMode
+                ? "Simple mode · morning + evening punch · half-shift cutoff · late detection"
+                : "4-punch breakdown · shift completion · late detection · monthly penalties"}
+            </p>
           </div>
+          <span
+            className={`ml-auto text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wide ${
+              simpleMode
+                ? "bg-green-100 text-green-700"
+                : "bg-amber-100 text-amber-700"
+            }`}
+            title="Attendance calculation mode — change it in Settings → Attendance"
+          >
+            {simpleMode ? "Simple Mode" : "Strict Mode"}
+          </span>
         </div>
 
         {/* Toolbar */}
@@ -140,8 +157,8 @@ export default function AttendanceReportLog() {
             </select>
           )}
 
-          {/* Recompute */}
-          {tab !== "late" && (
+          {/* Recompute — strict mode only; simple mode recomputes automatically on load */}
+          {tab !== "late" && !simpleMode && (
             <button
               onClick={handleRecompute}
               disabled={computeMutation.isPending}
@@ -169,7 +186,10 @@ export default function AttendanceReportLog() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 border-b">
                     <tr>
-                      {["Employee", "Shift", "P1 — Morning IN", "P2 — Lunch OUT", "P3 — Return IN", "P4 — Evening OUT", "1st ½", "2nd ½", "Shifts", "Late"].map(h => (
+                      {(simpleMode
+                        ? ["Employee", "Mode", "First IN", "Last OUT", "1st ½", "2nd ½", "Shifts", "Late"]
+                        : ["Employee", "Shift", "P1 — Morning IN", "P2 — Lunch OUT", "P3 — Return IN", "P4 — Evening OUT", "1st ½", "2nd ½", "Shifts", "Late"]
+                      ).map(h => (
                         <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -189,12 +209,16 @@ export default function AttendanceReportLog() {
                             ? <span className={row.lateMorning ? "text-red-600 font-bold" : "text-green-700"}>{row.punch1}</span>
                             : <span className="text-gray-300">—</span>}
                         </td>
-                        <td className="px-4 py-3 font-mono text-sm text-gray-600">{row.punch2 ?? <span className="text-gray-300">—</span>}</td>
-                        <td className="px-4 py-3 font-mono text-sm">
-                          {row.punch3
-                            ? <span className={row.lateReturn ? "text-orange-600 font-bold" : "text-gray-700"}>{row.punch3}</span>
-                            : <span className="text-gray-300">—</span>}
-                        </td>
+                        {!simpleMode && (
+                          <>
+                            <td className="px-4 py-3 font-mono text-sm text-gray-600">{row.punch2 ?? <span className="text-gray-300">—</span>}</td>
+                            <td className="px-4 py-3 font-mono text-sm">
+                              {row.punch3
+                                ? <span className={row.lateReturn ? "text-orange-600 font-bold" : "text-gray-700"}>{row.punch3}</span>
+                                : <span className="text-gray-300">—</span>}
+                            </td>
+                          </>
+                        )}
                         <td className="px-4 py-3 font-mono text-sm text-gray-600">{row.punch4 ?? <span className="text-gray-300">—</span>}</td>
                         <td className="px-4 py-3">
                           {row.firstHalf
@@ -244,7 +268,10 @@ export default function AttendanceReportLog() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 border-b">
                     <tr>
-                      {["Date", "Employee", "Shift", "P1 IN", "P2 Lunch", "P3 Return", "P4 OUT", "1st ½", "2nd ½", "Shifts", "Late"].map(h => (
+                      {(simpleMode
+                        ? ["Date", "Employee", "Mode", "First IN", "Last OUT", "1st ½", "2nd ½", "Shifts", "Late"]
+                        : ["Date", "Employee", "Shift", "P1 IN", "P2 Lunch", "P3 Return", "P4 OUT", "1st ½", "2nd ½", "Shifts", "Late"]
+                      ).map(h => (
                         <th key={h} className="text-left px-3 py-3 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -261,8 +288,12 @@ export default function AttendanceReportLog() {
                         </td>
                         <td className="px-3 py-2.5 text-xs text-gray-500">{row.shiftName ?? "—"}</td>
                         <td className={`px-3 py-2.5 font-mono text-xs ${row.lateMorning ? "text-red-600 font-bold" : "text-gray-700"}`}>{row.punch1 ?? "—"}</td>
-                        <td className="px-3 py-2.5 font-mono text-xs text-gray-600">{row.punch2 ?? "—"}</td>
-                        <td className={`px-3 py-2.5 font-mono text-xs ${row.lateReturn ? "text-orange-600 font-bold" : "text-gray-700"}`}>{row.punch3 ?? "—"}</td>
+                        {!simpleMode && (
+                          <>
+                            <td className="px-3 py-2.5 font-mono text-xs text-gray-600">{row.punch2 ?? "—"}</td>
+                            <td className={`px-3 py-2.5 font-mono text-xs ${row.lateReturn ? "text-orange-600 font-bold" : "text-gray-700"}`}>{row.punch3 ?? "—"}</td>
+                          </>
+                        )}
                         <td className="px-3 py-2.5 font-mono text-xs text-gray-600">{row.punch4 ?? "—"}</td>
                         <td className="px-3 py-2.5">{row.firstHalf ? <CheckCircle2 size={13} className="text-green-600" /> : <XCircle size={13} className="text-gray-300" />}</td>
                         <td className="px-3 py-2.5">{row.secondHalf ? <CheckCircle2 size={13} className="text-green-600" /> : <XCircle size={13} className="text-gray-300" />}</td>

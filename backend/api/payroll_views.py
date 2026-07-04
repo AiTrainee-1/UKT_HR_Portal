@@ -332,6 +332,24 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
         )
     )
 
+    # 5b. Final attendance records (auto-computed + HR overrides).
+    #     Manual overrides are ALWAYS authoritative. In simple attendance mode
+    #     the auto records replace the strict 4-punch classification entirely.
+    from .models import AttendanceDayRecord as _ADR, PayrollSettings as _PS
+    _settings = _PS.get()
+    use_simple = _settings.attendance_mode == "simple"
+    if use_simple:
+        from .attendance_final import compute_month_records
+        final_records = compute_month_records(emp, year, month, _settings)
+        final_by_date = {r.date: r for r in final_records}
+    else:
+        final_by_date = {
+            r.date: r
+            for r in _ADR.objects.filter(
+                employee=emp, date__year=year, date__month=month, source="manual"
+            )
+        }
+
     # 6. Classify each working day
     DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     days_detail = []
@@ -345,8 +363,34 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
     effective_present = Decimal("0")  # accumulates 0.5 or 1.0 per present day
 
     for d in working_days_list:
-        info = _classify_day(d, logs_by_date, attendance_by_date, approved_leaves, shift_start, grace_minutes)
-        status = info["status"]
+        # Final record (override / simple mode) takes priority over strict classification
+        fr = final_by_date.get(d)
+        if fr is not None and (fr.source == "manual" or use_simple):
+            fr_status = fr.status
+            if fr_status in ("present", "half_shift"):
+                status = "present"
+            elif fr_status == "on_leave":
+                status = "paid_leave"
+            elif fr_status == "holiday":
+                # A day marked holiday by override shouldn't reduce pay
+                status = "paid_leave"
+            else:
+                status = "absent"
+            info = {
+                "status": status,
+                "is_late": fr.is_late,
+                "first_in": fr.first_punch.strftime("%H:%M") if fr.first_punch else None,
+                "last_out": fr.last_punch.strftime("%H:%M") if fr.last_punch else None,
+                "leave_type": None,
+            }
+            forced_shifts = Decimal(str(fr.shifts_earned or 0))
+            forced_half = fr.is_half_shift or fr_status == "half_shift"
+        else:
+            info = _classify_day(d, logs_by_date, attendance_by_date, approved_leaves, shift_start, grace_minutes)
+            status = info["status"]
+            forced_shifts = None
+            forced_half = False
+
         is_late = info["is_late"]
         is_half = False
         day_shifts = Decimal("1.00")
@@ -355,17 +399,26 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
             present_count += 1
             if is_late:
                 late_count += 1
-            # Use DailyShiftLog.shifts_completed to detect half shifts
-            sl = shift_logs_by_date.get(d)
-            if sl and sl.shifts_completed > 0:
-                day_shifts = sl.shifts_completed
-                if day_shifts == Decimal("0.50"):
+            if forced_shifts is not None:
+                # Value from the final-attendance record (override or simple mode)
+                day_shifts = forced_shifts if forced_shifts > 0 else Decimal("1.00")
+                if forced_half or day_shifts == Decimal("0.50"):
                     is_half = True
                     half_shift_count += 1
                 else:
                     full_shift_count += 1
             else:
-                full_shift_count += 1
+                # Strict mode: use DailyShiftLog.shifts_completed to detect half shifts
+                sl = shift_logs_by_date.get(d)
+                if sl and sl.shifts_completed > 0:
+                    day_shifts = sl.shifts_completed
+                    if day_shifts == Decimal("0.50"):
+                        is_half = True
+                        half_shift_count += 1
+                    else:
+                        full_shift_count += 1
+                else:
+                    full_shift_count += 1
             effective_present += day_shifts
         elif status == "paid_leave":
             paid_leave_count += 1
@@ -1449,6 +1502,18 @@ def _ps_response(ps) -> dict:
         "signatureImage": ps.signature_image,
         "companyLogo": ps.company_logo,
         "authorizedSignature": ps.authorized_signature,
+        # Attendance calculation mode
+        "attendanceMode": ps.attendance_mode,
+        "simpleHalfShiftCutoff": str(ps.simple_half_shift_cutoff)[:5],
+        "simpleGraceMinutes": ps.simple_grace_minutes,
+        # Production attendance windows (1.5-shift day)
+        "prodFirstHalfStart": str(ps.prod_first_half_start)[:5],
+        "prodFirstHalfEnd": str(ps.prod_first_half_end)[:5],
+        "prodSecondHalfStart": str(ps.prod_second_half_start)[:5],
+        "prodSecondHalfEnd": str(ps.prod_second_half_end)[:5],
+        "prodExtraStart": str(ps.prod_extra_start)[:5],
+        "prodExtraEnd": str(ps.prod_extra_end)[:5],
+        "prodPfEfRules": ps.prod_pf_ef_rules or [],
         # SMTP / Email
         "smtpHost": ps.smtp_host,
         "smtpPort": ps.smtp_port,
@@ -1490,11 +1555,22 @@ def payroll_settings_view(request: Request) -> Response:
         "smtpPassword": ("smtp_password", str),
         "smtpFromEmail": ("smtp_from_email", str),
         "smtpFromName": ("smtp_from_name", str),
+        "attendanceMode": ("attendance_mode", str),
+        "simpleHalfShiftCutoff": ("simple_half_shift_cutoff", str),
+        "simpleGraceMinutes": ("simple_grace_minutes", int),
+        "prodFirstHalfStart": ("prod_first_half_start", str),
+        "prodFirstHalfEnd": ("prod_first_half_end", str),
+        "prodSecondHalfStart": ("prod_second_half_start", str),
+        "prodSecondHalfEnd": ("prod_second_half_end", str),
+        "prodExtraStart": ("prod_extra_start", str),
+        "prodExtraEnd": ("prod_extra_end", str),
     }
     for key, (attr, cast) in field_map.items():
         if key in data:
             val = data[key]
             setattr(ps, attr, Decimal(str(val)) if cast is Decimal else cast(val))
+    if "prodPfEfRules" in data and isinstance(data["prodPfEfRules"], list):
+        ps.prod_pf_ef_rules = data["prodPfEfRules"]
     ps.save()
 
     return Response(_ps_response(ps))

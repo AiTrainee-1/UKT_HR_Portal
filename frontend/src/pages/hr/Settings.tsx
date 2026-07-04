@@ -25,6 +25,22 @@ export default function Settings() {
     halfDayHours: 4.5, overtimeThresholdHours: 9,
   });
 
+  // ── Attendance mode + production windows — loaded from DB ─────────────
+  const [attMode, setAttMode] = useState({
+    attendanceMode: "strict" as "strict" | "simple",
+    simpleHalfShiftCutoff: "13:30",
+    simpleGraceMinutes: 15,
+    prodFirstHalfStart: "08:30",
+    prodFirstHalfEnd: "12:30",
+    prodSecondHalfStart: "13:30",
+    prodSecondHalfEnd: "17:30",
+    prodExtraStart: "17:50",
+    prodExtraEnd: "20:00",
+  });
+  const [pfEfRules, setPfEfRules] = useState<
+    { label: string; minSalary: number; maxSalary: number; pfRate: number; efRate: number }[]
+  >([]);
+
   // ── Payroll — loaded from DB ───────────────────────────────────────────
   const { data: payrollSettingsData, isLoading: psLoading } = usePayrollSettings();
   const updatePayrollSettings = useUpdatePayrollSettings();
@@ -82,6 +98,18 @@ export default function Settings() {
         smtpFromEmail: payrollSettingsData.smtpFromEmail || "",
         smtpFromName: payrollSettingsData.smtpFromName || "UKTextiles HR",
       });
+      setAttMode({
+        attendanceMode: (payrollSettingsData.attendanceMode as "strict" | "simple") || "strict",
+        simpleHalfShiftCutoff: payrollSettingsData.simpleHalfShiftCutoff || "13:30",
+        simpleGraceMinutes: payrollSettingsData.simpleGraceMinutes ?? 15,
+        prodFirstHalfStart: payrollSettingsData.prodFirstHalfStart || "08:30",
+        prodFirstHalfEnd: payrollSettingsData.prodFirstHalfEnd || "12:30",
+        prodSecondHalfStart: payrollSettingsData.prodSecondHalfStart || "13:30",
+        prodSecondHalfEnd: payrollSettingsData.prodSecondHalfEnd || "17:30",
+        prodExtraStart: payrollSettingsData.prodExtraStart || "17:50",
+        prodExtraEnd: payrollSettingsData.prodExtraEnd || "20:00",
+      });
+      setPfEfRules(payrollSettingsData.prodPfEfRules ?? []);
     }
   }, [payrollSettingsData]);
 
@@ -125,6 +153,29 @@ export default function Settings() {
 
   const save = (section: string) => {
     toast({ title: `${section} settings saved successfully` });
+  };
+
+  const saveAttendanceMode = async () => {
+    try {
+      await updatePayrollSettings.mutateAsync({
+        attendanceMode: attMode.attendanceMode,
+        simpleHalfShiftCutoff: attMode.simpleHalfShiftCutoff,
+        simpleGraceMinutes: attMode.simpleGraceMinutes,
+        prodFirstHalfStart: attMode.prodFirstHalfStart,
+        prodFirstHalfEnd: attMode.prodFirstHalfEnd,
+        prodSecondHalfStart: attMode.prodSecondHalfStart,
+        prodSecondHalfEnd: attMode.prodSecondHalfEnd,
+        prodExtraStart: attMode.prodExtraStart,
+        prodExtraEnd: attMode.prodExtraEnd,
+        prodPfEfRules: pfEfRules,
+      } as never);
+      toast({
+        title: "Attendance settings saved",
+        description: `Mode: ${attMode.attendanceMode === "simple" ? "Simple (morning + evening punch)" : "Strict (4-punch engine)"}. Applies to new calculations.`,
+      });
+    } catch {
+      toast({ title: "Failed to save attendance settings", variant: "destructive" });
+    }
   };
 
   return (
@@ -190,11 +241,214 @@ export default function Settings() {
           </TabsContent>
 
           {/* Attendance */}
-          <TabsContent value="attendance" className="mt-4">
+          <TabsContent value="attendance" className="mt-4 space-y-4">
+            {/* ── Calculation Mode ── */}
             <Card className="border-0 shadow-sm">
               <CardHeader className="pb-3">
                 <CardTitle className="text-sm font-bold flex items-center gap-2">
-                  <Clock size={15} className="text-amber-500" /> Attendance Rules
+                  <Clock size={15} className="text-amber-500" /> Attendance Calculation Mode
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid sm:grid-cols-2 gap-3">
+                  {/* Strict */}
+                  <button
+                    onClick={() => setAttMode(a => ({ ...a, attendanceMode: "strict" }))}
+                    className={`text-left p-4 rounded-xl border-2 transition-all ${
+                      attMode.attendanceMode === "strict"
+                        ? "border-amber-400 bg-amber-50/60 shadow-sm"
+                        : "border-gray-200 bg-white hover:border-gray-300"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <p className="font-bold text-sm text-gray-900">Strict Mode (4-Punch)</p>
+                      {attMode.attendanceMode === "strict" && (
+                        <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">ACTIVE</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-500 leading-relaxed">
+                      Tracks all 4 punches: morning IN, lunch OUT, lunch return, evening OUT.
+                      Detects lunch-return delays, half shifts from missing punches, and applies
+                      the 3-free-late penalty rule.
+                    </p>
+                  </button>
+                  {/* Simple */}
+                  <button
+                    onClick={() => setAttMode(a => ({ ...a, attendanceMode: "simple" }))}
+                    className={`text-left p-4 rounded-xl border-2 transition-all ${
+                      attMode.attendanceMode === "simple"
+                        ? "border-green-400 bg-green-50/60 shadow-sm"
+                        : "border-gray-200 bg-white hover:border-gray-300"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <p className="font-bold text-sm text-gray-900">Simple Mode (Recommended)</p>
+                      {attMode.attendanceMode === "simple" && (
+                        <span className="text-[10px] font-bold text-green-700 bg-green-100 px-2 py-0.5 rounded-full">ACTIVE</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-500 leading-relaxed">
+                      Morning punch + evening last punch = full shift. First punch after the
+                      cutoff time = half shift. No lunch-break tracking. Late = morning punch
+                      beyond grace period. Early leave is flagged.
+                    </p>
+                  </button>
+                </div>
+
+                {attMode.attendanceMode === "simple" && (
+                  <div className="grid sm:grid-cols-2 gap-4 p-3 bg-green-50/50 border border-green-100 rounded-lg">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Half-Shift Cutoff Time</Label>
+                      <p className="text-[11px] text-gray-500 -mt-1">First punch after this time = half shift</p>
+                      <Input
+                        type="time"
+                        value={attMode.simpleHalfShiftCutoff}
+                        onChange={e => setAttMode(a => ({ ...a, simpleHalfShiftCutoff: e.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Grace Period (minutes)</Label>
+                      <p className="text-[11px] text-gray-500 -mt-1">Used when the employee has no shift assigned</p>
+                      <Input
+                        type="number" min={0} max={120}
+                        value={attMode.simpleGraceMinutes}
+                        onChange={e => setAttMode(a => ({ ...a, simpleGraceMinutes: Number(e.target.value) }))}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <Button size="sm" onClick={saveAttendanceMode} disabled={updatePayrollSettings.isPending}>
+                  {updatePayrollSettings.isPending ? "Saving…" : "Save Attendance Mode"}
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* ── Production Shift Windows ── */}
+            <Card className="border-0 shadow-sm">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-bold flex items-center gap-2">
+                  <Clock size={15} className="text-orange-500" /> Production Attendance Windows (1.5-Shift Day)
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-xs text-gray-500">
+                  Production employees can earn up to <strong>1.5 shifts per day</strong>:
+                  first half (0.5) + second half (0.5) + additional evening half (0.5).
+                </p>
+                <div className="grid sm:grid-cols-3 gap-4">
+                  {([
+                    { label: "First Half", from: "prodFirstHalfStart", to: "prodFirstHalfEnd", color: "text-blue-700" },
+                    { label: "Second Half", from: "prodSecondHalfStart", to: "prodSecondHalfEnd", color: "text-indigo-700" },
+                    { label: "Additional Half", from: "prodExtraStart", to: "prodExtraEnd", color: "text-purple-700" },
+                  ] as const).map(w => (
+                    <div key={w.label} className="p-3 border rounded-xl space-y-2">
+                      <p className={`text-xs font-bold ${w.color}`}>{w.label} (0.5 shift)</p>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="time"
+                          value={(attMode as any)[w.from]}
+                          onChange={e => setAttMode(a => ({ ...a, [w.from]: e.target.value }))}
+                          className="h-8 text-xs"
+                        />
+                        <span className="text-gray-400 text-xs">→</span>
+                        <Input
+                          type="time"
+                          value={(attMode as any)[w.to]}
+                          onChange={e => setAttMode(a => ({ ...a, [w.to]: e.target.value }))}
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <Button size="sm" onClick={saveAttendanceMode} disabled={updatePayrollSettings.isPending}>
+                  {updatePayrollSettings.isPending ? "Saving…" : "Save Production Windows"}
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* ── Production PF / EF Rules ── */}
+            <Card className="border-0 shadow-sm">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-bold flex items-center gap-2">
+                  <IndianRupee size={15} className="text-purple-500" /> Production PF / EF Salary-Range Rules
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="p-3 rounded-lg bg-blue-50 border border-blue-100 text-xs text-blue-700">
+                  Define PF / EF rates per salary range or work category. Payroll will apply
+                  these rules to production employees once the exact calculation details are
+                  finalised. Leave empty to skip PF/EF for now.
+                </div>
+                {pfEfRules.length === 0 ? (
+                  <p className="text-xs text-center text-muted-foreground py-3">No rules configured yet.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {pfEfRules.map((rule, i) => (
+                      <div key={i} className="grid grid-cols-[1fr_100px_100px_80px_80px_32px] gap-2 items-center">
+                        <Input
+                          placeholder="Category / label"
+                          value={rule.label}
+                          onChange={e => setPfEfRules(rs => rs.map((r, j) => j === i ? { ...r, label: e.target.value } : r))}
+                          className="h-8 text-xs"
+                        />
+                        <Input
+                          type="number" placeholder="Min ₹"
+                          value={rule.minSalary}
+                          onChange={e => setPfEfRules(rs => rs.map((r, j) => j === i ? { ...r, minSalary: Number(e.target.value) } : r))}
+                          className="h-8 text-xs"
+                        />
+                        <Input
+                          type="number" placeholder="Max ₹"
+                          value={rule.maxSalary}
+                          onChange={e => setPfEfRules(rs => rs.map((r, j) => j === i ? { ...r, maxSalary: Number(e.target.value) } : r))}
+                          className="h-8 text-xs"
+                        />
+                        <Input
+                          type="number" placeholder="PF %"
+                          value={rule.pfRate}
+                          onChange={e => setPfEfRules(rs => rs.map((r, j) => j === i ? { ...r, pfRate: Number(e.target.value) } : r))}
+                          className="h-8 text-xs"
+                        />
+                        <Input
+                          type="number" placeholder="EF %"
+                          value={rule.efRate}
+                          onChange={e => setPfEfRules(rs => rs.map((r, j) => j === i ? { ...r, efRate: Number(e.target.value) } : r))}
+                          className="h-8 text-xs"
+                        />
+                        <button
+                          onClick={() => setPfEfRules(rs => rs.filter((_, j) => j !== i))}
+                          className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50"
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                    ))}
+                    <div className="grid grid-cols-[1fr_100px_100px_80px_80px_32px] gap-2 text-[10px] text-gray-400 uppercase font-semibold px-1">
+                      <span>Category</span><span>Min Salary</span><span>Max Salary</span><span>PF %</span><span>EF %</span><span />
+                    </div>
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <Button
+                    size="sm" variant="outline"
+                    onClick={() => setPfEfRules(rs => [...rs, { label: "", minSalary: 0, maxSalary: 0, pfRate: 0, efRate: 0 }])}
+                  >
+                    + Add Rule
+                  </Button>
+                  <Button size="sm" onClick={saveAttendanceMode} disabled={updatePayrollSettings.isPending}>
+                    {updatePayrollSettings.isPending ? "Saving…" : "Save PF/EF Rules"}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* ── Legacy general rules ── */}
+            <Card className="border-0 shadow-sm">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-bold flex items-center gap-2">
+                  <Clock size={15} className="text-gray-400" /> General Attendance Rules
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">

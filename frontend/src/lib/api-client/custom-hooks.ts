@@ -1502,6 +1502,18 @@ export type PayrollSettingsItem = {
   // Resignation letter assets
   companyLogo: string | null;
   authorizedSignature: string | null;
+  // Attendance calculation mode
+  attendanceMode: "strict" | "simple";
+  simpleHalfShiftCutoff: string;
+  simpleGraceMinutes: number;
+  // Production attendance windows (1.5-shift day)
+  prodFirstHalfStart: string;
+  prodFirstHalfEnd: string;
+  prodSecondHalfStart: string;
+  prodSecondHalfEnd: string;
+  prodExtraStart: string;
+  prodExtraEnd: string;
+  prodPfEfRules: { label: string; minSalary: number; maxSalary: number; pfRate: number; efRate: number }[];
   // SMTP / Email
   smtpHost: string;
   smtpPort: number;
@@ -1541,6 +1553,325 @@ export const useEmailSalarySlip = () =>
         method: "POST",
         body: JSON.stringify({ toEmail }),
       }),
+  });
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Typed attendance dashboard (staff / production filtered)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type TypedAttendanceSummary = {
+  date: string;
+  totalEmployees: number;
+  productionTotal: number;
+  staffTotal: number;
+  presentToday: number;
+  biometricPresent: number;
+  manualPresent: number;
+  notPunched: number;
+  productionNotPunched: number;
+  staffNotPunched: number;
+  yesterday: { date: string; present: number; absent: number; late: number; onLeave: number };
+};
+
+export const useAttendanceSummaryTyped = (date: string, employmentType?: string) =>
+  useQuery<TypedAttendanceSummary>({
+    queryKey: ["/api/attendance/summary", date, employmentType ?? "all"],
+    queryFn: () =>
+      customFetch<TypedAttendanceSummary>(
+        `/api/attendance/summary?date=${date}${employmentType ? `&employmentType=${employmentType}` : ""}`,
+      ),
+  });
+
+export type TrendPoint = { date: string; day: number; label: string; present: number; absent: number };
+
+export const useAttendanceTrendTyped = (year: number, month: number, employmentType?: string) =>
+  useQuery<TrendPoint[]>({
+    queryKey: ["/api/attendance/monthly-trend", year, month, employmentType ?? "all"],
+    queryFn: () =>
+      customFetch<TrendPoint[]>(
+        `/api/attendance/monthly-trend?year=${year}&month=${month}${employmentType ? `&employmentType=${employmentType}` : ""}`,
+      ),
+  });
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Final Attendance (weekly search + manual overrides)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type FinalAttendanceDay = {
+  date: string;
+  day: string;
+  status: "present" | "absent" | "half_shift" | "on_leave" | "holiday";
+  isLate: boolean;
+  isHalfShift: boolean;
+  earlyLeave: boolean;
+  shiftsEarned: string;
+  firstPunch?: string | null;
+  lastPunch?: string | null;
+  totalPunches: number;
+  source: "auto" | "manual";
+  overrideBy?: string | null;
+  overrideNote?: string | null;
+  computedMode?: string | null;
+};
+
+export type EmployeeMonthlyAttendance = {
+  employee: {
+    id: number;
+    code: string;
+    name: string;
+    department?: string | null;
+    designation?: string | null;
+    employmentType?: string | null;
+    photoUrl?: string | null;
+  };
+  month: number;
+  year: number;
+  attendanceMode: string;
+  weeks: { week: number; days: FinalAttendanceDay[] }[];
+  summary: {
+    totalDays: number;
+    workingDays: number;
+    present: number;
+    halfShift: number;
+    absent: number;
+    onLeave: number;
+    holidays: number;
+    late: number;
+    totalShifts: string;
+    effectiveDays: string;
+  };
+};
+
+export const getEmployeeMonthlyAttendanceKey = (code: string, month: number, year: number) =>
+  ["/api/attendance/employee-monthly", code, month, year] as const;
+
+export const useEmployeeMonthlyAttendance = (
+  code: string, month: number, year: number, enabled = true,
+) =>
+  useQuery<EmployeeMonthlyAttendance>({
+    queryKey: getEmployeeMonthlyAttendanceKey(code, month, year),
+    queryFn: () =>
+      customFetch<EmployeeMonthlyAttendance>(
+        `/api/attendance/employee-monthly?code=${encodeURIComponent(code)}&month=${month}&year=${year}`,
+      ),
+    enabled: enabled && !!code.trim(),
+    retry: false,
+  });
+
+export const useAttendanceOverride = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: {
+      employeeId: number;
+      date: string;
+      status?: string;
+      isLate?: boolean;
+      isHalfShift?: boolean;
+      firstPunch?: string | null;
+      lastPunch?: string | null;
+      note?: string;
+      reset?: boolean;
+    }) =>
+      customFetch<{ ok: boolean; record: FinalAttendanceDay }>("/api/attendance/override", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance/employee-monthly"] });
+    },
+  });
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Promotions
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type PromotionItem = {
+  id: number;
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  previousDepartment?: string | null;
+  previousDesignation?: string | null;
+  newDepartment?: string | null;
+  newDesignation?: string | null;
+  effectiveDate: string;
+  notes?: string | null;
+  promotedBy?: string | null;
+  createdAt?: string | null;
+};
+
+export const useListPromotions = (params?: { employeeId?: number; code?: string }) => {
+  const qs = new URLSearchParams();
+  if (params?.employeeId) qs.set("employeeId", String(params.employeeId));
+  if (params?.code) qs.set("code", params.code);
+  const q = qs.toString() ? `?${qs.toString()}` : "";
+  return useQuery<PromotionItem[]>({
+    queryKey: ["/api/promotions", params?.employeeId ?? null, params?.code ?? null],
+    queryFn: () => customFetch<PromotionItem[]>(`/api/promotions${q}`),
+  });
+};
+
+export const useCreatePromotion = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: {
+      employeeId: number;
+      newDepartmentId?: number | null;
+      newDesignationId?: number | null;
+      effectiveDate?: string;
+      notes?: string;
+    }) =>
+      customFetch<PromotionItem>("/api/promotions", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/promotions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/employees"] });
+    },
+  });
+};
+
+export const useDeletePromotion = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      customFetch<{ ok: boolean }>(`/api/promotions/${id}`, { method: "DELETE" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/promotions"] }),
+  });
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Salary Increments
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type IncrementItem = {
+  id: number;
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  previousSalary: number;
+  newSalary: number;
+  percent: number;
+  effectiveDate: string;
+  notes?: string | null;
+  addedBy?: string | null;
+  createdAt?: string | null;
+};
+
+export type IncrementSummary = {
+  employee: {
+    id: number;
+    code: string;
+    name: string;
+    department?: string | null;
+    designation?: string | null;
+    employmentType?: string | null;
+  };
+  currentSalary: number;
+  initialSalary: number;
+  totalIncrementAmount: number;
+  totalIncrements: number;
+  history: IncrementItem[];
+};
+
+export const useIncrementSummary = (code: string, enabled = true) =>
+  useQuery<IncrementSummary>({
+    queryKey: ["/api/increments/summary", code],
+    queryFn: () =>
+      customFetch<IncrementSummary>(`/api/increments/summary?code=${encodeURIComponent(code)}`),
+    enabled: enabled && !!code.trim(),
+    retry: false,
+  });
+
+export const useAddIncrement = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: {
+      employeeId: number;
+      percent?: number;
+      amount?: number;
+      effectiveDate?: string;
+      notes?: string;
+    }) =>
+      customFetch<IncrementItem>("/api/increments", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/increments/summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/employees"] });
+    },
+  });
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ID Cards + QR Verification
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type IdCardData = {
+  id: number;
+  code: string;
+  name: string;
+  designation?: string | null;
+  department?: string | null;
+  employmentType?: string | null;
+  photoUrl?: string | null;
+  bloodGroup?: string | null;
+  dateOfBirth?: string | null;
+  emergencyContact?: string | null;
+  address?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  joinDate?: string | null;
+  status: string;
+  company: {
+    name: string;
+    address: string;
+    logo?: string | null;
+    signature?: string | null;
+  };
+};
+
+export const useIdCards = (ids: number[], enabled = true) =>
+  useQuery<IdCardData[]>({
+    queryKey: ["/api/idcard", ids.join(",")],
+    queryFn: () => customFetch<IdCardData[]>(`/api/idcard?ids=${ids.join(",")}`),
+    enabled: enabled && ids.length > 0,
+  });
+
+export const useEmailIdCard = () =>
+  useMutation({
+    mutationFn: (data: { employeeId: number; image?: string; toEmail?: string }) =>
+      customFetch<{ ok: boolean; sentTo: string }>("/api/idcard/email", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+  });
+
+export type VerifyEmployeeResult = {
+  verified: boolean;
+  status?: string;
+  employee?: {
+    code: string;
+    name: string;
+    designation?: string | null;
+    department?: string | null;
+    employmentType?: string | null;
+    photoUrl?: string | null;
+    bloodGroup?: string | null;
+    joinDate?: string | null;
+  };
+  company: { name: string; address?: string; logo?: string | null };
+};
+
+export const useVerifyEmployee = (code: string) =>
+  useQuery<VerifyEmployeeResult>({
+    queryKey: ["/api/verify-employee", code],
+    queryFn: () => customFetch<VerifyEmployeeResult>(`/api/verify-employee/${encodeURIComponent(code)}`),
+    enabled: !!code,
+    retry: false,
   });
 
 // ── Department Manager Types ──────────────────────────────────────────────────
