@@ -40,6 +40,7 @@ from .manager_views import (
     manager_department_assignments, manager_employee_assignments,
     manager_me, manager_pending_requests,
     manager_update_leave_status, manager_update_permission_status,
+    manager_update_attendance_status, manager_update_casual_leave_status,
 )
 from .reports_views import (
     attendance_report, attendance_summary_report,
@@ -51,14 +52,25 @@ from .reports_views import (
 from .attendance_views import (
     attendance_summary, attendance_daily, attendance_monthly_trend,
     attendance_employee_history, biometric_punch, manual_attendance,
-    sync_biometric_api, attendance_report_log, compute_shift_logs,
+    sync_biometric_api, sync_biometric_progress, attendance_report_log, compute_shift_logs,
     attendance_late_summary, employee_shift_monthly_stats,
 )
 from .growth_views import (
-    employee_monthly_attendance, attendance_day_override,
+    employee_monthly_attendance, attendance_day_override, attendance_override_requests,
     promotions, promotion_detail,
-    increment_summary, add_increment,
+    increment_summary, add_increment, increment_dashboard,
     idcard_data, verify_employee, email_idcard,
+)
+from .system_settings_views import (
+    biometric_devices, biometric_device_detail, idcard_settings_view,
+    production_shift_config_view, production_shift_segments, production_shift_segment_detail,
+)
+from .casual_leave_views import (
+    casual_leaves, casual_leave_detail, casual_leave_eligibility,
+)
+from .night_shift_views import (
+    night_shift_dashboard, night_shift_recompute,
+    night_shift_rules, night_shift_rule_detail,
 )
 from .payroll_views import (
     session_configs, session_config_detail,
@@ -163,22 +175,46 @@ urlpatterns = [
     path("attendance/employee/<int:pk>", attendance_employee_history),
     path("attendance/manual", manual_attendance),
     path("attendance/sync-biometric", sync_biometric_api),
+    path("attendance/sync-biometric-progress", sync_biometric_progress),
     path("attendance/report-log", attendance_report_log),
     path("attendance/compute-shifts", compute_shift_logs),
     path("attendance/late-summary", attendance_late_summary),
     path("attendance/employee-shift-stats", employee_shift_monthly_stats),
     path("attendance/employee-monthly", employee_monthly_attendance),
     path("attendance/override", attendance_day_override),
+    path("attendance/override-requests", attendance_override_requests),
     path("biometric/punch", biometric_punch),
+
+    # ── Casual Leave (CL) ───────────────────────────────────────────────────
+    path("casual-leaves", casual_leaves),
+    path("casual-leaves/eligibility", casual_leave_eligibility),
+    path("casual-leaves/<int:pk>", casual_leave_detail),
+
+    # ── Night Shift Relaxation ──────────────────────────────────────────────
+    path("night-shift/dashboard", night_shift_dashboard),
+    path("night-shift/recompute", night_shift_recompute),
+    path("night-shift/rules", night_shift_rules),
+    path("night-shift/rules/<int:pk>", night_shift_rule_detail),
 
     # ── Growth: Promotions / Increments / ID Cards ─────────────────────────
     path("promotions", promotions),
     path("promotions/<int:pk>", promotion_detail),
     path("increments/summary", increment_summary),
+    path("increments/dashboard", increment_dashboard),
     path("increments", add_increment),
     path("idcard", idcard_data),
     path("idcard/email", email_idcard),
+    path("idcard-settings", idcard_settings_view),
     path("verify-employee/<str:code>", verify_employee),
+
+    # ── Biometric Device Management ─────────────────────────────────────────
+    path("biometric-devices", biometric_devices),
+    path("biometric-devices/<int:pk>", biometric_device_detail),
+
+    # ── Production Shift Workflow ────────────────────────────────────────────
+    path("production-shift-config", production_shift_config_view),
+    path("production-shift-segments", production_shift_segments),
+    path("production-shift-segments/<int:pk>", production_shift_segment_detail),
 
     # ── Dashboard ───────────────────────────────────────────────────────────
     path("dashboard/hr-summary", views.hr_dashboard_summary),
@@ -218,6 +254,8 @@ urlpatterns = [
     path("manager/pending-requests", manager_pending_requests),
     path("manager/leave-requests/<int:pk>/status", manager_update_leave_status),
     path("manager/permissions/<int:pk>/status", manager_update_permission_status),
+    path("manager/attendance-requests/<int:pk>/status", manager_update_attendance_status),
+    path("manager/casual-leaves/<int:pk>/status", manager_update_casual_leave_status),
 
     # ── Audit Logs ───────────────────────────────────────────────────────────
     path("audit-logs", audit_logs),

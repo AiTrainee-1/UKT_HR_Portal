@@ -35,7 +35,7 @@ from django.db.models import Q
 
 from .models import (
     AttendanceDayRecord, AttendanceLog, Attendance, Employee, Holiday,
-    LeaveRequest, PayrollSettings,
+    LeaveRequest, PayrollSettings, ProductionShiftConfig, ProductionShiftSegment,
 )
 from .shift_engine import _get_shift_for_date, _t2s
 
@@ -141,62 +141,87 @@ def _compute_staff_strict(emp, d, punch_logs, punch_times):
     }
 
 
-# ── Production: 1.5-shift day ──────────────────────────────────────────────
+# ── Production: dynamic shift-segment day ───────────────────────────────────
+#
+# Default 4-punch day (8:30 arrival / 12:45 lunch-out / 13:30 lunch-return /
+# 20:00 departure) is scored against an ordered list of ProductionShiftSegment
+# rows. Each segment is credited when a continuous worked span covers it
+# (within the configured grace). With 4 punches the day splits into a morning
+# span and an afternoon span; with any other punch count a single first→last
+# span is used instead, so a bare arrival+departure without a lunch punch
+# still earns credit for every segment it fully covers.
 
-def _compute_production(emp, d, punch_times, settings):
+def _as_time(v):
+    """TimeField defaults may still be raw strings on a freshly-created row
+    (before the next DB round-trip parses them) — normalize defensively."""
+    if isinstance(v, str):
+        return datetime.strptime(v[:5], "%H:%M").time()
+    return v
+
+
+def _production_spans(punch_times):
+    if len(punch_times) >= 4:
+        return [(punch_times[0], punch_times[1]), (punch_times[2], punch_times[3])]
+    if len(punch_times) >= 2:
+        return [(punch_times[0], punch_times[-1])]
+    return []
+
+
+def _compute_production(emp, d, punch_times, settings, config=None, segments=None):
     if not punch_times:
         return {"status": "absent", "shifts_earned": Decimal("0")}
 
-    def as_time(v, fallback):
-        if isinstance(v, str):
-            return datetime.strptime(v[:5], "%H:%M").time()
-        return v or fallback
-
-    fh_end   = as_time(settings.prod_first_half_end,   time_type(12, 30))
-    sh_end   = as_time(settings.prod_second_half_end,  time_type(17, 30))
-    ex_end   = as_time(settings.prod_extra_end,        time_type(20, 0))
-    fh_start = as_time(settings.prod_first_half_start, time_type(8, 30))
+    if config is None:
+        config = ProductionShiftConfig.get()
+    if segments is None:
+        segments = list(ProductionShiftSegment.objects.filter(is_active=True))
 
     first = punch_times[0]
-    last = punch_times[-1] if len(punch_times) > 1 else punch_times[0]
+    last = punch_times[-1] if len(punch_times) > 1 else None
 
-    # First half earned when they arrived within/before the morning window
-    first_half = _t2s(first) <= _t2s(fh_end)
-    # Second half earned when they stayed until the second-half end (small tolerance)
-    second_half = _t2s(last) >= _t2s(sh_end) - 30 * 60
-    # Extra half earned when they stayed until (nearly) the extra-window end
-    extra_half = _t2s(last) >= _t2s(ex_end) - 15 * 60
+    spans = _production_spans(punch_times)
+    grace = (config.grace_minutes or 10) * 60
+
+    def covered(seg) -> bool:
+        # Arrival may be up to `grace` late, departure up to `grace` early,
+        # and the segment is still credited in full.
+        latest_ok_start = _t2s(_as_time(seg.start_time)) + grace
+        earliest_ok_end = _t2s(_as_time(seg.end_time)) - grace
+        return any(_t2s(s) <= latest_ok_start and _t2s(e) >= earliest_ok_end for s, e in spans)
 
     shifts = Decimal("0")
-    if first_half:
-        shifts += Decimal("0.50")
-    if second_half:
-        shifts += Decimal("0.50")
-    if extra_half:
-        shifts += Decimal("0.50")
-    if shifts == 0:
-        # They punched but matched no window → count a half for showing up
-        shifts = Decimal("0.50")
+    for seg in segments:
+        if covered(seg):
+            shifts += Decimal(str(seg.shift_value))
 
-    grace = (settings.simple_grace_minutes or 15) * 60
-    is_late = _t2s(first) > _t2s(fh_start) + grace
-    is_half = shifts <= Decimal("0.50")
+    max_possible = sum((Decimal(str(s.shift_value)) for s in segments), Decimal("0"))
+    if max_possible <= 0:
+        max_possible = Decimal("1.50")
+    if shifts == 0 and spans:
+        # Punched in/out but matched no configured segment window → minimal credit for showing up
+        shifts = Decimal("0.25")
+    shifts = min(shifts, max_possible)
+
+    is_late = _t2s(first) > _t2s(_as_time(config.punch1_time)) + grace
+    early_leave = last is not None and _t2s(last) < _t2s(_as_time(config.punch4_time)) - grace
+    is_half = shifts <= (max_possible / 2)
 
     return {
         "status": "half_shift" if is_half else "present",
         "is_late": is_late,
         "is_half_shift": is_half,
-        "early_leave": not second_half and first_half,
-        "shifts_earned": min(shifts, Decimal("1.50")),
+        "early_leave": early_leave,
+        "shifts_earned": shifts,
         "first_punch": first,
-        "last_punch": last if last != first else None,
+        "last_punch": last,
     }
 
 
 # ── Main entry: compute (or keep) the final record for one day ─────────────
 
 def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
-                       leave_dates=None, holiday_dates=None):
+                       leave_dates=None, holiday_dates=None,
+                       prod_config=None, prod_segments=None):
     """
     Compute and persist the AttendanceDayRecord for (emp, d).
     Manual overrides are preserved — returns the existing row untouched.
@@ -214,6 +239,18 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         )
     punch_times = sorted(p.punch_time for p in punch_logs)
 
+    # ── Night Shift Relaxation ──────────────────────────────────────────
+    # If the employee worked late last night they may report late today
+    # without Late / Half-Shift penalties. Also, early-morning punches that
+    # are actually last night's checkout must not count as today's arrival.
+    from .night_shift import get_relaxation_for, record_report, MORNING_CUTOFF
+    relaxation = get_relaxation_for(emp, d) if punch_times else None
+    if relaxation and relaxation.crossed_midnight:
+        day_times = [t for t in punch_times if t > MORNING_CUTOFF]
+        punch_logs = [p for p in punch_logs if p.punch_time > MORNING_CUTOFF]
+    else:
+        day_times = punch_times
+
     # Manual attendance entries (Attendance table) count as presence too
     has_manual = Attendance.objects.filter(
         employee=emp, date=d.isoformat(), present=True
@@ -227,16 +264,31 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         "first_punch": None, "last_punch": None,
     }
 
-    if punch_times or has_manual:
-        if not punch_times and has_manual:
+    is_production = emp.employment_type == "production"
+
+    if day_times or has_manual:
+        if not day_times and has_manual:
             computed = {"status": "present", "shifts_earned": Decimal("1.00")}
-        elif emp.employment_type == "production":
-            computed = _compute_production(emp, d, punch_times, settings)
+        elif is_production:
+            computed = _compute_production(emp, d, day_times, settings, prod_config, prod_segments)
         elif settings.attendance_mode == "simple":
             shift = _get_shift_for_date(emp, d)
-            computed = _compute_staff_simple(emp, d, punch_times, settings, shift)
+            computed = _compute_staff_simple(emp, d, day_times, settings, shift)
         else:
-            computed = _compute_staff_strict(emp, d, punch_logs, punch_times)
+            computed = _compute_staff_strict(emp, d, punch_logs, day_times)
+    elif punch_times and relaxation and relaxation.crossed_midnight:
+        # Only last night's checkout punches exist so far today — the employee
+        # has not yet reported for the new day. Not absent; still within the
+        # relaxation window (or simply not arrived yet).
+        computed = {"status": "absent", "shifts_earned": Decimal("0")}
+    elif is_production:
+        # Production employees have no leave/CL and work Sundays as a normal
+        # day — only an explicit company Holiday exempts them; otherwise a
+        # day with zero punches is simply Absent.
+        if is_holiday:
+            computed = {"status": "holiday", "shifts_earned": Decimal("0")}
+        else:
+            computed = {"status": "absent", "shifts_earned": Decimal("0")}
     elif on_leave:
         computed = {"status": "on_leave", "shifts_earned": Decimal("0")}
     elif is_holiday or _sunday(d):
@@ -245,6 +297,19 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         computed = {"status": "absent", "shifts_earned": Decimal("0")}
 
     fields.update(computed)
+
+    # Apply the relaxation: arriving within the allowed window is never Late,
+    # and a half-shift caused purely by the late arrival becomes a full shift
+    # once the day is completed (a distinct evening punch exists).
+    if relaxation and day_times:
+        first_day_punch = day_times[0]
+        record_report(relaxation, first_day_punch)
+        if first_day_punch <= relaxation.allowed_until:
+            fields["is_late"] = False
+            if fields.get("status") == "half_shift" and len(day_times) > 1:
+                fields["status"] = "present"
+                fields["is_half_shift"] = False
+                fields["shifts_earned"] = Decimal("1.00")
     fields["total_punches"] = len(punch_times)
     fields["computed_mode"] = (
         "production" if emp.employment_type == "production" else settings.attendance_mode
@@ -275,6 +340,12 @@ def compute_month_records(emp, year: int, month: int, settings=None):
     leave_dates = _leave_dates_for_month(emp, year, month)
     holiday_dates = _holiday_dates_for_month(year, month)
 
+    prod_config = ProductionShiftConfig.get() if emp.employment_type == "production" else None
+    prod_segments = (
+        list(ProductionShiftSegment.objects.filter(is_active=True))
+        if emp.employment_type == "production" else None
+    )
+
     records = []
     for day in range(1, days_in_month + 1):
         d = date_type(year, month, day)
@@ -286,7 +357,52 @@ def compute_month_records(emp, year: int, month: int, settings=None):
             settings=settings,
             leave_dates=leave_dates,
             holiday_dates=holiday_dates,
+            prod_config=prod_config,
+            prod_segments=prod_segments,
         ))
+    return records
+
+
+def compute_range_records(emp, date_from: date_type, date_to: date_type, settings=None):
+    """Compute final records for every day in [date_from, date_to] (inclusive)."""
+    if settings is None:
+        settings = PayrollSettings.get()
+
+    today = date_type.today()
+    logs = AttendanceLog.objects.filter(
+        employee=emp, date__gte=date_from, date__lte=date_to
+    ).order_by("punch_time")
+    logs_by_date = {}
+    for log in logs:
+        logs_by_date.setdefault(log.date, []).append(log)
+
+    months = {(d.year, d.month) for d in (date_from, date_to)}
+    leave_dates, holiday_dates = set(), set()
+    for y, m in months:
+        leave_dates |= _leave_dates_for_month(emp, y, m)
+        holiday_dates |= _holiday_dates_for_month(y, m)
+
+    prod_config = ProductionShiftConfig.get() if emp.employment_type == "production" else None
+    prod_segments = (
+        list(ProductionShiftSegment.objects.filter(is_active=True))
+        if emp.employment_type == "production" else None
+    )
+
+    records = []
+    d = date_from
+    while d <= date_to:
+        if d > today:
+            break
+        records.append(compute_day_record(
+            emp, d,
+            punch_logs=logs_by_date.get(d, []),
+            settings=settings,
+            leave_dates=leave_dates,
+            holiday_dates=holiday_dates,
+            prod_config=prod_config,
+            prod_segments=prod_segments,
+        ))
+        d += timedelta(days=1)
     return records
 
 

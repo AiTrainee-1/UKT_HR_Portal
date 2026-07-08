@@ -424,6 +424,8 @@ def employee_report(request: Request):
             "bankAccount": e.bank_account or "",
             "bankIfsc": e.bank_ifsc or "",
             "bankName": e.bank_name or "",
+            "bloodGroup": e.blood_group or "",
+            "emergencyContact": e.emergency_contact or "",
             "status": e.status,
         }
         for e in qs

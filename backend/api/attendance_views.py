@@ -555,76 +555,103 @@ def manual_attendance(request: Request) -> Response:
 
 
 # ── Biometric Sync ────────────────────────────────────────────────────────────
+# Two device sources, both supported together:
+#   • backend/.env (BIOMETRIC_DEVICE_IP/PORT/PASSWORD) — always works, unchanged
+#   • Settings → Devices — any number of additional devices added from the UI
 
-def run_biometric_sync(mode: str = "today") -> dict:
-    """
-    Run the biometric sync and return a summary dict.
-    mode: "today" | "days3" | "days7" | "month" | "prevmonth" | "all"
-    """
-    from django.core.management import call_command
-    from django.core.management.base import CommandError
+def _date_from_for_mode(mode: str):
+    """mode: 'day' | 'week' | 'month' | 'all' — the only 4 sync ranges HR needs."""
     from datetime import date as _date
+    today = _date.today()
+    if mode == "day":
+        return today
+    if mode == "week":
+        return today - timedelta(days=7)
+    if mode == "month":
+        return today - timedelta(days=30)
+    return None  # "all"
 
-    out = StringIO()
-    kwargs: dict = {"stdout": out, "stderr": out}
-    if mode == "today":
-        kwargs["today"] = True
-    elif mode == "all":
-        kwargs["sync_all"] = True
-    elif mode == "days7":
-        kwargs["days"] = 7
-    elif mode == "month":
-        # Sync from the 1st of the current month to today
-        today = _date.today()
-        days_elapsed = max(today.day, 1)
-        kwargs["days"] = days_elapsed
-    elif mode == "prevmonth":
-        # Sync from the 1st of the previous month to today
-        today = _date.today()
-        first_of_this_month = today.replace(day=1)
-        last_of_prev_month = first_of_this_month - timedelta(days=1)
-        first_of_prev_month = last_of_prev_month.replace(day=1)
-        days_back = (today - first_of_prev_month).days + 1
-        kwargs["days"] = days_back
-    else:
-        kwargs["days"] = 3
+
+def run_biometric_sync(mode: str = "day", device_id=None) -> dict:
+    """
+    Run the biometric sync and return a merged summary dict.
+    mode: "day" | "week" | "month" | "all"
+    device_id: int (a specific Settings device), "env" (the .env-configured
+               device), or "all"/None (the .env device + every enabled
+               Settings device, merged).
+    """
+    from .biometric_sync import BiometricSyncError, get_sync_targets, pull_from_device
+    from . import sync_progress
+    from django.utils import timezone
+
+    date_from = _date_from_for_mode(mode)
 
     try:
-        call_command("sync_biometric", **kwargs)
-        output = out.getvalue()
-        created = 0
-        not_found_ids: list[str] = []
-        for line in output.splitlines():
-            if "New records created" in line:
-                try:
-                    created = int(line.split(":")[-1].strip())
-                except ValueError:
-                    pass
-            # Extract unmatched device user IDs from warning block
-            if line.strip().startswith("- '") and line.strip().endswith("'"):
-                uid = line.strip()[3:-1]
-                not_found_ids.append(uid)
-        return {
-            "ok": True,
-            "created": created,
-            "output": output,
-            "syncedAt": datetime.utcnow().isoformat() + "Z",
-            "unmatchedDeviceIds": not_found_ids,
-        }
-    except CommandError as e:
-        return {"ok": False, "error": str(e)}
-    except Exception as e:
-        logger.exception("Biometric sync failed")
-        return {"ok": False, "error": str(e)}
+        targets = get_sync_targets(device_id)
+    except BiometricSyncError as exc:
+        return {"ok": False, "error": str(exc)}
+
+    # Progress-tracking only (UI pipeline) — does not affect the sync itself.
+    sync_progress.start(targets)
+
+    total_created = 0
+    not_found_ids: set = set()
+    device_errors = []
+    succeeded = 0
+
+    for t in targets:
+        if t.get("config_error"):
+            device_errors.append(f"{t['label']}: {t['config_error']}")
+            sync_progress.mark(t["label"], "failed")
+            continue
+        sync_progress.mark(t["label"], "syncing")
+        try:
+            result = pull_from_device(t["host"], t["port"], t["password"], date_from, device_label=t["label"])
+            total_created += result["created"]
+            not_found_ids |= result["notFound"]
+            succeeded += 1
+            if t["device"] is not None:
+                t["device"].last_synced_at = timezone.now()
+                t["device"].save(update_fields=["last_synced_at"])
+            sync_progress.mark(t["label"], "completed")
+        except BiometricSyncError as exc:
+            device_errors.append(f"{t['label']}: {exc}")
+            sync_progress.mark(t["label"], "failed")
+        except Exception as exc:
+            logger.exception("Biometric sync failed for device %s", t["label"])
+            device_errors.append(f"{t['label']}: {exc}")
+            sync_progress.mark(t["label"], "failed")
+
+    sync_progress.finish()
+
+    if succeeded == 0:
+        return {"ok": False, "error": "; ".join(device_errors)}
+
+    return {
+        "ok": True,
+        "created": total_created,
+        "syncedAt": datetime.utcnow().isoformat() + "Z",
+        "unmatchedDeviceIds": sorted(not_found_ids),
+        "deviceErrors": device_errors,
+    }
 
 
 @api_view(["POST"])
 @require_hr
 def sync_biometric_api(request: Request) -> Response:
-    mode = request.data.get("mode", "today")   # "today" | "days3" | "all"
-    result = run_biometric_sync(mode)
+    mode = request.data.get("mode", "day")       # "day" | "week" | "month" | "all"
+    device_id = request.data.get("deviceId")     # int | "env" | "all" | None
+    result = run_biometric_sync(mode, device_id)
     status_code = 200 if result["ok"] else 502
     return Response(result, status=status_code)
+
+
+@api_view(["GET"])
+@require_hr
+def sync_biometric_progress(request: Request) -> Response:
+    """Poll target for the live Start → Device → Completed sync pipeline UI."""
+    from . import sync_progress
+    return Response(sync_progress.snapshot())
 
 
 # ── Report Log ────────────────────────────────────────────────────────────────

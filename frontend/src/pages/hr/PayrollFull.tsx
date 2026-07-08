@@ -256,14 +256,16 @@ function SessionConfigPanel() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Settings size={15} className="text-amber-600" />
-            <CardTitle className="text-sm font-bold text-gray-900">Production Session Config</CardTitle>
+            <CardTitle className="text-sm font-bold text-gray-900">Legacy Session Config</CardTitle>
           </div>
           <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => { setShowAdd(s => !s); setEditId(null); resetForm(); }}>
             <Plus size={12} /> Add Session
           </Button>
         </div>
         <p className="text-xs text-muted-foreground mt-0.5">
-          Define pay per session. Production employees earn per completed session — not by the hour.
+          Not used by current production payroll — pay is now Total Shifts × Salary Per Shift
+          (configure shift segments and punch times in Settings → Payroll). This panel only affects
+          historical payroll records still shown in the old session format.
         </p>
       </CardHeader>
       <CardContent className="pt-0 space-y-2">
@@ -271,11 +273,10 @@ function SessionConfigPanel() {
         {isLoading ? (
           <div className="space-y-2">{[1,2].map(i => <Skeleton key={i} className="h-14 w-full rounded-lg" />)}</div>
         ) : (configs ?? []).length === 0 ? (
-          <div className="flex items-start gap-2 p-3 rounded-lg bg-red-50 border border-red-100">
-            <AlertCircle size={14} className="text-red-500 mt-0.5 shrink-0" />
-            <p className="text-xs text-red-700">
-              No sessions configured. Production payroll cannot be generated until you add at least one session.
-              <br />Example: Morning (08:30–12:40, min checkout 12:40, ₹150) + Afternoon (13:40–20:00, min checkout 17:30, ₹150).
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-gray-50 border border-gray-100">
+            <AlertCircle size={14} className="text-gray-400 mt-0.5 shrink-0" />
+            <p className="text-xs text-gray-500">
+              No legacy sessions configured — nothing to do here. Current production payroll doesn't need this.
             </p>
           </div>
         ) : (
@@ -318,6 +319,8 @@ const STATUS_COLORS: Record<string, string> = {
   absent:       "bg-red-100 text-red-700",
   paid_leave:   "bg-blue-100 text-blue-700",
   unpaid_leave: "bg-orange-100 text-orange-700",
+  half_shift:   "bg-amber-100 text-amber-700",
+  holiday:      "bg-gray-100 text-gray-600",
 };
 
 function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: () => void }) {
@@ -392,6 +395,16 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
                       </div>
                     ))}
                   </div>
+                  {/* Attendance mode used for this payroll */}
+                  {bd.attendanceMode && (
+                    <p className="mt-2 text-[11px] text-muted-foreground">
+                      Attendance calculated in{" "}
+                      <strong className="uppercase">{bd.attendanceMode} mode</strong>
+                      {bd.attendanceMode === "simple"
+                        ? " — morning + evening punch model (configured in Settings → Attendance)."
+                        : " — 4-punch engine (configured in Settings → Attendance)."}
+                    </p>
+                  )}
                   {(bd.summary.lateDays ?? 0) > 0 && (
                     <div className="mt-2 rounded-md bg-amber-50 border border-amber-100 px-3 py-2 text-xs text-amber-800 space-y-0.5">
                       <p className="font-semibold flex items-center gap-1">
@@ -407,6 +420,9 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
                           : "—"}
                       </strong></p>
                       <p>Days arrived after deadline: <strong>{bd.summary.lateDays}</strong></p>
+                      {bd.attendanceMode === "simple" && (
+                        <p className="text-amber-700/80">Simple mode: only the morning punch is checked — lunch-return delays are ignored.</p>
+                      )}
                     </div>
                   )}
                   {(bd.summary.halfShiftDays ?? 0) > 0 && (
@@ -414,7 +430,15 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
                       <p className="font-semibold flex items-center gap-1">
                         <AlertCircle size={11} /> Half-Shift Detection
                       </p>
-                      <p>A half-shift is recorded when only <strong>2 punches</strong> are present (morning only: P1+P2, or afternoon only: P3+P4).</p>
+                      {bd.attendanceMode === "simple" ? (
+                        <p>
+                          A half-shift is recorded when the <strong>first punch is after{" "}
+                          {bd.simpleHalfShiftCutoff ?? "13:30"}</strong>, when only a single punch
+                          exists for the day, or when HR manually marks the day as half shift.
+                        </p>
+                      ) : (
+                        <p>A half-shift is recorded when only <strong>2 punches</strong> are present (morning only: P1+P2, or afternoon only: P3+P4).</p>
+                      )}
                       <p>
                         <strong>{bd.summary.halfShiftDays}</strong> half-shift day{bd.summary.halfShiftDays !== 1 ? "s" : ""} &nbsp;×&nbsp; 0.5 &nbsp;=&nbsp;
                         <strong> {((bd.summary.halfShiftDays ?? 0) * 0.5).toFixed(2)} effective days</strong>
@@ -567,8 +591,130 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
               </>
             )}
 
-            {/* Production breakdown */}
-            {bd.type === "production" && (
+            {/* Production breakdown — current shift-based payroll */}
+            {bd.type === "production" && bd.salaryPerShift != null && (
+              <>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                    Period: {bd.dateFrom} to {bd.dateTo}
+                  </p>
+                  <div className="grid grid-cols-3 gap-2 mb-3">
+                    {[
+                      { label: "Days Worked", value: bd.summary.daysWorked, color: "text-green-700" },
+                      { label: "Days Absent", value: bd.summary.daysAbsent, color: "text-red-700" },
+                      { label: "Total Shifts", value: bd.summary.totalShifts, color: "text-blue-700" },
+                    ].map(s => (
+                      <div key={s.label} className="rounded-lg border p-2 text-center">
+                        <p className={`text-xl font-black ${s.color}`}>{s.value}</p>
+                        <p className="text-xs text-muted-foreground">{s.label}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Earnings</p>
+                  <div className="rounded-lg border divide-y text-sm">
+                    <div className="flex justify-between px-3 py-2">
+                      <span className="text-gray-600">Total Shifts Earned</span>
+                      <span className="font-semibold">{bd.earnings.totalShifts}</span>
+                    </div>
+                    <div className="flex justify-between px-3 py-2">
+                      <span className="text-gray-600">Salary Per Shift</span>
+                      <span className="font-semibold">₹{bd.earnings.salaryPerShift}</span>
+                    </div>
+                    <div className="flex justify-between px-3 py-2 font-bold bg-green-50/40">
+                      <span className="text-green-800">Gross Salary</span>
+                      <span className="text-green-800">₹{bd.earnings.grossSalary.toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {((bd.deductions.pf ?? 0) > 0 || (bd.deductions.esi ?? 0) > 0 || bd.deductions.advances > 0) && (
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                      Deductions
+                      {bd.deductions.pfEfRule && (
+                        <span className="ml-2 normal-case font-normal text-purple-600">
+                          rule: {bd.deductions.pfEfRule.label}
+                        </span>
+                      )}
+                    </p>
+                    <div className="rounded-lg border divide-y text-sm">
+                      {(bd.deductions.pf ?? 0) > 0 && (
+                        <div className="flex justify-between px-3 py-2">
+                          <span className="text-gray-600">PF ({bd.deductions.pfRate}%)</span>
+                          <span className="font-semibold text-red-700">- ₹{(bd.deductions.pf ?? 0).toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                        </div>
+                      )}
+                      {(bd.deductions.esi ?? 0) > 0 && (
+                        <div className="flex justify-between px-3 py-2">
+                          <span className="text-gray-600">{bd.deductions.pfEfRule ? "EF" : "ESI"} ({bd.deductions.esiRate}%)</span>
+                          <span className="font-semibold text-red-700">- ₹{(bd.deductions.esi ?? 0).toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                        </div>
+                      )}
+                      {bd.deductions.advances > 0 && (
+                        <div className="flex justify-between px-3 py-2">
+                          <span className="text-gray-600">Advance Recovery</span>
+                          <span className="font-semibold text-red-700">- ₹{bd.deductions.advances.toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Day-by-day table */}
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Day-by-Day Shifts</p>
+                  <div className="rounded-lg border overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="text-left px-3 py-2 font-semibold text-gray-600">Date</th>
+                          <th className="text-left px-3 py-2 font-semibold text-gray-600">Day</th>
+                          <th className="text-left px-3 py-2 font-semibold text-gray-600">First Punch</th>
+                          <th className="text-left px-3 py-2 font-semibold text-gray-600">Last Punch</th>
+                          <th className="text-left px-3 py-2 font-semibold text-gray-600">Status</th>
+                          <th className="text-right px-3 py-2 font-semibold text-gray-600">Shifts</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {displayDays.map((d) => (
+                          <tr key={d.date} className={(d.shiftsEarned ?? 0) > 0 ? "" : "opacity-40"}>
+                            <td className="px-3 py-1.5 font-mono">{d.date}</td>
+                            <td className="px-3 py-1.5 text-muted-foreground">{d.day}</td>
+                            <td className="px-3 py-1.5 font-mono text-green-700">{d.firstPunch ?? "—"}</td>
+                            <td className="px-3 py-1.5 font-mono text-blue-700">{d.lastPunch ?? "—"}</td>
+                            <td className="px-3 py-1.5">
+                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[d.status ?? "absent"] ?? "bg-gray-100 text-gray-600"}`}>
+                                {d.status ?? "—"}
+                              </span>
+                              {d.isLate && <span className="ml-1 text-amber-600 font-semibold text-xs">Late</span>}
+                            </td>
+                            <td className="px-3 py-1.5 text-right">
+                              {(d.shiftsEarned ?? 0) > 0
+                                ? <Badge className="text-xs bg-green-100 text-green-700 border-green-200">{d.shiftsEarned}</Badge>
+                                : <span className="text-gray-300">0</span>
+                              }
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {bd.days.length > 15 && (
+                      <div className="border-t bg-gray-50 px-3 py-2 text-center">
+                        <button className="text-xs text-blue-600 hover:underline flex items-center gap-1 mx-auto" onClick={() => setShowAllDays(s => !s)}>
+                          {showAllDays ? <><ChevronUp size={12} /> Show fewer</> : <><ChevronDown size={12} /> Show all {bd.days.length} days</>}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Production breakdown — legacy session-based payroll (historical records) */}
+            {bd.type === "production" && bd.salaryPerShift == null && (
               <>
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Session Configuration</p>
@@ -769,7 +915,7 @@ function GeneratePayrollDialog({ onClose, onSuccess }: { onClose: () => void; on
                 <Factory size={14} className={runType === "biweekly" ? "text-amber-700" : "text-gray-500"} />
                 <span className={`font-semibold text-sm ${runType === "biweekly" ? "text-amber-800" : "text-gray-700"}`}>Production Bi-Weekly</span>
               </div>
-              <p className="text-xs text-muted-foreground">Session-based pay for production</p>
+              <p className="text-xs text-muted-foreground">Shift-based pay for production</p>
             </button>
           </div>
 
@@ -815,7 +961,7 @@ function GeneratePayrollDialog({ onClose, onSuccess }: { onClose: () => void; on
             <p className={`text-xs ${runType === "monthly" ? "text-green-800" : "text-amber-800"}`}>
               {runType === "monthly"
                 ? `Will generate monthly payroll for all active staff employees for ${MONTH_NAMES[month - 1]} ${year}. Calculations are based on attendance logs, approved leave, and advances.`
-                : `Will generate session-based payroll for all active production employees for ${weekRange} (${weekNumber === 1 ? "Week 1 & 2" : "Week 3 & 4"}). Sessions completed = attendance × session rate.`
+                : `Will generate shift-based payroll for all active production employees for ${weekRange} (${weekNumber === 1 ? "Week 1 & 2" : "Week 3 & 4"}). Pay = total shifts earned × salary per shift.`
               }
             </p>
           </div>
@@ -844,7 +990,8 @@ function PayrollRow({ run, onViewBreakdown, onMarkPaid }: {
   onMarkPaid: (run: PayrollRunItem) => void;
 }) {
   const s = STATUS_CONFIG[run.status] ?? STATUS_CONFIG.pending;
-  const isProduction = run.salaryMode === "session";
+  const isProduction = run.salaryMode === "session" || run.salaryMode === "shift";
+  const isShiftMode = run.salaryMode === "shift";
 
   return (
     <div className="flex items-center gap-3 py-3 px-4 rounded-xl border bg-white hover:shadow-sm transition-shadow">
@@ -862,7 +1009,9 @@ function PayrollRow({ run, onViewBreakdown, onMarkPaid }: {
           {run.weekNumber && <Badge variant="outline" className="text-xs">Week {run.weekNumber}</Badge>}
         </div>
         <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground flex-wrap">
-          {isProduction ? (
+          {isShiftMode ? (
+            <span className="flex items-center gap-1"><CalendarDays size={11} />{run.presentDays} shifts</span>
+          ) : isProduction ? (
             <span className="flex items-center gap-1"><CalendarDays size={11} />{run.completedSessions} sessions</span>
           ) : (
             <span className="flex items-center gap-1"><CalendarDays size={11} />{run.presentDays} / {run.totalWorkingDays} days</span>
@@ -919,9 +1068,10 @@ export default function PayrollFull() {
   const { data: runs, isLoading } = useListPayrollRuns({ month: filterMonth, year: filterYear });
 
   const allRuns = runs ?? [];
+  const isProdMode = (mode: string) => mode === "session" || mode === "shift";
   const staffRuns  = allRuns.filter(r => r.salaryMode === "monthly");
-  const week12Runs = allRuns.filter(r => r.salaryMode === "session" && r.weekNumber === 1);
-  const week34Runs = allRuns.filter(r => r.salaryMode === "session" && r.weekNumber === 2);
+  const week12Runs = allRuns.filter(r => isProdMode(r.salaryMode) && r.weekNumber === 1);
+  const week34Runs = allRuns.filter(r => isProdMode(r.salaryMode) && r.weekNumber === 2);
   const prodRuns   = [...week12Runs, ...week34Runs];
 
   const filteredRuns =
@@ -959,7 +1109,7 @@ export default function PayrollFull() {
               variant="outline" className="gap-2 h-9"
               onClick={() => setShowSessionConfig(s => !s)}
             >
-              <Settings size={14} /> Session Config
+              <Settings size={14} /> Legacy Session Config
             </Button>
             <Button className="gap-2 h-9" onClick={() => setShowGenerate(true)}>
               <Play size={14} /> Generate Payroll
@@ -1129,7 +1279,7 @@ export default function PayrollFull() {
               <AlertCircle size={14} className="text-blue-500 mt-0.5 shrink-0" />
               <div className="text-xs text-gray-500 space-y-0.5">
                 <p><strong>Staff:</strong> Monthly salary, pro-rated by working days (Mon–Sat or Mon–Fri). PF = 12% of basic. ESI = 0.75% of gross (if salary ≤ ₹21,000).</p>
-                <p><strong>Production:</strong> Bi-weekly session pay. Morning + afternoon sessions each paid separately. Min checkout time determines if session counts.</p>
+                <p><strong>Production:</strong> Bi-weekly shift pay. Pay = total shifts earned × salary per shift, computed from punch-time coverage of the configured shift segments. No leave/permission — Sunday is a normal working day.</p>
                 <p><strong>Advances</strong> are auto-deducted from the monthly repayment schedule configured in the Advances module.</p>
               </div>
             </div>

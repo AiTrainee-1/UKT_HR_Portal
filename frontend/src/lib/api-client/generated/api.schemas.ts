@@ -101,6 +101,12 @@ export interface Employee {
   /** @nullable */
   phone?: string | null;
   /** @nullable */
+  photoUrl?: string | null;
+  /** @nullable */
+  bloodGroup?: string | null;
+  /** @nullable */
+  emergencyContact?: string | null;
+  /** @nullable */
   role?: string | null;
   /** @nullable */
   gender?: string | null;
@@ -119,6 +125,8 @@ export interface Employee {
   salaryType: EmployeeSalaryType;
   /** @nullable */
   salaryAmount?: number | null;
+  /** @nullable */
+  salaryPerShift?: number | null;
   status: EmployeeStatus;
   /** @nullable */
   bankName?: string | null;
@@ -153,10 +161,14 @@ export interface EmployeeInput {
   lastName: string;
   email?: string;
   phone?: string;
+  photoUrl?: string;
+  bloodGroup?: string;
+  emergencyContact?: string;
   role?: string;
   departmentId?: number;
   salaryType: EmployeeInputSalaryType;
   salaryAmount?: number;
+  salaryPerShift?: number;
   bankName?: string;
   bankAccount?: string;
   bankIfsc?: string;
@@ -180,10 +192,14 @@ export interface EmployeeUpdate {
   lastName?: string;
   email?: string;
   phone?: string;
+  photoUrl?: string;
+  bloodGroup?: string;
+  emergencyContact?: string;
   role?: string;
   departmentId?: number;
   salaryType?: EmployeeUpdateSalaryType;
   salaryAmount?: number;
+  salaryPerShift?: number;
   bankName?: string;
   bankAccount?: string;
   bankIfsc?: string;
@@ -307,6 +323,8 @@ export interface LeaveRequest {
   type: LeaveRequestType;
   startDate: string;
   endDate: string;
+  /** @nullable */
+  totalDays?: number | null;
   /** @nullable */
   reason?: string | null;
   status: LeaveRequestStatus;

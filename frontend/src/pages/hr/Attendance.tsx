@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useLocation } from "wouter";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,9 +22,12 @@ import {
   getAttendanceMonthlyTrendQueryKey,
 } from "@/lib/api-client";
 import {
-  useSyncBiometric, useAttendanceSummaryTyped, useAttendanceTrendTyped,
+  useAttendanceSummaryTyped, useAttendanceTrendTyped,
+  useListBiometricDevices, type SyncBiometricMode, type SyncDeviceId,
 } from "@/lib/api-client/custom-hooks";
+import { useBiometricSync } from "@/contexts/BiometricSyncContext";
 import EmployeeSearchSelect from "@/components/EmployeeSearchSelect";
+import BiometricSyncPipeline from "@/components/BiometricSyncPipeline";
 import AttendanceSearchSection from "./AttendanceSearch";
 import {
   Users, UserCheck, UserX, CalendarDays, Plus,
@@ -300,54 +303,45 @@ export default function AttendancePage() {
   });
 
   const [detailEmpId, setDetailEmpId] = useState<number | null>(null);
-  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
-  const [syncMode, setSyncMode] = useState<"today" | "days3" | "days7" | "month" | "prevmonth" | "all">("today");
+  const [syncMode, setSyncMode] = useState<SyncBiometricMode>("day");
+  const [syncDeviceId, setSyncDeviceId] = useState<SyncDeviceId>("all");
   const [showSyncMenu, setShowSyncMenu] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
   const syncMenuRef = useRef<HTMLDivElement>(null);
 
   const { data: employees } = useListEmployees({ status: "active" });
-  const syncMutation = useSyncBiometric();
+  const { data: devices } = useListBiometricDevices();
+  const enabledDevices = (devices ?? []).filter(d => d.isActive);
 
-  const SYNC_MODES = [
-    { key: "today",     label: "Today only" },
-    { key: "days3",     label: "Last 3 days" },
-    { key: "days7",     label: "Last 7 days" },
-    { key: "month",     label: "This month" },
-    { key: "prevmonth", label: "Previous month" },
-    { key: "all",       label: "All records (first-time import)" },
-  ] as const;
+  // Sync lives in a root-level context (BiometricSyncProvider) so it keeps
+  // running — and stays visible — even if the user navigates away mid-sync.
+  const { isSyncing, showPipeline, progress, lastSyncedAt, triggerSync, dismiss } = useBiometricSync();
 
-  const syncModeLabel = SYNC_MODES.find(m => m.key === syncMode)?.label ?? "Today only";
+  const SYNC_MODES: { key: SyncBiometricMode; label: string }[] = [
+    { key: "day",   label: "Last Day" },
+    { key: "week",  label: "Last One Week" },
+    { key: "month", label: "Last One Month" },
+    { key: "all",   label: "All Records" },
+  ];
 
-  const handleSync = async (modeOverride?: string) => {
+  const syncModeLabel = SYNC_MODES.find(m => m.key === syncMode)?.label ?? "Last Day";
+
+  const handleSync = (modeOverride?: SyncBiometricMode) => {
     const mode = modeOverride ?? syncMode;
     setShowSyncMenu(false);
-    try {
-      const result = await syncMutation.mutateAsync(mode as any);
-      if (result.ok) {
-        setLastSyncedAt(new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }));
-        const unmatched: string[] = result.unmatchedDeviceIds ?? [];
-        toast({
-          title: `Sync complete — ${result.created ?? 0} new records`,
-          description: unmatched.length > 0
-            ? `⚠ ${unmatched.length} device ID(s) had no matching employee: ${unmatched.join(", ")}`
-            : undefined,
-          variant: unmatched.length > 0 ? "destructive" : "default",
-        });
-        queryClient.invalidateQueries({ queryKey: getAttendanceSummaryQueryKey(selectedDate) });
-        queryClient.invalidateQueries({ queryKey: getAttendanceDailyQueryKey(selectedDate) });
-        queryClient.invalidateQueries({ queryKey: getAttendanceMonthlyTrendQueryKey(selectedYear, selectedMonth) });
-        if (detailEmpId) {
-          queryClient.invalidateQueries({ queryKey: ["attendance-employee", detailEmpId] });
-        }
-      } else {
-        toast({ title: "Sync failed", description: result.error ?? "Device unreachable", variant: "destructive" });
-      }
-    } catch {
-      toast({ title: "Sync failed", description: "Could not reach device", variant: "destructive" });
-    }
+    void triggerSync(mode, syncDeviceId);
   };
+
+  // The context invalidates "/api/attendance" queries broadly on completion;
+  // this page just needs to also refresh the one-employee history dialog key
+  // (not covered by that prefix) when a sync finishes while it's open.
+  const prevIsSyncing = useRef(isSyncing);
+  useEffect(() => {
+    if (prevIsSyncing.current && !isSyncing && detailEmpId) {
+      queryClient.invalidateQueries({ queryKey: ["attendance-employee", detailEmpId] });
+    }
+    prevIsSyncing.current = isSyncing;
+  }, [isSyncing, detailEmpId, queryClient]);
 
   // Summary + trend are filtered server-side by the selected sub-section
   const { data: summary, isLoading: summaryLoading } = useAttendanceSummaryTyped(selectedDate, view);
@@ -430,12 +424,12 @@ export default function AttendancePage() {
               <Button
                 variant="outline"
                 onClick={() => handleSync()}
-                disabled={syncMutation.isPending}
+                disabled={isSyncing}
                 className="gap-2 h-9 border-cyan-200 text-cyan-700 hover:bg-cyan-50 rounded-r-none border-r-0"
               >
-                <RefreshCw size={14} className={syncMutation.isPending ? "animate-spin" : ""} />
-                {syncMutation.isPending ? "Syncing…" : "Sync Biometric"}
-                {lastSyncedAt && !syncMutation.isPending && (
+                <RefreshCw size={14} className={isSyncing ? "animate-spin" : ""} />
+                {isSyncing ? "Syncing…" : "Sync Biometric"}
+                {lastSyncedAt && !isSyncing && (
                   <span className="text-[10px] text-cyan-500 font-normal">· {lastSyncedAt}</span>
                 )}
               </Button>
@@ -447,7 +441,32 @@ export default function AttendancePage() {
                 <ChevronDown size={13} />
               </button>
               {showSyncMenu && (
-                <div className="absolute top-full right-0 mt-1 z-50 bg-white border rounded-xl shadow-lg overflow-hidden min-w-[200px]">
+                <div className="absolute top-full right-0 mt-1 z-50 bg-white border rounded-xl shadow-lg overflow-hidden min-w-[220px]">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400 px-3 pt-2.5 pb-1">Device</p>
+                  <button
+                    onClick={() => setSyncDeviceId("all")}
+                    className={`w-full text-left px-3 py-1.5 text-sm hover:bg-cyan-50 transition-colors ${
+                      syncDeviceId === "all" ? "text-cyan-700 font-semibold bg-cyan-50" : "text-gray-700"
+                    }`}
+                  >
+                    Select All Devices
+                  </button>
+                  {enabledDevices.map(d => (
+                    <button
+                      key={d.id}
+                      onClick={() => setSyncDeviceId(d.id)}
+                      className={`w-full text-left px-3 py-1.5 text-sm hover:bg-cyan-50 transition-colors ${
+                        syncDeviceId === d.id ? "text-cyan-700 font-semibold bg-cyan-50" : "text-gray-700"
+                      }`}
+                    >
+                      {d.name}
+                    </button>
+                  ))}
+                  {enabledDevices.length === 0 && (
+                    <p className="px-3 py-1.5 text-xs text-amber-600">No enabled devices — add one in Settings.</p>
+                  )}
+
+                  <div className="border-t mt-1" />
                   <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400 px-3 pt-2.5 pb-1">Sync range</p>
                   {SYNC_MODES.map(m => (
                     <button
@@ -475,6 +494,9 @@ export default function AttendancePage() {
             </Button>
           </div>
         </div>
+
+        {/* ── Biometric Sync Pipeline (visible only while/just after syncing) ── */}
+        <BiometricSyncPipeline active={showPipeline} data={progress} onDismiss={dismiss} />
 
         {/* ── Summary Cards ── */}
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">

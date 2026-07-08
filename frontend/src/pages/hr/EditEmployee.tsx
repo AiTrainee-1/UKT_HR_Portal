@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useLocation } from "wouter";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,6 +9,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import PhotoUpload from "@/components/PhotoUpload";
 import {
   useGetEmployee, useUpdateEmployee,
   getListEmployeesQueryKey, getGetEmployeeQueryKey,
@@ -28,13 +29,16 @@ const schema = z.object({
   lastName: z.string().min(1, "Last name is required"),
   email: z.string().email("Valid email required").or(z.literal("")).optional(),
   phone: z.string().min(10, "Phone number required"),
-  gender: z.enum(["male", "female", "other"]).optional(),
+  // Plain strings (not z.enum) — the Select options already constrain the choices,
+  // and an enum here rejects "" during the brief window before async data loads.
+  gender: z.string().optional(),
   dateOfBirth: z.string().optional(),
-  employmentType: z.enum(["staff", "production"]).optional(),
+  employmentType: z.string().optional(),
   departmentId: z.string().optional(),
   designationId: z.string().optional(),
-  salaryType: z.enum(["monthly", "weekly"]),
-  salaryAmount: z.string().min(1, "Salary amount is required"),
+  salaryType: z.string().optional(),
+  salaryAmount: z.string().optional(),
+  salaryPerShift: z.string().optional(),
   joinDate: z.string().optional(),
   bankName: z.string().optional(),
   bankAccount: z.string().optional(),
@@ -46,6 +50,8 @@ const schema = z.object({
   fatherName: z.string().optional(),
   motherName: z.string().optional(),
   biometricDeviceId: z.string().optional(),
+  bloodGroup: z.string().optional(),
+  emergencyContact: z.string().optional(),
 });
 
 type FormData = z.infer<typeof schema>;
@@ -61,6 +67,7 @@ export default function EditEmployee() {
     query: { enabled: !!empId, queryKey: getGetEmployeeQueryKey(empId) } as any,
   });
   const mutation = useUpdateEmployee();
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
 
   const { data: departments } = useListDepartments();
   const [selectedDeptId, setSelectedDeptId] = useState<string>("");
@@ -68,42 +75,58 @@ export default function EditEmployee() {
     selectedDeptId ? { departmentId: Number(selectedDeptId) } : undefined,
   );
 
+  // Derive the form's populated values directly from the fetched employee.
+  // Using RHF's `values` option (instead of a manual useEffect + form.reset)
+  // keeps every field — including the Gender and Employment Type selects —
+  // in sync the instant the employee data arrives, with no race condition
+  // between the async fetch and the Select components' initial mount.
+  const formValues = useMemo<FormData | undefined>(() => {
+    if (!employee) return undefined;
+    return {
+      employeeCode: employee.employeeCode ?? "",
+      firstName: employee.firstName ?? "",
+      lastName: employee.lastName ?? "",
+      email: employee.email ?? "",
+      phone: employee.phone ?? "",
+      gender: employee.gender ?? "",
+      dateOfBirth: employee.dateOfBirth ?? "",
+      employmentType: employee.employmentType ?? "staff",
+      departmentId: employee.departmentId ? String(employee.departmentId) : "",
+      designationId: employee.designationId ? String(employee.designationId) : "",
+      salaryType: employee.salaryType ?? "monthly",
+      salaryAmount: employee.salaryAmount ? String(employee.salaryAmount) : "",
+      salaryPerShift: (employee as any).salaryPerShift ? String((employee as any).salaryPerShift) : "",
+      joinDate: employee.joinDate ?? "",
+      bankName: employee.bankName ?? "",
+      bankAccount: employee.bankAccount ?? "",
+      bankIfsc: employee.bankIfsc ?? "",
+      pfNumber: employee.pfNumber ?? "",
+      esiNumber: employee.esiNumber ?? "",
+      address: employee.address ?? "",
+      idProof: employee.idProof ?? "",
+      fatherName: (employee as any).fatherName ?? "",
+      motherName: (employee as any).motherName ?? "",
+      biometricDeviceId: (employee as any).biometricDeviceId ?? "",
+      bloodGroup: employee.bloodGroup ?? "",
+      emergencyContact: employee.emergencyContact ?? "",
+    };
+  }, [employee]);
+
   const form = useForm<FormData>({
     resolver: zodResolver(schema),
     defaultValues: { salaryType: "monthly", salaryAmount: "" },
+    values: formValues,
   });
 
+  const employmentType = form.watch("employmentType");
+
+  // Non-form-field side effects that still need to react to the employee load
   useEffect(() => {
     if (employee) {
-      const deptId = employee.departmentId ? String(employee.departmentId) : "";
-      setSelectedDeptId(deptId);
-      form.reset({
-        employeeCode: employee.employeeCode ?? "",
-        firstName: employee.firstName ?? "",
-        lastName: employee.lastName ?? "",
-        email: employee.email ?? "",
-        phone: employee.phone ?? "",
-        gender: (employee.gender as "male" | "female" | "other") ?? undefined,
-        dateOfBirth: employee.dateOfBirth ?? "",
-        employmentType: (employee.employmentType as "staff" | "production") ?? "staff",
-        departmentId: deptId,
-        designationId: employee.designationId ? String(employee.designationId) : "",
-        salaryType: (employee.salaryType as "monthly" | "weekly") ?? "monthly",
-        salaryAmount: employee.salaryAmount ? String(employee.salaryAmount) : "",
-        joinDate: employee.joinDate ?? "",
-        bankName: employee.bankName ?? "",
-        bankAccount: employee.bankAccount ?? "",
-        bankIfsc: employee.bankIfsc ?? "",
-        pfNumber: employee.pfNumber ?? "",
-        esiNumber: employee.esiNumber ?? "",
-        address: employee.address ?? "",
-        idProof: employee.idProof ?? "",
-        fatherName: (employee as any).fatherName ?? "",
-        motherName: (employee as any).motherName ?? "",
-        biometricDeviceId: (employee as any).biometricDeviceId ?? "",
-      });
+      setSelectedDeptId(employee.departmentId ? String(employee.departmentId) : "");
+      setPhotoUrl(employee.photoUrl ?? null);
     }
-  }, [employee, form]);
+  }, [employee]);
 
   const onSubmit = (data: FormData) => {
     mutation.mutate(
@@ -121,7 +144,8 @@ export default function EditEmployee() {
           departmentId: data.departmentId ? Number(data.departmentId) : null,
           designationId: data.designationId ? Number(data.designationId) : null,
           salaryType: data.salaryType,
-          salaryAmount: Number(data.salaryAmount),
+          salaryAmount: data.employmentType === "production" ? undefined : (data.salaryAmount ? Number(data.salaryAmount) : undefined),
+          salaryPerShift: data.employmentType === "production" ? (data.salaryPerShift ? Number(data.salaryPerShift) : undefined) : undefined,
           joinDate: data.joinDate || undefined,
           bankName: data.bankName || undefined,
           bankAccount: data.bankAccount || undefined,
@@ -133,6 +157,9 @@ export default function EditEmployee() {
           fatherName: data.fatherName || undefined,
           motherName: data.motherName || undefined,
           biometricDeviceId: data.biometricDeviceId || undefined,
+          photoUrl: photoUrl || undefined,
+          bloodGroup: data.bloodGroup || undefined,
+          emergencyContact: data.emergencyContact || undefined,
         } as any,
       },
       {
@@ -188,6 +215,16 @@ export default function EditEmployee() {
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
+
+            {/* Profile Photo */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground">Profile Photo</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <PhotoUpload value={photoUrl} onChange={setPhotoUrl} />
+              </CardContent>
+            </Card>
 
             {/* Basic Information */}
             <Card>
@@ -303,20 +340,35 @@ export default function EditEmployee() {
                 <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground">Salary</CardTitle>
               </CardHeader>
               <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <FormField control={form.control} name="salaryType" render={({ field }) => (
-                  <FormItem><FormLabel>Salary Type *</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl><SelectTrigger data-testid="select-salary-type"><SelectValue /></SelectTrigger></FormControl>
-                      <SelectContent>
-                        <SelectItem value="monthly">Monthly</SelectItem>
-                        <SelectItem value="weekly">Weekly</SelectItem>
-                      </SelectContent>
-                    </Select><FormMessage />
-                  </FormItem>
-                )} />
-                <FormField control={form.control} name="salaryAmount" render={({ field }) => (
-                  <FormItem><FormLabel>Amount (₹) *</FormLabel><FormControl><Input type="number" data-testid="input-salary-amount" {...field} /></FormControl><FormMessage /></FormItem>
-                )} />
+                {employmentType === "production" ? (
+                  <FormField control={form.control} name="salaryPerShift" render={({ field }) => (
+                    <FormItem className="sm:col-span-2">
+                      <FormLabel>Salary Per Shift (₹) *</FormLabel>
+                      <FormControl><Input type="number" step="0.01" placeholder="e.g. 300" {...field} /></FormControl>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Production pay = Total Shifts Worked × Salary Per Shift. No monthly amount needed.
+                      </p>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                ) : (
+                  <>
+                    <FormField control={form.control} name="salaryType" render={({ field }) => (
+                      <FormItem><FormLabel>Salary Type *</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value ?? "monthly"}>
+                          <FormControl><SelectTrigger data-testid="select-salary-type"><SelectValue /></SelectTrigger></FormControl>
+                          <SelectContent>
+                            <SelectItem value="monthly">Monthly</SelectItem>
+                            <SelectItem value="weekly">Weekly</SelectItem>
+                          </SelectContent>
+                        </Select><FormMessage />
+                      </FormItem>
+                    )} />
+                    <FormField control={form.control} name="salaryAmount" render={({ field }) => (
+                      <FormItem><FormLabel>Amount (₹) *</FormLabel><FormControl><Input type="number" data-testid="input-salary-amount" {...field} /></FormControl><FormMessage /></FormItem>
+                    )} />
+                  </>
+                )}
               </CardContent>
             </Card>
 
@@ -364,6 +416,21 @@ export default function EditEmployee() {
                 )} />
                 <FormField control={form.control} name="idProof" render={({ field }) => (
                   <FormItem><FormLabel>ID Proof</FormLabel><FormControl><Input data-testid="input-id-proof" {...field} /></FormControl><FormMessage /></FormItem>
+                )} />
+                <FormField control={form.control} name="bloodGroup" render={({ field }) => (
+                  <FormItem><FormLabel>Blood Group</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value ?? ""}>
+                      <FormControl><SelectTrigger><SelectValue placeholder="Select blood group" /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {["A+","A-","B+","B-","AB+","AB-","O+","O-"].map(bg => (
+                          <SelectItem key={bg} value={bg}>{bg}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  <FormMessage /></FormItem>
+                )} />
+                <FormField control={form.control} name="emergencyContact" render={({ field }) => (
+                  <FormItem><FormLabel>Emergency Contact</FormLabel><FormControl><Input placeholder="Name and phone number" {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
               </CardContent>
             </Card>

@@ -2,11 +2,13 @@ import React, { useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { useAuth } from '@/contexts/AuthContext';
 import { useListLeaveRequests, useListPermissions, useListResignations, useListAdvances } from '@/lib/api-client';
+import { usePayrollSettings } from '@/lib/api-client/custom-hooks';
 import {
   LayoutDashboard, Users, Clock, Calendar, CheckCircle2, IndianRupee,
   Wallet, BarChart3, Shield, Activity, Settings, FileText, LogOut,
   ChevronRight, Search, X, Command, UserCheck, UserMinus, Banknote,
   CalendarCheck, Bell, Award, TrendingUp, Gift, CreditCard,
+  CalendarHeart, MoonStar,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -64,6 +66,8 @@ const navGroups: NavGroupData[] = [
     items: [
       { path: '/hr/shifts', label: 'Manage Shift', icon: Clock },
       { path: '/hr/leave', label: 'Leave & Holiday', icon: Calendar },
+      { path: '/hr/casual-leave', label: 'Casual Leave', icon: CalendarHeart },
+      { path: '/hr/night-shift', label: 'Night Shift', icon: MoonStar },
       { path: '/hr/requests', label: 'Requests', icon: CheckCircle2 },
       { path: '/hr/promotion', label: 'Promotion', icon: Award },
       { path: '/hr/increment', label: 'Increment', icon: TrendingUp },
@@ -136,7 +140,50 @@ function UKTLogo({ className }: { className?: string }) {
 
 // ── Search Modal ───────────────────────────────────────────────────────────
 
+type SearchEntry = {
+  path: string;
+  label: string;
+  group?: string;
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
+};
+
+// Flatten every top-level page and child page into one searchable list
+const searchIndex: SearchEntry[] = navGroups.flatMap((group) =>
+  group.items.flatMap((item) => {
+    const entries: SearchEntry[] = [
+      { path: item.path, label: item.label, group: group.heading, icon: item.icon },
+    ];
+    if (item.children) {
+      entries.push(
+        ...item.children.map((c) => ({
+          path: c.path,
+          label: c.label,
+          group: item.label,
+          icon: item.icon,
+        })),
+      );
+    }
+    return entries;
+  }),
+);
+
 function SearchModal({ onClose }: { onClose: () => void }) {
+  const [, navigate] = useLocation();
+  const [query, setQuery] = useState('');
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  const results = query.trim()
+    ? searchIndex.filter((e) =>
+        e.label.toLowerCase().includes(query.toLowerCase()) ||
+        (e.group ?? '').toLowerCase().includes(query.toLowerCase()),
+      )
+    : searchIndex;
+
+  const goTo = (path: string) => {
+    navigate(path);
+    onClose();
+  };
+
   return (
     <div className="absolute inset-0 z-50 flex items-start justify-center pt-[12vh] bg-[#006496]/10 backdrop-blur-sm px-4">
       <div className="absolute inset-0" onClick={onClose} />
@@ -154,6 +201,21 @@ function SearchModal({ onClose }: { onClose: () => void }) {
           <Search className="w-4 h-4 text-[#006496]/50 mr-3 shrink-0" strokeWidth={1.5} />
           <input
             autoFocus
+            value={query}
+            onChange={(e) => { setQuery(e.target.value); setActiveIndex(0); }}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setActiveIndex((i) => Math.min(i + 1, results.length - 1));
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setActiveIndex((i) => Math.max(i - 1, 0));
+              } else if (e.key === 'Enter' && results[activeIndex]) {
+                goTo(results[activeIndex].path);
+              } else if (e.key === 'Escape') {
+                onClose();
+              }
+            }}
             className="flex-1 bg-transparent py-3.5 outline-none text-[13px] text-[#1a3a4a] placeholder:text-[#006496]/30"
             placeholder="Search pages, settings…"
           />
@@ -164,10 +226,34 @@ function SearchModal({ onClose }: { onClose: () => void }) {
             <X className="w-[15px] h-[15px]" strokeWidth={1.5} />
           </button>
         </div>
-        <div className="p-4 py-7 flex flex-col items-center justify-center">
-          <Command className="w-5 h-5 text-[#006496]/20 mb-2" strokeWidth={1.5} />
-          <p className="text-[12px] text-[#006496]/40 font-medium">Type to search pages…</p>
-        </div>
+
+        {results.length === 0 ? (
+          <div className="p-4 py-7 flex flex-col items-center justify-center">
+            <Command className="w-5 h-5 text-[#006496]/20 mb-2" strokeWidth={1.5} />
+            <p className="text-[12px] text-[#006496]/40 font-medium">No pages match "{query}"</p>
+          </div>
+        ) : (
+          <div className="max-h-[50vh] overflow-y-auto py-2">
+            {results.map((entry, i) => (
+              <button
+                key={entry.path + entry.label}
+                onClick={() => goTo(entry.path)}
+                onMouseEnter={() => setActiveIndex(i)}
+                className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${
+                  i === activeIndex ? 'bg-[#006496]/[0.07]' : ''
+                }`}
+              >
+                <entry.icon className="w-4 h-4 shrink-0 text-[#006496]/70" strokeWidth={1.8} />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[13px] font-medium text-[#1a3a4a] truncate">{entry.label}</p>
+                  {entry.group && (
+                    <p className="text-[10px] text-[#006496]/40 truncate">{entry.group}</p>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -349,6 +435,10 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
     .slice(0, 2)
     .toUpperCase();
 
+  const { data: settings } = usePayrollSettings();
+  const companyName = settings?.companyName || 'UKTextiles';
+  const companyLogo = settings?.companyLogo;
+
   return (
     <div className="relative flex flex-col h-full" style={{ fontFamily: "'Hanken Grotesk', 'Inter', sans-serif" }}>
 
@@ -358,13 +448,17 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
         style={{ borderBottom: '1px solid rgba(0,100,150,0.08)' }}
       >
         <div className="flex items-center gap-3 min-w-0">
-          <UKTLogo className="h-9 w-auto shrink-0" />
+          {companyLogo ? (
+            <img src={companyLogo} alt={companyName} className="h-9 w-9 rounded-full object-contain shrink-0 bg-white" />
+          ) : (
+            <UKTLogo className="h-9 w-auto shrink-0" />
+          )}
           <div className="min-w-0">
             <h1
-              className="text-[15px] font-black leading-none tracking-tight"
+              className="text-[15px] font-black leading-none tracking-tight truncate"
               style={{ color: '#006496' }}
             >
-              UKTextiles
+              {companyName}
             </h1>
             <p className="text-[10px] font-semibold tracking-widest uppercase leading-none mt-0.5" style={{ color: '#006496', opacity: 0.45 }}>
               HR Portal

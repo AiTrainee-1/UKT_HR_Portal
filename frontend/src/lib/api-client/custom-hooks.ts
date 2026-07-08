@@ -992,6 +992,7 @@ export type SyncResult = {
   syncedAt?: string;
   error?: string;
   unmatchedDeviceIds?: string[];
+  deviceErrors?: string[];
 };
 
 // ── Report Log types ──────────────────────────────────────────────────────────
@@ -1080,13 +1081,39 @@ export type LateSummaryResponse = {
   employees: LateSummaryEmployee[];
 };
 
+export type SyncBiometricMode = "day" | "week" | "month" | "all";
+export type SyncDeviceId = number | "all" | "env";
+
 export const useSyncBiometric = () =>
   useMutation({
-    mutationFn: (mode: "today" | "days3" | "days7" | "month" | "prevmonth" | "all" = "today") =>
-      customFetch<SyncResult>("/api/attendance/sync-biometric", {
+    mutationFn: (params: { mode?: SyncBiometricMode; deviceId?: SyncDeviceId } | SyncBiometricMode = "day") => {
+      const { mode = "day", deviceId } = typeof params === "string" ? { mode: params } : params;
+      return customFetch<SyncResult>("/api/attendance/sync-biometric", {
         method: "POST",
-        body: JSON.stringify({ mode }),
-      }),
+        body: JSON.stringify({ mode, deviceId }),
+      });
+    },
+  });
+
+// ── Biometric Sync Pipeline Progress ──────────────────────────────────────────
+
+export type SyncDeviceStatus = "pending" | "syncing" | "completed" | "failed";
+export type SyncProgressDevice = { id: number | string; label: string; status: SyncDeviceStatus };
+export type SyncProgress = {
+  stage: "idle" | "running" | "completed";
+  devices: SyncProgressDevice[];
+  startedAt: string | null;
+  finishedAt: string | null;
+};
+
+export const useSyncBiometricProgress = (enabled: boolean) =>
+  useQuery<SyncProgress>({
+    queryKey: ["/api/attendance/sync-biometric-progress"],
+    queryFn: () => customFetch<SyncProgress>("/api/attendance/sync-biometric-progress"),
+    enabled,
+    refetchInterval: enabled ? 600 : false,
+    // The pipeline only cares about the freshest snapshot — never serve a stale one.
+    staleTime: 0,
   });
 
 export const getReportLogQueryKey = (params: { date?: string; month?: number; year?: number; employeeId?: number }) =>
@@ -1216,15 +1243,22 @@ export type PayrollBreakdownDay = {
   firstIn?: string | null;
   lastOut?: string | null;
   leaveType?: string | null;
-  // production-only fields
+  // production-only fields (legacy session-based payroll)
   sessions?: { sessionId: number; sessionName: string; completed: boolean; rate: number }[];
   totalSessions?: number;
   sessionAmount?: number;
   present?: boolean;
+  // production-only fields (current shift-based payroll)
+  shiftsEarned?: number;
+  firstPunch?: string | null;
+  lastPunch?: string | null;
 };
 
 export type PayrollBreakdown = {
   type: "staff" | "production";
+  // Which attendance calculation produced this payroll (strict | simple)
+  attendanceMode?: "strict" | "simple" | null;
+  simpleHalfShiftCutoff?: string | null;
   // staff
   shift?: {
     id?: number | null;
@@ -1237,9 +1271,12 @@ export type PayrollBreakdown = {
   weekNumber?: number;
   dateFrom?: string;
   dateTo?: string;
+  // legacy session-based payroll only
   sessionConfigs?: {
     id: number; name: string; startTime: string; endTime: string; minCheckout: string; rate: number;
   }[];
+  // current shift-based payroll only
+  salaryPerShift?: number;
   days: PayrollBreakdownDay[];
   summary: {
     // staff
@@ -1257,6 +1294,7 @@ export type PayrollBreakdown = {
     daysWorked?: number;
     daysAbsent?: number;
     totalSessions?: number;
+    totalShifts?: number;
   };
   earnings: {
     monthlySalary?: number;
@@ -1267,10 +1305,16 @@ export type PayrollBreakdown = {
     allowances?: number;
     grossSalary: number;
     totalSessions?: number;
+    totalShifts?: number;
+    salaryPerShift?: number;
   };
   deductions: {
     pf?: number;
+    pfRate?: number;
     esi?: number;
+    esiRate?: number;
+    // Salary-range rule applied to production PF/EF (null/absent = flat rates)
+    pfEfRule?: { label: string; pfRate: number; efRate: number } | null;
     advances: number;
     advanceDetails: { advanceId: number; repaymentId: number; amount: number; notes?: string | null }[];
     lateShiftPenalty?: number;
@@ -1483,6 +1527,16 @@ export const useDeleteSessionConfig = () =>
 // ── Payroll Settings (singleton — PF/ESI rates) ───────────────────────────────
 
 export type PayrollSettingsItem = {
+  // Company profile — drives branding across the whole portal
+  companyName: string;
+  companyTagline: string;
+  companyPhone: string;
+  companyEmail: string;
+  companyWebsite: string;
+  companyGstin: string;
+  companyPan: string;
+  companyAddress: string;
+  companyRegistration: string;
   // Staff deductions
   pfRate: number;
   esiRate: number;
@@ -1494,6 +1548,7 @@ export type PayrollSettingsItem = {
   // General
   payDay: number;
   productionPayType: string;
+  defaultSalaryPerShift?: number;
   // Salary slip header & signature
   slipCompanyName: string;
   slipCompanyAddress: string;
@@ -1513,6 +1568,7 @@ export type PayrollSettingsItem = {
   prodSecondHalfEnd: string;
   prodExtraStart: string;
   prodExtraEnd: string;
+  prodPfEfEnabled?: boolean;
   prodPfEfRules: { label: string; minSalary: number; maxSalary: number; pfRate: number; efRate: number }[];
   // SMTP / Email
   smtpHost: string;
@@ -1543,6 +1599,180 @@ export const useUpdatePayrollSettings = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: getPayrollSettingsQueryKey() });
     },
+  });
+};
+
+// ── Biometric Device Management ───────────────────────────────────────────────
+
+export type BiometricDeviceItem = {
+  id: number | "env";
+  name: string;
+  deviceType: string;
+  host: string;
+  port: number | null;
+  hasApiKey: boolean;
+  connectionConfig: Record<string, unknown>;
+  isActive: boolean;
+  isDefault: boolean;
+  /** true for the read-only device configured via backend/.env */
+  isEnv?: boolean;
+  lastSyncedAt: string | null;
+  notes: string | null;
+  createdAt: string | null;
+};
+
+export const getBiometricDevicesQueryKey = () => ["/api/biometric-devices"] as const;
+
+export const useListBiometricDevices = () =>
+  useQuery<BiometricDeviceItem[]>({
+    queryKey: getBiometricDevicesQueryKey(),
+    queryFn: () => customFetch<BiometricDeviceItem[]>("/api/biometric-devices"),
+  });
+
+export const useCreateBiometricDevice = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: {
+      name: string; deviceType?: string; host?: string; port?: number | null;
+      apiKey?: string; isActive?: boolean; isDefault?: boolean; notes?: string;
+      connectionConfig?: Record<string, unknown>;
+    }) =>
+      customFetch<BiometricDeviceItem>("/api/biometric-devices", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: getBiometricDevicesQueryKey() }),
+  });
+};
+
+export const useUpdateBiometricDevice = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: {
+      id: number;
+      data: Partial<{
+        name: string; deviceType: string; host: string; port: number | null;
+        apiKey: string; isActive: boolean; isDefault: boolean; notes: string;
+        connectionConfig: Record<string, unknown>;
+      }>;
+    }) =>
+      customFetch<BiometricDeviceItem>(`/api/biometric-devices/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: getBiometricDevicesQueryKey() }),
+  });
+};
+
+export const useDeleteBiometricDevice = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      customFetch<void>(`/api/biometric-devices/${id}`, { method: "DELETE" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: getBiometricDevicesQueryKey() }),
+  });
+};
+
+// ── Production Shift Workflow (punch times + dynamic shift-value segments) ────
+
+export type ProductionShiftSegment = {
+  id: number;
+  label: string;
+  startTime: string;
+  endTime: string;
+  shiftValue: number;
+  order: number;
+  isActive: boolean;
+};
+
+export type ProductionShiftConfigResponse = {
+  punch1Time: string;
+  punch2Time: string;
+  punch3Time: string;
+  punch4Time: string;
+  graceMinutes: number;
+  updatedAt: string | null;
+  segments: ProductionShiftSegment[];
+};
+
+export const getProductionShiftConfigQueryKey = () => ["/api/production-shift-config"] as const;
+
+export const useProductionShiftConfig = () =>
+  useQuery<ProductionShiftConfigResponse>({
+    queryKey: getProductionShiftConfigQueryKey(),
+    queryFn: () => customFetch<ProductionShiftConfigResponse>("/api/production-shift-config"),
+  });
+
+export const useUpdateProductionShiftConfig = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Partial<{
+      punch1Time: string; punch2Time: string; punch3Time: string; punch4Time: string; graceMinutes: number;
+    }>) =>
+      customFetch("/api/production-shift-config", { method: "PUT", body: JSON.stringify(data) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: getProductionShiftConfigQueryKey() }),
+  });
+};
+
+export const useCreateProductionShiftSegment = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { label: string; startTime: string; endTime: string; shiftValue: number; order?: number; isActive?: boolean }) =>
+      customFetch<ProductionShiftSegment>("/api/production-shift-segments", { method: "POST", body: JSON.stringify(data) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: getProductionShiftConfigQueryKey() }),
+  });
+};
+
+export const useUpdateProductionShiftSegment = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Partial<{ label: string; startTime: string; endTime: string; shiftValue: number; order: number; isActive: boolean }> }) =>
+      customFetch<ProductionShiftSegment>(`/api/production-shift-segments/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: getProductionShiftConfigQueryKey() }),
+  });
+};
+
+export const useDeleteProductionShiftSegment = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      customFetch<void>(`/api/production-shift-segments/${id}`, { method: "DELETE" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: getProductionShiftConfigQueryKey() }),
+  });
+};
+
+// ── ID Card Template Settings ─────────────────────────────────────────────────
+
+export type IdCardSettingsItem = {
+  primaryColor: string;
+  secondaryColor: string;
+  textColor: string;
+  fontFamily: string;
+  backgroundStyle: string;
+  logoPosition: string;
+  cornerStyle: string;
+  showQrOnBack: boolean;
+  footerText: string;
+  updatedAt: string | null;
+};
+
+export const getIdCardSettingsQueryKey = () => ["/api/idcard-settings"] as const;
+
+export const useIdCardSettings = () =>
+  useQuery<IdCardSettingsItem>({
+    queryKey: getIdCardSettingsQueryKey(),
+    queryFn: () => customFetch<IdCardSettingsItem>("/api/idcard-settings"),
+  });
+
+export const useUpdateIdCardSettings = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Partial<IdCardSettingsItem>) =>
+      customFetch<IdCardSettingsItem>("/api/idcard-settings", {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: getIdCardSettingsQueryKey() }),
   });
 };
 
@@ -1658,6 +1888,30 @@ export const useEmployeeMonthlyAttendance = (
     retry: false,
   });
 
+export type AttendanceOverrideRequest = {
+  id: number;
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department?: string | null;
+  date: string;
+  previousValues: Record<string, unknown>;
+  requestedValues: Record<string, unknown>;
+  reason?: string | null;
+  status: "pending" | "approved" | "rejected";
+  requestedBy?: string | null;
+  reviewedBy?: string | null;
+  reviewComment?: string | null;
+  reviewedAt?: string | null;
+  createdAt?: string | null;
+};
+
+/**
+ * Submitting an override does NOT apply it immediately — it creates a
+ * pending AttendanceOverrideRequest that a Department Head must approve
+ * (via the mobile app) before the attendance record is actually changed.
+ * reset=true is the only path that applies instantly (reverts to auto).
+ */
 export const useAttendanceOverride = () => {
   const queryClient = useQueryClient();
   return useMutation({
@@ -1672,13 +1926,32 @@ export const useAttendanceOverride = () => {
       note?: string;
       reset?: boolean;
     }) =>
-      customFetch<{ ok: boolean; record: FinalAttendanceDay }>("/api/attendance/override", {
+      customFetch<{
+        ok: boolean;
+        record: FinalAttendanceDay;
+        pendingApproval?: boolean;
+        request?: AttendanceOverrideRequest;
+        reset?: boolean;
+      }>("/api/attendance/override", {
         method: "POST",
         body: JSON.stringify(data),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/attendance/employee-monthly"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance/override-requests"] });
     },
+  });
+};
+
+export const useAttendanceOverrideRequests = (params?: { employeeId?: number; code?: string; status?: string }) => {
+  const qs = new URLSearchParams();
+  if (params?.employeeId) qs.set("employeeId", String(params.employeeId));
+  if (params?.code) qs.set("code", params.code);
+  if (params?.status) qs.set("status", params.status);
+  const q = qs.toString() ? `?${qs.toString()}` : "";
+  return useQuery<AttendanceOverrideRequest[]>({
+    queryKey: ["/api/attendance/override-requests", params?.employeeId ?? null, params?.code ?? null, params?.status ?? null],
+    queryFn: () => customFetch<AttendanceOverrideRequest[]>(`/api/attendance/override-requests${q}`),
   });
 };
 
@@ -1776,6 +2049,28 @@ export type IncrementSummary = {
   history: IncrementItem[];
 };
 
+export type IncrementDashboard = {
+  totalIncrements: number;
+  totalEmployeesIncremented: number;
+  totalIncrementAmount: number;
+  avgIncrementPercent: number;
+  departmentBreakdown: {
+    department: string;
+    incrementCount: number;
+    employeeCount: number;
+    avgPercent: number;
+    totalAmount: number;
+  }[];
+  recentIncrements: IncrementItem[];
+  topIncrements: IncrementItem[];
+};
+
+export const useIncrementDashboard = () =>
+  useQuery<IncrementDashboard>({
+    queryKey: ["/api/increments/dashboard"],
+    queryFn: () => customFetch<IncrementDashboard>("/api/increments/dashboard"),
+  });
+
 export const useIncrementSummary = (code: string, enabled = true) =>
   useQuery<IncrementSummary>({
     queryKey: ["/api/increments/summary", code],
@@ -1832,6 +2127,17 @@ export type IdCardData = {
     logo?: string | null;
     signature?: string | null;
   };
+  template?: {
+    primaryColor: string;
+    secondaryColor: string;
+    textColor: string;
+    fontFamily: string;
+    backgroundStyle: string;
+    logoPosition: string;
+    cornerStyle: string;
+    showQrOnBack: boolean;
+    footerText: string;
+  };
 };
 
 export const useIdCards = (ids: number[], enabled = true) =>
@@ -1874,6 +2180,210 @@ export const useVerifyEmployee = (code: string) =>
     retry: false,
   });
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  Casual Leave (CL)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type CasualLeaveItem = {
+  id: number;
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department?: string | null;
+  designation?: string | null;
+  date: string;
+  reason?: string | null;
+  status: "pending" | "approved" | "rejected";
+  reviewedBy?: string | null;
+  reviewerRole?: string | null;
+  reviewComment?: string | null;
+  reviewedAt?: string | null;
+  createdAt?: string | null;
+};
+
+export type CasualLeaveEligibility = {
+  month: number;
+  year: number;
+  eligibilityMonths: number;
+  employees: {
+    employeeId: number;
+    employeeCode: string;
+    employeeName: string;
+    department?: string | null;
+    designation?: string | null;
+    joinDate?: string | null;
+    serviceMonths: number | null;
+    eligible: boolean;
+    reason?: string | null;
+    usedThisMonth: boolean;
+    usedStatus?: string | null;
+    usedDate?: string | null;
+  }[];
+};
+
+export const getCasualLeavesQueryKey = () => ["/api/casual-leaves"] as const;
+
+export const useListCasualLeaves = (params?: { status?: string; month?: number; year?: number }) => {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.month) qs.set("month", String(params.month));
+  if (params?.year) qs.set("year", String(params.year));
+  const q = qs.toString() ? `?${qs.toString()}` : "";
+  return useQuery<CasualLeaveItem[]>({
+    queryKey: ["/api/casual-leaves", params?.status ?? null, params?.month ?? null, params?.year ?? null],
+    queryFn: () => customFetch<CasualLeaveItem[]>(`/api/casual-leaves${q}`),
+  });
+};
+
+export const useCasualLeaveEligibility = (month: number, year: number) =>
+  useQuery<CasualLeaveEligibility>({
+    queryKey: ["/api/casual-leaves/eligibility", month, year],
+    queryFn: () =>
+      customFetch<CasualLeaveEligibility>(`/api/casual-leaves/eligibility?month=${month}&year=${year}`),
+  });
+
+export const useCreateCasualLeave = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { employeeId: number; date: string; reason?: string }) =>
+      customFetch<CasualLeaveItem>("/api/casual-leaves", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getCasualLeavesQueryKey() });
+      queryClient.invalidateQueries({ queryKey: ["/api/casual-leaves/eligibility"] });
+    },
+  });
+};
+
+export const useDecideCasualLeave = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, status, comment }: { id: number; status: "approved" | "rejected"; comment?: string }) =>
+      customFetch<CasualLeaveItem>(`/api/casual-leaves/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status, comment }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getCasualLeavesQueryKey() });
+      queryClient.invalidateQueries({ queryKey: ["/api/casual-leaves/eligibility"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance/employee-monthly"] });
+    },
+  });
+};
+
+export const useDeleteCasualLeave = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      customFetch<{ ok: boolean }>(`/api/casual-leaves/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getCasualLeavesQueryKey() });
+      queryClient.invalidateQueries({ queryKey: ["/api/casual-leaves/eligibility"] });
+    },
+  });
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Night Shift Relaxation
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type NightShiftRecord = {
+  id: number;
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department?: string | null;
+  nightDate: string;
+  relaxationDate: string;
+  lastPunchOut: string;
+  crossedMidnight: boolean;
+  allowedUntil: string;
+  ruleName?: string | null;
+  reportedAt?: string | null;
+  withinAllowance?: boolean | null;
+  status: "reported_within" | "reported_late" | "waiting" | "window_expired" | "no_report";
+  remainingMinutes?: number | null;
+};
+
+export type NightShiftDashboard = {
+  detected: number | null;
+  count: number;
+  summary: { reportedWithin: number; reportedLate: number; waiting: number; noReport: number };
+  records: NightShiftRecord[];
+};
+
+export const useNightShiftDashboard = (params: {
+  date?: string; month?: number; year?: number; employeeId?: number; departmentId?: number;
+}) => {
+  const qs = new URLSearchParams();
+  if (params.date) qs.set("date", params.date);
+  if (params.month) qs.set("month", String(params.month));
+  if (params.year) qs.set("year", String(params.year));
+  if (params.employeeId) qs.set("employeeId", String(params.employeeId));
+  if (params.departmentId) qs.set("departmentId", String(params.departmentId));
+  return useQuery<NightShiftDashboard>({
+    queryKey: ["/api/night-shift/dashboard", qs.toString()],
+    queryFn: () => customFetch<NightShiftDashboard>(`/api/night-shift/dashboard?${qs.toString()}`),
+  });
+};
+
+export const useNightShiftRecompute = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { date?: string; month?: number; year?: number }) =>
+      customFetch<{ ok: boolean; detected: number }>("/api/night-shift/recompute", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/night-shift/dashboard"] }),
+  });
+};
+
+export type NightShiftRuleItem = {
+  id: number;
+  name: string;
+  workedUntil: string;
+  crossesMidnight: boolean;
+  allowedFirstPunch: string;
+  order: number;
+  isActive: boolean;
+};
+
+export const useNightShiftRules = () =>
+  useQuery<NightShiftRuleItem[]>({
+    queryKey: ["/api/night-shift/rules"],
+    queryFn: () => customFetch<NightShiftRuleItem[]>("/api/night-shift/rules"),
+  });
+
+export const useSaveNightShiftRule = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Partial<NightShiftRuleItem> & { id?: number }) =>
+      data.id
+        ? customFetch<NightShiftRuleItem>(`/api/night-shift/rules/${data.id}`, {
+            method: "PUT", body: JSON.stringify(data),
+          })
+        : customFetch<NightShiftRuleItem>("/api/night-shift/rules", {
+            method: "POST", body: JSON.stringify(data),
+          }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/night-shift/rules"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/night-shift/dashboard"] });
+    },
+  });
+};
+
+export const useDeleteNightShiftRule = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      customFetch<{ ok: boolean }>(`/api/night-shift/rules/${id}`, { method: "DELETE" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/night-shift/rules"] }),
+  });
+};
+
 // ── Department Manager Types ──────────────────────────────────────────────────
 
 export type AssignedDepartment = {
@@ -1901,6 +2411,8 @@ export type DepartmentManagerItem = {
   canApproveLeaves: boolean;
   canApprovePermissions: boolean;
   canApproveResignations: boolean;
+  canApproveAttendance: boolean;
+  canApproveCasualLeave: boolean;
   isActive: boolean;
   notes?: string | null;
   createdAt?: string | null;
@@ -1913,6 +2425,7 @@ export type DepartmentManagerItem = {
   canSubmitLeave?: boolean;
   pendingApprovalsCount?: number;
   pendingResignationsCount?: number;
+  pendingAttendanceCount?: number;
 };
 
 export const getDepartmentManagersQueryKey = () => ["department-managers"] as const;
@@ -1939,6 +2452,8 @@ export const useCreateDepartmentManager = () => {
       canApproveLeaves?: boolean;
       canApprovePermissions?: boolean;
       canApproveResignations?: boolean;
+      canApproveAttendance?: boolean;
+      canApproveCasualLeave?: boolean;
       notes?: string;
     }) =>
       customFetch<DepartmentManagerItem>("/api/department-managers", {
@@ -1963,6 +2478,8 @@ export const useUpdateDepartmentManager = () => {
         canApproveLeaves: boolean;
         canApprovePermissions: boolean;
         canApproveResignations: boolean;
+        canApproveAttendance: boolean;
+        canApproveCasualLeave: boolean;
         isActive: boolean;
         notes: string;
       }>;

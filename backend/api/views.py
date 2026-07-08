@@ -270,6 +270,7 @@ def _employees_create(request: Request) -> Response:
         designation=desig,
         salary_type=data.get("salaryType", "monthly"),
         salary_amount=parse_decimal(data.get("salaryAmount")),
+        salary_per_shift=parse_decimal(data.get("salaryPerShift")),
         bank_name=data.get("bankName"),
         bank_account=data.get("bankAccount"),
         bank_ifsc=data.get("bankIfsc"),
@@ -281,6 +282,9 @@ def _employees_create(request: Request) -> Response:
         father_name=data.get("fatherName"),
         mother_name=data.get("motherName"),
         biometric_device_id=data.get("biometricDeviceId"),
+        photo_url=data.get("photoUrl"),
+        blood_group=data.get("bloodGroup"),
+        emergency_contact=data.get("emergencyContact"),
     )
     # Auto-assign production shift if applicable
     from .shift_views import auto_assign_production_shift
@@ -347,6 +351,7 @@ def _employee_update(request: Request, pk: int) -> Response:
         "employmentType": "employment_type",
         "salaryType": "salary_type",
         "salaryAmount": "salary_amount",
+        "salaryPerShift": "salary_per_shift",
         "status": "status",
         "bankName": "bank_name",
         "bankAccount": "bank_account",
@@ -359,11 +364,14 @@ def _employee_update(request: Request, pk: int) -> Response:
         "fatherName": "father_name",
         "motherName": "mother_name",
         "biometricDeviceId": "biometric_device_id",
+        "photoUrl": "photo_url",
+        "bloodGroup": "blood_group",
+        "emergencyContact": "emergency_contact",
     }
     for json_key, model_key in field_map.items():
         if json_key in request.data:
             value = request.data[json_key]
-            if model_key == "salary_amount":
+            if model_key in ("salary_amount", "salary_per_shift"):
                 value = parse_decimal(value)
             elif model_key == "date_of_birth":
                 value = value or None

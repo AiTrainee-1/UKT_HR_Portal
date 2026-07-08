@@ -8,12 +8,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import {
-  useEmployeeMonthlyAttendance, useAttendanceOverride,
+  useEmployeeMonthlyAttendance, useAttendanceOverride, useAttendanceOverrideRequests,
   type FinalAttendanceDay,
 } from "@/lib/api-client/custom-hooks";
 import { useListEmployees } from "@/lib/api-client";
 import {
-  Search, User, RotateCcw, PenLine, X, Clock,
+  Search, User, RotateCcw, PenLine, X, Clock, Send, ShieldCheck, Hourglass, ShieldX, History,
 } from "lucide-react";
 
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -68,6 +68,14 @@ export default function AttendanceSearchSection({
   const { data: employees } = useListEmployees({ status: "active" });
   const { data, isLoading, isError } = useEmployeeMonthlyAttendance(searchCode, month, year);
   const overrideMutation = useAttendanceOverride();
+  const { data: myRequests } = useAttendanceOverrideRequests(
+    data ? { employeeId: data.employee.id } : undefined,
+  );
+
+  // Map date -> latest pending request, so the table can flag "Under Review"
+  const pendingByDate = new Map(
+    (myRequests ?? []).filter(r => r.status === "pending").map(r => [r.date, r]),
+  );
 
   const suggestions = input.trim() && !searchCode
     ? (employees ?? [])
@@ -101,7 +109,7 @@ export default function AttendanceSearchSection({
       ? "half_shift"
       : form.status;
     try {
-      await overrideMutation.mutateAsync({
+      const res = await overrideMutation.mutateAsync({
         employeeId: data.employee.id,
         date: editDay.date,
         status,
@@ -111,10 +119,17 @@ export default function AttendanceSearchSection({
         lastPunch: form.lastPunch || null,
         note: form.note || undefined,
       });
-      toast({ title: `Attendance updated for ${editDay.date}` });
+      if (res.pendingApproval) {
+        toast({
+          title: "Submitted for Department Head approval",
+          description: `The change for ${editDay.date} is pending review. Attendance will only update once approved.`,
+        });
+      } else {
+        toast({ title: `Attendance updated for ${editDay.date}` });
+      }
       setEditDay(null);
     } catch (err: any) {
-      toast({ title: err?.message ?? "Failed to update attendance", variant: "destructive" });
+      toast({ title: err?.message ?? "Failed to submit request", variant: "destructive" });
     }
   };
 
@@ -142,8 +157,8 @@ export default function AttendanceSearchSection({
               Employee Attendance Search
             </CardTitle>
             <p className="text-[11px] text-muted-foreground mt-0.5">
-              Search by employee code — view weekly attendance and apply manual overrides.
-              Overridden values become final and are used by payroll.
+              Search by employee code — view weekly attendance and submit manual edits.
+              Edits require Department Head approval before they become final and reach payroll.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -251,8 +266,8 @@ export default function AttendanceSearchSection({
 
             <p className="text-[11px] text-muted-foreground -mt-1">
               Calculation mode: <strong className="uppercase">{data.attendanceMode}</strong>.
-              Click <PenLine size={10} className="inline" /> on a day to edit it manually —
-              edits are stored in the database and used for payroll.
+              Click <PenLine size={10} className="inline" /> on a day to propose a manual edit —
+              it goes to the employee's Department Head for approval before it becomes final.
             </p>
 
             {/* Weekly tables */}
@@ -276,10 +291,13 @@ export default function AttendanceSearchSection({
                       </tr>
                     </thead>
                     <tbody>
-                      {week.days.map(day => (
+                      {week.days.map(day => {
+                        const pending = pendingByDate.get(day.date);
+                        return (
                         <tr
                           key={day.date}
                           className={`border-b last:border-0 hover:bg-gray-50 ${
+                            pending ? "bg-yellow-50/50" :
                             day.source === "manual" ? "bg-blue-50/40" :
                             day.status === "absent" ? "bg-red-50/30" :
                             day.status === "half_shift" ? "bg-amber-50/30" : ""
@@ -306,9 +324,13 @@ export default function AttendanceSearchSection({
                               : <span className="text-gray-300">—</span>}
                           </td>
                           <td className="px-3 py-2 text-[10px]">
-                            {day.source === "manual" ? (
+                            {pending ? (
+                              <span className="inline-flex items-center gap-1 text-yellow-700 font-semibold">
+                                <Hourglass size={10} /> Under Review
+                              </span>
+                            ) : day.source === "manual" ? (
                               <span className="inline-flex items-center gap-1 text-blue-600 font-semibold">
-                                <PenLine size={10} /> Manual{day.overrideBy ? ` · ${day.overrideBy}` : ""}
+                                <ShieldCheck size={10} /> Approved{day.overrideBy ? ` · ${day.overrideBy}` : ""}
                               </span>
                             ) : (
                               <span className="text-gray-400">Auto</span>
@@ -318,12 +340,13 @@ export default function AttendanceSearchSection({
                             <div className="flex items-center gap-1 justify-end">
                               <button
                                 onClick={() => openEdit(day)}
-                                className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
-                                title="Edit this day"
+                                disabled={!!pending}
+                                className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                                title={pending ? "A request is already under review for this day" : "Propose an edit"}
                               >
                                 <PenLine size={13} />
                               </button>
-                              {day.source === "manual" && (
+                              {day.source === "manual" && !pending && (
                                 <button
                                   onClick={() => revertDay(day)}
                                   className="p-1.5 rounded-lg text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
@@ -335,12 +358,48 @@ export default function AttendanceSearchSection({
                             </div>
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
               </div>
             ))}
+
+            {/* Submitted request tracking */}
+            {(myRequests ?? []).length > 0 && (
+              <div className="rounded-xl border overflow-hidden">
+                <div className="px-3 py-2 bg-gray-50 border-b flex items-center gap-1.5">
+                  <History size={12} className="text-gray-400" />
+                  <p className="text-xs font-bold uppercase tracking-wider text-gray-500">
+                    Submitted Attendance Requests
+                  </p>
+                </div>
+                <div className="divide-y max-h-56 overflow-y-auto">
+                  {(myRequests ?? []).slice(0, 15).map(r => (
+                    <div key={r.id} className="flex items-center gap-3 px-3 py-2 text-xs">
+                      <span className="font-mono text-gray-500 w-24 shrink-0">{r.date}</span>
+                      <span className="text-gray-600 flex-1 truncate">{r.reason || "—"}</span>
+                      {r.status === "pending" && (
+                        <span className="inline-flex items-center gap-1 text-yellow-700 font-semibold shrink-0">
+                          <Hourglass size={11} /> Pending
+                        </span>
+                      )}
+                      {r.status === "approved" && (
+                        <span className="inline-flex items-center gap-1 text-green-700 font-semibold shrink-0">
+                          <ShieldCheck size={11} /> Approved{r.reviewedBy ? ` · ${r.reviewedBy}` : ""}
+                        </span>
+                      )}
+                      {r.status === "rejected" && (
+                        <span className="inline-flex items-center gap-1 text-red-600 font-semibold shrink-0" title={r.reviewComment ?? ""}>
+                          <ShieldX size={11} /> Rejected{r.reviewedBy ? ` · ${r.reviewedBy}` : ""}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </CardContent>
@@ -349,7 +408,7 @@ export default function AttendanceSearchSection({
       <Dialog open={!!editDay} onOpenChange={open => { if (!open) setEditDay(null); }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Edit Attendance</DialogTitle>
+            <DialogTitle>Propose Attendance Change</DialogTitle>
           </DialogHeader>
           {editDay && data && (
             <div className="space-y-4 pt-1">
@@ -455,9 +514,9 @@ export default function AttendanceSearchSection({
                 </>
               )}
 
-              {/* Note */}
+              {/* Reason */}
               <div className="space-y-1.5">
-                <Label className="text-xs">Note (optional)</Label>
+                <Label className="text-xs">Reason for this change <span className="text-gray-400 font-normal">(shown to the Department Head)</span></Label>
                 <Input
                   placeholder="e.g. CCTV verified — device missed punch"
                   value={form.note}
@@ -470,16 +529,18 @@ export default function AttendanceSearchSection({
                   Cancel
                 </Button>
                 <Button
-                  className="flex-1"
+                  className="flex-1 gap-1.5"
                   onClick={saveEdit}
                   disabled={overrideMutation.isPending}
                 >
-                  {overrideMutation.isPending ? "Saving…" : "Save & Overwrite"}
+                  <Send size={13} />
+                  {overrideMutation.isPending ? "Submitting…" : "Submit for Approval"}
                 </Button>
               </div>
               <p className="text-[10px] text-muted-foreground -mt-1">
-                Saved values become the final attendance record for this day and are used
-                directly by payroll. Use the ↩ button in the table to revert to automatic.
+                This does not change attendance immediately. The employee's Department Head
+                reviews the request on the mobile app — only an approval writes it to the record
+                used by payroll. Use the ↩ button in the table to instantly revert an already-approved edit.
               </p>
             </div>
           )}

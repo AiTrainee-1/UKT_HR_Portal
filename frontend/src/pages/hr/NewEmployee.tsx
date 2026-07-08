@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,10 +9,12 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { Label } from "@/components/ui/label";
+import PhotoUpload from "@/components/PhotoUpload";
 import {
   useCreateEmployee, getListEmployeesQueryKey,
   useListDepartments, useListDesignations,
 } from "@/lib/api-client";
+import { usePayrollSettings } from "@/lib/api-client/custom-hooks";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
@@ -32,7 +34,8 @@ const schema = z.object({
   departmentId: z.string().optional(),
   designationId: z.string().optional(),
   salaryType: z.enum(["monthly", "weekly"]),
-  salaryAmount: z.string().min(1, "Salary amount is required"),
+  salaryAmount: z.string().optional(),
+  salaryPerShift: z.string().optional(),
   joinDate: z.string().optional(),
   bankName: z.string().optional(),
   bankAccount: z.string().optional(),
@@ -44,6 +47,16 @@ const schema = z.object({
   fatherName: z.string().optional(),
   motherName: z.string().optional(),
   biometricDeviceId: z.string().optional(),
+  bloodGroup: z.string().optional(),
+  emergencyContact: z.string().optional(),
+}).superRefine((data, ctx) => {
+  if (data.employmentType === "production") {
+    if (!data.salaryPerShift || Number(data.salaryPerShift) <= 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["salaryPerShift"], message: "Salary per shift is required" });
+    }
+  } else if (!data.salaryAmount || Number(data.salaryAmount) <= 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["salaryAmount"], message: "Salary amount is required" });
+  }
 });
 
 type FormData = z.infer<typeof schema>;
@@ -53,6 +66,7 @@ export default function NewEmployee() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const mutation = useCreateEmployee();
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
 
   const { data: departments } = useListDepartments();
   const [selectedDeptId, setSelectedDeptId] = useState<string>("");
@@ -66,8 +80,23 @@ export default function NewEmployee() {
       salaryType: "monthly",
       employmentType: "staff",
       salaryAmount: "",
+      salaryPerShift: "",
     },
   });
+
+  const employmentType = form.watch("employmentType");
+
+  // Pre-fill the configured default per-shift rate when switching to Production
+  const { data: payrollSettings } = usePayrollSettings();
+  useEffect(() => {
+    if (
+      employmentType === "production" &&
+      !form.getValues("salaryPerShift") &&
+      payrollSettings?.defaultSalaryPerShift
+    ) {
+      form.setValue("salaryPerShift", String(payrollSettings.defaultSalaryPerShift));
+    }
+  }, [employmentType, payrollSettings, form]);
 
   const onSubmit = (data: FormData) => {
     mutation.mutate(
@@ -84,7 +113,8 @@ export default function NewEmployee() {
           departmentId: data.departmentId ? Number(data.departmentId) : undefined,
           designationId: data.designationId ? Number(data.designationId) : undefined,
           salaryType: data.salaryType,
-          salaryAmount: Number(data.salaryAmount),
+          salaryAmount: data.employmentType === "production" ? undefined : Number(data.salaryAmount),
+          salaryPerShift: data.employmentType === "production" ? Number(data.salaryPerShift) : undefined,
           joinDate: data.joinDate || undefined,
           bankName: data.bankName || undefined,
           bankAccount: data.bankAccount || undefined,
@@ -96,6 +126,9 @@ export default function NewEmployee() {
           fatherName: data.fatherName || undefined,
           motherName: data.motherName || undefined,
           biometricDeviceId: data.biometricDeviceId || undefined,
+          photoUrl: photoUrl || undefined,
+          bloodGroup: data.bloodGroup || undefined,
+          emergencyContact: data.emergencyContact || undefined,
         } as any,
       },
       {
@@ -127,6 +160,16 @@ export default function NewEmployee() {
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
+
+            {/* Profile Photo */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground">Profile Photo</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <PhotoUpload value={photoUrl} onChange={setPhotoUrl} />
+              </CardContent>
+            </Card>
 
             {/* Basic Information */}
             <Card>
@@ -241,20 +284,35 @@ export default function NewEmployee() {
                 <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground">Salary</CardTitle>
               </CardHeader>
               <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <FormField control={form.control} name="salaryType" render={({ field }) => (
-                  <FormItem><FormLabel>Salary Type *</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
-                      <SelectContent>
-                        <SelectItem value="monthly">Monthly</SelectItem>
-                        <SelectItem value="weekly">Weekly</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  <FormMessage /></FormItem>
-                )} />
-                <FormField control={form.control} name="salaryAmount" render={({ field }) => (
-                  <FormItem><FormLabel>Amount (₹) *</FormLabel><FormControl><Input type="number" {...field} /></FormControl><FormMessage /></FormItem>
-                )} />
+                {employmentType === "production" ? (
+                  <FormField control={form.control} name="salaryPerShift" render={({ field }) => (
+                    <FormItem className="sm:col-span-2">
+                      <FormLabel>Salary Per Shift (₹) *</FormLabel>
+                      <FormControl><Input type="number" step="0.01" placeholder="e.g. 300" {...field} /></FormControl>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Production pay = Total Shifts Worked × Salary Per Shift. No monthly amount needed.
+                      </p>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                ) : (
+                  <>
+                    <FormField control={form.control} name="salaryType" render={({ field }) => (
+                      <FormItem><FormLabel>Salary Type *</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value}>
+                          <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
+                          <SelectContent>
+                            <SelectItem value="monthly">Monthly</SelectItem>
+                            <SelectItem value="weekly">Weekly</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      <FormMessage /></FormItem>
+                    )} />
+                    <FormField control={form.control} name="salaryAmount" render={({ field }) => (
+                      <FormItem><FormLabel>Amount (₹) *</FormLabel><FormControl><Input type="number" {...field} /></FormControl><FormMessage /></FormItem>
+                    )} />
+                  </>
+                )}
               </CardContent>
             </Card>
 
@@ -302,6 +360,21 @@ export default function NewEmployee() {
                 )} />
                 <FormField control={form.control} name="idProof" render={({ field }) => (
                   <FormItem><FormLabel>ID Proof</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
+                )} />
+                <FormField control={form.control} name="bloodGroup" render={({ field }) => (
+                  <FormItem><FormLabel>Blood Group</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value ?? ""}>
+                      <FormControl><SelectTrigger><SelectValue placeholder="Select blood group" /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {["A+","A-","B+","B-","AB+","AB-","O+","O-"].map(bg => (
+                          <SelectItem key={bg} value={bg}>{bg}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  <FormMessage /></FormItem>
+                )} />
+                <FormField control={form.control} name="emergencyContact" render={({ field }) => (
+                  <FormItem><FormLabel>Emergency Contact</FormLabel><FormControl><Input placeholder="Name and phone number" {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
               </CardContent>
             </Card>

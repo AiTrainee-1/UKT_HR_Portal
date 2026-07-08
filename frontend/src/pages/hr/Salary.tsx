@@ -55,6 +55,7 @@ export default function Salary() {
   const [monthFilter, setMonthFilter] = useState(String(new Date().getMonth() + 1));
   const [yearFilter, setYearFilter] = useState(String(new Date().getFullYear()));
   const [statusFilter, setStatusFilter] = useState("all");
+  const [payrollGroup, setPayrollGroup] = useState<"staff" | "production">("staff");
 
   // Data Loading States
   const [payrolls, setPayrolls] = useState<any[]>([]);
@@ -164,6 +165,8 @@ export default function Salary() {
     if (activeTab === "configs") fetchConfigs();
     setPage(1);
   }, [activeTab, empFilter, monthFilter, yearFilter, statusFilter]);
+
+  useEffect(() => { setPage(1); }, [payrollGroup]);
 
   // Operations
   const handleGeneratePayroll = async () => {
@@ -359,15 +362,21 @@ export default function Salary() {
     }
   };
 
-  // Stats calculation
-  const totalGross = payrolls.reduce((sum, p) => sum + p.grossSalary, 0);
-  const totalPaid = payrolls.filter(p => p.status === "paid").reduce((sum, p) => sum + p.finalSalary, 0);
-  const totalPending = payrolls.filter(p => p.status === "pending").reduce((sum, p) => sum + p.finalSalary, 0);
-  
+  // Staff vs Production split — staff pay is salaryMode "monthly", production is "session" (legacy) or "shift" (current)
+  const isProductionMode = (mode: string) => mode === "session" || mode === "shift";
+  const staffPayrolls = payrolls.filter(p => p.salaryMode === "monthly");
+  const productionPayrolls = payrolls.filter(p => isProductionMode(p.salaryMode));
+  const groupedPayrolls = payrollGroup === "staff" ? staffPayrolls : productionPayrolls;
+
+  // Stats calculation (reflects the selected Staff/Production group)
+  const totalGross = groupedPayrolls.reduce((sum, p) => sum + p.grossSalary, 0);
+  const totalPaid = groupedPayrolls.filter(p => p.status === "paid").reduce((sum, p) => sum + p.finalSalary, 0);
+  const totalPending = groupedPayrolls.filter(p => p.status === "pending").reduce((sum, p) => sum + p.finalSalary, 0);
+
   // Paginated Data
   const getPaginatedData = () => {
     let dataList: any[] = [];
-    if (activeTab === "payroll") dataList = payrolls;
+    if (activeTab === "payroll") dataList = groupedPayrolls;
     else if (activeTab === "punches") dataList = punches;
     else if (activeTab === "sessions") dataList = sessions;
     else if (activeTab === "configs") dataList = configs;
@@ -585,6 +594,28 @@ export default function Salary() {
           </button>
         </div>
 
+        {/* Staff / Production toggle — payroll tab only */}
+        {activeTab === "payroll" && (
+          <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1 w-fit">
+            {(
+              [
+                { key: "staff" as const, label: `Staff (${staffPayrolls.length})` },
+                { key: "production" as const, label: `Production (${productionPayrolls.length})` },
+              ]
+            ).map(g => (
+              <button
+                key={g.key}
+                onClick={() => setPayrollGroup(g.key)}
+                className={`px-4 py-1.5 rounded-md text-xs font-bold transition-colors ${
+                  payrollGroup === g.key ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                {g.label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* MAIN DATA PANELS */}
         <div className="flex-1">
           {/* TAB 1: PAYROLL COMPUTATION RECORDS */}
@@ -597,7 +628,7 @@ export default function Salary() {
                       <TableHead className="pl-4 font-bold text-slate-700">Employee</TableHead>
                       <TableHead className="font-bold text-slate-700">Mode</TableHead>
                       <TableHead className="font-bold text-slate-700">Period</TableHead>
-                      <TableHead className="font-bold text-slate-700">Present (Days)</TableHead>
+                      <TableHead className="font-bold text-slate-700">{payrollGroup === "production" ? "Shifts Worked" : "Present (Days)"}</TableHead>
                       <TableHead className="font-bold text-slate-700">Basic Rate</TableHead>
                       <TableHead className="font-bold text-slate-700">OT Pay</TableHead>
                       <TableHead className="font-bold text-slate-700">Bonus / Deduct</TableHead>
@@ -607,7 +638,7 @@ export default function Salary() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {loading ? (
+                    {loading && paginated.length === 0 ? (
                       Array.from({ length: 5 }).map((_, i) => (
                         <TableRow key={i}>
                           {Array.from({ length: 10 }).map((_, j) => (
@@ -622,13 +653,15 @@ export default function Salary() {
                             <div>{rec.employeeName}</div>
                             <span className="text-[10px] text-slate-400 block font-mono">ID: {rec.employeeId}</span>
                           </TableCell>
-                          <TableCell className="capitalize text-xs font-semibold">
+                          <TableCell className="text-xs font-semibold">
                             <Badge variant="outline" className={rec.salaryMode === "monthly" ? "text-blue-700 bg-blue-50 border-blue-100" : "text-purple-700 bg-purple-50 border-purple-100"}>
-                              {rec.salaryMode}
+                              {rec.salaryMode === "monthly" ? "Monthly" : rec.salaryMode === "shift" ? "Shift" : "Session"}
                             </Badge>
                           </TableCell>
                           <TableCell className="text-xs font-medium text-slate-600">{rec.month}/{rec.year}</TableCell>
-                          <TableCell className="text-xs font-mono font-medium text-slate-700">{rec.presentDays} Days</TableCell>
+                          <TableCell className="text-xs font-mono font-medium text-slate-700">
+                            {isProductionMode(rec.salaryMode) ? `${rec.presentDays} Shifts` : `${rec.presentDays} Days`}
+                          </TableCell>
                           <TableCell className="font-medium text-xs">₹{rec.baseSalary.toLocaleString("en-IN")}</TableCell>
                           <TableCell className="font-medium text-xs text-indigo-600">₹{rec.otAmount.toLocaleString("en-IN")}</TableCell>
                           <TableCell className="text-xs">
@@ -724,7 +757,7 @@ export default function Salary() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {loading ? (
+                        {loading && paginated.length === 0 ? (
                           Array.from({ length: 5 }).map((_, i) => (
                             <TableRow key={i}>
                               {Array.from({ length: 5 }).map((_, j) => (
@@ -787,7 +820,7 @@ export default function Salary() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {loading ? (
+                    {loading && paginated.length === 0 ? (
                       Array.from({ length: 5 }).map((_, i) => (
                         <TableRow key={i}>
                           {Array.from({ length: 9 }).map((_, j) => (

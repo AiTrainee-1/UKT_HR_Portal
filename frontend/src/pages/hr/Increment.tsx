@@ -8,10 +8,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useListEmployees } from "@/lib/api-client";
 import {
-  useIncrementSummary, useAddIncrement,
+  useIncrementSummary, useAddIncrement, useIncrementDashboard,
 } from "@/lib/api-client/custom-hooks";
 import {
   IndianRupee, Search, User, TrendingUp, ArrowUpRight, X, History,
+  Users, Building2, Percent, Award,
 } from "lucide-react";
 
 const QUICK_PERCENTS = [5, 10, 15, 20];
@@ -31,6 +32,7 @@ export default function Increment() {
 
   const { data: employees } = useListEmployees({ status: "active" });
   const { data, isLoading, isError } = useIncrementSummary(searchCode);
+  const { data: dashboard, isLoading: dashboardLoading } = useIncrementDashboard();
   const addMutation = useAddIncrement();
 
   const suggestions = input.trim() && !searchCode
@@ -78,6 +80,137 @@ export default function Increment() {
             Track salary growth and apply percentage-based increments
           </p>
         </div>
+
+        {/* ── Company-wide dashboard ── */}
+        {dashboardLoading ? (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
+          </div>
+        ) : dashboard ? (
+          <>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              {[
+                { label: "Total Increments", value: dashboard.totalIncrements, cls: "text-gray-900", icon: History, iconCls: "bg-gray-700" },
+                { label: "Employees Incremented", value: dashboard.totalEmployeesIncremented, cls: "text-blue-700", icon: Users, iconCls: "bg-blue-600" },
+                { label: "Total Amount Increased", value: fmt(dashboard.totalIncrementAmount), cls: "text-green-700", icon: IndianRupee, iconCls: "bg-green-600" },
+                { label: "Avg Increment %", value: `${dashboard.avgIncrementPercent}%`, cls: "text-purple-700", icon: Percent, iconCls: "bg-purple-600" },
+              ].map(({ label, value, cls, icon: Icon, iconCls }) => (
+                <Card key={label} className="border">
+                  <CardContent className="p-5">
+                    <div className="flex items-center justify-between mb-3">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">{label}</p>
+                      <div className={`p-1.5 rounded-lg ${iconCls}`}>
+                        <Icon size={14} className="text-white" />
+                      </div>
+                    </div>
+                    <p className={`text-2xl font-black leading-none ${cls}`}>{value}</p>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+
+            {dashboard.totalIncrements > 0 && (
+              <div className="grid lg:grid-cols-2 gap-4">
+                {/* Department-wise breakdown */}
+                <Card className="border">
+                  <CardHeader className="pb-3 pt-4 px-4">
+                    <CardTitle className="text-sm font-bold flex items-center gap-2">
+                      <Building2 size={14} className="text-indigo-500" /> Department-Wise Increments
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="px-4 pb-4">
+                    {dashboard.departmentBreakdown.length === 0 ? (
+                      <p className="text-sm text-center text-muted-foreground py-6">No data yet.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {dashboard.departmentBreakdown.map(d => (
+                          <div key={d.department} className="flex items-center gap-3 p-2.5 border rounded-xl">
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-bold text-gray-800 truncate">{d.department}</p>
+                              <p className="text-[11px] text-gray-400">
+                                {d.employeeCount} employee{d.employeeCount !== 1 ? "s" : ""} · {d.incrementCount} increment{d.incrementCount !== 1 ? "s" : ""}
+                              </p>
+                            </div>
+                            <div className="text-right shrink-0">
+                              <p className="text-sm font-black text-indigo-700">{d.avgPercent}% avg</p>
+                              <p className="text-[11px] text-green-600 font-semibold">+{fmt(d.totalAmount)}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Top increments */}
+                <Card className="border">
+                  <CardHeader className="pb-3 pt-4 px-4">
+                    <CardTitle className="text-sm font-bold flex items-center gap-2">
+                      <Award size={14} className="text-amber-500" /> Top Increments
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="px-4 pb-4">
+                    {dashboard.topIncrements.length === 0 ? (
+                      <p className="text-sm text-center text-muted-foreground py-6">No data yet.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {dashboard.topIncrements.map(h => (
+                          <div key={h.id} className="flex items-center gap-3 p-2.5 border rounded-xl">
+                            <div className="w-7 h-7 rounded-lg bg-amber-50 flex items-center justify-center shrink-0">
+                              <TrendingUp size={13} className="text-amber-600" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-bold text-gray-800 truncate">{h.employeeName}</p>
+                              <p className="text-[11px] text-gray-400 font-mono">{h.employeeCode}</p>
+                            </div>
+                            <div className="text-right shrink-0">
+                              <p className="text-sm font-black text-green-600">+{h.percent}%</p>
+                              <p className="text-[10px] text-gray-400">{h.effectiveDate}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+
+            {/* Recent increments feed */}
+            {dashboard.recentIncrements.length > 0 && (
+              <Card className="border">
+                <CardHeader className="pb-3 pt-4 px-4">
+                  <CardTitle className="text-sm font-bold flex items-center gap-2">
+                    <History size={14} className="text-gray-400" /> Recent Increments Across the Company
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="px-4 pb-4">
+                  <div className="space-y-2 max-h-72 overflow-y-auto">
+                    {dashboard.recentIncrements.map(h => (
+                      <div key={h.id} className="flex items-center gap-3 p-2.5 border rounded-xl">
+                        <div className="w-7 h-7 rounded-lg bg-green-50 flex items-center justify-center shrink-0">
+                          <ArrowUpRight size={13} className="text-green-600" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-gray-800 truncate">
+                            {h.employeeName} <span className="text-gray-400 font-mono text-xs font-normal">({h.employeeCode})</span>
+                          </p>
+                          <p className="text-[11px] text-gray-400">
+                            {fmt(h.previousSalary)} → {fmt(h.newSalary)}{h.notes ? ` · ${h.notes}` : ""}
+                          </p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="text-sm font-black text-green-600">+{h.percent}%</p>
+                          <p className="text-[10px] text-gray-400">{h.effectiveDate}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </>
+        ) : null}
 
         {/* Search */}
         <Card className="border">

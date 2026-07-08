@@ -1,4 +1,6 @@
+import { useRef, useState } from "react";
 import { useParams, useLocation } from "wouter";
+import html2canvas from "html2canvas";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -6,19 +8,64 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useGetEmployee, useListSalaryRecords, getGetEmployeeQueryKey } from "@/lib/api-client";
-import { ArrowLeft, Phone, Mail, MapPin, CreditCard, Building, Calendar } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import {
+  useGetEmployee, useListSalaryRecords, useListLeaveRequests, getGetEmployeeQueryKey,
+} from "@/lib/api-client";
+import { useIdCards, useAttendanceEmployeeHistory } from "@/lib/api-client/custom-hooks";
+import {
+  StaffCardFront, StaffCardBack, ProductionCardFront, ProductionCardBack, useQrCodes,
+} from "@/components/idcard/IdCardViews";
+import {
+  ArrowLeft, Phone, Mail, MapPin, CreditCard, Building, Calendar, Droplets,
+  ShieldAlert, Cake, Download, CalendarCheck, CalendarX, CalendarDays, Briefcase, User,
+} from "lucide-react";
 import Loader from "@/components/Loader";
+import EmployeeAvatar from "@/components/EmployeeAvatar";
 
 export default function EmployeeDetail() {
   const { id } = useParams<{ id: string }>();
   const [, navigate] = useLocation();
+  const { toast } = useToast();
   const empId = Number(id);
 
   const { data: employee, isLoading } = useGetEmployee(empId, {
     query: { enabled: !!empId, queryKey: getGetEmployeeQueryKey(empId) }
   });
   const { data: salaryRecords } = useListSalaryRecords({ employeeId: empId });
+  const { data: idCards } = useIdCards(empId ? [empId] : []);
+  const idCard = idCards?.[0];
+  const qrs = useQrCodes(idCard ? [idCard] : []);
+
+  const now = new Date();
+  const { data: attendanceMonth } = useAttendanceEmployeeHistory(
+    empId || null, now.getMonth() + 1, now.getFullYear(),
+  );
+  const { data: leaveRequests } = useListLeaveRequests({ employeeId: empId } as never);
+
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownloadIdCard = async () => {
+    if (!cardRef.current || !employee) return;
+    setDownloading(true);
+    try {
+      const canvas = await html2canvas(cardRef.current, {
+        backgroundColor: "#ffffff",
+        scale: 3,
+        useCORS: true,
+      });
+      const link = document.createElement("a");
+      link.download = `ID-Card-${employee.employeeCode}-${employee.firstName}${employee.lastName}.png`;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+      toast({ title: "ID card downloaded" });
+    } catch {
+      toast({ title: "Failed to download ID card", variant: "destructive" });
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -41,6 +88,16 @@ export default function EmployeeDetail() {
     );
   }
 
+  // Lifetime approved leave days (all statuses fetched; filter client-side)
+  const approvedLeaveDays = (leaveRequests ?? [])
+    .filter((r) => r.status === "approved")
+    .reduce((sum, r) => sum + Number(r.totalDays ?? 0), 0);
+
+  const workingDaysThisMonth =
+    (attendanceMonth?.totalPresent ?? 0) +
+    (attendanceMonth?.totalAbsent ?? 0) +
+    (attendanceMonth?.summary?.onLeave ?? 0);
+
   return (
     <HrLayout>
       <div className="space-y-5">
@@ -49,6 +106,7 @@ export default function EmployeeDetail() {
           <Button variant="ghost" size="icon" onClick={() => navigate("/hr/employees")} data-testid="button-back">
             <ArrowLeft size={18} />
           </Button>
+          <EmployeeAvatar photoUrl={employee.photoUrl} name={`${employee.firstName} ${employee.lastName}`} size={56} />
           <div className="flex-1">
             <div className="flex items-center gap-3 flex-wrap">
               <h2 className="text-2xl font-black">{employee.firstName} {employee.lastName}</h2>
@@ -58,11 +116,56 @@ export default function EmployeeDetail() {
                 {employee.status}
               </Badge>
             </div>
-            <p className="text-muted-foreground text-sm mt-0.5">{employee.departmentName} · Joined {employee.joinDate ? new Date(employee.joinDate).toLocaleDateString("en-IN") : "N/A"}</p>
+            <p className="text-muted-foreground text-sm mt-0.5">
+              {employee.departmentName}
+              {employee.designationTitle ? ` · ${employee.designationTitle}` : ""} · Joined{" "}
+              {employee.joinDate ? new Date(employee.joinDate).toLocaleDateString("en-IN") : "N/A"}
+            </p>
           </div>
+          <Button className="gap-2" onClick={handleDownloadIdCard} disabled={downloading || !idCard}>
+            <Download size={15} />
+            {downloading ? "Preparing…" : "Download ID Card"}
+          </Button>
+        </div>
+
+        {/* This-month attendance snapshot */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          {[
+            { label: "Working Days (This Month)", value: workingDaysThisMonth, icon: CalendarDays, cls: "text-gray-900", iconCls: "bg-gray-700" },
+            { label: "Present Days", value: attendanceMonth?.totalPresent ?? "—", icon: CalendarCheck, cls: "text-green-700", iconCls: "bg-green-600" },
+            { label: "Absent Days", value: attendanceMonth?.totalAbsent ?? "—", icon: CalendarX, cls: "text-red-600", iconCls: "bg-red-500" },
+            { label: "Total Leave Days (Lifetime)", value: approvedLeaveDays, icon: Calendar, cls: "text-purple-700", iconCls: "bg-purple-600" },
+          ].map(({ label, value, icon: Icon, cls, iconCls }) => (
+            <Card key={label} className="border">
+              <CardContent className="p-5">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">{label}</p>
+                  <div className={`p-1.5 rounded-lg ${iconCls}`}>
+                    <Icon size={14} className="text-white" />
+                  </div>
+                </div>
+                <p className={`text-3xl font-black leading-none ${cls}`}>{value}</p>
+              </CardContent>
+            </Card>
+          ))}
         </div>
 
         <div className="grid md:grid-cols-2 gap-5">
+          {/* Personal Information */}
+          <Card>
+            <CardHeader className="pb-3"><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Personal Information</CardTitle></CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <div className="flex items-center gap-3"><User size={15} className="text-muted-foreground" /><span className="capitalize">{employee.gender ?? "—"}</span></div>
+              <div className="flex items-center gap-3"><Cake size={15} className="text-muted-foreground" /><span>{employee.dateOfBirth ? new Date(employee.dateOfBirth).toLocaleDateString("en-IN") : "—"}</span></div>
+              <div className="flex items-center gap-3">
+                <Droplets size={15} className={employee.bloodGroup ? "text-red-400" : "text-muted-foreground"} />
+                <span className={employee.bloodGroup ? "font-semibold" : "text-muted-foreground"}>{employee.bloodGroup ?? "Not recorded"}</span>
+              </div>
+              <div className="flex items-center gap-3"><Briefcase size={15} className="text-muted-foreground" /><span className="capitalize">{employee.employmentType ?? "—"}</span></div>
+              <div className="flex items-center gap-3"><Calendar size={15} className="text-muted-foreground" /><span>Joined {employee.joinDate ? new Date(employee.joinDate).toLocaleDateString("en-IN") : "N/A"}</span></div>
+            </CardContent>
+          </Card>
+
           {/* Contact */}
           <Card>
             <CardHeader className="pb-3"><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Contact</CardTitle></CardHeader>
@@ -70,6 +173,7 @@ export default function EmployeeDetail() {
               <div className="flex items-center gap-3"><Phone size={15} className="text-muted-foreground" /><span>{employee.phone}</span></div>
               <div className="flex items-center gap-3"><Mail size={15} className="text-muted-foreground" /><span>{employee.email}</span></div>
               {employee.address && <div className="flex items-start gap-3"><MapPin size={15} className="text-muted-foreground mt-0.5" /><span>{employee.address}</span></div>}
+              {employee.emergencyContact && <div className="flex items-center gap-3"><ShieldAlert size={15} className="text-amber-400" /><span>{employee.emergencyContact}</span></div>}
             </CardContent>
           </Card>
 
@@ -107,6 +211,34 @@ export default function EmployeeDetail() {
             </Card>
           )}
         </div>
+
+        {/* Employee ID Card — view only, download is the only action */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+              <CreditCard size={15} />Employee ID Card
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {idCard ? (
+              <div ref={cardRef} className="inline-flex gap-4 flex-wrap bg-white p-2">
+                {idCard.employmentType === "production" ? (
+                  <>
+                    <ProductionCardFront card={idCard} />
+                    <ProductionCardBack card={idCard} qr={qrs[idCard.code]} />
+                  </>
+                ) : (
+                  <>
+                    <StaffCardFront card={idCard} />
+                    <StaffCardBack card={idCard} qr={qrs[idCard.code]} />
+                  </>
+                )}
+              </div>
+            ) : (
+              <p className="text-center py-8 text-muted-foreground text-sm">Loading ID card…</p>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Salary History */}
         <Card>

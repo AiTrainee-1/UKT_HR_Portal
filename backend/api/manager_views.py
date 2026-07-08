@@ -8,7 +8,8 @@ from .auth import require_hr, require_auth, get_token_employee_id
 from .models import (
     Employee, Department,
     DepartmentManager, ManagerDepartmentAssignment, ManagerEmployeeAssignment,
-    ResignationRequest,
+    ResignationRequest, AttendanceOverrideRequest, AttendanceDayRecord,
+    CasualLeaveRequest,
 )
 
 
@@ -30,6 +31,8 @@ def _manager_json(m, include_assignments=False):
         "canApproveLeaves": m.can_approve_leaves,
         "canApprovePermissions": m.can_approve_permissions,
         "canApproveResignations": m.can_approve_resignations,
+        "canApproveAttendance": m.can_approve_attendance,
+        "canApproveCasualLeave": m.can_approve_casual_leave,
         "isActive": m.is_active,
         "notes": m.notes,
         "createdAt": m.created_at.isoformat() if m.created_at else None,
@@ -102,6 +105,8 @@ def department_managers(request: Request) -> Response:
         can_approve_leaves=bool(data.get("canApproveLeaves", True)),
         can_approve_permissions=bool(data.get("canApprovePermissions", True)),
         can_approve_resignations=bool(data.get("canApproveResignations", True)),
+        can_approve_attendance=bool(data.get("canApproveAttendance", True)),
+        can_approve_casual_leave=bool(data.get("canApproveCasualLeave", True)),
         notes=data.get("notes"),
     )
     return Response(_manager_json(m, include_assignments=True), status=201)
@@ -135,6 +140,10 @@ def department_manager_detail(request: Request, pk: int) -> Response:
         m.can_approve_permissions = bool(data["canApprovePermissions"])
     if "canApproveResignations" in data:
         m.can_approve_resignations = bool(data["canApproveResignations"])
+    if "canApproveAttendance" in data:
+        m.can_approve_attendance = bool(data["canApproveAttendance"])
+    if "canApproveCasualLeave" in data:
+        m.can_approve_casual_leave = bool(data["canApproveCasualLeave"])
     if "isActive" in data:
         m.is_active = bool(data["isActive"])
     if "notes" in data:
@@ -256,16 +265,31 @@ def manager_me(request: Request) -> Response:
         ResignationRequest.objects.filter(emp_filter, status="pending").count()
         if m.can_approve_resignations else 0
     )
-    pending_count = pending_leaves + pending_perms + pending_resignations
+    pending_attendance = (
+        AttendanceOverrideRequest.objects.filter(emp_filter, status="pending").count()
+        if m.can_approve_attendance else 0
+    )
+    pending_casual = (
+        CasualLeaveRequest.objects.filter(emp_filter, status="pending").count()
+        if m.can_approve_casual_leave else 0
+    )
+    pending_count = (
+        pending_leaves + pending_perms + pending_resignations
+        + pending_attendance + pending_casual
+    )
 
     return Response({
         "isManager": True,
         "canSubmitLeave": True,
         "canApproveResignations": m.can_approve_resignations,
+        "canApproveAttendance": m.can_approve_attendance,
+        "canApproveCasualLeave": m.can_approve_casual_leave,
         "pendingApprovalsCount": pending_count,
         "pendingLeavesCount": pending_leaves,
         "pendingPermissionsCount": pending_perms,
         "pendingResignationsCount": pending_resignations,
+        "pendingAttendanceCount": pending_attendance,
+        "pendingCasualLeaveCount": pending_casual,
         **_manager_json(m, include_assignments=True),
     })
 
@@ -349,14 +373,38 @@ def manager_pending_requests(request: Request) -> Response:
         resign_qs = ResignationRequest.objects.none()
     resign_qs = resign_qs.order_by("-created_at")
 
+    from .growth_views import _override_request_dict
+    attendance_qs = AttendanceOverrideRequest.objects.select_related(
+        "employee__department", "employee__designation"
+    ).filter(emp_filter)
+    if status_filter != "all" and m.can_approve_attendance:
+        attendance_qs = attendance_qs.filter(status=status_filter)
+    elif not m.can_approve_attendance:
+        attendance_qs = AttendanceOverrideRequest.objects.none()
+    attendance_qs = attendance_qs.order_by("-created_at")
+
+    from .casual_leave_views import _cl_dict
+    casual_qs = CasualLeaveRequest.objects.select_related(
+        "employee__department", "employee__designation"
+    ).filter(emp_filter)
+    if status_filter != "all" and m.can_approve_casual_leave:
+        casual_qs = casual_qs.filter(status=status_filter)
+    elif not m.can_approve_casual_leave:
+        casual_qs = CasualLeaveRequest.objects.none()
+    casual_qs = casual_qs.order_by("-created_at")
+
     return Response({
         "leaveRequests": [_leave_with_emp(r) for r in leave_qs],
         "permissions": [_perm_with_emp(p) for p in perm_qs],
         "resignations": [_resignation_json(r) for r in resign_qs],
+        "attendanceRequests": [_override_request_dict(r) for r in attendance_qs],
+        "casualLeaves": [_cl_dict(r) for r in casual_qs],
         "totalPending": (
             LeaveRequest.objects.filter(emp_filter, status="pending").count()
             + EmployeePermission.objects.filter(emp_filter, status="pending").count()
             + (ResignationRequest.objects.filter(emp_filter, status="pending").count() if m.can_approve_resignations else 0)
+            + (AttendanceOverrideRequest.objects.filter(emp_filter, status="pending").count() if m.can_approve_attendance else 0)
+            + (CasualLeaveRequest.objects.filter(emp_filter, status="pending").count() if m.can_approve_casual_leave else 0)
         ),
     })
 
@@ -458,3 +506,119 @@ def manager_update_permission_status(request: Request, pk: int) -> Response:
         perm.hr_comment = comment
     perm.save()
     return Response(_permission_json(perm))
+
+
+@api_view(["PATCH"])
+@require_auth
+def manager_update_attendance_status(request: Request, pk: int) -> Response:
+    """
+    Department Head approves/rejects an HR-submitted attendance override request.
+    Approval writes the requested values onto AttendanceDayRecord (used by payroll).
+    Rejection leaves the original attendance data untouched.
+    """
+    from .growth_views import _override_request_dict, apply_override_values
+    from .attendance_final import compute_day_record
+
+    token_emp_id = get_token_employee_id(request)
+    if not token_emp_id:
+        return Response({"error": "Employee authentication required"}, status=403)
+
+    try:
+        m = DepartmentManager.objects.select_related("employee").prefetch_related(
+            "department_assignments", "employee_assignments"
+        ).get(employee_id=token_emp_id, is_active=True)
+    except DepartmentManager.DoesNotExist:
+        return Response({"error": "Not a department manager"}, status=403)
+
+    if not m.can_approve_attendance:
+        return Response({
+            "error": "Approve-attendance access is disabled for your account. Ask HR to enable it.",
+            "code": "APPROVE_ATTENDANCE_DISABLED",
+        }, status=403)
+
+    dept_ids, direct_ids = _get_manager_employee_ids(m)
+    emp_filter = Q(employee_id__in=direct_ids)
+    if dept_ids:
+        emp_filter |= Q(employee__department_id__in=dept_ids)
+
+    try:
+        req = AttendanceOverrideRequest.objects.select_related(
+            "employee__department", "employee__designation"
+        ).filter(emp_filter).get(pk=pk)
+    except AttendanceOverrideRequest.DoesNotExist:
+        if AttendanceOverrideRequest.objects.filter(pk=pk).exists():
+            return Response({"error": "This request is not in your approval scope"}, status=403)
+        return Response({"error": "Attendance override request not found"}, status=404)
+
+    if req.status != "pending":
+        return Response({"error": f"This request was already {req.status}"}, status=400)
+
+    status_val = request.data.get("status")
+    if status_val not in ["approved", "rejected"]:
+        return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
+
+    from django.utils import timezone
+    reviewer_name = f"{m.employee.first_name} {m.employee.last_name}"
+
+    if status_val == "approved":
+        record = AttendanceDayRecord.objects.filter(employee=req.employee, date=req.date).first()
+        if record is None:
+            record = compute_day_record(req.employee, req.date)
+        apply_override_values(record, req.requested_values, reviewer_name)
+
+    req.status = status_val
+    req.reviewed_by = reviewer_name
+    req.reviewed_at = timezone.now()
+    if comment := request.data.get("comment"):
+        req.review_comment = comment
+    req.save()
+    return Response(_override_request_dict(req))
+
+
+@api_view(["PATCH"])
+@require_auth
+def manager_update_casual_leave_status(request: Request, pk: int) -> Response:
+    """Department Head approves/rejects a Casual Leave request from their team."""
+    from .casual_leave_views import _cl_dict, apply_cl_decision
+
+    token_emp_id = get_token_employee_id(request)
+    if not token_emp_id:
+        return Response({"error": "Employee authentication required"}, status=403)
+
+    try:
+        m = DepartmentManager.objects.select_related("employee").prefetch_related(
+            "department_assignments", "employee_assignments"
+        ).get(employee_id=token_emp_id, is_active=True)
+    except DepartmentManager.DoesNotExist:
+        return Response({"error": "Not a department manager"}, status=403)
+
+    if not m.can_approve_casual_leave:
+        return Response({
+            "error": "Approve-casual-leave access is disabled for your account. Ask HR to enable it.",
+            "code": "APPROVE_CASUAL_LEAVE_DISABLED",
+        }, status=403)
+
+    dept_ids, direct_ids = _get_manager_employee_ids(m)
+    emp_filter = Q(employee_id__in=direct_ids)
+    if dept_ids:
+        emp_filter |= Q(employee__department_id__in=dept_ids)
+
+    try:
+        cl = CasualLeaveRequest.objects.select_related(
+            "employee__department", "employee__designation"
+        ).filter(emp_filter).get(pk=pk)
+    except CasualLeaveRequest.DoesNotExist:
+        if CasualLeaveRequest.objects.filter(pk=pk).exists():
+            return Response({"error": "This request is not in your approval scope"}, status=403)
+        return Response({"error": "Casual leave request not found"}, status=404)
+
+    if cl.status != "pending":
+        return Response({"error": f"This request was already {cl.status}"}, status=400)
+
+    status_val = request.data.get("status")
+    if status_val not in ["approved", "rejected"]:
+        return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
+
+    reviewer_name = f"{m.employee.first_name} {m.employee.last_name}"
+    apply_cl_decision(cl, status_val, reviewer_name, "dept_head", request.data.get("comment"))
+    return Response(_cl_dict(cl))

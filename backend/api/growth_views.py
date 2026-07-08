@@ -17,7 +17,7 @@ from rest_framework.response import Response
 
 from .auth import require_hr
 from .models import (
-    AttendanceDayRecord, Department, Designation, Employee,
+    AttendanceDayRecord, AttendanceOverrideRequest, Department, Designation, Employee,
     PayrollSettings, Promotion, SalaryIncrement,
 )
 from .attendance_final import (
@@ -101,54 +101,29 @@ def employee_monthly_attendance(request: Request) -> Response:
 
 # ── Manual override ─────────────────────────────────────────────────────────
 
-@api_view(["POST"])
-@require_hr
-def attendance_day_override(request: Request) -> Response:
-    """
-    Body: { employeeId, date, status?, isLate?, isHalfShift?,
-            firstPunch? ("HH:MM"), lastPunch? ("HH:MM"), note?, reset? }
-    reset=true reverts the day to auto-computed values.
-    """
-    data = request.data
-    emp = Employee.objects.filter(id=data.get("employeeId")).first()
-    if not emp:
-        return Response({"error": "Employee not found"}, status=404)
+def _parse_time(v):
     try:
-        d = date_type.fromisoformat(str(data.get("date")))
+        return datetime.strptime(str(v)[:5], "%H:%M").time()
     except (ValueError, TypeError):
-        return Response({"error": "Invalid date"}, status=400)
+        return None
 
-    hr_name = getattr(request, "hr_user_name", None) or "HR"
 
-    if data.get("reset"):
-        AttendanceDayRecord.objects.filter(employee=emp, date=d).delete()
-        record = compute_day_record(emp, d)
-        return Response({"ok": True, "record": _record_dict(record), "reset": True})
-
-    record = AttendanceDayRecord.objects.filter(employee=emp, date=d).first()
-    if record is None:
-        record = compute_day_record(emp, d)
-
+def _resolve_override_fields(record: AttendanceDayRecord, emp: Employee, data: dict) -> dict:
+    """Compute the final field values an override would apply, without saving."""
     status = data.get("status", record.status)
     if status not in ("present", "absent", "half_shift", "on_leave", "holiday"):
-        return Response({"error": f"Invalid status '{status}'"}, status=400)
+        raise ValueError(f"Invalid status '{status}'")
 
     is_late = bool(data.get("isLate", record.is_late))
     is_half = bool(data.get("isHalfShift", record.is_half_shift))
 
-    # Optional punch-time edits ("HH:MM" or "" to clear)
-    def _parse_time(v):
-        try:
-            return datetime.strptime(str(v)[:5], "%H:%M").time()
-        except (ValueError, TypeError):
-            return None
-
+    first_punch = record.first_punch
+    last_punch = record.last_punch
     if "firstPunch" in data:
-        record.first_punch = _parse_time(data["firstPunch"]) if data["firstPunch"] else None
+        first_punch = _parse_time(data["firstPunch"]) if data["firstPunch"] else None
     if "lastPunch" in data:
-        record.last_punch = _parse_time(data["lastPunch"]) if data["lastPunch"] else None
+        last_punch = _parse_time(data["lastPunch"]) if data["lastPunch"] else None
 
-    # Keep status ↔ half-shift flags coherent
     if status == "half_shift":
         is_half = True
     elif status in ("absent", "on_leave", "holiday"):
@@ -167,16 +142,144 @@ def attendance_day_override(request: Request) -> Response:
     else:
         shifts = Decimal("0")
 
-    record.status = status
-    record.is_late = is_late
-    record.is_half_shift = is_half
-    record.shifts_earned = shifts
-    record.source = "manual"
-    record.override_by = hr_name
-    record.override_note = data.get("note") or record.override_note
-    record.save()
+    return {
+        "status": status,
+        "isLate": is_late,
+        "isHalfShift": is_half,
+        "firstPunch": first_punch.strftime("%H:%M") if first_punch else None,
+        "lastPunch": last_punch.strftime("%H:%M") if last_punch else None,
+        "shiftsEarned": str(shifts),
+        "note": data.get("note") or record.override_note,
+    }
 
-    return Response({"ok": True, "record": _record_dict(record)})
+
+def _snapshot_fields(record: AttendanceDayRecord) -> dict:
+    return {
+        "status": record.status,
+        "isLate": record.is_late,
+        "isHalfShift": record.is_half_shift,
+        "firstPunch": record.first_punch.strftime("%H:%M") if record.first_punch else None,
+        "lastPunch": record.last_punch.strftime("%H:%M") if record.last_punch else None,
+        "shiftsEarned": str(record.shifts_earned),
+        "note": record.override_note,
+        "source": record.source,
+    }
+
+
+def apply_override_values(record: AttendanceDayRecord, values: dict, reviewer_name: str) -> AttendanceDayRecord:
+    """Write resolved override values onto the record (called after approval)."""
+    record.status = values["status"]
+    record.is_late = values["isLate"]
+    record.is_half_shift = values["isHalfShift"]
+    record.first_punch = _parse_time(values["firstPunch"]) if values.get("firstPunch") else None
+    record.last_punch = _parse_time(values["lastPunch"]) if values.get("lastPunch") else None
+    record.shifts_earned = Decimal(str(values["shiftsEarned"]))
+    record.source = "manual"
+    record.override_by = reviewer_name
+    record.override_note = values.get("note")
+    record.save()
+    return record
+
+
+def _override_request_dict(req: AttendanceOverrideRequest) -> dict:
+    emp = req.employee
+    return {
+        "id": req.id,
+        "employeeId": emp.id,
+        "employeeCode": emp.employee_code,
+        "employeeName": f"{emp.first_name} {emp.last_name}",
+        "department": emp.department.name if emp.department_id and emp.department else None,
+        "date": str(req.date),
+        "previousValues": req.previous_values,
+        "requestedValues": req.requested_values,
+        "reason": req.reason,
+        "status": req.status,
+        "requestedBy": req.requested_by,
+        "reviewedBy": req.reviewed_by,
+        "reviewComment": req.review_comment,
+        "reviewedAt": req.reviewed_at.isoformat() if req.reviewed_at else None,
+        "createdAt": req.created_at.isoformat() if req.created_at else None,
+    }
+
+
+@api_view(["POST"])
+@require_hr
+def attendance_day_override(request: Request) -> Response:
+    """
+    Body: { employeeId, date, status?, isLate?, isHalfShift?,
+            firstPunch? ("HH:MM"), lastPunch? ("HH:MM"), note?, reset? }
+
+    reset=true reverts the day to auto-computed values immediately (removes
+    a prior manual override — restoring the objective computed truth does
+    not require approval).
+
+    Any other change is NOT applied directly. It creates a pending
+    AttendanceOverrideRequest that a Department Head must approve before the
+    AttendanceDayRecord is actually overwritten. This prevents HR from
+    unilaterally editing attendance data used by payroll.
+    """
+    data = request.data
+    emp = Employee.objects.filter(id=data.get("employeeId")).first()
+    if not emp:
+        return Response({"error": "Employee not found"}, status=404)
+    try:
+        d = date_type.fromisoformat(str(data.get("date")))
+    except (ValueError, TypeError):
+        return Response({"error": "Invalid date"}, status=400)
+
+    hr_name = getattr(request, "hr_user_name", None) or "HR"
+
+    if data.get("reset"):
+        AttendanceDayRecord.objects.filter(employee=emp, date=d).delete()
+        AttendanceOverrideRequest.objects.filter(
+            employee=emp, date=d, status=AttendanceOverrideRequest.STATUS_PENDING
+        ).update(status=AttendanceOverrideRequest.STATUS_REJECTED, review_comment="Superseded by revert to automatic")
+        record = compute_day_record(emp, d)
+        return Response({"ok": True, "record": _record_dict(record), "reset": True})
+
+    record = AttendanceDayRecord.objects.filter(employee=emp, date=d).first()
+    if record is None:
+        record = compute_day_record(emp, d)
+
+    try:
+        resolved = _resolve_override_fields(record, emp, data)
+    except ValueError as e:
+        return Response({"error": str(e)}, status=400)
+
+    # Replace any earlier pending request for the same day with this new one
+    AttendanceOverrideRequest.objects.filter(
+        employee=emp, date=d, status=AttendanceOverrideRequest.STATUS_PENDING
+    ).update(status=AttendanceOverrideRequest.STATUS_REJECTED, review_comment="Superseded by a newer request")
+
+    req = AttendanceOverrideRequest.objects.create(
+        employee=emp,
+        date=d,
+        previous_values=_snapshot_fields(record),
+        requested_values=resolved,
+        reason=data.get("note"),
+        requested_by=hr_name,
+    )
+    return Response({
+        "ok": True,
+        "pendingApproval": True,
+        "request": _override_request_dict(req),
+        "record": _record_dict(record),  # unchanged — for UI reference
+    }, status=202)
+
+
+@api_view(["GET"])
+@require_hr
+def attendance_override_requests(request: Request) -> Response:
+    """HR-side visibility into submitted override requests and their approval status."""
+    qs = AttendanceOverrideRequest.objects.select_related("employee__department")
+    if emp_id := request.query_params.get("employeeId"):
+        qs = qs.filter(employee_id=emp_id)
+    if code := request.query_params.get("code"):
+        qs = qs.filter(employee__employee_code__iexact=code.strip())
+    if status_filter := request.query_params.get("status"):
+        qs = qs.filter(status=status_filter)
+    qs = qs.order_by("-created_at")[:200]
+    return Response([_override_request_dict(r) for r in qs])
 
 
 # ── Promotions ──────────────────────────────────────────────────────────────
@@ -361,9 +464,67 @@ def add_increment(request: Request) -> Response:
     return Response(_increment_dict(inc), status=201)
 
 
+@api_view(["GET"])
+@require_hr
+def increment_dashboard(request: Request) -> Response:
+    """Company-wide increment analytics for the Increment page dashboard."""
+    increments = list(
+        SalaryIncrement.objects.select_related(
+            "employee__department", "employee__designation"
+        ).order_by("-created_at")
+    )
+
+    total_increments = len(increments)
+    incremented_employee_ids = {i.employee_id for i in increments}
+    total_employees_incremented = len(incremented_employee_ids)
+
+    total_increment_amount = sum((i.new_salary - i.previous_salary) for i in increments) if increments else Decimal("0")
+    avg_percent = (
+        sum(i.percent for i in increments) / len(increments)
+        if increments else Decimal("0")
+    )
+
+    # Department-wise stats
+    dept_stats: dict[str, dict] = {}
+    for i in increments:
+        dept_name = i.employee.department.name if i.employee.department_id and i.employee.department else "Unassigned"
+        d = dept_stats.setdefault(dept_name, {"count": 0, "totalPercent": Decimal("0"), "totalAmount": Decimal("0"), "employeeIds": set()})
+        d["count"] += 1
+        d["totalPercent"] += i.percent
+        d["totalAmount"] += (i.new_salary - i.previous_salary)
+        d["employeeIds"].add(i.employee_id)
+
+    department_breakdown = [
+        {
+            "department": name,
+            "incrementCount": d["count"],
+            "employeeCount": len(d["employeeIds"]),
+            "avgPercent": float((d["totalPercent"] / d["count"]).quantize(Decimal("0.01"))) if d["count"] else 0.0,
+            "totalAmount": float(d["totalAmount"]),
+        }
+        for name, d in dept_stats.items()
+    ]
+    department_breakdown.sort(key=lambda x: x["totalAmount"], reverse=True)
+
+    # Top increments by percentage
+    top_increments = sorted(increments, key=lambda i: i.percent, reverse=True)[:5]
+
+    return Response({
+        "totalIncrements": total_increments,
+        "totalEmployeesIncremented": total_employees_incremented,
+        "totalIncrementAmount": float(total_increment_amount),
+        "avgIncrementPercent": float(avg_percent.quantize(Decimal("0.01"))) if increments else 0.0,
+        "departmentBreakdown": department_breakdown,
+        "recentIncrements": [_increment_dict(i) for i in increments[:10]],
+        "topIncrements": [_increment_dict(i) for i in top_increments],
+    })
+
+
 # ── ID Card data + QR verification ─────────────────────────────────────────
 
 def _idcard_dict(emp: Employee, settings: PayrollSettings) -> dict:
+    from .models import IdCardSettings
+    tmpl = IdCardSettings.get()
     return {
         "id": emp.id,
         "code": emp.employee_code,
@@ -381,10 +542,21 @@ def _idcard_dict(emp: Employee, settings: PayrollSettings) -> dict:
         "joinDate": emp.join_date,
         "status": emp.status,
         "company": {
-            "name": settings.slip_company_name,
-            "address": settings.slip_company_address,
+            "name": settings.company_name or settings.slip_company_name,
+            "address": settings.company_address or settings.slip_company_address,
             "logo": settings.company_logo,
             "signature": settings.authorized_signature or settings.signature_image,
+        },
+        "template": {
+            "primaryColor": tmpl.primary_color,
+            "secondaryColor": tmpl.secondary_color,
+            "textColor": tmpl.text_color,
+            "fontFamily": tmpl.font_family,
+            "backgroundStyle": tmpl.background_style,
+            "logoPosition": tmpl.logo_position,
+            "cornerStyle": tmpl.corner_style,
+            "showQrOnBack": tmpl.show_qr_on_back,
+            "footerText": tmpl.footer_text,
         },
     }
 

@@ -27,6 +27,7 @@ import {
   type ShiftAssignment,
 } from "@/lib/api-client";
 import { useEmployeeShiftMonthlyStats } from "@/lib/api-client/custom-hooks";
+import ProductionShiftConfigCard from "@/components/ProductionShiftConfigCard";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Clock, Plus, Edit, Trash2, Users, Factory, AlertCircle,
@@ -426,7 +427,7 @@ function AssignedGroupCard({ group, onRemove }: {
                   >
                     <div
                       className="flex items-center gap-3 min-w-0 cursor-pointer flex-1"
-                      onClick={() => setStatsEmp({ id: emp.id, name: emp.employeeName })}
+                      onClick={() => setStatsEmp({ id: emp.employeeId, name: emp.employeeName })}
                       title="View shift statistics"
                     >
                       <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white text-xs font-bold shrink-0">
@@ -467,7 +468,7 @@ function AssignedGroupCard({ group, onRemove }: {
                         variant="ghost" size="icon"
                         className="h-7 w-7 text-gray-300 hover:text-indigo-600 hover:bg-indigo-50"
                         title="View shift statistics"
-                        onClick={() => setStatsEmp({ id: emp.id, name: emp.employeeName })}
+                        onClick={() => setStatsEmp({ id: emp.employeeId, name: emp.employeeName })}
                       >
                         <BarChart2 size={13} />
                       </Button>
@@ -885,14 +886,12 @@ function ProductionAutoAssignDialog({ shift, onClose }: { shift: ShiftTemplate; 
     if (!effectiveFrom) { toast({ title: "Select an effective date", variant: "destructive" }); return; }
     let res: { assigned: number; shiftName: string } | null = null;
     try {
-      res = await bulkMutation.mutateAsync({ shiftId: shift.id, effectiveFrom, employmentType: "production", genderRule: shift.genderRule as "all" | "male" | "female" });
+      res = await bulkMutation.mutateAsync({ shiftId: shift.id, effectiveFrom, employmentType: "production", genderRule: "all" });
     } catch { toast({ title: "Failed to apply shift", variant: "destructive" }); return; }
     toast({ title: `Applied to ${res!.assigned} production employee${res!.assigned !== 1 ? "s" : ""}`, description: `${res!.shiftName} active from ${effectiveFrom}.` });
     queryClient.invalidateQueries({ queryKey: getShiftAssignmentsQueryKey() });
     onClose();
   };
-
-  const genderLabel = shift.genderRule === "male" ? "male" : shift.genderRule === "female" ? "female" : "all";
 
   return (
     <Dialog open onOpenChange={onClose}>
@@ -901,8 +900,8 @@ function ProductionAutoAssignDialog({ shift, onClose }: { shift: ShiftTemplate; 
         <div className="space-y-4 py-2">
           <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800">
             <p className="font-semibold mb-1">Shift: {shift.name}</p>
-            <p>{shift.startTime} – {shift.endTime} · Gender rule: <strong className="capitalize">{genderLabel}</strong></p>
-            <p className="mt-1.5 text-xs">All active production employees{genderLabel !== "all" ? ` (${genderLabel} only)` : ""} will be assigned to this shift. Previous assignments will be ended.</p>
+            <p>{shift.startTime} – {shift.endTime}</p>
+            <p className="mt-1.5 text-xs">All active production employees will be assigned to this shift (same configuration for every gender). Previous assignments will be ended.</p>
           </div>
           <div className="space-y-1.5">
             <Label>Effective From</Label>
@@ -1072,7 +1071,7 @@ export default function ManageShift() {
                     <AlertCircle size={16} className="text-blue-600 mt-0.5 shrink-0" />
                     <div className="flex-1">
                       <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
-                        <p className="text-sm font-bold text-blue-900">Default Gender-Based Shift Rules — Production Only</p>
+                        <p className="text-sm font-bold text-blue-900">Production Shift — Same For Every Employee</p>
                         <Button
                           size="sm"
                           variant="outline"
@@ -1085,21 +1084,11 @@ export default function ManageShift() {
                           {syncMutation.isPending ? "Syncing…" : "Sync Unassigned"}
                         </Button>
                       </div>
-                      <p className="text-xs text-blue-700 mb-3">
-                        New production employees are <strong>assigned automatically</strong> when added.
-                        Use <strong>Apply</strong> on a shift for the initial rollout.
-                        Use <strong>Sync Unassigned</strong> anytime to catch any employees missed — no date prompt required.
+                      <p className="text-xs text-blue-700">
+                        Production shifts no longer split by gender — every production employee uses the
+                        same shift, punch times, and shift-value segments. New production employees are
+                        <strong> assigned automatically</strong> when added.
                       </p>
-                      <div className="grid sm:grid-cols-2 gap-3">
-                        <div className="bg-white rounded-lg p-3 border border-blue-100">
-                          <div className="flex items-center gap-2 mb-1"><User size={14} className="text-blue-600" /><span className="text-xs font-bold text-blue-800">Male Production Employees</span></div>
-                          <p className="text-sm font-mono font-bold text-gray-800">09:00 AM – 08:00 PM</p>
-                        </div>
-                        <div className="bg-white rounded-lg p-3 border border-pink-100">
-                          <div className="flex items-center gap-2 mb-1"><User size={14} className="text-pink-600" /><span className="text-xs font-bold text-pink-800">Female Production Employees</span></div>
-                          <p className="text-sm font-mono font-bold text-gray-800">09:00 AM – 07:00 PM</p>
-                        </div>
-                      </div>
                     </div>
                   </div>
                 </CardContent>
@@ -1107,8 +1096,10 @@ export default function ManageShift() {
 
               <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-100">
                 <AlertCircle size={14} className="text-amber-600 mt-0.5 shrink-0" />
-                <p className="text-xs text-amber-700">Production employees are paid <strong>bi-weekly</strong>. Session-based pay is applied based on shift completion.</p>
+                <p className="text-xs text-amber-700">Production employees are paid <strong>bi-weekly</strong> — pay = Total Shifts Earned × Salary Per Shift. Sunday is a normal working day.</p>
               </div>
+
+              <ProductionShiftConfigCard />
 
               {productionShifts.length === 0 ? (
                 <div className="text-center py-12 text-muted-foreground text-sm">No production shifts yet. Click <strong>New Shift</strong> and choose "Production".</div>
@@ -1196,19 +1187,26 @@ export default function ManageShift() {
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label>Shift Type</Label>
-                  <select value={form.shiftType} onChange={(e) => setForm((f) => ({ ...f, shiftType: e.target.value }))} className="w-full h-9 rounded-md border px-3 text-sm bg-background">
+                  <select value={form.shiftType} onChange={(e) => setForm((f) => ({ ...f, shiftType: e.target.value, genderRule: e.target.value === "production" ? "all" : f.genderRule }))} className="w-full h-9 rounded-md border px-3 text-sm bg-background">
                     <option value="production">Production</option>
                     <option value="staff">Staff</option>
                   </select>
                 </div>
-                <div className="space-y-1.5">
-                  <Label>Gender Rule</Label>
-                  <select value={form.genderRule} onChange={(e) => setForm((f) => ({ ...f, genderRule: e.target.value }))} className="w-full h-9 rounded-md border px-3 text-sm bg-background">
-                    <option value="all">All Genders</option>
-                    <option value="male">Male Only</option>
-                    <option value="female">Female Only</option>
-                  </select>
-                </div>
+                {form.shiftType === "staff" ? (
+                  <div className="space-y-1.5">
+                    <Label>Gender Rule</Label>
+                    <select value={form.genderRule} onChange={(e) => setForm((f) => ({ ...f, genderRule: e.target.value }))} className="w-full h-9 rounded-md border px-3 text-sm bg-background">
+                      <option value="all">All Genders</option>
+                      <option value="male">Male Only</option>
+                      <option value="female">Female Only</option>
+                    </select>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    <Label className="text-muted-foreground">Applies To</Label>
+                    <div className="h-9 flex items-center px-3 text-sm text-muted-foreground border rounded-md bg-muted/30">All production employees</div>
+                  </div>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">

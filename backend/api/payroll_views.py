@@ -390,6 +390,16 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
             status = info["status"]
             forced_shifts = None
             forced_half = False
+            # Night-shift relaxation: worked late last night → late arrival
+            # today within the allowed window is not counted as Late.
+            if info["is_late"] and info.get("first_in"):
+                from .night_shift import get_relaxation_for
+                _relax = get_relaxation_for(emp, d)
+                if _relax:
+                    from datetime import datetime as _dtm
+                    _fi = _dtm.strptime(info["first_in"], "%H:%M").time()
+                    if _fi <= _relax.allowed_until:
+                        info["is_late"] = False
 
         is_late = info["is_late"]
         is_half = False
@@ -471,8 +481,10 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
         else Decimal("0")
     )
 
-    # 8. Late shift penalty — always recompute from DailyShiftLog so stale
-    #    summaries from earlier (pre-engine-fix) runs don't persist.
+    # 8. Late shift penalty — 3 free lates/month, every 3 billable = ¼ shift.
+    #    Late counts follow the active attendance mode:
+    #      simple → is_late flags on the final AttendanceDayRecords (incl. overrides)
+    #      strict → 4-punch engine summary (morning late + lunch-return late)
     late_penalty = Decimal("0")
     late_summary_data = {
         "totalLateCount": late_count,
@@ -480,16 +492,30 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
         "billableLateCount": 0,
         "shiftDeductions": 0.0,
     }
-    from .shift_engine import compute_monthly_shift_summary
-    shift_summary = compute_monthly_shift_summary(emp, year, month, daily_rate)
-    if shift_summary and shift_summary.salary_deduction_amount > 0:
-        late_penalty = shift_summary.salary_deduction_amount
+    if use_simple:
+        total_late = late_count  # counted in the day loop from final records
+        free_permissions = 3
+        billable_late = max(0, total_late - free_permissions)
+        shift_deductions = Decimal(str(billable_late // 3)) * Decimal("0.25")
         late_summary_data = {
-            "totalLateCount": shift_summary.total_late_count,
-            "permissionsUsed": shift_summary.permissions_used,
-            "billableLateCount": shift_summary.billable_late_count,
-            "shiftDeductions": float(shift_summary.shift_deductions),
+            "totalLateCount": total_late,
+            "permissionsUsed": min(total_late, free_permissions),
+            "billableLateCount": billable_late,
+            "shiftDeductions": float(shift_deductions),
         }
+        if shift_deductions > 0:
+            late_penalty = _d2(shift_deductions * daily_rate)
+    else:
+        from .shift_engine import compute_monthly_shift_summary
+        shift_summary = compute_monthly_shift_summary(emp, year, month, daily_rate)
+        if shift_summary and shift_summary.salary_deduction_amount > 0:
+            late_penalty = shift_summary.salary_deduction_amount
+            late_summary_data = {
+                "totalLateCount": shift_summary.total_late_count,
+                "permissionsUsed": shift_summary.permissions_used,
+                "billableLateCount": shift_summary.billable_late_count,
+                "shiftDeductions": float(shift_summary.shift_deductions),
+            }
 
     # 9. Advances
     advance_total, advance_details = _pending_advance_repayments(emp, month, year)
@@ -500,6 +526,8 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
     # 9. Build breakdown JSON (full traceability)
     breakdown = {
         "type": "staff",
+        "attendanceMode": "simple" if use_simple else "strict",
+        "simpleHalfShiftCutoff": str(_settings.simple_half_shift_cutoff)[:5] if use_simple else None,
         "shift": {
             "id": shift_id,
             "name": shift_name,
@@ -641,159 +669,123 @@ def _get_biweekly_range(month: int, year: int, week_number: int) -> tuple[date, 
 
 def _generate_production_payroll(emp: Employee, month: int, year: int, week_number: int) -> dict | None:
     """
-    Session-based bi-weekly payroll for production employees.
+    Shift-based bi-weekly payroll for production employees — completely
+    separate from the staff engine. No monthly salary, no proration, no
+    leave/permission/CL: pay = total shifts earned x salary_per_shift.
     week_number: 1 (days 1-15) or 2 (days 16-end).
     """
-    # 1. Load session configs ordered by start time
-    session_configs = list(SessionConfig.objects.filter(is_overtime=False).order_by("order"))
-    if not session_configs:
-        return None  # No sessions configured
+    if not emp.salary_per_shift or emp.salary_per_shift <= 0:
+        return None  # Salary Per Shift not configured for this employee
 
-    # Ensure every session has a minimum_checkout_time (fall back to end_time)
-    for sc in session_configs:
-        if not sc.minimum_checkout_time:
-            sc.minimum_checkout_time = sc.end_time
+    from .attendance_final import compute_range_records
 
     date_from, date_to = _get_biweekly_range(month, year, week_number)
+    records = compute_range_records(emp, date_from, date_to)
 
-    # 2. Fetch attendance logs for the period
-    logs = AttendanceLog.objects.filter(
-        employee=emp,
-        date__gte=date_from,
-        date__lte=date_to,
-    ).order_by("date", "punch_time")
-
-    logs_by_date: dict[date, list] = defaultdict(list)
-    for log in logs:
-        logs_by_date[log.date].append(log)
-
-    # 3. Delete existing WorkSessions for this period (re-process)
-    WorkSession.objects.filter(
-        employee=emp,
-        date__gte=date_from,
-        date__lte=date_to,
-    ).delete()
-
-    # 4. Iterate over every calendar day in the period
     DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     days_detail = []
-    total_sessions = 0
-    total_amount = Decimal("0")
+    total_shifts = Decimal("0")
     days_worked = 0
+    days_absent = 0
 
-    cur = date_from
-    while cur <= date_to:
-        day_logs = logs_by_date.get(cur, [])
-        in_logs = [l for l in day_logs if l.punch_type == "IN"]
-        out_logs = [l for l in day_logs if l.punch_type == "OUT"]
-
-        first_in = min(l.punch_time for l in in_logs) if in_logs else None
-        last_out = max(l.punch_time for l in out_logs) if out_logs else None
-
-        day_sessions_done = []
-        day_session_amount = Decimal("0")
-
-        if first_in is not None:
+    for rec in records:
+        shifts = rec.shifts_earned or Decimal("0")
+        total_shifts += shifts
+        if rec.status in ("present", "half_shift"):
             days_worked += 1
-            for sc in session_configs:
-                completed = _session_completed(first_in, last_out, sc.minimum_checkout_time)
-                if completed:
-                    day_sessions_done.append({
-                        "sessionId": sc.id,
-                        "sessionName": sc.name,
-                        "completed": True,
-                        "rate": float(sc.pay_amount),
-                    })
-                    day_session_amount += sc.pay_amount
-                    total_sessions += 1
-                    total_amount += sc.pay_amount
-
-                    # Create WorkSession record for each completed session
-                    # Use session config times as check_in/check_out proxies
-                    WorkSession.objects.create(
-                        employee=emp,
-                        date=cur,
-                        session_config=sc,
-                        session_name=sc.name,
-                        check_in=first_in,
-                        check_out=last_out,
-                        hours_worked=_compute_hours(first_in, last_out),
-                        session_amount=sc.pay_amount,
-                        is_overtime=sc.is_overtime,
-                    )
-
+        elif rec.status == "absent":
+            days_absent += 1
         days_detail.append({
-            "date": cur.isoformat(),
-            "day": DAY_NAMES[cur.weekday()],
-            "firstIn": first_in.strftime("%H:%M") if first_in else None,
-            "lastOut": last_out.strftime("%H:%M") if last_out else None,
-            "sessions": day_sessions_done,
-            "totalSessions": len(day_sessions_done),
-            "sessionAmount": float(day_session_amount),
-            "present": first_in is not None,
+            "date": rec.date.isoformat(),
+            "day": DAY_NAMES[rec.date.weekday()],
+            "firstPunch": rec.first_punch.strftime("%H:%M") if rec.first_punch else None,
+            "lastPunch": rec.last_punch.strftime("%H:%M") if rec.last_punch else None,
+            "shiftsEarned": float(shifts),
+            "status": rec.status,
+            "isLate": rec.is_late,
         })
-        cur += timedelta(days=1)
 
-    # 5. PF / ESI for production — read from PayrollSettings
+    salary_per_shift = emp.salary_per_shift
+    gross_amount = _d2(total_shifts * salary_per_shift)
+
+    # PF / EF for production — either salary-range rules (when enabled) or flat rates
     ps = PayrollSettings.get()
-    prod_pf_rate  = ps.prod_pf_rate / Decimal("100")
-    prod_esi_rate = ps.prod_esi_rate / Decimal("100")
-    prod_esi_ceil = ps.prod_esi_applicable_below
+    monthly_equiv = _d2(gross_amount * 2)  # biweekly * 2 = monthly estimate
 
-    # PF on gross session earnings
-    pf_deduction = _d2(total_amount * prod_pf_rate) if prod_pf_rate > 0 else Decimal("0")
+    matched_rule = None
+    if ps.prod_pf_ef_enabled:
+        for rule in (ps.prod_pf_ef_rules or []):
+            try:
+                lo = Decimal(str(rule.get("minSalary", 0) or 0))
+                hi = Decimal(str(rule.get("maxSalary", 0) or 0))
+            except Exception:
+                continue
+            # maxSalary 0 means "no upper limit"
+            if monthly_equiv >= lo and (hi <= 0 or monthly_equiv <= hi):
+                matched_rule = rule
+                break
 
-    # ESI — check monthly-equivalent earnings against ceiling
-    monthly_equiv = _d2(total_amount * 2)  # biweekly * 2 = monthly estimate
-    esi_deduction = (
-        _d2(total_amount * prod_esi_rate)
-        if prod_esi_rate > 0 and monthly_equiv <= prod_esi_ceil
-        else Decimal("0")
-    )
+    if matched_rule is not None:
+        rule_pf = Decimal(str(matched_rule.get("pfRate", 0) or 0)) / Decimal("100")
+        rule_ef = Decimal(str(matched_rule.get("efRate", 0) or 0)) / Decimal("100")
+        pf_deduction = _d2(gross_amount * rule_pf) if rule_pf > 0 else Decimal("0")
+        esi_deduction = _d2(gross_amount * rule_ef) if rule_ef > 0 else Decimal("0")
+        applied_pf_rate = Decimal(str(matched_rule.get("pfRate", 0) or 0))
+        applied_ef_rate = Decimal(str(matched_rule.get("efRate", 0) or 0))
+    else:
+        prod_pf_rate  = ps.prod_pf_rate / Decimal("100")
+        prod_esi_rate = ps.prod_esi_rate / Decimal("100")
+        prod_esi_ceil = ps.prod_esi_applicable_below
+        pf_deduction = _d2(gross_amount * prod_pf_rate) if prod_pf_rate > 0 else Decimal("0")
+        esi_deduction = (
+            _d2(gross_amount * prod_esi_rate)
+            if prod_esi_rate > 0 and monthly_equiv <= prod_esi_ceil
+            else Decimal("0")
+        )
+        applied_pf_rate = ps.prod_pf_rate
+        applied_ef_rate = ps.prod_esi_rate
 
-    # 6. Advances
     advance_total, advance_details = _pending_advance_repayments(emp, month, year)
 
     total_deductions = _d2(pf_deduction + esi_deduction + advance_total)
-    net_salary = _d2(total_amount - total_deductions)
+    net_salary = _d2(gross_amount - total_deductions)
 
-    # 7. Build session config summary for breakdown
-    sessions_config_summary = [
-        {
-            "id": sc.id,
-            "name": sc.name,
-            "startTime": _time_to_str(sc.start_time),
-            "endTime": _time_to_str(sc.end_time),
-            "minCheckout": _time_to_str(sc.minimum_checkout_time),
-            "rate": float(sc.pay_amount),
-        }
-        for sc in session_configs
-    ]
+    total_days = (date_to - date_from).days + 1
 
     breakdown = {
         "type": "production",
         "weekNumber": week_number,
         "dateFrom": date_from.isoformat(),
         "dateTo": date_to.isoformat(),
-        "sessionConfigs": sessions_config_summary,
+        "salaryPerShift": float(salary_per_shift),
         "days": days_detail,
         "summary": {
-            "totalDays": (date_to - date_from).days + 1,
+            "totalDays": total_days,
             "daysWorked": days_worked,
-            "daysAbsent": (date_to - date_from).days + 1 - days_worked,
-            "totalSessions": total_sessions,
+            "daysAbsent": days_absent,
+            "totalShifts": float(total_shifts),
         },
         "earnings": {
-            "totalSessions": total_sessions,
-            "grossSalary": float(total_amount),
+            "totalShifts": float(total_shifts),
+            "salaryPerShift": float(salary_per_shift),
+            "grossSalary": float(gross_amount),
         },
         "deductions": {
             "pf": float(pf_deduction),
-            "pfRate": float(ps.prod_pf_rate),
+            "pfRate": float(applied_pf_rate),
             "esi": float(esi_deduction),
-            "esiRate": float(ps.prod_esi_rate),
-            "esiApplicableBelow": float(prod_esi_ceil),
+            "esiRate": float(applied_ef_rate),
+            "esiApplicableBelow": float(ps.prod_esi_applicable_below),
             "monthlyEquivalent": float(monthly_equiv),
+            # Which salary-range rule was applied (null = flat rates were used)
+            "pfEfRule": (
+                {
+                    "label": matched_rule.get("label") or "Salary-range rule",
+                    "pfRate": float(matched_rule.get("pfRate", 0) or 0),
+                    "efRate": float(matched_rule.get("efRate", 0) or 0),
+                }
+                if matched_rule is not None else None
+            ),
             "advances": float(advance_total),
             "advanceDetails": advance_details,
             "total": float(total_deductions),
@@ -801,62 +793,59 @@ def _generate_production_payroll(emp: Employee, month: int, year: int, week_numb
         "netSalary": float(net_salary),
     }
 
-    # 8. Upsert Payroll record
     payroll, _ = Payroll.objects.update_or_create(
         employee=emp, month=month, year=year, week_number=week_number,
         defaults=dict(
-            salary_mode="session",
-            total_working_days=(date_to - date_from).days + 1,
-            present_days=Decimal(str(days_worked)),
-            absent_days=Decimal(str((date_to - date_from).days + 1 - days_worked)),
-            completed_sessions=total_sessions,
+            salary_mode="shift",
+            total_working_days=total_days,
+            present_days=total_shifts,
+            absent_days=Decimal(str(days_absent)),
+            completed_sessions=0,
             ot_hours=Decimal("0"),
             ot_amount=Decimal("0"),
-            base_salary=total_amount,
-            gross_salary=total_amount,
+            base_salary=gross_amount,
+            gross_salary=gross_amount,
             deductions=total_deductions,
             bonus=Decimal("0"),
             final_salary=net_salary,
             status="pending",
             notes=(
                 f"Production week {week_number} ({date_from} to {date_to}): "
-                f"{days_worked} days worked, {total_sessions} sessions completed = Rs{total_amount}."
+                f"{total_shifts} shifts x Rs{salary_per_shift} = Rs{gross_amount}."
             ),
         ),
     )
 
-    # 9. Upsert SalarySlip
     slip_number = f"SS/{emp.employee_code}/{year}/{str(month).zfill(2)}/W{week_number}"
     slip, _ = SalarySlip.objects.update_or_create(
         employee=emp, month=month, year=year, week_number=week_number,
         defaults=dict(
             payroll_run=None,
             slip_number=slip_number,
-            basic=total_amount,
+            basic=gross_amount,
             hra=Decimal("0"),
             allowances=Decimal("0"),
             incentives=Decimal("0"),
             bonuses=Decimal("0"),
             ot_amount=Decimal("0"),
-            gross_salary=total_amount,
+            gross_salary=gross_amount,
             pf_deduction=pf_deduction,
             esi_deduction=esi_deduction,
             advance_deduction=advance_total,
             other_deductions=Decimal("0"),
             total_deductions=total_deductions,
             net_salary=net_salary,
-            working_days=(date_to - date_from).days + 1,
-            present_days=Decimal(str(days_worked)),
-            absent_days=Decimal(str((date_to - date_from).days + 1 - days_worked)),
+            working_days=total_days,
+            present_days=total_shifts,
+            absent_days=Decimal(str(days_absent)),
             paid_leave_days=Decimal("0"),
             unpaid_leave_days=Decimal("0"),
-            late_days=0,
-            completed_sessions=total_sessions,
+            late_days=sum(1 for d in days_detail if d["isLate"]),
+            completed_sessions=0,
             breakdown_details=breakdown,
         ),
     )
 
-    # Mark advance repayments as processed and update advance outstanding totals
     if advance_details:
         _mark_repayments_processed(advance_details)
 
@@ -1265,7 +1254,7 @@ def generate_payroll(request: Request) -> Response:
                     else:
                         skipped.append({
                             "employeeId": emp.id, "name": emp_name,
-                            "reason": "No session configs found — configure Session Config first",
+                            "reason": "Salary Per Shift not set for this employee",
                         })
         except Exception as e:
             skipped.append({"employeeId": emp.id, "name": emp_name, "reason": str(e)})
@@ -1484,6 +1473,16 @@ def seed_attendance(request: Request) -> Response:
 
 def _ps_response(ps) -> dict:
     return {
+        # Company profile (drives branding across the whole portal)
+        "companyName": ps.company_name,
+        "companyTagline": ps.company_tagline,
+        "companyPhone": ps.company_phone,
+        "companyEmail": ps.company_email,
+        "companyWebsite": ps.company_website,
+        "companyGstin": ps.company_gstin,
+        "companyPan": ps.company_pan,
+        "companyAddress": ps.company_address,
+        "companyRegistration": ps.company_registration,
         # Staff
         "pfRate": float(ps.pf_rate),
         "esiRate": float(ps.esi_rate),
@@ -1495,6 +1494,7 @@ def _ps_response(ps) -> dict:
         # General
         "payDay": ps.pay_day,
         "productionPayType": ps.production_pay_type,
+        "defaultSalaryPerShift": float(ps.default_salary_per_shift),
         # Salary slip header & signature
         "slipCompanyName": ps.slip_company_name,
         "slipCompanyAddress": ps.slip_company_address,
@@ -1513,6 +1513,7 @@ def _ps_response(ps) -> dict:
         "prodSecondHalfEnd": str(ps.prod_second_half_end)[:5],
         "prodExtraStart": str(ps.prod_extra_start)[:5],
         "prodExtraEnd": str(ps.prod_extra_end)[:5],
+        "prodPfEfEnabled": ps.prod_pf_ef_enabled,
         "prodPfEfRules": ps.prod_pf_ef_rules or [],
         # SMTP / Email
         "smtpHost": ps.smtp_host,
@@ -1535,6 +1536,15 @@ def payroll_settings_view(request: Request) -> Response:
 
     data = request.data
     field_map = {
+        "companyName": ("company_name", str),
+        "companyTagline": ("company_tagline", str),
+        "companyPhone": ("company_phone", str),
+        "companyEmail": ("company_email", str),
+        "companyWebsite": ("company_website", str),
+        "companyGstin": ("company_gstin", str),
+        "companyPan": ("company_pan", str),
+        "companyAddress": ("company_address", str),
+        "companyRegistration": ("company_registration", str),
         "pfRate": ("pf_rate", Decimal),
         "esiRate": ("esi_rate", Decimal),
         "esiApplicableBelow": ("esi_applicable_below", Decimal),
@@ -1543,6 +1553,7 @@ def payroll_settings_view(request: Request) -> Response:
         "prodEsiApplicableBelow": ("prod_esi_applicable_below", Decimal),
         "payDay": ("pay_day", int),
         "productionPayType": ("production_pay_type", str),
+        "defaultSalaryPerShift": ("default_salary_per_shift", Decimal),
         "slipCompanyName": ("slip_company_name", str),
         "slipCompanyAddress": ("slip_company_address", str),
         "minWageRate": ("min_wage_rate", Decimal),
@@ -1571,6 +1582,8 @@ def payroll_settings_view(request: Request) -> Response:
             setattr(ps, attr, Decimal(str(val)) if cast is Decimal else cast(val))
     if "prodPfEfRules" in data and isinstance(data["prodPfEfRules"], list):
         ps.prod_pf_ef_rules = data["prodPfEfRules"]
+    if "prodPfEfEnabled" in data:
+        ps.prod_pf_ef_enabled = bool(data["prodPfEfEnabled"])
     ps.save()
 
     return Response(_ps_response(ps))

@@ -90,6 +90,10 @@ class Employee(models.Model):
     salary_amount = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True, db_column="salary_amount"
     )
+    # Production employees only: fixed pay per shift. Payroll = total_shifts * salary_per_shift.
+    salary_per_shift = models.DecimalField(
+        max_digits=8, decimal_places=2, null=True, blank=True, db_column="salary_per_shift"
+    )
     status = models.TextField(default="active")
     bank_name = models.TextField(null=True, blank=True, db_column="bank_name")
     bank_account = models.TextField(null=True, blank=True, db_column="bank_account")
@@ -874,7 +878,12 @@ class WorkSession(models.Model):
 class Payroll(models.Model):
     SALARY_MODE_MONTHLY = "monthly"
     SALARY_MODE_SESSION = "session"
-    MODE_CHOICES = [(SALARY_MODE_MONTHLY, "Monthly"), (SALARY_MODE_SESSION, "Session-based")]
+    SALARY_MODE_SHIFT = "shift"
+    MODE_CHOICES = [
+        (SALARY_MODE_MONTHLY, "Monthly"),
+        (SALARY_MODE_SESSION, "Session-based"),
+        (SALARY_MODE_SHIFT, "Shift-based (Production)"),
+    ]
     STATUS_PENDING = "pending"
     STATUS_PAID = "paid"
     STATUS_CHOICES = [(STATUS_PENDING, "Pending"), (STATUS_PAID, "Paid")]
@@ -910,6 +919,17 @@ class Payroll(models.Model):
 class PayrollSettings(models.Model):
     """Singleton — always fetch/update the row with pk=1."""
     # 0 means "do not deduct" — default off so HR explicitly enables
+
+    # ── Company profile (drives branding across the whole portal) ─────────
+    company_name = models.TextField(default="UKTextiles", db_column="company_name")
+    company_tagline = models.TextField(default="Garments Manufacturing Excellence", db_column="company_tagline")
+    company_phone = models.TextField(blank=True, default="", db_column="company_phone")
+    company_email = models.TextField(blank=True, default="", db_column="company_email")
+    company_website = models.TextField(blank=True, default="", db_column="company_website")
+    company_gstin = models.TextField(blank=True, default="", db_column="company_gstin")
+    company_pan = models.TextField(blank=True, default="", db_column="company_pan")
+    company_address = models.TextField(blank=True, default="", db_column="company_address")
+    company_registration = models.TextField(blank=True, default="", db_column="company_registration")
 
     # ── Staff deductions ──────────────────────────────────────────────────
     pf_rate = models.DecimalField(
@@ -950,6 +970,10 @@ class PayrollSettings(models.Model):
         default="biweekly", db_column="production_pay_type",
         help_text="biweekly or monthly"
     )
+    default_salary_per_shift = models.DecimalField(
+        max_digits=8, decimal_places=2, default=0, db_column="default_salary_per_shift",
+        help_text="Pre-filled Salary Per Shift for new production employees. 0 = no default.",
+    )
     slip_company_name = models.TextField(default="UK TEXTILES - H.O", db_column="slip_company_name")
     slip_company_address = models.TextField(default="TIRUPUR", db_column="slip_company_address")
     min_wage_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="min_wage_rate")
@@ -979,8 +1003,11 @@ class PayrollSettings(models.Model):
     prod_extra_start = models.TimeField(default="17:50", db_column="prod_extra_start")
     prod_extra_end   = models.TimeField(default="20:00", db_column="prod_extra_end")
 
-    # ── Production PF/EF salary-range rules (filled in later by HR) ────────
+    # ── Production PF/EF salary-range rules ────────────────────────────────
     # list of {"label": str, "minSalary": num, "maxSalary": num, "pfRate": num, "efRate": num}
+    # When enabled, the rule matching the employee's monthly-equivalent earnings
+    # takes precedence over the flat prod_pf_rate / prod_esi_rate.
+    prod_pf_ef_enabled = models.BooleanField(default=False, db_column="prod_pf_ef_enabled")
     prod_pf_ef_rules = models.JSONField(default=list, blank=True, db_column="prod_pf_ef_rules")
 
     # ── SMTP / Email ──────────────────────────────────────────────────────
@@ -1032,6 +1059,8 @@ class DepartmentManager(models.Model):
     can_approve_leaves = models.BooleanField(default=True, db_column="can_approve_leaves")
     can_approve_permissions = models.BooleanField(default=True, db_column="can_approve_permissions")
     can_approve_resignations = models.BooleanField(default=True, db_column="can_approve_resignations")
+    can_approve_attendance = models.BooleanField(default=True, db_column="can_approve_attendance")
+    can_approve_casual_leave = models.BooleanField(default=True, db_column="can_approve_casual_leave")
     is_active = models.BooleanField(default=True, db_column="is_active")
     notes = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
@@ -1177,3 +1206,256 @@ class SalaryIncrement(models.Model):
     class Meta:
         db_table = "salary_increments"
         ordering = ["-effective_date", "-created_at"]
+
+
+# ──────────────────────────────────────────────
+#  Attendance Override Requests (two-level approval)
+# ──────────────────────────────────────────────
+
+class AttendanceOverrideRequest(models.Model):
+    """
+    HR proposes a manual attendance change; a Department Head must approve it
+    before the AttendanceDayRecord is actually overwritten. Prevents HR from
+    silently editing attendance without accountability.
+    """
+    STATUS_PENDING = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_REJECTED = "rejected"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id",
+        related_name="attendance_override_requests",
+    )
+    date = models.DateField()
+    # Snapshot of the record before the change, and the change requested — both JSON
+    previous_values = models.JSONField(default=dict, db_column="previous_values")
+    requested_values = models.JSONField(default=dict, db_column="requested_values")
+    reason = models.TextField(null=True, blank=True)
+    status = models.TextField(choices=STATUS_CHOICES, default=STATUS_PENDING)
+    requested_by = models.TextField(null=True, blank=True, db_column="requested_by")
+    reviewed_by = models.TextField(null=True, blank=True, db_column="reviewed_by")
+    review_comment = models.TextField(null=True, blank=True, db_column="review_comment")
+    reviewed_at = models.DateTimeField(null=True, blank=True, db_column="reviewed_at")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "attendance_override_requests"
+        ordering = ["-created_at"]
+
+
+# ──────────────────────────────────────────────
+#  Biometric / Punching Device Configuration
+# ──────────────────────────────────────────────
+
+class BiometricDevice(models.Model):
+    DEVICE_TYPE_CHOICES = [
+        ("aiface_mars", "AiFace-Mars"),
+        ("zkteco", "ZKTeco"),
+        ("essl", "eSSL"),
+        ("generic_http", "Generic HTTP API"),
+        ("other", "Other"),
+    ]
+
+    name = models.TextField()
+    device_type = models.TextField(choices=DEVICE_TYPE_CHOICES, default="aiface_mars", db_column="device_type")
+    host = models.TextField(blank=True, default="", help_text="IP address or hostname")
+    port = models.IntegerField(null=True, blank=True)
+    api_key = models.TextField(blank=True, default="", db_column="api_key")
+    # Free-form extra config (auth headers, polling interval, model-specific options)
+    connection_config = models.JSONField(default=dict, blank=True, db_column="connection_config")
+    is_active = models.BooleanField(default=True, db_column="is_active")
+    is_default = models.BooleanField(default=False, db_column="is_default")
+    last_synced_at = models.DateTimeField(null=True, blank=True, db_column="last_synced_at")
+    notes = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "biometric_devices"
+        ordering = ["-is_default", "name"]
+
+
+# ──────────────────────────────────────────────
+#  Employee ID Card Template Settings
+# ──────────────────────────────────────────────
+
+class IdCardSettings(models.Model):
+    """Singleton — always fetch/update the row with pk=1."""
+
+    primary_color = models.TextField(default="#006496", db_column="primary_color")
+    secondary_color = models.TextField(default="#4FB8F0", db_column="secondary_color")
+    text_color = models.TextField(default="#0f172a", db_column="text_color")
+    font_family = models.TextField(default="Hanken Grotesk", db_column="font_family")
+    background_style = models.TextField(default="gradient", db_column="background_style")  # gradient | solid | pattern
+    logo_position = models.TextField(default="left", db_column="logo_position")  # left | center
+    corner_style = models.TextField(default="rounded", db_column="corner_style")  # rounded | sharp
+    show_qr_on_back = models.BooleanField(default=True, db_column="show_qr_on_back")
+    footer_text = models.TextField(blank=True, default="", db_column="footer_text")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "idcard_settings"
+
+    @classmethod
+    def get(cls) -> "IdCardSettings":
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
+# ──────────────────────────────────────────────
+#  Casual Leave (CL) — paid, staff-only, 1/month
+# ──────────────────────────────────────────────
+
+class CasualLeaveRequest(models.Model):
+    """
+    Casual Leave — completely independent of LeaveRequest / permissions.
+
+    Rules enforced in the views:
+      • staff employees only
+      • eligible only after 6 months of service
+      • one CL per calendar month (pending or approved blocks another)
+      • approved  → attendance for that date = Present (full paid day)
+      • rejected  → attendance for that date = Leave
+    """
+    STATUS_PENDING = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_REJECTED = "rejected"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id",
+        related_name="casual_leaves",
+    )
+    date = models.DateField(help_text="The single day of casual leave.")
+    reason = models.TextField(null=True, blank=True)
+    status = models.TextField(choices=STATUS_CHOICES, default=STATUS_PENDING)
+    reviewed_by = models.TextField(null=True, blank=True, db_column="reviewed_by")
+    reviewer_role = models.TextField(null=True, blank=True, db_column="reviewer_role")  # hr | dept_head
+    review_comment = models.TextField(null=True, blank=True, db_column="review_comment")
+    reviewed_at = models.DateTimeField(null=True, blank=True, db_column="reviewed_at")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "casual_leave_requests"
+        ordering = ["-created_at"]
+
+
+# ──────────────────────────────────────────────
+#  Night Shift Relaxation
+# ──────────────────────────────────────────────
+
+class NightShiftRule(models.Model):
+    """
+    DB-driven relaxation rule: if the employee's last punch-out of the night
+    is at or before `worked_until` (with `crosses_midnight` marking early-
+    morning times as belonging to the previous night), the next morning they
+    may punch in as late as `allowed_first_punch` without late/half-shift.
+
+    Rules are matched in ascending `worked_until` order — the first rule whose
+    threshold is >= the actual punch-out time wins.
+    """
+    name = models.TextField()
+    worked_until = models.TimeField(
+        db_column="worked_until",
+        help_text="Latest punch-out this rule covers (e.g. 22:30, or 02:30 next day).",
+    )
+    crosses_midnight = models.BooleanField(
+        default=False, db_column="crosses_midnight",
+        help_text="True when worked_until is an early-morning time of the NEXT day.",
+    )
+    allowed_first_punch = models.TimeField(
+        db_column="allowed_first_punch",
+        help_text="Next-day first punch allowed up to this time without penalty.",
+    )
+    order = models.IntegerField(default=0)
+    is_active = models.BooleanField(default=True, db_column="is_active")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "night_shift_rules"
+        ordering = ["order", "id"]
+
+
+class NightShiftRelaxation(models.Model):
+    """
+    One row per employee per night worked late. Detected automatically from
+    AttendanceLog punches. `relaxation_date` (= night_date + 1) is the day the
+    late-arrival allowance applies to; attendance/payroll consult this table
+    when classifying that day.
+    """
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id",
+        related_name="night_relaxations",
+    )
+    night_date = models.DateField(db_column="night_date", help_text="The day the night shift started.")
+    relaxation_date = models.DateField(db_column="relaxation_date", help_text="Next day — allowance applies here.")
+    last_punch_out = models.TimeField(db_column="last_punch_out")
+    crossed_midnight = models.BooleanField(default=False, db_column="crossed_midnight")
+    allowed_until = models.TimeField(db_column="allowed_until")
+    rule = models.ForeignKey(
+        NightShiftRule, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="rule_id", related_name="relaxations",
+    )
+    # Filled in once the employee punches in the next day
+    reported_at = models.TimeField(null=True, blank=True, db_column="reported_at")
+    within_allowance = models.BooleanField(null=True, blank=True, db_column="within_allowance")
+    computed_at = models.DateTimeField(auto_now=True, db_column="computed_at")
+
+    class Meta:
+        db_table = "night_shift_relaxations"
+        unique_together = [["employee", "relaxation_date"]]
+        ordering = ["-relaxation_date"]
+
+
+# ──────────────────────────────────────────────
+#  Production Shift Workflow (separate from staff)
+# ──────────────────────────────────────────────
+
+class ProductionShiftConfig(models.Model):
+    """
+    Singleton. Reference punch times for the production 4-punch day and the
+    grace window used when checking segment coverage. Gender-agnostic — a
+    single config applies to every production employee.
+    """
+    punch1_time = models.TimeField(default="08:30", db_column="punch1_time", help_text="Arrival")
+    punch2_time = models.TimeField(default="12:45", db_column="punch2_time", help_text="Lunch out")
+    punch3_time = models.TimeField(default="13:30", db_column="punch3_time", help_text="Lunch return")
+    punch4_time = models.TimeField(default="20:00", db_column="punch4_time", help_text="Departure")
+    grace_minutes = models.IntegerField(default=10, db_column="grace_minutes")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "production_shift_config"
+
+    @classmethod
+    def get(cls) -> "ProductionShiftConfig":
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
+class ProductionShiftSegment(models.Model):
+    """
+    Ordered, dynamic list of shift-value segments for production attendance.
+    Default (1.50-shift day): 4 x 0.25 covering 8:30-12:45 & 13:30-17:30,
+    plus 0.50 for 17:30-20:00. Fully editable from Settings / Shift Management.
+    """
+    label = models.TextField()
+    start_time = models.TimeField(db_column="start_time")
+    end_time = models.TimeField(db_column="end_time")
+    shift_value = models.DecimalField(max_digits=4, decimal_places=2, db_column="shift_value")
+    order = models.IntegerField(default=0)
+    is_active = models.BooleanField(default=True, db_column="is_active")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "production_shift_segments"
+        ordering = ["order", "id"]

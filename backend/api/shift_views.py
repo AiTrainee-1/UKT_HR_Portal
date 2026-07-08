@@ -12,28 +12,22 @@ from .models import ShiftTemplate, EmployeeShiftAssignment, Employee, Department
 
 def auto_assign_production_shift(emp: Employee, effective_from: Optional[date] = None) -> bool:
     """
-    Assign the correct production shift to a production employee if they don't already
+    Assign the production shift to a production employee if they don't already
     have an active shift assignment.  Returns True if a new assignment was created.
-    Matches gender-specific shifts first, then falls back to gender_rule="all".
+    Production shifts are gender-agnostic — every production employee uses the
+    same shift configuration regardless of gender.
     """
     if emp.employment_type != "production" or emp.status != "active":
         return False
     if EmployeeShiftAssignment.objects.filter(employee=emp, effective_to__isnull=True).exists():
         return False
 
-    shift = None
-    if emp.gender:
-        shift = (
-            ShiftTemplate.objects
-            .filter(shift_type="production", is_active=True, gender_rule=emp.gender)
-            .first()
-        )
-    if not shift:
-        shift = (
-            ShiftTemplate.objects
-            .filter(shift_type="production", is_active=True, gender_rule="all")
-            .first()
-        )
+    shift = (
+        ShiftTemplate.objects
+        .filter(shift_type="production", is_active=True)
+        .order_by("-is_default", "id")
+        .first()
+    )
     if not shift:
         return False
 
@@ -42,7 +36,7 @@ def auto_assign_production_shift(emp: Employee, effective_from: Optional[date] =
         shift=shift,
         effective_from=effective_from or date.today(),
         assigned_by="System (Auto)",
-        notes="Auto-assigned based on employment type and gender rule",
+        notes="Auto-assigned production shift",
     )
     return True
 
@@ -328,9 +322,8 @@ def bulk_shift_assignments(request: Request) -> Response:
 @require_hr
 def sync_production_shifts(request: Request) -> Response:
     """
-    Silently assign production shifts to all unassigned active production employees.
+    Silently assign the production shift to all unassigned active production employees.
     Uses today as effective_from — no date needed from the caller.
-    Also handles employees whose gender-based shift has changed.
     """
     today = date.today()
     employees = Employee.objects.filter(employment_type="production", status="active")

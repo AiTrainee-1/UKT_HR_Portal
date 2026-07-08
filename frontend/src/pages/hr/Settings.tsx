@@ -5,19 +5,28 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { Building2, Clock, Mail, Database, IndianRupee, FileText, Upload, X } from "lucide-react";
-import { usePayrollSettings, useUpdatePayrollSettings } from "@/lib/api-client/custom-hooks";
+import {
+  Building2, Clock, Mail, Database, IndianRupee, FileText, Upload, X,
+  Fingerprint, CreditCard, Plus, Trash2, Power, Pencil,
+} from "lucide-react";
+import {
+  usePayrollSettings, useUpdatePayrollSettings,
+  useListBiometricDevices, useCreateBiometricDevice, useUpdateBiometricDevice, useDeleteBiometricDevice,
+  useIdCardSettings, useUpdateIdCardSettings,
+} from "@/lib/api-client/custom-hooks";
+import ProductionShiftConfigCard from "@/components/ProductionShiftConfigCard";
 
 export default function Settings() {
   const { toast } = useToast();
 
-  // ── Company (local-only for now) ───────────────────────────────────────
+  // ── Company profile — persisted to PayrollSettings via the API ─────────
   const [company, setCompany] = useState({
     name: "UKTextiles", tagline: "Garments Manufacturing Excellence",
     address: "Chennai, Tamil Nadu, India", phone: "+91 9876543210",
     email: "hr@uktextiles.in", website: "https://uktextiles.in",
-    gstin: "", pan: "",
+    gstin: "", pan: "", registration: "",
   });
 
   const [attendance, setAttendance] = useState({
@@ -37,13 +46,15 @@ export default function Settings() {
     prodExtraStart: "17:50",
     prodExtraEnd: "20:00",
   });
-  const [pfEfRules, setPfEfRules] = useState<
-    { label: string; minSalary: number; maxSalary: number; pfRate: number; efRate: number }[]
-  >([]);
-
   // ── Payroll — loaded from DB ───────────────────────────────────────────
   const { data: payrollSettingsData, isLoading: psLoading } = usePayrollSettings();
   const updatePayrollSettings = useUpdatePayrollSettings();
+
+  // Production PF/EF salary-range rules (takes precedence over flat rates when enabled)
+  const [pfEfEnabled, setPfEfEnabled] = useState(false);
+  const [pfEfRules, setPfEfRules] = useState<
+    { label: string; minSalary: number; maxSalary: number; pfRate: number; efRate: number }[]
+  >([]);
 
   const [payroll, setPayroll] = useState({
     // Staff
@@ -57,6 +68,7 @@ export default function Settings() {
     // General
     payDay: 5,
     productionPayType: "biweekly",
+    defaultSalaryPerShift: 0,
     // Salary slip
     slipCompanyName: "UK TEXTILES - H.O",
     slipCompanyAddress: "TIRUPUR",
@@ -76,6 +88,17 @@ export default function Settings() {
   // Sync DB values into local state once loaded
   useEffect(() => {
     if (payrollSettingsData) {
+      setCompany({
+        name: payrollSettingsData.companyName || "UKTextiles",
+        tagline: payrollSettingsData.companyTagline || "Garments Manufacturing Excellence",
+        phone: payrollSettingsData.companyPhone || "",
+        email: payrollSettingsData.companyEmail || "",
+        website: payrollSettingsData.companyWebsite || "",
+        gstin: payrollSettingsData.companyGstin || "",
+        pan: payrollSettingsData.companyPan || "",
+        address: payrollSettingsData.companyAddress || "",
+        registration: payrollSettingsData.companyRegistration || "",
+      });
       setPayroll({
         pfRate: payrollSettingsData.pfRate,
         esiRate: payrollSettingsData.esiRate,
@@ -85,6 +108,7 @@ export default function Settings() {
         prodEsiApplicableBelow: payrollSettingsData.prodEsiApplicableBelow,
         payDay: payrollSettingsData.payDay,
         productionPayType: payrollSettingsData.productionPayType,
+        defaultSalaryPerShift: payrollSettingsData.defaultSalaryPerShift ?? 0,
         slipCompanyName: payrollSettingsData.slipCompanyName || "UK TEXTILES - H.O",
         slipCompanyAddress: payrollSettingsData.slipCompanyAddress || "TIRUPUR",
         minWageRate: payrollSettingsData.minWageRate || 0,
@@ -109,6 +133,7 @@ export default function Settings() {
         prodExtraStart: payrollSettingsData.prodExtraStart || "17:50",
         prodExtraEnd: payrollSettingsData.prodExtraEnd || "20:00",
       });
+      setPfEfEnabled(payrollSettingsData.prodPfEfEnabled ?? false);
       setPfEfRules(payrollSettingsData.prodPfEfRules ?? []);
     }
   }, [payrollSettingsData]);
@@ -129,6 +154,9 @@ export default function Settings() {
         prodEsiApplicableBelow: payroll.prodEsiApplicableBelow,
         payDay: payroll.payDay,
         productionPayType: payroll.productionPayType,
+        defaultSalaryPerShift: payroll.defaultSalaryPerShift,
+        prodPfEfEnabled: pfEfEnabled,
+        prodPfEfRules: pfEfRules,
         slipCompanyName: payroll.slipCompanyName,
         slipCompanyAddress: payroll.slipCompanyAddress,
         minWageRate: payroll.minWageRate,
@@ -155,6 +183,107 @@ export default function Settings() {
     toast({ title: `${section} settings saved successfully` });
   };
 
+  const saveCompany = async () => {
+    try {
+      await updatePayrollSettings.mutateAsync({
+        companyName: company.name,
+        companyTagline: company.tagline,
+        companyPhone: company.phone,
+        companyEmail: company.email,
+        companyWebsite: company.website,
+        companyGstin: company.gstin,
+        companyPan: company.pan,
+        companyAddress: company.address,
+        companyRegistration: company.registration,
+      });
+      toast({
+        title: "Company settings saved",
+        description: "The name and logo now update everywhere in the portal, including the sidebar.",
+      });
+    } catch {
+      toast({ title: "Failed to save company settings", variant: "destructive" });
+    }
+  };
+
+  // ── Biometric devices ────────────────────────────────────────────────────
+  const { data: devices, isLoading: devicesLoading } = useListBiometricDevices();
+  const createDevice = useCreateBiometricDevice();
+  const updateDevice = useUpdateBiometricDevice();
+  const deleteDevice = useDeleteBiometricDevice();
+  const [showAddDevice, setShowAddDevice] = useState(false);
+  const [newDevice, setNewDevice] = useState({
+    name: "", deviceType: "aiface_mars", host: "", port: "", apiKey: "", password: "", notes: "",
+  });
+  const [editingDeviceId, setEditingDeviceId] = useState<number | null>(null);
+  const [editDevice, setEditDevice] = useState({ host: "", port: "", password: "" });
+
+  const startEditDevice = (d: { id: number; host: string; port: number | null; connectionConfig?: Record<string, unknown> }) => {
+    setEditingDeviceId(d.id);
+    setEditDevice({ host: d.host ?? "", port: d.port ? String(d.port) : "", password: String((d.connectionConfig as any)?.password ?? "") });
+  };
+
+  const saveEditDevice = async (id: number) => {
+    try {
+      await updateDevice.mutateAsync({
+        id,
+        data: {
+          host: editDevice.host,
+          port: editDevice.port ? Number(editDevice.port) : null,
+          connectionConfig: { password: editDevice.password },
+        } as any,
+      });
+      toast({ title: "Device updated" });
+      setEditingDeviceId(null);
+    } catch {
+      toast({ title: "Failed to update device", variant: "destructive" });
+    }
+  };
+
+  const addDevice = async () => {
+    if (!newDevice.name.trim()) {
+      toast({ title: "Device name is required", variant: "destructive" });
+      return;
+    }
+    try {
+      await createDevice.mutateAsync({
+        name: newDevice.name,
+        deviceType: newDevice.deviceType,
+        host: newDevice.host || undefined,
+        port: newDevice.port ? Number(newDevice.port) : undefined,
+        apiKey: newDevice.apiKey || undefined,
+        notes: newDevice.notes || undefined,
+        connectionConfig: newDevice.password ? { password: newDevice.password } : undefined,
+      } as any);
+      toast({ title: "Device added" });
+      setNewDevice({ name: "", deviceType: "aiface_mars", host: "", port: "", apiKey: "", password: "", notes: "" });
+      setShowAddDevice(false);
+    } catch {
+      toast({ title: "Failed to add device", variant: "destructive" });
+    }
+  };
+
+  // ── ID Card template settings ───────────────────────────────────────────
+  const { data: idCardSettingsData, isLoading: idCardLoading } = useIdCardSettings();
+  const updateIdCardSettings = useUpdateIdCardSettings();
+  const [idCardForm, setIdCardForm] = useState({
+    primaryColor: "#006496", secondaryColor: "#4FB8F0", textColor: "#0f172a",
+    fontFamily: "Hanken Grotesk", backgroundStyle: "gradient", logoPosition: "left",
+    cornerStyle: "rounded", showQrOnBack: true, footerText: "",
+  });
+
+  useEffect(() => {
+    if (idCardSettingsData) setIdCardForm(idCardSettingsData);
+  }, [idCardSettingsData]);
+
+  const saveIdCardSettings = async () => {
+    try {
+      await updateIdCardSettings.mutateAsync(idCardForm);
+      toast({ title: "ID card template saved", description: "Applies to all newly generated ID cards." });
+    } catch {
+      toast({ title: "Failed to save ID card settings", variant: "destructive" });
+    }
+  };
+
   const saveAttendanceMode = async () => {
     try {
       await updatePayrollSettings.mutateAsync({
@@ -167,7 +296,6 @@ export default function Settings() {
         prodSecondHalfEnd: attMode.prodSecondHalfEnd,
         prodExtraStart: attMode.prodExtraStart,
         prodExtraEnd: attMode.prodExtraEnd,
-        prodPfEfRules: pfEfRules,
       } as never);
       toast({
         title: "Attendance settings saved",
@@ -190,6 +318,8 @@ export default function Settings() {
           <TabsList className="bg-gray-100 flex-wrap h-auto gap-1 p-1">
             <TabsTrigger value="company" className="gap-1.5 text-xs"><Building2 size={13} /> Company</TabsTrigger>
             <TabsTrigger value="attendance" className="gap-1.5 text-xs"><Clock size={13} /> Attendance</TabsTrigger>
+            <TabsTrigger value="devices" className="gap-1.5 text-xs"><Fingerprint size={13} /> Devices</TabsTrigger>
+            <TabsTrigger value="idcard" className="gap-1.5 text-xs"><CreditCard size={13} /> ID Card</TabsTrigger>
             <TabsTrigger value="payroll" className="gap-1.5 text-xs"><IndianRupee size={13} /> Payroll</TabsTrigger>
             <TabsTrigger value="salary-slip" className="gap-1.5 text-xs"><FileText size={13} /> Salary Slip</TabsTrigger>
             <TabsTrigger value="smtp" className="gap-1.5 text-xs"><Mail size={13} /> SMTP / Email</TabsTrigger>
@@ -205,6 +335,50 @@ export default function Settings() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
+                <div className="p-3 rounded-lg bg-blue-50 border border-blue-100 text-xs text-blue-700">
+                  These details are used across the entire portal — the sidebar, salary slips,
+                  ID cards, and PDFs all pull the name and logo from here automatically.
+                </div>
+
+                {/* Logo upload */}
+                <div className="space-y-2">
+                  <Label className="text-xs">Company Logo</Label>
+                  <div className="flex items-start gap-4">
+                    {payroll.companyLogo ? (
+                      <div className="relative">
+                        <img
+                          src={payroll.companyLogo}
+                          alt="Company Logo"
+                          className="h-20 border border-gray-200 rounded-lg bg-white p-2 object-contain"
+                        />
+                        <button
+                          onClick={() => setPayroll(p => ({ ...p, companyLogo: null }))}
+                          className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-0.5"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ) : (
+                      <label className="flex flex-col items-center justify-center w-40 h-20 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors">
+                        <Upload size={18} className="text-gray-400 mb-1" />
+                        <span className="text-xs text-gray-400">Upload logo</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={e => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            const reader = new FileReader();
+                            reader.onload = ev => setPayroll(p => ({ ...p, companyLogo: ev.target?.result as string }));
+                            reader.readAsDataURL(file);
+                          }}
+                        />
+                      </label>
+                    )}
+                  </div>
+                </div>
+
                 <div className="grid sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <Label className="text-xs">Company Name</Label>
@@ -230,12 +404,289 @@ export default function Settings() {
                     <Label className="text-xs">GSTIN</Label>
                     <Input value={company.gstin} onChange={e => setCompany(c => ({ ...c, gstin: e.target.value }))} placeholder="27XXXXX..." />
                   </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">PAN</Label>
+                    <Input value={company.pan} onChange={e => setCompany(c => ({ ...c, pan: e.target.value }))} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Registration Details</Label>
+                    <Input value={company.registration} onChange={e => setCompany(c => ({ ...c, registration: e.target.value }))} placeholder="CIN / factory license no." />
+                  </div>
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs">Address</Label>
                   <Input value={company.address} onChange={e => setCompany(c => ({ ...c, address: e.target.value }))} />
                 </div>
-                <Button size="sm" onClick={() => save("Company")}>Save Company Settings</Button>
+                <Button size="sm" onClick={saveCompany} disabled={updatePayrollSettings.isPending}>
+                  {updatePayrollSettings.isPending ? "Saving…" : "Save Company Settings"}
+                </Button>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Devices */}
+          <TabsContent value="devices" className="mt-4">
+            <Card className="border-0 shadow-sm">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm font-bold flex items-center gap-2">
+                    <Fingerprint size={15} className="text-cyan-500" /> Biometric / Punching Devices
+                  </CardTitle>
+                  <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowAddDevice(v => !v)}>
+                    <Plus size={13} /> Add Device
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-xs text-gray-500">
+                  Add and enable/disable additional attendance devices — supports employees working
+                  across multiple units or branches. The <strong>.env</strong>-configured device (blue badge)
+                  always keeps working exactly as before; devices added here are extra. When syncing
+                  attendance (Attendance page), HR picks which device to pull from, including
+                  "All Devices" to merge every enabled device plus the .env device.
+                </p>
+
+                {showAddDevice && (
+                  <div className="p-4 border-2 border-cyan-100 bg-cyan-50/40 rounded-xl space-y-3">
+                    <div className="grid sm:grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Device Name</Label>
+                        <Input value={newDevice.name} onChange={e => setNewDevice(d => ({ ...d, name: e.target.value }))} placeholder="e.g. Main Gate Scanner" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Device Type</Label>
+                        <select
+                          value={newDevice.deviceType}
+                          onChange={e => setNewDevice(d => ({ ...d, deviceType: e.target.value }))}
+                          className="w-full h-9 rounded-md border px-3 text-sm bg-background"
+                        >
+                          <option value="aiface_mars">AiFace-Mars</option>
+                          <option value="zkteco">ZKTeco</option>
+                          <option value="essl">eSSL</option>
+                          <option value="generic_http">Generic HTTP API</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Host / IP Address</Label>
+                        <Input value={newDevice.host} onChange={e => setNewDevice(d => ({ ...d, host: e.target.value }))} placeholder="192.168.1.201" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Port</Label>
+                        <Input type="number" value={newDevice.port} onChange={e => setNewDevice(d => ({ ...d, port: e.target.value }))} placeholder="4370" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Comm Password (ZKTeco, optional)</Label>
+                        <Input type="password" value={newDevice.password} onChange={e => setNewDevice(d => ({ ...d, password: e.target.value }))} placeholder="0" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">API Key / Token (optional)</Label>
+                        <Input type="password" value={newDevice.apiKey} onChange={e => setNewDevice(d => ({ ...d, apiKey: e.target.value }))} />
+                      </div>
+                      <div className="space-y-1.5 sm:col-span-2">
+                        <Label className="text-xs">Notes</Label>
+                        <Input value={newDevice.notes} onChange={e => setNewDevice(d => ({ ...d, notes: e.target.value }))} />
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={addDevice} disabled={createDevice.isPending}>
+                        {createDevice.isPending ? "Adding…" : "Save Device"}
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setShowAddDevice(false)}>Cancel</Button>
+                    </div>
+                  </div>
+                )}
+
+                {devicesLoading ? (
+                  <p className="text-sm text-muted-foreground">Loading devices…</p>
+                ) : (devices ?? []).length === 0 ? (
+                  <p className="text-sm text-center text-muted-foreground py-6">No devices configured yet.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {(devices ?? []).map(d => (
+                      <div key={d.id} className="border rounded-xl overflow-hidden">
+                        <div className="flex items-center gap-3 p-3">
+                          <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${d.isActive ? "bg-cyan-50" : "bg-gray-100"}`}>
+                            <Fingerprint size={16} className={d.isActive ? "text-cyan-600" : "text-gray-400"} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="text-sm font-bold text-gray-800">{d.name}</p>
+                              {d.isEnv && (
+                                <span className="text-[10px] font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded-full">.env</span>
+                              )}
+                              {!d.isActive && (
+                                <span className="text-[10px] font-bold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-full">Disabled</span>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-gray-400">
+                              {d.deviceType} {d.host ? `· ${d.host}${d.port ? `:${d.port}` : ""}` : ""}
+                              {d.isEnv ? " · configured in backend/.env" : ""}
+                            </p>
+                          </div>
+                          {typeof d.id === "number" && !d.isEnv && (
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                onClick={() => editingDeviceId === d.id ? setEditingDeviceId(null) : startEditDevice(d as any)}
+                                className="p-1.5 rounded-lg text-gray-400 hover:text-cyan-600 hover:bg-cyan-50"
+                                title="Edit connection (host, port, password)"
+                              >
+                                <Pencil size={13} />
+                              </button>
+                              <button
+                                onClick={() => updateDevice.mutate({ id: d.id as number, data: { isActive: !d.isActive } })}
+                                className={`p-1.5 rounded-lg hover:bg-gray-50 ${d.isActive ? "text-green-600" : "text-gray-400"}`}
+                                title={d.isActive ? "Disable device" : "Enable device"}
+                              >
+                                <Power size={13} />
+                              </button>
+                              <button
+                                onClick={() => deleteDevice.mutate(d.id as number)}
+                                className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50"
+                                title="Remove device"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        {editingDeviceId === d.id && (
+                          <div className="p-3 border-t bg-gray-50 grid sm:grid-cols-3 gap-3">
+                            <div className="space-y-1.5">
+                              <Label className="text-xs">Host / IP Address</Label>
+                              <Input value={editDevice.host} onChange={e => setEditDevice(v => ({ ...v, host: e.target.value }))} placeholder="192.168.1.201" />
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label className="text-xs">Port</Label>
+                              <Input type="number" value={editDevice.port} onChange={e => setEditDevice(v => ({ ...v, port: e.target.value }))} placeholder="4370" />
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label className="text-xs">Comm Password (ZKTeco)</Label>
+                              <Input type="password" value={editDevice.password} onChange={e => setEditDevice(v => ({ ...v, password: e.target.value }))} placeholder="0" />
+                            </div>
+                            <div className="sm:col-span-3 flex gap-2">
+                              <Button size="sm" onClick={() => saveEditDevice(d.id as number)} disabled={updateDevice.isPending}>
+                                {updateDevice.isPending ? "Saving…" : "Save Connection"}
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={() => setEditingDeviceId(null)}>Cancel</Button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* ID Card Settings */}
+          <TabsContent value="idcard" className="mt-4">
+            <Card className="border-0 shadow-sm">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-bold flex items-center gap-2">
+                  <CreditCard size={15} className="text-sky-500" /> Employee ID Card Template
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-xs text-gray-500">
+                  These settings control the look of every ID card generated from the ID Cards page.
+                </p>
+                {idCardLoading ? (
+                  <p className="text-sm text-muted-foreground">Loading…</p>
+                ) : (
+                  <div className="grid sm:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Primary Color</Label>
+                      <div className="flex items-center gap-2">
+                        <input type="color" value={idCardForm.primaryColor} onChange={e => setIdCardForm(f => ({ ...f, primaryColor: e.target.value }))} className="h-9 w-12 rounded border cursor-pointer" />
+                        <Input value={idCardForm.primaryColor} onChange={e => setIdCardForm(f => ({ ...f, primaryColor: e.target.value }))} />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Secondary Color</Label>
+                      <div className="flex items-center gap-2">
+                        <input type="color" value={idCardForm.secondaryColor} onChange={e => setIdCardForm(f => ({ ...f, secondaryColor: e.target.value }))} className="h-9 w-12 rounded border cursor-pointer" />
+                        <Input value={idCardForm.secondaryColor} onChange={e => setIdCardForm(f => ({ ...f, secondaryColor: e.target.value }))} />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Text Color</Label>
+                      <div className="flex items-center gap-2">
+                        <input type="color" value={idCardForm.textColor} onChange={e => setIdCardForm(f => ({ ...f, textColor: e.target.value }))} className="h-9 w-12 rounded border cursor-pointer" />
+                        <Input value={idCardForm.textColor} onChange={e => setIdCardForm(f => ({ ...f, textColor: e.target.value }))} />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Font Family</Label>
+                      <select
+                        value={idCardForm.fontFamily}
+                        onChange={e => setIdCardForm(f => ({ ...f, fontFamily: e.target.value }))}
+                        className="w-full h-9 rounded-md border px-3 text-sm bg-background"
+                      >
+                        <option value="Hanken Grotesk">Hanken Grotesk</option>
+                        <option value="Inter">Inter</option>
+                        <option value="Poppins">Poppins</option>
+                        <option value="Roboto">Roboto</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Background Style</Label>
+                      <select
+                        value={idCardForm.backgroundStyle}
+                        onChange={e => setIdCardForm(f => ({ ...f, backgroundStyle: e.target.value }))}
+                        className="w-full h-9 rounded-md border px-3 text-sm bg-background"
+                      >
+                        <option value="gradient">Gradient</option>
+                        <option value="solid">Solid</option>
+                        <option value="pattern">Pattern</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Logo Position</Label>
+                      <select
+                        value={idCardForm.logoPosition}
+                        onChange={e => setIdCardForm(f => ({ ...f, logoPosition: e.target.value }))}
+                        className="w-full h-9 rounded-md border px-3 text-sm bg-background"
+                      >
+                        <option value="left">Left</option>
+                        <option value="center">Center</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Corner Style</Label>
+                      <select
+                        value={idCardForm.cornerStyle}
+                        onChange={e => setIdCardForm(f => ({ ...f, cornerStyle: e.target.value }))}
+                        className="w-full h-9 rounded-md border px-3 text-sm bg-background"
+                      >
+                        <option value="rounded">Rounded</option>
+                        <option value="sharp">Sharp</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Footer Text (optional)</Label>
+                      <Input value={idCardForm.footerText} onChange={e => setIdCardForm(f => ({ ...f, footerText: e.target.value }))} placeholder="e.g. Valid for the current calendar year" />
+                    </div>
+                    <div className="space-y-1.5 flex items-end">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <button
+                          type="button"
+                          onClick={() => setIdCardForm(f => ({ ...f, showQrOnBack: !f.showQrOnBack }))}
+                          className={`w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${
+                            idCardForm.showQrOnBack ? "bg-sky-600 border-sky-600" : "bg-white border-gray-300"
+                          }`}
+                        >
+                          {idCardForm.showQrOnBack && <span className="w-2 h-2 bg-white rounded-sm" />}
+                        </button>
+                        <span className="text-sm text-gray-700">Show QR verification code on back</span>
+                      </label>
+                    </div>
+                  </div>
+                )}
+                <Button size="sm" onClick={saveIdCardSettings} disabled={updateIdCardSettings.isPending}>
+                  {updateIdCardSettings.isPending ? "Saving…" : "Save ID Card Template"}
+                </Button>
               </CardContent>
             </Card>
           </TabsContent>
@@ -324,125 +775,12 @@ export default function Settings() {
               </CardContent>
             </Card>
 
-            {/* ── Production Shift Windows ── */}
-            <Card className="border-0 shadow-sm">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-bold flex items-center gap-2">
-                  <Clock size={15} className="text-orange-500" /> Production Attendance Windows (1.5-Shift Day)
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <p className="text-xs text-gray-500">
-                  Production employees can earn up to <strong>1.5 shifts per day</strong>:
-                  first half (0.5) + second half (0.5) + additional evening half (0.5).
-                </p>
-                <div className="grid sm:grid-cols-3 gap-4">
-                  {([
-                    { label: "First Half", from: "prodFirstHalfStart", to: "prodFirstHalfEnd", color: "text-blue-700" },
-                    { label: "Second Half", from: "prodSecondHalfStart", to: "prodSecondHalfEnd", color: "text-indigo-700" },
-                    { label: "Additional Half", from: "prodExtraStart", to: "prodExtraEnd", color: "text-purple-700" },
-                  ] as const).map(w => (
-                    <div key={w.label} className="p-3 border rounded-xl space-y-2">
-                      <p className={`text-xs font-bold ${w.color}`}>{w.label} (0.5 shift)</p>
-                      <div className="flex items-center gap-2">
-                        <Input
-                          type="time"
-                          value={(attMode as any)[w.from]}
-                          onChange={e => setAttMode(a => ({ ...a, [w.from]: e.target.value }))}
-                          className="h-8 text-xs"
-                        />
-                        <span className="text-gray-400 text-xs">→</span>
-                        <Input
-                          type="time"
-                          value={(attMode as any)[w.to]}
-                          onChange={e => setAttMode(a => ({ ...a, [w.to]: e.target.value }))}
-                          className="h-8 text-xs"
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <Button size="sm" onClick={saveAttendanceMode} disabled={updatePayrollSettings.isPending}>
-                  {updatePayrollSettings.isPending ? "Saving…" : "Save Production Windows"}
-                </Button>
-              </CardContent>
-            </Card>
+            {/* ── Production Punch Times & Shift Segments (replaces the old fixed 3-window model) ── */}
+            <ProductionShiftConfigCard />
 
-            {/* ── Production PF / EF Rules ── */}
-            <Card className="border-0 shadow-sm">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-bold flex items-center gap-2">
-                  <IndianRupee size={15} className="text-purple-500" /> Production PF / EF Salary-Range Rules
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="p-3 rounded-lg bg-blue-50 border border-blue-100 text-xs text-blue-700">
-                  Define PF / EF rates per salary range or work category. Payroll will apply
-                  these rules to production employees once the exact calculation details are
-                  finalised. Leave empty to skip PF/EF for now.
-                </div>
-                {pfEfRules.length === 0 ? (
-                  <p className="text-xs text-center text-muted-foreground py-3">No rules configured yet.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {pfEfRules.map((rule, i) => (
-                      <div key={i} className="grid grid-cols-[1fr_100px_100px_80px_80px_32px] gap-2 items-center">
-                        <Input
-                          placeholder="Category / label"
-                          value={rule.label}
-                          onChange={e => setPfEfRules(rs => rs.map((r, j) => j === i ? { ...r, label: e.target.value } : r))}
-                          className="h-8 text-xs"
-                        />
-                        <Input
-                          type="number" placeholder="Min ₹"
-                          value={rule.minSalary}
-                          onChange={e => setPfEfRules(rs => rs.map((r, j) => j === i ? { ...r, minSalary: Number(e.target.value) } : r))}
-                          className="h-8 text-xs"
-                        />
-                        <Input
-                          type="number" placeholder="Max ₹"
-                          value={rule.maxSalary}
-                          onChange={e => setPfEfRules(rs => rs.map((r, j) => j === i ? { ...r, maxSalary: Number(e.target.value) } : r))}
-                          className="h-8 text-xs"
-                        />
-                        <Input
-                          type="number" placeholder="PF %"
-                          value={rule.pfRate}
-                          onChange={e => setPfEfRules(rs => rs.map((r, j) => j === i ? { ...r, pfRate: Number(e.target.value) } : r))}
-                          className="h-8 text-xs"
-                        />
-                        <Input
-                          type="number" placeholder="EF %"
-                          value={rule.efRate}
-                          onChange={e => setPfEfRules(rs => rs.map((r, j) => j === i ? { ...r, efRate: Number(e.target.value) } : r))}
-                          className="h-8 text-xs"
-                        />
-                        <button
-                          onClick={() => setPfEfRules(rs => rs.filter((_, j) => j !== i))}
-                          className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50"
-                        >
-                          <X size={13} />
-                        </button>
-                      </div>
-                    ))}
-                    <div className="grid grid-cols-[1fr_100px_100px_80px_80px_32px] gap-2 text-[10px] text-gray-400 uppercase font-semibold px-1">
-                      <span>Category</span><span>Min Salary</span><span>Max Salary</span><span>PF %</span><span>EF %</span><span />
-                    </div>
-                  </div>
-                )}
-                <div className="flex gap-2">
-                  <Button
-                    size="sm" variant="outline"
-                    onClick={() => setPfEfRules(rs => [...rs, { label: "", minSalary: 0, maxSalary: 0, pfRate: 0, efRate: 0 }])}
-                  >
-                    + Add Rule
-                  </Button>
-                  <Button size="sm" onClick={saveAttendanceMode} disabled={updatePayrollSettings.isPending}>
-                    {updatePayrollSettings.isPending ? "Saving…" : "Save PF/EF Rules"}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+            {/* Production PF/ESI deductions are configured in the Payroll tab
+                (prodPfRate / prodEsiRate / prodEsiApplicableBelow) — the only
+                rates the payroll engine actually applies. */}
 
             {/* ── Legacy general rules ── */}
             <Card className="border-0 shadow-sm">
@@ -533,7 +871,7 @@ export default function Settings() {
                     <div className="space-y-3">
                       <div className="flex items-center gap-2 pb-1 border-b">
                         <span className="text-xs font-semibold text-orange-700 bg-orange-50 px-2 py-0.5 rounded">Production</span>
-                        <span className="text-xs text-muted-foreground">Session-based employees</span>
+                        <span className="text-xs text-muted-foreground">Shift-based employees (pay = shifts × salary per shift)</span>
                       </div>
                       <div className="space-y-1.5">
                         <Label className="text-xs">
@@ -587,6 +925,17 @@ export default function Settings() {
                         <option value="monthly">Monthly</option>
                       </select>
                     </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">
+                        Default Salary Per Shift (&#8377;) <span className="text-muted-foreground font-normal">pre-filled for new production employees</span>
+                      </Label>
+                      <Input
+                        type="number" min={0} step={0.01}
+                        value={payroll.defaultSalaryPerShift}
+                        onChange={e => setPayroll(p => ({ ...p, defaultSalaryPerShift: Number(e.target.value) }))}
+                        placeholder="e.g. 300"
+                      />
+                    </div>
                   </div>
                 )}
 
@@ -597,6 +946,92 @@ export default function Settings() {
                 >
                   {updatePayrollSettings.isPending ? "Saving…" : "Save Payroll Settings"}
                 </Button>
+              </CardContent>
+            </Card>
+
+            {/* ── Production PF / EF salary-range rules ── */}
+            <Card className="border-0 shadow-sm mt-4">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm font-bold flex items-center gap-2">
+                    <IndianRupee size={15} className="text-purple-500" /> Production PF / EF Salary-Range Rules
+                  </CardTitle>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-bold ${pfEfEnabled ? "text-green-600" : "text-gray-400"}`}>
+                      {pfEfEnabled ? "ENABLED" : "DISABLED"}
+                    </span>
+                    <Switch checked={pfEfEnabled} onCheckedChange={setPfEfEnabled} />
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="p-3 rounded-lg bg-blue-50 border border-blue-100 text-xs text-blue-700">
+                  When <strong>enabled</strong>, production payroll picks the rule matching the employee's
+                  monthly-equivalent earnings (bi-weekly gross × 2) and deducts PF / EF at that rule's rates —
+                  overriding the flat Production PF/ESI rates above. Amounts appear in the payroll breakdown
+                  and the salary slip. Max Salary <strong>0</strong> = no upper limit. When disabled, the flat
+                  rates above apply.
+                </div>
+                {pfEfRules.length === 0 ? (
+                  <p className="text-xs text-center text-muted-foreground py-3">No rules configured yet.</p>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-[1fr_100px_100px_80px_80px_32px] gap-2 text-[10px] text-gray-400 uppercase font-semibold px-1">
+                      <span>Category</span><span>Min Salary</span><span>Max Salary</span><span>PF %</span><span>EF %</span><span />
+                    </div>
+                    {pfEfRules.map((rule, i) => (
+                      <div key={i} className="grid grid-cols-[1fr_100px_100px_80px_80px_32px] gap-2 items-center">
+                        <Input
+                          placeholder="Category / label"
+                          value={rule.label}
+                          onChange={e => setPfEfRules(rs => rs.map((r, j) => j === i ? { ...r, label: e.target.value } : r))}
+                          className="h-8 text-xs"
+                        />
+                        <Input
+                          type="number" placeholder="Min ₹"
+                          value={rule.minSalary}
+                          onChange={e => setPfEfRules(rs => rs.map((r, j) => j === i ? { ...r, minSalary: Number(e.target.value) } : r))}
+                          className="h-8 text-xs"
+                        />
+                        <Input
+                          type="number" placeholder="Max ₹ (0 = no limit)"
+                          value={rule.maxSalary}
+                          onChange={e => setPfEfRules(rs => rs.map((r, j) => j === i ? { ...r, maxSalary: Number(e.target.value) } : r))}
+                          className="h-8 text-xs"
+                        />
+                        <Input
+                          type="number" placeholder="PF %"
+                          value={rule.pfRate}
+                          onChange={e => setPfEfRules(rs => rs.map((r, j) => j === i ? { ...r, pfRate: Number(e.target.value) } : r))}
+                          className="h-8 text-xs"
+                        />
+                        <Input
+                          type="number" placeholder="EF %"
+                          value={rule.efRate}
+                          onChange={e => setPfEfRules(rs => rs.map((r, j) => j === i ? { ...r, efRate: Number(e.target.value) } : r))}
+                          className="h-8 text-xs"
+                        />
+                        <button
+                          onClick={() => setPfEfRules(rs => rs.filter((_, j) => j !== i))}
+                          className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50"
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <Button
+                    size="sm" variant="outline"
+                    onClick={() => setPfEfRules(rs => [...rs, { label: "", minSalary: 0, maxSalary: 0, pfRate: 0, efRate: 0 }])}
+                  >
+                    + Add Rule
+                  </Button>
+                  <Button size="sm" onClick={savePayroll} disabled={updatePayrollSettings.isPending}>
+                    {updatePayrollSettings.isPending ? "Saving…" : "Save PF/EF Rules"}
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           </TabsContent>

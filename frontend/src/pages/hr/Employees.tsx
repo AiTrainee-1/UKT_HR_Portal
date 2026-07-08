@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import Loader from "@/components/Loader";
+import EmployeeAvatar from "@/components/EmployeeAvatar";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import {
   useListEmployees, useListDepartments, useDeleteEmployee, useUpdateEmployeeStatus,
@@ -31,6 +32,7 @@ export default function Employees() {
   const [search, setSearch] = useState("");
   const [deptFilter, setDeptFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState<"staff" | "production">("staff");
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
@@ -39,7 +41,12 @@ export default function Employees() {
     status: statusFilter !== "all" ? statusFilter : undefined,
   });
 
+  const staffCount = rawEmployees?.filter((e) => e.employmentType !== "production").length ?? 0;
+  const productionCount = rawEmployees?.filter((e) => e.employmentType === "production").length ?? 0;
+
   const employees = rawEmployees?.filter((e) => {
+    const isProduction = e.employmentType === "production";
+    if (typeFilter === "production" ? !isProduction : isProduction) return false;
     if (!search) return true;
     const q = search.toLowerCase();
     return (
@@ -94,7 +101,24 @@ export default function Employees() {
           <div className="flex items-center justify-between">
           <div>
             <h2 className="text-2xl font-black">Employees</h2>
-            <p className="text-muted-foreground text-sm mt-0.5">{employees?.length ?? 0} total records</p>
+            <p className="text-muted-foreground text-sm mt-0.5">{employees?.length ?? 0} records</p>
+            {/* Staff / Production toggle */}
+            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1 mt-2 w-fit">
+              {([
+                { key: "staff" as const, label: `Staff (${staffCount})` },
+                { key: "production" as const, label: `Production (${productionCount})` },
+              ]).map((t) => (
+                <button
+                  key={t.key}
+                  onClick={() => setTypeFilter(t.key)}
+                  className={`px-4 py-1.5 rounded-md text-xs font-bold transition-colors ${
+                    typeFilter === t.key ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-800"
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
           </div>
           <Button onClick={() => navigate("/hr/employees/new")} data-testid="button-add-employee">
             <Plus size={16} className="mr-2" /> Add Employee
@@ -167,9 +191,12 @@ export default function Employees() {
                         <Badge variant="outline" className="font-mono text-xs">{emp.employeeCode}</Badge>
                       </TableCell>
                       <TableCell>
-                        <div>
-                          <p className="font-semibold text-sm">{emp.firstName} {emp.lastName}</p>
-                          <p className="text-xs text-muted-foreground">{emp.email}</p>
+                        <div className="flex items-center gap-2.5">
+                          <EmployeeAvatar photoUrl={emp.photoUrl} name={`${emp.firstName} ${emp.lastName}`} size={32} />
+                          <div>
+                            <p className="font-semibold text-sm">{emp.firstName} {emp.lastName}</p>
+                            <p className="text-xs text-muted-foreground">{emp.email}</p>
+                          </div>
                         </div>
                       </TableCell>
                       <TableCell className="hidden md:table-cell text-sm text-muted-foreground">{emp.departmentName ?? "—"}</TableCell>

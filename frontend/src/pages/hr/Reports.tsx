@@ -235,6 +235,8 @@ const REPORTS: ReportConfig[] = [
       { key: "esiNumber",      label: "ESI No.",      type: "text",  width: 14 },
       { key: "bankAccount",    label: "Bank Acct",    type: "text",  width: 16 },
       { key: "bankIfsc",       label: "IFSC",         type: "text",  width: 12 },
+      { key: "bloodGroup",       label: "Blood Group",       type: "text",  width: 12 },
+      { key: "emergencyContact", label: "Emergency Contact", type: "text",  width: 20 },
     ],
   },
   {

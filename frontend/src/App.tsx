@@ -3,6 +3,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import { BiometricSyncProvider } from "@/contexts/BiometricSyncContext";
+import GlobalSyncBanner from "@/components/GlobalSyncBanner";
 import NotFound from "@/pages/not-found";
 
 // Public pages
@@ -47,6 +49,8 @@ import Promotion from "@/pages/hr/Promotion";
 import Increment from "@/pages/hr/Increment";
 import Bonus from "@/pages/hr/Bonus";
 import IdCards from "@/pages/hr/IdCards";
+import CasualLeave from "@/pages/hr/CasualLeave";
+import NightShift from "@/pages/hr/NightShift";
 import VerifyEmployee from "@/pages/VerifyEmployee";
 
 // Employee pages
@@ -188,6 +192,12 @@ function Router() {
       <Route path="/hr/id-cards">
         {() => <ProtectedRoute component={IdCards} allowedRoles={["hr"]} />}
       </Route>
+      <Route path="/hr/casual-leave">
+        {() => <ProtectedRoute component={CasualLeave} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/night-shift">
+        {() => <ProtectedRoute component={NightShift} allowedRoles={["hr"]} />}
+      </Route>
       <Route path="/hr/shifts">
         {() => <ProtectedRoute component={ManageShift} allowedRoles={["hr"]} />}
       </Route>
@@ -286,9 +296,12 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <AuthProvider>
-          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-            <Router />
-          </WouterRouter>
+          <BiometricSyncProvider>
+            <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+              <Router />
+            </WouterRouter>
+            <GlobalSyncBanner />
+          </BiometricSyncProvider>
         </AuthProvider>
         <Toaster />
       </TooltipProvider>

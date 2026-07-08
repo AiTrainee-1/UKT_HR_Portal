@@ -14,10 +14,8 @@ import {
   useListHolidays,
   useAuditLogStats,
   useListPermissions,
-  useSyncBiometric,
 } from "@/lib/api-client/custom-hooks";
-import { useToast } from "@/hooks/use-toast";
-import { useQueryClient } from "@tanstack/react-query";
+import { useBiometricSync } from "@/contexts/BiometricSyncContext";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   CartesianGrid, PieChart, Pie, Cell, Legend,
@@ -177,25 +175,10 @@ function daysUntil(iso: string) {
 
 export default function HrDashboard() {
   const [, navigate] = useLocation();
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
-  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
-  const syncMutation = useSyncBiometric();
-
-  const handleSync = async () => {
-    try {
-      const result = await syncMutation.mutateAsync("today");
-      if (result.ok) {
-        setLastSyncedAt(new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }));
-        toast({ title: `Sync complete — ${result.created ?? 0} new records` });
-        queryClient.invalidateQueries();
-      } else {
-        toast({ title: "Sync failed", description: result.error ?? "Device unreachable", variant: "destructive" });
-      }
-    } catch {
-      toast({ title: "Sync failed", description: "Could not reach device", variant: "destructive" });
-    }
-  };
+  // Sync lives in a root-level context so it survives navigating away from
+  // the Dashboard, and is shared with the Attendance page's sync button.
+  const { isSyncing, lastSyncedAt, triggerSync } = useBiometricSync();
+  const handleSync = () => void triggerSync("day", "all");
 
   const now = new Date();
   const month = now.getMonth() + 1;
@@ -297,7 +280,7 @@ export default function HrDashboard() {
             </span>
             <button
               onClick={handleSync}
-              disabled={syncMutation.isPending}
+              disabled={isSyncing}
               className="flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1 rounded-full transition-all disabled:opacity-60"
               style={{
                 color: "#006496",
@@ -305,9 +288,9 @@ export default function HrDashboard() {
                 boxShadow: "3px 3px 8px rgba(0,100,150,0.1), -2px -2px 6px rgba(255,255,255,0.8)",
               }}
             >
-              <RefreshCw size={11} className={syncMutation.isPending ? "animate-spin" : ""} />
-              {syncMutation.isPending ? "Syncing…" : "Auto Sync"}
-              {lastSyncedAt && !syncMutation.isPending && (
+              <RefreshCw size={11} className={isSyncing ? "animate-spin" : ""} />
+              {isSyncing ? "Syncing…" : "Auto Sync"}
+              {lastSyncedAt && !isSyncing && (
                 <span style={{ color: "rgba(0,100,150,0.45)", fontWeight: 400 }}>· {lastSyncedAt}</span>
               )}
             </button>
