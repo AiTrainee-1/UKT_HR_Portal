@@ -21,7 +21,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import require_hr, require_auth, get_token_employee_id
-from .models import AttendanceDayRecord, CasualLeaveRequest, Employee
+from .models import AttendanceDayRecord, CasualLeaveRequest, Employee, Notification
 
 ELIGIBILITY_MONTHS = 6
 
@@ -133,6 +133,11 @@ def apply_cl_decision(cl: CasualLeaveRequest, status: str, reviewer: str,
     cl.reviewed_at = timezone.now()
     cl.save()
     _write_attendance_for_cl(cl, reviewer)
+    Notification.objects.create(
+        employee=cl.employee,
+        type="casual_leave",
+        message=f"Your Casual Leave request for {cl.date.isoformat()} was {status}.",
+    )
     return cl
 
 
@@ -260,7 +265,8 @@ def casual_leave_eligibility(request: Request) -> Response:
             "serviceMonths": months,
             "eligible": service_ok and used is None,
             "reason": (
-                None if service_ok
+                "Casual Leave already used this month (limit: 1 per month)" if service_ok and used is not None
+                else None if service_ok
                 else ("Join date not set" if months is None
                       else f"{months}/{ELIGIBILITY_MONTHS} months of service")
             ),

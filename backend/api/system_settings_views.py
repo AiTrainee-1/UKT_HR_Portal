@@ -12,7 +12,7 @@ from rest_framework.response import Response
 
 from datetime import time as time_type
 
-from .auth import require_hr
+from .auth import require_hr, require_auth
 from .models import BiometricDevice, IdCardSettings, ProductionShiftConfig, ProductionShiftSegment
 
 
@@ -146,11 +146,17 @@ def _idcard_settings_dict(s: IdCardSettings) -> dict:
 
 
 @api_view(["GET", "PUT"])
-@require_hr
+@require_auth
 def idcard_settings_view(request: Request) -> Response:
     s = IdCardSettings.get()
     if request.method == "GET":
+        # Read-only template info — any authenticated user (mobile employees
+        # need this to render their own ID card). Editing stays HR-only.
         return Response(_idcard_settings_dict(s))
+
+    from .auth import is_hr
+    if not is_hr(request):
+        return Response({"error": "HR access required"}, status=403)
 
     data = request.data
     field_map = {

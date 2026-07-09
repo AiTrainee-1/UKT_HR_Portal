@@ -125,7 +125,8 @@ def pull_from_device(host: str, port: int, password: int, date_from: date_type |
                       device_label: str = "") -> dict:
     """
     Connect to one device, pull attendance, write logs. Returns a summary dict:
-    {"created": int, "skipped": int, "notFound": set[str], "total": int}
+    {"created": int, "skipped": int, "notFound": set[str], "total": int,
+     "suspiciousDays": list[dict]}
     Raises BiometricSyncError on connection failure.
     """
     try:
@@ -152,17 +153,23 @@ def pull_from_device(host: str, port: int, password: int, date_from: date_type |
                 pass
 
     active_employees = list(Employee.objects.filter(status="active"))
+    # Employee Code is the ONLY identifier ever used to match a device punch to
+    # an employee — never name, never the internal database row id. A device
+    # user_id must equal either the employee's assigned Biometric Device ID or
+    # their Employee Code, exactly. Anything else is reported as "not found"
+    # rather than guessed, so two different people can never be silently
+    # merged onto one employee record.
     by_device_id = {
         str(e.biometric_device_id).strip(): e
         for e in active_employees if e.biometric_device_id
     }
     by_code = {str(e.employee_code): e for e in active_employees}
-    by_pk = {str(e.id): e for e in active_employees}
 
     created = 0
     skipped = 0
     not_found: set[str] = set()
     source_tag = f"biometric:{device_label}" if device_label else "biometric:essl"
+    daily_punch_counts: dict[tuple[int, date_type], int] = {}
 
     for rec in raw_records:
         if date_from and rec.timestamp.date() < date_from:
@@ -170,9 +177,7 @@ def pull_from_device(host: str, port: int, password: int, date_from: date_type |
             continue
 
         uid = str(rec.user_id).strip()
-        emp = by_device_id.get(uid) or by_code.get(uid) or by_pk.get(uid)
-        if not emp and uid.isdigit():
-            emp = by_pk.get(str(int(uid)))
+        emp = by_device_id.get(uid) or by_code.get(uid)
 
         if not emp:
             not_found.add(uid)
@@ -192,10 +197,23 @@ def pull_from_device(host: str, port: int, password: int, date_from: date_type |
             Attendance.objects.update_or_create(
                 employee=emp, date=str(punch_date), defaults={"present": True},
             )
+            key = (emp.id, punch_date)
+            daily_punch_counts[key] = daily_punch_counts.get(key, 0) + 1
         else:
             skipped += 1
+
+    # A normal day has 2-4 punches (in/out, maybe a break). 6+ almost always
+    # means the device has two different people sharing one Device User ID —
+    # exactly the kind of silent identity merge Employee-Code-only matching
+    # cannot detect on its own, since the device itself sent one uid for both.
+    suspicious = [
+        {"employeeId": emp_id, "date": str(d), "punches": count}
+        for (emp_id, d), count in daily_punch_counts.items()
+        if count >= 6
+    ]
 
     return {
         "created": created, "skipped": skipped,
         "notFound": not_found, "total": len(raw_records),
+        "suspiciousDays": suspicious,
     }

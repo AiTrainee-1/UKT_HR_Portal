@@ -598,6 +598,7 @@ def run_biometric_sync(mode: str = "day", device_id=None) -> dict:
     not_found_ids: set = set()
     device_errors = []
     succeeded = 0
+    suspicious_days = []
 
     for t in targets:
         if t.get("config_error"):
@@ -609,6 +610,7 @@ def run_biometric_sync(mode: str = "day", device_id=None) -> dict:
             result = pull_from_device(t["host"], t["port"], t["password"], date_from, device_label=t["label"])
             total_created += result["created"]
             not_found_ids |= result["notFound"]
+            suspicious_days.extend(result.get("suspiciousDays", []))
             succeeded += 1
             if t["device"] is not None:
                 t["device"].last_synced_at = timezone.now()
@@ -627,12 +629,28 @@ def run_biometric_sync(mode: str = "day", device_id=None) -> dict:
     if succeeded == 0:
         return {"ok": False, "error": "; ".join(device_errors)}
 
+    if suspicious_days:
+        emp_ids = {d["employeeId"] for d in suspicious_days}
+        names = {
+            e.id: f"{e.first_name} {e.last_name}".strip()
+            for e in Employee.objects.filter(id__in=emp_ids)
+        }
+        for d in suspicious_days:
+            d["employeeName"] = names.get(d["employeeId"], "")
+
     return {
         "ok": True,
         "created": total_created,
         "syncedAt": datetime.utcnow().isoformat() + "Z",
         "unmatchedDeviceIds": sorted(not_found_ids),
         "deviceErrors": device_errors,
+        # Days where one employee logged 6+ punches — almost always means the
+        # biometric device has two different people sharing one Device User
+        # ID. Employee-Code-only matching can't split them since the device
+        # itself sends one identical id for both; this needs to be fixed by
+        # re-enrolling the duplicate person under their own unique Device
+        # User ID and remapping it in Settings → Devices.
+        "suspiciousDays": suspicious_days,
     }
 
 
@@ -933,17 +951,26 @@ def attendance_late_summary(request: Request) -> Response:
 
 
 @api_view(["GET"])
-@require_hr
+@require_auth
 def employee_shift_monthly_stats(request: Request) -> Response:
     """
     GET /api/attendance/employee-shift-stats/?employee_id=X&month=M&year=Y
-    Returns detailed monthly shift stats for one employee (used by Manage Shift panel).
+    Returns detailed monthly shift stats for one employee (used by Manage Shift
+    panel, and self-service by the mobile app's My Shift page).
+    An employee token always gets their own stats, ignoring employee_id.
     """
     import calendar as _cal
     from collections import defaultdict as _dd
     from decimal import Decimal as _D
 
-    emp_id = request.query_params.get("employee_id")
+    token_emp_id = get_token_employee_id(request)
+    if token_emp_id:
+        emp_id = token_emp_id
+    else:
+        from .auth import is_hr
+        if not is_hr(request):
+            return Response({"error": "HR access required"}, status=403)
+        emp_id = request.query_params.get("employee_id")
     try:
         m = int(request.query_params.get("month", _today().month))
         y = int(request.query_params.get("year", _today().year))

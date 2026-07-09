@@ -15,7 +15,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from .auth import require_hr
+from .auth import require_hr, require_auth, get_token_employee_id
 from .models import (
     AttendanceDayRecord, AttendanceOverrideRequest, Department, Designation, Employee,
     PayrollSettings, Promotion, SalaryIncrement,
@@ -23,6 +23,7 @@ from .models import (
 from .attendance_final import (
     compute_month_records, compute_day_record, month_summary_from_records,
 )
+from .shift_engine import _get_shift_for_date
 
 
 def _emp_by_code_or_id(request) -> Employee | None:
@@ -60,9 +61,16 @@ def _record_dict(r: AttendanceDayRecord) -> dict:
 # ── Employee monthly attendance (search + weekly table) ────────────────────
 
 @api_view(["GET"])
-@require_hr
+@require_auth
 def employee_monthly_attendance(request: Request) -> Response:
-    emp = _emp_by_code_or_id(request)
+    token_emp_id = get_token_employee_id(request)
+    if token_emp_id:
+        emp = Employee.objects.filter(id=token_emp_id).select_related("department", "designation").first()
+    else:
+        from .auth import is_hr
+        if not is_hr(request):
+            return Response({"error": "HR access required"}, status=403)
+        emp = _emp_by_code_or_id(request)
     if not emp:
         return Response({"error": "Employee not found"}, status=404)
 
@@ -79,6 +87,12 @@ def employee_monthly_attendance(request: Request) -> Response:
         w = min(5, (r.date.day - 1) // 7 + 1)
         weeks.setdefault(w, []).append(_record_dict(r))
 
+    # Assigned shift for a representative day this month — this, and only
+    # this, is what drives late/half-shift detection for the employee.
+    from calendar import monthrange
+    rep_day = date_type(year, month, min(15, monthrange(year, month)[1]))
+    shift = _get_shift_for_date(emp, rep_day)
+
     return Response({
         "employee": {
             "id": emp.id,
@@ -89,6 +103,12 @@ def employee_monthly_attendance(request: Request) -> Response:
             "employmentType": emp.employment_type,
             "photoUrl": emp.photo_url,
         },
+        "assignedShift": {
+            "name": shift.name,
+            "startTime": shift.start_time.strftime("%H:%M") if shift.start_time else None,
+            "endTime": shift.end_time.strftime("%H:%M") if shift.end_time else None,
+            "gracePeriodMinutes": shift.grace_period_minutes,
+        } if shift else None,
         "month": month,
         "year": year,
         "attendanceMode": settings.attendance_mode,
@@ -562,10 +582,25 @@ def _idcard_dict(emp: Employee, settings: PayrollSettings) -> dict:
 
 
 @api_view(["GET"])
-@require_hr
+@require_auth
 def idcard_data(request: Request) -> Response:
-    """ID card payload for one employee (?employeeId= / ?code=) or many (?ids=1,2,3)."""
+    """
+    ID card payload for one employee (?employeeId= / ?code=) or many (?ids=1,2,3).
+    An employee token only ever gets their own card, regardless of query params —
+    bulk (?ids=) and lookup-by-other-employee are HR only.
+    """
     settings = PayrollSettings.get()
+    token_emp_id = get_token_employee_id(request)
+    if token_emp_id:
+        emp = Employee.objects.filter(id=token_emp_id).select_related("department", "designation").first()
+        if not emp:
+            return Response({"error": "Employee not found"}, status=404)
+        return Response(_idcard_dict(emp, settings))
+
+    from .auth import is_hr
+    if not is_hr(request):
+        return Response({"error": "HR access required"}, status=403)
+
     ids = request.query_params.get("ids")
     if ids:
         id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]

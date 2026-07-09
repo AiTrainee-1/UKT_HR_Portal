@@ -990,10 +990,6 @@ class PayrollSettings(models.Model):
         default="13:30", db_column="simple_half_shift_cutoff",
         help_text="Simple mode: first punch after this time = half shift."
     )
-    simple_grace_minutes = models.IntegerField(
-        default=15, db_column="simple_grace_minutes",
-        help_text="Simple mode fallback grace when employee has no shift assigned."
-    )
 
     # ── Production attendance windows (1.5-shift day) ─────────────────────
     prod_first_half_start = models.TimeField(default="08:30", db_column="prod_first_half_start")

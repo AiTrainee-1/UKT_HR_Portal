@@ -29,16 +29,10 @@ export default function Settings() {
     gstin: "", pan: "", registration: "",
   });
 
-  const [attendance, setAttendance] = useState({
-    workingDaysPerMonth: 26, gracePeriodMinutes: 15,
-    halfDayHours: 4.5, overtimeThresholdHours: 9,
-  });
-
   // ── Attendance mode + production windows — loaded from DB ─────────────
   const [attMode, setAttMode] = useState({
     attendanceMode: "strict" as "strict" | "simple",
     simpleHalfShiftCutoff: "13:30",
-    simpleGraceMinutes: 15,
     prodFirstHalfStart: "08:30",
     prodFirstHalfEnd: "12:30",
     prodSecondHalfStart: "13:30",
@@ -125,7 +119,6 @@ export default function Settings() {
       setAttMode({
         attendanceMode: (payrollSettingsData.attendanceMode as "strict" | "simple") || "strict",
         simpleHalfShiftCutoff: payrollSettingsData.simpleHalfShiftCutoff || "13:30",
-        simpleGraceMinutes: payrollSettingsData.simpleGraceMinutes ?? 15,
         prodFirstHalfStart: payrollSettingsData.prodFirstHalfStart || "08:30",
         prodFirstHalfEnd: payrollSettingsData.prodFirstHalfEnd || "12:30",
         prodSecondHalfStart: payrollSettingsData.prodSecondHalfStart || "13:30",
@@ -289,7 +282,6 @@ export default function Settings() {
       await updatePayrollSettings.mutateAsync({
         attendanceMode: attMode.attendanceMode,
         simpleHalfShiftCutoff: attMode.simpleHalfShiftCutoff,
-        simpleGraceMinutes: attMode.simpleGraceMinutes,
         prodFirstHalfStart: attMode.prodFirstHalfStart,
         prodFirstHalfEnd: attMode.prodFirstHalfEnd,
         prodSecondHalfStart: attMode.prodSecondHalfStart,
@@ -757,14 +749,12 @@ export default function Settings() {
                         onChange={e => setAttMode(a => ({ ...a, simpleHalfShiftCutoff: e.target.value }))}
                       />
                     </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Grace Period (minutes)</Label>
-                      <p className="text-[11px] text-gray-500 -mt-1">Used when the employee has no shift assigned</p>
-                      <Input
-                        type="number" min={0} max={120}
-                        value={attMode.simpleGraceMinutes}
-                        onChange={e => setAttMode(a => ({ ...a, simpleGraceMinutes: Number(e.target.value) }))}
-                      />
+                    <div className="space-y-1.5 sm:col-span-2">
+                      <p className="text-[11px] text-gray-500">
+                        Grace period and shift start/end times come solely from the shift assigned
+                        to each employee in <strong>Manage Shift</strong> — there is no Settings-level default.
+                        An employee with no shift assigned is never flagged late.
+                      </p>
                     </div>
                   </div>
                 )}
@@ -782,31 +772,6 @@ export default function Settings() {
                 (prodPfRate / prodEsiRate / prodEsiApplicableBelow) — the only
                 rates the payroll engine actually applies. */}
 
-            {/* ── Legacy general rules ── */}
-            <Card className="border-0 shadow-sm">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-bold flex items-center gap-2">
-                  <Clock size={15} className="text-gray-400" /> General Attendance Rules
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid sm:grid-cols-2 gap-4">
-                  {[
-                    { label: "Working Days / Month", key: "workingDaysPerMonth" },
-                    { label: "Grace Period (minutes)", key: "gracePeriodMinutes" },
-                    { label: "Half Day Threshold (hours)", key: "halfDayHours" },
-                    { label: "Overtime Threshold (hours)", key: "overtimeThresholdHours" },
-                  ].map(({ label, key }) => (
-                    <div key={key} className="space-y-1.5">
-                      <Label className="text-xs">{label}</Label>
-                      <Input type="number" value={(attendance as any)[key]}
-                        onChange={e => setAttendance(a => ({ ...a, [key]: Number(e.target.value) }))} />
-                    </div>
-                  ))}
-                </div>
-                <Button size="sm" onClick={() => save("Attendance")}>Save Attendance Settings</Button>
-              </CardContent>
-            </Card>
           </TabsContent>
 
           {/* Payroll */}

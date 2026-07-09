@@ -12,6 +12,7 @@ dist/
 
 # Python
 .venv/
+.venv*/
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -26,6 +27,8 @@ __pycache__/
 
 # Logs & OS
 *.log
+logs/
+backend/logs/
 .DS_Store
 Thumbs.db
 
@@ -37,6 +40,7 @@ secrets.txt
 # Django
 backend/db.sqlite3
 backend/staticfiles/
+backend/media/
 
 # Server runtime — environment-specific, not version-controlled
 nginx/

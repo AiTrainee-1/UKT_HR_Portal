@@ -1854,6 +1854,12 @@ export type EmployeeMonthlyAttendance = {
     employmentType?: string | null;
     photoUrl?: string | null;
   };
+  assignedShift?: {
+    name: string;
+    startTime: string | null;
+    endTime: string | null;
+    gracePeriodMinutes: number;
+  } | null;
   month: number;
   year: number;
   attendanceMode: string;

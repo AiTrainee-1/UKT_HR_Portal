@@ -89,7 +89,9 @@ def _effective_shift_times(assignment: EmployeeShiftAssignment):
     shift = assignment.shift
     start = assignment.custom_start_time or shift.start_time
     end = assignment.custom_end_time or shift.end_time
-    grace = shift.grace_period_minutes or 15
+    # `or` would turn an explicit 0-minute grace into a phantom default —
+    # the shift's configured value is authoritative, including zero.
+    grace = shift.grace_period_minutes if shift.grace_period_minutes is not None else 0
     sat_off = assignment.saturday_off
     return start, end, grace, sat_off
 
@@ -149,8 +151,8 @@ def _classify_day(
     logs_by_date: dict[date, list],          # AttendanceLog punch records (biometric/excel)
     attendance_by_date: dict[str, object],    # Attendance simple records (manual)
     approved_leaves: list,
-    shift_start: time,
-    grace_minutes: int,
+    shift_start: time | None,                 # None = no shift assigned → no late detection
+    grace_minutes: int | None,
 ) -> dict:
     """
     Classify a working day into: present | paid_leave | unpaid_leave | absent.
@@ -180,10 +182,14 @@ def _classify_day(
         else:
             last_out = None
 
-        total_grace_secs = grace_minutes * 60
-        shift_start_secs = shift_start.hour * 3600 + shift_start.minute * 60
-        first_in_secs = first_in.hour * 3600 + first_in.minute * 60
-        is_late = (first_in_secs - shift_start_secs) > total_grace_secs
+        if shift_start is not None and grace_minutes is not None:
+            total_grace_secs = grace_minutes * 60
+            shift_start_secs = shift_start.hour * 3600 + shift_start.minute * 60
+            first_in_secs = first_in.hour * 3600 + first_in.minute * 60
+            is_late = (first_in_secs - shift_start_secs) > total_grace_secs
+        else:
+            # No assigned shift → no basis for lateness
+            is_late = False
 
         return {
             "status": "present",
@@ -267,11 +273,14 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
     if not emp.salary_amount:
         return None
 
-    # 1. Get shift assignment for middle of month (representative date)
+    # 1. Get shift assignment for middle of month (representative date).
+    #    Shift start and grace come solely from the assigned shift — there is
+    #    no global default. Without an assignment, late detection is disabled
+    #    (grace_minutes=None) because there is no basis to judge lateness.
     mid_month = date(year, month, 15)
     assignment = _get_active_assignment(emp, mid_month)
-    shift_start = time(9, 0)  # default 9:00 AM
-    grace_minutes = 15
+    shift_start: time | None = None
+    grace_minutes: int | None = None
     saturday_off = False
 
     if assignment:
@@ -279,7 +288,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
         shift_name = assignment.shift.name
         shift_id = assignment.shift_id
     else:
-        shift_name = "Default"
+        shift_name = "No shift assigned"
         shift_id = None
 
     # 2. Get holidays for this month
@@ -531,7 +540,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
         "shift": {
             "id": shift_id,
             "name": shift_name,
-            "startTime": shift_start.strftime("%H:%M"),
+            "startTime": shift_start.strftime("%H:%M") if shift_start else None,
             "gracePeriodMinutes": grace_minutes,
             "saturdayOff": saturday_off,
         },
@@ -1505,7 +1514,6 @@ def _ps_response(ps) -> dict:
         # Attendance calculation mode
         "attendanceMode": ps.attendance_mode,
         "simpleHalfShiftCutoff": str(ps.simple_half_shift_cutoff)[:5],
-        "simpleGraceMinutes": ps.simple_grace_minutes,
         # Production attendance windows (1.5-shift day)
         "prodFirstHalfStart": str(ps.prod_first_half_start)[:5],
         "prodFirstHalfEnd": str(ps.prod_first_half_end)[:5],
@@ -1568,7 +1576,6 @@ def payroll_settings_view(request: Request) -> Response:
         "smtpFromName": ("smtp_from_name", str),
         "attendanceMode": ("attendance_mode", str),
         "simpleHalfShiftCutoff": ("simple_half_shift_cutoff", str),
-        "simpleGraceMinutes": ("simple_grace_minutes", int),
         "prodFirstHalfStart": ("prod_first_half_start", str),
         "prodFirstHalfEnd": ("prod_first_half_end", str),
         "prodSecondHalfStart": ("prod_second_half_start", str),

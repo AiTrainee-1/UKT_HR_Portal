@@ -27,14 +27,35 @@ from .models import (
     AttendanceLog, Employee, NightShiftRelaxation, NightShiftRule,
 )
 
-# Punches at/after this time count as night work on the same day
-NIGHT_START = time_type(20, 0)
+# Fallback only for employees with no shift assignment at all — everyone else
+# uses their own shift's end time (see _night_start_for below), never a fixed
+# clock time. A hardcoded global here would misclassify perfectly normal
+# checkouts as "worked a night shift" for anyone whose shift simply ends near
+# this hour.
+_DEFAULT_NIGHT_START = time_type(20, 0)
+# How far past an employee's OWN shift end counts as genuinely working into
+# the night (as opposed to a normal few-minutes-over checkout).
+NIGHT_WORK_BUFFER_MINUTES = 120
 # Punches at/before this time belong to the PREVIOUS night's session
 MORNING_CUTOFF = time_type(6, 0)
 
 
 def _t2m(t: time_type) -> int:
     return t.hour * 60 + t.minute
+
+
+def _night_start_for(emp: Employee, night_date: date_type) -> time_type:
+    """
+    The time after which this employee is considered to be working into the
+    night, derived from their OWN assigned shift end + a buffer — never a
+    fixed clock time shared across every employee.
+    """
+    from .shift_engine import _get_shift_for_date
+    shift = _get_shift_for_date(emp, night_date)
+    if shift and shift.end_time:
+        end_minutes = _t2m(shift.end_time) + NIGHT_WORK_BUFFER_MINUTES
+        return time_type((end_minutes // 60) % 24, end_minutes % 60)
+    return _DEFAULT_NIGHT_START
 
 
 def _night_minutes(t: time_type, crossed: bool) -> int:
@@ -84,6 +105,7 @@ def detect_night_for_employee(emp: Employee, night_date: date_type) -> NightShif
     the employee did not work into the night.
     """
     next_day = night_date + timedelta(days=1)
+    night_start = _night_start_for(emp, night_date)
 
     day_punches = list(
         AttendanceLog.objects.filter(employee=emp, date=night_date)
@@ -95,8 +117,8 @@ def detect_night_for_employee(emp: Employee, night_date: date_type) -> NightShif
         ).order_by("punch_time").values_list("punch_time", flat=True)
     )
 
-    worked_late_same_day = bool(day_punches) and day_punches[-1] >= NIGHT_START
-    crossed = bool(early_punches) and bool(day_punches) and day_punches[-1] >= NIGHT_START
+    worked_late_same_day = bool(day_punches) and day_punches[-1] >= night_start
+    crossed = bool(early_punches) and bool(day_punches) and day_punches[-1] >= night_start
 
     # Crossed midnight: checkout is the last early-morning punch on the next day.
     # (Requires evening presence on the night day so a lone early punch — e.g.

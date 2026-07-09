@@ -296,6 +296,7 @@ def employee_request_action(request: Request, pk: int) -> Response:
         return Response({"error": "Request not found"}, status=404)
 
     data = request.data
+    prev_status = er.status
     if "status" in data:
         er.status = data["status"]
     if "hrNotes" in data:
@@ -304,6 +305,12 @@ def employee_request_action(request: Request, pk: int) -> Response:
         er.handled_by = data["handledBy"]
     er.handled_at = datetime.utcnow()
     er.save()
+    if er.status != prev_status:
+        Notification.objects.create(
+            employee=er.employee,
+            type="employee_request",
+            message=f"Your request '{er.subject}' is now {er.status.replace('_', ' ')}.",
+        )
     return Response({"id": er.id, "status": er.status})
 
 
@@ -437,6 +444,7 @@ def employee_permission_detail(request: Request, pk: int) -> Response:
         return Response(status=204)
 
     data = request.data
+    prev_status = p.status
     if "status" in data:
         p.status = data["status"]
     if "hrComment" in data:
@@ -444,4 +452,10 @@ def employee_permission_detail(request: Request, pk: int) -> Response:
     if "approvedBy" in data:
         p.approved_by = data["approvedBy"]
     p.save()
+    if p.status != prev_status and p.status in ("approved", "rejected"):
+        Notification.objects.create(
+            employee=p.employee,
+            type="permission",
+            message=f"Your permission request for {p.date.isoformat()} was {p.status}.",
+        )
     return Response(_permission_json(p))

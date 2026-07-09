@@ -9,7 +9,7 @@ from .models import (
     Employee, Department,
     DepartmentManager, ManagerDepartmentAssignment, ManagerEmployeeAssignment,
     ResignationRequest, AttendanceOverrideRequest, AttendanceDayRecord,
-    CasualLeaveRequest,
+    CasualLeaveRequest, Notification,
 )
 
 
@@ -456,6 +456,11 @@ def manager_update_leave_status(request: Request, pk: int) -> Response:
     if comment := request.data.get("comment"):
         leave.hr_comment = comment
     leave.save()
+    Notification.objects.create(
+        employee=leave.employee,
+        type="leave",
+        message=f"Your leave request ({leave.start_date} to {leave.end_date}) was {status}.",
+    )
     return Response(leave_request_json(leave))
 
 
@@ -505,6 +510,11 @@ def manager_update_permission_status(request: Request, pk: int) -> Response:
     if comment := request.data.get("comment"):
         perm.hr_comment = comment
     perm.save()
+    Notification.objects.create(
+        employee=perm.employee,
+        type="permission",
+        message=f"Your permission request for {perm.date.isoformat()} was {status}.",
+    )
     return Response(_permission_json(perm))
 
 
@@ -572,6 +582,11 @@ def manager_update_attendance_status(request: Request, pk: int) -> Response:
     if comment := request.data.get("comment"):
         req.review_comment = comment
     req.save()
+    Notification.objects.create(
+        employee=req.employee,
+        type="attendance",
+        message=f"Your attendance correction request for {req.date} was {status_val}.",
+    )
     return Response(_override_request_dict(req))
 
 

@@ -2,6 +2,13 @@
 
 A complete, on-premise HR and ERP platform built for UKTextiles — a garments manufacturing company. The system covers attendance (biometric), leave, payroll, shift management, settlement, reporting, and a React Native employee mobile app.
 
+**Related documents in `docs/`:**
+- [`docs/MOBILE_APP_V2_SPEC.md`](docs/MOBILE_APP_V2_SPEC.md) — current, authoritative page-by-page mobile app spec (endpoints, DB tables, business rules, what's built vs. pending)
+- [`docs/DEPLOYMENT_GUIDE.md`](docs/DEPLOYMENT_GUIDE.md) — full step-by-step on-premise deployment runbook (Nginx + Waitress + Cloudflare Tunnel + NSSM services), including a postmortem of two real deployment bugs worth knowing about in advance
+- [`docs/MOBILE_INTEGRATION.md`](docs/MOBILE_INTEGRATION.md) — older, terser API reference (superseded by `MOBILE_APP_V2_SPEC.md` where they overlap)
+- [`docs/PROJECT_REVIEW.md`](docs/PROJECT_REVIEW.md) — full workflow review and known-issues list
+- [`PortDetails.md`](PortDetails.md), [`BIOMETRIC_INTEGRATION.md`](BIOMETRIC_INTEGRATION.md), [`EMPLOYEE_MOBILE_APP_PROMPT.md`](EMPLOYEE_MOBILE_APP_PROMPT.md) — earlier research/planning notes, kept for history
+
 ---
 
 ## Table of Contents
@@ -153,11 +160,34 @@ The system replaces manual HR work — attendance sheets, leave registers, salar
 - Salary slip generation and email delivery
 - Shift-level overrides (custom start/end times, Saturday-off flag per employee)
 
+#### Casual Leave (CL)
+- Paid leave, staff-only, one per calendar month, eligible after 6 months of service
+- Separate from Leave/Permission — its own request table and approval flow
+- Approve/reject from HR Portal or from a Department Head's mobile Approvals tab
+- Approving/rejecting automatically writes the attendance record for that date (present + paid, or unpaid leave) — payroll picks it up with no manual step
+
+#### Night Shift Relaxation
+- Employees who work late into the night are excused from being marked Late the next morning, within a configurable grace window
+- Detected automatically from biometric punches (last night's checkout time), matched against rule-based thresholds (e.g. worked until 10:30 PM → allowed in until 10:00 AM)
+- The threshold for "worked into the night" is derived from each employee's own assigned shift end time, never a fixed clock time — so a normal end-of-shift checkout is never mistaken for night work
+
 #### Shift Management
 - Shift templates (start time, end time, grace period, department, gender rule)
 - Assign shifts to departments (bulk) or individual employees
 - Per-employee override: custom start/end times and Saturday-off flag
 - Production shift auto-sync
+- Production attendance uses a segment-based engine (configurable punch windows + per-segment shift value) — Sunday is a normal working day for production, unlike staff
+
+#### Digital ID Card
+- Template-driven ID card generator (colors, fonts, corner style, logo position — configurable in Settings)
+- Separate staff (vertical) and production (horizontal) card layouts, each with a QR-code back face
+- QR code encodes a public verification URL (`/verify-employee/<code>`) — no login required to check an ID card's authenticity
+- Bulk generation for multiple employees at once
+
+#### Promotions & Increments
+- Record department/designation changes with an effective date and notes
+- Track salary increments against each employee's initial salary baseline
+- Increment dashboard with summary stats
 
 #### Settlement
 - Advance loans with repayment schedules
@@ -374,7 +404,7 @@ All endpoints are prefixed with `/api/`. JWT token must be in the `Authorization
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/auth/hr-login` | HR admin login → returns `{ token }` |
-| POST | `/auth/employee-login` | Employee login by code + password → returns `{ token, employee }` |
+| POST | `/auth/employee-login` | Employee login by `identifier` (code, phone, or email) + password → returns `{ token, role, employeeId, name }` |
 | GET | `/auth/me` | Current user info |
 | POST | `/auth/set-password` | Set/change employee password |
 
@@ -583,31 +613,38 @@ HR Portal
             └─ DepartmentManager record created in DB
                   │
                   ├─ Mobile App: isManager = true
-                  │    └─ 5th tab "Approvals" appears
+                  │    └─ "Approvals" tab appears
                   │    └─ Can approve/reject team's requests
                   │
                   └─ GET /manager/pending-requests
-                       └─ Returns all pending Leave + Permission
-                          requests from assigned departments/employees
+                       └─ Returns all pending Leave + Permission + Casual
+                          Leave + Attendance Correction + Resignation
+                          requests from assigned departments/employees,
+                          merged in one call
 ```
 
 ### Approval flow
 
-1. **Employee submits** a Leave or Permission request from mobile app
+1. **Employee submits** a Leave, Permission, Casual Leave, Attendance Correction, or Resignation request from the mobile app
 2. **Manager opens** the Approvals tab in their mobile app
 3. **Manager taps** Approve / Reject with optional comment
-4. **Status updates** immediately via `PATCH /manager/leave-requests/{id}/status`
-5. **HR can still see** all requests in the HR Portal Requests page
+4. **Status updates** immediately via the matching `PATCH /manager/<type>/{id}/status` endpoint — approving Casual Leave or an Attendance Correction also writes straight to that employee's attendance record, so payroll picks it up automatically
+5. **HR can still see and act on** every request type from the HR Portal web pages — the mobile Approvals tab is the Department Head's interface, HR doesn't need the mobile app
 
 ### Permissions in HR Portal
+
+Each of the five approval types is gated independently per manager:
 
 | Setting | Effect |
 |---------|--------|
 | Can Approve Leaves ✓ | Manager can approve/reject leave requests |
 | Can Approve Permissions ✓ | Manager can approve/reject permission requests |
-| Active | Whether manager can log in with manager access |
+| Can Approve Resignations ✓ | Manager can approve/reject resignations (first-stage; HR does final approval) |
+| Can Approve Attendance ✓ | Manager can approve/reject HR-submitted attendance corrections |
+| Can Approve Casual Leave ✓ | Manager can approve/reject Casual Leave requests |
+| Active | Whether the manager can log in with manager access at all |
 
-> **Important:** Both permissions default to **enabled** when creating a user. If you see a 403 on PATCH requests from mobile, open User Management → Details → verify both permission buttons are green.
+> **Important:** All five permissions default to **enabled** when creating a user. If you see a 403 with a `code` like `APPROVE_LEAVES_DISABLED` on a PATCH request from mobile, open User Management → Details → verify the matching permission toggle is green.
 
 ### Cross-department assignments
 
@@ -619,12 +656,14 @@ A manager assigned to "Cutting" department can also have individual employees fr
 
 The React Native app communicates with the same Django backend using employee JWT tokens.
 
+**→ For the current, fully detailed page-by-page spec (every screen, exact endpoint, exact DB table, business rules, and what's still pending), see [`docs/MOBILE_APP_V2_SPEC.md`](docs/MOBILE_APP_V2_SPEC.md).** The summary below is kept short and may lag behind that doc as the mobile app evolves — treat the spec as the source of truth.
+
 ### Authentication
 
 ```
 POST /api/auth/employee-login
-Body: { employeeCode: "30020", password: "••••" }
-Returns: { token: "eyJ...", employee: { id, name, code, ... } }
+Body: { identifier: "30020", password: "••••" }   // identifier = employee code, phone, or email
+Returns: { token: "eyJ...", role: "employee", employeeId, name }
 ```
 
 Store the token in SecureStore. Send it as `Authorization: Bearer <token>` on every request.
@@ -693,19 +732,15 @@ Body: { status: "approved" | "rejected", comment: "optional" }
 
 ### Bottom navigation
 
-| Tab | Visible to | Endpoint used |
-|-----|-----------|---------------|
-| Home | All | `/dashboard/employee-summary` |
-| Attendance | All | `/attendance/employee/<id>` |
-| Leave | isManager only | `/leave-requests`, `/permissions` |
-| Approvals | isManager only | `/manager/pending-requests` |
-| Profile | All | `/employees/<id>` |
+Current tabs: **Home · Leave · Alerts · Profile · Approval** (the Approval tab only appears when `GET /manager/me` succeeds for the logged-in employee — see `docs/MOBILE_APP_V2_SPEC.md` for the full page-by-page breakdown, including the larger side-drawer navigation: Attendance, Salary Slip, Permission, My Shift, ID Card, Holidays, Chat, Resignation, etc.)
 
 ---
 
 ## 13. Deployment (On-Premise)
 
-The system is designed for on-premise deployment on the company's own PC on the same LAN as the biometric device.
+The system is designed for on-premise deployment on the company's own PC, on the same LAN as the biometric device, with Nginx + Cloudflare Tunnel exposing it publicly under a real domain.
+
+**→ Full step-by-step deployment runbook: [`docs/DEPLOYMENT_GUIDE.md`](docs/DEPLOYMENT_GUIDE.md)** — covers Django (via `waitress`, not the dev `runserver`), Nginx reverse proxy config, Cloudflare Tunnel setup, all three services wired up with NSSM for auto-start on boot, the mobile app handoff, and a troubleshooting cheat sheet built from two real deployment bugs (a non-portable `.venv` and an NSSM/`waitress-serve.exe` gotcha) — read that doc before deploying, it will save you from re-hitting both.
 
 ### Why on-premise
 
@@ -714,19 +749,17 @@ The system is designed for on-premise deployment on the company's own PC on the 
 - Data stays within the company network
 - Zero cloud cost
 
-### Auto-start Django as a Windows service
+### Access matrix (once deployed per the guide above)
 
-Install [NSSM](https://nssm.cc/) (Non-Sucking Service Manager), then run as Administrator:
+| Who | URL | Network |
+|-----|-----|---------|
+| HR Portal | `http://192.168.x.x` (LAN) or the public domain | Office LAN / Internet |
+| Biometric device | `http://192.168.x.x:4370` | Office LAN only |
+| Employee mobile app | `https://<your-domain>/api` | Internet (Cloudflare Tunnel) |
 
-```powershell
-nssm install UKTextilesHR python
-nssm set UKTextilesHR AppDirectory "D:\Projects\UK-textile\backend"
-nssm set UKTextilesHR AppParameters "manage.py runserver 0.0.0.0:8080"
-nssm set UKTextilesHR AppEnvironmentExtra DJANGO_SETTINGS_MODULE=config.settings
-nssm start UKTextilesHR
-```
+All three point to the same Django server and the same PostgreSQL database — nothing is duplicated or mirrored.
 
-Django now starts automatically when Windows boots — no manual `runserver` needed.
+**Cost:** Only the domain name. Cloudflare account, Tunnel, and TLS are free.
 
 ### Auto power on/off (optional)
 
@@ -735,47 +768,7 @@ Django now starts automatically when Windows boots — no manual `runserver` nee
 | Auto power on at 8 AM | BIOS → Power Management → RTC Wake / Scheduled Power On |
 | Auto shutdown at 10 PM | Windows Task Scheduler → `shutdown /s /t 0` at 22:00 |
 
-### Mobile app access from employee phones (Cloudflare Tunnel)
-
-Employees on mobile data (4G/5G) can't reach a local IP directly. Use a free Cloudflare Tunnel:
-
-```bash
-# 1. Download cloudflared from cloudflare.com/products/tunnel
-
-# 2. Authenticate
-cloudflared tunnel login
-
-# 3. Create tunnel
-cloudflared tunnel create uktextiles
-
-# 4. Route your domain
-cloudflared tunnel route dns uktextiles api.uktextiles.com
-
-# 5. Install as Windows service (auto-starts with PC)
-cloudflared service install
-```
-
-**Access matrix:**
-
-| Who | URL | Network |
-|-----|-----|---------|
-| HR Portal | `http://192.168.1.xx:5173` | Office LAN |
-| Biometric device | `http://192.168.1.xx:8080` | Office LAN |
-| Employee mobile app | `https://api.uktextiles.com` | Internet (Cloudflare Tunnel) |
-
-All three point to the same Django server and same PostgreSQL database.
-
-**Cost:** Only a domain name (~₹800/year). Cloudflare account and tunnel are free.
-
-### Frontend production build
-
-```bash
-cd frontend
-npm run build
-# Serve the dist/ folder with nginx or any static file server
-```
-
-Point `VITE_API_URL` in `.env` to your Django URL (either LAN IP or tunnel URL).
+Accepted tradeoff: the public site is only reachable while the PC is powered on — fine for a single-location factory used only during working hours.
 
 ---
 

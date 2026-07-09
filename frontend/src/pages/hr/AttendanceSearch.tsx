@@ -230,38 +230,63 @@ export default function AttendanceSearchSection({
         ) : (
           <div className="space-y-4 border-t pt-4">
             {/* Employee header + totals */}
-            <div className="flex items-center gap-4 flex-wrap p-3 bg-gray-50 rounded-xl">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-full bg-gray-200 flex items-center justify-center shrink-0">
-                  {data.employee.photoUrl
-                    ? <img src={data.employee.photoUrl} className="w-9 h-9 rounded-full object-cover" alt="" />
-                    : <User size={15} className="text-gray-500" />}
-                </div>
-                <div>
-                  <p className="font-bold text-sm">{data.employee.name}</p>
-                  <p className="text-[11px] text-gray-400 font-mono">
-                    {data.employee.code}
-                    {data.employee.department ? ` · ${data.employee.department}` : ""}
-                    {data.employee.employmentType ? ` · ${data.employee.employmentType}` : ""}
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 ml-auto flex-wrap">
-                {[
-                  { label: "Working Days", value: data.summary.workingDays, cls: "text-gray-700" },
-                  { label: "Present", value: data.summary.present, cls: "text-green-700" },
-                  { label: "Half Shift", value: data.summary.halfShift, cls: "text-amber-700" },
-                  { label: "Absent", value: data.summary.absent, cls: "text-red-600" },
-                  { label: "Late", value: data.summary.late, cls: "text-orange-600" },
-                  { label: "Leave", value: data.summary.onLeave, cls: "text-purple-600" },
-                  { label: "Effective", value: data.summary.effectiveDays, cls: "text-indigo-700" },
-                ].map(s => (
-                  <div key={s.label} className="text-center bg-white border rounded-lg px-3 py-1.5 min-w-[70px]">
-                    <p className="text-[10px] text-gray-400 uppercase tracking-wide">{s.label}</p>
-                    <p className={`text-sm font-black ${s.cls}`}>{s.value}</p>
+            <div className="p-3 bg-gray-50 rounded-xl space-y-3">
+              <div className="flex items-center gap-4 flex-wrap">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-full bg-gray-200 flex items-center justify-center shrink-0">
+                    {data.employee.photoUrl
+                      ? <img src={data.employee.photoUrl} className="w-9 h-9 rounded-full object-cover" alt="" />
+                      : <User size={15} className="text-gray-500" />}
                   </div>
-                ))}
+                  <div>
+                    <p className="font-black text-base leading-tight">{data.employee.name}</p>
+                    <p className="text-[11px] text-gray-400 font-mono">
+                      {data.employee.code}
+                      {data.employee.department ? ` · ${data.employee.department}` : ""}
+                      {data.employee.employmentType ? ` · ${data.employee.employmentType}` : ""}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 ml-auto flex-wrap">
+                  {[
+                    { label: "Working Days", value: data.summary.workingDays, cls: "text-gray-700" },
+                    { label: "Present", value: data.summary.present, cls: "text-green-700" },
+                    { label: "Half Shift", value: data.summary.halfShift, cls: "text-amber-700" },
+                    { label: "Absent", value: data.summary.absent, cls: "text-red-600" },
+                    { label: "Late", value: data.summary.late, cls: "text-orange-600" },
+                    { label: "Leave", value: data.summary.onLeave, cls: "text-purple-600" },
+                    { label: "Effective", value: data.summary.effectiveDays, cls: "text-indigo-700" },
+                  ].map(s => (
+                    <div key={s.label} className="text-center bg-white border rounded-lg px-3 py-1.5 min-w-[70px]">
+                      <p className="text-[10px] text-gray-400 uppercase tracking-wide">{s.label}</p>
+                      <p className={`text-sm font-black ${s.cls}`}>{s.value}</p>
+                    </div>
+                  ))}
+                </div>
               </div>
+
+              {/* Assigned shift + grace period — the sole source of late/half-shift detection */}
+              {data.assignedShift ? (
+                <div className="flex items-center gap-2 flex-wrap text-xs bg-white border rounded-lg px-3 py-2">
+                  <ShieldCheck size={13} className="text-blue-500 shrink-0" />
+                  <span className="text-gray-500">Assigned Shift:</span>
+                  <strong className="text-gray-800">{data.assignedShift.name}</strong>
+                  {data.assignedShift.startTime && data.assignedShift.endTime && (
+                    <span className="font-mono text-gray-600">
+                      {data.assignedShift.startTime}–{data.assignedShift.endTime}
+                    </span>
+                  )}
+                  <span className="text-gray-300">|</span>
+                  <span className="text-gray-500">Grace Period:</span>
+                  <strong className="text-gray-800">{data.assignedShift.gracePeriodMinutes} min</strong>
+                  <span className="text-gray-400">— all late/half-shift detection below uses only this shift's settings.</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-xs bg-amber-50 border border-amber-200 text-amber-700 rounded-lg px-3 py-2">
+                  <ShieldCheck size={13} className="shrink-0" />
+                  No shift assigned — late detection cannot run for this employee until a shift is assigned in Manage Shift.
+                </div>
+              )}
             </div>
 
             <p className="text-[11px] text-muted-foreground -mt-1">

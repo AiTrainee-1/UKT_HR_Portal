@@ -13,7 +13,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from .auth import require_auth, require_hr
+from .auth import require_auth, require_hr, get_token_employee_id
 from .jwt_utils import sign_token
 from .audit_utils import log_action
 from .models import (
@@ -741,6 +741,11 @@ def _notif_with_name(record: Notification) -> dict:
 def notifications(request: Request) -> Response:
     if request.method == "GET":
         qs = Notification.objects.select_related("employee")
+        # An employee token only ever sees their own notifications — HR sees
+        # everything (used for admin/debug, not a normal HR-portal screen).
+        employee_id = get_token_employee_id(request)
+        if employee_id:
+            qs = qs.filter(employee_id=employee_id)
         if request.query_params.get("unreadOnly") in ("true", "1", True):
             qs = qs.filter(is_read=False)
         rows = [_notif_with_name(r) for r in qs]

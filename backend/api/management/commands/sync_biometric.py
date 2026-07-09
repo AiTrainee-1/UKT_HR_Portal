@@ -55,6 +55,7 @@ class Command(BaseCommand):
         total_created = 0
         total_skipped = 0
         not_found: set[str] = set()
+        suspicious_days: list[dict] = []
         failures: list[str] = []
 
         for t in targets:
@@ -77,6 +78,7 @@ class Command(BaseCommand):
             total_created += result["created"]
             total_skipped += result["skipped"]
             not_found |= result["notFound"]
+            suspicious_days.extend(result.get("suspiciousDays", []))
             self.stdout.write(f"  Device returned {result['total']} total records.")
             self.stdout.write(self.style.SUCCESS(f"  New records created : {result['created']}"))
             self.stdout.write(f"  Skipped (duplicate or out of range) : {result['skipped']}")
@@ -94,6 +96,23 @@ class Command(BaseCommand):
                     + "\n  employee_code in the HR Portal (e.g. EMP042)."
                 )
             )
+
+        if suspicious_days:
+            from api.models import Employee
+            emp_ids = {d["employeeId"] for d in suspicious_days}
+            names = {
+                e.id: f"{e.first_name} {e.last_name}".strip()
+                for e in Employee.objects.filter(id__in=emp_ids)
+            }
+            self.stdout.write(
+                self.style.WARNING(
+                    f"\n  {len(suspicious_days)} suspicious day(s) with 6+ punches "
+                    "(likely two people sharing one Device User ID — check enrollment on the device):"
+                )
+            )
+            for d in sorted(suspicious_days, key=lambda x: x["date"]):
+                name = names.get(d["employeeId"], f"id={d['employeeId']}")
+                self.stdout.write(f"    - {d['date']}: {name} — {d['punches']} punches")
 
         if failures and total_created == 0 and len(failures) == len(targets):
             raise CommandError("All devices failed: " + "; ".join(failures))

@@ -28,7 +28,7 @@ production:     1.5-shift day (works in both modes):
 """
 
 import calendar
-from datetime import date as date_type, datetime, time as time_type, timedelta
+from datetime import date as date_type, datetime, timedelta
 from decimal import Decimal
 
 from django.db.models import Q
@@ -93,20 +93,18 @@ def _compute_staff_simple(emp, d, punch_times, settings, shift):
             "first_punch": first, "last_punch": last,
         }
 
-    # Late: morning punch beyond shift start + grace
+    # Late: morning punch beyond shift start + grace — both values come solely
+    # from the employee's assigned ShiftTemplate (Shift Management). There is
+    # no Settings-level default: without an assigned shift there is no basis
+    # for late detection, so the day is simply never flagged late.
     is_late = False
     early_leave = False
     if shift:
-        grace = (shift.grace_period_minutes or settings.simple_grace_minutes or 0) * 60
+        grace = (shift.grace_period_minutes if shift.grace_period_minutes is not None else 0) * 60
         if _t2s(first) > _t2s(shift.start_time) + grace:
             is_late = True
         if last and _t2s(last) < _t2s(shift.end_time):
             early_leave = True
-    else:
-        # No shift assigned — fall back to global grace over a 09:00 baseline
-        grace = (settings.simple_grace_minutes or 0) * 60
-        if _t2s(first) > _t2s(time_type(9, 0)) + grace:
-            is_late = True
 
     # Full shift needs a distinct evening punch; single punch = half day
     if last is None:

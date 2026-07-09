@@ -61,6 +61,7 @@ def employee_json(emp, department_name: str | None = None) -> dict:
         "idProof": emp.id_proof,
         "pfNumber": emp.pf_number,
         "esiNumber": emp.esi_number,
+        "uanNumber": emp.uan_number,
         "address": emp.address,
         "joinDate": emp.join_date,
         "fatherName": emp.father_name,

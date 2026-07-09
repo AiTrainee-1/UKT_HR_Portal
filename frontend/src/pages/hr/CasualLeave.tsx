@@ -34,8 +34,10 @@ export default function CasualLeave() {
   const [year, setYear] = useState(now.getFullYear());
   const [tab, setTab] = useState("pending");
 
-  // "Apply on behalf" dialog
-  const [applyFor, setApplyFor] = useState<{ employeeId: number; name: string } | null>(null);
+  // "Apply on behalf" dialog — carries the eligibility reason so HR sees
+  // immediately why an employee can't get another CL, instead of finding out
+  // only after clicking Submit.
+  const [applyFor, setApplyFor] = useState<{ employeeId: number; name: string; eligible: boolean; reason?: string | null } | null>(null);
   const [applyDate, setApplyDate] = useState(now.toISOString().slice(0, 10));
   const [applyReason, setApplyReason] = useState("");
 
@@ -50,6 +52,7 @@ export default function CasualLeave() {
   const approved = all.filter(l => l.status === "approved");
   const rejected = all.filter(l => l.status === "rejected");
   const eligibleCount = (eligibility?.employees ?? []).filter(e => e.eligible).length;
+  const usedThisMonthCount = (eligibility?.employees ?? []).filter(e => e.usedThisMonth).length;
 
   const decide = async (l: CasualLeaveItem, status: "approved" | "rejected") => {
     try {
@@ -77,7 +80,8 @@ export default function CasualLeave() {
       setApplyFor(null);
       setApplyReason("");
     } catch (err: any) {
-      toast({ title: err?.message ?? "Failed to create request", variant: "destructive" });
+      const reason = err?.data?.error ?? "Failed to create request";
+      toast({ title: `Not eligible for ${applyFor.name}`, description: reason, variant: "destructive" });
     }
   };
 
@@ -167,12 +171,13 @@ export default function CasualLeave() {
         </div>
 
         {/* Stat cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
           {[
             { label: "Pending Requests", value: pending.length, icon: Hourglass, cls: "text-amber-700", iconCls: "bg-amber-500" },
             { label: "Approved", value: approved.length, icon: CheckCircle2, cls: "text-green-700", iconCls: "bg-green-600" },
             { label: "Rejected", value: rejected.length, icon: XCircle, cls: "text-red-600", iconCls: "bg-red-500" },
             { label: "Eligible Employees", value: eligLoading ? "…" : eligibleCount, icon: Users, cls: "text-blue-700", iconCls: "bg-blue-600" },
+            { label: "Used This Month", value: eligLoading ? "…" : usedThisMonthCount, icon: CalendarHeart, cls: "text-pink-700", iconCls: "bg-pink-500" },
           ].map(({ label, value, icon: Icon, cls, iconCls }) => (
             <Card key={label} className="border">
               <CardContent className="p-5">
@@ -286,14 +291,15 @@ export default function CasualLeave() {
                               )}
                             </td>
                             <td className="px-4 py-2.5 text-right">
-                              {e.eligible && (
-                                <Button
-                                  size="sm" variant="outline" className="h-7 gap-1 text-xs"
-                                  onClick={() => setApplyFor({ employeeId: e.employeeId, name: e.employeeName })}
-                                >
-                                  <Plus size={11} /> Apply CL
-                                </Button>
-                              )}
+                              <Button
+                                size="sm" variant="outline" className="h-7 gap-1 text-xs"
+                                onClick={() => setApplyFor({
+                                  employeeId: e.employeeId, name: e.employeeName,
+                                  eligible: e.eligible, reason: e.reason,
+                                })}
+                              >
+                                <Plus size={11} /> Apply CL
+                              </Button>
                             </td>
                           </tr>
                         ))}
@@ -314,17 +320,31 @@ export default function CasualLeave() {
             <DialogTitle>Apply Casual Leave — {applyFor?.name}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 pt-1">
+            {applyFor && !applyFor.eligible && (
+              <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
+                <XCircle size={14} className="shrink-0 mt-0.5" />
+                <span>
+                  <strong>Not eligible for Casual Leave.</strong> {applyFor.reason ?? "This employee does not currently qualify."}
+                </span>
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label className="text-xs">CL Date</Label>
-              <Input type="date" value={applyDate} onChange={e => setApplyDate(e.target.value)} />
+              <Input type="date" value={applyDate} onChange={e => setApplyDate(e.target.value)} disabled={!applyFor?.eligible} />
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs">Reason (optional)</Label>
-              <Input placeholder="e.g. Family function" value={applyReason} onChange={e => setApplyReason(e.target.value)} />
+              <Input
+                placeholder="e.g. Family function" value={applyReason}
+                onChange={e => setApplyReason(e.target.value)} disabled={!applyFor?.eligible}
+              />
             </div>
             <div className="flex gap-3">
               <Button variant="outline" className="flex-1" onClick={() => setApplyFor(null)}>Cancel</Button>
-              <Button className="flex-1" onClick={submitOnBehalf} disabled={createMutation.isPending}>
+              <Button
+                className="flex-1" onClick={submitOnBehalf}
+                disabled={createMutation.isPending || !applyFor?.eligible}
+              >
                 {createMutation.isPending ? "Submitting…" : "Submit Request"}
               </Button>
             </div>
