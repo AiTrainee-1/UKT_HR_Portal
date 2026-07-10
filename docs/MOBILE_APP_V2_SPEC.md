@@ -332,9 +332,13 @@ Add `shiftApprovals: []` to this same response once §4.2 is built (small additi
 
 ---
 
-## 5. Chat Module — 🔧 entirely NEW major feature
+## 5. Chat Module — ✅ BUILT
 
-Nothing chat-related exists in the backend today (confirmed: no models, no endpoints, no migrations reference messaging). This needs full new models, endpoints, and (for "instant message updates") a WebSocket or polling layer. Given "a simple UI is enough... no need for advanced WhatsApp-style features," recommend polling over building a full WebSocket stack unless you already have Django Channels in your deployment plan — polling every 3-5s on an open chat screen is indistinguishable from "real-time" at this company's scale and needs zero new infrastructure.
+Backend is live: models in `models.py` (`ChatChannel`, `ChatMessage`, `ChatReaction`), endpoints in the new `chat_views.py`, migration `0028_chatchannel_chatmessage_chatreaction_and_more` applied. No WebSockets were needed — polling only, per the design below.
+
+Verified end-to-end via a Django-shell smoke test: channel listing, posting to the company channel, replying, reacting/un-reacting, and — most importantly — a **cross-department post attempt correctly returned 403**, and each employee's `GET /chat/channels` only ever lists their own department's channel, never another one's. The access-control rule is doing its job.
+
+**One field-name note for mobile integration:** the actual shipped endpoint accepts `reply_to_id` (snake_case) in the POST body, not `replyToId` as originally sketched below — the view accepts either key (`data.get("reply_to_id") or data.get("replyToId")`), so either casing works, but prefer `reply_to_id` to match what was actually tested.
 
 ### New models
 ```python
@@ -371,7 +375,7 @@ POST /chat/channels/<id>/messages            body: { text, replyToId? }
 POST /chat/messages/<id>/reactions           body: { emoji }
 DELETE /chat/messages/<id>/reactions         body: { emoji }   (toggle off)
 ```
-**Access control (important, since this is company-wide messaging):** `company` channel → any active employee may post/read. `department` channel → server must verify `employee.department_id == channel.department_id` on every read and write; reject with 403 otherwise. This is the one place in this whole feature where a bug would mean employees reading another department's private conversation, so it deserves its own explicit test.
+**Access control (important, since this is company-wide messaging):** `company` channel → any active employee may post/read. `department` channel → server verifies `employee.department_id == channel.department_id` on every read and write; rejects with 403 otherwise. ✅ Confirmed working via direct test — see the note above.
 
 ### Mobile UI notes
 - Two top tabs: Company / Department (hide the Department tab entirely if the employee has no `department_id` set).
@@ -395,9 +399,9 @@ Everything 🔧-tagged above, in one place, roughly in priority order (fixes/sma
 7. **`GET /salary-slips/<pk>/pdf`** — new endpoint, reuse existing HTML renderer + reportlab pattern already used for resignations (§3.5). **Not started.**
 8. **`GET /my-shift-summary`** — new consolidated endpoint (§3.7), or skip this and do 3 client-side calls using the fixes from #4 (viable today). **Not started.**
 9. **Shift Approval workflow** — new model fields + 2 endpoints (§4.2). **Decision confirmed: Department Head countersigns**, following the exact `can_approve_*` flag pattern already used for leave/permission/resignation/CL — add `DepartmentManager.can_approve_shifts` and route through `manager_views.py` the same way `manager_update_casual_leave_status` does. **Not started.**
-10. **Chat module** — new models + 5 endpoints (§5) — the largest single item, build last. **Not started.**
+10. ✅ **DONE — Chat module** — models + 3 endpoints built in `chat_views.py`, migration applied, access control verified end-to-end (§5).
 
-Items 1-4 are done. None of items 5-8 require a new Django app or architectural change — they're additive fields/endpoints/auth-decorator tweaks on existing views, following the same patterns items 1-4 just used. Item 9 is unblocked (decision made). Item 10 is the only genuinely new subsystem.
+Items 1-4 and 10 are done. None of items 5-8 require a new Django app or architectural change — they're additive fields/endpoints/auth-decorator tweaks on existing views, following the same patterns items 1-4 just used. Item 9 is unblocked (decision made) but not yet built.
 
 ---
 
@@ -438,8 +442,10 @@ Items 1-4 are done. None of items 5-8 require a new Django app or architectural 
 | Approval (mgr) | PATCH | `/manager/attendance-requests/<pk>/status` | |
 | Approval (mgr) | PATCH | `/manager/casual-leaves/<pk>/status` | |
 | Approval (mgr) | PATCH | `/manager/resignations/<pk>/action` | |
-| Shift Approval | — | `/shift-assignments/pending-approval`, `/shift-assignments/<pk>/approve` 🔧 | new |
-| Chat | — | `/chat/channels`, `/chat/channels/<id>/messages`, `/chat/messages/<id>/reactions` 🔧 | new |
+| Shift Approval | — | `/shift-assignments/pending-approval`, `/shift-assignments/<pk>/approve` 🔧 | new, not started |
+| Chat | GET | `/chat/channels` ✅ | built |
+| Chat | GET/POST | `/chat/channels/<id>/messages` ✅ | built, use `reply_to_id` |
+| Chat | POST/DELETE | `/chat/messages/<id>/reactions` ✅ | built |
 
 ---
 

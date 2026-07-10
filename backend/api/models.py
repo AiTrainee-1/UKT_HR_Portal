@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Q
 
 
 # ──────────────────────────────────────────────
@@ -1455,3 +1456,70 @@ class ProductionShiftSegment(models.Model):
     class Meta:
         db_table = "production_shift_segments"
         ordering = ["order", "id"]
+
+
+# ──────────────────────────────────────────────
+#  Staff Chat (mobile app) — Company + Department channels
+# ──────────────────────────────────────────────
+
+class ChatChannel(models.Model):
+    """
+    One row for the single company-wide channel (department=None), plus one
+    row per Department for department-scoped channels. Rows are created
+    lazily on first access rather than pre-seeded for every department.
+    """
+    CHANNEL_COMPANY = "company"
+    CHANNEL_DEPARTMENT = "department"
+    CHANNEL_TYPES = [(CHANNEL_COMPANY, "Company"), (CHANNEL_DEPARTMENT, "Department")]
+
+    channel_type = models.TextField(choices=CHANNEL_TYPES, db_column="channel_type")
+    department = models.ForeignKey(
+        Department, on_delete=models.CASCADE, null=True, blank=True,
+        db_column="department_id", related_name="chat_channels",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "chat_channels"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["department"], condition=Q(channel_type="department"),
+                name="unique_department_chat_channel",
+            ),
+        ]
+
+    @classmethod
+    def get_company_channel(cls) -> "ChatChannel":
+        obj, _ = cls.objects.get_or_create(channel_type=cls.CHANNEL_COMPANY, department=None)
+        return obj
+
+    @classmethod
+    def get_department_channel(cls, department: "Department") -> "ChatChannel":
+        obj, _ = cls.objects.get_or_create(channel_type=cls.CHANNEL_DEPARTMENT, department=department)
+        return obj
+
+
+class ChatMessage(models.Model):
+    channel = models.ForeignKey(ChatChannel, on_delete=models.CASCADE, db_column="channel_id", related_name="messages")
+    sender = models.ForeignKey(Employee, on_delete=models.CASCADE, db_column="sender_id", related_name="chat_messages")
+    text = models.TextField()
+    reply_to = models.ForeignKey(
+        "self", on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="reply_to_id", related_name="replies",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "chat_messages"
+        ordering = ["created_at"]
+
+
+class ChatReaction(models.Model):
+    message = models.ForeignKey(ChatMessage, on_delete=models.CASCADE, db_column="message_id", related_name="reactions")
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="chat_reactions")
+    emoji = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "chat_reactions"
+        unique_together = [["message", "employee", "emoji"]]

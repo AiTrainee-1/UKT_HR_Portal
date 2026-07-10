@@ -79,6 +79,9 @@ from .payroll_views import (
     payroll_list, generate_payroll, payroll_detail, payroll_breakdown,
     seed_attendance, payroll_settings_view,
 )
+from .chat_views import (
+    chat_channels, chat_messages, chat_message_reactions,
+)
 
 urlpatterns = [
     # ── Health ──────────────────────────────────────────────────────────────
@@ -236,6 +239,11 @@ urlpatterns = [
     path("payroll/generate", generate_payroll),
     path("payroll/<int:pk>/breakdown", payroll_breakdown),
     path("payroll/<int:pk>", payroll_detail),
+
+    # ── Chat (mobile) ────────────────────────────────────────────────────────
+    path("chat/channels", chat_channels),
+    path("chat/channels/<int:pk>/messages", chat_messages),
+    path("chat/messages/<int:pk>/reactions", chat_message_reactions),
 
     # ── User Management ─────────────────────────────────────────────────────
     path("roles", roles),
