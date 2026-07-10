@@ -1003,21 +1003,24 @@ export type ShiftLogEntry = {
   employeeName: string;
   department?: string | null;
   designation?: string | null;
-  employmentType: string;
   date: string;
-  shiftName?: string | null;
+  assignedShift: { name: string; startTime: string | null; endTime: string | null; gracePeriodMinutes: number } | null;
   punch1?: string | null;   // morning IN
   punch2?: string | null;   // lunch OUT
   punch3?: string | null;   // lunch IN
   punch4?: string | null;   // evening OUT
   totalPunches: number;
-  firstHalf: boolean;
-  secondHalf: boolean;
+  status: "present" | "half_shift" | "absent" | "on_leave" | "holiday";
+  isLate: boolean;
+  isHalfShift: boolean;
+  earlyLeave: boolean;
   shiftsCompleted: string;  // Decimal as string, e.g. "1.00"
   lateMorning: boolean;
   lateReturn: boolean;
   lateReason?: string | null;
-  computedAt?: string | null;
+  casualLeave: { status: "pending" | "approved" | "rejected"; reason: string | null } | null;
+  permission: { status: "pending" | "approved" | "rejected"; time: string | null; reason: string | null } | null;
+  source: "auto" | "manual";
 };
 
 export type LateSummaryEmployee = {
@@ -1570,6 +1573,12 @@ export type PayrollSettingsItem = {
   prodExtraEnd: string;
   prodPfEfEnabled?: boolean;
   prodPfEfRules: { label: string; minSalary: number; maxSalary: number; pfRate: number; efRate: number }[];
+  // Feature toggles (Settings master switches)
+  staffPayrollRulesEnabled?: boolean;
+  prodPayrollRulesEnabled?: boolean;
+  nightShiftEnabled?: boolean;
+  // Backup
+  backupDirectory?: string;
   // SMTP / Email
   smtpHost: string;
   smtpPort: number;
@@ -2820,4 +2829,84 @@ export const downloadResignationPdf = async (id: number, getToken: () => string 
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+};
+
+// ── Database Backup (Settings → Backup) ───────────────────────────────────────
+
+export type BackupFileItem = { file: string; sizeBytes: number; createdAt: string };
+
+export type BackupStatus = {
+  backupDirectory: string;
+  pgDumpAvailable: boolean;
+  backups: BackupFileItem[];
+};
+
+export const getBackupStatusQueryKey = () => ["/api/backup"] as const;
+
+export const useBackupStatus = () =>
+  useQuery<BackupStatus>({
+    queryKey: getBackupStatusQueryKey(),
+    queryFn: () => customFetch<BackupStatus>("/api/backup"),
+  });
+
+export const useRunBackup = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (directory: string) =>
+      customFetch<{ ok: boolean; file: string; path: string; sizeBytes: number; backups: BackupFileItem[] }>(
+        "/api/backup/run",
+        { method: "POST", body: JSON.stringify({ directory }) },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getBackupStatusQueryKey() });
+    },
+  });
+};
+
+// ── Chat (HR portal — company channel) ────────────────────────────────────────
+
+export type ChatChannelItem = {
+  id: number;
+  type: "company" | "department";
+  departmentId: number | null;
+  departmentName: string | null;
+};
+
+export type ChatMessageItem = {
+  id: number;
+  senderId: number | null;
+  senderName: string;
+  isHr?: boolean;
+  text: string;
+  replyTo: { id: number; senderName: string; text: string } | null;
+  reactions: { emoji: string; count: number; reactedByMe: boolean }[];
+  createdAt: string | null;
+};
+
+export const useChatChannels = () =>
+  useQuery<ChatChannelItem[]>({
+    queryKey: ["/api/chat/channels"],
+    queryFn: () => customFetch<ChatChannelItem[]>("/api/chat/channels"),
+  });
+
+export const useChatMessages = (channelId: number | null) =>
+  useQuery<ChatMessageItem[]>({
+    queryKey: ["/api/chat/channels", channelId, "messages"],
+    queryFn: () => customFetch<ChatMessageItem[]>(`/api/chat/channels/${channelId}/messages?limit=100`),
+    enabled: channelId != null,
+    refetchInterval: 4000,
+  });
+
+export const useSendChatMessage = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ channelId, text, replyToId }: { channelId: number; text: string; replyToId?: number }) =>
+      customFetch<ChatMessageItem>(`/api/chat/channels/${channelId}/messages`, {
+        method: "POST",
+        body: JSON.stringify({ text, reply_to_id: replyToId }),
+      }),
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/chat/channels", vars.channelId, "messages"] });
+    },
+  });
 };

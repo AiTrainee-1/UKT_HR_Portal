@@ -23,7 +23,18 @@ function colorsFor(card: IdCardData) {
     rounded: (card.template?.cornerStyle ?? "rounded") !== "sharp",
     showQr: card.template?.showQrOnBack ?? true,
     footerText: card.template?.footerText || "",
+    bgStyle: card.template?.backgroundStyle || "gradient",
+    logoCenter: (card.template?.logoPosition || "left") === "center",
   };
+}
+
+/** Header background per the template's Background Style setting. */
+function headerBackground(bgStyle: string, primary: string, secondary: string): string {
+  if (bgStyle === "solid") return primary;
+  if (bgStyle === "pattern") {
+    return `radial-gradient(rgba(255,255,255,0.18) 1px, transparent 1px) 0 0 / 8px 8px, linear-gradient(120deg, ${primary}, ${secondary})`;
+  }
+  return `linear-gradient(120deg, ${primary}, ${secondary})`;
 }
 
 export function useQrCodes(cards: IdCardData[]) {
@@ -47,11 +58,15 @@ export function useQrCodes(cards: IdCardData[]) {
 }
 
 function CompanyHeader({ card, compact }: { card: IdCardData; compact?: boolean }) {
-  const { primary, secondary } = colorsFor(card);
+  const { primary, secondary, bgStyle, logoCenter } = colorsFor(card);
   return (
     <div
-      className="flex items-center gap-2 px-3"
-      style={{ background: `linear-gradient(120deg, ${primary}, ${secondary})`, paddingTop: compact ? 8 : 12, paddingBottom: compact ? 8 : 12 }}
+      className={`flex items-center gap-2 px-3 ${logoCenter ? "flex-col justify-center text-center gap-1" : ""}`}
+      style={{
+        background: headerBackground(bgStyle, primary, secondary),
+        paddingTop: compact ? 8 : 12,
+        paddingBottom: compact ? 8 : 12,
+      }}
     >
       {card.company.logo ? (
         <img src={card.company.logo} alt="" className="h-8 w-8 object-contain bg-white rounded-full p-0.5 shrink-0" />
@@ -60,7 +75,7 @@ function CompanyHeader({ card, compact }: { card: IdCardData; compact?: boolean 
           <span className="text-[10px] font-black" style={{ color: primary }}>UK</span>
         </div>
       )}
-      <div className="min-w-0 text-white">
+      <div className={`min-w-0 text-white ${logoCenter ? "text-center" : ""}`}>
         <p className="font-black leading-tight truncate" style={{ fontSize: compact ? 11 : 13 }}>
           {card.company.name}
         </p>
@@ -71,7 +86,7 @@ function CompanyHeader({ card, compact }: { card: IdCardData; compact?: boolean 
 }
 
 export function StaffCardFront({ card }: { card: IdCardData }) {
-  const { primary, secondary, font, rounded } = colorsFor(card);
+  const { primary, secondary, text, font, rounded } = colorsFor(card);
   return (
     <div
       className={`idcard w-[240px] h-[380px] bg-white overflow-hidden shadow-xl border flex flex-col shrink-0 relative ${rounded ? "rounded-2xl" : "rounded-none"}`}
@@ -106,7 +121,7 @@ export function StaffCardFront({ card }: { card: IdCardData }) {
               : <User size={38} className="text-gray-300" />}
           </div>
 
-          <p className="mt-3 font-black text-[15px] text-gray-900 text-center leading-tight">{card.name}</p>
+          <p className="mt-3 font-black text-[15px] text-center leading-tight" style={{ color: text }}>{card.name}</p>
 
           <div
             className="flex items-center gap-1 mt-1 px-2.5 py-0.5 rounded-full"
@@ -132,7 +147,7 @@ export function StaffCardFront({ card }: { card: IdCardData }) {
             ].map(([k, v]) => (
               <div key={k} className="flex justify-between border-b border-dashed border-gray-200 pb-0.5">
                 <span className="text-gray-400 font-semibold">{k}</span>
-                <span className="font-bold text-gray-900 font-mono">{v}</span>
+                <span className="font-bold font-mono" style={{ color: text }}>{v}</span>
               </div>
             ))}
           </div>
@@ -198,7 +213,7 @@ export function StaffCardBack({ card, qr }: { card: IdCardData; qr?: string }) {
 }
 
 export function ProductionCardFront({ card }: { card: IdCardData }) {
-  const { primary, secondary, font, rounded } = colorsFor(card);
+  const { primary, secondary, text, font, rounded } = colorsFor(card);
   return (
     <div className={`idcard w-[380px] h-[240px] bg-white overflow-hidden shadow-lg border flex flex-col shrink-0 ${rounded ? "rounded-2xl" : "rounded-none"}`} style={{ fontFamily: font }}>
       <CompanyHeader card={card} compact />
@@ -217,7 +232,7 @@ export function ProductionCardFront({ card }: { card: IdCardData }) {
             : <User size={30} className="text-gray-300" />}
         </div>
         <div className="flex-1 min-w-0">
-          <p className="font-black text-[15px] text-gray-900 leading-tight truncate">{card.name}</p>
+          <p className="font-black text-[15px] leading-tight truncate" style={{ color: text }}>{card.name}</p>
           <p className="text-[10px] font-bold mb-1.5" style={{ color: primary }}>{card.designation ?? "Production Operator"}</p>
           <div className="space-y-0.5 text-[9px]">
             {[
@@ -227,7 +242,7 @@ export function ProductionCardFront({ card }: { card: IdCardData }) {
             ].map(([k, v]) => (
               <div key={k} className="flex justify-between border-b border-dashed border-gray-200 pb-0.5">
                 <span className="text-gray-400 font-semibold">{k}</span>
-                <span className="font-bold text-gray-900 font-mono">{v}</span>
+                <span className="font-bold font-mono" style={{ color: text }}>{v}</span>
               </div>
             ))}
           </div>

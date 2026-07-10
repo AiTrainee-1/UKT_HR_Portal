@@ -82,6 +82,7 @@ from .payroll_views import (
 from .chat_views import (
     chat_channels, chat_messages, chat_message_reactions,
 )
+from .backup_views import backup_status, run_backup
 
 urlpatterns = [
     # ── Health ──────────────────────────────────────────────────────────────
@@ -240,10 +241,14 @@ urlpatterns = [
     path("payroll/<int:pk>/breakdown", payroll_breakdown),
     path("payroll/<int:pk>", payroll_detail),
 
-    # ── Chat (mobile) ────────────────────────────────────────────────────────
+    # ── Chat (mobile + HR portal company channel) ────────────────────────────
     path("chat/channels", chat_channels),
     path("chat/channels/<int:pk>/messages", chat_messages),
     path("chat/messages/<int:pk>/reactions", chat_message_reactions),
+
+    # ── Database Backup (Settings → Backup) ──────────────────────────────────
+    path("backup", backup_status),
+    path("backup/run", run_backup),
 
     # ── User Management ─────────────────────────────────────────────────────
     path("roles", roles),

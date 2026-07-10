@@ -17,7 +17,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from .auth import require_auth, get_token_employee_id
+from .auth import require_auth, get_token_employee_id, is_hr
 from .models import ChatChannel, ChatMessage, ChatReaction, Employee
 
 
@@ -26,6 +26,12 @@ def _current_employee(request: Request) -> Employee | None:
     if not emp_id:
         return None
     return Employee.objects.filter(id=emp_id).select_related("department").first()
+
+
+def _hr_label(request: Request) -> str:
+    """Display name for an HR Portal user (HR Admin / Managing Director / Director)."""
+    user = getattr(request, "jwt_user", {}) or {}
+    return user.get("name") or "HR"
 
 
 def _channel_json(c: ChatChannel) -> dict:
@@ -37,24 +43,32 @@ def _channel_json(c: ChatChannel) -> dict:
     }
 
 
-def _message_json(m: ChatMessage, viewer_id: int) -> dict:
+def _sender_name(m: ChatMessage) -> str:
+    if m.sender_id and m.sender:
+        return f"{m.sender.first_name} {m.sender.last_name}"
+    return m.sender_label or "HR"
+
+
+def _message_json(m: ChatMessage, viewer_id: int | None) -> dict:
     reply = None
     if m.reply_to_id and m.reply_to:
         reply = {
             "id": m.reply_to_id,
-            "senderName": f"{m.reply_to.sender.first_name} {m.reply_to.sender.last_name}",
+            "senderName": _sender_name(m.reply_to),
             "text": m.reply_to.text,
         }
     reactions_by_emoji: dict[str, dict] = {}
     for r in m.reactions.all():
         entry = reactions_by_emoji.setdefault(r.emoji, {"emoji": r.emoji, "count": 0, "reactedByMe": False})
         entry["count"] += 1
-        if r.employee_id == viewer_id:
+        if viewer_id is not None and r.employee_id == viewer_id:
             entry["reactedByMe"] = True
     return {
         "id": m.id,
         "senderId": m.sender_id,
-        "senderName": f"{m.sender.first_name} {m.sender.last_name}",
+        "senderName": _sender_name(m),
+        # Lets clients style HR/management messages differently
+        "isHr": m.sender_id is None,
         "text": m.text,
         "replyTo": reply,
         "reactions": list(reactions_by_emoji.values()),
@@ -72,9 +86,14 @@ def _check_department_access(channel: ChatChannel, emp: Employee) -> bool:
 @api_view(["GET"])
 @require_auth
 def chat_channels(request: Request) -> Response:
-    """Company channel + the caller's own department channel only."""
+    """
+    Company channel + the caller's own department channel. HR Portal users
+    (no Employee row) get the company channel only.
+    """
     emp = _current_employee(request)
     if not emp:
+        if is_hr(request):
+            return Response([_channel_json(ChatChannel.get_company_channel())])
         return Response({"error": "Employee access required"}, status=403)
 
     channels = [ChatChannel.get_company_channel()]
@@ -87,13 +106,19 @@ def chat_channels(request: Request) -> Response:
 @require_auth
 def chat_messages(request: Request, pk: int) -> Response:
     emp = _current_employee(request)
-    if not emp:
+    hr_user = emp is None and is_hr(request)
+    if not emp and not hr_user:
         return Response({"error": "Employee access required"}, status=403)
 
     channel = ChatChannel.objects.select_related("department").filter(pk=pk).first()
     if not channel:
         return Response({"error": "Channel not found"}, status=404)
-    if not _check_department_access(channel, emp):
+    if hr_user:
+        # HR Portal users participate in the company-wide channel only —
+        # department channels stay private to that department's employees.
+        if channel.channel_type != ChatChannel.CHANNEL_COMPANY:
+            return Response({"error": "HR can only use the company channel"}, status=403)
+    elif not _check_department_access(channel, emp):
         return Response({"error": "You are not a member of this department"}, status=403)
 
     if request.method == "POST":
@@ -106,9 +131,15 @@ def chat_messages(request: Request, pk: int) -> Response:
             reply_to = ChatMessage.objects.filter(pk=reply_to_id, channel=channel).first()
             if not reply_to:
                 return Response({"error": "reply_to_id is not a message in this channel"}, status=400)
-        msg = ChatMessage.objects.create(channel=channel, sender=emp, text=text, reply_to=reply_to)
+        msg = ChatMessage.objects.create(
+            channel=channel,
+            sender=emp,
+            sender_label=_hr_label(request) if hr_user else "",
+            text=text,
+            reply_to=reply_to,
+        )
         msg = ChatMessage.objects.select_related("sender", "reply_to__sender").prefetch_related("reactions").get(pk=msg.pk)
-        return Response(_message_json(msg, emp.id), status=201)
+        return Response(_message_json(msg, emp.id if emp else None), status=201)
 
     try:
         limit = min(int(request.query_params.get("limit", 50)), 200)
@@ -124,11 +155,11 @@ def chat_messages(request: Request, pk: int) -> Response:
         qs = qs.filter(pk__lt=before)
     if after := request.query_params.get("after"):
         qs = qs.filter(pk__gt=after).order_by("created_at")
-        return Response([_message_json(m, emp.id) for m in qs])
+        return Response([_message_json(m, emp.id if emp else None) for m in qs])
 
     messages = list(qs[:limit])
     messages.reverse()
-    return Response([_message_json(m, emp.id) for m in messages])
+    return Response([_message_json(m, emp.id if emp else None) for m in messages])
 
 
 @api_view(["POST", "DELETE"])

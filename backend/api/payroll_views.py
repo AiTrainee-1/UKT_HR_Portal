@@ -475,20 +475,26 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
     hra = _d2(hra_full * prorate_factor)
     allowances = _d2(base_gross - basic - hra)
 
-    # PF / ESI — read live from PayrollSettings (0 = disabled)
+    # PF / ESI — read live from PayrollSettings. The Staff Payroll Rules
+    # master toggle (Settings → Payroll) must be ON for any deduction to
+    # apply; rates alone are not enough.
     ps = PayrollSettings.get()
-    pf_rate     = ps.pf_rate / Decimal("100")          # e.g. 12 -> 0.12
-    esi_rate    = ps.esi_rate / Decimal("100")          # e.g. 0.75 -> 0.0075
-    esi_ceiling = ps.esi_applicable_below
+    if ps.staff_payroll_rules_enabled:
+        pf_rate     = ps.pf_rate / Decimal("100")          # e.g. 12 -> 0.12
+        esi_rate    = ps.esi_rate / Decimal("100")          # e.g. 0.75 -> 0.0075
+        esi_ceiling = ps.esi_applicable_below
 
-    pf_deduction = _d2(basic * pf_rate) if pf_rate > 0 else Decimal("0")
+        pf_deduction = _d2(basic * pf_rate) if pf_rate > 0 else Decimal("0")
 
-    monthly_gross_equivalent = _d2(emp.salary_amount)
-    esi_deduction = (
-        _d2(base_gross * esi_rate)
-        if esi_rate > 0 and monthly_gross_equivalent <= esi_ceiling
-        else Decimal("0")
-    )
+        monthly_gross_equivalent = _d2(emp.salary_amount)
+        esi_deduction = (
+            _d2(base_gross * esi_rate)
+            if esi_rate > 0 and monthly_gross_equivalent <= esi_ceiling
+            else Decimal("0")
+        )
+    else:
+        pf_deduction = Decimal("0")
+        esi_deduction = Decimal("0")
 
     # 8. Late shift penalty — 3 free lates/month, every 3 billable = ¼ shift.
     #    Late counts follow the active attendance mode:
@@ -741,7 +747,9 @@ def _generate_production_payroll(emp: Employee, month: int, year: int, week_numb
         esi_deduction = _d2(gross_amount * rule_ef) if rule_ef > 0 else Decimal("0")
         applied_pf_rate = Decimal(str(matched_rule.get("pfRate", 0) or 0))
         applied_ef_rate = Decimal(str(matched_rule.get("efRate", 0) or 0))
-    else:
+    elif ps.prod_payroll_rules_enabled:
+        # Flat rates apply only when the Production Payroll Rules master
+        # toggle (Settings → Payroll) is ON — mirrors the staff toggle.
         prod_pf_rate  = ps.prod_pf_rate / Decimal("100")
         prod_esi_rate = ps.prod_esi_rate / Decimal("100")
         prod_esi_ceil = ps.prod_esi_applicable_below
@@ -753,6 +761,11 @@ def _generate_production_payroll(emp: Employee, month: int, year: int, week_numb
         )
         applied_pf_rate = ps.prod_pf_rate
         applied_ef_rate = ps.prod_esi_rate
+    else:
+        pf_deduction = Decimal("0")
+        esi_deduction = Decimal("0")
+        applied_pf_rate = Decimal("0")
+        applied_ef_rate = Decimal("0")
 
     advance_total, advance_details = _pending_advance_repayments(emp, month, year)
 
@@ -1523,6 +1536,12 @@ def _ps_response(ps) -> dict:
         "prodExtraEnd": str(ps.prod_extra_end)[:5],
         "prodPfEfEnabled": ps.prod_pf_ef_enabled,
         "prodPfEfRules": ps.prod_pf_ef_rules or [],
+        # Feature toggles
+        "staffPayrollRulesEnabled": ps.staff_payroll_rules_enabled,
+        "prodPayrollRulesEnabled": ps.prod_payroll_rules_enabled,
+        "nightShiftEnabled": ps.night_shift_enabled,
+        # Backup
+        "backupDirectory": ps.backup_directory,
         # SMTP / Email
         "smtpHost": ps.smtp_host,
         "smtpPort": ps.smtp_port,
@@ -1583,14 +1602,28 @@ def payroll_settings_view(request: Request) -> Response:
         "prodExtraStart": ("prod_extra_start", str),
         "prodExtraEnd": ("prod_extra_end", str),
     }
+    # Image fields may legitimately be set to null (user removed the logo /
+    # signature) — str(None) would store the literal string "None".
+    _nullable_text = {"signature_image", "company_logo", "authorized_signature"}
     for key, (attr, cast) in field_map.items():
         if key in data:
             val = data[key]
-            setattr(ps, attr, Decimal(str(val)) if cast is Decimal else cast(val))
+            if val is None and attr in _nullable_text:
+                setattr(ps, attr, None)
+            else:
+                setattr(ps, attr, Decimal(str(val)) if cast is Decimal else cast(val))
     if "prodPfEfRules" in data and isinstance(data["prodPfEfRules"], list):
         ps.prod_pf_ef_rules = data["prodPfEfRules"]
     if "prodPfEfEnabled" in data:
         ps.prod_pf_ef_enabled = bool(data["prodPfEfEnabled"])
+    if "staffPayrollRulesEnabled" in data:
+        ps.staff_payroll_rules_enabled = bool(data["staffPayrollRulesEnabled"])
+    if "prodPayrollRulesEnabled" in data:
+        ps.prod_payroll_rules_enabled = bool(data["prodPayrollRulesEnabled"])
+    if "nightShiftEnabled" in data:
+        ps.night_shift_enabled = bool(data["nightShiftEnabled"])
+    if "backupDirectory" in data:
+        ps.backup_directory = str(data["backupDirectory"] or "")
     ps.save()
 
     return Response(_ps_response(ps))

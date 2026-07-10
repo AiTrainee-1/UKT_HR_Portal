@@ -2,6 +2,7 @@ import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import ConnectivityOverlay from "@/components/ConnectivityOverlay";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { BiometricSyncProvider } from "@/contexts/BiometricSyncContext";
 import GlobalSyncBanner from "@/components/GlobalSyncBanner";
@@ -51,6 +52,7 @@ import Bonus from "@/pages/hr/Bonus";
 import IdCards from "@/pages/hr/IdCards";
 import CasualLeave from "@/pages/hr/CasualLeave";
 import NightShift from "@/pages/hr/NightShift";
+import HrChat from "@/pages/hr/Chat";
 import VerifyEmployee from "@/pages/VerifyEmployee";
 
 // Employee pages
@@ -198,6 +200,9 @@ function Router() {
       <Route path="/hr/night-shift">
         {() => <ProtectedRoute component={NightShift} allowedRoles={["hr"]} />}
       </Route>
+      <Route path="/hr/chat">
+        {() => <ProtectedRoute component={HrChat} allowedRoles={["hr"]} />}
+      </Route>
       <Route path="/hr/shifts">
         {() => <ProtectedRoute component={ManageShift} allowedRoles={["hr"]} />}
       </Route>
@@ -304,6 +309,7 @@ function App() {
           </BiometricSyncProvider>
         </AuthProvider>
         <Toaster />
+        <ConnectivityOverlay />
       </TooltipProvider>
     </QueryClientProvider>
   );

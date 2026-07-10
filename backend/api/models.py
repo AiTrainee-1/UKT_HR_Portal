@@ -1007,6 +1007,19 @@ class PayrollSettings(models.Model):
     prod_pf_ef_enabled = models.BooleanField(default=False, db_column="prod_pf_ef_enabled")
     prod_pf_ef_rules = models.JSONField(default=list, blank=True, db_column="prod_pf_ef_rules")
 
+    # ── Feature toggles (Settings page master switches) ────────────────────
+    # Flat PF/ESI payroll rules per employee class. Disabled by default —
+    # when off, the flat rates above are NOT applied even if non-zero.
+    # (Production salary-range rules keep their own prod_pf_ef_enabled toggle.)
+    staff_payroll_rules_enabled = models.BooleanField(default=False, db_column="staff_payroll_rules_enabled")
+    prod_payroll_rules_enabled = models.BooleanField(default=False, db_column="prod_payroll_rules_enabled")
+    # Night Shift Relaxation (staff-only). Controls sidebar visibility of the
+    # page; default True preserves the pre-toggle behavior.
+    night_shift_enabled = models.BooleanField(default=True, db_column="night_shift_enabled")
+
+    # ── Database backup ─────────────────────────────────────────────────────
+    backup_directory = models.TextField(blank=True, default="", db_column="backup_directory")
+
     # ── SMTP / Email ──────────────────────────────────────────────────────
     smtp_host = models.TextField(default="smtp.gmail.com", db_column="smtp_host")
     smtp_port = models.IntegerField(default=587, db_column="smtp_port")
@@ -1501,7 +1514,13 @@ class ChatChannel(models.Model):
 
 class ChatMessage(models.Model):
     channel = models.ForeignKey(ChatChannel, on_delete=models.CASCADE, db_column="channel_id", related_name="messages")
-    sender = models.ForeignKey(Employee, on_delete=models.CASCADE, db_column="sender_id", related_name="chat_messages")
+    # Null sender = an HR Portal user (HR/MD/Director), who has no Employee
+    # row — their display name is stored in sender_label instead.
+    sender = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, null=True, blank=True,
+        db_column="sender_id", related_name="chat_messages",
+    )
+    sender_label = models.TextField(blank=True, default="", db_column="sender_label")
     text = models.TextField()
     reply_to = models.ForeignKey(
         "self", on_delete=models.SET_NULL, null=True, blank=True,
@@ -1523,3 +1542,24 @@ class ChatReaction(models.Model):
     class Meta:
         db_table = "chat_reactions"
         unique_together = [["message", "employee", "emoji"]]
+
+
+# ──────────────────────────────────────────────
+#  HR Portal login security (brute-force lockout + audit trail)
+# ──────────────────────────────────────────────
+
+class HrLoginAttempt(models.Model):
+    """
+    One row per HR Portal login attempt (success or failure), used to enforce
+    a per-username lockout after repeated failures. Kept separate from the
+    general AuditLog so lockout queries stay fast and simple.
+    """
+    username = models.TextField(db_index=True)
+    ip_address = models.TextField(null=True, blank=True)
+    success = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "hr_login_attempts"
+        indexes = [models.Index(fields=["username", "created_at"])]
+        ordering = ["-created_at"]

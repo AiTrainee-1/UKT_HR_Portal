@@ -15,6 +15,7 @@ import {
   usePayrollSettings, useUpdatePayrollSettings,
   useListBiometricDevices, useCreateBiometricDevice, useUpdateBiometricDevice, useDeleteBiometricDevice,
   useIdCardSettings, useUpdateIdCardSettings,
+  useBackupStatus, useRunBackup,
 } from "@/lib/api-client/custom-hooks";
 import ProductionShiftConfigCard from "@/components/ProductionShiftConfigCard";
 
@@ -49,6 +50,14 @@ export default function Settings() {
   const [pfEfRules, setPfEfRules] = useState<
     { label: string; minSalary: number; maxSalary: number; pfRate: number; efRate: number }[]
   >([]);
+
+  // Master switches for the flat PF/ESI payroll rules (default OFF — no
+  // deduction is applied for that employee class until explicitly enabled)
+  const [staffRulesEnabled, setStaffRulesEnabled] = useState(false);
+  const [prodRulesEnabled, setProdRulesEnabled] = useState(false);
+
+  // Night Shift Relaxation feature toggle (staff-only page in the sidebar)
+  const [nightShiftEnabled, setNightShiftEnabled] = useState(true);
 
   const [payroll, setPayroll] = useState({
     // Staff
@@ -128,13 +137,44 @@ export default function Settings() {
       });
       setPfEfEnabled(payrollSettingsData.prodPfEfEnabled ?? false);
       setPfEfRules(payrollSettingsData.prodPfEfRules ?? []);
+      setStaffRulesEnabled(payrollSettingsData.staffPayrollRulesEnabled ?? false);
+      setProdRulesEnabled(payrollSettingsData.prodPayrollRulesEnabled ?? false);
+      setNightShiftEnabled(payrollSettingsData.nightShiftEnabled ?? true);
     }
   }, [payrollSettingsData]);
 
-  const [backup, setBackup] = useState({
-    enabled: true, schedule: "daily", time: "02:00",
-    retentionDays: 30, backupPath: "D:/backups/uktextile/",
-  });
+  // ── Database backup ─────────────────────────────────────────────────────
+  const { data: backupStatus } = useBackupStatus();
+  const runBackup = useRunBackup();
+  const [backupDir, setBackupDir] = useState("");
+  const [backupDirLoaded, setBackupDirLoaded] = useState(false);
+
+  useEffect(() => {
+    if (backupStatus && !backupDirLoaded) {
+      setBackupDir(backupStatus.backupDirectory || "D:/backups/uktextile");
+      setBackupDirLoaded(true);
+    }
+  }, [backupStatus, backupDirLoaded]);
+
+  const handleRunBackup = async () => {
+    if (!backupDir.trim()) {
+      toast({ title: "Enter a backup directory first", variant: "destructive" });
+      return;
+    }
+    try {
+      const result = await runBackup.mutateAsync(backupDir.trim());
+      toast({
+        title: "Backup completed",
+        description: `${result.file} (${(result.sizeBytes / 1024 / 1024).toFixed(2)} MB)`,
+      });
+    } catch (err) {
+      toast({
+        title: "Backup failed",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    }
+  };
 
   const savePayroll = async () => {
     try {
@@ -150,6 +190,8 @@ export default function Settings() {
         defaultSalaryPerShift: payroll.defaultSalaryPerShift,
         prodPfEfEnabled: pfEfEnabled,
         prodPfEfRules: pfEfRules,
+        staffPayrollRulesEnabled: staffRulesEnabled,
+        prodPayrollRulesEnabled: prodRulesEnabled,
         slipCompanyName: payroll.slipCompanyName,
         slipCompanyAddress: payroll.slipCompanyAddress,
         minWageRate: payroll.minWageRate,
@@ -172,10 +214,6 @@ export default function Settings() {
     }
   };
 
-  const save = (section: string) => {
-    toast({ title: `${section} settings saved successfully` });
-  };
-
   const saveCompany = async () => {
     try {
       await updatePayrollSettings.mutateAsync({
@@ -188,7 +226,9 @@ export default function Settings() {
         companyPan: company.pan,
         companyAddress: company.address,
         companyRegistration: company.registration,
-      });
+        // null is meaningful here — it clears a previously saved logo
+        companyLogo: payroll.companyLogo,
+      } as never);
       toast({
         title: "Company settings saved",
         description: "The name and logo now update everywhere in the portal, including the sidebar.",
@@ -765,6 +805,48 @@ export default function Settings() {
               </CardContent>
             </Card>
 
+            {/* ── Night Shift Relaxation (staff-only feature toggle) ── */}
+            <Card className="border-0 shadow-sm">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm font-bold flex items-center gap-2">
+                    <Clock size={15} className="text-indigo-500" /> Night Shift Relaxation (Staff)
+                  </CardTitle>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-bold ${nightShiftEnabled ? "text-green-600" : "text-gray-400"}`}>
+                      {nightShiftEnabled ? "ENABLED" : "DISABLED"}
+                    </span>
+                    <Switch
+                      checked={nightShiftEnabled}
+                      onCheckedChange={async (v) => {
+                        setNightShiftEnabled(v);
+                        try {
+                          await updatePayrollSettings.mutateAsync({ nightShiftEnabled: v } as never);
+                          toast({
+                            title: v ? "Night Shift Relaxation enabled" : "Night Shift Relaxation disabled",
+                            description: v
+                              ? "The Night Shift page is now visible in the sidebar."
+                              : "The Night Shift page is hidden from the sidebar. Existing relaxation logic is unchanged.",
+                          });
+                        } catch {
+                          setNightShiftEnabled(!v);
+                          toast({ title: "Failed to update setting", variant: "destructive" });
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  Staff who work late into the night get a grace window to report late the next
+                  morning without being marked Late. This switch controls whether the
+                  <strong> Night Shift</strong> page appears in the sidebar — the underlying
+                  detection logic and rules keep working exactly as before either way.
+                </p>
+              </CardContent>
+            </Card>
+
             {/* ── Production Punch Times & Shift Segments (replaces the old fixed 3-window model) ── */}
             <ProductionShiftConfigCard />
 
@@ -785,8 +867,9 @@ export default function Settings() {
               <CardContent className="space-y-4">
                 {/* Info banner */}
                 <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800">
-                  <strong>Note:</strong> PF and ESI are <strong>disabled by default</strong> (rate = 0).
-                  Enter a non-zero rate to enable automatic deduction during payroll generation.
+                  <strong>Note:</strong> Payroll rules are <strong>disabled by default</strong>.
+                  Use the switch on each column to enable PF/ESI deductions for that employee
+                  class — while a switch is off, no deduction is applied even if rates are set.
                   Changes apply to all new payroll runs — existing records are not affected.
                 </div>
 
@@ -795,10 +878,16 @@ export default function Settings() {
                 ) : (
                   <div className="grid sm:grid-cols-2 gap-6">
                     {/* ── Staff column ── */}
-                    <div className="space-y-3">
+                    <div className={`space-y-3 ${staffRulesEnabled ? "" : "opacity-60"}`}>
                       <div className="flex items-center gap-2 pb-1 border-b">
                         <span className="text-xs font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded">Staff</span>
                         <span className="text-xs text-muted-foreground">Monthly salary employees</span>
+                        <div className="ml-auto flex items-center gap-2">
+                          <span className={`text-[10px] font-bold ${staffRulesEnabled ? "text-green-600" : "text-gray-400"}`}>
+                            {staffRulesEnabled ? "ENABLED" : "DISABLED"}
+                          </span>
+                          <Switch checked={staffRulesEnabled} onCheckedChange={setStaffRulesEnabled} />
+                        </div>
                       </div>
                       <div className="space-y-1.5">
                         <Label className="text-xs">
@@ -833,10 +922,16 @@ export default function Settings() {
                     </div>
 
                     {/* ── Production column ── */}
-                    <div className="space-y-3">
+                    <div className={`space-y-3 ${prodRulesEnabled ? "" : "opacity-60"}`}>
                       <div className="flex items-center gap-2 pb-1 border-b">
                         <span className="text-xs font-semibold text-orange-700 bg-orange-50 px-2 py-0.5 rounded">Production</span>
-                        <span className="text-xs text-muted-foreground">Shift-based employees (pay = shifts × salary per shift)</span>
+                        <span className="text-xs text-muted-foreground">Shift-based employees</span>
+                        <div className="ml-auto flex items-center gap-2">
+                          <span className={`text-[10px] font-bold ${prodRulesEnabled ? "text-green-600" : "text-gray-400"}`}>
+                            {prodRulesEnabled ? "ENABLED" : "DISABLED"}
+                          </span>
+                          <Switch checked={prodRulesEnabled} onCheckedChange={setProdRulesEnabled} />
+                        </div>
                       </div>
                       <div className="space-y-1.5">
                         <Label className="text-xs">
@@ -1056,37 +1151,52 @@ export default function Settings() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="p-3 rounded-lg bg-blue-50 border border-blue-100 text-xs text-blue-700">
-                  PostgreSQL backups are automated using pg_dump. Backup files are stored locally on the server.
+                  Creates a full PostgreSQL dump (<strong>pg_dump</strong>, plain SQL) of the live
+                  database into the folder below, on the server machine. The filename includes the
+                  date and time, e.g. <strong>UKTex_DB_backup_2026-07-10_14-30-00.sql</strong>.
+                  Restore with <code>psql -f &lt;file&gt;</code>.
                 </div>
-                <div className="grid sm:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">Schedule</Label>
-                    <select value={backup.schedule} onChange={e => setBackup(b => ({ ...b, schedule: e.target.value }))}
-                      className="w-full h-9 rounded-md border px-3 text-sm bg-background">
-                      <option value="hourly">Every Hour</option>
-                      <option value="daily">Daily</option>
-                      <option value="weekly">Weekly</option>
-                    </select>
+
+                {backupStatus && !backupStatus.pgDumpAvailable && (
+                  <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700">
+                    <strong>pg_dump was not found on the server.</strong> Install the PostgreSQL
+                    client tools on the server machine (or add PostgreSQL's <code>bin</code> folder
+                    to PATH), then reload this page.
                   </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">Time (24h)</Label>
-                    <Input type="time" value={backup.time} onChange={e => setBackup(b => ({ ...b, time: e.target.value }))} />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">Retention (days)</Label>
-                    <Input type="number" value={backup.retentionDays} onChange={e => setBackup(b => ({ ...b, retentionDays: Number(e.target.value) }))} />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">Backup Path</Label>
-                    <Input value={backup.backupPath} onChange={e => setBackup(b => ({ ...b, backupPath: e.target.value }))} />
-                  </div>
+                )}
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Backup Directory (on the server machine)</Label>
+                  <Input
+                    value={backupDir}
+                    onChange={e => setBackupDir(e.target.value)}
+                    placeholder="D:/backups/uktextile"
+                  />
+                  <p className="text-[11px] text-gray-400">
+                    The folder is created automatically if it doesn't exist. The directory is
+                    remembered after the first successful backup.
+                  </p>
                 </div>
-                <div className="flex gap-3">
-                  <Button size="sm" variant="outline" onClick={() => toast({ title: "Backup started…" })}>
-                    Run Backup Now
-                  </Button>
-                  <Button size="sm" onClick={() => save("Backup")}>Save Backup Settings</Button>
-                </div>
+
+                <Button size="sm" onClick={handleRunBackup} disabled={runBackup.isPending}>
+                  {runBackup.isPending ? "Backing up…" : "Run Backup Now"}
+                </Button>
+
+                {(backupStatus?.backups?.length ?? 0) > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold text-gray-600">Recent backups in this folder</p>
+                    <div className="border rounded-lg divide-y">
+                      {backupStatus!.backups.map(b => (
+                        <div key={b.file} className="flex items-center justify-between px-3 py-2 text-xs">
+                          <span className="font-mono text-gray-700 truncate">{b.file}</span>
+                          <span className="text-gray-400 shrink-0 ml-3">
+                            {(b.sizeBytes / 1024 / 1024).toFixed(2)} MB · {new Date(b.createdAt).toLocaleString("en-IN")}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

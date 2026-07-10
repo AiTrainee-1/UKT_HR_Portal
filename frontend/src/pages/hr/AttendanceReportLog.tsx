@@ -10,8 +10,7 @@ import {
 } from "@/lib/api-client/custom-hooks";
 import { useListEmployees } from "@/lib/api-client";
 import {
-  ClipboardList, RefreshCw, AlertTriangle, CheckCircle2, XCircle,
-  ChevronLeft,
+  ClipboardList, RefreshCw, AlertTriangle, ChevronLeft, Users,
 } from "lucide-react";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -21,6 +20,73 @@ const currentMonth = () => new Date().getMonth() + 1;
 const currentYear = () => new Date().getFullYear();
 
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+const STATUS_STYLES: Record<ShiftLogEntry["status"], string> = {
+  present: "bg-green-100 text-green-700",
+  half_shift: "bg-amber-100 text-amber-700",
+  absent: "bg-red-100 text-red-700",
+  on_leave: "bg-blue-100 text-blue-700",
+  holiday: "bg-gray-100 text-gray-600",
+};
+
+const STATUS_LABELS: Record<ShiftLogEntry["status"], string> = {
+  present: "Present",
+  half_shift: "Half Shift",
+  absent: "Absent",
+  on_leave: "On Leave",
+  holiday: "Holiday",
+};
+
+function StatusBadge({ status }: { status: ShiftLogEntry["status"] }) {
+  return (
+    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap ${STATUS_STYLES[status]}`}>
+      {STATUS_LABELS[status]}
+    </span>
+  );
+}
+
+function CasualLeaveBadge({ cl }: { cl: ShiftLogEntry["casualLeave"] }) {
+  if (!cl) return <span className="text-gray-300 text-xs">—</span>;
+  const style =
+    cl.status === "approved" ? "bg-green-50 text-green-700 border-green-200"
+    : cl.status === "rejected" ? "bg-red-50 text-red-700 border-red-200"
+    : "bg-amber-50 text-amber-700 border-amber-200";
+  return (
+    <span
+      className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border whitespace-nowrap ${style}`}
+      title={cl.reason ?? ""}
+    >
+      CL · {cl.status}
+    </span>
+  );
+}
+
+function PermissionBadge({ perm }: { perm: ShiftLogEntry["permission"] }) {
+  if (!perm) return <span className="text-gray-300 text-xs">—</span>;
+  const style =
+    perm.status === "approved" ? "bg-green-50 text-green-700 border-green-200"
+    : perm.status === "rejected" ? "bg-red-50 text-red-700 border-red-200"
+    : "bg-purple-50 text-purple-700 border-purple-200";
+  return (
+    <span
+      className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border whitespace-nowrap ${style}`}
+      title={perm.reason ?? ""}
+    >
+      Perm {perm.time ? `· ${perm.time}` : ""} · {perm.status}
+    </span>
+  );
+}
+
+function LateCell({ row }: { row: ShiftLogEntry }) {
+  if (!row.isLate) return <span className="text-green-600 text-sm">✓</span>;
+  const parts = [row.lateMorning && "AM", row.lateReturn && "Return"].filter(Boolean);
+  return (
+    <span className="flex items-center gap-1.5 text-red-600 font-semibold text-xs" title={row.lateReason ?? ""}>
+      <AlertTriangle size={13} />
+      {parts.length > 0 ? parts.join(" + ") : "Late"}
+    </span>
+  );
+}
 
 // ── Component ──────────────────────────────────────────────────────────────
 
@@ -44,7 +110,7 @@ export default function AttendanceReportLog() {
   const { data: monthData, isLoading: monthLoading, refetch: refetchMonth } =
     useAttendanceReportLog(
       { month, year, employeeId: empId ?? undefined },
-      tab === "month"
+      tab === "month" && empId != null
     );
 
   const { data: lateData, isLoading: lateLoading } =
@@ -56,16 +122,75 @@ export default function AttendanceReportLog() {
     if (tab === "day") {
       await computeMutation.mutateAsync({ date });
       refetchDay();
-    } else {
-      await computeMutation.mutateAsync({ month, year, employeeId: empId ?? undefined });
+    } else if (empId != null) {
+      await computeMutation.mutateAsync({ month, year, employeeId: empId });
       refetchMonth();
     }
-    toast({ title: "Shift logs recomputed" });
+    toast({ title: "Attendance recomputed" });
   };
+
+  function renderRow(row: ShiftLogEntry, showDate: boolean) {
+    return (
+      <tr
+        key={showDate ? `${row.employeeId}-${row.date}` : row.employeeId}
+        className={`border-b hover:bg-gray-50 transition-colors ${
+          row.status === "absent" ? "bg-red-50/30" : row.isHalfShift ? "bg-amber-50/30" : ""
+        }`}
+      >
+        {showDate && <td className="px-3 py-2.5 text-xs font-mono text-gray-700 whitespace-nowrap">{row.date}</td>}
+        <td className="px-4 py-3">
+          <p className="font-semibold text-gray-900 text-sm whitespace-nowrap">{row.employeeName}</p>
+          <p className="text-[11px] text-gray-400 font-mono">{row.employeeCode}</p>
+        </td>
+        <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
+          {row.assignedShift ? (
+            <>
+              <p className="font-medium text-gray-700">{row.assignedShift.name}</p>
+              <p className="text-[10px] text-gray-400">
+                {row.assignedShift.startTime}–{row.assignedShift.endTime} · Grace {row.assignedShift.gracePeriodMinutes}m
+              </p>
+            </>
+          ) : (
+            <span className="text-gray-300">No shift assigned</span>
+          )}
+        </td>
+        <td className="px-4 py-3 font-mono text-sm whitespace-nowrap">
+          {row.punch1
+            ? <span className={row.lateMorning ? "text-red-600 font-bold" : "text-green-700"}>{row.punch1}</span>
+            : <span className="text-gray-300">—</span>}
+        </td>
+        {!simpleMode && (
+          <>
+            <td className="px-4 py-3 font-mono text-sm text-gray-600 whitespace-nowrap">{row.punch2 ?? <span className="text-gray-300">—</span>}</td>
+            <td className="px-4 py-3 font-mono text-sm whitespace-nowrap">
+              {row.punch3
+                ? <span className={row.lateReturn ? "text-orange-600 font-bold" : "text-gray-700"}>{row.punch3}</span>
+                : <span className="text-gray-300">—</span>}
+            </td>
+          </>
+        )}
+        <td className="px-4 py-3 font-mono text-sm text-gray-600 whitespace-nowrap">{row.punch4 ?? <span className="text-gray-300">—</span>}</td>
+        <td className="px-4 py-3"><StatusBadge status={row.status} /></td>
+        <td className="px-4 py-3">
+          <span className={`font-bold ${row.isHalfShift ? "text-amber-700" : "text-gray-800"}`}>{row.shiftsCompleted}</span>
+        </td>
+        <td className="px-4 py-3"><LateCell row={row} /></td>
+        <td className="px-4 py-3"><CasualLeaveBadge cl={row.casualLeave} /></td>
+        <td className="px-4 py-3"><PermissionBadge perm={row.permission} /></td>
+      </tr>
+    );
+  }
+
+  const columnHeaders = (showDate: boolean) => [
+    ...(showDate ? ["Date"] : []),
+    "Employee", "Assigned Shift", "P1 · Morning IN",
+    ...(simpleMode ? [] : ["P2 · Lunch OUT", "P3 · Lunch IN"]),
+    "P4 · Evening OUT", "Status", "Shifts", "Late", "CL", "Permission",
+  ];
 
   return (
     <HrLayout>
-      <div className="max-w-6xl mx-auto px-6 py-6 space-y-5">
+      <div className="max-w-[1400px] mx-auto px-6 py-6 space-y-5">
 
         {/* Header */}
         <div className="flex items-center gap-3">
@@ -81,16 +206,12 @@ export default function AttendanceReportLog() {
           <div>
             <h1 className="text-xl font-bold text-gray-900">Report Log</h1>
             <p className="text-xs text-muted-foreground">
-              {simpleMode
-                ? "Simple mode · morning + evening punch · half-shift cutoff · late detection"
-                : "4-punch breakdown · shift completion · late detection · monthly penalties"}
+              Every punch, shift, status, and reason — CL and Permission included — for every staff employee.
             </p>
           </div>
           <span
             className={`ml-auto text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wide ${
-              simpleMode
-                ? "bg-green-100 text-green-700"
-                : "bg-amber-100 text-amber-700"
+              simpleMode ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"
             }`}
             title="Attendance calculation mode — change it in Settings → Attendance"
           >
@@ -100,7 +221,6 @@ export default function AttendanceReportLog() {
 
         {/* Toolbar */}
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Tabs */}
           <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
             {(["day", "month", "late"] as const).map((t) => (
               <button
@@ -110,12 +230,11 @@ export default function AttendanceReportLog() {
                   tab === t ? "bg-indigo-600 text-white shadow-sm" : "text-gray-600 hover:bg-gray-200"
                 }`}
               >
-                {t === "day" ? "Day View" : t === "month" ? "Month View" : "Late Summary"}
+                {t === "day" ? "Day View" : t === "month" ? "Employee Month View" : "Late Summary"}
               </button>
             ))}
           </div>
 
-          {/* Filters */}
           {tab === "day" && (
             <Input
               type="date"
@@ -148,7 +267,7 @@ export default function AttendanceReportLog() {
               onChange={(e) => setEmpId(e.target.value ? Number(e.target.value) : null)}
               className="h-8 rounded-md border px-2 text-xs bg-background flex-1 max-w-xs"
             >
-              <option value="">— All staff employees —</option>
+              <option value="">— Select an employee —</option>
               {(employees ?? []).filter(e => e.employmentType === "staff").map(e => (
                 <option key={e.id} value={e.id}>
                   {e.firstName} {e.lastName} ({e.employeeCode})
@@ -157,12 +276,12 @@ export default function AttendanceReportLog() {
             </select>
           )}
 
-          {/* Recompute — strict mode only; simple mode recomputes automatically on load */}
-          {tab !== "late" && !simpleMode && (
+          {tab !== "late" && (tab === "day" || empId != null) && (
             <button
               onClick={handleRecompute}
               disabled={computeMutation.isPending}
               className="ml-auto h-8 px-3 text-xs border rounded-lg text-indigo-700 border-indigo-200 hover:bg-indigo-50 flex items-center gap-1.5 font-semibold"
+              title="Recomputes and refreshes immediately — the report already reflects the latest punches on every load"
             >
               <RefreshCw size={12} className={computeMutation.isPending ? "animate-spin" : ""} />
               Recompute
@@ -178,73 +297,20 @@ export default function AttendanceReportLog() {
             ) : !dayData || dayData.length === 0 ? (
               <div className="py-20 text-center">
                 <ClipboardList size={36} className="text-gray-200 mx-auto mb-3" />
-                <p className="text-sm text-gray-500">No shift logs for {date}.</p>
-                <p className="text-xs text-muted-foreground mt-1">Click "Recompute" to process this day's punches.</p>
+                <p className="text-sm text-gray-500">No active staff employees found.</p>
               </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 border-b">
                     <tr>
-                      {(simpleMode
-                        ? ["Employee", "Mode", "First IN", "Last OUT", "1st ½", "2nd ½", "Shifts", "Late"]
-                        : ["Employee", "Shift", "P1 — Morning IN", "P2 — Lunch OUT", "P3 — Return IN", "P4 — Evening OUT", "1st ½", "2nd ½", "Shifts", "Late"]
-                      ).map(h => (
+                      {columnHeaders(false).map(h => (
                         <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {dayData.map((row: ShiftLogEntry) => {
-                      const isHalf = row.shiftsCompleted === "0.50";
-                      return (
-                      <tr key={row.employeeId} className={`border-b hover:bg-gray-50 transition-colors ${isHalf ? "bg-amber-50/30" : ""}`}>
-                        <td className="px-4 py-3">
-                          <p className="font-semibold text-gray-900 text-sm">{row.employeeName}</p>
-                          <p className="text-[11px] text-gray-400 font-mono">{row.employeeCode}</p>
-                        </td>
-                        <td className="px-4 py-3 text-xs text-gray-500">{row.shiftName ?? "—"}</td>
-                        <td className="px-4 py-3 font-mono text-sm">
-                          {row.punch1
-                            ? <span className={row.lateMorning ? "text-red-600 font-bold" : "text-green-700"}>{row.punch1}</span>
-                            : <span className="text-gray-300">—</span>}
-                        </td>
-                        {!simpleMode && (
-                          <>
-                            <td className="px-4 py-3 font-mono text-sm text-gray-600">{row.punch2 ?? <span className="text-gray-300">—</span>}</td>
-                            <td className="px-4 py-3 font-mono text-sm">
-                              {row.punch3
-                                ? <span className={row.lateReturn ? "text-orange-600 font-bold" : "text-gray-700"}>{row.punch3}</span>
-                                : <span className="text-gray-300">—</span>}
-                            </td>
-                          </>
-                        )}
-                        <td className="px-4 py-3 font-mono text-sm text-gray-600">{row.punch4 ?? <span className="text-gray-300">—</span>}</td>
-                        <td className="px-4 py-3">
-                          {row.firstHalf
-                            ? <CheckCircle2 size={16} className="text-green-600" />
-                            : <XCircle size={16} className="text-gray-300" />}
-                        </td>
-                        <td className="px-4 py-3">
-                          {row.secondHalf
-                            ? <CheckCircle2 size={16} className="text-green-600" />
-                            : <XCircle size={16} className="text-gray-300" />}
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className={`font-bold ${isHalf ? "text-amber-700" : "text-gray-800"}`}>{row.shiftsCompleted}</span>
-                          {isHalf && <span className="ml-1.5 text-[10px] font-semibold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">½ Shift</span>}
-                        </td>
-                        <td className="px-4 py-3">
-                          {(row.lateMorning || row.lateReturn) ? (
-                            <span className="flex items-center gap-1.5 text-red-600 font-semibold text-xs">
-                              <AlertTriangle size={13} />
-                              {[row.lateMorning && "AM", row.lateReturn && "Return"].filter(Boolean).join(" + ")}
-                            </span>
-                          ) : <span className="text-green-600 text-sm">✓</span>}
-                        </td>
-                      </tr>
-                      );
-                    })}
+                    {dayData.map((row) => renderRow(row, false))}
                   </tbody>
                 </table>
               </div>
@@ -252,63 +318,33 @@ export default function AttendanceReportLog() {
           </div>
         )}
 
-        {/* ── Month View ── */}
+        {/* ── Employee Month View ── */}
         {tab === "month" && (
           <div className="rounded-xl border bg-white overflow-hidden shadow-sm">
-            {monthLoading ? (
+            {empId == null ? (
+              <div className="py-20 text-center">
+                <Users size={36} className="text-gray-200 mx-auto mb-3" />
+                <p className="text-sm text-gray-500">Select an employee above to see their full month.</p>
+              </div>
+            ) : monthLoading ? (
               <div className="py-16 text-center text-sm text-muted-foreground">Loading…</div>
             ) : !monthData || monthData.length === 0 ? (
               <div className="py-20 text-center">
                 <ClipboardList size={36} className="text-gray-200 mx-auto mb-3" />
-                <p className="text-sm text-gray-500">No shift logs for {MONTH_NAMES[month - 1]} {year}.</p>
-                <p className="text-xs text-muted-foreground mt-1">Click "Recompute" to process the full month's punches.</p>
+                <p className="text-sm text-gray-500">No attendance for {MONTH_NAMES[month - 1]} {year}.</p>
               </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 border-b">
                     <tr>
-                      {(simpleMode
-                        ? ["Date", "Employee", "Mode", "First IN", "Last OUT", "1st ½", "2nd ½", "Shifts", "Late"]
-                        : ["Date", "Employee", "Shift", "P1 IN", "P2 Lunch", "P3 Return", "P4 OUT", "1st ½", "2nd ½", "Shifts", "Late"]
-                      ).map(h => (
+                      {columnHeaders(true).map(h => (
                         <th key={h} className="text-left px-3 py-3 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {monthData.map((row: ShiftLogEntry, i: number) => {
-                      const isHalf = row.shiftsCompleted === "0.50";
-                      return (
-                      <tr key={i} className={`border-b hover:bg-gray-50 ${isHalf ? "bg-amber-50/30" : ""}`}>
-                        <td className="px-3 py-2.5 text-xs font-mono text-gray-700">{row.date}</td>
-                        <td className="px-3 py-2.5">
-                          <p className="font-semibold text-xs text-gray-900">{row.employeeName}</p>
-                          <p className="text-[10px] font-mono text-gray-400">{row.employeeCode}</p>
-                        </td>
-                        <td className="px-3 py-2.5 text-xs text-gray-500">{row.shiftName ?? "—"}</td>
-                        <td className={`px-3 py-2.5 font-mono text-xs ${row.lateMorning ? "text-red-600 font-bold" : "text-gray-700"}`}>{row.punch1 ?? "—"}</td>
-                        {!simpleMode && (
-                          <>
-                            <td className="px-3 py-2.5 font-mono text-xs text-gray-600">{row.punch2 ?? "—"}</td>
-                            <td className={`px-3 py-2.5 font-mono text-xs ${row.lateReturn ? "text-orange-600 font-bold" : "text-gray-700"}`}>{row.punch3 ?? "—"}</td>
-                          </>
-                        )}
-                        <td className="px-3 py-2.5 font-mono text-xs text-gray-600">{row.punch4 ?? "—"}</td>
-                        <td className="px-3 py-2.5">{row.firstHalf ? <CheckCircle2 size={13} className="text-green-600" /> : <XCircle size={13} className="text-gray-300" />}</td>
-                        <td className="px-3 py-2.5">{row.secondHalf ? <CheckCircle2 size={13} className="text-green-600" /> : <XCircle size={13} className="text-gray-300" />}</td>
-                        <td className="px-3 py-2.5">
-                          <span className={`text-xs font-bold ${isHalf ? "text-amber-700" : "text-gray-800"}`}>{row.shiftsCompleted}</span>
-                          {isHalf && <span className="ml-1 text-[9px] font-semibold bg-amber-100 text-amber-700 px-1 py-0.5 rounded-full">½</span>}
-                        </td>
-                        <td className="px-3 py-2.5 text-xs">
-                          {(row.lateMorning || row.lateReturn)
-                            ? <span title={row.lateReason ?? ""}><AlertTriangle size={13} className="text-red-500" /></span>
-                            : <span className="text-green-500">✓</span>}
-                        </td>
-                      </tr>
-                      );
-                    })}
+                    {monthData.map((row) => renderRow(row, true))}
                   </tbody>
                 </table>
               </div>
@@ -327,7 +363,6 @@ export default function AttendanceReportLog() {
                 These deductions are applied automatically when payroll is generated.
               </span>
             </div>
-            {/* Shift Completion Summary */}
             {lateData && lateData.employees.length > 0 && (
               <div className="rounded-xl border bg-white overflow-hidden shadow-sm">
                 <div className="px-4 py-3 border-b bg-gray-50">
@@ -345,7 +380,7 @@ export default function AttendanceReportLog() {
                     {lateData.employees.map((row) => {
                       const total = parseFloat(row.totalShifts);
                       const half = row.halfShiftDays ?? 0;
-                      const full = total - half * 0.5; // approximate full shift days
+                      const full = total - half * 0.5;
                       return (
                         <tr key={row.employeeId} className={`border-b hover:bg-gray-50 ${half > 0 ? "bg-amber-50/20" : ""}`}>
                           <td className="px-4 py-2.5">
@@ -369,14 +404,12 @@ export default function AttendanceReportLog() {
               </div>
             )}
 
-            {/* Late Penalty Summary */}
             <div className="rounded-xl border bg-white overflow-hidden shadow-sm">
               {lateLoading ? (
                 <div className="py-16 text-center text-sm text-muted-foreground">Loading…</div>
               ) : !lateData || lateData.employees.length === 0 ? (
                 <div className="py-20 text-center">
                   <p className="text-sm text-gray-500">No late summary for {MONTH_NAMES[month - 1]} {year}.</p>
-                  <p className="text-xs text-muted-foreground mt-1">Switch to Month View and run Recompute first, then regenerate payroll.</p>
                 </div>
               ) : (
                 <>

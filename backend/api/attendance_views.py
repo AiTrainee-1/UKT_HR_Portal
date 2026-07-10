@@ -674,58 +674,68 @@ def sync_biometric_progress(request: Request) -> Response:
 
 # ── Report Log ────────────────────────────────────────────────────────────────
 
-def _shift_log_json(log: DailyShiftLog) -> dict:
-    emp = log.employee
-    shift = log.shift
+def _assigned_shift_json(shift) -> dict | None:
+    if not shift:
+        return None
     return {
-        "employeeId": emp.id,
-        "employeeCode": emp.employee_code,
-        "employeeName": f"{emp.first_name} {emp.last_name}",
-        "department": emp.department.name if emp.department else None,
-        "designation": emp.designation.title if emp.designation else None,
-        "employmentType": emp.employment_type,
-        "date": str(log.date),
-        "shiftName": shift.name if shift else None,
-        "punch1": log.punch1.strftime("%H:%M") if log.punch1 else None,
-        "punch2": log.punch2.strftime("%H:%M") if log.punch2 else None,
-        "punch3": log.punch3.strftime("%H:%M") if log.punch3 else None,
-        "punch4": log.punch4.strftime("%H:%M") if log.punch4 else None,
-        "totalPunches": log.total_punches,
-        "firstHalf": log.first_half,
-        "secondHalf": log.second_half,
-        "shiftsCompleted": str(log.shifts_completed),
-        "lateMorning": log.late_morning,
-        "lateReturn": log.late_return,
-        "lateReason": log.late_reason,
-        "computedAt": log.computed_at.isoformat() if log.computed_at else None,
+        "name": shift.name,
+        "startTime": shift.start_time.strftime("%H:%M") if shift.start_time else None,
+        "endTime": shift.end_time.strftime("%H:%M") if shift.end_time else None,
+        "gracePeriodMinutes": shift.grace_period_minutes,
     }
 
 
-def _final_record_as_log_json(r) -> dict:
-    """Map an AttendanceDayRecord (simple mode) onto the ShiftLogEntry shape."""
-    emp = r.employee
-    shifts = float(r.shifts_earned or 0)
+def _full_day_row(emp, rec, shift, dsl, cl, perm) -> dict:
+    """
+    One employee's full attendance picture for one day — used by the
+    redesigned Report Log page. Built entirely from data the existing
+    engines already compute (AttendanceDayRecord / DailyShiftLog / Casual
+    Leave / Permission); nothing here recalculates anything.
+    """
+    if dsl:
+        punch1 = dsl.punch1.strftime("%H:%M") if dsl.punch1 else None
+        punch2 = dsl.punch2.strftime("%H:%M") if dsl.punch2 else None
+        punch3 = dsl.punch3.strftime("%H:%M") if dsl.punch3 else None
+        punch4 = dsl.punch4.strftime("%H:%M") if dsl.punch4 else None
+        late_morning = dsl.late_morning
+        late_return = dsl.late_return
+        late_reason = dsl.late_reason
+    else:
+        punch1 = rec.first_punch.strftime("%H:%M") if rec.first_punch else None
+        punch2 = punch3 = None
+        punch4 = rec.last_punch.strftime("%H:%M") if rec.last_punch else None
+        late_morning = rec.is_late
+        late_return = False
+        late_reason = rec.override_note if rec.is_late else None
+
     return {
         "employeeId": emp.id,
         "employeeCode": emp.employee_code,
         "employeeName": f"{emp.first_name} {emp.last_name}",
         "department": emp.department.name if emp.department else None,
         "designation": emp.designation.title if emp.designation else None,
-        "employmentType": emp.employment_type,
-        "date": str(r.date),
-        "shiftName": "Simple Mode",
-        "punch1": r.first_punch.strftime("%H:%M") if r.first_punch else None,
-        "punch2": None,
-        "punch3": None,
-        "punch4": r.last_punch.strftime("%H:%M") if r.last_punch else None,
-        "totalPunches": r.total_punches,
-        "firstHalf": shifts >= 0.5,
-        "secondHalf": shifts >= 1.0,
-        "shiftsCompleted": f"{shifts:.2f}",
-        "lateMorning": r.is_late,
-        "lateReturn": False,
-        "lateReason": r.override_note or ("Arrived after grace period" if r.is_late else None),
-        "computedAt": r.updated_at.isoformat() if r.updated_at else None,
+        "date": str(rec.date),
+        "assignedShift": _assigned_shift_json(shift),
+        "punch1": punch1, "punch2": punch2, "punch3": punch3, "punch4": punch4,
+        "totalPunches": rec.total_punches,
+        "status": rec.status,  # present | half_shift | absent | on_leave | holiday
+        "isLate": bool(rec.is_late),
+        "isHalfShift": bool(rec.is_half_shift),
+        "earlyLeave": bool(rec.early_leave),
+        "shiftsCompleted": str(rec.shifts_earned),
+        "lateMorning": bool(late_morning),
+        "lateReturn": bool(late_return),
+        "lateReason": late_reason,
+        "casualLeave": {"status": cl.status, "reason": cl.reason} if cl else None,
+        "permission": (
+            {
+                "status": perm.status,
+                "time": perm.permission_time.strftime("%H:%M") if perm.permission_time else None,
+                "reason": perm.reason,
+            }
+            if perm else None
+        ),
+        "source": rec.source,
     }
 
 
@@ -734,76 +744,52 @@ def _final_record_as_log_json(r) -> dict:
 def attendance_report_log(request: Request) -> Response:
     """
     GET /api/attendance/report-log/?date=2026-07-01
-        → all employees for that date
+        → every active staff employee's full attendance picture for that date
+          (present, absent, on leave, holiday — everyone, not just those who punched)
 
     GET /api/attendance/report-log/?month=7&year=2026&employeeId=123
-        → full month log for one employee
+        → one employee's full month, day by day
 
-    Follows the attendance mode selected in Settings:
-      strict → DailyShiftLog (4-punch engine)
-      simple → AttendanceDayRecord (morning + evening punch model)
+    Built on the same AttendanceDayRecord/DailyShiftLog engines used
+    everywhere else (compute_day_record / compute_daily_shift_log via
+    compute_month_records) — this endpoint only reads and joins their
+    output for display, it does not change how anything is calculated.
+    Casual Leave and Permission rows for the same date(s) are attached so
+    a day's full story (shift, punches, late/half/absent, CL, permission)
+    is visible in one place.
     """
-    from .models import PayrollSettings
+    from .models import PayrollSettings, CasualLeaveRequest, EmployeePermission
     from .attendance_final import compute_day_record, compute_month_records
+    from .shift_engine import _get_shift_for_date
 
     settings = PayrollSettings.get()
     date_param = request.query_params.get("date")
     month_param = request.query_params.get("month")
     year_param = request.query_params.get("year")
     emp_id_param = request.query_params.get("employeeId")
-
-    # ── Simple mode: final-attendance engine ─────────────────────────────
-    if settings.attendance_mode == "simple":
-        if date_param:
-            try:
-                d = date_type.fromisoformat(date_param)
-            except (ValueError, TypeError):
-                d = _today()
-            emps = list(
-                Employee.objects.filter(status="active", employment_type="staff")
-                .select_related("department", "designation")
-            )
-            rows = []
-            for emp in emps:
-                rec = compute_day_record(emp, d, settings=settings)
-                if rec.total_punches > 0 or rec.status not in ("absent", "holiday"):
-                    rows.append(_final_record_as_log_json(rec))
-            rows.sort(key=lambda r: r["employeeName"])
-            return Response(rows)
-
-        if month_param and year_param:
-            try:
-                m = int(month_param)
-                y = int(year_param)
-            except (ValueError, TypeError):
-                return Response({"error": "Invalid month/year"}, status=400)
-            emp_qs = Employee.objects.filter(status="active", employment_type="staff")
-            if emp_id_param:
-                emp_qs = emp_qs.filter(pk=emp_id_param)
-            rows = []
-            for emp in emp_qs.select_related("department", "designation"):
-                for rec in compute_month_records(emp, y, m, settings):
-                    if rec.total_punches > 0 or rec.status not in ("absent", "holiday"):
-                        rows.append(_final_record_as_log_json(rec))
-            rows.sort(key=lambda r: (r["employeeName"], r["date"]))
-            return Response(rows)
-
-        return Response({"error": "Provide date or month+year"}, status=400)
-
-    # ── Strict mode: 4-punch DailyShiftLog (existing behaviour) ──────────
-    qs = (
-        DailyShiftLog.objects
-        .select_related("employee__department", "employee__designation", "shift")
-        .order_by("employee__first_name", "date")
-    )
+    is_strict = settings.attendance_mode != "simple"
 
     if date_param:
         try:
             d = date_type.fromisoformat(date_param)
         except (ValueError, TypeError):
             d = _today()
-        qs = qs.filter(date=d)
-        return Response([_shift_log_json(l) for l in qs])
+
+        emps = list(
+            Employee.objects.filter(status="active", employment_type="staff")
+            .select_related("department", "designation")
+            .order_by("first_name")
+        )
+        cl_map = {c.employee_id: c for c in CasualLeaveRequest.objects.filter(date=d)}
+        perm_map = {p.employee_id: p for p in EmployeePermission.objects.filter(date=d)}
+
+        rows = []
+        for emp in emps:
+            rec = compute_day_record(emp, d, settings=settings)
+            shift = _get_shift_for_date(emp, d)
+            dsl = DailyShiftLog.objects.filter(employee=emp, date=d).first() if is_strict else None
+            rows.append(_full_day_row(emp, rec, shift, dsl, cl_map.get(emp.id), perm_map.get(emp.id)))
+        return Response(rows)
 
     if month_param and year_param:
         try:
@@ -811,10 +797,42 @@ def attendance_report_log(request: Request) -> Response:
             y = int(year_param)
         except (ValueError, TypeError):
             return Response({"error": "Invalid month/year"}, status=400)
-        qs = qs.filter(date__year=y, date__month=m)
-        if emp_id_param:
-            qs = qs.filter(employee_id=emp_id_param)
-        return Response([_shift_log_json(l) for l in qs])
+        if not emp_id_param:
+            return Response({"error": "employeeId is required for the month view"}, status=400)
+        try:
+            emp = Employee.objects.select_related("department", "designation").get(
+                pk=emp_id_param, status="active",
+            )
+        except Employee.DoesNotExist:
+            return Response({"error": "Employee not found"}, status=404)
+
+        records = compute_month_records(emp, y, m, settings)
+        cl_map = {
+            c.date: c for c in CasualLeaveRequest.objects.filter(
+                employee=emp, date__year=y, date__month=m,
+            )
+        }
+        perm_map = {
+            p.date: p for p in EmployeePermission.objects.filter(
+                employee=emp, date__year=y, date__month=m,
+            )
+        }
+        dsl_map = {}
+        if is_strict:
+            dsl_map = {
+                l.date: l for l in DailyShiftLog.objects.filter(
+                    employee=emp, date__year=y, date__month=m,
+                )
+            }
+
+        rows = []
+        for rec in records:
+            shift = _get_shift_for_date(emp, rec.date)
+            rows.append(_full_day_row(
+                emp, rec, shift, dsl_map.get(rec.date),
+                cl_map.get(rec.date), perm_map.get(rec.date),
+            ))
+        return Response(rows)
 
     return Response({"error": "Provide date or month+year"}, status=400)
 

@@ -8,7 +8,7 @@ import {
   Wallet, BarChart3, Shield, Activity, Settings, FileText, LogOut,
   ChevronRight, Search, X, Command, UserCheck, UserMinus, Banknote,
   CalendarCheck, Bell, Award, TrendingUp, Gift, CreditCard,
-  CalendarHeart, MoonStar,
+  CalendarHeart, MoonStar, MessageCircle,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -67,7 +67,6 @@ const navGroups: NavGroupData[] = [
       { path: '/hr/shifts', label: 'Manage Shift', icon: Clock },
       { path: '/hr/leave', label: 'Leave & Holiday', icon: Calendar },
       { path: '/hr/casual-leave', label: 'Casual Leave', icon: CalendarHeart },
-      { path: '/hr/night-shift', label: 'Night Shift', icon: MoonStar },
       { path: '/hr/requests', label: 'Requests', icon: CheckCircle2 },
       { path: '/hr/promotion', label: 'Promotion', icon: Award },
       { path: '/hr/increment', label: 'Increment', icon: TrendingUp },
@@ -106,7 +105,11 @@ const navGroups: NavGroupData[] = [
     items: [
       { path: '/hr/user-management', label: 'User Management', icon: Shield },
       { path: '/hr/activity-logs', label: 'Activity Logs', icon: Activity },
+      { path: '/hr/chat', label: 'Chat', icon: MessageCircle },
       { path: '/hr/notifications', label: 'Notifications', icon: Bell },
+      // Settings-gated: hidden at render time when the Night Shift Relaxation
+      // toggle (Settings → Attendance) is off. Staff-only feature.
+      { path: '/hr/night-shift', label: 'Night Shift', icon: MoonStar },
       { path: '/hr/settings', label: 'Settings', icon: Settings },
     ],
   },
@@ -510,7 +513,14 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
                 {group.heading}
               </span>
             )}
-            {group.items.map((item) => (
+            {group.items
+              .filter((item) =>
+                // Night Shift page is gated by the Settings toggle; anything
+                // else is always visible. Treat "not loaded yet" as enabled
+                // so the entry doesn't flash in and out on page load.
+                item.path !== '/hr/night-shift' || settings?.nightShiftEnabled !== false
+              )
+              .map((item) => (
               <NavItem
                 key={item.path}
                 item={

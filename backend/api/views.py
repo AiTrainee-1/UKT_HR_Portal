@@ -8,14 +8,16 @@ import bcrypt
 from django.conf import settings
 from django.db.models import Count, DecimalField, Q, Sum, Value
 from django.db.models.functions import Coalesce
+from django.utils import timezone
 from rest_framework import status
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, throttle_classes
 from rest_framework.request import Request
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 
 from .auth import require_auth, require_hr, get_token_employee_id
 from .jwt_utils import sign_token
-from .audit_utils import log_action
+from .audit_utils import log_action, _get_ip
 from .models import (
     Applicant,
     Attendance,
@@ -23,6 +25,7 @@ from .models import (
     Department,
     Employee,
     EmployeePermission,
+    HrLoginAttempt,
     Job,
     LeaveBalance,
     LeaveRequest,
@@ -79,21 +82,56 @@ def healthz(_request: Request) -> Response:
 
 # --- Auth ---
 
+# HR Portal login lockout — independent of the DRF per-IP throttle below.
+# This is per-username, so an attacker rotating IPs still gets locked out.
+HR_LOCKOUT_THRESHOLD = 5
+HR_LOCKOUT_WINDOW_MINUTES = 15
+HR_LOCKOUT_DURATION_MINUTES = 15
+
+
+def _hr_username_locked_out(username: str) -> bool:
+    if not username:
+        return False
+    window_start = timezone.now() - timedelta(minutes=HR_LOCKOUT_WINDOW_MINUTES)
+    recent = HrLoginAttempt.objects.filter(
+        username__iexact=username, created_at__gte=window_start
+    ).order_by("-created_at")[:HR_LOCKOUT_THRESHOLD]
+    if len(recent) < HR_LOCKOUT_THRESHOLD:
+        return False
+    # Locked out only if the most recent N attempts were ALL failures —
+    # a single success resets the count.
+    return all(not a.success for a in recent)
+
 
 @api_view(["POST"])
+@throttle_classes([ScopedRateThrottle])
 def hr_login(request: Request) -> Response:
-    username = request.data.get("username")
-    password = request.data.get("password")
-    if username != settings.HR_USERNAME or password != settings.HR_PASSWORD:
+    request.throttle_scope = "login"
+    username = (request.data.get("username") or "").strip()
+    password = request.data.get("password") or ""
+
+    if _hr_username_locked_out(username):
+        log_action(request, "login_blocked", "auth", description=f"Locked-out login attempt for: {username}")
+        return _error(
+            f"Too many failed attempts. Try again in {HR_LOCKOUT_DURATION_MINUTES} minutes.", 429
+        )
+
+    account = settings.HR_ACCOUNTS.get(username.lower())
+    valid = bool(account) and bool(password) and bcrypt.checkpw(password.encode(), account["passwordHash"].encode())
+
+    HrLoginAttempt.objects.create(username=username, ip_address=_get_ip(request), success=valid)
+
+    if not valid:
         log_action(request, "login_failed", "auth", description=f"Failed login for: {username}")
         return _error("Invalid credentials", 401)
-    token = sign_token({"role": "hr", "name": "HR Admin"})
-    # Write audit log after constructing the fake jwt_user
-    request.jwt_user = {"role": "hr", "name": "HR Admin"}
-    log_action(request, "login", "auth", description="HR Admin logged in")
-    return Response(
-        {"token": token, "role": "hr", "employeeId": None, "name": "HR Admin"}
-    )
+
+    label = account["label"]
+    real_username = account["username"]
+    # Shorter-lived token than employee sessions — this is the privileged portal.
+    token = sign_token({"role": "hr", "name": label, "username": real_username}, expires_in=timedelta(hours=12))
+    request.jwt_user = {"role": "hr", "name": label, "username": real_username}
+    log_action(request, "login", "auth", description=f"{label} ({real_username}) logged in")
+    return Response({"token": token, "role": "hr", "employeeId": None, "name": label})
 
 
 @api_view(["POST"])
