@@ -535,7 +535,10 @@ class SalarySlip(models.Model):
 class Role(models.Model):
     name = models.TextField(unique=True)  # HR Admin, HR Executive, Payroll Officer, etc.
     description = models.TextField(null=True, blank=True)
-    permissions = models.JSONField(default=dict)  # {module: {view, create, edit, delete, approve}}
+    # {module_key: "hidden" | "view" | "edit"} — one entry per sidebar module.
+    # See api/permission_middleware.py MODULE_REGISTRY for the canonical module_key list
+    # and how each is enforced against incoming requests.
+    permissions = models.JSONField(default=dict)
     is_system = models.BooleanField(default=False, db_column="is_system")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
@@ -824,9 +827,14 @@ class MonthlyShiftSummary(models.Model):
     year = models.IntegerField()
     month = models.IntegerField()
     total_shifts = models.DecimalField(max_digits=5, decimal_places=2, default=0)
-    total_late_count = models.IntegerField(default=0)
+    total_late_count = models.IntegerField(default=0)       # late punches only
+    # Approved EmployeePermission requests beyond the first 3 in the month —
+    # merged into the same late pool as total_late_count for the deduction
+    # formula below, but kept separate here so HR can see why a deduction
+    # happened (late arrivals vs. excess permission requests).
+    permission_overage_count = models.IntegerField(default=0)
     permissions_used = models.IntegerField(default=0)       # of 3 free
-    billable_late_count = models.IntegerField(default=0)    # after 3 free
+    billable_late_count = models.IntegerField(default=0)    # after 3 free, combined pool
     shift_deductions = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     salary_deduction_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     updated_at = models.DateTimeField(auto_now=True)

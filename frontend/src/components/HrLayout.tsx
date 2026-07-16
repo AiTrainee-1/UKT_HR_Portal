@@ -1,7 +1,11 @@
-import { useLayoutEffect, useRef, useState } from "react";
-import { Menu } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useLocation } from "wouter";
+import { Menu, Eye } from "lucide-react";
 import { HrSidebar } from "@/components/ui/dashboard-sidebar";
 import { usePayrollSettings } from "@/lib/api-client/custom-hooks";
+import { useAuth, permissionLevel } from "@/contexts/AuthContext";
+import { moduleForPath } from "@/lib/permission-modules";
+import { lockMutatingControls } from "@/lib/view-only-lock";
 
 // Scroll positions per pathname, surviving page remounts (each page renders its
 // own HrLayout, so navigating away and back would otherwise reset to the top).
@@ -13,7 +17,35 @@ export default function HrLayout({ children }: { children: React.ReactNode }) {
   const companyName = settings?.companyName || "UKTextiles";
   const companyLogo = settings?.companyLogo;
 
+  const { user } = useAuth();
+  const [location] = useLocation();
+  const moduleKey = moduleForPath(location);
+  // The API (permission_middleware.py) is the authoritative backstop — it
+  // 403s any write regardless of UI state. The UI-level lock below only
+  // disables buttons that look like a data-modifying action (Add/Edit/
+  // Delete/Import/... — see lib/view-only-lock.ts); tabs, filters, search,
+  // pagination and expand/collapse controls are deliberately left alone so
+  // View Only is still a full browsing experience, not a frozen page.
+  const isViewOnly = moduleKey ? permissionLevel(user, moduleKey) === "view" : false;
+
   const mainRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (!isViewOnly) return;
+
+    const relock = () => lockMutatingControls(document.body);
+    relock();
+    // Observing document.body (not just the page's own content div) on
+    // purpose: Radix Dialog/Popover/Select content portals straight to
+    // <body>, outside this page's DOM subtree. A "View Details" dialog is
+    // fine to open (its trigger isn't a mutating word), but if that dialog
+    // has its own "Edit"/"Save" button, that only exists in the portaled
+    // content — this is what catches it once it mounts.
+    const observer = new MutationObserver(relock);
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [isViewOnly, location]);
+
   useLayoutEffect(() => {
     const el = mainRef.current;
     if (!el) return;
@@ -131,7 +163,22 @@ export default function HrLayout({ children }: { children: React.ReactNode }) {
         {/* `relative` keeps absolutely-positioned descendants (e.g. Radix Select's
             hidden native <select>) anchored inside this scroll container — without
             it they anchor to <html> and stretch the whole document. */}
-        <main ref={mainRef} className="relative flex-1 overflow-y-auto p-4 lg:p-6">{children}</main>
+        <main ref={mainRef} className="relative flex-1 overflow-y-auto p-4 lg:p-6">
+          {isViewOnly && (
+            <div
+              className="flex items-center gap-2 mb-4 px-3.5 py-2.5 rounded-xl text-sm font-semibold"
+              style={{
+                background: "rgba(245,158,11,0.08)",
+                color: "#b45309",
+                boxShadow: "inset 3px 3px 8px rgba(245,158,11,0.06), inset -3px -3px 8px rgba(255,255,255,0.9)",
+              }}
+            >
+              <Eye size={15} strokeWidth={2} />
+              View only — browse and inspect freely, changes can't be saved.
+            </div>
+          )}
+          {children}
+        </main>
       </div>
     </div>
   );

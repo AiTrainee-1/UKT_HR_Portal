@@ -27,6 +27,7 @@ MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "api.middleware.DatabaseHealthMiddleware",
+    "api.permission_middleware.HrPermissionMiddleware",
     "django.middleware.common.CommonMiddleware",
 ]
 
@@ -80,34 +81,12 @@ REST_FRAMEWORK = {
 
 JWT_SECRET = os.environ.get("JWT_SECRET", "fallback-secret")
 
-
-def _load_hr_accounts() -> dict:
-    """
-    Exactly 4 accounts may access the HR Portal: HR, MD, and two Directors.
-    Passwords are set as plaintext in .env (for easy editing) but are hashed
-    here once at process startup — the plaintext is never stored or compared
-    directly anywhere past this point, only the in-memory bcrypt hash is used
-    (see views.py::hr_login, bcrypt.checkpw against accounts[...]["passwordHash"]).
-    """
-    import bcrypt
-
-    accounts: dict[str, dict[str, str]] = {}
-
-    def add(user_env: str, password_env: str, label: str) -> None:
-        username = os.environ.get(user_env, "").strip()
-        password = os.environ.get(password_env, "").strip()
-        if username and password:
-            pwd_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
-            accounts[username.lower()] = {"username": username, "passwordHash": pwd_hash, "label": label}
-
-    add("HR_USERNAME", "HR_PASSWORD", "HR Admin")
-    add("MD_USERNAME", "MD_PASSWORD", "Managing Director")
-    add("DIRECTOR1_USERNAME", "DIRECTOR1_PASSWORD", "Director")
-    add("DIRECTOR2_USERNAME", "DIRECTOR2_PASSWORD", "Director")
-    return accounts
-
-
-HR_ACCOUNTS = _load_hr_accounts()
+# The only credential left in .env — bootstraps the one super-admin HRUser row
+# on first startup (see api/apps.py::_bootstrap_admin_account). Every other
+# HR-portal account (MD, Directors, HR staff, etc.) is created and managed
+# from Account Management in the portal itself, stored in the HRUser table.
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "").strip()
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "").strip()
 
 # Security headers — safe defaults regardless of DEBUG/HTTPS setup.
 SECURE_CONTENT_TYPE_NOSNIFF = True

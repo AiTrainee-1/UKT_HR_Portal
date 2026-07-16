@@ -249,7 +249,7 @@ export default function Landing() {
       {/* ── Footer ── */}
       <div className="relative mt-12 text-center clay-fade-in" style={{ animationDelay: "0.3s" }}>
         <p className="text-xs font-medium" style={{ color: "rgba(0,100,150,0.3)" }}>
-          UKTextiles Enterprise Platform &nbsp;·&nbsp; On-Premise &nbsp;·&nbsp; Confidential
+          UKTextiles Enterprise Platform &nbsp;·&nbsp; On-Premise &nbsp;·&nbsp; Role-Based Access Control &nbsp;·&nbsp; Confidential
         </p>
       </div>
     </div>

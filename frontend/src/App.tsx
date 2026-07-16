@@ -3,7 +3,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import ConnectivityOverlay from "@/components/ConnectivityOverlay";
-import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import { AuthProvider, useAuth, canView } from "@/contexts/AuthContext";
+import { moduleForPath } from "@/lib/permission-modules";
+import { ApiError } from "@/lib/api-client/custom-fetch";
+import { toast } from "@/hooks/use-toast";
 import { BiometricSyncProvider } from "@/contexts/BiometricSyncContext";
 import GlobalSyncBanner from "@/components/GlobalSyncBanner";
 import NotFound from "@/pages/not-found";
@@ -43,6 +46,7 @@ import PayrollFull from "@/pages/hr/PayrollFull";
 import Settlement from "@/pages/hr/Settlement";
 import Reports from "@/pages/hr/Reports";
 import UserManagement from "@/pages/hr/UserManagement";
+import AccountManagement from "@/pages/hr/AccountManagement";
 import ActivityLogs from "@/pages/hr/ActivityLogs";
 import Settings from "@/pages/hr/Settings";
 import SalarySlip from "@/pages/hr/SalarySlip";
@@ -77,6 +81,20 @@ const queryClient = new QueryClient({
       retry: 1,
       staleTime: 30_000,
     },
+    mutations: {
+      onError: (error) => {
+        // Centralized so pages don't each need to special-case a view-only
+        // role's blocked write — see backend/api/permission_middleware.py,
+        // which is the actual enforcer this is just explaining.
+        if (error instanceof ApiError && error.status === 403 && (error.data as any)?.error === "permission_denied") {
+          toast({
+            title: "View-only access",
+            description: "You have view-only access to this section.",
+            variant: "destructive",
+          });
+        }
+      },
+    },
   },
 });
 
@@ -88,7 +106,7 @@ function ProtectedRoute({
   allowedRoles: ("hr" | "employee" | "erp")[];
 }) {
   const { isAuthenticated, isLoading, user } = useAuth();
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
 
   if (isLoading) {
     return (
@@ -125,6 +143,21 @@ function ProtectedRoute({
 
   if (!allowedRoles.includes(user.role as any)) {
     navigate(user.role === "hr" ? "/hr/dashboard" : "/employee/dashboard");
+    return null;
+  }
+
+  // Account Management is admin-only, independent of Role.permissions.
+  if (location.startsWith("/hr/account-management") && !user.isSuperAdmin) {
+    navigate("/hr/dashboard");
+    return null;
+  }
+
+  // Defense in depth — the API is the authoritative 403 for a hidden module,
+  // this just avoids flashing a broken page if a restricted user hits the
+  // URL directly (e.g. from a stale bookmark after their access changed).
+  const moduleKey = moduleForPath(location);
+  if (moduleKey && !canView(user, moduleKey)) {
+    navigate("/hr/dashboard");
     return null;
   }
 
@@ -226,6 +259,9 @@ function Router() {
       </Route>
       <Route path="/hr/user-management">
         {() => <ProtectedRoute component={UserManagement} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/account-management">
+        {() => <ProtectedRoute component={AccountManagement} allowedRoles={["hr"]} />}
       </Route>
       <Route path="/hr/activity-logs">
         {() => <ProtectedRoute component={ActivityLogs} allowedRoles={["hr"]} />}

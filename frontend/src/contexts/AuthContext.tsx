@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { useGetMe, getGetMeQueryKey } from "@/lib/api-client";
 import { useQueryClient } from "@tanstack/react-query";
+import type { PermissionLevel } from "@/lib/api-client/custom-hooks";
+import { resolvePermission } from "@/lib/permission-modules";
 
 type Role = "hr" | "employee";
 
@@ -8,6 +10,28 @@ interface UserInfo {
   role: Role;
   employeeId: number | null;
   name?: string;
+  isSuperAdmin?: boolean;
+  permissions?: Record<string, PermissionLevel>;
+}
+
+export type { PermissionLevel };
+
+// Cascading + fail-closed, mirroring backend permission_middleware.py: a
+// submodule with no explicit entry inherits its parent's level, and a
+// module missing from the whole chain defaults to "hidden".
+export function permissionLevel(user: UserInfo | null, moduleKey: string): PermissionLevel {
+  if (!user || user.role !== "hr") return "edit";
+  if (user.isSuperAdmin) return "edit";
+  return resolvePermission(user.permissions, moduleKey);
+}
+
+export function canView(user: UserInfo | null, moduleKey: string): boolean {
+  const level = permissionLevel(user, moduleKey);
+  return level === "view" || level === "edit";
+}
+
+export function canEdit(user: UserInfo | null, moduleKey: string): boolean {
+  return permissionLevel(user, moduleKey) === "edit";
 }
 
 interface AuthContextType {
@@ -62,7 +86,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const user: UserInfo | null = me ? {
     role: me.role as Role,
     employeeId: me.employeeId || null,
-    name: me.name
+    name: me.name,
+    isSuperAdmin: (me as { isSuperAdmin?: boolean }).isSuperAdmin,
+    permissions: (me as { permissions?: Record<string, PermissionLevel> }).permissions,
   } : null;
 
   const value = {

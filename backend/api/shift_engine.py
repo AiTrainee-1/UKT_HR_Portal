@@ -18,11 +18,24 @@ Late rules:
    are allowed to leave — extends the window in which punch2 is valid)
 
 Monthly deduction:
-  total_late = sum of (late_morning + late_return) across all days
-  free_permissions = 3 per month
+  late_punch_count = sum of (late_morning + late_return) across all days
+  approved_permissions = count of approved EmployeePermission requests this month
+  total_late = late_punch_count + approved_permissions   (merged pool — every
+               approved permission counts as a late entry here, on equal
+               footing with a late punch)
+  free_permissions = 3 per month (ONE shared allowance across the merged pool —
+               NOT 3 free late punches plus a separate 3 free permissions)
   billable_late = max(0, total_late - 3)
   shift_deductions = floor(billable_late / 3) * 0.25
   salary_deduction_amount = shift_deductions * daily_rate
+  permission_overage_count (stored, display-only) = max(0, approved_permissions - 3)
+               — shown to HR as "excess permissions" context, not used in the
+               billable_late math above (which uses the raw approved_permissions
+               count merged with late_punch_count before the single 3-free cut)
+
+Note: employees may still SUBMIT more than 3 permission requests per month
+(the old hard submission cap was removed) — only the deduction math treats
+the 4th-and-beyond approved one as a late entry.
 """
 
 import calendar
@@ -234,17 +247,29 @@ def compute_monthly_shift_summary(emp, year: int, month: int, daily_rate: Decima
     computes salary_deduction_amount if daily_rate is supplied.
     Returns the MonthlyShiftSummary instance.
     """
-    from .models import DailyShiftLog, MonthlyShiftSummary
+    from .models import DailyShiftLog, MonthlyShiftSummary, EmployeePermission
 
     logs = DailyShiftLog.objects.filter(
         employee=emp, date__year=year, date__month=month
     )
 
     total_shifts = sum(l.shifts_completed for l in logs) or Decimal("0")
-    total_late = sum(
+    late_punch_count = sum(
         (1 if l.late_morning else 0) + (1 if l.late_return else 0)
         for l in logs
     )
+
+    # All approved permission requests this month are merged into the same
+    # late-entry pool as late punches — ONE shared 3-free allowance covers
+    # the combined raw total (not a separate 3-free for permissions, which
+    # would double-discount). permission_overage below is display-only, so
+    # HR can see how many permissions pushed past the free-3 mark.
+    approved_permissions = EmployeePermission.objects.filter(
+        employee=emp, date__year=year, date__month=month, status="approved",
+    ).count()
+    permission_overage = max(0, approved_permissions - 3)
+
+    total_late = late_punch_count + approved_permissions
 
     free_permissions = 3
     permissions_used = min(total_late, free_permissions)
@@ -261,7 +286,8 @@ def compute_monthly_shift_summary(emp, year: int, month: int, daily_rate: Decima
         month=month,
         defaults={
             "total_shifts": total_shifts,
-            "total_late_count": total_late,
+            "total_late_count": late_punch_count,
+            "permission_overage_count": permission_overage,
             "permissions_used": permissions_used,
             "billable_late_count": billable_late,
             "shift_deductions": shift_deductions,

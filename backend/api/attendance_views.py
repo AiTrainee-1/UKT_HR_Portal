@@ -959,6 +959,7 @@ def attendance_late_summary(request: Request) -> Response:
             "totalShifts": str(s.total_shifts),
             "halfShiftDays": half_shift_map.get(emp.id, 0),
             "totalLateCount": s.total_late_count,
+            "permissionOverageCount": s.permission_overage_count,
             "permissionsUsed": s.permissions_used,
             "billableLateCount": s.billable_late_count,
             "shiftDeductions": str(s.shift_deductions),

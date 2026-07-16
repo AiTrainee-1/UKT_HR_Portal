@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useLocation } from 'wouter';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuth, canView } from '@/contexts/AuthContext';
+import { moduleForPath } from '@/lib/permission-modules';
 import { useListLeaveRequests, useListPermissions, useListResignations, useListAdvances } from '@/lib/api-client';
 import { usePayrollSettings } from '@/lib/api-client/custom-hooks';
 import {
@@ -8,7 +9,7 @@ import {
   Wallet, BarChart3, Shield, Activity, Settings, FileText, LogOut,
   ChevronRight, Search, X, Command, UserCheck, UserMinus, Banknote,
   CalendarCheck, Bell, Award, TrendingUp, Gift, CreditCard,
-  CalendarHeart, MoonStar, MessageCircle,
+  CalendarHeart, MoonStar, MessageCircle, UserCog,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -103,6 +104,9 @@ const navGroups: NavGroupData[] = [
   {
     heading: 'Administration',
     items: [
+      // Admin-only — filtered out for everyone else in HrSidebar below,
+      // regardless of Role.permissions (it's not a gated module at all).
+      { path: '/hr/account-management', label: 'Account Management', icon: UserCog },
       { path: '/hr/user-management', label: 'User Management', icon: Shield },
       { path: '/hr/activity-logs', label: 'Activity Logs', icon: Activity },
       { path: '/hr/chat', label: 'Chat', icon: MessageCircle },
@@ -417,10 +421,19 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
   const { user, logout } = useAuth();
   const [isSearchOpen, setIsSearchOpen] = useState(false);
 
-  const { data: leaveData }  = useListLeaveRequests(undefined, { query: { refetchInterval: 30_000 } } as any);
-  const { data: permData }   = useListPermissions(undefined, { refetchInterval: 30_000 } as any);
-  const { data: resignData } = useListResignations(undefined, { refetchInterval: 30_000 } as any);
-  const { data: advanceData } = useListAdvances(undefined, { refetchInterval: 30_000 } as any);
+  // Gated on the nav item each badge actually attaches to — if "Requests" (or
+  // "Recruitment > Resignations" / "Settlement") is hidden for this role, the
+  // badge never renders, so there's no reason to fetch the full record list
+  // just to compute a count nobody sees (and these endpoints correctly 403
+  // when hidden, since they're also the full-detail pages, not counts-only).
+  const canSeeRequests = canView(user, 'requests');
+  const canSeeResignations = canView(user, 'recruitment.resignations');
+  const canSeeSettlement = canView(user, 'settlement');
+
+  const { data: leaveData }  = useListLeaveRequests(undefined, { query: { refetchInterval: 30_000, enabled: canSeeRequests } } as any);
+  const { data: permData }   = useListPermissions(undefined, { refetchInterval: 30_000, enabled: canSeeRequests } as any);
+  const { data: resignData } = useListResignations(undefined, { refetchInterval: 30_000, enabled: canSeeResignations } as any);
+  const { data: advanceData } = useListAdvances(undefined, { refetchInterval: 30_000, enabled: canSeeSettlement } as any);
   const pendingCount =
     ((leaveData ?? []).filter((l: any) => l.status === 'pending').length) +
     ((permData  ?? []).filter((p: any) => p.status === 'pending').length);
@@ -503,7 +516,37 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
       <nav
         className="flex-1 overflow-y-auto py-3 px-2.5 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col gap-4"
       >
-        {navGroups.map((group, idx) => (
+        {navGroups.map((group, idx) => {
+          const visibleItems = group.items
+            // Children can carry their own module key distinct from the
+            // parent's (e.g. Departments/Designations/Manage Branch under
+            // Employees) — trim each child individually first...
+            .map((item) => {
+              if (!item.children) return item;
+              const visibleChildren = item.children.filter((c) => {
+                const moduleKey = moduleForPath(c.path);
+                return moduleKey ? canView(user, moduleKey) : true;
+              });
+              return { ...item, children: visibleChildren };
+            })
+            // ...then drop the parent row only if BOTH its own module and
+            // every child are hidden (a parent with a visible child stays,
+            // even if its own path's module happens to be hidden).
+            .filter((item) => {
+              // Night Shift page is also gated by the Settings toggle. Treat
+              // "not loaded yet" as enabled so the entry doesn't flash in
+              // and out on page load.
+              if (item.path === '/hr/night-shift' && settings?.nightShiftEnabled === false) return false;
+              // Account Management is admin-only, independent of Role.permissions.
+              if (item.path === '/hr/account-management') return !!user?.isSuperAdmin;
+              if (item.children) return item.children.length > 0;
+              const moduleKey = moduleForPath(item.path);
+              return moduleKey ? canView(user, moduleKey) : true;
+            });
+
+          if (visibleItems.length === 0) return null;
+
+          return (
           <div key={idx} className="flex flex-col gap-0.5">
             {group.heading && (
               <span
@@ -513,13 +556,7 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
                 {group.heading}
               </span>
             )}
-            {group.items
-              .filter((item) =>
-                // Night Shift page is gated by the Settings toggle; anything
-                // else is always visible. Treat "not loaded yet" as enabled
-                // so the entry doesn't flash in and out on page load.
-                item.path !== '/hr/night-shift' || settings?.nightShiftEnabled !== false
-              )
+            {visibleItems
               .map((item) => (
               <NavItem
                 key={item.path}
@@ -544,7 +581,8 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
               />
             ))}
           </div>
-        ))}
+          );
+        })}
       </nav>
 
       {/* ── Sign Out ── */}

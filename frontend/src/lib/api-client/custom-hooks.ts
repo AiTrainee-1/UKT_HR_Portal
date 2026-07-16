@@ -95,11 +95,13 @@ export type Advance = {
   repayments?: AdvanceRepaymentItem[];
 };
 
+export type PermissionLevel = "hidden" | "view" | "edit";
+
 export type Role = {
   id: number;
   name: string;
   description?: string | null;
-  permissions: Record<string, Record<string, boolean>>;
+  permissions: Record<string, PermissionLevel>;
   isSystem: boolean;
   createdAt?: string | null;
 };
@@ -434,7 +436,7 @@ export const useCreateRole = () =>
     mutationFn: (data: {
       name: string;
       description?: string;
-      permissions?: Record<string, Record<string, boolean>>;
+      permissions?: Record<string, PermissionLevel>;
     }) =>
       customFetch<Role>("/api/roles", {
         method: "POST",

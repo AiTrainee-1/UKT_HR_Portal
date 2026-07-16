@@ -25,6 +25,7 @@ from .models import (
     Department,
     Employee,
     EmployeePermission,
+    HRUser,
     HrLoginAttempt,
     Job,
     LeaveBalance,
@@ -116,8 +117,8 @@ def hr_login(request: Request) -> Response:
             f"Too many failed attempts. Try again in {HR_LOCKOUT_DURATION_MINUTES} minutes.", 429
         )
 
-    account = settings.HR_ACCOUNTS.get(username.lower())
-    valid = bool(account) and bool(password) and bcrypt.checkpw(password.encode(), account["passwordHash"].encode())
+    account = HRUser.objects.filter(username__iexact=username, is_active=True).first()
+    valid = bool(account) and bool(password) and bcrypt.checkpw(password.encode(), account.password_hash.encode())
 
     HrLoginAttempt.objects.create(username=username, ip_address=_get_ip(request), success=valid)
 
@@ -125,12 +126,23 @@ def hr_login(request: Request) -> Response:
         log_action(request, "login_failed", "auth", description=f"Failed login for: {username}")
         return _error("Invalid credentials", 401)
 
-    label = account["label"]
-    real_username = account["username"]
+    label = account.full_name or account.username
+    account.last_login = timezone.now()
+    account.save(update_fields=["last_login"])
     # Shorter-lived token than employee sessions — this is the privileged portal.
-    token = sign_token({"role": "hr", "name": label, "username": real_username}, expires_in=timedelta(hours=12))
-    request.jwt_user = {"role": "hr", "name": label, "username": real_username}
-    log_action(request, "login", "auth", description=f"{label} ({real_username}) logged in")
+    # Permissions are NOT baked into the token — see permission_middleware.py,
+    # which re-checks HRUser.is_active/role.permissions fresh on every request
+    # so an Admin revoking access takes effect immediately, not after expiry.
+    token_payload = {
+        "role": "hr",
+        "name": label,
+        "username": account.username,
+        "hrUserId": account.id,
+        "isSuperAdmin": account.is_super_admin,
+    }
+    token = sign_token(token_payload, expires_in=timedelta(hours=12))
+    request.jwt_user = token_payload
+    log_action(request, "login", "auth", description=f"{label} ({account.username}) logged in")
     return Response({"token": token, "role": "hr", "employeeId": None, "name": label})
 
 
@@ -174,13 +186,24 @@ def set_password(request: Request) -> Response:
 @require_auth
 def auth_me(request: Request) -> Response:
     user = request.jwt_user
-    return Response(
-        {
-            "role": user.get("role"),
-            "employeeId": user.get("employeeId"),
-            "name": user.get("name", ""),
-        }
-    )
+    payload = {
+        "role": user.get("role"),
+        "employeeId": user.get("employeeId"),
+        "name": user.get("name", ""),
+    }
+    if user.get("role") == "hr":
+        # Resolved fresh from the DB (not trusted from the token) so a
+        # permission change by an Admin is reflected on the next page load.
+        hr_user = (
+            HRUser.objects.select_related("role")
+            .filter(id=user.get("hrUserId"), is_active=True)
+            .first()
+        )
+        is_super_admin = bool(hr_user and hr_user.is_super_admin)
+        permissions = (hr_user.role.permissions if hr_user and hr_user.role else {}) or {}
+        payload["isSuperAdmin"] = is_super_admin
+        payload["permissions"] = permissions
+    return Response(payload)
 
 
 # --- Departments ---

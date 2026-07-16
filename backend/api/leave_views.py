@@ -315,6 +315,13 @@ def employee_request_action(request: Request, pk: int) -> Response:
 
 
 # ── Employee Permissions ──────────────────────────────────────────────────────
+#
+# There is NO hard cap on how many permission requests an employee can
+# submit — MONTHLY_PERMISSION_LIMIT below is purely informational (shown in
+# the UI as "used X of 3 free"). Approved permissions beyond this number are
+# not blocked; they're picked up by the payroll deduction engine instead
+# (see shift_engine.compute_monthly_shift_summary), which treats each
+# approved permission past the first 3 as a late entry.
 
 MONTHLY_PERMISSION_LIMIT = 3
 
@@ -390,19 +397,6 @@ def employee_permissions(request: Request) -> Response:
         emp = Employee.objects.get(pk=emp_id)
     except Employee.DoesNotExist:
         return Response({"error": "Employee not found"}, status=404)
-
-    month_used = EmployeePermission.objects.filter(
-        employee=emp,
-        date__year=parsed_date.year,
-        date__month=parsed_date.month,
-        status__in=["pending", "approved"],
-    ).count()
-
-    if month_used >= MONTHLY_PERMISSION_LIMIT:
-        return Response(
-            {"error": f"Employee has already used {MONTHLY_PERMISSION_LIMIT} permissions this month"},
-            status=400,
-        )
 
     perm_time = data.get("permissionTime") or data.get("permission_time") or None
     if perm_time:

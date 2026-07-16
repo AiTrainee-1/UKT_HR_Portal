@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
 import HrLayout from "@/components/HrLayout";
+import { useAuth, canView } from "@/contexts/AuthContext";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   useGetHrDashboardSummary,
@@ -175,6 +176,7 @@ function daysUntil(iso: string) {
 
 export default function HrDashboard() {
   const [, navigate] = useLocation();
+  const { user } = useAuth();
   // Sync lives in a root-level context so it survives navigating away from
   // the Dashboard, and is shared with the Attendance page's sync button.
   const { isSyncing, lastSyncedAt, triggerSync } = useBiometricSync();
@@ -184,15 +186,23 @@ export default function HrDashboard() {
   const month = now.getMonth() + 1;
   const year  = now.getFullYear();
 
+  // Holidays and audit stats are always-readable aggregate data (see backend
+  // permission_middleware.py ALWAYS_READABLE_GET_PREFIXES) — but advances and
+  // pending permissions are full sensitive records reused here just for a
+  // Dashboard count, so those two are only fetched when the viewer actually
+  // has access to Settlement / Requests respectively.
+  const canSeeSettlement = canView(user, "settlement");
+  const canSeeRequests = canView(user, "requests");
+
   const { data: summary, isLoading: sumLoading } = useGetHrDashboardSummary();
   const { data: trends  } = useGetSalaryTrends();
   const { data: depts   } = useListDepartments();
   const { data: attn    } = useAttendanceSummary();
   const { data: attnTrend } = useAttendanceMonthlyTrend(year, month);
-  const { data: advances  } = useListAdvances({ status: "approved" });
+  const { data: advances  } = useListAdvances({ status: "approved" }, { enabled: canSeeSettlement } as any);
   const { data: holidays  } = useListHolidays({ year });
   const { data: auditStats } = useAuditLogStats();
-  const { data: pendingPerms } = useListPermissions({ status: "pending", month, year });
+  const { data: pendingPerms } = useListPermissions({ status: "pending", month, year }, { enabled: canSeeRequests } as any);
 
   // ── Derived ────────────────────────────────────────────────────────────────
 

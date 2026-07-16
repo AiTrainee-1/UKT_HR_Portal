@@ -8,7 +8,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from .auth import require_hr
+from .auth import require_hr, require_super_admin
 from .models import HRUser, Role, AuditLog
 from .audit_utils import log_action
 
@@ -63,7 +63,7 @@ def audit_log_json(log):
 # ── Roles ────────────────────────────────────────────────────────────────────
 
 @api_view(["GET", "POST"])
-@require_hr
+@require_super_admin
 def roles(request: Request) -> Response:
     if request.method == "GET":
         qs = Role.objects.order_by("name")
@@ -85,7 +85,7 @@ def roles(request: Request) -> Response:
 
 
 @api_view(["GET", "PUT", "DELETE"])
-@require_hr
+@require_super_admin
 def role_detail(request: Request, pk: int) -> Response:
     try:
         role = Role.objects.get(pk=pk)
@@ -117,7 +117,7 @@ def role_detail(request: Request, pk: int) -> Response:
 # ── HR Users ─────────────────────────────────────────────────────────────────
 
 @api_view(["GET", "POST"])
-@require_hr
+@require_super_admin
 def hr_users(request: Request) -> Response:
     if request.method == "GET":
         qs = HRUser.objects.select_related("role", "department", "branch").order_by("username")
@@ -144,7 +144,7 @@ def hr_users(request: Request) -> Response:
 
 
 @api_view(["GET", "PUT", "DELETE"])
-@require_hr
+@require_super_admin
 def hr_user_detail(request: Request, pk: int) -> Response:
     try:
         u = HRUser.objects.select_related("role", "department", "branch").get(pk=pk)

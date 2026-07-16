@@ -500,6 +500,12 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
     #    Late counts follow the active attendance mode:
     #      simple → is_late flags on the final AttendanceDayRecords (incl. overrides)
     #      strict → 4-punch engine summary (morning late + lunch-return late)
+    #    All approved permission requests this month count as late entries too,
+    #    merged into the same late-punch pool (applies to both modes — see
+    #    shift_engine.compute_monthly_shift_summary for the strict-mode
+    #    equivalent). ONE shared 3-free allowance covers the combined raw
+    #    total — permissions are NOT pre-filtered by their own 3-free before
+    #    merging, since that would double-discount the free allowance.
     late_penalty = Decimal("0")
     late_summary_data = {
         "totalLateCount": late_count,
@@ -508,12 +514,17 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
         "shiftDeductions": 0.0,
     }
     if use_simple:
-        total_late = late_count  # counted in the day loop from final records
+        from .models import EmployeePermission
+        approved_permissions = EmployeePermission.objects.filter(
+            employee=emp, date__year=year, date__month=month, status="approved",
+        ).count()
+
+        total_late = late_count + approved_permissions  # counted in the day loop from final records
         free_permissions = 3
         billable_late = max(0, total_late - free_permissions)
         shift_deductions = Decimal(str(billable_late // 3)) * Decimal("0.25")
         late_summary_data = {
-            "totalLateCount": total_late,
+            "totalLateCount": late_count,
             "permissionsUsed": min(total_late, free_permissions),
             "billableLateCount": billable_late,
             "shiftDeductions": float(shift_deductions),
