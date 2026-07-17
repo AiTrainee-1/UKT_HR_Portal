@@ -14,8 +14,9 @@ import {
   useCreateEmployee, getListEmployeesQueryKey,
   useListDepartments, useListDesignations,
 } from "@/lib/api-client";
-import { usePayrollSettings } from "@/lib/api-client/custom-hooks";
+import { usePayrollSettings, useListBranches, getListBranchesQueryKey } from "@/lib/api-client/custom-hooks";
 import { useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -33,6 +34,7 @@ const schema = z.object({
   employmentType: z.enum(["staff", "production"]),
   departmentId: z.string().optional(),
   designationId: z.string().optional(),
+  branchId: z.string().optional(),
   salaryType: z.enum(["monthly", "weekly"]),
   salaryAmount: z.string().optional(),
   salaryPerShift: z.string().optional(),
@@ -67,8 +69,10 @@ export default function NewEmployee() {
   const queryClient = useQueryClient();
   const mutation = useCreateEmployee();
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const { user } = useAuth();
 
   const { data: departments } = useListDepartments();
+  const { data: branches } = useListBranches({ enabled: !user?.branchId, queryKey: getListBranchesQueryKey() });
   const [selectedDeptId, setSelectedDeptId] = useState<string>("");
   const { data: designations } = useListDesignations(
     selectedDeptId ? { departmentId: Number(selectedDeptId) } : undefined,
@@ -112,6 +116,7 @@ export default function NewEmployee() {
           employmentType: data.employmentType,
           departmentId: data.departmentId ? Number(data.departmentId) : undefined,
           designationId: data.designationId ? Number(data.designationId) : undefined,
+          branchId: data.branchId ? Number(data.branchId) : undefined,
           salaryType: data.salaryType,
           salaryAmount: data.employmentType === "production" ? undefined : Number(data.salaryAmount),
           salaryPerShift: data.employmentType === "production" ? Number(data.salaryPerShift) : undefined,
@@ -275,6 +280,26 @@ export default function NewEmployee() {
                     <FormMessage />
                   </FormItem>
                 )} />
+                {!user?.branchId && (
+                  <FormField control={form.control} name="branchId" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Branch</FormLabel>
+                      <FormControl>
+                        <select
+                          value={field.value ?? ""}
+                          onChange={field.onChange}
+                          className="w-full h-9 rounded-md border px-3 text-sm bg-background"
+                        >
+                          <option value="">— Select Branch —</option>
+                          {(branches ?? []).map((b) => (
+                            <option key={b.id} value={String(b.id)}>{b.name}{b.isHeadOffice ? " (Head Office)" : ""}</option>
+                          ))}
+                        </select>
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                )}
               </CardContent>
             </Card>
 

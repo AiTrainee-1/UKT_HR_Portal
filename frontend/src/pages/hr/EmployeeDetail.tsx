@@ -115,6 +115,14 @@ export default function EmployeeDetail() {
                 className={employee.status === "active" ? "bg-green-100 text-green-800" : ""}>
                 {employee.status}
               </Badge>
+              {employee.branchName && (
+                <Badge variant="outline" className="gap-1.5 text-teal-700 border-teal-200 bg-teal-50">
+                  <Building size={11} /> {employee.branchName}
+                  {employee.unitCode && (
+                    <span className="text-[10px] font-mono font-black text-teal-800">{employee.unitCode}</span>
+                  )}
+                </Badge>
+              )}
             </div>
             <p className="text-muted-foreground text-sm mt-0.5">
               {employee.departmentName}

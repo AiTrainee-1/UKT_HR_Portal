@@ -9,6 +9,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import require_hr, require_auth, get_token_employee_id
+from .branch_scope import get_branch_scope, scope_to_branch
 from .models import SalarySlip, Employee, PayrollSettings, LeaveBalance
 
 MONTHS = ["","January","February","March","April","May","June",
@@ -249,6 +250,7 @@ def salary_slips(request: Request) -> Response:
         .select_related("employee", "employee__department", "employee__designation")
         .order_by("-year", "-month", "employee__employee_code")
     )
+    qs = scope_to_branch(qs, request, field="employee__branch_id")
     if emp_id:   qs = qs.filter(employee_id=emp_id)
     if month:    qs = qs.filter(month=int(month))
     if year:     qs = qs.filter(year=int(year))
@@ -287,6 +289,9 @@ def salary_slip_detail(request: Request, pk: int) -> Response:
     # Employees can only view their own salary slips
     token_emp_id = get_token_employee_id(request)
     if token_emp_id and s.employee_id != token_emp_id:
+        return Response({"error": "Access denied"}, status=403)
+    branch_id = get_branch_scope(request)
+    if branch_id is not None and s.employee.branch_id != branch_id:
         return Response({"error": "Access denied"}, status=403)
     return Response(slip_json(s, include_settings=True))
 

@@ -19,6 +19,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import require_hr
+from .branch_scope import scope_to_branch
 from .models import (
     Advance,
     AdvanceRepayment,
@@ -1201,6 +1202,7 @@ def work_session_detail(request: Request, pk: int) -> Response:
 @require_hr
 def payroll_list(request: Request) -> Response:
     qs = Payroll.objects.select_related("employee").order_by("-year", "-month", "employee__first_name")
+    qs = scope_to_branch(qs, request, field="employee__branch_id")
     emp_id = request.query_params.get("employeeId")
     month = request.query_params.get("month")
     year = request.query_params.get("year")

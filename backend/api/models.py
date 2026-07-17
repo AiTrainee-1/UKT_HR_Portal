@@ -8,11 +8,18 @@ from django.db.models import Q
 
 class Branch(models.Model):
     name = models.TextField()
+    code = models.TextField(null=True, blank=True, unique=True, db_column="code")
     location = models.TextField(null=True, blank=True)
     address = models.TextField(null=True, blank=True)
     manager_name = models.TextField(null=True, blank=True, db_column="manager_name")
     phone = models.TextField(null=True, blank=True)
+    is_head_office = models.BooleanField(default=False, db_column="is_head_office")
     is_active = models.BooleanField(default=True, db_column="is_active")
+    # Counter behind the auto-generated per-branch employee "Unit Code"
+    # (HO-1, HO-2, ... / Unit1-1, Unit1-2, ...) — see Employee.unit_code and
+    # views.py::_assign_unit_code. Only ever incremented, never reused, even
+    # if an employee with an earlier number is later deleted or moved out.
+    next_employee_seq = models.IntegerField(default=0, db_column="next_employee_seq")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
 
     class Meta:
@@ -83,6 +90,10 @@ class Employee(models.Model):
         Branch, on_delete=models.SET_NULL, null=True, blank=True,
         db_column="branch_id", related_name="employees",
     )
+    # Auto-generated from Branch.code + Branch.next_employee_seq at creation
+    # time (and regenerated if the employee moves to a different branch) —
+    # see views.py::_assign_unit_code. Not user-editable.
+    unit_code = models.TextField(null=True, blank=True, unique=True, db_column="unit_code")
     reporting_manager = models.ForeignKey(
         "self", on_delete=models.SET_NULL, null=True, blank=True,
         db_column="reporting_manager_id", related_name="subordinates",

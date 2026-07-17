@@ -21,6 +21,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   useListRoles, useCreateRole, useUpdateRole, useDeleteRole,
   useListHrUsers, useCreateHrUser, useUpdateHrUser, useDeleteHrUser,
+  useListBranches,
   getListRolesQueryKey, getListHrUsersQueryKey,
   type Role, type HrUserItem, type PermissionLevel,
 } from "@/lib/api-client/custom-hooks";
@@ -223,6 +224,8 @@ function HrUserDialog({
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [roleId, setRoleId] = useState<string>(user?.roleId ? String(user.roleId) : "");
+  const [branchId, setBranchId] = useState<string>(user?.branchId ? String(user.branchId) : "");
+  const { data: branches } = useListBranches();
 
   const createMutation = useCreateHrUser();
   const updateMutation = useUpdateHrUser();
@@ -245,6 +248,7 @@ function HrUserDialog({
             fullName: fullName || undefined,
             email: email || undefined,
             roleId: roleId ? Number(roleId) : undefined,
+            branchId: branchId ? Number(branchId) : null,
             ...(password ? { password } : {}),
           },
         });
@@ -256,6 +260,7 @@ function HrUserDialog({
           fullName: fullName || undefined,
           email: email || undefined,
           roleId: roleId ? Number(roleId) : undefined,
+          branchId: branchId ? Number(branchId) : undefined,
         });
         toast({ title: "Account created" });
       }
@@ -327,6 +332,21 @@ function HrUserDialog({
               </SelectContent>
             </Select>
             <p className="text-xs text-gray-400">Access is determined entirely by the selected role's module permissions.</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Branch</Label>
+            <Select value={branchId || "__all__"} onValueChange={(v) => setBranchId(v === "__all__" ? "" : v)}>
+              <SelectTrigger>
+                <SelectValue placeholder="All branches" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All branches (unscoped)</SelectItem>
+                {branches?.map((b) => (
+                  <SelectItem key={b.id} value={String(b.id)}>{b.name}{b.isHeadOffice ? " (Head Office)" : ""}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-gray-400">Leave as "All branches" for a company-wide role (MD, Director, HR Admin). Assign one branch to scope this account to only that branch's data.</p>
           </div>
         </div>
 
@@ -433,6 +453,7 @@ export default function AccountManagement() {
                         <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50">Username</TableHead>
                         <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50">Full Name</TableHead>
                         <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50">Role</TableHead>
+                        <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50">Branch</TableHead>
                         <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50">Status</TableHead>
                         <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50">Last Login</TableHead>
                         <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50 text-right">Actions</TableHead>
@@ -449,6 +470,13 @@ export default function AccountManagement() {
                           </TableCell>
                           <TableCell className="text-sm text-gray-500">{u.fullName || "—"}</TableCell>
                           <TableCell className="text-sm text-gray-500">{u.roleName || "—"}</TableCell>
+                          <TableCell className="text-sm text-gray-500">
+                            {u.branchName ? (
+                              <Badge variant="outline" className="text-[10px] text-teal-700 border-teal-200 bg-teal-50">{u.branchName}</Badge>
+                            ) : (
+                              <span className="text-xs text-gray-400">All branches</span>
+                            )}
+                          </TableCell>
                           <TableCell>
                             {u.isActive ? (
                               <Badge className="text-xs bg-green-50 text-green-600 border-green-200 gap-1"><CheckCircle2 size={11} /> Active</Badge>

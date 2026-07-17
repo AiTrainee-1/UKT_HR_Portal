@@ -23,21 +23,27 @@ import {
   useListEmployees, useListDepartments, useDeleteEmployee, useUpdateEmployeeStatus,
   getListEmployeesQueryKey
 } from "@/lib/api-client";
+import { useListBranches, getListBranchesQueryKey } from "@/lib/api-client/custom-hooks";
 import { useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Search, UserCheck, UserX, Trash2, Eye, Pencil } from "lucide-react";
+import { Plus, Search, UserCheck, UserX, Trash2, Eye, Pencil, UploadCloud } from "lucide-react";
 
 export default function Employees() {
   const [, navigate] = useLocation();
   const [search, setSearch] = useState("");
   const [deptFilter, setDeptFilter] = useState("all");
+  const [branchFilter, setBranchFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState<"staff" | "production">("staff");
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { user } = useAuth();
+  const isBranchScoped = !!user?.branchId;
 
   const { data: rawEmployees, isLoading } = useListEmployees({
     departmentId: deptFilter !== "all" ? Number(deptFilter) : undefined,
+    branchId: !isBranchScoped && branchFilter !== "all" ? Number(branchFilter) : undefined,
     status: statusFilter !== "all" ? statusFilter : undefined,
   });
 
@@ -58,6 +64,7 @@ export default function Employees() {
     );
   });
   const { data: departments } = useListDepartments();
+  const { data: branches } = useListBranches({ enabled: !isBranchScoped, queryKey: getListBranchesQueryKey() });
   const deleteMutation = useDeleteEmployee();
   const statusMutation = useUpdateEmployeeStatus();
 
@@ -120,9 +127,14 @@ export default function Employees() {
               ))}
             </div>
           </div>
-          <Button onClick={() => navigate("/hr/employees/new")} data-testid="button-add-employee">
-            <Plus size={16} className="mr-2" /> Add Employee
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => navigate("/hr/employees/bulk-upload")} data-testid="button-bulk-upload">
+              <UploadCloud size={16} className="mr-2" /> Bulk Upload
+            </Button>
+            <Button onClick={() => navigate("/hr/employees/new")} data-testid="button-add-employee">
+              <Plus size={16} className="mr-2" /> Add Employee
+            </Button>
+          </div>
         </div>
 
         {/* Filters */}
@@ -149,6 +161,19 @@ export default function Employees() {
                 ))}
               </SelectContent>
             </Select>
+            {!isBranchScoped && (
+              <Select value={branchFilter} onValueChange={setBranchFilter}>
+                <SelectTrigger className="w-full sm:w-44" data-testid="select-branch">
+                  <SelectValue placeholder="Branch" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Branches</SelectItem>
+                  {branches?.map((b) => (
+                    <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
             <Select value={statusFilter} onValueChange={setStatusFilter}>
               <SelectTrigger className="w-full sm:w-36" data-testid="select-status">
                 <SelectValue placeholder="Status" />
@@ -169,8 +194,10 @@ export default function Employees() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="pl-4">Code</TableHead>
+                  <TableHead>Unit Code</TableHead>
                   <TableHead>Name</TableHead>
                   <TableHead className="hidden md:table-cell">Department</TableHead>
+                  <TableHead className="hidden md:table-cell">Branch</TableHead>
                   <TableHead className="hidden lg:table-cell">Phone</TableHead>
                   <TableHead className="hidden lg:table-cell">Salary</TableHead>
                   <TableHead>Status</TableHead>
@@ -180,7 +207,7 @@ export default function Employees() {
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="py-16">
+                    <TableCell colSpan={9} className="py-16">
                       <Loader />
                     </TableCell>
                   </TableRow>
@@ -189,6 +216,18 @@ export default function Employees() {
                     <TableRow key={emp.id} data-testid={`row-employee-${emp.id}`}>
                       <TableCell className="pl-4">
                         <Badge variant="outline" className="font-mono text-xs">{emp.employeeCode}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        {emp.unitCode ? (
+                          <span
+                            className="text-xs font-mono font-bold text-teal-700 bg-teal-50 border border-teal-200 px-2 py-1 rounded"
+                            title={emp.branchName ?? undefined}
+                          >
+                            {emp.unitCode}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2.5">
@@ -200,6 +239,18 @@ export default function Employees() {
                         </div>
                       </TableCell>
                       <TableCell className="hidden md:table-cell text-sm text-muted-foreground">{emp.departmentName ?? "—"}</TableCell>
+                      <TableCell className="hidden md:table-cell text-sm text-muted-foreground">
+                        {emp.branchName ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            {emp.branchName}
+                            {emp.branchCode && (
+                              <span className="text-[10px] font-mono font-semibold text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded">
+                                {emp.branchCode}
+                              </span>
+                            )}
+                          </span>
+                        ) : "—"}
+                      </TableCell>
                       <TableCell className="hidden lg:table-cell text-sm text-muted-foreground">{emp.phone}</TableCell>
                       <TableCell className="hidden lg:table-cell text-sm">
                         ₹{Number(emp.salaryAmount ?? 0).toLocaleString("en-IN")}
@@ -246,7 +297,7 @@ export default function Employees() {
                   ))
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center py-12 text-muted-foreground">No employees found</TableCell>
+                    <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">No employees found</TableCell>
                   </TableRow>
                 )}
               </TableBody>

@@ -10,12 +10,14 @@ from django.db.models import Count, DecimalField, Q, Sum, Value
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.decorators import api_view, throttle_classes
+from rest_framework.decorators import api_view, parser_classes, throttle_classes
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 
 from .auth import require_auth, require_hr, get_token_employee_id
+from .branch_scope import get_branch_scope, scope_to_branch
 from .jwt_utils import sign_token
 from .audit_utils import log_action, _get_ip
 from .models import (
@@ -196,7 +198,7 @@ def auth_me(request: Request) -> Response:
         # Resolved fresh from the DB (not trusted from the token) so a
         # permission change by an Admin is reflected on the next page load.
         hr_user = (
-            HRUser.objects.select_related("role")
+            HRUser.objects.select_related("role", "branch")
             .filter(id=user.get("hrUserId"), is_active=True)
             .first()
         )
@@ -204,6 +206,8 @@ def auth_me(request: Request) -> Response:
         permissions = (hr_user.role.permissions if hr_user and hr_user.role else {}) or {}
         payload["isSuperAdmin"] = is_super_admin
         payload["permissions"] = permissions
+        payload["branchId"] = hr_user.branch_id if hr_user else None
+        payload["branchName"] = hr_user.branch.name if hr_user and hr_user.branch else None
     return Response(payload)
 
 
@@ -261,7 +265,7 @@ def delete_department(request: Request, pk: int) -> Response:
 
 
 def _employee_queryset():
-    return Employee.objects.select_related("department", "designation")
+    return Employee.objects.select_related("department", "designation", "branch")
 
 
 def _serialize_employee(emp: Employee) -> dict:
@@ -278,8 +282,10 @@ def employees(request: Request) -> Response:
 
 def _employees_list(request: Request) -> Response:
     qs = _employee_queryset()
+    qs = scope_to_branch(qs, request)
     dept_id = request.query_params.get("departmentId")
     desig_id = request.query_params.get("designationId")
+    branch_id = request.query_params.get("branchId")
     emp_status = request.query_params.get("status")
     salary_type = request.query_params.get("salaryType")
     search = request.query_params.get("search", "").strip()
@@ -287,6 +293,8 @@ def _employees_list(request: Request) -> Response:
         qs = qs.filter(department_id=int(dept_id))
     if desig_id:
         qs = qs.filter(designation_id=int(desig_id))
+    if branch_id:
+        qs = qs.filter(branch_id=int(branch_id))
     if emp_status:
         qs = qs.filter(status=emp_status)
     if salary_type:
@@ -296,61 +304,150 @@ def _employees_list(request: Request) -> Response:
     return Response([_serialize_employee(e) for e in qs])
 
 
-def _employees_create(request: Request) -> Response:
-    data = request.data
+def _assign_unit_code(branch_id: int | None) -> str | None:
+    """
+    Next "<branch code>-<n>" identifier for a branch, e.g. HO-1, HO-2,
+    Unit1-1 — atomically incremented (select_for_update, inside a
+    transaction) so two concurrent requests can never be handed the same
+    number, and a number is never reused even after the employee holding it
+    is later deleted or moved to a different branch. None if the employee
+    has no branch, or that branch has no code set yet.
+    """
+    if branch_id is None:
+        return None
 
-    # Resolve department: prefer departmentId (int FK), fall back to name string
+    from django.db import transaction
+    from .models import Branch
+
+    with transaction.atomic():
+        branch = Branch.objects.select_for_update().filter(pk=branch_id).first()
+        if branch is None or not branch.code:
+            return None
+        branch.next_employee_seq += 1
+        branch.save(update_fields=["next_employee_seq"])
+        return f"{branch.code}-{branch.next_employee_seq}"
+
+
+def _resolve_employee_relations(data: dict, request: Request) -> tuple[dict, list[str]]:
+    """
+    Resolve department/designation/branch from either an <field>Id (int FK —
+    what the Add Employee dropdowns send) or a plain <field> name string
+    (what the bulk-upload Excel importer sends). Returns (kwargs, warnings)
+    where kwargs has department/designation/branch_id ready for
+    Employee.objects.create(), and warnings are non-fatal notes about names
+    that couldn't be matched (the row/request still succeeds).
+    """
+    from .models import Branch, Designation as _Desig
+
+    warnings: list[str] = []
+
     dept = None
     if data.get("departmentId"):
         dept = Department.objects.filter(pk=int(data["departmentId"])).first()
-    elif data.get("department", "").strip():
-        dept, _ = Department.objects.get_or_create(name=data["department"].strip())
+    elif str(data.get("department") or "").strip():
+        dept_name = str(data["department"]).strip()
+        dept = Department.objects.filter(name__iexact=dept_name).first()
+        if dept is None:
+            dept, _created = Department.objects.get_or_create(name=dept_name)
 
-    # Resolve designation
     desig = None
     if data.get("designationId"):
-        from .models import Designation as _Desig
         desig = _Desig.objects.filter(pk=int(data["designationId"])).first()
+    elif str(data.get("designation") or "").strip():
+        desig_title = str(data["designation"]).strip()
+        desig_qs = _Desig.objects.filter(title__iexact=desig_title)
+        desig = (desig_qs.filter(department=dept).first() if dept else None) or desig_qs.first()
+        if desig is None:
+            warnings.append(f"Designation '{desig_title}' not found — left blank")
 
-    employee_code = (data.get("employeeCode") or "").strip()
+    # A branch-scoped HR user can only ever create employees in their own
+    # branch, regardless of what the client/row sends. Unscoped users (super
+    # admin, MD/Directors, branch-less HR) pick one explicitly, by id or name.
+    scoped_branch_id = get_branch_scope(request)
+    if scoped_branch_id is not None:
+        branch_id = scoped_branch_id
+    elif data.get("branchId"):
+        branch_id = int(data["branchId"])
+    elif str(data.get("branch") or "").strip():
+        branch_name = str(data["branch"]).strip()
+        b = Branch.objects.filter(name__iexact=branch_name).first()
+        branch_id = b.id if b else None
+        if b is None:
+            warnings.append(f"Branch '{branch_name}' not found — left unassigned")
+    else:
+        branch_id = None
+
+    return {"department": dept, "designation": desig, "branch_id": branch_id}, warnings
+
+
+def _create_employee_from_data(data: dict, request: Request) -> tuple[Employee | None, str | None, list[str]]:
+    """
+    Create one Employee from a plain camelCase dict — the shape shared by
+    both the single Add Employee JSON body and one row of a bulk-upload
+    Excel import. Returns (employee, error, warnings): error is a hard-fail
+    reason (nothing created); warnings are non-fatal notes about fields that
+    were skipped (e.g. an unmatched department/branch name).
+    """
+    employee_code = str(data.get("employeeCode") or "").strip()
+    first_name = str(data.get("firstName") or "").strip()
+    last_name = str(data.get("lastName") or "").strip()
+    phone = str(data.get("phone") or "").strip()
+
     if not employee_code:
-        return _error("Employee code is required")
+        return None, "Employee code is required", []
+    if not first_name:
+        return None, "First name is required", []
+    if not last_name:
+        return None, "Last name is required", []
+    if not phone:
+        return None, "Phone is required", []
     if Employee.objects.filter(employee_code=employee_code).exists():
-        return _error("Employee code already exists")
+        return None, f"Employee code '{employee_code}' already exists", []
+
+    relations, warnings = _resolve_employee_relations(data, request)
+    unit_code = _assign_unit_code(relations["branch_id"])
 
     emp = Employee.objects.create(
         employee_code=employee_code,
-        first_name=data.get("firstName"),
-        last_name=data.get("lastName"),
-        gender=data.get("gender"),
+        first_name=first_name,
+        last_name=last_name,
+        gender=data.get("gender") or None,
         date_of_birth=data.get("dateOfBirth") or None,
-        email=data.get("email"),
-        phone=data.get("phone"),
-        role=data.get("role"),
-        employment_type=data.get("employmentType", "staff"),
-        department=dept,
-        designation=desig,
-        salary_type=data.get("salaryType", "monthly"),
+        email=data.get("email") or None,
+        phone=phone,
+        role=data.get("role") or None,
+        employment_type=data.get("employmentType") or "staff",
+        department=relations["department"],
+        designation=relations["designation"],
+        branch_id=relations["branch_id"],
+        unit_code=unit_code,
+        salary_type=data.get("salaryType") or "monthly",
         salary_amount=parse_decimal(data.get("salaryAmount")),
         salary_per_shift=parse_decimal(data.get("salaryPerShift")),
-        bank_name=data.get("bankName"),
-        bank_account=data.get("bankAccount"),
-        bank_ifsc=data.get("bankIfsc"),
-        pf_number=data.get("pfNumber"),
-        esi_number=data.get("esiNumber"),
-        id_proof=data.get("idProof"),
-        address=data.get("address"),
-        join_date=data.get("joinDate"),
-        father_name=data.get("fatherName"),
-        mother_name=data.get("motherName"),
-        biometric_device_id=data.get("biometricDeviceId"),
-        photo_url=data.get("photoUrl"),
-        blood_group=data.get("bloodGroup"),
-        emergency_contact=data.get("emergencyContact"),
+        bank_name=data.get("bankName") or None,
+        bank_account=data.get("bankAccount") or None,
+        bank_ifsc=data.get("bankIfsc") or None,
+        pf_number=data.get("pfNumber") or None,
+        esi_number=data.get("esiNumber") or None,
+        id_proof=data.get("idProof") or None,
+        address=data.get("address") or None,
+        join_date=data.get("joinDate") or None,
+        father_name=data.get("fatherName") or None,
+        mother_name=data.get("motherName") or None,
+        biometric_device_id=data.get("biometricDeviceId") or None,
+        photo_url=data.get("photoUrl") or None,
+        blood_group=data.get("bloodGroup") or None,
+        emergency_contact=data.get("emergencyContact") or None,
     )
-    # Auto-assign production shift if applicable
     from .shift_views import auto_assign_production_shift
     auto_assign_production_shift(emp)
+    return emp, None, warnings
+
+
+def _employees_create(request: Request) -> Response:
+    emp, error, _warnings = _create_employee_from_data(request.data, request)
+    if error:
+        return _error(error)
 
     emp = _employee_queryset().get(pk=emp.pk)
     log_action(request, "create", "employees", record_id=emp.id,
@@ -367,17 +464,19 @@ def employee_detail(request: Request, pk: int) -> Response:
     return require_hr(_employee_delete)(request, pk)
 
 
-def _employee_get(_request: Request, pk: int) -> Response:
-    emp = _employee_queryset().filter(pk=pk).first()
+def _employee_get(request: Request, pk: int) -> Response:
+    emp = scope_to_branch(_employee_queryset(), request).filter(pk=pk).first()
     if not emp:
         return _error("Employee not found", 404)
     return Response(_serialize_employee(emp))
 
 
 def _employee_update(request: Request, pk: int) -> Response:
-    emp = _employee_queryset().filter(pk=pk).first()
+    emp = scope_to_branch(_employee_queryset(), request).filter(pk=pk).first()
     if not emp:
         return _error("Employee not found", 404)
+
+    original_branch_id = emp.branch_id
 
     # Handle department: prefer departmentId (int FK), fall back to name string
     if "departmentId" in request.data:
@@ -393,6 +492,21 @@ def _employee_update(request: Request, pk: int) -> Response:
     if "designationId" in request.data:
         raw = request.data.get("designationId")
         emp.designation_id = int(raw) if raw else None
+
+    # Handle branch: a branch-scoped HR user can't move an employee to
+    # another branch (their own branch_id wins regardless of payload).
+    scoped_branch_id = get_branch_scope(request)
+    if scoped_branch_id is not None:
+        emp.branch_id = scoped_branch_id
+    elif "branchId" in request.data:
+        raw = request.data.get("branchId")
+        emp.branch_id = int(raw) if raw else None
+
+    if emp.branch_id != original_branch_id:
+        # Moved to a different branch (or removed from one) — the old Unit
+        # Code no longer describes them, so retire it and mint a fresh one
+        # for the new branch (never touches the old branch's counter).
+        emp.unit_code = _assign_unit_code(emp.branch_id)
 
     if "employeeCode" in request.data:
         new_code = (request.data["employeeCode"] or "").strip()
@@ -452,9 +566,11 @@ def _employee_update(request: Request, pk: int) -> Response:
 
 
 def _employee_delete(request: Request, pk: int) -> Response:
-    emp = Employee.objects.filter(id=pk).first()
-    name = f"{emp.employee_code} — {emp.first_name} {emp.last_name}" if emp else str(pk)
-    Employee.objects.filter(id=pk).delete()
+    emp = scope_to_branch(Employee.objects, request).filter(id=pk).first()
+    if not emp:
+        return _error("Employee not found", 404)
+    name = f"{emp.employee_code} — {emp.first_name} {emp.last_name}"
+    emp.delete()
     log_action(request, "delete", "employees", record_id=pk, description=f"Deleted employee {name}")
     return Response({"message": "Employee deleted"})
 
@@ -462,12 +578,188 @@ def _employee_delete(request: Request, pk: int) -> Response:
 @api_view(["PATCH"])
 @require_hr
 def employee_status(request: Request, pk: int) -> Response:
-    emp = _employee_queryset().filter(pk=pk).first()
+    emp = scope_to_branch(_employee_queryset(), request).filter(pk=pk).first()
     if not emp:
         return _error("Employee not found", 404)
     emp.status = request.data.get("status")
     emp.save(update_fields=["status", "updated_at"])
     return Response(_serialize_employee(emp))
+
+
+# --- Bulk employee upload ---
+#
+# Column order/text is the enforced contract with the downloaded template —
+# keep this in sync with EMPLOYEE_TEMPLATE_HEADERS in
+# frontend/src/pages/hr/BulkUploadEmployees.tsx if either ever changes.
+EMPLOYEE_UPLOAD_HEADERS = [
+    "Employee Code", "First Name", "Last Name", "Email", "Phone", "Gender",
+    "Date of Birth", "Employment Type", "Department", "Designation", "Branch",
+    "Salary Type", "Salary Amount", "Salary Per Shift", "Join Date",
+    "Bank Name", "Bank Account", "Bank IFSC", "PF Number", "ESI Number",
+    "Address", "ID Proof", "Father's Name", "Mother's Name",
+    "Biometric Device ID", "Blood Group", "Emergency Contact",
+]
+
+_VALID_EMPLOYMENT_TYPES = {"staff", "production"}
+_VALID_SALARY_TYPES = {"monthly", "weekly"}
+_VALID_GENDERS = {"male", "female", "other"}
+
+
+def _parse_date_cell(value):
+    if value is None or str(value).strip() == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    raw = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(raw, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return raw  # unparseable — let Django's own validation reject it with its own message
+
+
+def _employee_row_to_data(row: dict) -> tuple[dict, str | None]:
+    """Normalize one raw Excel row (header -> cell value) into the camelCase
+    dict _create_employee_from_data expects. Returns (data, error) — error is
+    set when a restricted-choice column (Employment Type/Salary Type/Gender)
+    holds something other than one of its known values or blank."""
+
+    def cell(key: str) -> str:
+        v = row.get(key)
+        return "" if v is None else str(v).strip()
+
+    def num_cell(key: str):
+        v = row.get(key)
+        if v is None or (isinstance(v, str) and v.strip() == ""):
+            return None
+        return v
+
+    emp_type = cell("Employment Type").lower()
+    if emp_type and emp_type not in _VALID_EMPLOYMENT_TYPES:
+        return {}, f"Employment Type must be Staff or Production, got '{cell('Employment Type')}'"
+
+    salary_type = cell("Salary Type").lower()
+    if salary_type and salary_type not in _VALID_SALARY_TYPES:
+        return {}, f"Salary Type must be Monthly or Weekly, got '{cell('Salary Type')}'"
+
+    gender = cell("Gender").lower()
+    if gender and gender not in _VALID_GENDERS:
+        return {}, f"Gender must be Male, Female or Other, got '{cell('Gender')}'"
+
+    return {
+        "employeeCode": cell("Employee Code"),
+        "firstName": cell("First Name"),
+        "lastName": cell("Last Name"),
+        "email": cell("Email") or None,
+        "phone": cell("Phone"),
+        "gender": gender or None,
+        "dateOfBirth": _parse_date_cell(row.get("Date of Birth")),
+        "employmentType": emp_type or None,
+        "department": cell("Department") or None,
+        "designation": cell("Designation") or None,
+        "branch": cell("Branch") or None,
+        "salaryType": salary_type or None,
+        "salaryAmount": num_cell("Salary Amount"),
+        "salaryPerShift": num_cell("Salary Per Shift"),
+        "joinDate": _parse_date_cell(row.get("Join Date")),
+        "bankName": cell("Bank Name") or None,
+        "bankAccount": cell("Bank Account") or None,
+        "bankIfsc": cell("Bank IFSC") or None,
+        "pfNumber": cell("PF Number") or None,
+        "esiNumber": cell("ESI Number") or None,
+        "address": cell("Address") or None,
+        "idProof": cell("ID Proof") or None,
+        "fatherName": cell("Father's Name") or None,
+        "motherName": cell("Mother's Name") or None,
+        "biometricDeviceId": cell("Biometric Device ID") or None,
+        "bloodGroup": cell("Blood Group") or None,
+        "emergencyContact": cell("Emergency Contact") or None,
+    }, None
+
+
+@api_view(["POST"])
+@parser_classes([MultiPartParser, FormParser])
+@require_hr
+def bulk_upload_employees(request: Request) -> Response:
+    file = request.FILES.get("file")
+    if not file:
+        return _error("No file uploaded. Send as multipart/form-data with key 'file'.")
+
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(file.read()), data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+    except Exception as e:
+        return _error(f"Failed to read the Excel file: {e}")
+
+    if not rows:
+        return _error("The uploaded file is empty.")
+
+    def _normalize_header(c) -> str:
+        # The downloaded template marks required columns as "Employee Code *"
+        # for the user's benefit — strip that trailing marker back off before
+        # comparing, so an unmodified official template always validates.
+        h = str(c).strip() if c is not None else ""
+        return h[:-1].rstrip() if h.endswith("*") else h
+
+    header_row = [_normalize_header(c) for c in rows[0]]
+    while header_row and header_row[-1] == "":
+        header_row.pop()
+
+    if header_row != EMPLOYEE_UPLOAD_HEADERS:
+        return Response(
+            {
+                "error": "invalid_template",
+                "message": "Invalid template. Please upload the employee data using the official template provided by the system.",
+            },
+            status=400,
+        )
+
+    created = 0
+    sample_skipped = 0
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    for idx, raw_row in enumerate(rows[1:], start=2):
+        if not raw_row or all(c is None or str(c).strip() == "" for c in raw_row):
+            continue  # skip fully blank rows
+        first_cell = str(raw_row[0]).strip() if raw_row[0] is not None else ""
+        if first_cell.upper().startswith("SAMPLE"):
+            # Reference rows shipped in the downloaded template — never imported,
+            # even if the user forgets to delete them before uploading.
+            sample_skipped += 1
+            continue
+        row = dict(zip(EMPLOYEE_UPLOAD_HEADERS, raw_row))
+        data, row_error = _employee_row_to_data(row)
+        if row_error:
+            errors.append(f"Row {idx}: {row_error}")
+            continue
+        emp, error, row_warnings = _create_employee_from_data(data, request)
+        if error:
+            errors.append(f"Row {idx}: {error}")
+            continue
+        created += 1
+        log_action(
+            request, "create", "employees", record_id=emp.id,
+            description=f"Bulk-imported employee {emp.employee_code} — {emp.first_name} {emp.last_name}",
+        )
+        warnings.extend(f"Row {idx}: {w}" for w in row_warnings)
+
+    return Response(
+        {
+            "message": f"Imported {created} employee(s)." + (f" {len(errors)} row(s) failed." if errors else ""),
+            "created": created,
+            "failed": len(errors),
+            "sampleRowsSkipped": sample_skipped,
+            "errors": errors,
+            "warnings": warnings,
+        },
+        status=201,
+    )
 
 
 # --- Salary ---
@@ -684,6 +976,7 @@ def _resolve_employee_filter(params) -> int | None:
 
 def _leave_requests_list(request: Request) -> Response:
     qs = LeaveRequest.objects.select_related("employee__department", "employee__designation").order_by("-id")
+    qs = scope_to_branch(qs, request, field="employee__branch_id")
     employee_id = _resolve_employee_filter(request.query_params)
     leave_status = request.query_params.get("status")
     if employee_id:

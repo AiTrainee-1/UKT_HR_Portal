@@ -106,6 +106,7 @@ urlpatterns = [
     path("employees", views.employees),
     path("employees/<int:pk>", views.employee_detail),
     path("employees/<int:pk>/status", views.employee_status),
+    path("employees/bulk-upload", views.bulk_upload_employees),
 
     # ── Shift Management ────────────────────────────────────────────────────
     path("shifts", shift_templates),

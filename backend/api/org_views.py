@@ -11,10 +11,12 @@ def branch_json(b):
     return {
         "id": b.id,
         "name": b.name,
+        "code": b.code,
         "location": b.location,
         "address": b.address,
         "managerName": b.manager_name,
         "phone": b.phone,
+        "isHeadOffice": b.is_head_office,
         "isActive": b.is_active,
         "createdAt": b.created_at.isoformat() if b.created_at else None,
     }
@@ -47,12 +49,18 @@ def branches(request: Request) -> Response:
     if not data.get("name"):
         return Response({"error": "name is required"}, status=400)
 
+    is_head_office = bool(data.get("isHeadOffice"))
+    if is_head_office:
+        Branch.objects.filter(is_head_office=True).update(is_head_office=False)
+
     b = Branch.objects.create(
         name=data["name"],
+        code=data.get("code"),
         location=data.get("location"),
         address=data.get("address"),
         manager_name=data.get("managerName"),
         phone=data.get("phone"),
+        is_head_office=is_head_office,
     )
     return Response(branch_json(b), status=201)
 
@@ -70,9 +78,12 @@ def branch_detail(request: Request, pk: int) -> Response:
 
     if request.method == "PUT":
         data = request.data
+        if data.get("isHeadOffice"):
+            Branch.objects.filter(is_head_office=True).exclude(pk=b.pk).update(is_head_office=False)
         for field, attr in [
-            ("name", "name"), ("location", "location"), ("address", "address"),
-            ("managerName", "manager_name"), ("phone", "phone"), ("isActive", "is_active"),
+            ("name", "name"), ("code", "code"), ("location", "location"), ("address", "address"),
+            ("managerName", "manager_name"), ("phone", "phone"),
+            ("isHeadOffice", "is_head_office"), ("isActive", "is_active"),
         ]:
             if field in data:
                 setattr(b, attr, data[field])

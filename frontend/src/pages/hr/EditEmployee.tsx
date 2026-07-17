@@ -15,7 +15,9 @@ import {
   getListEmployeesQueryKey, getGetEmployeeQueryKey,
   useListDepartments, useListDesignations,
 } from "@/lib/api-client";
+import { useListBranches, getListBranchesQueryKey } from "@/lib/api-client/custom-hooks";
 import { useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -36,6 +38,7 @@ const schema = z.object({
   employmentType: z.string().optional(),
   departmentId: z.string().optional(),
   designationId: z.string().optional(),
+  branchId: z.string().optional(),
   salaryType: z.string().optional(),
   salaryAmount: z.string().optional(),
   salaryPerShift: z.string().optional(),
@@ -68,8 +71,10 @@ export default function EditEmployee() {
   });
   const mutation = useUpdateEmployee();
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const { user } = useAuth();
 
   const { data: departments } = useListDepartments();
+  const { data: branches } = useListBranches({ enabled: !user?.branchId, queryKey: getListBranchesQueryKey() });
   const [selectedDeptId, setSelectedDeptId] = useState<string>("");
   const { data: designations } = useListDesignations(
     selectedDeptId ? { departmentId: Number(selectedDeptId) } : undefined,
@@ -93,6 +98,7 @@ export default function EditEmployee() {
       employmentType: employee.employmentType ?? "staff",
       departmentId: employee.departmentId ? String(employee.departmentId) : "",
       designationId: employee.designationId ? String(employee.designationId) : "",
+      branchId: employee.branchId ? String(employee.branchId) : "",
       salaryType: employee.salaryType ?? "monthly",
       salaryAmount: employee.salaryAmount ? String(employee.salaryAmount) : "",
       salaryPerShift: (employee as any).salaryPerShift ? String((employee as any).salaryPerShift) : "",
@@ -143,6 +149,7 @@ export default function EditEmployee() {
           employmentType: data.employmentType,
           departmentId: data.departmentId ? Number(data.departmentId) : null,
           designationId: data.designationId ? Number(data.designationId) : null,
+          branchId: data.branchId ? Number(data.branchId) : null,
           salaryType: data.salaryType,
           salaryAmount: data.employmentType === "production" ? undefined : (data.salaryAmount ? Number(data.salaryAmount) : undefined),
           salaryPerShift: data.employmentType === "production" ? (data.salaryPerShift ? Number(data.salaryPerShift) : undefined) : undefined,
@@ -331,6 +338,26 @@ export default function EditEmployee() {
                     <FormMessage />
                   </FormItem>
                 )} />
+                {!user?.branchId && (
+                  <FormField control={form.control} name="branchId" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Branch</FormLabel>
+                      <FormControl>
+                        <select
+                          value={field.value ?? ""}
+                          onChange={field.onChange}
+                          className="w-full h-9 rounded-md border px-3 text-sm bg-background"
+                        >
+                          <option value="">— Select Branch —</option>
+                          {(branches ?? []).map((b) => (
+                            <option key={b.id} value={String(b.id)}>{b.name}{b.isHeadOffice ? " (Head Office)" : ""}</option>
+                          ))}
+                        </select>
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                )}
               </CardContent>
             </Card>
 

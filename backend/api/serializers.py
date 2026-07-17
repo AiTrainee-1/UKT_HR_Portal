@@ -33,6 +33,11 @@ def employee_json(emp, department_name: str | None = None) -> dict:
     designation_title = None
     if hasattr(emp, "designation") and emp.designation_id and emp.designation:
         designation_title = emp.designation.title
+    branch_name = None
+    branch_code = None
+    if hasattr(emp, "branch") and emp.branch_id and emp.branch:
+        branch_name = emp.branch.name
+        branch_code = emp.branch.code
     return {
         "id": emp.id,
         "employeeCode": emp.employee_code,
@@ -51,6 +56,10 @@ def employee_json(emp, department_name: str | None = None) -> dict:
         "departmentName": department_name,
         "designationId": emp.designation_id,
         "designationTitle": designation_title,
+        "branchId": emp.branch_id,
+        "branchName": branch_name,
+        "branchCode": branch_code,
+        "unitCode": emp.unit_code,
         "salaryType": emp.salary_type,
         "salaryAmount": _float_or_none(emp.salary_amount),
         "salaryPerShift": _float_or_none(emp.salary_per_shift),

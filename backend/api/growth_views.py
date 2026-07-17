@@ -551,6 +551,9 @@ def _idcard_dict(emp: Employee, settings: PayrollSettings) -> dict:
         "name": f"{emp.first_name} {emp.last_name}",
         "designation": emp.designation.title if emp.designation else None,
         "department": emp.department.name if emp.department else None,
+        "branchName": emp.branch.name if emp.branch_id and emp.branch else None,
+        "branchCode": emp.branch.code if emp.branch_id and emp.branch else None,
+        "unitCode": emp.unit_code,
         "employmentType": emp.employment_type,
         "photoUrl": emp.photo_url,
         "bloodGroup": emp.blood_group,
@@ -592,7 +595,7 @@ def idcard_data(request: Request) -> Response:
     settings = PayrollSettings.get()
     token_emp_id = get_token_employee_id(request)
     if token_emp_id:
-        emp = Employee.objects.filter(id=token_emp_id).select_related("department", "designation").first()
+        emp = Employee.objects.filter(id=token_emp_id).select_related("department", "designation", "branch").first()
         if not emp:
             return Response({"error": "Employee not found"}, status=404)
         return Response(_idcard_dict(emp, settings))
@@ -604,7 +607,7 @@ def idcard_data(request: Request) -> Response:
     ids = request.query_params.get("ids")
     if ids:
         id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
-        emps = Employee.objects.filter(id__in=id_list).select_related("department", "designation")
+        emps = Employee.objects.filter(id__in=id_list).select_related("department", "designation", "branch")
         return Response([_idcard_dict(e, settings) for e in emps])
     emp = _emp_by_code_or_id(request)
     if not emp:

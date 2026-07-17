@@ -25,6 +25,7 @@ import DatabaseOffline from "@/pages/DatabaseOffline";
 import HrDashboard from "@/pages/hr/Dashboard";
 import Employees from "@/pages/hr/Employees";
 import NewEmployee from "@/pages/hr/NewEmployee";
+import BulkUploadEmployees from "@/pages/hr/BulkUploadEmployees";
 import EmployeeDetail from "@/pages/hr/EmployeeDetail";
 import EditEmployee from "@/pages/hr/EditEmployee";
 import Leave from "@/pages/hr/Leave";
@@ -184,6 +185,9 @@ function Router() {
       </Route>
       <Route path="/hr/employees/new">
         {() => <ProtectedRoute component={NewEmployee} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/employees/bulk-upload">
+        {() => <ProtectedRoute component={BulkUploadEmployees} allowedRoles={["hr"]} />}
       </Route>
       <Route path="/hr/employees/:id/edit">
         {() => <ProtectedRoute component={EditEmployee} allowedRoles={["hr"]} />}

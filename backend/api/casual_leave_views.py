@@ -21,6 +21,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import require_hr, require_auth, get_token_employee_id
+from .branch_scope import scope_to_branch
 from .models import AttendanceDayRecord, CasualLeaveRequest, Employee, Notification
 
 ELIGIBILITY_MONTHS = 6
@@ -150,6 +151,7 @@ def casual_leaves(request: Request) -> Response:
         qs = CasualLeaveRequest.objects.select_related(
             "employee__department", "employee__designation"
         )
+        qs = scope_to_branch(qs, request, field="employee__branch_id")
         # Employees see only their own CLs
         token_emp_id = get_token_employee_id(request)
         if token_emp_id:

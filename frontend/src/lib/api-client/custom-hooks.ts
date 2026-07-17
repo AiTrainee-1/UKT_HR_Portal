@@ -7,10 +7,12 @@ import { customFetch } from "./custom-fetch";
 export type Branch = {
   id: number;
   name: string;
+  code?: string | null;
   location?: string | null;
   address?: string | null;
   managerName?: string | null;
   phone?: string | null;
+  isHeadOffice: boolean;
   isActive: boolean;
   createdAt?: string | null;
 };
@@ -179,13 +181,24 @@ export const useCreateBranch = () =>
   useMutation({
     mutationFn: (data: {
       name: string;
+      code?: string;
       location?: string;
       address?: string;
       managerName?: string;
       phone?: string;
+      isHeadOffice?: boolean;
     }) =>
       customFetch<Branch>("/api/branches", {
         method: "POST",
+        body: JSON.stringify(data),
+      }),
+  });
+
+export const useUpdateBranch = () =>
+  useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Partial<Branch> }) =>
+      customFetch<Branch>(`/api/branches/${id}`, {
+        method: "PUT",
         body: JSON.stringify(data),
       }),
   });
@@ -480,6 +493,7 @@ export const useCreateHrUser = () =>
       email?: string;
       fullName?: string;
       roleId?: number;
+      branchId?: number | null;
     }) =>
       customFetch<HrUserItem>("/api/hr-users", {
         method: "POST",
@@ -2128,6 +2142,9 @@ export type IdCardData = {
   name: string;
   designation?: string | null;
   department?: string | null;
+  branchName?: string | null;
+  branchCode?: string | null;
+  unitCode?: string | null;
   employmentType?: string | null;
   photoUrl?: string | null;
   bloodGroup?: string | null;

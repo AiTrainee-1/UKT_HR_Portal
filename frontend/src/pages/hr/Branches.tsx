@@ -14,24 +14,27 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import {
-  useListBranches, useCreateBranch, useDeleteBranch, getListBranchesQueryKey,
+  useListBranches, useCreateBranch, useUpdateBranch, useDeleteBranch, getListBranchesQueryKey,
 } from "@/lib/api-client";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
-import { MapPin, Plus, Trash2, Search, Phone } from "lucide-react";
+import { MapPin, Plus, Trash2, Pencil, Search, Phone, Building2 } from "lucide-react";
+
+const EMPTY_FORM = { name: "", code: "", location: "", address: "", phone: "", isHeadOffice: false };
 
 export default function Branches() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [showDialog, setShowDialog] = useState(false);
-  const [form, setForm] = useState({
-    name: "", location: "", address: "", phone: "",
-  });
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [form, setForm] = useState(EMPTY_FORM);
 
   const { data: branches, isLoading } = useListBranches();
   const createMutation = useCreateBranch();
+  const updateMutation = useUpdateBranch();
   const deleteMutation = useDeleteBranch();
+  const isSaving = createMutation.isPending || updateMutation.isPending;
 
   const filtered = (branches ?? []).filter(
     (b) =>
@@ -41,27 +44,48 @@ export default function Branches() {
   );
 
   function openCreate() {
-    setForm({ name: "", location: "", address: "", phone: "" });
+    setEditingId(null);
+    setForm(EMPTY_FORM);
     setShowDialog(true);
   }
 
-  async function handleCreate() {
+  function openEdit(b: NonNullable<typeof branches>[number]) {
+    setEditingId(b.id);
+    setForm({
+      name: b.name,
+      code: b.code ?? "",
+      location: b.location ?? "",
+      address: b.address ?? "",
+      phone: b.phone ?? "",
+      isHeadOffice: b.isHeadOffice,
+    });
+    setShowDialog(true);
+  }
+
+  async function handleSave() {
     if (!form.name.trim()) {
       toast({ title: "Branch name is required", variant: "destructive" });
       return;
     }
+    const payload = {
+      name: form.name.trim(),
+      code: form.code.trim() || undefined,
+      location: form.location.trim() || undefined,
+      address: form.address.trim() || undefined,
+      phone: form.phone.trim() || undefined,
+      isHeadOffice: form.isHeadOffice,
+    };
     try {
-      await createMutation.mutateAsync({
-        name: form.name.trim(),
-        location: form.location.trim() || undefined,
-        address: form.address.trim() || undefined,
-        phone: form.phone.trim() || undefined,
-      });
+      if (editingId) {
+        await updateMutation.mutateAsync({ id: editingId, data: payload });
+      } else {
+        await createMutation.mutateAsync(payload);
+      }
     } catch {
-      toast({ title: "Failed to create branch", variant: "destructive" });
+      toast({ title: editingId ? "Failed to update branch" : "Failed to create branch", variant: "destructive" });
       return;
     }
-    toast({ title: "Branch created" });
+    toast({ title: editingId ? "Branch updated" : "Branch created" });
     setShowDialog(false);
     queryClient.invalidateQueries({ queryKey: getListBranchesQueryKey() });
   }
@@ -160,6 +184,16 @@ export default function Branches() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <p className="font-bold text-gray-900">{b.name}</p>
+                      {b.code && (
+                        <span className="text-[11px] font-mono font-semibold text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded">
+                          {b.code}
+                        </span>
+                      )}
+                      {b.isHeadOffice && (
+                        <span className="flex items-center gap-1 text-[11px] font-semibold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">
+                          <Building2 size={10} /> Head Office
+                        </span>
+                      )}
                       {b.location && (
                         <span className="text-sm text-muted-foreground">{b.location}</span>
                       )}
@@ -173,7 +207,16 @@ export default function Branches() {
                       </span>
                     )}
                   </div>
-                  <div className="shrink-0">
+                  <div className="shrink-0 flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-teal-700 hover:bg-teal-50"
+                      onClick={() => openEdit(b)}
+                      title="Edit"
+                    >
+                      <Pencil size={15} />
+                    </Button>
                     <AlertDialog>
                       <AlertDialogTrigger asChild>
                         <Button
@@ -212,22 +255,33 @@ export default function Branches() {
         </div>
       </div>
 
-      {/* Create Dialog */}
+      {/* Create / Edit Dialog */}
       <Dialog open={showDialog} onOpenChange={setShowDialog}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Add Branch</DialogTitle>
+            <DialogTitle>{editingId ? "Edit Branch" : "Add Branch"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="br-name">Branch Name <span className="text-red-500">*</span></Label>
-              <Input
-                id="br-name"
-                placeholder="e.g. Surat Branch"
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                autoFocus
-              />
+            <div className="grid grid-cols-3 gap-3">
+              <div className="col-span-2 space-y-1.5">
+                <Label htmlFor="br-name">Branch Name <span className="text-red-500">*</span></Label>
+                <Input
+                  id="br-name"
+                  placeholder="e.g. Surat Branch"
+                  value={form.name}
+                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                  autoFocus
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="br-code">Code</Label>
+                <Input
+                  id="br-code"
+                  placeholder="e.g. U2"
+                  value={form.code}
+                  onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
+                />
+              </div>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="br-location">Location / City</Label>
@@ -256,11 +310,26 @@ export default function Branches() {
                 onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
               />
             </div>
+            <label htmlFor="br-ho" className="flex items-start gap-2.5 rounded-lg border p-3 cursor-pointer">
+              <input
+                id="br-ho"
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 accent-teal-600"
+                checked={form.isHeadOffice}
+                onChange={(e) => setForm((f) => ({ ...f, isHeadOffice: e.target.checked }))}
+              />
+              <span>
+                <span className="block text-sm font-medium text-gray-900">Head Office</span>
+                <span className="block text-xs text-muted-foreground mt-0.5">
+                  The default branch existing employees and departments belong to. Only one branch can be Head Office — marking this one unmarks any other.
+                </span>
+              </span>
+            </label>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDialog(false)}>Cancel</Button>
-            <Button onClick={handleCreate} disabled={createMutation.isPending}>
-              {createMutation.isPending ? "Adding…" : "Add Branch"}
+            <Button onClick={handleSave} disabled={isSaving}>
+              {isSaving ? "Saving…" : editingId ? "Save Changes" : "Add Branch"}
             </Button>
           </DialogFooter>
         </DialogContent>

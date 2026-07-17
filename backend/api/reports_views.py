@@ -11,6 +11,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import require_hr
+from .branch_scope import scope_to_branch
 from .models import (
     Employee, Attendance, AttendanceLog, LeaveRequest, LeaveBalance, LeaveType,
     Department, Branch, Advance, AdvanceRepayment, SalarySlip,
@@ -60,6 +61,7 @@ def attendance_summary_report(request: Request):
         .select_related("department", "designation")
         .filter(status="active")
     )
+    emp_qs = scope_to_branch(emp_qs, request)
     if dept_id:
         emp_qs = emp_qs.filter(department_id=dept_id)
     if emp_id:
@@ -140,6 +142,7 @@ def attendance_report(request: Request):
         .select_related("employee", "employee__department", "employee__designation")
         .order_by("date", "employee__employee_code", "punch_time")
     )
+    qs = scope_to_branch(qs, request, field="employee__branch_id")
     if date_from:
         qs = qs.filter(date__gte=date_from)
     if date_to:
@@ -182,6 +185,7 @@ def leave_report(request: Request):
         .select_related("employee", "employee__department", "employee__designation", "leave_type_ref")
         .order_by("-created_at")
     )
+    qs = scope_to_branch(qs, request, field="employee__branch_id")
 
     if year:
         qs = qs.filter(start_date__startswith=str(year))
@@ -229,6 +233,7 @@ def leave_balance_report(request: Request):
         .filter(year=year, employee__status="active")
         .order_by("employee__employee_code", "leave_type__code")
     )
+    qs = scope_to_branch(qs, request, field="employee__branch_id")
     if dept_id:
         qs = qs.filter(employee__department_id=dept_id)
     if emp_id:
@@ -270,6 +275,7 @@ def payroll_report(request: Request):
         .filter(month=int(month), year=int(year))
         .order_by("employee__employee_code")
     )
+    qs = scope_to_branch(qs, request, field="employee__branch_id")
     if dept_id:
         qs = qs.filter(employee__department_id=dept_id)
     if emp_id:
@@ -339,6 +345,7 @@ def pf_esi_report(request: Request):
         .filter(month=month, year=year)
         .order_by("employee__employee_code")
     )
+    qs = scope_to_branch(qs, request, field="employee__branch_id")
     if dept_id:
         qs = qs.filter(employee__department_id=dept_id)
     if emp_id:
@@ -394,6 +401,7 @@ def employee_report(request: Request):
         .filter(status=emp_status)
         .order_by("employee_code")
     )
+    qs = scope_to_branch(qs, request)
     if dept_id:
         qs = qs.filter(department_id=dept_id)
     if branch_id:
@@ -447,6 +455,7 @@ def headcount_report(request: Request):
         .select_related("department", "designation", "branch")
         .filter(status=emp_status)
     )
+    employees = scope_to_branch(employees, request)
 
     by_dept: dict    = defaultdict(lambda: {"staff": 0, "production": 0, "male": 0, "female": 0, "other": 0, "total": 0})
     by_type: dict    = defaultdict(int)
@@ -504,6 +513,7 @@ def settlement_report(request: Request):
         .prefetch_related("repayments")
         .order_by("-created_at")
     )
+    qs = scope_to_branch(qs, request, field="employee__branch_id")
     if adv_status:
         qs = qs.filter(status=adv_status)
     if adv_type:
@@ -575,6 +585,7 @@ def new_joinings_report(request: Request):
         .filter(join_date__startswith=prefix)
         .order_by("join_date", "employee_code")
     )
+    qs = scope_to_branch(qs, request)
     if dept_id:
         qs = qs.filter(department_id=dept_id)
     if emp_type:

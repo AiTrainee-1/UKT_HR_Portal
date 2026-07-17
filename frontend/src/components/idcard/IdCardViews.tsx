@@ -128,7 +128,7 @@ export function StaffCardFront({ card }: { card: IdCardData }) {
             style={{ background: `${primary}14` }}
           >
             <Briefcase size={9} style={{ color: primary }} />
-            <p className="text-[9px] font-bold" style={{ color: primary }}>{card.designation ?? "—"}</p>
+            <p className="text-[9px] font-bold" style={{ color: primary }}>{card.designation ?? "Staff"}</p>
           </div>
 
           {/* Highlighted employee-code strip */}
@@ -143,6 +143,7 @@ export function StaffCardFront({ card }: { card: IdCardData }) {
           <div className="w-full mt-2.5 space-y-1 text-[9px]">
             {[
               ["Department", card.department ?? "—"],
+              ["Branch", card.unitCode ?? card.branchCode ?? card.branchName ?? "—"],
               ["Joined Date", formatJoinDate(card.joinDate)],
             ].map(([k, v]) => (
               <div key={k} className="flex justify-between border-b border-dashed border-gray-200 pb-0.5">
@@ -233,11 +234,12 @@ export function ProductionCardFront({ card }: { card: IdCardData }) {
         </div>
         <div className="flex-1 min-w-0">
           <p className="font-black text-[15px] leading-tight truncate" style={{ color: text }}>{card.name}</p>
-          <p className="text-[10px] font-bold mb-1.5" style={{ color: primary }}>{card.designation ?? "Production Operator"}</p>
+          <p className="text-[10px] font-bold mb-1.5" style={{ color: primary }}>{card.designation ?? "Employee"}</p>
           <div className="space-y-0.5 text-[9px]">
             {[
               ["Emp Code", card.code],
               ["Department", card.department ?? "—"],
+              ["Branch", card.unitCode ?? card.branchCode ?? card.branchName ?? "—"],
               ["Joined Date", formatJoinDate(card.joinDate)],
             ].map(([k, v]) => (
               <div key={k} className="flex justify-between border-b border-dashed border-gray-200 pb-0.5">

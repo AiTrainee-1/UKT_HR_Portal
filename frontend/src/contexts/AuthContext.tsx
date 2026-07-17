@@ -12,6 +12,8 @@ interface UserInfo {
   name?: string;
   isSuperAdmin?: boolean;
   permissions?: Record<string, PermissionLevel>;
+  branchId?: number | null;
+  branchName?: string | null;
 }
 
 export type { PermissionLevel };
@@ -89,6 +91,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     name: me.name,
     isSuperAdmin: (me as { isSuperAdmin?: boolean }).isSuperAdmin,
     permissions: (me as { permissions?: Record<string, PermissionLevel> }).permissions,
+    branchId: (me as { branchId?: number | null }).branchId ?? null,
+    branchName: (me as { branchName?: string | null }).branchName ?? null,
   } : null;
 
   const value = {

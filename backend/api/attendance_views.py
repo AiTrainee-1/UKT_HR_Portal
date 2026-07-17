@@ -11,6 +11,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import require_hr, require_auth, get_token_employee_id
+from .branch_scope import get_branch_scope, scope_to_branch
 from .models import (
     Attendance, AttendanceLog, Employee, EmployeeShiftAssignment, LeaveRequest,
     DailyShiftLog, MonthlyShiftSummary,
@@ -60,7 +61,7 @@ def _leave_ids(d: date_type) -> set[int]:
     )
 
 
-def _late_count(d: date_type) -> int:
+def _late_count(d: date_type, allowed_ids: set[int] | None = None) -> int:
     """Employees who punched IN after their shift start + grace period."""
     logs = (
         AttendanceLog.objects
@@ -74,6 +75,8 @@ def _late_count(d: date_type) -> int:
 
     late = 0
     for emp_id, pt in first_punch.items():
+        if allowed_ids is not None and emp_id not in allowed_ids:
+            continue
         asgn = (
             EmployeeShiftAssignment.objects
             .filter(
@@ -101,21 +104,29 @@ def attendance_summary(request: Request) -> Response:
     d = _parse_date(request.query_params.get("date"))
     yesterday = d - timedelta(days=1)
     emp_type = request.query_params.get("employmentType")  # staff | production | None
+    branch_id = get_branch_scope(request)
 
     base_qs = Employee.objects.filter(status="active")
+    if branch_id is not None:
+        base_qs = base_qs.filter(branch_id=branch_id)
     if emp_type:
         base_qs = base_qs.filter(employment_type=emp_type)
-    type_ids = set(base_qs.values_list("id", flat=True)) if emp_type else None
+    restrict_ids = set(base_qs.values_list("id", flat=True)) if (emp_type or branch_id is not None) else None
 
     total = base_qs.count()
-    prod_total = Employee.objects.filter(status="active", employment_type="production").count()
-    staff_total = Employee.objects.filter(status="active", employment_type="staff").count()
+    prod_qs = Employee.objects.filter(status="active", employment_type="production")
+    staff_qs = Employee.objects.filter(status="active", employment_type="staff")
+    if branch_id is not None:
+        prod_qs = prod_qs.filter(branch_id=branch_id)
+        staff_qs = staff_qs.filter(branch_id=branch_id)
+    prod_total = prod_qs.count()
+    staff_total = staff_qs.count()
 
     bio_ids = _punched_ids(d)
     manual_ids = _manual_present_ids(d)
-    if type_ids is not None:
-        bio_ids &= type_ids
-        manual_ids &= type_ids
+    if restrict_ids is not None:
+        bio_ids &= restrict_ids
+        manual_ids &= restrict_ids
     present_ids = bio_ids | manual_ids
 
     # Production / Staff breakdown of present
@@ -132,14 +143,14 @@ def attendance_summary(request: Request) -> Response:
     # Yesterday stats
     y_bio = _punched_ids(yesterday)
     y_manual = _manual_present_ids(yesterday)
-    if type_ids is not None:
-        y_bio &= type_ids
-        y_manual &= type_ids
+    if restrict_ids is not None:
+        y_bio &= restrict_ids
+        y_manual &= restrict_ids
     y_present_ids = y_bio | y_manual
     y_leave = _leave_ids(yesterday)
-    if type_ids is not None:
-        y_leave &= type_ids
-    y_late = _late_count(yesterday)
+    if restrict_ids is not None:
+        y_leave &= restrict_ids
+    y_late = _late_count(yesterday, restrict_ids)
     y_absent = max(0, total - len(y_present_ids) - len(y_leave & (set(range(total + 1)) - y_present_ids)))
 
     return Response({
@@ -189,6 +200,7 @@ def attendance_daily(request: Request) -> Response:
     leave_emp_ids = _leave_ids(d)
 
     qs = Employee.objects.filter(status="active").select_related("department", "designation")
+    qs = scope_to_branch(qs, request)
     if emp_type:
         qs = qs.filter(employment_type=emp_type)
 
@@ -244,11 +256,14 @@ def attendance_monthly_trend(request: Request) -> Response:
     month = int(request.query_params.get("month", _today().month))
     emp_type = request.query_params.get("employmentType")
 
+    branch_id = get_branch_scope(request)
     emp_qs = Employee.objects.filter(status="active")
+    if branch_id is not None:
+        emp_qs = emp_qs.filter(branch_id=branch_id)
     if emp_type:
         emp_qs = emp_qs.filter(employment_type=emp_type)
     total = emp_qs.count()
-    type_ids = set(emp_qs.values_list("id", flat=True)) if emp_type else None
+    type_ids = set(emp_qs.values_list("id", flat=True)) if (emp_type or branch_id is not None) else None
 
     log_qs = AttendanceLog.objects.filter(date__year=year, date__month=month)
     if type_ids is not None:
@@ -294,9 +309,8 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
     token_emp_id = get_token_employee_id(request)
     if token_emp_id and token_emp_id != pk:
         return Response({"error": "Access denied"}, status=403)
-    try:
-        emp = Employee.objects.select_related("department", "designation").get(pk=pk)
-    except Employee.DoesNotExist:
+    emp = scope_to_branch(Employee.objects, request).select_related("department", "designation").filter(pk=pk).first()
+    if not emp:
         return Response({"error": "Employee not found"}, status=404)
 
     today = date_type.today()
@@ -776,7 +790,8 @@ def attendance_report_log(request: Request) -> Response:
             d = _today()
 
         emps = list(
-            Employee.objects.filter(status="active", employment_type="staff")
+            scope_to_branch(Employee.objects, request)
+            .filter(status="active", employment_type="staff")
             .select_related("department", "designation")
             .order_by("first_name")
         )
@@ -802,11 +817,13 @@ def attendance_report_log(request: Request) -> Response:
             return Response({"error": "Invalid month/year"}, status=400)
         if not emp_id_param:
             return Response({"error": "employeeId is required for the month view"}, status=400)
-        try:
-            emp = Employee.objects.select_related("department", "designation").get(
-                pk=emp_id_param, status="active",
-            )
-        except Employee.DoesNotExist:
+        emp = (
+            scope_to_branch(Employee.objects, request)
+            .select_related("department", "designation")
+            .filter(pk=emp_id_param, status="active")
+            .first()
+        )
+        if not emp:
             return Response({"error": "Employee not found"}, status=404)
 
         records = compute_month_records(emp, y, m, settings)
@@ -940,7 +957,7 @@ def attendance_late_summary(request: Request) -> Response:
         return Response({"error": "Invalid month/year"}, status=400)
 
     summaries = (
-        MonthlyShiftSummary.objects
+        scope_to_branch(MonthlyShiftSummary.objects, request, field="employee__branch_id")
         .filter(year=y, month=m)
         .select_related("employee__department", "employee__designation")
         .order_by("employee__first_name")

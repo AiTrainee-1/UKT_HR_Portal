@@ -122,6 +122,14 @@ export interface Employee {
   designationId?: number | null;
   /** @nullable */
   designationTitle?: string | null;
+  /** @nullable */
+  branchId?: number | null;
+  /** @nullable */
+  branchName?: string | null;
+  /** @nullable */
+  branchCode?: string | null;
+  /** @nullable */
+  unitCode?: string | null;
   salaryType: EmployeeSalaryType;
   /** @nullable */
   salaryAmount?: number | null;
@@ -166,6 +174,7 @@ export interface EmployeeInput {
   emergencyContact?: string;
   role?: string;
   departmentId?: number;
+  branchId?: number;
   salaryType: EmployeeInputSalaryType;
   salaryAmount?: number;
   salaryPerShift?: number;
@@ -197,6 +206,7 @@ export interface EmployeeUpdate {
   emergencyContact?: string;
   role?: string;
   departmentId?: number;
+  branchId?: number;
   salaryType?: EmployeeUpdateSalaryType;
   salaryAmount?: number;
   salaryPerShift?: number;
@@ -565,6 +575,7 @@ export interface SalaryTrend {
 export type ListEmployeesParams = {
 departmentId?: number;
 designationId?: number;
+branchId?: number;
 status?: string;
 salaryType?: string;
 search?: string;

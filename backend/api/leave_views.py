@@ -5,6 +5,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import require_hr, require_auth, get_token_employee_id, is_hr
+from .branch_scope import scope_to_branch
 from .models import LeaveType, LeaveBalance, Holiday, LeaveRequest, Employee, Notification, EmployeePermission
 
 
@@ -352,6 +353,7 @@ def _permission_json(p, monthly_used=None):
 def employee_permissions(request: Request) -> Response:
     if request.method == "GET":
         qs = EmployeePermission.objects.select_related("employee__department", "employee__designation").order_by("-date", "-created_at")
+        qs = scope_to_branch(qs, request, field="employee__branch_id")
         # Resolve employee by code or ID; employees can only see their own
         token_emp_id = get_token_employee_id(request)
         if token_emp_id:

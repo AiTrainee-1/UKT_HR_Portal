@@ -50,12 +50,21 @@ class HrPermissionMiddleware:
     ever restricts the HR portal. Endpoints not present in the module
     registry (dashboard summaries, notifications, chat, roles/hr-users —
     the latter gated separately by require_super_admin) are left ungated.
+
+    Also resolves branch scope for data isolation: request.hr_branch_id is
+    set to the requesting HR user's branch_id (None = unscoped — super
+    admins and branch-less roles see every branch, same as today). Views
+    read it via branch_scope.get_branch_scope()/scope_to_branch() rather
+    than touching the attribute directly. Resolved fresh from the DB per
+    request, same as role.permissions above, so reassigning someone's branch
+    takes effect immediately rather than waiting for their token to expire.
     """
 
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
+        request.hr_branch_id = None
         if request.path.startswith("/api/"):
             rel_path = request.path[len("/api/"):]
             if not rel_path.startswith(EXEMPT_PREFIXES) and rel_path not in EXEMPT_PATHS:
@@ -93,6 +102,8 @@ class HrPermissionMiddleware:
 
         if hr_user.is_super_admin:
             return None
+
+        request.hr_branch_id = hr_user.branch_id
 
         if request.method in SAFE_METHODS and _is_always_readable_get(rel_path):
             return None
