@@ -45,34 +45,29 @@ function StatusBadge({ status }: { status: ShiftLogEntry["status"] }) {
   );
 }
 
+// The backend only ever sends approved CL/Permission rows here (pending and
+// rejected requests aren't final, so they don't belong on an attendance
+// report) — a present row is always "approved", hence the fixed green style.
 function CasualLeaveBadge({ cl }: { cl: ShiftLogEntry["casualLeave"] }) {
   if (!cl) return <span className="text-gray-300 text-xs">—</span>;
-  const style =
-    cl.status === "approved" ? "bg-green-50 text-green-700 border-green-200"
-    : cl.status === "rejected" ? "bg-red-50 text-red-700 border-red-200"
-    : "bg-amber-50 text-amber-700 border-amber-200";
   return (
     <span
-      className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border whitespace-nowrap ${style}`}
+      className="text-[10px] font-bold px-1.5 py-0.5 rounded-full border whitespace-nowrap bg-green-50 text-green-700 border-green-200"
       title={cl.reason ?? ""}
     >
-      CL · {cl.status}
+      CL · Approved
     </span>
   );
 }
 
 function PermissionBadge({ perm }: { perm: ShiftLogEntry["permission"] }) {
   if (!perm) return <span className="text-gray-300 text-xs">—</span>;
-  const style =
-    perm.status === "approved" ? "bg-green-50 text-green-700 border-green-200"
-    : perm.status === "rejected" ? "bg-red-50 text-red-700 border-red-200"
-    : "bg-purple-50 text-purple-700 border-purple-200";
   return (
     <span
-      className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border whitespace-nowrap ${style}`}
+      className="text-[10px] font-bold px-1.5 py-0.5 rounded-full border whitespace-nowrap bg-green-50 text-green-700 border-green-200"
       title={perm.reason ?? ""}
     >
-      Perm {perm.time ? `· ${perm.time}` : ""} · {perm.status}
+      Perm {perm.time ? `· ${perm.time}` : ""} · Approved
     </span>
   );
 }

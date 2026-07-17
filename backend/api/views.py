@@ -32,6 +32,7 @@ from .models import (
     LeaveRequest,
     Notification,
     Payroll,
+    PushToken,
     SalaryRecord,
     SessionConfig,
     WorkSession,
@@ -834,6 +835,29 @@ def mark_notification_read(_request: Request, pk: int) -> Response:
     record.is_read = True
     record.save(update_fields=["is_read"])
     return Response(_notif_with_name(record))
+
+
+@api_view(["POST"])
+@require_auth
+def register_push_token(request: Request) -> Response:
+    """
+    Mobile app only — the web app has no push equivalent. Called once after
+    login (and again if Expo issues a new token). Upserts by token value so
+    re-registering the same device just reassigns it, which also covers
+    "a different employee logged into this phone".
+    """
+    employee_id = get_token_employee_id(request)
+    if not employee_id:
+        return _error("Employee access required", 403)
+
+    token = (request.data.get("token") or "").strip()
+    if not token:
+        return _error("token is required")
+
+    PushToken.objects.update_or_create(
+        token=token, defaults={"employee_id": employee_id, "platform": request.data.get("platform", "expo")}
+    )
+    return Response({"message": "Push token registered"}, status=201)
 
 
 # --- Jobs ---

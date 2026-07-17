@@ -656,6 +656,26 @@ class Notification(models.Model):
         db_table = "notifications"
 
 
+class PushToken(models.Model):
+    """
+    An Expo push token for one of an employee's devices (mobile app only —
+    the web app has no equivalent). An employee can have several, one per
+    device they've logged in from; registering the same token again just
+    reassigns it, covering the "different employee logs in on this phone"
+    case. See api/signals.py for what actually sends the push.
+    """
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="push_tokens"
+    )
+    token = models.TextField(unique=True)
+    platform = models.TextField(default="expo")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "push_tokens"
+
+
 # ──────────────────────────────────────────────
 #  Recruitment
 # ──────────────────────────────────────────────

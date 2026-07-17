@@ -22,7 +22,7 @@
       "runtimeArgs": ["run", "dev", "--", "--port", "5174"],
       "port": 5174,
       "autoPort": true,
-      "cwd": "Employee-Web-App"
+      "cwd": "D:\\Projects\\Employee-Web-App\\Employee-Web-App"
     }
   ]
 }

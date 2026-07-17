@@ -15,6 +15,8 @@ class ApiConfig(AppConfig):
         if os.environ.get("RUN_MAIN") != "true" and os.environ.get("DJANGO_SETTINGS_MODULE"):
             # In production (gunicorn/waitress) RUN_MAIN isn't set — allow once
             pass
+        from . import signals  # noqa: F401 — registers the push-notification signal receiver
+
         self._bootstrap_admin_account()
         self._start_scheduler()
 

@@ -780,8 +780,11 @@ def attendance_report_log(request: Request) -> Response:
             .select_related("department", "designation")
             .order_by("first_name")
         )
-        cl_map = {c.employee_id: c for c in CasualLeaveRequest.objects.filter(date=d)}
-        perm_map = {p.employee_id: p for p in EmployeePermission.objects.filter(date=d)}
+        # Only approved CL/Permission requests are shown here — pending ones
+        # aren't final yet and rejected ones didn't happen, so neither belongs
+        # on an attendance report.
+        cl_map = {c.employee_id: c for c in CasualLeaveRequest.objects.filter(date=d, status="approved")}
+        perm_map = {p.employee_id: p for p in EmployeePermission.objects.filter(date=d, status="approved")}
 
         rows = []
         for emp in emps:
@@ -807,14 +810,16 @@ def attendance_report_log(request: Request) -> Response:
             return Response({"error": "Employee not found"}, status=404)
 
         records = compute_month_records(emp, y, m, settings)
+        # Only approved CL/Permission requests are shown here — see the
+        # matching comment in the day-view branch above.
         cl_map = {
             c.date: c for c in CasualLeaveRequest.objects.filter(
-                employee=emp, date__year=y, date__month=m,
+                employee=emp, date__year=y, date__month=m, status="approved",
             )
         }
         perm_map = {
             p.date: p for p in EmployeePermission.objects.filter(
-                employee=emp, date__year=y, date__month=m,
+                employee=emp, date__year=y, date__month=m, status="approved",
             )
         }
         dsl_map = {}
@@ -1124,6 +1129,8 @@ def employee_shift_monthly_stats(request: Request) -> Response:
         summary_data = {
             "totalShifts": str(s.total_shifts),
             "totalLateCount": s.total_late_count,
+            "permissionsUsed": s.permissions_used,
+            "permissionOverageCount": s.permission_overage_count,
             "billableLateCount": s.billable_late_count,
             "shiftDeductions": str(s.shift_deductions),
             "salaryDeductionAmount": str(s.salary_deduction_amount),

@@ -153,6 +153,7 @@ urlpatterns = [
     # ── Notifications ───────────────────────────────────────────────────────
     path("notifications", views.notifications),
     path("notifications/<int:pk>/read", views.mark_notification_read),
+    path("my/push-token", views.register_push_token),
 
     # ── Recruitment ─────────────────────────────────────────────────────────
     path("jobs", views.jobs),
