@@ -1,3 +1,5 @@
+from datetime import time
+
 from django.db import models
 from django.db.models import Q
 
@@ -1512,10 +1514,10 @@ class ProductionShiftConfig(models.Model):
     grace window used when checking segment coverage. Gender-agnostic — a
     single config applies to every production employee.
     """
-    punch1_time = models.TimeField(default="08:30", db_column="punch1_time", help_text="Arrival")
-    punch2_time = models.TimeField(default="12:45", db_column="punch2_time", help_text="Lunch out")
-    punch3_time = models.TimeField(default="13:30", db_column="punch3_time", help_text="Lunch return")
-    punch4_time = models.TimeField(default="20:00", db_column="punch4_time", help_text="Departure")
+    punch1_time = models.TimeField(default=time(8, 30), db_column="punch1_time", help_text="Arrival")
+    punch2_time = models.TimeField(default=time(12, 45), db_column="punch2_time", help_text="Lunch out")
+    punch3_time = models.TimeField(default=time(13, 30), db_column="punch3_time", help_text="Lunch return")
+    punch4_time = models.TimeField(default=time(20, 0), db_column="punch4_time", help_text="Departure")
     grace_minutes = models.IntegerField(default=10, db_column="grace_minutes")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
