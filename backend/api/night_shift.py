@@ -165,14 +165,17 @@ def detect_night_for_date(night_date: date_type) -> int:
 
 def get_relaxation_for(emp: Employee, d: date_type) -> NightShiftRelaxation | None:
     """
-    Relaxation applying to day `d` for this employee — lazily detected from
-    the previous night's punches if not already stored. This is the hook
-    attendance/payroll use, so no pre-computation step is ever required.
+    Relaxation applying to day `d` for this employee — always re-derived from
+    the previous night's actual punches against the employee's CURRENT shift
+    assignment. A stored row is never trusted on its own: if it were, a shift
+    assigned/changed *after* the row was first computed (e.g. a backdated
+    effective_from) would leave a stale relaxation window applying forever,
+    silently overriding late detection with numbers computed under a shift
+    the employee no longer has. detect_night_for_employee() already
+    updates/deletes the stored row to match, so this stays cheap and correct
+    on every call.
     """
-    relax = NightShiftRelaxation.objects.filter(employee=emp, relaxation_date=d).first()
-    if relax is None:
-        relax = detect_night_for_employee(emp, d - timedelta(days=1))
-    return relax
+    return detect_night_for_employee(emp, d - timedelta(days=1))
 
 
 def record_report(relax: NightShiftRelaxation, first_punch: time_type) -> None:

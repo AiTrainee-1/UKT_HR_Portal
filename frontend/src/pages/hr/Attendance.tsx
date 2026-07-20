@@ -303,6 +303,7 @@ export default function AttendancePage() {
     hoursWorked: "",
   });
 
+  const [statusFilter, setStatusFilter] = useState<"all" | "present" | "absent" | "on_leave">("all");
   const [detailEmpId, setDetailEmpId] = useState<number | null>(null);
   const [syncMode, setSyncMode] = useState<SyncBiometricMode>("day");
   const [syncDeviceId, setSyncDeviceId] = useState<SyncDeviceId>("all");
@@ -355,11 +356,16 @@ export default function AttendancePage() {
 
   // Records for the active sub-section only
   const allRecords    = (dailyList ?? []).filter((r) => r.employmentType === view);
-  const activeRecords = allRecords;
 
   const presentCount  = allRecords.filter(r => r.status === "present" || r.status === "manual").length;
   const absentCount   = allRecords.filter(r => r.status === "absent").length;
   const onLeaveCount  = allRecords.filter(r => r.status === "on_leave").length;
+
+  const filteredRecords = allRecords.filter((r) => {
+    if (statusFilter === "all") return true;
+    if (statusFilter === "present") return r.status === "present" || r.status === "manual";
+    return r.status === statusFilter;
+  });
 
   // Monthly trend data for chart
   const trendData = monthlyTrend ?? [];
@@ -731,22 +737,22 @@ export default function AttendancePage() {
                 </CardTitle>
                 <p className="text-xs text-muted-foreground mt-0.5">Click any row to view full attendance history</p>
               </div>
-              <div className="flex items-center gap-3 text-xs text-gray-500">
-                <span className="flex items-center gap-1">
-                  <div className="w-2 h-2 rounded-full bg-green-500" /> Present: {presentCount}
-                </span>
-                <span className="flex items-center gap-1">
-                  <div className="w-2 h-2 rounded-full bg-red-500" /> Absent: {absentCount}
-                </span>
-                <span className="flex items-center gap-1">
-                  <div className="w-2 h-2 rounded-full bg-purple-500" /> On Leave: {onLeaveCount}
-                </span>
-              </div>
+              <PillTabs
+                size="sm"
+                items={[
+                  { value: "all", label: "All", count: allRecords.length },
+                  { value: "present", label: "Present", count: presentCount, color: "#16a34a" },
+                  { value: "absent", label: "Absent", count: absentCount, color: "#dc2626" },
+                  { value: "on_leave", label: "On Leave", count: onLeaveCount, color: "#9333ea" },
+                ]}
+                value={statusFilter}
+                onChange={(v) => setStatusFilter(v as typeof statusFilter)}
+              />
             </div>
           </CardHeader>
           <CardContent className="p-0 mt-3">
             <EmployeeTable
-              records={activeRecords}
+              records={filteredRecords}
               isLoading={dailyLoading}
               onClickEmployee={(id) => setDetailEmpId(id)}
             />

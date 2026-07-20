@@ -51,6 +51,18 @@ def _manual_present_ids(d: date_type) -> set[int]:
     )
 
 
+def _bio_punched_ids(d: date_type) -> set[int]:
+    """Employees with an actual biometric-device punch today. Unlike the
+    Attendance table (present=True), which biometric sync ALSO writes to as
+    a side effect and so can't tell biometric from manual apart on its own,
+    AttendanceLog.source reliably distinguishes them."""
+    return set(
+        AttendanceLog.objects.filter(date=d, source__startswith="biometric")
+        .values_list("employee_id", flat=True)
+        .distinct()
+    )
+
+
 def _leave_ids(d: date_type) -> set[int]:
     return set(
         LeaveRequest.objects.filter(
@@ -122,12 +134,14 @@ def attendance_summary(request: Request) -> Response:
     prod_total = prod_qs.count()
     staff_total = staff_qs.count()
 
-    bio_ids = _punched_ids(d)
+    all_punched_ids = _punched_ids(d)
+    bio_ids = _bio_punched_ids(d)
     manual_ids = _manual_present_ids(d)
     if restrict_ids is not None:
+        all_punched_ids &= restrict_ids
         bio_ids &= restrict_ids
         manual_ids &= restrict_ids
-    present_ids = bio_ids | manual_ids
+    present_ids = all_punched_ids | manual_ids
 
     # Production / Staff breakdown of present
     present_emp_types = dict(
@@ -159,8 +173,8 @@ def attendance_summary(request: Request) -> Response:
         "productionTotal": prod_total,
         "staffTotal": staff_total,
         "presentToday": present_today,
-        "biometricPresent": len(bio_ids - manual_ids),
-        "manualPresent": len(manual_ids),
+        "biometricPresent": len(bio_ids),
+        "manualPresent": len(present_ids - bio_ids),
         "productionPresent": prod_present,
         "staffPresent": staff_present,
         "notPunched": not_punched,

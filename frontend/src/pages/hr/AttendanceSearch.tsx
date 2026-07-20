@@ -197,6 +197,14 @@ export default function AttendanceSearchSection({
                 </div>
               )}
             </div>
+            <Button
+              size="sm"
+              className="h-8 gap-1.5 text-xs px-3"
+              disabled={!input.trim()}
+              onClick={() => runSearch(input.trim())}
+            >
+              <Search size={12} /> Search
+            </Button>
             <select
               value={month}
               onChange={e => setMonth(Number(e.target.value))}
@@ -217,7 +225,7 @@ export default function AttendanceSearchSection({
       <CardContent className="px-4 pb-4 pt-0">
         {!searchCode ? (
           <div className="py-10 text-center text-sm text-muted-foreground border-t">
-            Enter an employee code above to load their monthly attendance.
+            Enter an employee code above and click Search (or press Enter) to load their monthly attendance.
           </div>
         ) : isLoading ? (
           <div className="space-y-3 border-t pt-4">

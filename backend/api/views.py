@@ -550,6 +550,11 @@ def _employee_update(request: Request, pk: int) -> Response:
         "bloodGroup": "blood_group",
         "emergencyContact": "emergency_contact",
     }
+    if "employmentType" in request.data:
+        emp_type = request.data.get("employmentType")
+        if emp_type not in (Employee.EMPLOYMENT_TYPE_STAFF, Employee.EMPLOYMENT_TYPE_PRODUCTION):
+            return _error("employmentType must be 'staff' or 'production'")
+
     for json_key, model_key in field_map.items():
         if json_key in request.data:
             value = request.data[json_key]
@@ -1312,12 +1317,14 @@ def _attendance_list(request: Request) -> Response:
 
 def _attendance_create(request: Request) -> Response:
     data = request.data
-    record = Attendance.objects.create(
+    record, _created = Attendance.objects.update_or_create(
         employee_id=data.get("employeeId"),
         date=data.get("date"),
-        present=data.get("present", True),
-        hours_worked=parse_decimal(data.get("hoursWorked")),
-        notes=data.get("notes"),
+        defaults={
+            "present": data.get("present", True),
+            "hours_worked": parse_decimal(data.get("hoursWorked")),
+            "notes": data.get("notes"),
+        },
     )
     return Response(attendance_json(record), status=201)
 

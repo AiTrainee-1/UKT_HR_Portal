@@ -188,15 +188,26 @@ def pull_from_device(host: str, port: int, password: int, date_from: date_type |
         punch_time = rec.timestamp.time().replace(microsecond=0)
         punch_type = _STATUS_MAP.get(rec.status, AttendanceLog.PUNCH_IN)
 
-        _, was_created = AttendanceLog.objects.get_or_create(
-            employee=emp, date=punch_date, punch_time=punch_time, punch_type=punch_type,
-            defaults={"source": source_tag},
-        )
+        try:
+            _, was_created = AttendanceLog.objects.get_or_create(
+                employee=emp, date=punch_date, punch_time=punch_time, punch_type=punch_type,
+                defaults={"source": source_tag},
+            )
+        except AttendanceLog.MultipleObjectsReturned:
+            # A pre-existing duplicate for this exact punch (shouldn't happen now
+            # that the table has a real unique constraint, but never let one bad
+            # row abort every employee after it in this device's sync batch).
+            was_created = False
         if was_created:
             created += 1
-            Attendance.objects.update_or_create(
-                employee=emp, date=str(punch_date), defaults={"present": True},
-            )
+            try:
+                Attendance.objects.update_or_create(
+                    employee=emp, date=str(punch_date), defaults={"present": True},
+                )
+            except Attendance.MultipleObjectsReturned:
+                # Same defensive skip as above — a real unique constraint now
+                # backs this table too, so this should be unreachable.
+                pass
             key = (emp.id, punch_date)
             daily_punch_counts[key] = daily_punch_counts.get(key, 0) + 1
         else:

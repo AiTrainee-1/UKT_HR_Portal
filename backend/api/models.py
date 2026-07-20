@@ -803,6 +803,7 @@ class Attendance(models.Model):
 
     class Meta:
         db_table = "attendance"
+        unique_together = [("employee", "date")]
 
 
 class AttendanceLog(models.Model):
@@ -822,6 +823,7 @@ class AttendanceLog(models.Model):
     class Meta:
         db_table = "attendance_logs"
         ordering = ["date", "punch_time"]
+        unique_together = [("employee", "date", "punch_time", "punch_type")]
 
 
 class DailyShiftLog(models.Model):
