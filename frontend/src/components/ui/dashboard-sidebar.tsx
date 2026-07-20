@@ -75,23 +75,7 @@ const navGroups: NavGroupData[] = [
       { path: '/hr/id-cards', label: 'ID Cards', icon: CreditCard },
     ],
   },
-  {
-    heading: 'Recruitment',
-    items: [
-      {
-        path: '/hr/recruitment',
-        label: 'Recruitment',
-        icon: UserMinus,
-        children: [
-          { path: '/hr/recruitment/dashboard', label: 'Dashboard' },
-          { path: '/hr/recruitment/resignations', label: 'Resignations' },
-          { path: '/hr/recruitment/required-roles', label: 'Required Roles' },
-          { path: '/hr/interviews', label: 'Interviews' },
-        ],
-      },
-    ],
-  },
-  {
+{
     heading: 'Payroll',
     items: [
       { path: '/hr/payroll', label: 'Payroll', icon: IndianRupee },
@@ -101,6 +85,25 @@ const navGroups: NavGroupData[] = [
       { path: '/hr/reports', label: 'Reports', icon: BarChart3 },
     ],
   },
+
+  {
+    heading: 'Recruitment',
+    items: [
+      {
+        path: '/hr/recruitment',
+        label: 'Recruitment',
+        icon: UserMinus,
+        children: [
+          { path: '/hr/recruitment/dashboard', label: 'Dashboard' },
+          { path: '/hr/recruitment/new-joinees', label: 'New Joinees' },
+          { path: '/hr/recruitment/resignations', label: 'Resignations' },
+          { path: '/hr/recruitment/required-roles', label: 'Required Roles' },
+          { path: '/hr/interviews', label: 'Interviews' },
+        ],
+      },
+    ],
+  },
+  
   {
     heading: 'Administration',
     items: [

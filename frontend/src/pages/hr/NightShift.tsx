@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PillTabs } from "@/components/ui/pill-tabs";
 import { useToast } from "@/hooks/use-toast";
 import { useListDepartments, useListEmployees } from "@/lib/api-client";
 import {
@@ -118,19 +119,15 @@ export default function NightShift() {
 
         {/* Filters */}
         <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
-            {(["day", "month"] as const).map(v => (
-              <button
-                key={v}
-                onClick={() => setViewMode(v)}
-                className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${
-                  viewMode === v ? "bg-indigo-600 text-white shadow-sm" : "text-gray-600 hover:bg-gray-200"
-                }`}
-              >
-                {v === "day" ? "Day View" : "Month View"}
-              </button>
-            ))}
-          </div>
+          <PillTabs
+            items={[
+              { value: "day", label: "Day View" },
+              { value: "month", label: "Month View" },
+            ]}
+            value={viewMode}
+            onChange={(v) => setViewMode(v as "day" | "month")}
+            baseColor="#4f46e5"
+          />
           {viewMode === "day" ? (
             <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="h-8 text-xs w-36" />
           ) : (

@@ -380,13 +380,19 @@ def _resolve_employee_relations(data: dict, request: Request) -> tuple[dict, lis
     return {"department": dept, "designation": desig, "branch_id": branch_id}, warnings
 
 
-def _create_employee_from_data(data: dict, request: Request) -> tuple[Employee | None, str | None, list[str]]:
+def _create_employee_from_data(
+    data: dict, request: Request, strict: bool = True,
+) -> tuple[Employee | None, str | None, list[str]]:
     """
     Create one Employee from a plain camelCase dict — the shape shared by
     both the single Add Employee JSON body and one row of a bulk-upload
     Excel import. Returns (employee, error, warnings): error is a hard-fail
     reason (nothing created); warnings are non-fatal notes about fields that
     were skipped (e.g. an unmatched department/branch name).
+
+    `strict` gates Last Name / Phone as required — on for the single Add
+    Employee form, off for bulk upload (where only Employee Code and First
+    Name are mandatory; Last Name and Phone may be filled in later).
     """
     employee_code = str(data.get("employeeCode") or "").strip()
     first_name = str(data.get("firstName") or "").strip()
@@ -397,9 +403,9 @@ def _create_employee_from_data(data: dict, request: Request) -> tuple[Employee |
         return None, "Employee code is required", []
     if not first_name:
         return None, "First name is required", []
-    if not last_name:
+    if strict and not last_name:
         return None, "Last name is required", []
-    if not phone:
+    if strict and not phone:
         return None, "Phone is required", []
     if Employee.objects.filter(employee_code=employee_code).exists():
         return None, f"Employee code '{employee_code}' already exists", []
@@ -738,7 +744,7 @@ def bulk_upload_employees(request: Request) -> Response:
         if row_error:
             errors.append(f"Row {idx}: {row_error}")
             continue
-        emp, error, row_warnings = _create_employee_from_data(data, request)
+        emp, error, row_warnings = _create_employee_from_data(data, request, strict=False)
         if error:
             errors.append(f"Row {idx}: {error}")
             continue

@@ -11,7 +11,8 @@ import {
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { PillTabs } from "@/components/ui/pill-tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -93,11 +94,15 @@ export default function Leave() {
         </div>
 
         <Tabs value={tab} onValueChange={(v) => setTab(v as LeaveStatus)}>
-          <TabsList>
-            <TabsTrigger value="pending" data-testid="tab-pending">Pending</TabsTrigger>
-            <TabsTrigger value="approved" data-testid="tab-approved">Approved</TabsTrigger>
-            <TabsTrigger value="rejected" data-testid="tab-rejected">Rejected</TabsTrigger>
-          </TabsList>
+          <PillTabs
+            items={[
+              { value: "pending", label: "Pending" },
+              { value: "approved", label: "Approved" },
+              { value: "rejected", label: "Rejected" },
+            ]}
+            value={tab}
+            onChange={(v) => setTab(v as LeaveStatus)}
+          />
 
           {(["pending", "approved", "rejected"] as LeaveStatus[]).map((tabVal) => (
             <TabsContent key={tabVal} value={tabVal}>

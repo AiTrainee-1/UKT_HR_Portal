@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PillTabs } from "@/components/ui/pill-tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
@@ -562,26 +563,15 @@ function AssignedShiftsTab() {
     <div className="space-y-5">
       {/* Summary pills */}
       <div className="flex items-center gap-3 flex-wrap">
-        {(
-          [
-            { key: "all", label: "All Assignments", count: allAssignments.length, color: "bg-gray-100 text-gray-700" },
-            { key: "production", label: "Production", count: prodCount, color: "bg-amber-100 text-amber-700" },
-            { key: "staff", label: "Staff", count: staffCount, color: "bg-green-100 text-green-700" },
-          ] as const
-        ).map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setFilterType(t.key)}
-            className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-semibold transition-all border-2 ${
-              filterType === t.key
-                ? "border-gray-900 shadow-sm"
-                : "border-transparent hover:border-gray-200"
-            } ${t.color}`}
-          >
-            {t.label}
-            <span className="text-xs font-bold opacity-70">{t.count}</span>
-          </button>
-        ))}
+        <PillTabs
+          items={[
+            { value: "all", label: "All Assignments", count: allAssignments.length, color: "#374151" },
+            { value: "production", label: "Production", count: prodCount, color: "#d97706" },
+            { value: "staff", label: "Staff", count: staffCount, color: "#16a34a" },
+          ]}
+          value={filterType}
+          onChange={(v) => setFilterType(v as "all" | "production" | "staff")}
+        />
 
         <div className="relative ml-auto">
           <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -1051,17 +1041,15 @@ export default function ManageShift() {
           </div>
         ) : (
           <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)}>
-            <TabsList className="bg-gray-100">
-              <TabsTrigger value="production" className="gap-2">
-                <Factory size={14} /> Production ({productionShifts.length})
-              </TabsTrigger>
-              <TabsTrigger value="staff" className="gap-2">
-                <Users size={14} /> Staff ({staffShifts.length})
-              </TabsTrigger>
-              <TabsTrigger value="assigned" className="gap-2">
-                <Calendar size={14} /> Assigned Shifts
-              </TabsTrigger>
-            </TabsList>
+            <PillTabs
+              items={[
+                { value: "production", label: "Production", count: productionShifts.length, icon: <Factory size={14} /> },
+                { value: "staff", label: "Staff", count: staffShifts.length, icon: <Users size={14} /> },
+                { value: "assigned", label: "Assigned Shifts", icon: <Calendar size={14} /> },
+              ]}
+              value={activeTab}
+              onChange={(v) => setActiveTab(v as typeof activeTab)}
+            />
 
             {/* ── Production Tab ── */}
             <TabsContent value="production" className="mt-4 space-y-4">

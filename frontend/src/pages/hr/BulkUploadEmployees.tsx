@@ -10,7 +10,7 @@ import { useListEmployees, getListEmployeesQueryKey, type Employee } from "@/lib
 import { useAuth } from "@/contexts/AuthContext";
 import {
   ArrowLeft, Download, UploadCloud, FileSpreadsheet, CheckCircle2,
-  XCircle, AlertTriangle, ListChecks, Info, Table2,
+  XCircle, AlertTriangle, ListChecks, Info, Table2, X,
 } from "lucide-react";
 
 // Keep in sync with EMPLOYEE_UPLOAD_HEADERS in backend/api/views.py — the
@@ -24,7 +24,7 @@ const EMPLOYEE_TEMPLATE_HEADERS = [
   "Biometric Device ID", "Blood Group", "Emergency Contact",
 ] as const;
 
-const REQUIRED_COLUMNS = new Set(["Employee Code", "First Name", "Last Name", "Phone"]);
+const REQUIRED_COLUMNS = new Set(["Employee Code", "First Name"]);
 
 const COLUMN_NOTES: Partial<Record<(typeof EMPLOYEE_TEMPLATE_HEADERS)[number], string>> = {
   "Date of Birth": "Format: DD-MM-YYYY (e.g. 15-01-1995)",
@@ -77,6 +77,12 @@ function scopeLabel(user: ReturnType<typeof useAuth>["user"]): string {
 
 function todayStamp(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function styleHeaderRow(headerRow: ExcelJS.Row) {
@@ -208,8 +214,22 @@ export default function BulkUploadEmployees() {
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<UploadResult | null>(null);
   const [invalidTemplate, setInvalidTemplate] = useState<string | null>(null);
+  const [dragActive, setDragActive] = useState(false);
 
   const { data: employees, isLoading: employeesLoading } = useListEmployees();
+
+  const pickFile = (f: File | null) => {
+    setFile(f);
+    setResult(null);
+    setInvalidTemplate(null);
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLLabelElement>) => {
+    e.preventDefault();
+    setDragActive(false);
+    const dropped = e.dataTransfer.files?.[0];
+    if (dropped) pickFile(dropped);
+  };
 
   const handleUpload = async () => {
     if (!file) return;
@@ -295,7 +315,7 @@ export default function BulkUploadEmployees() {
           </Card>
 
           {/* ── Step 2: Upload ── */}
-          <Card className="border-0 shadow-sm">
+          <Card className="border-0 shadow-sm overflow-hidden">
             <CardHeader className="pb-3">
               <div className="flex items-center gap-2">
                 <div className="w-7 h-7 rounded-full bg-teal-600 text-white flex items-center justify-center text-xs font-black shrink-0">2</div>
@@ -306,24 +326,53 @@ export default function BulkUploadEmployees() {
               <p className="text-sm text-muted-foreground">
                 Fill in employee details below the sample rows, save it, then upload it here.
               </p>
-              <label
-                htmlFor="bulk-emp-file"
-                className="relative border-2 border-dashed border-gray-200 hover:border-teal-400 transition rounded-xl p-6 flex flex-col items-center gap-2 text-center bg-gray-50/50 cursor-pointer block"
-              >
-                <input
-                  id="bulk-emp-file"
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".xlsx,.xls"
-                  onChange={(e) => { setFile(e.target.files?.[0] ?? null); setResult(null); setInvalidTemplate(null); }}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                />
-                <UploadCloud size={30} className="text-teal-600" />
-                <span className="text-sm font-semibold text-gray-700">
-                  {file ? file.name : "Drag the filled Excel file here, or click to browse"}
-                </span>
-                <span className="text-xs text-muted-foreground">.xlsx or .xls, using the official template</span>
-              </label>
+
+              {file ? (
+                <div className="rounded-xl border border-teal-200 bg-teal-50/60 p-4 flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-lg bg-teal-600 flex items-center justify-center shrink-0">
+                    <FileSpreadsheet size={20} className="text-white" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-gray-800 truncate">{file.name}</p>
+                    <p className="text-xs text-teal-700/70">{formatFileSize(file.size)} · Ready to upload</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { pickFile(null); if (fileInputRef.current) fileInputRef.current.value = ""; }}
+                    className="w-7 h-7 rounded-full bg-white border border-teal-200 flex items-center justify-center text-teal-700 hover:bg-teal-100 transition-colors shrink-0"
+                    aria-label="Remove selected file"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ) : (
+                <label
+                  htmlFor="bulk-emp-file"
+                  onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
+                  onDragLeave={() => setDragActive(false)}
+                  onDrop={handleDrop}
+                  className={`relative border-2 border-dashed transition-all rounded-xl p-7 flex flex-col items-center gap-2 text-center cursor-pointer block ${
+                    dragActive ? "border-teal-500 bg-teal-50" : "border-gray-200 hover:border-teal-400 bg-gray-50/50"
+                  }`}
+                >
+                  <input
+                    id="bulk-emp-file"
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  />
+                  <div className={`w-12 h-12 rounded-full flex items-center justify-center transition-colors ${dragActive ? "bg-teal-600" : "bg-teal-600/10"}`}>
+                    <UploadCloud size={22} className={dragActive ? "text-white" : "text-teal-600"} />
+                  </div>
+                  <span className="text-sm font-semibold text-gray-700">
+                    {dragActive ? "Drop the file here" : "Drag the filled Excel file here, or click to browse"}
+                  </span>
+                  <span className="text-xs text-muted-foreground">.xlsx or .xls, using the official template</span>
+                </label>
+              )}
+
               <Button onClick={handleUpload} disabled={!file || uploading} className="w-full gap-2">
                 <UploadCloud size={15} /> {uploading ? "Uploading…" : "Upload & Create Employees"}
               </Button>
@@ -337,39 +386,95 @@ export default function BulkUploadEmployees() {
 
               {result && (
                 <div className="rounded-xl border border-gray-100 overflow-hidden">
-                  <div className="grid grid-cols-2 divide-x divide-gray-100">
-                    <div className="p-3 text-center bg-green-50/60">
-                      <p className="text-2xl font-black text-green-700">{result.created}</p>
-                      <p className="text-[11px] font-semibold text-green-700/80 uppercase tracking-wide">Created</p>
+                  {/* Summary banner */}
+                  <div
+                    className={`px-4 py-3 flex items-center gap-2.5 ${
+                      result.failed === 0 && result.created > 0
+                        ? "bg-green-50"
+                        : result.created === 0
+                        ? "bg-red-50"
+                        : "bg-amber-50"
+                    }`}
+                  >
+                    {result.failed === 0 && result.created > 0 ? (
+                      <CheckCircle2 size={18} className="text-green-600 shrink-0" />
+                    ) : result.created === 0 ? (
+                      <XCircle size={18} className="text-red-600 shrink-0" />
+                    ) : (
+                      <AlertTriangle size={18} className="text-amber-600 shrink-0" />
+                    )}
+                    <p className="text-sm font-semibold text-gray-800">{result.message}</p>
+                  </div>
+
+                  {/* Stat cards */}
+                  <div className="grid grid-cols-2 gap-3 p-4">
+                    <div className="rounded-xl border border-green-100 bg-green-50/50 p-4 flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-lg bg-green-600 flex items-center justify-center shrink-0">
+                        <CheckCircle2 size={18} className="text-white" />
+                      </div>
+                      <div>
+                        <p className="text-2xl font-black text-green-700 leading-none">{result.created}</p>
+                        <p className="text-[11px] font-semibold text-green-700/70 uppercase tracking-wide mt-0.5">Created</p>
+                      </div>
                     </div>
-                    <div className={`p-3 text-center ${result.failed > 0 ? "bg-red-50/60" : "bg-gray-50"}`}>
-                      <p className={`text-2xl font-black ${result.failed > 0 ? "text-red-700" : "text-gray-400"}`}>{result.failed}</p>
-                      <p className={`text-[11px] font-semibold uppercase tracking-wide ${result.failed > 0 ? "text-red-700/80" : "text-gray-400"}`}>Failed</p>
+                    <div className={`rounded-xl border p-4 flex items-center gap-3 ${result.failed > 0 ? "border-red-100 bg-red-50/50" : "border-gray-100 bg-gray-50/50"}`}>
+                      <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${result.failed > 0 ? "bg-red-600" : "bg-gray-300"}`}>
+                        <XCircle size={18} className="text-white" />
+                      </div>
+                      <div>
+                        <p className={`text-2xl font-black leading-none ${result.failed > 0 ? "text-red-700" : "text-gray-400"}`}>{result.failed}</p>
+                        <p className={`text-[11px] font-semibold uppercase tracking-wide mt-0.5 ${result.failed > 0 ? "text-red-700/70" : "text-gray-400"}`}>Failed</p>
+                      </div>
                     </div>
                   </div>
+
                   {!!result.sampleRowsSkipped && (
-                    <p className="border-t border-gray-100 px-3 py-2 text-xs text-amber-700 bg-amber-50/60">
+                    <p className="border-t border-gray-100 px-4 py-2.5 text-xs text-amber-700 bg-amber-50/60 flex items-center gap-2">
+                      <Info size={12} className="shrink-0" />
                       {result.sampleRowsSkipped} reference row{result.sampleRowsSkipped === 1 ? "" : "s"} (sample data / instructions) in the file were ignored, as expected.
                     </p>
                   )}
+
                   {result.errors.length > 0 && (
-                    <div className="border-t border-gray-100 p-3 space-y-1.5 max-h-48 overflow-y-auto">
-                      <p className="text-xs font-bold text-red-700 flex items-center gap-1.5"><XCircle size={12} /> Rows that failed</p>
-                      {result.errors.map((e, i) => (
-                        <p key={i} className="text-xs text-red-600 pl-4">{e}</p>
-                      ))}
+                    <div className="border-t border-gray-100 p-4 space-y-2 max-h-52 overflow-y-auto">
+                      <p className="text-xs font-bold text-red-700 flex items-center gap-1.5"><XCircle size={12} /> Rows that failed ({result.errors.length})</p>
+                      {result.errors.map((e, i) => {
+                        const sep = e.indexOf(":");
+                        const rowLabel = sep === -1 ? "" : e.slice(0, sep).trim();
+                        const message = sep === -1 ? e : e.slice(sep + 1).trim();
+                        return (
+                          <div key={i} className="flex items-start gap-2 rounded-lg bg-red-50/60 border border-red-100 px-3 py-2">
+                            {rowLabel && (
+                              <span className="shrink-0 text-[10px] font-black text-red-700 bg-red-100 rounded px-1.5 py-0.5 mt-0.5">{rowLabel}</span>
+                            )}
+                            <span className="text-xs text-red-700 leading-relaxed">{message}</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
+
                   {result.warnings.length > 0 && (
-                    <div className="border-t border-gray-100 p-3 space-y-1.5 max-h-40 overflow-y-auto">
-                      <p className="text-xs font-bold text-amber-700 flex items-center gap-1.5"><AlertTriangle size={12} /> Warnings</p>
-                      {result.warnings.map((w, i) => (
-                        <p key={i} className="text-xs text-amber-700 pl-4">{w}</p>
-                      ))}
+                    <div className="border-t border-gray-100 p-4 space-y-2 max-h-44 overflow-y-auto">
+                      <p className="text-xs font-bold text-amber-700 flex items-center gap-1.5"><AlertTriangle size={12} /> Warnings ({result.warnings.length})</p>
+                      {result.warnings.map((w, i) => {
+                        const sep = w.indexOf(":");
+                        const rowLabel = sep === -1 ? "" : w.slice(0, sep).trim();
+                        const message = sep === -1 ? w : w.slice(sep + 1).trim();
+                        return (
+                          <div key={i} className="flex items-start gap-2 rounded-lg bg-amber-50/60 border border-amber-100 px-3 py-2">
+                            {rowLabel && (
+                              <span className="shrink-0 text-[10px] font-black text-amber-700 bg-amber-100 rounded px-1.5 py-0.5 mt-0.5">{rowLabel}</span>
+                            )}
+                            <span className="text-xs text-amber-700 leading-relaxed">{message}</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
+
                   {result.created > 0 && (
-                    <div className="border-t border-gray-100 p-3">
+                    <div className="border-t border-gray-100 p-4">
                       <Button variant="outline" size="sm" className="w-full gap-2" onClick={() => navigate("/hr/employees")}>
                         <CheckCircle2 size={13} /> View Employees
                       </Button>
@@ -394,7 +499,7 @@ export default function BulkUploadEmployees() {
               {[
                 "Download the official template using the button above — don't build your own sheet from scratch.",
                 `Rows 2–${1 + SAMPLE_ROWS.length} are sample data (shaded) — they're for reference only and are always skipped, whether or not you delete them.`,
-                "Employee Code, First Name, Last Name and Phone are required for every row; every other column can be left blank.",
+                "Employee Code and First Name are required for every row; every other column — including Last Name and Phone — can be left blank and filled in later.",
                 "Department, Designation and Branch are matched by name — spell them exactly as they appear in Manage Branch / Departments / Designations.",
                 "Already have employees in the system? Use \"Download Current Employees\" below instead — it's the same sheet with your real data already in it, so you can just add new rows at the bottom.",
                 "After uploading, review the Created/Failed summary — failed rows list the exact reason, so you can fix just those rows and re-upload only them.",

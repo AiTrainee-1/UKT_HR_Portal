@@ -1,6 +1,6 @@
 import smtplib
 import ssl
-from datetime import datetime
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -10,7 +10,7 @@ from rest_framework.response import Response
 
 from .auth import require_hr, require_auth, get_token_employee_id
 from .branch_scope import get_branch_scope, scope_to_branch
-from .models import SalarySlip, Employee, PayrollSettings, LeaveBalance
+from .models import SalarySlip, PayrollSettings, LeaveBalance
 
 MONTHS = ["","January","February","March","April","May","June",
           "July","August","September","October","November","December"]
@@ -83,157 +83,6 @@ def slip_json(s: SalarySlip, include_settings: bool = False) -> dict:
         data["signatureImage"]     = ps.signature_image or ""
 
     return data
-
-
-def _render_slip_html(s: SalarySlip, ps: PayrollSettings) -> str:
-    """Render the wage slip as a self-contained HTML string for email."""
-    emp = s.employee
-    other_allowances = float(s.allowances) + float(s.incentives) + float(s.bonuses)
-    last_day = 31  # simple fallback
-    period = f"01/{s.month:02d}/{s.year} To {last_day:02d}/{s.month:02d}/{s.year}"
-    today = datetime.now().strftime("%d-%m-%Y")
-    father = (emp.father_name or "—").upper()
-    join_date = emp.join_date or "—"
-
-    balances = list(LeaveBalance.objects.select_related("leave_type").filter(employee=emp, year=s.year))
-    if not balances:
-        leave_rows = '<tr><td style="border:1px solid #000;padding:3px;text-align:center">Casual Leave</td><td style="border:1px solid #000;padding:3px;text-align:center">0.00</td><td style="border:1px solid #000;padding:3px;text-align:center">0.00</td><td style="border:1px solid #000;padding:3px;text-align:center">0.00</td><td style="border:1px solid #000;padding:3px;text-align:center">0.00</td></tr>'
-    else:
-        leave_rows = "".join(
-            f'<tr><td style="border:1px solid #000;padding:3px;text-align:center">{lb.leave_type.name}</td>'
-            f'<td style="border:1px solid #000;padding:3px;text-align:center">{float(lb.allocated):.2f}</td>'
-            f'<td style="border:1px solid #000;padding:3px;text-align:center">{float(lb.used):.2f}</td>'
-            f'<td style="border:1px solid #000;padding:3px;text-align:center">0.00</td>'
-            f'<td style="border:1px solid #000;padding:3px;text-align:center">{float(lb.remaining):.2f}</td></tr>'
-            for lb in balances
-        )
-
-    sig_html = f'<img src="{ps.signature_image}" style="height:40px;display:block;margin:0 auto" />' if ps.signature_image else '<div style="height:40px"></div>'
-
-    net = float(s.net_salary)
-    net_fmt = f"{net:,.2f}"
-
-    return f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8">
-<style>
-  body{{font-family:Arial,sans-serif;font-size:9pt;color:#000;background:#fff}}
-  table{{border-collapse:collapse;width:100%}}
-  td{{font-size:9pt;vertical-align:top}}
-  .border{{border:1px solid #000;padding:3px 6px}}
-</style></head>
-<body>
-<table style="border:2px solid #000;max-width:700px;margin:0 auto">
-  <tr>
-    <td colspan="2" class="border" style="text-align:center">
-      <div style="font-weight:bold;font-size:14pt;letter-spacing:1px">{ps.slip_company_name}</div>
-      <div style="font-size:11pt">{ps.slip_company_address}-</div>
-    </td>
-    <td colspan="2" class="border" style="text-align:right;white-space:nowrap">
-      <strong>Period From</strong> {period}
-    </td>
-  </tr>
-  <tr>
-    <td colspan="4" class="border" style="text-align:center">
-      <div style="font-weight:bold;font-size:11pt">Wage Slip / ஊதிய ரசீது &nbsp; मजदूरी पचीन</div>
-      <div style="font-size:8pt">(UNDER RULE 27(2) OF THE MIN WAGES CHENNAI RULES 1953)</div>
-    </td>
-  </tr>
-  <tr>
-    <td colspan="2" class="border"><strong>Emp Code:</strong> {emp.employee_code}</td>
-    <td colspan="2" class="border"><strong>Designation:</strong> {emp.designation.title if emp.designation_id else "—"}</td>
-  </tr>
-  <tr>
-    <td colspan="2" class="border"><strong>Name:</strong> {emp.first_name} {emp.last_name}</td>
-    <td colspan="2" class="border"><strong>Department:</strong> {emp.department.name if emp.department_id else "—"}</td>
-  </tr>
-  <tr>
-    <td class="border" style="padding:0;width:30%">
-      <table style="width:100%">
-        <tr><td colspan="2" class="border" style="font-weight:bold">Earnings</td></tr>
-        <tr><td class="border">Basic</td><td class="border" style="text-align:right">{float(s.basic):.2f}</td></tr>
-        <tr><td class="border">DA</td><td class="border" style="text-align:right">0.00</td></tr>
-        <tr><td class="border">HRA</td><td class="border" style="text-align:right">{float(s.hra):.2f}</td></tr>
-        <tr><td class="border">CA</td><td class="border" style="text-align:right">0.00</td></tr>
-        <tr><td class="border">EA</td><td class="border" style="text-align:right">0.00</td></tr>
-        <tr><td class="border">Other Allowances</td><td class="border" style="text-align:right">{other_allowances:.2f}</td></tr>
-        <tr><td class="border">OT Wages</td><td class="border" style="text-align:right">{float(s.ot_amount):.2f}</td></tr>
-        <tr><td class="border">PTRL</td><td class="border" style="text-align:right">0.00</td></tr>
-        <tr style="font-weight:bold"><td class="border">Total</td><td class="border" style="text-align:right">{float(s.gross_salary):.2f}</td></tr>
-      </table>
-    </td>
-    <td class="border" style="padding:0;width:30%">
-      <table style="width:100%">
-        <tr><td colspan="2" class="border" style="font-weight:bold">Deductions</td></tr>
-        <tr><td class="border">P.F</td><td class="border" style="text-align:right">{float(s.pf_deduction):.2f}</td></tr>
-        <tr><td class="border">E.S.I</td><td class="border" style="text-align:right">{float(s.esi_deduction):.2f}</td></tr>
-        <tr><td class="border">Advance</td><td class="border" style="text-align:right">{float(s.advance_deduction):.2f}</td></tr>
-        <tr><td class="border">T.Advance</td><td class="border" style="text-align:right">0.00</td></tr>
-        <tr><td class="border">TDS</td><td class="border" style="text-align:right">0.00</td></tr>
-        <tr><td class="border">LOP</td><td class="border" style="text-align:right">0.00</td></tr>
-        <tr><td class="border">Others</td><td class="border" style="text-align:right">{float(s.other_deductions):.2f}</td></tr>
-        <tr style="font-weight:bold"><td class="border">Total</td><td class="border" style="text-align:right">{float(s.total_deductions):.2f}</td></tr>
-      </table>
-    </td>
-    <td colspan="2" class="border" style="width:40%;font-size:8pt">
-      <p><strong>Father/Husband:</strong> {father}</p>
-      <p><strong>Date of Entry:</strong> {join_date}</p>
-      <p><strong>Shifts Worked:</strong> {s.completed_sessions if s.week_number else float(s.present_days)}</p>
-      <p><strong>OT:</strong> {float(s.ot_amount):.2f}</p>
-      <p><strong>Min Rate:</strong> {float(ps.min_wage_rate):.2f}</p>
-      <p><strong>PF No:</strong> {emp.pf_number or ""}</p>
-      <p><strong>ESI No:</strong> {emp.esi_number or ""}</p>
-      <br>
-      <table style="width:100%;border-collapse:collapse;font-size:8pt">
-        <tr style="background:#f0f0f0">
-          <th style="border:1px solid #000;padding:2px">Leave</th>
-          <th style="border:1px solid #000;padding:2px">Total</th>
-          <th style="border:1px solid #000;padding:2px">Used</th>
-          <th style="border:1px solid #000;padding:2px">Cur</th>
-          <th style="border:1px solid #000;padding:2px">Bal</th>
-        </tr>
-        {leave_rows}
-      </table>
-    </td>
-  </tr>
-  <tr>
-    <td colspan="2" class="border"><strong>Net Amount: ₹{net_fmt}</strong></td>
-    <td colspan="2" class="border" style="text-align:right"></td>
-  </tr>
-  <tr>
-    <td colspan="4" class="border"><strong>In Words:</strong> {_num_to_words(int(net))} ONLY</td>
-  </tr>
-  <tr>
-    <td class="border" style="text-align:center;padding:10px 6px">
-      <div style="height:36px"></div>
-      <div style="font-size:8pt">Employee Signature</div>
-    </td>
-    <td class="border" style="text-align:center">
-      <div style="font-weight:bold">Date of Payment</div>
-      <div>{today}</div>
-    </td>
-    <td colspan="2" class="border" style="text-align:center">
-      {sig_html}
-      <div style="font-weight:bold">Proprietor</div>
-    </td>
-  </tr>
-</table>
-</body></html>"""
-
-
-def _num_to_words(n: int) -> str:
-    if n < 0:
-        return "Rs. ZERO"
-    ones = ["","ONE","TWO","THREE","FOUR","FIVE","SIX","SEVEN","EIGHT","NINE","TEN",
-            "ELEVEN","TWELVE","THIRTEEN","FOURTEEN","FIFTEEN","SIXTEEN","SEVENTEEN","EIGHTEEN","NINETEEN"]
-    tens = ["","","TWENTY","THIRTY","FORTY","FIFTY","SIXTY","SEVENTY","EIGHTY","NINETY"]
-    def convert(x):
-        if x < 20: return ones[x]
-        if x < 100: return tens[x//10] + (" " + ones[x%10] if x%10 else "")
-        if x < 1000: return ones[x//100] + " HUNDRED" + (" " + convert(x%100) if x%100 else "")
-        if x < 100000: return convert(x//1000) + " THOUSAND" + (" " + convert(x%1000) if x%1000 else "")
-        if x < 10000000: return convert(x//100000) + " LAKH" + (" " + convert(x%100000) if x%100000 else "")
-        return convert(x//10000000) + " CRORE" + (" " + convert(x%10000000) if x%10000000 else "")
-    return "Rs. " + (convert(n) if n else "ZERO")
 
 
 @api_view(["GET"])
@@ -318,14 +167,41 @@ def email_salary_slip(request: Request, pk: int) -> Response:
     if not to_email:
         return Response({"error": "Employee has no email address. Provide toEmail in request body."}, status=400)
 
-    subject = f"Salary Slip – {MONTHS[s.month]} {s.year} | {ps.slip_company_name}"
-    html_body = _render_slip_html(s, ps)
+    company_name = ps.company_name or ps.slip_company_name or "UKTextiles"
+    emp_name = f"{emp.first_name} {emp.last_name}".strip()
+    subject = f"Salary Slip – {MONTHS[s.month]} {s.year} | {company_name}"
 
-    msg = MIMEMultipart("alternative")
+    html_body = f"""
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1a3a2e">
+      <div style="background:#0E4B3A;padding:20px;text-align:center;border-radius:8px 8px 0 0">
+        <h1 style="color:white;margin:0;font-size:18px">{company_name.upper()}</h1>
+        <p style="color:rgba(255,255,255,0.8);margin:4px 0 0;font-size:12px">
+          Salary Slip — {MONTHS[s.month]} {s.year}
+        </p>
+      </div>
+      <div style="background:#ffffff;padding:30px;border:1px solid #d8e5df;border-top:none">
+        <p>Dear <strong>{emp_name}</strong>,</p>
+        <p>Please find attached your salary slip for <strong>{MONTHS[s.month]} {s.year}</strong>.</p>
+        <p>Net amount paid: <strong>₹{float(s.net_salary):,.2f}</strong></p>
+        <p style="color:#888;font-size:12px">
+          This is a system-generated email. For any discrepancies, please contact HR.
+        </p>
+      </div>
+    </div>
+    """
+
+    from .company_documents_views import build_salary_slip_pdf
+    pdf_bytes = build_salary_slip_pdf(s)
+
+    msg = MIMEMultipart("mixed")
     msg["Subject"] = subject
     msg["From"]    = f"{ps.smtp_from_name} <{ps.smtp_from_email or ps.smtp_username}>"
     msg["To"]      = to_email
     msg.attach(MIMEText(html_body, "html"))
+
+    attachment = MIMEApplication(pdf_bytes, _subtype="pdf")
+    attachment.add_header("Content-Disposition", "attachment", filename=f"salary_slip_{s.slip_number}.pdf")
+    msg.attach(attachment)
 
     try:
         context = ssl.create_default_context()

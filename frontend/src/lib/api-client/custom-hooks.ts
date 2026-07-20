@@ -1810,6 +1810,109 @@ export const useEmailSalarySlip = () =>
       }),
   });
 
+// ── Company Documents (Offer Letter / Experience Letter / Salary Slip theming) ──
+
+export type DocumentType = "offer_letter" | "experience_letter" | "salary_slip" | "resignation_letter";
+
+export type DocumentSettingsItem = {
+  docType: DocumentType;
+  primaryColor: string;
+  accentColor: string;
+  headingStyle: "serif" | "sans";
+  showWatermark: boolean;
+  footerTagline: string;
+  logoOverride: string;
+  updatedAt: string | null;
+};
+
+export const getDocumentSettingsQueryKey = (docType: DocumentType) => ["/api/document-settings", docType] as const;
+
+export const useDocumentSettings = (docType: DocumentType) =>
+  useQuery<DocumentSettingsItem>({
+    queryKey: getDocumentSettingsQueryKey(docType),
+    queryFn: () => customFetch<DocumentSettingsItem>(`/api/document-settings/${docType}`),
+  });
+
+export const useUpdateDocumentSettings = (docType: DocumentType) => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Partial<DocumentSettingsItem>) =>
+      customFetch<DocumentSettingsItem>(`/api/document-settings/${docType}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: getDocumentSettingsQueryKey(docType) }),
+  });
+};
+
+const _fetchPdfBlob = async (url: string, getToken: () => string | null): Promise<{ blob: Blob; filename: string }> => {
+  const token = getToken();
+  const response = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error((err as any).error ?? "Failed to generate PDF");
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const match = disposition.match(/filename="([^"]+)"/);
+  return { blob, filename: match ? match[1] : "document.pdf" };
+};
+
+export const previewDocumentPdf = async (url: string, getToken: () => string | null) => {
+  const sep = url.includes("?") ? "&" : "?";
+  const { blob } = await _fetchPdfBlob(`${url}${sep}preview=1`, getToken);
+  const objectUrl = URL.createObjectURL(blob);
+  window.open(objectUrl, "_blank");
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+};
+
+export const downloadDocumentPdf = async (url: string, getToken: () => string | null) => {
+  const { blob, filename } = await _fetchPdfBlob(url, getToken);
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objectUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(objectUrl);
+};
+
+// ── New Joinees ─────────────────────────────────────────────────────────
+
+export type NewJoineeItem = {
+  id: number;
+  employeeCode: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  department: string | null;
+  designation: string | null;
+  branchName: string | null;
+  employmentType: string;
+  joinDate: string | null;
+  photoUrl: string | null;
+};
+
+export const getNewJoineesQueryKey = (days: number) => ["/api/recruitment/new-joinees", days] as const;
+
+export const useListNewJoinees = (days: number = 30) =>
+  useQuery<NewJoineeItem[]>({
+    queryKey: getNewJoineesQueryKey(days),
+    queryFn: () => customFetch<NewJoineeItem[]>(`/api/recruitment/new-joinees?days=${days}`),
+  });
+
+export const useSendOfferLetterEmail = () =>
+  useMutation({
+    mutationFn: ({ employeeId, toEmail }: { employeeId: number; toEmail?: string }) =>
+      customFetch<{ ok: boolean; sentTo: string; pdfAttached: boolean }>(`/api/employees/${employeeId}/offer-letter/email`, {
+        method: "POST",
+        body: JSON.stringify({ toEmail }),
+      }),
+  });
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  Typed attendance dashboard (staff / production filtered)
 // ═══════════════════════════════════════════════════════════════════════════

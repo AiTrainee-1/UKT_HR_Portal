@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PillTabs } from "@/components/ui/pill-tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
@@ -403,19 +404,15 @@ export default function AttendancePage() {
               Real-time tracking · AiFace-Mars biometric integration
             </p>
             {/* Staff / Production sub-section toggle */}
-            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1 mt-2 w-fit">
-              {(["staff", "production"] as const).map(v => (
-                <button
-                  key={v}
-                  onClick={() => setView(v)}
-                  className={`px-4 py-1.5 rounded-md text-xs font-bold transition-colors flex items-center gap-1.5 ${
-                    view === v ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-800"
-                  }`}
-                >
-                  {v === "staff" ? <Briefcase size={12} /> : <Factory size={12} />}
-                  {v === "staff" ? "Staff" : "Production"}
-                </button>
-              ))}
+            <div className="mt-2">
+              <PillTabs
+                items={[
+                  { value: "staff", label: "Staff", icon: <Briefcase size={12} /> },
+                  { value: "production", label: "Production", icon: <Factory size={12} /> },
+                ]}
+                value={view}
+                onChange={(v) => setView(v as "staff" | "production")}
+              />
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">

@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { PillTabs } from "@/components/ui/pill-tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
@@ -206,19 +207,16 @@ export default function CasualLeave() {
 
         {/* Tabs */}
         <Tabs value={tab} onValueChange={setTab}>
-          <TabsList className="bg-gray-100">
-            <TabsTrigger value="pending">
-              Pending
-              {pending.length > 0 && (
-                <span className="ml-1.5 inline-flex items-center justify-center min-w-[18px] h-4 px-1 text-[10px] font-bold rounded-full bg-amber-500 text-white">
-                  {pending.length}
-                </span>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="approved">Approved ({approved.length})</TabsTrigger>
-            <TabsTrigger value="rejected">Rejected ({rejected.length})</TabsTrigger>
-            <TabsTrigger value="eligible">Eligibility Board</TabsTrigger>
-          </TabsList>
+          <PillTabs
+            items={[
+              { value: "pending", label: `Pending (${pending.length})` },
+              { value: "approved", label: `Approved (${approved.length})` },
+              { value: "rejected", label: `Rejected (${rejected.length})` },
+              { value: "eligible", label: "Eligibility Board" },
+            ]}
+            value={tab}
+            onChange={(v) => setTab(v)}
+          />
 
           {(["pending", "approved", "rejected"] as const).map(t => (
             <TabsContent key={t} value={t} className="mt-4 space-y-2">

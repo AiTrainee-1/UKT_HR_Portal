@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { PillTabs } from "@/components/ui/pill-tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -742,41 +743,42 @@ export default function Settlement() {
               </button>
             )}
           </div>
-          <div className="flex items-center gap-1.5">
-            {(["all","general","term"] as const).map(t => (
-              <button
-                key={t}
-                onClick={() => setFilterType(t)}
-                className={`text-xs px-3 py-1.5 rounded-full border font-medium transition-all ${
-                  filterType === t
-                    ? "bg-gray-900 text-white border-gray-900"
-                    : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
-                }`}
-              >
-                {t === "all" ? "All Types" : t === "general" ? "General" : "Term Loan"}
-              </button>
-            ))}
-          </div>
+          <PillTabs
+            items={[
+              { value: "all", label: "All Types" },
+              { value: "general", label: "General" },
+              { value: "term", label: "Term Loan" },
+            ]}
+            value={filterType}
+            onChange={(v) => setFilterType(v as "all" | "general" | "term")}
+          />
         </div>
 
         {/* Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="bg-gray-100">
-            <TabsTrigger value="pending" className="relative">
-              Pending Approval
-              {pendingAdvances.length > 0 && (
-                <span className="ml-1.5 inline-flex items-center justify-center min-w-[18px] h-4 px-1 text-[10px] font-bold rounded-full bg-amber-500 text-white">
-                  {allAdvances.filter(a => a.status === "pending").length}
-                </span>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="general">General ({generalAdvances.length})</TabsTrigger>
-            <TabsTrigger value="term">Term Loan ({termAdvances.length})</TabsTrigger>
-            <TabsTrigger value="completed">Completed ({completedAdvances.length})</TabsTrigger>
-            <TabsTrigger value="rejected" className="data-[state=active]:bg-red-600 data-[state=active]:text-white">
-              Rejected ({rejectedAdvances.length})
-            </TabsTrigger>
-          </TabsList>
+          <PillTabs
+            items={[
+              {
+                value: "pending",
+                label: (
+                  <>
+                    Pending Approval
+                    {pendingAdvances.length > 0 && (
+                      <span className="ml-0.5 inline-flex items-center justify-center min-w-[18px] h-4 px-1 text-[10px] font-bold rounded-full bg-amber-500 text-white">
+                        {allAdvances.filter(a => a.status === "pending").length}
+                      </span>
+                    )}
+                  </>
+                ),
+              },
+              { value: "general", label: "General", count: generalAdvances.length },
+              { value: "term", label: "Term Loan", count: termAdvances.length },
+              { value: "completed", label: "Completed", count: completedAdvances.length },
+              { value: "rejected", label: "Rejected", count: rejectedAdvances.length, color: "#dc2626" },
+            ]}
+            value={activeTab}
+            onChange={setActiveTab}
+          />
 
           {/* Pending Approval */}
           <TabsContent value="pending" className="mt-4 space-y-3">

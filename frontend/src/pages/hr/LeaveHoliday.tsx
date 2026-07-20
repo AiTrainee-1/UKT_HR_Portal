@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { PillTabs } from "@/components/ui/pill-tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
@@ -219,30 +220,25 @@ export default function LeaveHoliday() {
           ))}
         </div>
 
-        <Tabs defaultValue={defaultTab} onValueChange={setActiveTab}>
-          <TabsList className="bg-gray-100">
-            <TabsTrigger value="leaves" className="gap-2">
-              <Calendar size={14} /> Leave Requests
-            </TabsTrigger>
-            <TabsTrigger value="permissions" className="gap-2">
-              <Clock size={14} /> Permissions
-            </TabsTrigger>
-            <TabsTrigger value="holidays" className="gap-2">
-              <Gift size={14} /> Holidays
-            </TabsTrigger>
-          </TabsList>
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <PillTabs
+            items={[
+              { value: "leaves", label: "Leave Requests", icon: <Calendar size={14} /> },
+              { value: "permissions", label: "Permissions", icon: <Clock size={14} /> },
+              { value: "holidays", label: "Holidays", icon: <Gift size={14} /> },
+            ]}
+            value={activeTab}
+            onChange={setActiveTab}
+          />
 
           <TabsContent value="leaves" className="mt-4 space-y-4">
             <div className="flex items-center gap-2 flex-wrap">
-              {["all", "pending", "approved", "rejected"].map(s => (
-                <button key={s}
-                  onClick={() => setFilterStatus(s)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize border transition-colors ${
-                    filterStatus === s ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
-                  }`}>
-                  {s}
-                </button>
-              ))}
+              <PillTabs
+                items={["all", "pending", "approved", "rejected"].map((s) => ({ value: s, label: s.charAt(0).toUpperCase() + s.slice(1) }))}
+                value={filterStatus}
+                onChange={setFilterStatus}
+                size="sm"
+              />
             </div>
 
             <div className="space-y-3">
@@ -319,15 +315,12 @@ export default function LeaveHoliday() {
           <TabsContent value="permissions" className="mt-4">
             <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
               <div className="flex items-center gap-2 flex-wrap">
-                {["all", "pending", "approved", "rejected"].map(s => (
-                  <button key={s}
-                    onClick={() => setPermFilterStatus(s)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize border transition-colors ${
-                      permFilterStatus === s ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
-                    }`}>
-                    {s}
-                  </button>
-                ))}
+                <PillTabs
+                  items={["all", "pending", "approved", "rejected"].map((s) => ({ value: s, label: s.charAt(0).toUpperCase() + s.slice(1) }))}
+                  value={permFilterStatus}
+                  onChange={setPermFilterStatus}
+                  size="sm"
+                />
                 <div className="flex items-center gap-1 ml-2">
                   <select
                     value={permFilterMonth}

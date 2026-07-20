@@ -33,6 +33,7 @@ import Salary from "@/pages/hr/Salary";
 import HrNotifications from "@/pages/hr/Notifications";
 import Interviews from "@/pages/hr/Interviews";
 import RecruitmentDashboard from "@/pages/hr/recruitment/RecruitmentDashboard";
+import NewJoinees from "@/pages/hr/recruitment/NewJoinees";
 import Resignations from "@/pages/hr/recruitment/Resignations";
 import RequiredRoles from "@/pages/hr/recruitment/RequiredRoles";
 import Attendance from "@/pages/hr/Attendance";
@@ -284,6 +285,9 @@ function Router() {
       </Route>
       <Route path="/hr/recruitment/dashboard">
         {() => <ProtectedRoute component={RecruitmentDashboard} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/recruitment/new-joinees">
+        {() => <ProtectedRoute component={NewJoinees} allowedRoles={["hr"]} />}
       </Route>
       <Route path="/hr/recruitment/resignations">
         {() => <ProtectedRoute component={Resignations} allowedRoles={["hr"]} />}

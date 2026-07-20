@@ -4,6 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PillTabs } from "@/components/ui/pill-tabs";
 import { useToast } from "@/hooks/use-toast";
 import {
   useListLeaveRequests, useUpdateLeaveStatus,
@@ -184,14 +185,11 @@ export default function ApprovedRequests() {
 
         {/* Period filter */}
         <div className="flex items-center gap-2">
-          {(["today", "week", "all"] as Period[]).map(p => (
-            <button key={p} onClick={() => setPeriod(p)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
-                period === p ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
-              }`}>
-              {PERIOD_LABELS[p]}
-            </button>
-          ))}
+          <PillTabs
+            items={(["today", "week", "all"] as Period[]).map((p) => ({ value: p, label: PERIOD_LABELS[p] }))}
+            value={period}
+            onChange={(v) => setPeriod(v as Period)}
+          />
           <span className="text-xs text-gray-400 ml-1">{unified.length} request{unified.length !== 1 ? "s" : ""}</span>
         </div>
 

@@ -19,6 +19,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import Loader from "@/components/Loader";
 import EmployeeAvatar from "@/components/EmployeeAvatar";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { ActionTooltip } from "@/components/ui/action-tooltip";
+import { PillTabs } from "@/components/ui/pill-tabs";
 import {
   useListEmployees, useListDepartments, useDeleteEmployee, useUpdateEmployeeStatus,
   getListEmployeesQueryKey
@@ -110,21 +112,15 @@ export default function Employees() {
             <h2 className="text-2xl font-black">Employees</h2>
             <p className="text-muted-foreground text-sm mt-0.5">{employees?.length ?? 0} records</p>
             {/* Staff / Production toggle */}
-            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1 mt-2 w-fit">
-              {([
-                { key: "staff" as const, label: `Staff (${staffCount})` },
-                { key: "production" as const, label: `Production (${productionCount})` },
-              ]).map((t) => (
-                <button
-                  key={t.key}
-                  onClick={() => setTypeFilter(t.key)}
-                  className={`px-4 py-1.5 rounded-md text-xs font-bold transition-colors ${
-                    typeFilter === t.key ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-800"
-                  }`}
-                >
-                  {t.label}
-                </button>
-              ))}
+            <div className="mt-2">
+              <PillTabs
+                items={[
+                  { value: "staff", label: "Staff", count: staffCount },
+                  { value: "production", label: "Production", count: productionCount },
+                ]}
+                value={typeFilter}
+                onChange={(v) => setTypeFilter(v as "staff" | "production")}
+              />
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -263,21 +259,54 @@ export default function Employees() {
                       </TableCell>
                       <TableCell className="pr-4 text-right">
                         <div className="flex items-center gap-1 justify-end">
-                          <Button size="icon" variant="ghost" onClick={() => navigate(`/hr/employees/${emp.id}`)} data-testid={`button-view-${emp.id}`}>
-                            <Eye size={14} />
-                          </Button>
-                          <Button size="icon" variant="ghost" onClick={() => handleToggleStatus(emp.id, emp.status ?? "active")} data-testid={`button-toggle-${emp.id}`}>
-                            {emp.status === "active" ? <UserX size={14} /> : <UserCheck size={14} />}
-                          </Button>
-                           <Button size="icon" variant="ghost" onClick={() => navigate(`/hr/employees/${emp.id}/edit`)} data-testid={`button-edit-${emp.id}`}>
-                            <Pencil size={14} />
-                          </Button>
+                          <ActionTooltip label="View profile" color="blue">
+                            <Button
+                              size="icon" variant="ghost"
+                              aria-label="View employee profile"
+                              onClick={() => navigate(`/hr/employees/${emp.id}`)}
+                              data-testid={`button-view-${emp.id}`}
+                            >
+                              <Eye size={14} />
+                            </Button>
+                          </ActionTooltip>
+
+                          <ActionTooltip
+                            label={emp.status === "active" ? "Deactivate employee" : "Activate employee"}
+                            color={emp.status === "active" ? "amber" : "emerald"}
+                          >
+                            <Button
+                              size="icon" variant="ghost"
+                              aria-label={emp.status === "active" ? "Deactivate employee" : "Activate employee"}
+                              onClick={() => handleToggleStatus(emp.id, emp.status ?? "active")}
+                              data-testid={`button-toggle-${emp.id}`}
+                            >
+                              {emp.status === "active" ? <UserX size={14} /> : <UserCheck size={14} />}
+                            </Button>
+                          </ActionTooltip>
+
+                          <ActionTooltip label="Edit details" color="blue">
+                            <Button
+                              size="icon" variant="ghost"
+                              aria-label="Edit employee details"
+                              onClick={() => navigate(`/hr/employees/${emp.id}/edit`)}
+                              data-testid={`button-edit-${emp.id}`}
+                            >
+                              <Pencil size={14} />
+                            </Button>
+                          </ActionTooltip>
+
                           <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                              <Button size="icon" variant="ghost" className="text-destructive" data-testid={`button-delete-${emp.id}`}>
-                                <Trash2 size={14} />
-                              </Button>
-                            </AlertDialogTrigger>
+                            <ActionTooltip label="Delete employee" color="red">
+                              <AlertDialogTrigger asChild>
+                                <Button
+                                  size="icon" variant="ghost" className="text-destructive"
+                                  aria-label="Delete employee"
+                                  data-testid={`button-delete-${emp.id}`}
+                                >
+                                  <Trash2 size={14} />
+                                </Button>
+                              </AlertDialogTrigger>
+                            </ActionTooltip>
                             <AlertDialogContent>
                               <AlertDialogHeader>
                                 <AlertDialogTitle>Delete employee?</AlertDialogTitle>

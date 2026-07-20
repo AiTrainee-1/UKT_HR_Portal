@@ -1357,6 +1357,43 @@ class IdCardSettings(models.Model):
 
 
 # ──────────────────────────────────────────────
+#  Company Documents (Offer Letter / Experience Letter / Salary Slip)
+# ──────────────────────────────────────────────
+
+class CompanyDocumentSettings(models.Model):
+    """One row per document type — fetch/update via `.get(doc_type)`."""
+
+    DOC_TYPE_OFFER_LETTER = "offer_letter"
+    DOC_TYPE_EXPERIENCE_LETTER = "experience_letter"
+    DOC_TYPE_SALARY_SLIP = "salary_slip"
+    DOC_TYPE_RESIGNATION_LETTER = "resignation_letter"
+    DOC_TYPES = [
+        (DOC_TYPE_OFFER_LETTER, "Offer Letter"),
+        (DOC_TYPE_EXPERIENCE_LETTER, "Experience Letter"),
+        (DOC_TYPE_SALARY_SLIP, "Salary Slip"),
+        (DOC_TYPE_RESIGNATION_LETTER, "Resignation Letter"),
+    ]
+
+    doc_type = models.TextField(unique=True, choices=DOC_TYPES, db_column="doc_type")
+    primary_color = models.TextField(default="#0E4B3A", db_column="primary_color")   # emerald
+    accent_color = models.TextField(default="#C9A227", db_column="accent_color")     # gold
+    heading_style = models.TextField(default="serif", db_column="heading_style")     # serif | sans
+    show_watermark = models.BooleanField(default=True, db_column="show_watermark")
+    footer_tagline = models.TextField(blank=True, default="Weaving Quality. Building Trust.", db_column="footer_tagline")
+    # Optional override — falls back to PayrollSettings.company_logo when blank.
+    logo_override = models.TextField(null=True, blank=True, db_column="logo_override")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "company_document_settings"
+
+    @classmethod
+    def get(cls, doc_type: str) -> "CompanyDocumentSettings":
+        obj, _ = cls.objects.get_or_create(doc_type=doc_type)
+        return obj
+
+
+# ──────────────────────────────────────────────
 #  Casual Leave (CL) — paid, staff-only, 1/month
 # ──────────────────────────────────────────────
 

@@ -5,7 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { PillTabs } from "@/components/ui/pill-tabs";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -265,6 +266,7 @@ export default function Resignations() {
   const [deleteTarget, setDeleteTarget] = useState<ResignationRequest | null>(null);
   const [emailLoading, setEmailLoading] = useState<number | null>(null);
   const [pdfLoading, setPdfLoading] = useState<number | null>(null);
+  const [resignTab, setResignTab] = useState("active");
 
   const { token } = useAuth();
   const queryClient = useQueryClient();
@@ -439,34 +441,18 @@ export default function Resignations() {
             border: "1px solid rgba(0,100,150,0.06)",
           }}
         >
-          <Tabs defaultValue="active">
+          <Tabs value={resignTab} onValueChange={setResignTab}>
             <div className="px-4 pt-4 border-b border-[#006496]/06">
-              <TabsList className="bg-[#f0f4f8] h-9 p-1 gap-1">
-                <TabsTrigger value="active" className="text-xs h-7 px-3 data-[state=active]:bg-white data-[state=active]:shadow-sm">
-                  Active
-                  {active.length > 0 && (
-                    <span className="ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700">
-                      {active.length}
-                    </span>
-                  )}
-                </TabsTrigger>
-                <TabsTrigger value="approved" className="text-xs h-7 px-3 data-[state=active]:bg-white data-[state=active]:shadow-sm">
-                  Approved
-                  {approved.length > 0 && (
-                    <span className="ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">
-                      {approved.length}
-                    </span>
-                  )}
-                </TabsTrigger>
-                <TabsTrigger value="rejected" className="text-xs h-7 px-3 data-[state=active]:bg-white data-[state=active]:shadow-sm">
-                  Rejected
-                  {rejected.length > 0 && (
-                    <span className="ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-600">
-                      {rejected.length}
-                    </span>
-                  )}
-                </TabsTrigger>
-              </TabsList>
+              <PillTabs
+                size="sm"
+                items={[
+                  { value: "active", label: "Active", count: active.length || undefined, color: "#d97706" },
+                  { value: "approved", label: "Approved", count: approved.length || undefined, color: "#059669" },
+                  { value: "rejected", label: "Rejected", count: rejected.length || undefined, color: "#dc2626" },
+                ]}
+                value={resignTab}
+                onChange={setResignTab}
+              />
             </div>
 
             <TabsContent value="active" className="mt-0">

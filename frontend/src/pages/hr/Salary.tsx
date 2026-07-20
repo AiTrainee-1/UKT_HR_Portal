@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PillTabs } from "@/components/ui/pill-tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Textarea } from "@/components/ui/textarea";
@@ -551,69 +552,31 @@ export default function Salary() {
         )}
 
         {/* Tab Navigation */}
-        <div className="flex border-b border-slate-200">
-          <button
-            onClick={() => setActiveTab("payroll")}
-            className={`py-3 px-6 font-bold text-sm tracking-wide transition border-b-2 -mb-[2px] ${
-              activeTab === "payroll"
-                ? "border-indigo-600 text-indigo-600 font-extrabold"
-                : "border-transparent text-slate-500 hover:text-slate-700"
-            }`}
-          >
-            📊 Payroll Computed Records
-          </button>
-          <button
-            onClick={() => setActiveTab("punches")}
-            className={`py-3 px-6 font-bold text-sm tracking-wide transition border-b-2 -mb-[2px] ${
-              activeTab === "punches"
-                ? "border-indigo-600 text-indigo-600 font-extrabold"
-                : "border-transparent text-slate-500 hover:text-slate-700"
-            }`}
-          >
-            📥 Biometric Raw Punches
-          </button>
-          <button
-            onClick={() => setActiveTab("sessions")}
-            className={`py-3 px-6 font-bold text-sm tracking-wide transition border-b-2 -mb-[2px] ${
-              activeTab === "sessions"
-                ? "border-indigo-600 text-indigo-600 font-extrabold"
-                : "border-transparent text-slate-500 hover:text-slate-700"
-            }`}
-          >
-            ⚙️ Paired Work Sessions
-          </button>
-          <button
-            onClick={() => setActiveTab("configs")}
-            className={`py-3 px-6 font-bold text-sm tracking-wide transition border-b-2 -mb-[2px] ${
-              activeTab === "configs"
-                ? "border-indigo-600 text-indigo-600 font-extrabold"
-                : "border-transparent text-slate-500 hover:text-slate-700"
-            }`}
-          >
-            🛠️ Session configurations
-          </button>
-        </div>
+        <PillTabs
+          items={[
+            { value: "payroll", label: "📊 Payroll Computed Records" },
+            { value: "punches", label: "📥 Biometric Raw Punches" },
+            { value: "sessions", label: "⚙️ Paired Work Sessions" },
+            { value: "configs", label: "🛠️ Session configurations" },
+          ]}
+          value={activeTab}
+          onChange={(v) => setActiveTab(v as typeof activeTab)}
+          baseColor="#4f46e5"
+          pillBg="#f1f5f9"
+        />
 
         {/* Staff / Production toggle — payroll tab only */}
         {activeTab === "payroll" && (
-          <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1 w-fit">
-            {(
-              [
-                { key: "staff" as const, label: `Staff (${staffPayrolls.length})` },
-                { key: "production" as const, label: `Production (${productionPayrolls.length})` },
-              ]
-            ).map(g => (
-              <button
-                key={g.key}
-                onClick={() => setPayrollGroup(g.key)}
-                className={`px-4 py-1.5 rounded-md text-xs font-bold transition-colors ${
-                  payrollGroup === g.key ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"
-                }`}
-              >
-                {g.label}
-              </button>
-            ))}
-          </div>
+          <PillTabs
+            items={[
+              { value: "staff", label: "Staff", count: staffPayrolls.length },
+              { value: "production", label: "Production", count: productionPayrolls.length },
+            ]}
+            value={payrollGroup}
+            onChange={(v) => setPayrollGroup(v as "staff" | "production")}
+            baseColor="#0f172a"
+            pillBg="#f1f5f9"
+          />
         )}
 
         {/* MAIN DATA PANELS */}

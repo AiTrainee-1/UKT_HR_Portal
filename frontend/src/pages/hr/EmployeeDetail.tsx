@@ -12,13 +12,19 @@ import { useToast } from "@/hooks/use-toast";
 import {
   useGetEmployee, useListSalaryRecords, useListLeaveRequests, getGetEmployeeQueryKey,
 } from "@/lib/api-client";
-import { useIdCards, useAttendanceEmployeeHistory } from "@/lib/api-client/custom-hooks";
+import {
+  useIdCards, useAttendanceEmployeeHistory, previewDocumentPdf, downloadDocumentPdf,
+} from "@/lib/api-client/custom-hooks";
+import { useAuth } from "@/contexts/AuthContext";
 import {
   StaffCardFront, StaffCardBack, ProductionCardFront, ProductionCardBack, useQrCodes,
 } from "@/components/idcard/IdCardViews";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   ArrowLeft, Phone, Mail, MapPin, CreditCard, Building, Calendar, Droplets,
   ShieldAlert, Cake, Download, CalendarCheck, CalendarX, CalendarDays, Briefcase, User,
+  FileSignature, Award, Eye,
 } from "lucide-react";
 import Loader from "@/components/Loader";
 import EmployeeAvatar from "@/components/EmployeeAvatar";
@@ -43,8 +49,38 @@ export default function EmployeeDetail() {
   );
   const { data: leaveRequests } = useListLeaveRequests({ employeeId: empId } as never);
 
+  const { token } = useAuth();
   const cardRef = useRef<HTMLDivElement>(null);
   const [downloading, setDownloading] = useState(false);
+  const [lastWorkingDay, setLastWorkingDay] = useState(() => new Date().toISOString().slice(0, 10));
+  const [offerLetterBusy, setOfferLetterBusy] = useState<"preview" | "download" | null>(null);
+  const [experienceLetterBusy, setExperienceLetterBusy] = useState<"preview" | "download" | null>(null);
+
+  const handleOfferLetter = async (mode: "preview" | "download") => {
+    setOfferLetterBusy(mode);
+    try {
+      const url = `/api/employees/${empId}/offer-letter/pdf`;
+      if (mode === "preview") await previewDocumentPdf(url, () => token);
+      else await downloadDocumentPdf(url, () => token);
+    } catch {
+      toast({ title: "Failed to generate Offer Letter", variant: "destructive" });
+    } finally {
+      setOfferLetterBusy(null);
+    }
+  };
+
+  const handleExperienceLetter = async (mode: "preview" | "download") => {
+    setExperienceLetterBusy(mode);
+    try {
+      const url = `/api/employees/${empId}/experience-letter/pdf?lastWorkingDate=${lastWorkingDay}`;
+      if (mode === "preview") await previewDocumentPdf(url, () => token);
+      else await downloadDocumentPdf(url, () => token);
+    } catch {
+      toast({ title: "Failed to generate Experience Letter", variant: "destructive" });
+    } finally {
+      setExperienceLetterBusy(null);
+    }
+  };
 
   const handleDownloadIdCard = async () => {
     if (!cardRef.current || !employee) return;
@@ -219,6 +255,44 @@ export default function EmployeeDetail() {
             </Card>
           )}
         </div>
+
+        {/* Documents — Offer Letter / Experience Letter generation */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+              <FileSignature size={15} />Documents
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid md:grid-cols-2 gap-5">
+            <div className="space-y-2">
+              <p className="text-sm font-semibold flex items-center gap-2"><FileSignature size={14} className="text-emerald-700" /> Offer Letter</p>
+              <p className="text-xs text-muted-foreground">Generated from this employee's current designation, department, and salary.</p>
+              <div className="flex items-center gap-2 pt-1">
+                <Button size="sm" variant="outline" className="gap-1.5" onClick={() => handleOfferLetter("preview")} disabled={offerLetterBusy !== null}>
+                  <Eye size={14} />{offerLetterBusy === "preview" ? "Generating…" : "Preview"}
+                </Button>
+                <Button size="sm" className="gap-1.5" onClick={() => handleOfferLetter("download")} disabled={offerLetterBusy !== null}>
+                  <Download size={14} />{offerLetterBusy === "download" ? "Generating…" : "Download"}
+                </Button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm font-semibold flex items-center gap-2"><Award size={14} className="text-emerald-700" /> Experience Letter</p>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Last Working Day</Label>
+                <Input type="date" className="h-8 w-44" value={lastWorkingDay} onChange={(e) => setLastWorkingDay(e.target.value)} />
+              </div>
+              <div className="flex items-center gap-2 pt-1">
+                <Button size="sm" variant="outline" className="gap-1.5" onClick={() => handleExperienceLetter("preview")} disabled={experienceLetterBusy !== null}>
+                  <Eye size={14} />{experienceLetterBusy === "preview" ? "Generating…" : "Preview"}
+                </Button>
+                <Button size="sm" className="gap-1.5" onClick={() => handleExperienceLetter("download")} disabled={experienceLetterBusy !== null}>
+                  <Download size={14} />{experienceLetterBusy === "download" ? "Generating…" : "Download"}
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Employee ID Card — view only, download is the only action */}
         <Card>

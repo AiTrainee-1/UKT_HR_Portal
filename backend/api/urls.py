@@ -24,12 +24,16 @@ from .hr_user_views import (
 from .salary_slip_views import (
     salary_slips, salary_slip_detail, email_salary_slip, employee_salary_slips,
 )
+from .company_documents_views import (
+    document_settings_view, document_settings_list, document_settings_preview,
+    offer_letter_pdf, offer_letter_email, experience_letter_pdf, salary_slip_pdf,
+)
 from .org_views import (
     branches, branch_detail,
     designations, designation_detail,
 )
 from .recruitment_views import (
-    recruitment_dashboard,
+    recruitment_dashboard, new_joinees,
     resignations, my_resignation, resignation_action, resignation_delete,
     manager_resignation_action, manager_pending_resignations,
     resignation_pdf, resignation_email,
@@ -149,7 +153,16 @@ urlpatterns = [
     path("salary-slips", salary_slips),
     path("salary-slips/<int:pk>", salary_slip_detail),
     path("salary-slips/<int:pk>/email", email_salary_slip),
+    path("salary-slips/<int:pk>/pdf", salary_slip_pdf),
     path("my/salary-slips", employee_salary_slips),
+
+    # ── Company Documents (Offer Letter / Experience Letter / Salary Slip theming) ──
+    path("document-settings", document_settings_list),
+    path("document-settings/<str:doc_type>", document_settings_view),
+    path("document-settings/<str:doc_type>/preview", document_settings_preview),
+    path("employees/<int:employee_id>/offer-letter/pdf", offer_letter_pdf),
+    path("employees/<int:employee_id>/offer-letter/email", offer_letter_email),
+    path("employees/<int:employee_id>/experience-letter/pdf", experience_letter_pdf),
 
     # ── Notifications ───────────────────────────────────────────────────────
     path("notifications", views.notifications),
@@ -162,6 +175,7 @@ urlpatterns = [
     path("applicants", views.applicants),
     path("applicants/<int:pk>/status", views.update_applicant_status),
     path("recruitment/dashboard", recruitment_dashboard),
+    path("recruitment/new-joinees", new_joinees),
     path("recruitment/resignations", resignations),
     path("recruitment/resignations/<int:pk>/action", resignation_action),
     path("recruitment/resignations/<int:pk>/delete", resignation_delete),

@@ -1,5 +1,3 @@
-import base64
-import io
 import smtplib
 import ssl
 from datetime import date, timedelta
@@ -13,6 +11,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import get_token_employee_id, require_auth, require_hr
+from .company_documents_views import build_resignation_letter_pdf
 from .models import (
     Department,
     DepartmentHeadcount,
@@ -222,6 +221,38 @@ def recruitment_dashboard(_request: Request) -> Response:
             for lr in recent_leaves_detail
         ],
     })
+
+
+# ── New Joinees ─────────────────────────────────────────────────────────────
+
+@api_view(["GET"])
+@require_hr
+def new_joinees(request: Request) -> Response:
+    days = int(request.query_params.get("days") or 30)
+    since = (date.today() - timedelta(days=days)).isoformat()
+
+    qs = (
+        Employee.objects.filter(status="active", join_date__gte=since)
+        .select_related("department", "designation", "branch")
+        .order_by("-join_date")
+    )
+
+    return Response([
+        {
+            "id": e.id,
+            "employeeCode": e.employee_code,
+            "name": f"{e.first_name} {e.last_name}".strip(),
+            "email": e.email,
+            "phone": e.phone,
+            "department": e.department.name if e.department_id and e.department else None,
+            "designation": e.designation.title if e.designation_id and e.designation else None,
+            "branchName": e.branch.name if e.branch_id and e.branch else None,
+            "employmentType": e.employment_type,
+            "joinDate": e.join_date,
+            "photoUrl": e.photo_url,
+        }
+        for e in qs
+    ])
 
 
 # ── Resignations (HR) ─────────────────────────────────────────────────────────
@@ -526,176 +557,8 @@ def manager_pending_resignations(request: Request) -> Response:
 
 
 # ── PDF Generation ────────────────────────────────────────────────────────────
-
-def _generate_resignation_pdf(r: ResignationRequest) -> bytes:
-    from reportlab.lib import colors
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import cm
-    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle, HRFlowable
-
-    ps = PayrollSettings.get()
-    emp = r.employee
-    today = timezone.now().strftime("%d %B %Y")
-    company_name = ps.slip_company_name or "UKTextiles"
-    company_address = ps.slip_company_address or ""
-
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buffer, pagesize=A4,
-        rightMargin=2 * cm, leftMargin=2 * cm,
-        topMargin=2 * cm, bottomMargin=2 * cm,
-    )
-
-    styles = getSampleStyleSheet()
-    normal = ParagraphStyle("Normal", fontName="Helvetica", fontSize=10, leading=16)
-    bold_style = ParagraphStyle("Bold", fontName="Helvetica-Bold", fontSize=10, leading=16)
-    heading_style = ParagraphStyle("Heading", fontName="Helvetica-Bold", fontSize=14, leading=20, alignment=1)
-    sub_heading = ParagraphStyle("SubHead", fontName="Helvetica-Bold", fontSize=11, leading=16, alignment=1)
-    small = ParagraphStyle("Small", fontName="Helvetica", fontSize=9, leading=13, textColor=colors.grey)
-
-    story = []
-
-    # Company header
-    if ps.company_logo:
-        try:
-            from reportlab.platypus import Image as RLImage
-            img_data = base64.b64decode(ps.company_logo.split(",")[-1])
-            img_buffer = io.BytesIO(img_data)
-            logo = RLImage(img_buffer, width=3 * cm, height=1.5 * cm)
-            story.append(logo)
-            story.append(Spacer(1, 0.3 * cm))
-        except Exception:
-            pass
-
-    story.append(Paragraph(company_name.upper(), heading_style))
-    if company_address:
-        story.append(Paragraph(company_address, ParagraphStyle("addr", fontName="Helvetica", fontSize=10, alignment=1)))
-    story.append(Spacer(1, 0.5 * cm))
-    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#006496")))
-    story.append(Spacer(1, 0.3 * cm))
-    story.append(Paragraph("RESIGNATION ACCEPTANCE LETTER", sub_heading))
-    story.append(Spacer(1, 0.5 * cm))
-
-    # Ref and date
-    ref_data = [
-        [Paragraph(f"<b>Ref No:</b> RES/{emp.employee_code}/{r.id}", normal),
-         Paragraph(f"<b>Date:</b> {today}", normal)],
-    ]
-    ref_table = Table(ref_data, colWidths=["50%", "50%"])
-    ref_table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
-    story.append(ref_table)
-    story.append(Spacer(1, 0.5 * cm))
-
-    # Salutation
-    emp_name = f"{emp.first_name} {emp.last_name}".strip()
-    story.append(Paragraph(f"To,", normal))
-    story.append(Paragraph(f"<b>{emp_name}</b>", bold_style))
-    if emp.designation_id and emp.designation:
-        story.append(Paragraph(emp.designation.title, normal))
-    if emp.department_id and emp.department:
-        story.append(Paragraph(emp.department.name, normal))
-    story.append(Paragraph(f"Employee Code: {emp.employee_code}", normal))
-    story.append(Spacer(1, 0.5 * cm))
-
-    story.append(Paragraph("Dear " + emp.first_name + ",", normal))
-    story.append(Spacer(1, 0.3 * cm))
-
-    # Body
-    subject_line = "<b>Subject: Acceptance of Resignation</b>"
-    story.append(Paragraph(subject_line, bold_style))
-    story.append(Spacer(1, 0.3 * cm))
-
-    last_working = r.last_working_date.strftime("%d %B %Y") if r.last_working_date else "as mutually agreed"
-    body1 = (
-        f"We acknowledge receipt of your resignation letter and wish to inform you that your resignation "
-        f"has been accepted with effect from <b>{last_working}</b>."
-    )
-    story.append(Paragraph(body1, normal))
-    story.append(Spacer(1, 0.3 * cm))
-
-    body2 = (
-        "We appreciate your contributions to the company during your tenure and thank you for your dedication "
-        "and commitment. We wish you all the best in your future endeavors."
-    )
-    story.append(Paragraph(body2, normal))
-    story.append(Spacer(1, 0.3 * cm))
-
-    body3 = (
-        "Please ensure that all company property, access cards, and pending work are handed over properly "
-        "before your last working day. Full and final settlement will be processed as per company policy."
-    )
-    story.append(Paragraph(body3, normal))
-    story.append(Spacer(1, 0.5 * cm))
-
-    # Details table
-    details = [
-        ["Employee Name", emp_name],
-        ["Employee Code", emp.employee_code],
-        ["Department", emp.department.name if emp.department_id and emp.department else "—"],
-        ["Designation", emp.designation.title if emp.designation_id and emp.designation else "—"],
-        ["Date of Joining", emp.join_date or "—"],
-        ["Last Working Date", r.last_working_date.strftime("%d %B %Y") if r.last_working_date else "As agreed"],
-        ["Resignation Date", r.created_at.strftime("%d %B %Y") if r.created_at else "—"],
-        ["Approved By (HR)", r.approved_by or "HR Management"],
-        ["Approval Date", r.approved_at.strftime("%d %B %Y") if r.approved_at else today],
-    ]
-    table = Table(details, colWidths=[6 * cm, 10 * cm])
-    table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f0f5fa")),
-        ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#006496")),
-        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-        ("FONTNAME", (1, 0), (1, -1), "Helvetica"),
-        ("FONTSIZE", (0, 0), (-1, -1), 9),
-        ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, colors.HexColor("#f8fbff")]),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d0e4f0")),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ("LEFTPADDING", (0, 0), (-1, -1), 8),
-    ]))
-    story.append(table)
-    story.append(Spacer(1, 0.8 * cm))
-
-    # Signature area
-    sig_label = ParagraphStyle("SigLabel", fontName="Helvetica", fontSize=9, alignment=1, textColor=colors.grey)
-    sig_name_style = ParagraphStyle("SigName", fontName="Helvetica-Bold", fontSize=10, alignment=1)
-
-    sig_content = []
-
-    if ps.authorized_signature:
-        try:
-            img_data = base64.b64decode(ps.authorized_signature.split(",")[-1])
-            from reportlab.platypus import Image as RLImage
-            sig_buf = io.BytesIO(img_data)
-            sig_img = RLImage(sig_buf, width=3 * cm, height=1.5 * cm)
-            sig_content.append(sig_img)
-        except Exception:
-            sig_content.append(Spacer(1, 1.5 * cm))
-    else:
-        sig_content.append(Spacer(1, 1.5 * cm))
-
-    sig_data = [
-        [Paragraph("Yours faithfully,", normal), ""],
-        [Spacer(1, 1.5 * cm), ""],
-        [Paragraph("<b>Authorized Signatory</b>", sig_name_style), ""],
-        [Paragraph(company_name, sig_label), ""],
-    ]
-
-    sig_table = Table(sig_data, colWidths=["50%", "50%"])
-    sig_table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
-    story.append(sig_table)
-
-    story.append(Spacer(1, 0.5 * cm))
-    story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#d0e4f0")))
-    story.append(Spacer(1, 0.2 * cm))
-    story.append(Paragraph(
-        f"This is a system-generated letter from {company_name} HR Portal. Generated on {today}.",
-        small,
-    ))
-
-    doc.build(story)
-    return buffer.getvalue()
+# Resignation Letter PDF is built by company_documents_views.build_resignation_letter_pdf()
+# (shared premium reportlab engine, themeable from Settings → Company Documents).
 
 
 @api_view(["GET"])
@@ -716,7 +579,7 @@ def resignation_pdf(request: Request, pk: int) -> Response:
     if r.status != "approved":
         return _error("PDF is only available for approved resignations", 400)
 
-    pdf_bytes = _generate_resignation_pdf(r)
+    pdf_bytes = build_resignation_letter_pdf(r)
     emp_code = r.employee.employee_code if r.employee else "emp"
     filename = f"resignation_acceptance_{emp_code}_{r.id}.pdf"
 
@@ -801,7 +664,7 @@ def resignation_email(request: Request, pk: int) -> Response:
 
     # Generate PDF attachment
     try:
-        pdf_bytes = _generate_resignation_pdf(r)
+        pdf_bytes = build_resignation_letter_pdf(r)
         emp_code = emp.employee_code
         pdf_filename = f"resignation_acceptance_{emp_code}_{r.id}.pdf"
     except Exception as pdf_err:

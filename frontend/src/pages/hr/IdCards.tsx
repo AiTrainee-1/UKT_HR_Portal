@@ -4,6 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PillTabs } from "@/components/ui/pill-tabs";
 import { useToast } from "@/hooks/use-toast";
 import { useListEmployees } from "@/lib/api-client";
 import {
@@ -105,17 +106,16 @@ export default function IdCards() {
                 />
               </div>
               <div className="flex items-center gap-1">
-                {(["all", "staff", "production"] as const).map(t => (
-                  <button
-                    key={t}
-                    onClick={() => setTypeFilter(t)}
-                    className={`text-[11px] px-2.5 py-1 rounded-full border font-semibold capitalize transition-all ${
-                      typeFilter === t ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600"
-                    }`}
-                  >
-                    {t}
-                  </button>
-                ))}
+                <PillTabs
+                  items={[
+                    { value: "all", label: "All" },
+                    { value: "staff", label: "Staff" },
+                    { value: "production", label: "Production" },
+                  ]}
+                  value={typeFilter}
+                  onChange={(v) => setTypeFilter(v as "all" | "staff" | "production")}
+                  size="sm"
+                />
                 <button
                   onClick={toggleAll}
                   className="ml-auto text-[11px] text-blue-600 font-semibold hover:underline"

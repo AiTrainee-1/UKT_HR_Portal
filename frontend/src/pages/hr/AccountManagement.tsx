@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { PillTabs } from "@/components/ui/pill-tabs";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
@@ -372,6 +373,7 @@ export default function AccountManagement() {
 
   const [userDialog, setUserDialog] = useState<{ open: boolean; user: HrUserItem | null }>({ open: false, user: null });
   const [roleDialog, setRoleDialog] = useState<{ open: boolean; role: Role | null }>({ open: false, role: null });
+  const [acctTab, setAcctTab] = useState("accounts");
 
   const updateUserMutation = useUpdateHrUser();
   const deleteUserMutation = useDeleteHrUser();
@@ -426,11 +428,15 @@ export default function AccountManagement() {
           </div>
         </div>
 
-        <Tabs defaultValue="accounts">
-          <TabsList>
-            <TabsTrigger value="accounts" className="gap-1.5"><Users size={14} /> Accounts</TabsTrigger>
-            <TabsTrigger value="roles" className="gap-1.5"><Shield size={14} /> Roles &amp; Permissions</TabsTrigger>
-          </TabsList>
+        <Tabs value={acctTab} onValueChange={setAcctTab}>
+          <PillTabs
+            items={[
+              { value: "accounts", label: "Accounts", icon: <Users size={14} /> },
+              { value: "roles", label: "Roles & Permissions", icon: <Shield size={14} /> },
+            ]}
+            value={acctTab}
+            onChange={setAcctTab}
+          />
 
           {/* ── Accounts Tab ── */}
           <TabsContent value="accounts" className="space-y-3 pt-3">

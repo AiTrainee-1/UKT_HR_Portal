@@ -14,7 +14,8 @@ from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, parser_classes
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.request import Request
 from rest_framework.response import Response
 
@@ -1062,6 +1063,7 @@ def attendance_logs(request: Request) -> Response:
 
 
 @api_view(["POST"])
+@parser_classes([MultiPartParser, FormParser])
 @require_hr
 def upload_attendance_excel(request: Request) -> Response:
     """
@@ -1072,20 +1074,25 @@ def upload_attendance_excel(request: Request) -> Response:
     if not file:
         return _error("No file uploaded. Send as multipart/form-data with key 'file'.")
     try:
-        import pandas as pd
-        df = pd.read_excel(io.BytesIO(file.read()))
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(file.read()), data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
     except Exception as e:
         return _error(f"Failed to read Excel: {e}")
 
-    df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
-    id_col = next((c for c in df.columns if "employee" in c and "id" in c), None)
-    date_col = next((c for c in df.columns if "date" in c), None)
-    time_col = next((c for c in df.columns if "time" in c), None)
-    type_col = next((c for c in df.columns if "type" in c), None)
+    if not rows:
+        return _error("The uploaded file is empty.")
 
-    if not all([id_col, date_col, time_col, type_col]):
+    columns = [str(c).strip().lower().replace(" ", "_") if c is not None else "" for c in rows[0]]
+    id_col = next((i for i, c in enumerate(columns) if "employee" in c and "id" in c), None)
+    date_col = next((i for i, c in enumerate(columns) if "date" in c), None)
+    time_col = next((i for i, c in enumerate(columns) if "time" in c), None)
+    type_col = next((i for i, c in enumerate(columns) if "type" in c), None)
+
+    if any(c is None for c in [id_col, date_col, time_col, type_col]):
         return _error(
-            f"Could not find required columns. Detected: {list(df.columns)}. "
+            f"Could not find required columns. Detected: {[c for c in columns if c]}. "
             "Expected: Employee ID, Date, Time, Type"
         )
 
@@ -1093,33 +1100,50 @@ def upload_attendance_excel(request: Request) -> Response:
     skipped = 0
     errors = []
 
-    for idx, row in df.iterrows():
+    def cell(row, i):
+        return row[i] if i < len(row) else None
+
+    for idx, row in enumerate(rows[1:], start=2):
+        if not row or all(c is None or str(c).strip() == "" for c in row):
+            continue
         try:
-            emp_id = int(row[id_col])
+            emp_id = int(cell(row, id_col))
             emp = Employee.objects.filter(id=emp_id).first()
             if not emp:
-                errors.append(f"Row {idx+2}: Employee ID {emp_id} not found.")
+                errors.append(f"Row {idx}: Employee ID {emp_id} not found.")
                 skipped += 1
                 continue
 
-            raw_date = str(row[date_col]).strip()
-            for fmt in ("%d-%m-%Y", "%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"):
-                try:
-                    log_date = datetime.strptime(raw_date, fmt).date()
-                    break
-                except ValueError:
-                    continue
+            raw_date_val = cell(row, date_col)
+            if isinstance(raw_date_val, datetime):
+                log_date = raw_date_val.date()
+            elif isinstance(raw_date_val, date):
+                log_date = raw_date_val
             else:
-                errors.append(f"Row {idx+2}: Cannot parse date '{raw_date}'.")
-                skipped += 1
-                continue
+                raw_date = str(raw_date_val).strip()
+                for fmt in ("%d-%m-%Y", "%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"):
+                    try:
+                        log_date = datetime.strptime(raw_date, fmt).date()
+                        break
+                    except ValueError:
+                        continue
+                else:
+                    errors.append(f"Row {idx}: Cannot parse date '{raw_date}'.")
+                    skipped += 1
+                    continue
 
-            raw_time = str(row[time_col]).strip()
-            if ":" not in raw_time:
-                raw_time = raw_time[:2] + ":" + raw_time[2:]
-            punch_time_val = time.fromisoformat(raw_time[:5])
+            raw_time_val = cell(row, time_col)
+            if isinstance(raw_time_val, time):
+                punch_time_val = raw_time_val
+            elif isinstance(raw_time_val, datetime):
+                punch_time_val = raw_time_val.time()
+            else:
+                raw_time = str(raw_time_val).strip()
+                if ":" not in raw_time:
+                    raw_time = raw_time[:2] + ":" + raw_time[2:]
+                punch_time_val = time.fromisoformat(raw_time[:5])
 
-            punch_type = str(row[type_col]).strip().upper()
+            punch_type = str(cell(row, type_col) or "").strip().upper()
             if punch_type not in ("IN", "OUT"):
                 punch_type = "IN"
 
@@ -1132,7 +1156,7 @@ def upload_attendance_excel(request: Request) -> Response:
             )
             created += 1
         except Exception as e:
-            errors.append(f"Row {idx+2}: {e}")
+            errors.append(f"Row {idx}: {e}")
             skipped += 1
 
     return Response({

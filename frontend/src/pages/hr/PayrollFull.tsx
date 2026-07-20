@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
+import { PillTabs } from "@/components/ui/pill-tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -1143,48 +1144,35 @@ export default function PayrollFull() {
             className="h-8 w-20 text-sm" min={2020} max={2030}
           />
           <Separator orientation="vertical" className="h-6" />
-          {(
-            [
-              { key: "staff",      label: `Staff (${staffRuns.length})` },
-              { key: "production", label: `Production (${prodRuns.length})` },
-            ] as const
-          ).map(t => (
-            <button
-              key={t.key}
-              onClick={() => setFilterType(t.key)}
-              className={`text-sm px-3 py-1 rounded-full font-medium transition-all border ${
-                filterType === t.key
-                  ? "bg-gray-900 text-white border-gray-900"
-                  : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
+          <PillTabs
+            items={[
+              { value: "staff", label: "Staff", count: staffRuns.length },
+              { value: "production", label: "Production", count: prodRuns.length },
+            ]}
+            value={filterType}
+            onChange={(v) => setFilterType(v as "staff" | "production")}
+          />
         </div>
 
         {/* Summary Cards + Export */}
         {/* Production sub-tabs (Week 1&2 / Week 3&4) */}
         {!isLoading && filterType === "production" && (
           <div className="flex items-center gap-2 flex-wrap">
-            {(
-              [
-                { key: "week12", label: `Week 1 & 2`, count: week12Runs.length, range: `${MONTH_SHORT[filterMonth - 1]} 1–15` },
-                { key: "week34", label: `Week 3 & 4`, count: week34Runs.length, range: `${MONTH_SHORT[filterMonth - 1]} 16–${new Date(filterYear, filterMonth, 0).getDate()}` },
-              ] as const
-            ).map(t => (
-              <button
-                key={t.key}
-                onClick={() => setProdWeek(t.key)}
-                className={`text-sm px-3 py-1 rounded-full font-medium transition-all border ${
-                  prodWeek === t.key
-                    ? "bg-amber-600 text-white border-amber-600"
-                    : "bg-white text-gray-600 border-gray-200 hover:border-amber-400"
-                }`}
-              >
-                {t.label} ({t.count}) <span className="font-normal opacity-70 text-xs">— {t.range}</span>
-              </button>
-            ))}
+            <PillTabs
+              items={[
+                {
+                  value: "week12",
+                  label: <>Week 1 &amp; 2 ({week12Runs.length}) <span className="font-normal opacity-70 text-xs">— {MONTH_SHORT[filterMonth - 1]} 1–15</span></>,
+                },
+                {
+                  value: "week34",
+                  label: <>Week 3 &amp; 4 ({week34Runs.length}) <span className="font-normal opacity-70 text-xs">— {MONTH_SHORT[filterMonth - 1]} 16–{new Date(filterYear, filterMonth, 0).getDate()}</span></>,
+                },
+              ]}
+              value={prodWeek}
+              onChange={(v) => setProdWeek(v as "week12" | "week34")}
+              baseColor="#d97706"
+            />
 
             {filteredRuns.length > 0 && (
               <Button

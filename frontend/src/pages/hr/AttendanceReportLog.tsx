@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useLocation } from "wouter";
 import HrLayout from "@/components/HrLayout";
 import { Input } from "@/components/ui/input";
+import { PillTabs } from "@/components/ui/pill-tabs";
 import { useToast } from "@/hooks/use-toast";
 import {
   useAttendanceReportLog, useComputeShiftLogs, useAttendanceLateSummary,
@@ -216,19 +217,16 @@ export default function AttendanceReportLog() {
 
         {/* Toolbar */}
         <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
-            {(["day", "month", "late"] as const).map((t) => (
-              <button
-                key={t}
-                onClick={() => setTab(t)}
-                className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${
-                  tab === t ? "bg-indigo-600 text-white shadow-sm" : "text-gray-600 hover:bg-gray-200"
-                }`}
-              >
-                {t === "day" ? "Day View" : t === "month" ? "Employee Month View" : "Late Summary"}
-              </button>
-            ))}
-          </div>
+          <PillTabs
+            items={[
+              { value: "day", label: "Day View" },
+              { value: "month", label: "Employee Month View" },
+              { value: "late", label: "Late Summary" },
+            ]}
+            value={tab}
+            onChange={(v) => setTab(v as "day" | "month" | "late")}
+            baseColor="#4f46e5"
+          />
 
           {tab === "day" && (
             <Input
