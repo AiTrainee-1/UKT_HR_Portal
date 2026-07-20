@@ -307,7 +307,7 @@ Frontend changes don't need a service restart (Nginx just serves whatever files 
 | Services | `UKTextilesDjango`, `UKTextilesNginx`, `UKTextilesTunnel` |
 | Frontend build output | `frontend\dist` → copied to → `www` |
 
-
+D:\HRMS\UKT_HR_Portal
 
 
 npm run build + copy to www\ ← almost certainly your actual symptom. www\ is not in git, so after git pull the deployed site still serves the old frontend bundle — no Branch column, no Unit Code, no Bulk Upload, no branch field in Account Management. Meanwhile it all works at localhost:5173 dev. That's exactly "worked locally, stopped working on NSSM."
