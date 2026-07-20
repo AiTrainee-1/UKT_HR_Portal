@@ -306,3 +306,25 @@ Frontend changes don't need a service restart (Nginx just serves whatever files 
 | Tunnel name | `hrms-demo` |
 | Services | `UKTextilesDjango`, `UKTextilesNginx`, `UKTextilesTunnel` |
 | Frontend build output | `frontend\dist` → copied to → `www` |
+
+
+
+
+npm run build + copy to www\ ← almost certainly your actual symptom. www\ is not in git, so after git pull the deployed site still serves the old frontend bundle — no Branch column, no Unit Code, no Bulk Upload, no branch field in Account Management. Meanwhile it all works at localhost:5173 dev. That's exactly "worked locally, stopped working on NSSM."
+pip install -r requirements.txt — required this time (openpyxl was added; without it, bulk upload 500s).
+python manage.py migrate — required this time (migrations 0035–0038). Already applied if that machine points at the shared DB at 192.168.0.5; required if it has its own DB.
+And always: nssm restart UKTextilesDjango — Waitress never auto-reloads.
+Run this on the NSSM machine:
+
+cd D:\Projects\UK-textile
+git pull
+cd backend
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+python manage.py migrate
+cd ..\frontend
+npm run build
+Remove-Item -Recurse -Force ..\www\* -ErrorAction SilentlyContinue
+Copy-Item -Recurse dist\* ..\www\
+cd ..
+.\nssm.exe restart UKTextilesDjango
