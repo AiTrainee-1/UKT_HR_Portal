@@ -122,11 +122,11 @@ def _compute_staff_simple(emp, d, punch_times, settings, shift):
 
 # ── Staff: strict mode (reuse 4-punch engine result) ───────────────────────
 
-def _compute_staff_strict(emp, d, punch_logs, punch_times):
+def _compute_staff_strict(emp, d, punch_logs, punch_times, assignments=None, relaxation=None):
     from .shift_engine import compute_daily_shift_log
     if not punch_times:
         return {"status": "absent", "shifts_earned": Decimal("0")}
-    log = compute_daily_shift_log(emp, d, punch_logs)
+    log = compute_daily_shift_log(emp, d, punch_logs, assignments=assignments, relaxation=relaxation)
     shifts = Decimal(log.shifts_completed or 0)
     is_half = shifts == Decimal("0.50")
     return {
@@ -219,12 +219,34 @@ def _compute_production(emp, d, punch_times, settings, config=None, segments=Non
 
 def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
                        leave_dates=None, holiday_dates=None,
-                       prod_config=None, prod_segments=None):
+                       prod_config=None, prod_segments=None, prefetch=None):
     """
     Compute and persist the AttendanceDayRecord for (emp, d).
     Manual overrides are preserved — returns the existing row untouched.
+
+    `prefetch`, when given, is a dict of data a bulk caller (compute_month_records)
+    already fetched once for this employee's whole month instead of this
+    function re-querying per day — this is what makes computing every
+    employee's month (Report Log summary, payroll generation) fast instead
+    of an O(employees × days) query storm. Recognized keys, all optional:
+      assignments            — this employee's EmployeeShiftAssignment list
+      existing_day_records    — {date: AttendanceDayRecord}
+      manual_attendance_dates — set of date objects with a manual present row
+      night_logs_by_date      — {date: [AttendanceLog, ...]} spanning one day
+                                 before the month through the month's end
+      night_rules             — active NightShiftRule list
+      existing_relaxations    — {date: NightShiftRelaxation} by relaxation_date
+    Omitted (the default), every one of these is looked up fresh exactly as
+    before — every other caller is unaffected.
     """
-    existing = AttendanceDayRecord.objects.filter(employee=emp, date=d).first()
+    prefetch = prefetch or {}
+    assignments = prefetch.get("assignments")
+
+    existing_day_records = prefetch.get("existing_day_records")
+    if existing_day_records is not None:
+        existing = existing_day_records.get(d)
+    else:
+        existing = AttendanceDayRecord.objects.filter(employee=emp, date=d).first()
     if existing and existing.source == "manual":
         return existing
 
@@ -242,7 +264,13 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
     # without Late / Half-Shift penalties. Also, early-morning punches that
     # are actually last night's checkout must not count as today's arrival.
     from .night_shift import get_relaxation_for, record_report, MORNING_CUTOFF
-    relaxation = get_relaxation_for(emp, d) if punch_times else None
+    relaxation = get_relaxation_for(
+        emp, d,
+        assignments=assignments,
+        logs_by_date=prefetch.get("night_logs_by_date"),
+        rules=prefetch.get("night_rules"),
+        existing_relaxations=prefetch.get("existing_relaxations"),
+    ) if punch_times else None
     if relaxation and relaxation.crossed_midnight:
         day_times = [t for t in punch_times if t > MORNING_CUTOFF]
         punch_logs = [p for p in punch_logs if p.punch_time > MORNING_CUTOFF]
@@ -250,9 +278,13 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         day_times = punch_times
 
     # Manual attendance entries (Attendance table) count as presence too
-    has_manual = Attendance.objects.filter(
-        employee=emp, date=d.isoformat(), present=True
-    ).exists()
+    manual_attendance_dates = prefetch.get("manual_attendance_dates")
+    if manual_attendance_dates is not None:
+        has_manual = d in manual_attendance_dates
+    else:
+        has_manual = Attendance.objects.filter(
+            employee=emp, date=d.isoformat(), present=True
+        ).exists()
 
     on_leave = (d in leave_dates) if leave_dates is not None else False
     is_holiday = (d in holiday_dates) if holiday_dates is not None else False
@@ -270,10 +302,10 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         elif is_production:
             computed = _compute_production(emp, d, day_times, settings, prod_config, prod_segments)
         elif settings.attendance_mode == "simple":
-            shift = _get_shift_for_date(emp, d)
+            shift = _get_shift_for_date(emp, d, assignments=assignments)
             computed = _compute_staff_simple(emp, d, day_times, settings, shift)
         else:
-            computed = _compute_staff_strict(emp, d, punch_logs, day_times)
+            computed = _compute_staff_strict(emp, d, punch_logs, day_times, assignments=assignments, relaxation=relaxation)
     elif punch_times and relaxation and relaxation.crossed_midnight:
         # Only last night's checkout punches exist so far today — the employee
         # has not yet reported for the new day. Not absent; still within the
@@ -313,6 +345,19 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         "production" if emp.employment_type == "production" else settings.attendance_mode
     )
     fields["source"] = "auto"
+    # Normalize to the field's actual DB precision (2 decimal places) so a
+    # freshly computed value (e.g. the literal Decimal("0")) compares equal
+    # in *representation*, not just value, to one read back from the DB —
+    # otherwise the skip-write check below would never fire for zero-shift
+    # days, since Decimal("0") == Decimal("0.00") but str() differs.
+    fields["shifts_earned"] = Decimal(fields["shifts_earned"]).quantize(Decimal("0.01"))
+
+    # Skip the write entirely when the freshly computed values match what's
+    # already persisted — a day's outcome rarely changes once computed, and
+    # this turns the common "nothing changed since last time" case (bulk
+    # month-wide reads) into zero write queries instead of one per day.
+    if existing is not None and all(getattr(existing, k) == v for k, v in fields.items()):
+        return existing
 
     record, _ = AttendanceDayRecord.objects.update_or_create(
         employee=emp, date=d, defaults=fields,
@@ -321,15 +366,30 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
 
 
 def compute_month_records(emp, year: int, month: int, settings=None):
-    """Compute final records for every elapsed day of the month. Returns list."""
+    """
+    Compute final records for every elapsed day of the month. Returns list.
+
+    Everything compute_day_record() would otherwise look up one day at a
+    time (existing AttendanceDayRecord, manual Attendance rows, the
+    employee's shift assignment(s), night-shift rules/relaxation state) is
+    fetched here ONCE for the whole month and handed down via `prefetch`.
+    Calling this per employee across a full roster (Report Log summary,
+    Payroll generation) would otherwise be an O(employees × days) query
+    storm — this keeps each employee's month to a small, fixed number of
+    queries regardless of how many days are in it.
+    """
     if settings is None:
         settings = PayrollSettings.get()
 
     days_in_month = calendar.monthrange(year, month)[1]
     today = date_type.today()
+    month_start = date_type(year, month, 1)
+    month_end = date_type(year, month, days_in_month)
 
+    # One day before the month too — night-shift detection for day 1 needs
+    # the previous night's (last day of the prior month) punches.
     logs = AttendanceLog.objects.filter(
-        employee=emp, date__year=year, date__month=month
+        employee=emp, date__gte=month_start - timedelta(days=1), date__lte=month_end,
     ).order_by("punch_time")
     logs_by_date = {}
     for log in logs:
@@ -344,6 +404,42 @@ def compute_month_records(emp, year: int, month: int, settings=None):
         if emp.employment_type == "production" else None
     )
 
+    from .models import EmployeeShiftAssignment, NightShiftRelaxation, NightShiftRule
+    from .night_shift import ensure_default_rules
+
+    assignments = list(
+        EmployeeShiftAssignment.objects.filter(employee=emp, effective_from__lte=month_end)
+        .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=month_start - timedelta(days=1)))
+        .select_related("shift")
+    )
+    existing_day_records = {
+        r.date: r for r in AttendanceDayRecord.objects.filter(
+            employee=emp, date__gte=month_start, date__lte=month_end,
+        )
+    }
+    manual_attendance_dates = {
+        date_type.fromisoformat(str(dt)[:10])
+        for dt in Attendance.objects.filter(
+            employee=emp, date__gte=month_start.isoformat(), date__lte=month_end.isoformat(),
+            present=True,
+        ).values_list("date", flat=True)
+    }
+    ensure_default_rules()
+    night_rules = list(NightShiftRule.objects.filter(is_active=True))
+    existing_relaxations = {
+        r.relaxation_date: r for r in NightShiftRelaxation.objects.filter(
+            employee=emp, relaxation_date__gte=month_start, relaxation_date__lte=month_end,
+        )
+    }
+    prefetch = {
+        "assignments": assignments,
+        "existing_day_records": existing_day_records,
+        "manual_attendance_dates": manual_attendance_dates,
+        "night_logs_by_date": logs_by_date,
+        "night_rules": night_rules,
+        "existing_relaxations": existing_relaxations,
+    }
+
     records = []
     for day in range(1, days_in_month + 1):
         d = date_type(year, month, day)
@@ -357,6 +453,7 @@ def compute_month_records(emp, year: int, month: int, settings=None):
             holiday_dates=holiday_dates,
             prod_config=prod_config,
             prod_segments=prod_segments,
+            prefetch=prefetch,
         ))
     return records
 

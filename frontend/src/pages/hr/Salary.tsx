@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,8 @@ import { Plus, CheckCircle, Cpu, FileSpreadsheet, UploadCloud, RefreshCw, Edit, 
 import EmployeeSearchSelect from "@/components/EmployeeSearchSelect";
 import Loader from "@/components/Loader";
 import { customFetch } from "@/lib/api-client/custom-fetch";
+import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
+import PayrollGenerationPipeline from "@/components/PayrollGenerationPipeline";
 
 // Form schemas
 const manualPunchSchema = z.object({
@@ -169,32 +171,36 @@ export default function Salary() {
 
   useEffect(() => { setPage(1); }, [payrollGroup]);
 
-  // Operations
-  const handleGeneratePayroll = async () => {
-    try {
-      setLoading(true);
-      const res = await customFetch<any>("/api/payroll/generate", {
-        method: "POST",
-        body: JSON.stringify({ month: Number(genMonth), year: Number(genYear) }),
-      });
-      toast({
-        title: "Success",
-        description: res.message || "Payroll generated successfully.",
-      });
-      // Switch display filter to the generated month and fetch immediately
-      setMonthFilter(genMonth);
-      setYearFilter(genYear);
-      fetchPayrolls(genMonth, genYear);
-      setRunPayrollOpen(false);
-    } catch (err: any) {
-      toast({
-        title: "Error",
-        description: err.data?.error || "Failed to generate payroll.",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
+  // Payroll generation lives in a root-level context (PayrollGenerationProvider)
+  // so it keeps running — and stays visible via the pipeline/banner — even if
+  // this page unmounts mid-run, the same pattern Attendance.tsx uses for the
+  // biometric sync pipeline.
+  const { triggerGenerate, isGenerating, showPipeline, progress, dismiss: dismissPipeline } = usePayrollGeneration();
+  const generatedParamsRef = useRef<{ month: string; year: string } | null>(null);
+  const wasGeneratingRef = useRef(false);
+
+  useEffect(() => {
+    if (wasGeneratingRef.current && !isGenerating && generatedParamsRef.current) {
+      const { month, year } = generatedParamsRef.current;
+      if (activeTab === "payroll") fetchPayrolls(month, year);
+      generatedParamsRef.current = null;
     }
+    wasGeneratingRef.current = isGenerating;
+  }, [isGenerating]);
+
+  // Operations
+  const handleGeneratePayroll = () => {
+    if (isGenerating) {
+      toast({ title: "A payroll run is already in progress", description: "Wait for it to finish before starting another." });
+      return;
+    }
+    generatedParamsRef.current = { month: genMonth, year: genYear };
+    triggerGenerate({ month: Number(genMonth), year: Number(genYear) });
+    // Switch display filter to the generated month right away so the list
+    // is pointed at the right period once results land.
+    setMonthFilter(genMonth);
+    setYearFilter(genYear);
+    setRunPayrollOpen(false);
   };
 
   const handleProcessSessions = async () => {
@@ -438,6 +444,9 @@ export default function Salary() {
             )}
           </div>
         </div>
+
+        {/* Payroll generation progress */}
+        <PayrollGenerationPipeline active={showPipeline} data={progress} onDismiss={dismissPipeline} />
 
         {/* Global Filter Bar */}
         <Card className="shadow-sm border-slate-100 bg-white">
@@ -981,8 +990,8 @@ export default function Salary() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRunPayrollOpen(false)}>Cancel</Button>
-            <Button onClick={handleGeneratePayroll} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold">
-              Execute Payroll Engine
+            <Button onClick={handleGeneratePayroll} disabled={isGenerating} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold">
+              {isGenerating ? "A run is already in progress…" : "Execute Payroll Engine"}
             </Button>
           </DialogFooter>
         </DialogContent>

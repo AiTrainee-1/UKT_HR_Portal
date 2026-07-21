@@ -306,7 +306,9 @@ export default function AttendancePage() {
   const [statusFilter, setStatusFilter] = useState<"all" | "present" | "absent" | "on_leave">("all");
   const [detailEmpId, setDetailEmpId] = useState<number | null>(null);
   const [syncMode, setSyncMode] = useState<SyncBiometricMode>("day");
-  const [syncDeviceId, setSyncDeviceId] = useState<SyncDeviceId>("all");
+  // Multi-select checklist: which specific devices to sync. Empty selection
+  // means "use the default" (every enabled device), same as before.
+  const [selectedDeviceIds, setSelectedDeviceIds] = useState<(number | "env")[]>([]);
   const [showSyncMenu, setShowSyncMenu] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
   const syncMenuRef = useRef<HTMLDivElement>(null);
@@ -320,18 +322,28 @@ export default function AttendancePage() {
   const { isSyncing, showPipeline, progress, lastSyncedAt, triggerSync, dismiss } = useBiometricSync();
 
   const SYNC_MODES: { key: SyncBiometricMode; label: string }[] = [
-    { key: "day",   label: "Last Day" },
+    { key: "day",   label: "Today" },
     { key: "week",  label: "Last One Week" },
     { key: "month", label: "Last One Month" },
     { key: "all",   label: "All Records" },
   ];
 
   const syncModeLabel = SYNC_MODES.find(m => m.key === syncMode)?.label ?? "Last Day";
+  const allDevicesSelected = enabledDevices.length > 0 && selectedDeviceIds.length === enabledDevices.length;
+
+  const toggleDevice = (id: number | "env") => {
+    setSelectedDeviceIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+  const toggleSelectAllDevices = () => {
+    setSelectedDeviceIds(prev => prev.length === enabledDevices.length ? [] : enabledDevices.map(d => d.id));
+  };
 
   const handleSync = (modeOverride?: SyncBiometricMode) => {
     const mode = modeOverride ?? syncMode;
     setShowSyncMenu(false);
-    void triggerSync(mode, syncDeviceId);
+    // No specific devices checked -> same default as before (every enabled device).
+    const deviceId: SyncDeviceId = selectedDeviceIds.length > 0 ? selectedDeviceIds : "all";
+    void triggerSync(mode, deviceId);
   };
 
   // The context invalidates "/api/attendance" queries broadly on completion;
@@ -446,24 +458,32 @@ export default function AttendancePage() {
               {showSyncMenu && (
                 <div className="absolute top-full right-0 mt-1 z-50 bg-white border rounded-xl shadow-lg overflow-hidden min-w-[220px]">
                   <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400 px-3 pt-2.5 pb-1">Device</p>
-                  <button
-                    onClick={() => setSyncDeviceId("all")}
-                    className={`w-full text-left px-3 py-1.5 text-sm hover:bg-cyan-50 transition-colors ${
-                      syncDeviceId === "all" ? "text-cyan-700 font-semibold bg-cyan-50" : "text-gray-700"
-                    }`}
-                  >
-                    Select All Devices
-                  </button>
+                  <label className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-cyan-50 cursor-pointer transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={allDevicesSelected}
+                      onChange={toggleSelectAllDevices}
+                      className="accent-cyan-600"
+                    />
+                    <span className={allDevicesSelected ? "text-cyan-700 font-semibold" : "text-gray-700"}>
+                      Select All Devices
+                    </span>
+                  </label>
                   {enabledDevices.map(d => (
-                    <button
+                    <label
                       key={d.id}
-                      onClick={() => setSyncDeviceId(d.id)}
-                      className={`w-full text-left px-3 py-1.5 text-sm hover:bg-cyan-50 transition-colors ${
-                        syncDeviceId === d.id ? "text-cyan-700 font-semibold bg-cyan-50" : "text-gray-700"
-                      }`}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-cyan-50 cursor-pointer transition-colors"
                     >
-                      {d.name}
-                    </button>
+                      <input
+                        type="checkbox"
+                        checked={selectedDeviceIds.includes(d.id)}
+                        onChange={() => toggleDevice(d.id)}
+                        className="accent-cyan-600"
+                      />
+                      <span className={selectedDeviceIds.includes(d.id) ? "text-cyan-700 font-semibold" : "text-gray-700"}>
+                        {d.name}
+                      </span>
+                    </label>
                   ))}
                   {enabledDevices.length === 0 && (
                     <p className="px-3 py-1.5 text-xs text-amber-600">No enabled devices — add one in Settings.</p>

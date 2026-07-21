@@ -318,34 +318,36 @@ export default function RecruitmentDashboard() {
               {modal?.type === "vacancies" && "Departments with Vacancies"}
             </DialogTitle>
           </DialogHeader>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Department</TableHead>
-                <TableHead className="text-center">Current</TableHead>
-                <TableHead className="text-center">Required</TableHead>
-                <TableHead className="text-center">Vacancy</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {dept
-                .filter((d) => modal?.type === "vacancies" ? d.vacancy > 0 : true)
-                .map((d) => (
-                  <TableRow key={d.departmentId}>
-                    <TableCell className="font-medium">{d.departmentName}</TableCell>
-                    <TableCell className="text-center">{d.currentCount}</TableCell>
-                    <TableCell className="text-center">{d.requiredCount}</TableCell>
-                    <TableCell className="text-center">
-                      {d.vacancy > 0 ? (
-                        <Badge className="bg-red-50 text-red-600 border-red-200 border">{d.vacancy} open</Badge>
-                      ) : (
-                        <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 border">Full</Badge>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-            </TableBody>
-          </Table>
+          <div className="max-h-[70vh] overflow-y-auto scrollbar-hide">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Department</TableHead>
+                  <TableHead className="text-center">Current</TableHead>
+                  <TableHead className="text-center">Required</TableHead>
+                  <TableHead className="text-center">Vacancy</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {dept
+                  .filter((d) => modal?.type === "vacancies" ? d.vacancy > 0 : true)
+                  .map((d) => (
+                    <TableRow key={d.departmentId}>
+                      <TableCell className="font-medium">{d.departmentName}</TableCell>
+                      <TableCell className="text-center">{d.currentCount}</TableCell>
+                      <TableCell className="text-center">{d.requiredCount}</TableCell>
+                      <TableCell className="text-center">
+                        {d.vacancy > 0 ? (
+                          <Badge className="bg-red-50 text-red-600 border-red-200 border">{d.vacancy} open</Badge>
+                        ) : (
+                          <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 border">Full</Badge>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+              </TableBody>
+            </Table>
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -358,29 +360,31 @@ export default function RecruitmentDashboard() {
           {joinees.length === 0 ? (
             <p className="text-sm text-center text-[#006496]/40 py-6">No new joinees in the last 30 days.</p>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Department</TableHead>
-                  <TableHead>Join Date</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {joinees.map((e: RecentJoineeItem) => (
-                  <TableRow key={e.id}>
-                    <TableCell>
-                      <div>
-                        <p className="font-medium text-sm">{e.name}</p>
-                        <p className="text-[11px] text-[#006496]/50">{e.employeeCode}</p>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-sm">{e.department ?? "—"}</TableCell>
-                    <TableCell className="text-sm">{e.joinDate ?? "—"}</TableCell>
+            <div className="max-h-[70vh] overflow-y-auto scrollbar-hide">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Department</TableHead>
+                    <TableHead>Join Date</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {joinees.map((e: RecentJoineeItem) => (
+                    <TableRow key={e.id}>
+                      <TableCell>
+                        <div>
+                          <p className="font-medium text-sm">{e.name}</p>
+                          <p className="text-[11px] text-[#006496]/50">{e.employeeCode}</p>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-sm">{e.department ?? "—"}</TableCell>
+                      <TableCell className="text-sm">{e.joinDate ?? "—"}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </DialogContent>
       </Dialog>
@@ -394,43 +398,45 @@ export default function RecruitmentDashboard() {
           {leaves.length === 0 ? (
             <p className="text-sm text-center text-[#006496]/40 py-6">No leave requests in the last 30 days.</p>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Employee</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Period</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {leaves.map((l: RecentLeaveItem) => (
-                  <TableRow key={l.id}>
-                    <TableCell>
-                      <div>
-                        <p className="font-medium text-sm">{l.employeeName}</p>
-                        <p className="text-[11px] text-[#006496]/50">{l.department ?? l.employeeCode}</p>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-sm capitalize">{l.type}</TableCell>
-                    <TableCell className="text-sm">{l.startDate} → {l.endDate}</TableCell>
-                    <TableCell>
-                      <Badge
-                        className={
-                          l.status === "approved"
-                            ? "bg-emerald-50 text-emerald-700 border-emerald-200 border text-[10px]"
-                            : l.status === "rejected"
-                            ? "bg-red-50 text-red-600 border-red-200 border text-[10px]"
-                            : "bg-amber-50 text-amber-700 border-amber-200 border text-[10px]"
-                        }
-                      >
-                        {l.status}
-                      </Badge>
-                    </TableCell>
+            <div className="max-h-[70vh] overflow-y-auto scrollbar-hide">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Employee</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Period</TableHead>
+                    <TableHead>Status</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {leaves.map((l: RecentLeaveItem) => (
+                    <TableRow key={l.id}>
+                      <TableCell>
+                        <div>
+                          <p className="font-medium text-sm">{l.employeeName}</p>
+                          <p className="text-[11px] text-[#006496]/50">{l.department ?? l.employeeCode}</p>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-sm capitalize">{l.type}</TableCell>
+                      <TableCell className="text-sm">{l.startDate} → {l.endDate}</TableCell>
+                      <TableCell>
+                        <Badge
+                          className={
+                            l.status === "approved"
+                              ? "bg-emerald-50 text-emerald-700 border-emerald-200 border text-[10px]"
+                              : l.status === "rejected"
+                              ? "bg-red-50 text-red-600 border-red-200 border text-[10px]"
+                              : "bg-amber-50 text-amber-700 border-amber-200 border text-[10px]"
+                          }
+                        >
+                          {l.status}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </DialogContent>
       </Dialog>

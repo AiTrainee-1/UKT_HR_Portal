@@ -55,8 +55,24 @@ def _s2t(s: int) -> time_type:
     return time_type(s // 3600, (s % 3600) // 60, s % 60)
 
 
-def _get_assignment_for_date(emp, d: date_type):
-    """Return the active EmployeeShiftAssignment for an employee on a date (or None)."""
+def _get_assignment_for_date(emp, d: date_type, assignments=None):
+    """
+    Return the active EmployeeShiftAssignment for an employee on a date (or None).
+
+    `assignments`, when given, is this employee's full assignment list
+    (any order) prefetched once by the caller — e.g. compute_month_records
+    fetching it once per employee instead of once per day. Resolving "which
+    assignment covers this date" then happens in Python instead of a fresh
+    query, which is what makes a month-wide bulk computation viable.
+    """
+    if assignments is not None:
+        best = None
+        for a in assignments:
+            if a.effective_from <= d and (a.effective_to is None or a.effective_to >= d):
+                if best is None or a.effective_from > best.effective_from:
+                    best = a
+        return best
+
     from .models import EmployeeShiftAssignment
     return (
         EmployeeShiftAssignment.objects
@@ -68,13 +84,13 @@ def _get_assignment_for_date(emp, d: date_type):
     )
 
 
-def _get_shift_for_date(emp, d: date_type):
+def _get_shift_for_date(emp, d: date_type, assignments=None):
     """
     Return the effective ShiftTemplate for an employee on a given date (or None).
     Per-employee custom start/end overrides on the assignment take precedence
     over the template's own times — HR sets these for individual schedules.
     """
-    asgn = _get_assignment_for_date(emp, d)
+    asgn = _get_assignment_for_date(emp, d, assignments=assignments)
     if not asgn:
         return None
     shift = asgn.shift
@@ -89,16 +105,26 @@ def _get_shift_for_date(emp, d: date_type):
     return shift
 
 
-def compute_daily_shift_log(emp, d: date_type, punches: list) -> dict:
+_UNSET = object()
+
+
+def compute_daily_shift_log(emp, d: date_type, punches: list, assignments=None, relaxation=_UNSET) -> dict:
     """
     Given a list of AttendanceLog objects for (emp, date), compute the
     4-punch shift result and persist it to DailyShiftLog.
+
+    `assignments` and `relaxation` let a bulk caller (compute_month_records)
+    pass in data it already fetched/computed once for the whole month,
+    instead of this function re-querying per day — see the same parameters
+    on _get_shift_for_date / night_shift.get_relaxation_for. Any other
+    caller (single-day recompute, etc.) can omit them and behavior is
+    unchanged: everything is looked up fresh, exactly as before.
 
     Returns the resulting DailyShiftLog instance dict.
     """
     from .models import DailyShiftLog
 
-    shift = _get_shift_for_date(emp, d)
+    shift = _get_shift_for_date(emp, d, assignments=assignments)
 
     # Sort punches by time
     sorted_punches = sorted(punches, key=lambda p: p.punch_time)
@@ -198,10 +224,13 @@ def compute_daily_shift_log(emp, d: date_type, punches: list) -> dict:
     # ── Night Shift Relaxation ───────────────────────────────────────────────
     # Worked late last night → allowed to arrive late today without penalty,
     # and the day still counts as a full shift once completed.
-    try:
-        from .night_shift import get_relaxation_for
-        relaxation = get_relaxation_for(emp, d) if punch1 else None
-    except Exception:
+    if relaxation is _UNSET:
+        try:
+            from .night_shift import get_relaxation_for
+            relaxation = get_relaxation_for(emp, d) if punch1 else None
+        except Exception:
+            relaxation = None
+    elif not punch1:
         relaxation = None
     if relaxation and punch1 and punch1 <= relaxation.allowed_until:
         if late_morning:

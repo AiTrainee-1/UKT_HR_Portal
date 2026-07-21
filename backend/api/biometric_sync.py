@@ -65,6 +65,9 @@ def get_sync_targets(device_id=None) -> list[dict]:
                           de-duplicated (Settings row wins).
       "env"             → only the .env device.
       <int>             → only that Settings device (must be enabled).
+      <list[int]>       → exactly those Settings devices (each must be
+                          enabled) — the HR Portal's multi-select device
+                          checklist sends this shape.
     Raises BiometricSyncError when the selection resolves to nothing.
     """
     from .models import BiometricDevice
@@ -100,6 +103,34 @@ def get_sync_targets(device_id=None) -> list[dict]:
                 "or pick a device added in Settings."
             )
         return [env]
+
+    if isinstance(device_id, (list, tuple)):
+        # The checklist can include the "env" pseudo-device alongside real
+        # numeric Settings device ids — split them apart before resolving.
+        wants_env = ENV_DEVICE_ID in device_id
+        numeric_ids = [x for x in device_id if x != ENV_DEVICE_ID]
+        try:
+            ids = [int(x) for x in numeric_ids]
+        except (TypeError, ValueError):
+            raise BiometricSyncError("Invalid device selection")
+        if not ids and not wants_env:
+            raise BiometricSyncError("Select at least one device to sync")
+
+        devices = {d.id: d for d in BiometricDevice.objects.filter(pk__in=ids, is_active=True)}
+        missing = [i for i in ids if i not in devices]
+        if missing:
+            raise BiometricSyncError(f"Device(s) not found or disabled: {', '.join(map(str, missing))}")
+
+        # Preserve the order the caller selected them in.
+        targets = []
+        for x in device_id:
+            if x == ENV_DEVICE_ID:
+                env = get_env_device()
+                if env:
+                    targets.append(env)
+            else:
+                targets.append(db_target(devices[int(x)]))
+        return targets
 
     if device_id not in (None, "", "all"):
         try:

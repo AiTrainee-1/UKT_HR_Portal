@@ -44,14 +44,14 @@ def _t2m(t: time_type) -> int:
     return t.hour * 60 + t.minute
 
 
-def _night_start_for(emp: Employee, night_date: date_type) -> time_type:
+def _night_start_for(emp: Employee, night_date: date_type, assignments=None) -> time_type:
     """
     The time after which this employee is considered to be working into the
     night, derived from their OWN assigned shift end + a buffer — never a
     fixed clock time shared across every employee.
     """
     from .shift_engine import _get_shift_for_date
-    shift = _get_shift_for_date(emp, night_date)
+    shift = _get_shift_for_date(emp, night_date, assignments=assignments)
     if shift and shift.end_time:
         end_minutes = _t2m(shift.end_time) + NIGHT_WORK_BUFFER_MINUTES
         return time_type((end_minutes // 60) % 24, end_minutes % 60)
@@ -85,37 +85,63 @@ def ensure_default_rules() -> None:
         )
 
 
-def match_rule(out_time: time_type, crossed_midnight: bool) -> NightShiftRule | None:
-    """First active rule whose threshold covers the actual punch-out time."""
-    ensure_default_rules()
+def match_rule(out_time: time_type, crossed_midnight: bool, rules=None) -> NightShiftRule | None:
+    """
+    First active rule whose threshold covers the actual punch-out time.
+
+    `rules`, when given, is the pre-fetched active-rule list (a bulk caller's
+    one-time query instead of a fresh `NightShiftRule.objects.filter(...)`
+    on every call — this function is invoked once or twice per employee per
+    day, so re-querying a small, rarely-changed table that often is what
+    made month-wide computation slow).
+    """
+    if rules is None:
+        ensure_default_rules()
+        rules = NightShiftRule.objects.filter(is_active=True)
     out_m = _night_minutes(out_time, crossed_midnight)
     best = None
     best_m = None
-    for rule in NightShiftRule.objects.filter(is_active=True):
+    for rule in rules:
         rule_m = _night_minutes(rule.worked_until, rule.crosses_midnight)
         if rule_m >= out_m and (best_m is None or rule_m < best_m):
             best, best_m = rule, rule_m
     return best
 
 
-def detect_night_for_employee(emp: Employee, night_date: date_type) -> NightShiftRelaxation | None:
+def detect_night_for_employee(
+    emp: Employee, night_date: date_type,
+    assignments=None, logs_by_date=None, rules=None, existing_relaxations=None,
+) -> NightShiftRelaxation | None:
     """
     Inspect punches for (emp, night_date) and the early morning of the next
     day. Creates/updates the NightShiftRelaxation row, or returns None when
     the employee did not work into the night.
+
+    `assignments`/`logs_by_date`/`rules`/`existing_relaxations` let a bulk
+    caller (compute_month_records) supply data it already fetched once for
+    the whole month instead of this function re-querying per day. Omitted
+    (the default), everything is looked up fresh exactly as before — every
+    other caller (single-day recompute, casual leave/manager views, etc.)
+    is unaffected.
     """
     next_day = night_date + timedelta(days=1)
-    night_start = _night_start_for(emp, night_date)
+    night_start = _night_start_for(emp, night_date, assignments=assignments)
 
-    day_punches = list(
-        AttendanceLog.objects.filter(employee=emp, date=night_date)
-        .order_by("punch_time").values_list("punch_time", flat=True)
-    )
-    early_punches = list(
-        AttendanceLog.objects.filter(
-            employee=emp, date=next_day, punch_time__lte=MORNING_CUTOFF,
-        ).order_by("punch_time").values_list("punch_time", flat=True)
-    )
+    if logs_by_date is not None:
+        day_punches = sorted(p.punch_time for p in logs_by_date.get(night_date, []))
+        early_punches = sorted(
+            p.punch_time for p in logs_by_date.get(next_day, []) if p.punch_time <= MORNING_CUTOFF
+        )
+    else:
+        day_punches = list(
+            AttendanceLog.objects.filter(employee=emp, date=night_date)
+            .order_by("punch_time").values_list("punch_time", flat=True)
+        )
+        early_punches = list(
+            AttendanceLog.objects.filter(
+                employee=emp, date=next_day, punch_time__lte=MORNING_CUTOFF,
+            ).order_by("punch_time").values_list("punch_time", flat=True)
+        )
 
     worked_late_same_day = bool(day_punches) and day_punches[-1] >= night_start
     crossed = bool(early_punches) and bool(day_punches) and day_punches[-1] >= night_start
@@ -128,11 +154,14 @@ def detect_night_for_employee(emp: Employee, night_date: date_type) -> NightShif
     elif worked_late_same_day:
         last_out, crossed_midnight = day_punches[-1], False
     else:
-        # No night work — remove any stale auto row for this night
-        NightShiftRelaxation.objects.filter(employee=emp, relaxation_date=next_day).delete()
+        # No night work — remove any stale auto row for this night. When the
+        # caller already knows (via a prefetched map) that no row exists for
+        # this date, skip the DELETE query entirely — it would be a no-op.
+        if existing_relaxations is None or next_day in existing_relaxations:
+            NightShiftRelaxation.objects.filter(employee=emp, relaxation_date=next_day).delete()
         return None
 
-    rule = match_rule(last_out, crossed_midnight)
+    rule = match_rule(last_out, crossed_midnight, rules=rules)
     if rule is None:
         return None
 
@@ -163,7 +192,10 @@ def detect_night_for_date(night_date: date_type) -> int:
     return count
 
 
-def get_relaxation_for(emp: Employee, d: date_type) -> NightShiftRelaxation | None:
+def get_relaxation_for(
+    emp: Employee, d: date_type,
+    assignments=None, logs_by_date=None, rules=None, existing_relaxations=None,
+) -> NightShiftRelaxation | None:
     """
     Relaxation applying to day `d` for this employee — always re-derived from
     the previous night's actual punches against the employee's CURRENT shift
@@ -174,8 +206,14 @@ def get_relaxation_for(emp: Employee, d: date_type) -> NightShiftRelaxation | No
     the employee no longer has. detect_night_for_employee() already
     updates/deletes the stored row to match, so this stays cheap and correct
     on every call.
+
+    See detect_night_for_employee() for what the optional prefetch params do.
     """
-    return detect_night_for_employee(emp, d - timedelta(days=1))
+    return detect_night_for_employee(
+        emp, d - timedelta(days=1),
+        assignments=assignments, logs_by_date=logs_by_date,
+        rules=rules, existing_relaxations=existing_relaxations,
+    )
 
 
 def record_report(relax: NightShiftRelaxation, first_punch: time_type) -> None:

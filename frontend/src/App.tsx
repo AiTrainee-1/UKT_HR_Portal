@@ -9,6 +9,12 @@ import { ApiError } from "@/lib/api-client/custom-fetch";
 import { toast } from "@/hooks/use-toast";
 import { BiometricSyncProvider } from "@/contexts/BiometricSyncContext";
 import GlobalSyncBanner from "@/components/GlobalSyncBanner";
+import { PayrollGenerationProvider } from "@/contexts/PayrollGenerationContext";
+import GlobalPayrollBanner from "@/components/GlobalPayrollBanner";
+import { SalarySlipBulkProvider } from "@/contexts/SalarySlipBulkContext";
+import GlobalSalarySlipBulkBanner from "@/components/GlobalSalarySlipBulkBanner";
+import { ResumeScreeningProvider } from "@/contexts/ResumeScreeningContext";
+import GlobalResumeScreeningBanner from "@/components/GlobalResumeScreeningBanner";
 import NotFound from "@/pages/not-found";
 
 // Public pages
@@ -36,6 +42,7 @@ import RecruitmentDashboard from "@/pages/hr/recruitment/RecruitmentDashboard";
 import NewJoinees from "@/pages/hr/recruitment/NewJoinees";
 import Resignations from "@/pages/hr/recruitment/Resignations";
 import RequiredRoles from "@/pages/hr/recruitment/RequiredRoles";
+import ResumeScreening from "@/pages/hr/recruitment/ResumeScreening";
 import Attendance from "@/pages/hr/Attendance";
 import AttendanceReportLog from "@/pages/hr/AttendanceReportLog";
 import Departments from "@/pages/hr/Departments";
@@ -295,6 +302,9 @@ function Router() {
       <Route path="/hr/recruitment/required-roles">
         {() => <ProtectedRoute component={RequiredRoles} allowedRoles={["hr"]} />}
       </Route>
+      <Route path="/hr/recruitment/resume-screening">
+        {() => <ProtectedRoute component={ResumeScreening} allowedRoles={["hr"]} />}
+      </Route>
 
       {/* ── Employee Routes ───────────────────────────────────── */}
       <Route path="/employee/dashboard">
@@ -346,10 +356,19 @@ function App() {
       <TooltipProvider>
         <AuthProvider>
           <BiometricSyncProvider>
-            <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-              <Router />
-            </WouterRouter>
-            <GlobalSyncBanner />
+            <PayrollGenerationProvider>
+              <SalarySlipBulkProvider>
+                <ResumeScreeningProvider>
+                  <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+                    <Router />
+                  </WouterRouter>
+                  <GlobalSyncBanner />
+                  <GlobalPayrollBanner />
+                  <GlobalSalarySlipBulkBanner />
+                  <GlobalResumeScreeningBanner />
+                </ResumeScreeningProvider>
+              </SalarySlipBulkProvider>
+            </PayrollGenerationProvider>
           </BiometricSyncProvider>
         </AuthProvider>
         <Toaster />

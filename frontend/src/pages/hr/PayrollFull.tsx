@@ -5,14 +5,17 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
+import PayrollGenerationPipeline from "@/components/PayrollGenerationPipeline";
 import {
-  useListPayrollRuns, useGeneratePayroll, useUpdatePayrollRecord,
+  useListPayrollRuns, useUpdatePayrollRecord, useListDepartments,
   usePayrollBreakdown, useSessionConfigs, useCreateSessionConfig,
   useUpdateSessionConfig, useDeleteSessionConfig,
   getListPayrollRunsQueryKey, getSessionConfigsQueryKey,
@@ -23,7 +26,7 @@ import {
   IndianRupee, Play, Lock, CheckCircle2, Clock, Users,
   TrendingUp, ChevronDown, ChevronUp, AlertCircle, Info,
   Factory, UserCheck, Settings, Plus, Trash2, Edit, X,
-  CalendarDays, ArrowRight, Download,
+  CalendarDays, ArrowRight, Download, Search,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -851,34 +854,27 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
 
 function GeneratePayrollDialog({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
   const { toast } = useToast();
-  const generateMutation = useGeneratePayroll();
+  const { triggerGenerate, isGenerating } = usePayrollGeneration();
   const [runType, setRunType] = useState<"monthly" | "biweekly">("monthly");
   const [weekNumber, setWeekNumber] = useState<1 | 2>(1);
   const [month, setMonth] = useState(new Date().getMonth() + 1);
   const [year, setYear] = useState(new Date().getFullYear());
 
-  const handleGenerate = async () => {
-    try {
-      const result = await generateMutation.mutateAsync({
-        month, year,
-        runType,
-        weekNumber: runType === "biweekly" ? weekNumber : undefined,
-      });
-      const skipped = result.skippedDetails ?? [];
-      if (skipped.length > 0) {
-        toast({
-          title: `${result.generated} payrolls generated, ${result.skipped} skipped`,
-          description: skipped.slice(0, 3).map(s => `${s.name}: ${s.reason}`).join(" | "),
-          variant: "destructive",
-        });
-      } else {
-        toast({ title: `${result.generated} payroll records generated successfully` });
-      }
-      onSuccess();
-      onClose();
-    } catch {
-      toast({ title: "Failed to generate payroll", variant: "destructive" });
+  const handleGenerate = () => {
+    if (isGenerating) {
+      toast({ title: "A payroll run is already in progress", description: "Wait for it to finish before starting another." });
+      return;
     }
+    // Fire-and-forget: the PayrollGenerationContext owns the request and the
+    // progress polling from here, so generation keeps running — and stays
+    // visible via the pipeline/banner — even after this dialog (or the whole
+    // page) unmounts.
+    triggerGenerate({
+      month, year, runType,
+      weekNumber: runType === "biweekly" ? weekNumber : undefined,
+    });
+    onSuccess();
+    onClose();
   };
 
   const lastDay = new Date(year, month, 0).getDate();
@@ -969,9 +965,9 @@ function GeneratePayrollDialog({ onClose, onSuccess }: { onClose: () => void; on
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleGenerate} disabled={generateMutation.isPending}
+          <Button onClick={handleGenerate} disabled={isGenerating}
             className={runType === "monthly" ? "" : "bg-amber-600 hover:bg-amber-700"}>
-            {generateMutation.isPending ? "Generating…" : (
+            {isGenerating ? "A run is already in progress…" : (
               <><Play size={13} className="mr-1.5" />Generate {runType === "monthly" ? "Staff" : "Production"} Payroll</>
             )}
           </Button>
@@ -1063,8 +1059,12 @@ export default function PayrollFull() {
   const [filterYear, setFilterYear] = useState<number>(new Date().getFullYear());
   const [filterType, setFilterType] = useState<"staff" | "production">("staff");
   const [prodWeek, setProdWeek]     = useState<"week12" | "week34">("week12");
+  const [search, setSearch]         = useState("");
+  const [deptFilter, setDeptFilter] = useState("all");
 
   const updateMutation = useUpdatePayrollRecord();
+  const { showPipeline, progress, dismiss: dismissPipeline } = usePayrollGeneration();
+  const { data: departments } = useListDepartments();
 
   const { data: runs, isLoading } = useListPayrollRuns({ month: filterMonth, year: filterYear });
 
@@ -1075,9 +1075,19 @@ export default function PayrollFull() {
   const week34Runs = allRuns.filter(r => isProdMode(r.salaryMode) && r.weekNumber === 2);
   const prodRuns   = [...week12Runs, ...week34Runs];
 
-  const filteredRuns =
+  const modeRuns =
     filterType === "staff" ? staffRuns :
     prodWeek === "week12"  ? week12Runs : week34Runs;
+
+  const filteredRuns = modeRuns.filter(r => {
+    if (deptFilter !== "all" && String(r.departmentId ?? "") !== deptFilter) return false;
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return (
+      r.employeeName?.toLowerCase().includes(q) ||
+      r.employeeCode?.toLowerCase().includes(q)
+    );
+  });
 
   const totalGross = filteredRuns.reduce((s, r) => s + r.grossSalary, 0);
   const totalDeductions = filteredRuns.reduce((s, r) => s + r.deductions, 0);
@@ -1118,6 +1128,9 @@ export default function PayrollFull() {
           </div>
         </div>
 
+        {/* Payroll generation progress */}
+        <PayrollGenerationPipeline active={showPipeline} data={progress} onDismiss={dismissPipeline} />
+
         {/* Session Config (collapsible) */}
         {showSessionConfig && <SessionConfigPanel />}
 
@@ -1143,6 +1156,27 @@ export default function PayrollFull() {
             onChange={e => setFilterYear(Number(e.target.value))}
             className="h-8 w-20 text-sm" min={2020} max={2030}
           />
+          <Separator orientation="vertical" className="h-6" />
+          <div className="relative">
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Search by employee code or name…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="h-8 pl-8 text-sm w-56"
+            />
+          </div>
+          <Select value={deptFilter} onValueChange={setDeptFilter}>
+            <SelectTrigger className="h-8 w-44 text-sm">
+              <SelectValue placeholder="Department" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Departments</SelectItem>
+              {departments?.map(d => (
+                <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Separator orientation="vertical" className="h-6" />
           <PillTabs
             items={[

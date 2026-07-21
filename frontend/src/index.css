@@ -18,6 +18,11 @@
 }
 .clay-tabs-list::-webkit-scrollbar { display: none; }
 
+/* Reusable utility: scrollable content with the scrollbar track hidden
+   (used by long lists inside dialogs — the content still scrolls normally). */
+.scrollbar-hide { scrollbar-width: none; }
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+
 /* Tab trigger base */
 .clay-tabs-trigger {
   position: relative !important;

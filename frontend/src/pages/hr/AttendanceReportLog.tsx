@@ -2,21 +2,18 @@ import { useState } from "react";
 import { useLocation } from "wouter";
 import HrLayout from "@/components/HrLayout";
 import { Input } from "@/components/ui/input";
-import { PillTabs } from "@/components/ui/pill-tabs";
-import { useToast } from "@/hooks/use-toast";
 import {
-  useAttendanceReportLog, useComputeShiftLogs, useAttendanceLateSummary,
+  useAttendanceReportSummary, useAttendanceReportDetail, useAttendanceLateSummary,
   usePayrollSettings,
-  type ShiftLogEntry,
+  type ShiftLogEntry, type MonthlySummaryRow,
 } from "@/lib/api-client/custom-hooks";
-import { useListEmployees } from "@/lib/api-client";
+import { useListDepartments } from "@/lib/api-client";
 import {
-  ClipboardList, RefreshCw, AlertTriangle, ChevronLeft, Users,
+  ClipboardList, AlertTriangle, ChevronLeft, ChevronDown, ChevronUp, Search, Users, Building2, Loader2,
 } from "lucide-react";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-const today = () => new Date().toISOString().slice(0, 10);
 const currentMonth = () => new Date().getMonth() + 1;
 const currentYear = () => new Date().getFullYear();
 
@@ -46,9 +43,10 @@ function StatusBadge({ status }: { status: ShiftLogEntry["status"] }) {
   );
 }
 
-// The backend only ever sends approved CL/Permission rows here (pending and
-// rejected requests aren't final, so they don't belong on an attendance
-// report) — a present row is always "approved", hence the fixed green style.
+// The backend only ever sends approved CL/Permission/Leave rows here
+// (pending and rejected requests aren't final, so they don't belong on an
+// attendance report) — a present row is always "approved", hence the fixed
+// green style on all three badges below.
 function CasualLeaveBadge({ cl }: { cl: ShiftLogEntry["casualLeave"] }) {
   if (!cl) return <span className="text-gray-300 text-xs">—</span>;
   return (
@@ -73,6 +71,18 @@ function PermissionBadge({ perm }: { perm: ShiftLogEntry["permission"] }) {
   );
 }
 
+function LeaveBadge({ leave }: { leave: ShiftLogEntry["leave"] }) {
+  if (!leave) return <span className="text-gray-300 text-xs">—</span>;
+  return (
+    <span
+      className="text-[10px] font-bold px-1.5 py-0.5 rounded-full border whitespace-nowrap bg-blue-50 text-blue-700 border-blue-200"
+      title={leave.reason ?? ""}
+    >
+      {leave.type ?? "Leave"} · Approved
+    </span>
+  );
+}
+
 function LateCell({ row }: { row: ShiftLogEntry }) {
   if (!row.isLate) return <span className="text-green-600 text-sm">✓</span>;
   const parts = [row.lateMorning && "AM", row.lateReturn && "Return"].filter(Boolean);
@@ -88,56 +98,41 @@ function LateCell({ row }: { row: ShiftLogEntry }) {
 
 export default function AttendanceReportLog() {
   const [, navigate] = useLocation();
-  const { toast } = useToast();
 
-  const [tab, setTab] = useState<"day" | "month" | "late">("day");
-  const [date, setDate] = useState(today());
   const [month, setMonth] = useState(currentMonth());
   const [year, setYear] = useState(currentYear());
-  const [empId, setEmpId] = useState<number | null>(null);
+  const [department, setDepartment] = useState("");
+  const [search, setSearch] = useState("");
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState<number | null>(null);
+  const [showLatePenalty, setShowLatePenalty] = useState(false);
 
-  const { data: employees } = useListEmployees({ status: "active" });
+  const { data: departments } = useListDepartments();
   const { data: settings } = usePayrollSettings();
   const simpleMode = settings?.attendanceMode === "simple";
 
-  const { data: dayData, isLoading: dayLoading, refetch: refetchDay } =
-    useAttendanceReportLog({ date }, tab === "day");
+  const isDetail = selectedEmployeeId != null;
 
-  const { data: monthData, isLoading: monthLoading, refetch: refetchMonth } =
-    useAttendanceReportLog(
-      { month, year, employeeId: empId ?? undefined },
-      tab === "month" && empId != null
-    );
+  const { data: summaryData, isLoading: summaryLoading } = useAttendanceReportSummary(
+    { month, year, department: department ? Number(department) : undefined, search: search || undefined },
+    !isDetail,
+  );
 
-  const { data: lateData, isLoading: lateLoading } =
-    useAttendanceLateSummary(month, year, tab === "late");
+  const { data: detailData, isLoading: detailLoading } = useAttendanceReportDetail(
+    { month, year, employeeId: selectedEmployeeId ?? 0 },
+    isDetail,
+  );
 
-  const computeMutation = useComputeShiftLogs();
+  const { data: lateData, isLoading: lateLoading } = useAttendanceLateSummary(month, year, showLatePenalty);
 
-  const handleRecompute = async () => {
-    if (tab === "day") {
-      await computeMutation.mutateAsync({ date });
-      refetchDay();
-    } else if (empId != null) {
-      await computeMutation.mutateAsync({ month, year, employeeId: empId });
-      refetchMonth();
-    }
-    toast({ title: "Attendance recomputed" });
-  };
-
-  function renderRow(row: ShiftLogEntry, showDate: boolean) {
+  function renderRow(row: ShiftLogEntry) {
     return (
       <tr
-        key={showDate ? `${row.employeeId}-${row.date}` : row.employeeId}
+        key={row.date}
         className={`border-b hover:bg-gray-50 transition-colors ${
           row.status === "absent" ? "bg-red-50/30" : row.isHalfShift ? "bg-amber-50/30" : ""
         }`}
       >
-        {showDate && <td className="px-3 py-2.5 text-xs font-mono text-gray-700 whitespace-nowrap">{row.date}</td>}
-        <td className="px-4 py-3">
-          <p className="font-semibold text-gray-900 text-sm whitespace-nowrap">{row.employeeName}</p>
-          <p className="text-[11px] text-gray-400 font-mono">{row.employeeCode}</p>
-        </td>
+        <td className="px-3 py-2.5 text-xs font-mono text-gray-700 whitespace-nowrap">{row.date}</td>
         <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
           {row.assignedShift ? (
             <>
@@ -173,15 +168,15 @@ export default function AttendanceReportLog() {
         <td className="px-4 py-3"><LateCell row={row} /></td>
         <td className="px-4 py-3"><CasualLeaveBadge cl={row.casualLeave} /></td>
         <td className="px-4 py-3"><PermissionBadge perm={row.permission} /></td>
+        <td className="px-4 py-3"><LeaveBadge leave={row.leave} /></td>
       </tr>
     );
   }
 
-  const columnHeaders = (showDate: boolean) => [
-    ...(showDate ? ["Date"] : []),
-    "Employee", "Assigned Shift", "P1 · Morning IN",
+  const columnHeaders = [
+    "Date", "Assigned Shift", "P1 · Morning IN",
     ...(simpleMode ? [] : ["P2 · Lunch OUT", "P3 · Lunch IN"]),
-    "P4 · Evening OUT", "Status", "Shifts", "Late", "CL", "Permission",
+    "P4 · Evening OUT", "Status", "Shifts", "Late", "CL", "Permission", "Leave",
   ];
 
   return (
@@ -202,7 +197,7 @@ export default function AttendanceReportLog() {
           <div>
             <h1 className="text-xl font-bold text-gray-900">Report Log</h1>
             <p className="text-xs text-muted-foreground">
-              Every punch, shift, status, and reason — CL and Permission included — for every staff employee.
+              Every punch, shift, status, and reason — CL, Permission, and Leave included — for every staff employee.
             </p>
           </div>
           <span
@@ -215,236 +210,227 @@ export default function AttendanceReportLog() {
           </span>
         </div>
 
-        {/* Toolbar */}
+        {/* Filter bar */}
         <div className="flex items-center gap-2 flex-wrap">
-          <PillTabs
-            items={[
-              { value: "day", label: "Day View" },
-              { value: "month", label: "Employee Month View" },
-              { value: "late", label: "Late Summary" },
-            ]}
-            value={tab}
-            onChange={(v) => setTab(v as "day" | "month" | "late")}
-            baseColor="#4f46e5"
-          />
-
-          {tab === "day" && (
-            <Input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="h-8 text-xs w-36"
-            />
-          )}
-          {(tab === "month" || tab === "late") && (
+          {isDetail ? (
+            <button
+              onClick={() => setSelectedEmployeeId(null)}
+              className="h-8 px-3 text-xs border rounded-lg text-indigo-700 border-indigo-200 hover:bg-indigo-50 flex items-center gap-1.5 font-semibold"
+            >
+              <ChevronLeft size={13} /> All Employees
+            </button>
+          ) : (
             <>
-              <select
-                value={month}
-                onChange={(e) => setMonth(Number(e.target.value))}
-                className="h-8 rounded-md border px-2 text-xs bg-background"
-              >
-                {MONTH_NAMES.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
-              </select>
-              <Input
-                type="number"
-                value={year}
-                onChange={(e) => setYear(Number(e.target.value))}
-                className="w-20 h-8 text-xs"
-                min={2020} max={2035}
-              />
+              <div className="relative">
+                <Building2 size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                <select
+                  value={department}
+                  onChange={(e) => setDepartment(e.target.value)}
+                  className="h-8 rounded-md border pl-7 pr-2 text-xs bg-background"
+                >
+                  <option value="">All Departments</option>
+                  {(departments ?? []).map(d => (
+                    <option key={d.id} value={d.id}>{d.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="relative">
+                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search by employee code or name…"
+                  className="h-8 text-xs pl-7 w-64"
+                />
+              </div>
             </>
           )}
-          {tab === "month" && (
-            <select
-              value={empId ?? ""}
-              onChange={(e) => setEmpId(e.target.value ? Number(e.target.value) : null)}
-              className="h-8 rounded-md border px-2 text-xs bg-background flex-1 max-w-xs"
-            >
-              <option value="">— Select an employee —</option>
-              {(employees ?? []).filter(e => e.employmentType === "staff").map(e => (
-                <option key={e.id} value={e.id}>
-                  {e.firstName} {e.lastName} ({e.employeeCode})
-                </option>
-              ))}
-            </select>
-          )}
-
-          {tab !== "late" && (tab === "day" || empId != null) && (
+          <select
+            value={month}
+            onChange={(e) => setMonth(Number(e.target.value))}
+            className="h-8 rounded-md border px-2 text-xs bg-background"
+          >
+            {MONTH_NAMES.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+          </select>
+          <Input
+            type="number"
+            value={year}
+            onChange={(e) => setYear(Number(e.target.value))}
+            className="w-20 h-8 text-xs"
+            min={2020} max={2035}
+          />
+          {!isDetail && (
             <button
-              onClick={handleRecompute}
-              disabled={computeMutation.isPending}
-              className="ml-auto h-8 px-3 text-xs border rounded-lg text-indigo-700 border-indigo-200 hover:bg-indigo-50 flex items-center gap-1.5 font-semibold"
-              title="Recomputes and refreshes immediately — the report already reflects the latest punches on every load"
+              onClick={() => setShowLatePenalty(v => !v)}
+              className="ml-auto h-8 px-3 text-xs border rounded-lg text-amber-700 border-amber-200 hover:bg-amber-50 flex items-center gap-1.5 font-semibold"
             >
-              <RefreshCw size={12} className={computeMutation.isPending ? "animate-spin" : ""} />
-              Recompute
+              {showLatePenalty ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+              Late-Penalty Breakdown
             </button>
           )}
         </div>
 
-        {/* ── Day View ── */}
-        {tab === "day" && (
-          <div className="rounded-xl border bg-white overflow-hidden shadow-sm">
-            {dayLoading ? (
-              <div className="py-16 text-center text-sm text-muted-foreground">Loading…</div>
-            ) : !dayData || dayData.length === 0 ? (
-              <div className="py-20 text-center">
-                <ClipboardList size={36} className="text-gray-200 mx-auto mb-3" />
-                <p className="text-sm text-gray-500">No active staff employees found.</p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b">
-                    <tr>
-                      {columnHeaders(false).map(h => (
-                        <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {dayData.map((row) => renderRow(row, false))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── Employee Month View ── */}
-        {tab === "month" && (
-          <div className="rounded-xl border bg-white overflow-hidden shadow-sm">
-            {empId == null ? (
-              <div className="py-20 text-center">
-                <Users size={36} className="text-gray-200 mx-auto mb-3" />
-                <p className="text-sm text-gray-500">Select an employee above to see their full month.</p>
-              </div>
-            ) : monthLoading ? (
-              <div className="py-16 text-center text-sm text-muted-foreground">Loading…</div>
-            ) : !monthData || monthData.length === 0 ? (
-              <div className="py-20 text-center">
-                <ClipboardList size={36} className="text-gray-200 mx-auto mb-3" />
-                <p className="text-sm text-gray-500">No attendance for {MONTH_NAMES[month - 1]} {year}.</p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b">
-                    <tr>
-                      {columnHeaders(true).map(h => (
-                        <th key={h} className="text-left px-3 py-3 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {monthData.map((row) => renderRow(row, true))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── Late Summary ── */}
-        {tab === "late" && (
-          <div className="space-y-3">
-            <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-100 rounded-xl text-xs text-amber-800">
-              <AlertTriangle size={14} className="text-amber-600 shrink-0 mt-0.5" />
-              <span>
-                <strong>Deduction Rule:</strong> Each employee gets 3 free lates per month.
-                Every 3 billable lates beyond that = ¼ shift deducted from salary.
-                These deductions are applied automatically when payroll is generated.
-              </span>
-            </div>
-            {lateData && lateData.employees.length > 0 && (
-              <div className="rounded-xl border bg-white overflow-hidden shadow-sm">
-                <div className="px-4 py-3 border-b bg-gray-50">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Shift Completion Summary</p>
-                </div>
-                <table className="w-full text-sm">
-                  <thead className="border-b">
-                    <tr>
-                      {["Employee", "Dept", "Total Shifts", "Full Shifts", "Half Shifts", "Effective Days"].map(h => (
-                        <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {lateData.employees.map((row) => {
-                      const total = parseFloat(row.totalShifts);
-                      const half = row.halfShiftDays ?? 0;
-                      const full = total - half * 0.5;
-                      return (
-                        <tr key={row.employeeId} className={`border-b hover:bg-gray-50 ${half > 0 ? "bg-amber-50/20" : ""}`}>
-                          <td className="px-4 py-2.5">
-                            <p className="font-semibold text-sm text-gray-900">{row.employeeName}</p>
-                            <p className="text-[11px] font-mono text-gray-400">{row.employeeCode}</p>
-                          </td>
-                          <td className="px-4 py-2.5 text-xs text-gray-600">{row.department ?? "—"}</td>
-                          <td className="px-4 py-2.5 font-bold text-sm text-indigo-700">{total.toFixed(2)}</td>
-                          <td className="px-4 py-2.5 font-bold text-sm text-green-700">{Math.floor(full)}</td>
-                          <td className="px-4 py-2.5">
-                            {half > 0
-                              ? <span className="inline-flex items-center gap-1 font-bold text-sm text-amber-700"><span className="text-xs bg-amber-100 px-1.5 py-0.5 rounded-full">½×{half}</span></span>
-                              : <span className="text-gray-400 text-sm">0</span>}
-                          </td>
-                          <td className="px-4 py-2.5 font-bold text-sm text-gray-800">{total.toFixed(2)} days</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
+        {/* ── Mode A: All Employees / Department Summary ── */}
+        {!isDetail && (
+          <>
             <div className="rounded-xl border bg-white overflow-hidden shadow-sm">
-              {lateLoading ? (
-                <div className="py-16 text-center text-sm text-muted-foreground">Loading…</div>
-              ) : !lateData || lateData.employees.length === 0 ? (
+              {summaryLoading ? (
+                <div className="py-20 flex flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+                  <Loader2 size={22} className="animate-spin text-indigo-500" />
+                  <span>Computing attendance for every employee this month…</span>
+                </div>
+              ) : !summaryData || summaryData.employees.length === 0 ? (
                 <div className="py-20 text-center">
-                  <p className="text-sm text-gray-500">No late summary for {MONTH_NAMES[month - 1]} {year}.</p>
+                  <Users size={36} className="text-gray-200 mx-auto mb-3" />
+                  <p className="text-sm text-gray-500">No matching employees found.</p>
                 </div>
               ) : (
-                <>
-                  <div className="px-4 py-3 border-b bg-gray-50">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Late Penalty Summary</p>
-                  </div>
+                <div className="overflow-x-auto">
                   <table className="w-full text-sm">
-                    <thead className="border-b">
+                    <thead className="bg-gray-50 border-b">
                       <tr>
-                        {["Employee", "Department", "Total Late", "Free (3)", "Billable", "Shift Deductions", "Salary Deduction"].map(h => (
+                        {["Employee", "Department", "Present", "Half Shift", "Absent", "On Leave", "CL", "Permission", "Holidays", "Late", "Total Shifts", "Effective Days"].map(h => (
                           <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {lateData.employees.map((row) => (
-                        <tr key={row.employeeId} className={`border-b hover:bg-gray-50 ${row.billableLateCount > 0 ? "bg-red-50/20" : ""}`}>
+                      {summaryData.employees.map((row: MonthlySummaryRow) => (
+                        <tr
+                          key={row.employeeId}
+                          onClick={() => setSelectedEmployeeId(row.employeeId)}
+                          className={`border-b hover:bg-indigo-50/50 cursor-pointer transition-colors ${row.absentDays > 0 ? "bg-red-50/20" : ""}`}
+                        >
                           <td className="px-4 py-3">
-                            <p className="font-semibold text-sm text-gray-900">{row.employeeName}</p>
-                            <p className="text-[11px] font-mono text-gray-400">{row.employeeCode}</p>
+                            <p className="font-semibold text-gray-900 text-sm whitespace-nowrap">{row.employeeName}</p>
+                            <p className="text-[11px] text-gray-400 font-mono">{row.employeeCode}</p>
                           </td>
-                          <td className="px-4 py-3 text-sm text-gray-600">{row.department ?? "—"}</td>
+                          <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">{row.department ?? "—"}</td>
+                          <td className="px-4 py-3 font-bold text-sm text-green-700">{row.presentDays}</td>
+                          <td className="px-4 py-3 font-bold text-sm text-amber-700">{row.halfShiftDays}</td>
+                          <td className="px-4 py-3 font-bold text-sm text-red-700">{row.absentDays}</td>
+                          <td className="px-4 py-3 font-bold text-sm text-blue-700">{row.onLeaveDays}</td>
+                          <td className="px-4 py-3 text-sm text-gray-700">{row.casualLeaveCount}</td>
+                          <td className="px-4 py-3 text-sm text-gray-700">{row.permissionCount}</td>
+                          <td className="px-4 py-3 text-sm text-gray-500">{row.holidays}</td>
                           <td className="px-4 py-3">
-                            <span className={`font-bold text-sm ${row.totalLateCount > 0 ? "text-amber-700" : "text-gray-400"}`}>{row.totalLateCount}</span>
+                            <span className={`font-bold text-sm ${row.lateCount > 0 ? "text-red-600" : "text-gray-400"}`}>{row.lateCount}</span>
                           </td>
-                          <td className="px-4 py-3 text-sm text-gray-600">{row.permissionsUsed}/3</td>
-                          <td className="px-4 py-3">
-                            <span className={`font-bold text-sm ${row.billableLateCount > 0 ? "text-red-700" : "text-green-600"}`}>{row.billableLateCount}</span>
-                          </td>
-                          <td className="px-4 py-3 font-bold text-sm text-gray-800">{row.shiftDeductions}</td>
-                          <td className="px-4 py-3">
-                            <span className={`font-bold text-sm ${parseFloat(row.salaryDeductionAmount) > 0 ? "text-red-700" : "text-green-600"}`}>
-                              ₹{parseFloat(row.salaryDeductionAmount).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </span>
-                          </td>
+                          <td className="px-4 py-3 font-bold text-sm text-indigo-700">{row.totalShifts}</td>
+                          <td className="px-4 py-3 font-bold text-sm text-gray-800">{row.effectiveDays}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
-                </>
+                </div>
               )}
             </div>
+
+            {/* ── Late-Penalty Breakdown (collapsible, payroll-adjacent) ── */}
+            {showLatePenalty && (
+              <div className="space-y-3">
+                <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-100 rounded-xl text-xs text-amber-800">
+                  <AlertTriangle size={14} className="text-amber-600 shrink-0 mt-0.5" />
+                  <span>
+                    <strong>Deduction Rule:</strong> Each employee gets 3 free lates per month.
+                    Every 3 billable lates beyond that = ¼ shift deducted from salary.
+                    These deductions are applied automatically when payroll is generated.
+                  </span>
+                </div>
+                <div className="rounded-xl border bg-white overflow-hidden shadow-sm">
+                  {lateLoading ? (
+                    <div className="py-16 flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 size={18} className="animate-spin text-amber-500" /> Loading…
+                    </div>
+                  ) : !lateData || lateData.employees.length === 0 ? (
+                    <div className="py-20 text-center">
+                      <p className="text-sm text-gray-500">No late summary for {MONTH_NAMES[month - 1]} {year}.</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="px-4 py-3 border-b bg-gray-50">
+                        <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Late Penalty Summary</p>
+                      </div>
+                      <table className="w-full text-sm">
+                        <thead className="border-b">
+                          <tr>
+                            {["Employee", "Department", "Total Late", "Free (3)", "Billable", "Shift Deductions", "Salary Deduction"].map(h => (
+                              <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {lateData.employees.map((row) => (
+                            <tr key={row.employeeId} className={`border-b hover:bg-gray-50 ${row.billableLateCount > 0 ? "bg-red-50/20" : ""}`}>
+                              <td className="px-4 py-3">
+                                <p className="font-semibold text-sm text-gray-900">{row.employeeName}</p>
+                                <p className="text-[11px] font-mono text-gray-400">{row.employeeCode}</p>
+                              </td>
+                              <td className="px-4 py-3 text-sm text-gray-600">{row.department ?? "—"}</td>
+                              <td className="px-4 py-3">
+                                <span className={`font-bold text-sm ${row.totalLateCount > 0 ? "text-amber-700" : "text-gray-400"}`}>{row.totalLateCount}</span>
+                              </td>
+                              <td className="px-4 py-3 text-sm text-gray-600">{row.permissionsUsed}/3</td>
+                              <td className="px-4 py-3">
+                                <span className={`font-bold text-sm ${row.billableLateCount > 0 ? "text-red-700" : "text-green-600"}`}>{row.billableLateCount}</span>
+                              </td>
+                              <td className="px-4 py-3 font-bold text-sm text-gray-800">{row.shiftDeductions}</td>
+                              <td className="px-4 py-3">
+                                <span className={`font-bold text-sm ${parseFloat(row.salaryDeductionAmount) > 0 ? "text-red-700" : "text-green-600"}`}>
+                                  ₹{parseFloat(row.salaryDeductionAmount).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ── Mode B: Single Employee Detail ── */}
+        {isDetail && (
+          <div className="rounded-xl border bg-white overflow-hidden shadow-sm">
+            {detailLoading ? (
+              <div className="py-16 flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                <Loader2 size={18} className="animate-spin text-indigo-500" /> Loading…
+              </div>
+            ) : !detailData ? (
+              <div className="py-20 text-center">
+                <ClipboardList size={36} className="text-gray-200 mx-auto mb-3" />
+                <p className="text-sm text-gray-500">No attendance for {MONTH_NAMES[month - 1]} {year}.</p>
+              </div>
+            ) : (
+              <>
+                <div className="px-4 py-3 border-b bg-gray-50 flex items-center gap-3">
+                  <div>
+                    <p className="font-bold text-sm text-gray-900">{detailData.employee.name}</p>
+                    <p className="text-[11px] text-gray-400 font-mono">
+                      {detailData.employee.code} · {detailData.employee.department ?? "—"}
+                      {detailData.employee.designation ? ` · ${detailData.employee.designation}` : ""}
+                    </p>
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 border-b">
+                      <tr>
+                        {columnHeaders.map(h => (
+                          <th key={h} className="text-left px-3 py-3 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {detailData.days.map((row) => renderRow(row))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </div>
         )}
 

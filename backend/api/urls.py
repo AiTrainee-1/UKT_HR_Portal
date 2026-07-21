@@ -23,6 +23,7 @@ from .hr_user_views import (
 )
 from .salary_slip_views import (
     salary_slips, salary_slip_detail, email_salary_slip, employee_salary_slips,
+    salary_slip_bulk_pdf, salary_slip_bulk_email, salary_slip_bulk_progress_view,
 )
 from .company_documents_views import (
     document_settings_view, document_settings_list, document_settings_preview,
@@ -38,6 +39,13 @@ from .recruitment_views import (
     manager_resignation_action, manager_pending_resignations,
     resignation_pdf, resignation_email,
     department_headcount, department_headcount_detail,
+)
+from .resume_screening_views import (
+    rule_sets, rule_set_detail,
+    upload_single, shortlist_candidate,
+    upload_bulk, upload_bulk_progress,
+    candidates, candidate_detail, candidate_resume,
+    reject_email_all, interview_invite_single, interview_invite_bulk,
 )
 from .manager_views import (
     department_managers, department_manager_detail,
@@ -80,7 +88,7 @@ from .payroll_views import (
     session_configs, session_config_detail,
     attendance_logs, upload_attendance_excel, process_punch_sessions,
     work_sessions, work_session_detail,
-    payroll_list, generate_payroll, payroll_detail, payroll_breakdown,
+    payroll_list, generate_payroll, generate_payroll_progress, payroll_detail, payroll_breakdown,
     seed_attendance, payroll_settings_view,
 )
 from .chat_views import (
@@ -151,6 +159,9 @@ urlpatterns = [
 
     # ── Salary Slips ────────────────────────────────────────────────────────
     path("salary-slips", salary_slips),
+    path("salary-slips/bulk-pdf", salary_slip_bulk_pdf),
+    path("salary-slips/bulk-email", salary_slip_bulk_email),
+    path("salary-slips/bulk-progress", salary_slip_bulk_progress_view),
     path("salary-slips/<int:pk>", salary_slip_detail),
     path("salary-slips/<int:pk>/email", email_salary_slip),
     path("salary-slips/<int:pk>/pdf", salary_slip_pdf),
@@ -183,6 +194,18 @@ urlpatterns = [
     path("recruitment/resignations/<int:pk>/email", resignation_email),
     path("recruitment/department-headcount", department_headcount),
     path("recruitment/department-headcount/<int:pk>", department_headcount_detail),
+    path("recruitment/resume-screening/rule-sets", rule_sets),
+    path("recruitment/resume-screening/rule-sets/<int:pk>", rule_set_detail),
+    path("recruitment/resume-screening/upload-single", upload_single),
+    path("recruitment/resume-screening/upload-bulk", upload_bulk),
+    path("recruitment/resume-screening/upload-bulk-progress", upload_bulk_progress),
+    path("recruitment/resume-screening/candidates", candidates),
+    path("recruitment/resume-screening/candidates/<int:pk>", candidate_detail),
+    path("recruitment/resume-screening/candidates/<int:pk>/shortlist", shortlist_candidate),
+    path("recruitment/resume-screening/candidates/<int:pk>/resume", candidate_resume),
+    path("recruitment/resume-screening/candidates/<int:pk>/interview-invite", interview_invite_single),
+    path("recruitment/resume-screening/candidates/reject-email-all", reject_email_all),
+    path("recruitment/resume-screening/candidates/interview-invite-bulk", interview_invite_bulk),
     path("my/resignation", my_resignation),
     path("manager/resignations", manager_pending_resignations),
     path("manager/resignations/<int:pk>/action", manager_resignation_action),
@@ -254,6 +277,7 @@ urlpatterns = [
     path("work-sessions/<int:pk>", work_session_detail),
     path("payroll", payroll_list),
     path("payroll/generate", generate_payroll),
+    path("payroll/generate-progress", generate_payroll_progress),
     path("payroll/<int:pk>/breakdown", payroll_breakdown),
     path("payroll/<int:pk>", payroll_detail),
 

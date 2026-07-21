@@ -21,6 +21,7 @@ from email.mime.text import MIMEText
 from django.http import HttpResponse
 from django.utils import timezone
 from reportlab.lib import colors
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm
 from reportlab.platypus import HRFlowable, Image as RLImage, Paragraph, Spacer, Table, TableStyle
 from rest_framework.decorators import api_view
@@ -673,6 +674,204 @@ def build_salary_slip_pdf(s: SalarySlip) -> bytes:
 
     doc.build(story)
     return buffer.getvalue()
+
+
+def _compact_salary_slip_flowables(s: SalarySlip, ds: CompanyDocumentSettings, ps: PayrollSettings,
+                                     primary, accent, col_width=13.2 * cm) -> list:
+    """
+    Full-detail salary-slip layout for the bulk "2 slips per landscape-A4
+    page" combined PDF (see salary_slip_bulk_pdf.py) — same header/info/
+    earnings-deductions/net-amount/footer arrangement as the single-slip PDF
+    (build_salary_slip_pdf), scaled to fit one ~13cm-wide column since the
+    bulk PDF places one slip in the left half of the (landscape) page and one
+    in the right half, both running the full page height.
+    """
+    emp = s.employee
+    MONTHS = ["", "January", "February", "March", "April", "May", "June",
+              "July", "August", "September", "October", "November", "December"]
+    period_label = f"{MONTHS[s.month]} {s.year}" + (f" — Week {s.week_number}" if s.week_number else "")
+    other_allowances = float(s.allowances) + float(s.incentives) + float(s.bonuses)
+    shifts_worked = s.completed_sessions if s.week_number else float(s.present_days)
+    leave_taken = float(s.paid_leave_days) + float(s.unpaid_leave_days)
+    balances = (
+        list(LeaveBalance.objects.select_related("leave_type").filter(employee=emp, year=s.year))
+        if emp.pk else []
+    )
+
+    company_style = ParagraphStyle("CBoldC", fontName=FONT_BODY_BOLD, fontSize=13, textColor=primary)
+    title_style = ParagraphStyle("CTitle", fontName=FONT_BODY_BOLD, fontSize=11, textColor=accent, alignment=2)
+    info_label_style = ParagraphStyle("CInfoL", fontName=FONT_BODY_BOLD, fontSize=9, textColor=primary)
+    info_val_style = ParagraphStyle("CInfoV", fontName=FONT_BODY, fontSize=9, textColor=colors.HexColor("#1f2937"))
+    personal_label_style = ParagraphStyle("CPersL", fontName=FONT_BODY_BOLD, fontSize=8, textColor=colors.HexColor("#4b5563"))
+    personal_val_style = ParagraphStyle("CPersV", fontName=FONT_BODY, fontSize=8, textColor=colors.HexColor("#1f2937"))
+    words_style = ParagraphStyle("CWords", fontName=FONT_BODY, fontSize=7.7, textColor=colors.HexColor("#6b7280"))
+    sig_style = ParagraphStyle("CSig", fontName=FONT_BODY, fontSize=8.7, textColor=colors.HexColor("#4b5563"))
+
+    CW = col_width
+
+    story = []
+
+    header = Table(
+        [[
+            Paragraph((ps.slip_company_name or ps.company_name or "UK TEXTILES").upper(), company_style),
+            Paragraph(f"SALARY SLIP — {period_label}", title_style),
+        ]],
+        colWidths=[CW * 0.42, CW * 0.58],
+    )
+    header.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+    story.append(header)
+    story.append(Spacer(1, 0.22 * cm))
+    story.append(HRFlowable(width="100%", thickness=0.8, color=accent))
+    story.append(Spacer(1, 0.4 * cm))
+
+    info_rows = [
+        ["Employee Code", emp.employee_code, "Employee Name", full_name(emp)],
+        ["Designation", emp.designation.title if emp.designation_id and emp.designation else "—",
+         "Department", emp.department.name if emp.department_id and emp.department else "—"],
+        ["Payroll Period", period_label, "Date of Joining", fmt_date(emp.join_date)],
+        ["Working Days", str(s.working_days), "Leave Taken", f"{leave_taken:g}"],
+    ]
+    info_table = Table(
+        [[Paragraph(a, info_label_style), Paragraph(str(b), info_val_style),
+          Paragraph(c, info_label_style), Paragraph(str(d), info_val_style)] for a, b, c, d in info_rows],
+        colWidths=[CW * 0.19, CW * 0.31, CW * 0.19, CW * 0.31],
+    )
+    info_table.setStyle(TableStyle([
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LINEBELOW", (0, 0), (-1, -2), 0.3, colors.HexColor("#e5e7eb")),
+    ]))
+    story.append(info_table)
+    story.append(Spacer(1, 0.3 * cm))
+
+    earn_rows = [
+        ["Earnings", "Amount"],
+        ["Basic Pay", rupee(s.basic)],
+        ["DA", rupee(0)],
+        ["HRA", rupee(s.hra)],
+        ["CA", rupee(0)],
+        ["EA", rupee(0)],
+        ["Other Allowances", rupee(other_allowances)],
+        ["OT Wages", rupee(s.ot_amount)],
+        ["PTRL", rupee(0)],
+        ["Total Earnings", rupee(s.gross_salary)],
+    ]
+    ded_rows = [
+        ["Deductions", "Amount"],
+        ["P.F", rupee(s.pf_deduction)],
+        ["E.S.I", rupee(s.esi_deduction)],
+        ["Advance", rupee(s.advance_deduction)],
+        ["T.Advance", rupee(0)],
+        ["TDS", rupee(0)],
+        ["LOP", rupee(0)],
+        ["Other Deductions", rupee(s.other_deductions)],
+        ["Total Deductions", rupee(s.total_deductions)],
+    ]
+
+    def _mini_table(rows, header_color, width):
+        t = Table(rows, colWidths=[width * 0.62, width * 0.38])
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), header_color),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), FONT_BODY_BOLD),
+            ("FONTNAME", (0, 1), (-1, -1), FONT_BODY),
+            ("FONTNAME", (0, -1), (-1, -1), FONT_BODY_BOLD),
+            ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+            ("LINEBELOW", (0, 1), (-1, -2), 0.25, colors.HexColor("#eef2f0")),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("BOX", (0, 0), (-1, -1), 0.4, colors.HexColor("#e5e7eb")),
+        ]))
+        return t
+
+    half = (CW - 0.4 * cm) / 2
+    tables_row = Table(
+        [[_mini_table(earn_rows, primary, half), _mini_table(ded_rows, accent, half)]],
+        colWidths=[half, half],
+    )
+    tables_row.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+    story.append(tables_row)
+    story.append(Spacer(1, 0.3 * cm))
+
+    personal_rows = [
+        ["Father's/Husband's Name", emp.father_name or "—"],
+        ["No. of Shifts Worked", f"{shifts_worked}"],
+        ["OT Hours", f"{float(s.ot_amount):.2f}"],
+        ["Min. Rate of Wages", rupee(ps.min_wage_rate)],
+        ["PF Number", emp.pf_number or "—"],
+        ["ESI Number", emp.esi_number or "—"],
+    ]
+    personal_table = Table(personal_rows, colWidths=[half * 0.62, half * 0.38])
+    personal_table.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (0, -1), FONT_BODY_BOLD),
+        ("FONTNAME", (1, 0), (1, -1), FONT_BODY),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#4b5563")),
+        ("RIGHTPADDING", (0, 0), (0, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+    ]))
+
+    if balances:
+        leave_rows = [["Leave Type", "Total", "Used", "Balance"]] + [
+            [lb.leave_type.name, f"{float(lb.allocated):.1f}", f"{float(lb.used):.1f}", f"{float(lb.remaining):.1f}"]
+            for lb in balances
+        ]
+    else:
+        leave_rows = [["Leave Type", "Total", "Used", "Balance"], ["Casual Leave", "0.0", "0.0", "0.0"]]
+    leave_table = Table(leave_rows, colWidths=[half * 0.4, half * 0.2, half * 0.2, half * 0.2])
+    leave_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f3f4f6")),
+        ("FONTNAME", (0, 0), (-1, 0), FONT_BODY_BOLD),
+        ("FONTNAME", (0, 1), (-1, -1), FONT_BODY),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e5e7eb")),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+
+    lower_row = Table([[personal_table, leave_table]], colWidths=[half, half])
+    lower_row.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+    story.append(lower_row)
+    story.append(Spacer(1, 0.35 * cm))
+
+    words = num_to_words(int(float(s.net_salary)))
+    net_card = Table([["NET AMOUNT PAID", rupee(s.net_salary)]], colWidths=[CW * 0.6, CW * 0.4])
+    net_card.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), primary),
+        ("TEXTCOLOR", (0, 0), (-1, -1), colors.white),
+        ("FONTNAME", (0, 0), (0, 0), FONT_BODY_BOLD),
+        ("FONTNAME", (1, 0), (1, 0), FONT_BODY_BOLD),
+        ("FONTSIZE", (0, 0), (0, 0), 10.5),
+        ("FONTSIZE", (1, 0), (1, 0), 14.5),
+        ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("BOX", (0, 0), (-1, -1), 0.6, accent),
+    ]))
+    story.append(net_card)
+    story.append(Spacer(1, 0.12 * cm))
+    story.append(Paragraph(f"Amount in Words: {words} ONLY", words_style))
+    story.append(Spacer(1, 0.35 * cm))
+
+    qr_img = _make_qr_image(f"UKTEX-SLIP-{s.id}-{s.slip_number}")
+    footer_row = Table(
+        [[
+            Paragraph("Employee Signature:<br/>_______________", sig_style),
+            Paragraph("Employer Signature:<br/>_______________", sig_style),
+            Paragraph(f"Date of Payment<br/><b>{timezone.now().strftime('%d %B %Y')}</b>", sig_style),
+            qr_img if qr_img else "",
+        ]],
+        colWidths=[CW * 0.32, CW * 0.32, CW * 0.21, CW * 0.15],
+    )
+    footer_row.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "BOTTOM"), ("ALIGN", (3, 0), (3, 0), "RIGHT")]))
+    story.append(footer_row)
+
+    return story
 
 
 @api_view(["GET"])

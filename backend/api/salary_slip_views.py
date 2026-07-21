@@ -4,6 +4,7 @@ from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+from django.http import HttpResponse
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -85,14 +86,24 @@ def slip_json(s: SalarySlip, include_settings: bool = False) -> dict:
     return data
 
 
-@api_view(["GET"])
-@require_hr
-def salary_slips(request: Request) -> Response:
-    emp_id     = request.query_params.get("employeeId")
-    month      = request.query_params.get("month")
-    year       = request.query_params.get("year")
-    week_num   = request.query_params.get("weekNumber")
-    emp_type   = request.query_params.get("employmentType")
+def _filtered_slip_qs(request: Request, params=None):
+    """
+    Shared queryset filter behind both the Salary Slip list endpoint and the
+    bulk download/email endpoints — bulk operations always act on exactly the
+    same filtered set the HR user sees on the Salary Slip page.
+
+    `params` defaults to the GET query string (`request.query_params`); the
+    bulk email endpoint is a POST and passes `request.data` instead, since
+    filters travel in the JSON body there. Either way `request` itself is
+    still the real DRF request, needed for branch scoping.
+    """
+    if params is None:
+        params = request.query_params
+    emp_id     = params.get("employeeId")
+    month      = params.get("month")
+    year       = params.get("year")
+    week_num   = params.get("weekNumber")
+    emp_type   = params.get("employmentType")
 
     qs = (
         SalarySlip.objects
@@ -106,6 +117,13 @@ def salary_slips(request: Request) -> Response:
     if emp_type == "staff":      qs = qs.filter(week_number__isnull=True)
     elif emp_type == "production": qs = qs.filter(week_number__isnull=False)
     if week_num: qs = qs.filter(week_number=int(week_num))
+    return qs
+
+
+@api_view(["GET"])
+@require_hr
+def salary_slips(request: Request) -> Response:
+    qs = _filtered_slip_qs(request)
 
     ps = PayrollSettings.get()
     settings_data = {
@@ -145,27 +163,16 @@ def salary_slip_detail(request: Request, pk: int) -> Response:
     return Response(slip_json(s, include_settings=True))
 
 
-@api_view(["POST"])
-@require_hr
-def email_salary_slip(request: Request, pk: int) -> Response:
-    """Send a salary slip via email using stored SMTP settings."""
-    try:
-        s = (
-            SalarySlip.objects
-            .select_related("employee", "employee__department", "employee__designation")
-            .get(pk=pk)
-        )
-    except SalarySlip.DoesNotExist:
-        return Response({"error": "Slip not found"}, status=404)
-
-    ps = PayrollSettings.get()
-    if not ps.smtp_host or not ps.smtp_username or not ps.smtp_password:
-        return Response({"error": "SMTP settings not configured. Please save SMTP settings first."}, status=400)
-
+def _send_slip_email(s: SalarySlip, ps: PayrollSettings, to_email: str | None = None) -> tuple[bool, str]:
+    """
+    Send one salary slip's email. Returns (ok, sentTo) on success or
+    (False, errorMessage) on failure — shared by the single-employee and
+    bulk email endpoints so they never diverge in behavior.
+    """
     emp = s.employee
-    to_email = request.data.get("toEmail") or emp.email
+    to_email = to_email or emp.email
     if not to_email:
-        return Response({"error": "Employee has no email address. Provide toEmail in request body."}, status=400)
+        return False, "Employee has no email address on file"
 
     company_name = ps.company_name or ps.slip_company_name or "UKTextiles"
     emp_name = f"{emp.first_name} {emp.last_name}".strip()
@@ -217,16 +224,107 @@ def email_salary_slip(request: Request, pk: int) -> Response:
                 server.login(ps.smtp_username, ps.smtp_password)
                 server.sendmail(ps.smtp_from_email or ps.smtp_username, to_email, msg.as_string())
     except smtplib.SMTPAuthenticationError:
-        return Response({"error": "SMTP authentication failed. Check username/password."}, status=502)
+        return False, "SMTP authentication failed. Check username/password."
     except Exception as exc:
-        return Response({"error": f"Failed to send email: {exc}"}, status=502)
+        return False, f"Failed to send email: {exc}"
 
-    # Mark as emailed
     from django.utils import timezone
     s.emailed_at = timezone.now()
     s.save(update_fields=["emailed_at"])
+    return True, to_email
 
-    return Response({"ok": True, "sentTo": to_email})
+
+@api_view(["POST"])
+@require_hr
+def email_salary_slip(request: Request, pk: int) -> Response:
+    """Send a salary slip via email using stored SMTP settings."""
+    try:
+        s = (
+            SalarySlip.objects
+            .select_related("employee", "employee__department", "employee__designation")
+            .get(pk=pk)
+        )
+    except SalarySlip.DoesNotExist:
+        return Response({"error": "Slip not found"}, status=404)
+
+    ps = PayrollSettings.get()
+    if not ps.smtp_host or not ps.smtp_username or not ps.smtp_password:
+        return Response({"error": "SMTP settings not configured. Please save SMTP settings first."}, status=400)
+
+    ok, result = _send_slip_email(s, ps, request.data.get("toEmail"))
+    if not ok:
+        status = 400 if result.startswith("Employee has no email") else 502
+        return Response({"error": result}, status=status)
+    return Response({"ok": True, "sentTo": result})
+
+
+@api_view(["GET"])
+@require_hr
+def salary_slip_bulk_pdf(request: Request) -> Response:
+    """
+    GET /api/salary-slips/bulk-pdf?month=&year=&employmentType=&weekNumber=
+    Combines every matching salary slip into ONE PDF, 2 slips per A4 page,
+    for printing and physical distribution. Same filters as the list
+    endpoint, so it always matches what's currently shown on the page.
+    """
+    from . import salary_slip_bulk_progress as progress
+    from .salary_slip_bulk_pdf import build_bulk_salary_slip_pdf
+
+    slips = list(_filtered_slip_qs(request))
+    if not slips:
+        return Response({"error": "No salary slips match the selected filters"}, status=404)
+
+    progress.start(len(slips), "pdf")
+    pdf_bytes = build_bulk_salary_slip_pdf(slips, on_progress=progress.step)
+    progress.finish()
+
+    month = request.query_params.get("month") or ""
+    year = request.query_params.get("year") or ""
+    filename = f"Salary-Slips-{month}-{year}.pdf" if month and year else "Salary-Slips.pdf"
+    response = HttpResponse(pdf_bytes, content_type="application/pdf")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
+
+
+@api_view(["POST"])
+@require_hr
+def salary_slip_bulk_email(request: Request) -> Response:
+    """
+    POST /api/salary-slips/bulk-email
+    Body: { month, year, employmentType?, weekNumber? } — same filters as the
+    list endpoint. Emails every matching slip to its employee's address.
+    """
+    from . import salary_slip_bulk_progress as progress
+
+    slips = list(_filtered_slip_qs(request, params=request.data))
+    if not slips:
+        return Response({"error": "No salary slips match the selected filters"}, status=404)
+
+    ps = PayrollSettings.get()
+    if not ps.smtp_host or not ps.smtp_username or not ps.smtp_password:
+        return Response({"error": "SMTP settings not configured. Please save SMTP settings first."}, status=400)
+
+    progress.start(len(slips), "email")
+    sent, failed, failures = 0, 0, []
+    for s in slips:
+        emp_name = f"{s.employee.first_name} {s.employee.last_name}".strip()
+        ok, result = _send_slip_email(s, ps)
+        if ok:
+            sent += 1
+        else:
+            failed += 1
+            failures.append({"employeeName": emp_name, "employeeCode": s.employee.employee_code, "error": result})
+        progress.step(emp_name, ok)
+    progress.finish()
+
+    return Response({"ok": True, "sent": sent, "failed": failed, "failures": failures})
+
+
+@api_view(["GET"])
+@require_hr
+def salary_slip_bulk_progress_view(request: Request) -> Response:
+    from . import salary_slip_bulk_progress as progress
+    return Response(progress.snapshot())
 
 
 @api_view(["GET"])

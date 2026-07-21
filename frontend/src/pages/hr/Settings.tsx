@@ -329,7 +329,11 @@ export default function Settings() {
     }
   };
 
-  const savePayroll = async () => {
+  // All Settings tabs (Payroll, PF/EF Rules, SMTP, Salary Slip) share one
+  // PayrollSettings record on the backend, so they share this one save call —
+  // but each tab reports its own accurate result rather than a generic
+  // "Payroll settings saved" message no matter which tab was actually edited.
+  const savePayroll = async (result?: { title: string; description?: string }, errorTitle?: string) => {
     try {
       await updatePayrollSettings.mutateAsync({
         pfRate: payroll.pfRate,
@@ -358,12 +362,12 @@ export default function Settings() {
         smtpFromEmail: payroll.smtpFromEmail,
         smtpFromName: payroll.smtpFromName,
       } as never);
-      toast({
+      toast(result ?? {
         title: "Payroll settings saved",
         description: "New rates will apply to all payroll generated from now.",
       });
     } catch {
-      toast({ title: "Failed to save payroll settings", variant: "destructive" });
+      toast({ title: errorTitle ?? "Failed to save payroll settings", variant: "destructive" });
     }
   };
 
@@ -1193,7 +1197,7 @@ export default function Settings() {
 
                 <Button
                   size="sm"
-                  onClick={savePayroll}
+                  onClick={() => savePayroll()}
                   disabled={updatePayrollSettings.isPending || psLoading}
                 >
                   {updatePayrollSettings.isPending ? "Saving…" : "Save Payroll Settings"}
@@ -1280,7 +1284,11 @@ export default function Settings() {
                   >
                     + Add Rule
                   </Button>
-                  <Button size="sm" onClick={savePayroll} disabled={updatePayrollSettings.isPending}>
+                  <Button
+                    size="sm"
+                    onClick={() => savePayroll({ title: "PF/EF rules saved" }, "Failed to save PF/EF rules")}
+                    disabled={updatePayrollSettings.isPending}
+                  >
                     {updatePayrollSettings.isPending ? "Saving…" : "Save PF/EF Rules"}
                   </Button>
                 </div>
@@ -1323,7 +1331,10 @@ export default function Settings() {
                 <div className="flex gap-3">
                   <Button
                     size="sm"
-                    onClick={savePayroll}
+                    onClick={() => savePayroll(
+                      { title: "SMTP settings saved", description: "Email sending will use these credentials from now on." },
+                      "Failed to save SMTP settings",
+                    )}
                     disabled={updatePayrollSettings.isPending || psLoading}
                   >
                     {updatePayrollSettings.isPending ? "Saving…" : "Save SMTP Settings"}
@@ -1555,7 +1566,11 @@ export default function Settings() {
                   </div>
                 </div>
 
-                <Button size="sm" onClick={savePayroll} disabled={updatePayrollSettings.isPending}>
+                <Button
+                  size="sm"
+                  onClick={() => savePayroll({ title: "Salary Slip settings saved" }, "Failed to save Salary Slip settings")}
+                  disabled={updatePayrollSettings.isPending}
+                >
                   {updatePayrollSettings.isPending ? "Saving…" : "Save Salary Slip Settings"}
                 </Button>
               </CardContent>

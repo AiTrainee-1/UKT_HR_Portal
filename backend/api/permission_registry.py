@@ -41,6 +41,7 @@ MODULE_TREE: list[dict] = [
         {"key": "recruitment.resignations", "label": "Resignations"},
         {"key": "recruitment.required_roles", "label": "Required Roles"},
         {"key": "recruitment.interviews", "label": "Interviews"},
+        {"key": "recruitment.resume_screening", "label": "Resume Screening"},
     ]},
     {"key": "payroll", "label": "Payroll"},
     {"key": "salary", "label": "Salary"},
@@ -117,6 +118,7 @@ URL_MODULE_MAP: dict[str, str] = {
 
     "recruitment/resignations": "recruitment.resignations",
     "recruitment/department-headcount": "recruitment.required_roles",
+    "recruitment/resume-screening": "recruitment.resume_screening",
     "interviews": "recruitment.interviews",
     "recruitment": "recruitment",
     "jobs": "recruitment",

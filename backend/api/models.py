@@ -786,6 +786,98 @@ class DepartmentHeadcount(models.Model):
 
 
 # ──────────────────────────────────────────────
+#  Resume Screening (ATS)
+# ──────────────────────────────────────────────
+
+class HiringRuleSet(models.Model):
+    """
+    Department-scoped hiring criteria used to score uploaded resumes.
+    Multiple rule sets can exist per department (e.g. different roles within
+    the same department) — HR picks one explicitly at screening time.
+    """
+    name = models.TextField()
+    department = models.ForeignKey(
+        Department, on_delete=models.CASCADE, db_column="department_id",
+        related_name="hiring_rule_sets",
+    )
+    required_skills = models.JSONField(default=list, blank=True, db_column="required_skills")
+    soft_skills = models.JSONField(default=list, blank=True, db_column="soft_skills")
+    education_qualification = models.TextField(null=True, blank=True, db_column="education_qualification")
+    min_experience_years = models.DecimalField(
+        max_digits=4, decimal_places=1, default=0, db_column="min_experience_years",
+    )
+    preferred_city = models.TextField(null=True, blank=True, db_column="preferred_city")
+    other_requirements = models.TextField(null=True, blank=True, db_column="other_requirements")
+    is_active = models.BooleanField(default=True, db_column="is_active")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "hiring_rule_sets"
+
+
+class ScreeningCandidate(models.Model):
+    """
+    One uploaded resume, its ML-extracted fields, its score against the
+    HiringRuleSet it was screened with, and its place in the
+    shortlist -> selected/rejected pipeline.
+    """
+    # rule_set is PROTECTed: a candidate row must survive rule-set edits or
+    # deactivation for audit purposes — deleting a rule set with candidates
+    # attached is blocked at the view layer instead.
+    rule_set = models.ForeignKey(
+        HiringRuleSet, on_delete=models.PROTECT, db_column="rule_set_id",
+        related_name="candidates",
+    )
+    # Denormalized copy of rule_set.department at screening time, so
+    # historical records stay meaningful even if the rule set's department
+    # is later changed.
+    department = models.ForeignKey(
+        Department, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="department_id", related_name="screening_candidates",
+    )
+    resume_file = models.FileField(upload_to="resumes/%Y/%m/", db_column="resume_file")
+    original_filename = models.TextField(db_column="original_filename")
+    source = models.TextField(default="single", db_column="source")  # "single" | "bulk"
+
+    # Extracted fields
+    candidate_name = models.TextField(null=True, blank=True, db_column="candidate_name")
+    email = models.TextField(null=True, blank=True, db_column="email")
+    phone = models.TextField(null=True, blank=True, db_column="phone")
+    city = models.TextField(null=True, blank=True, db_column="city")
+    extracted_skills = models.JSONField(default=list, blank=True, db_column="extracted_skills")
+    extracted_soft_skills = models.JSONField(default=list, blank=True, db_column="extracted_soft_skills")
+    extracted_experience_years = models.DecimalField(
+        max_digits=4, decimal_places=1, null=True, blank=True, db_column="extracted_experience_years",
+    )
+    extracted_education = models.TextField(null=True, blank=True, db_column="extracted_education")
+    raw_text_excerpt = models.TextField(null=True, blank=True, db_column="raw_text_excerpt")
+
+    # Scoring
+    match_score = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True, db_column="match_score",
+    )
+    score_breakdown = models.JSONField(null=True, blank=True, db_column="score_breakdown")
+    rank_in_batch = models.IntegerField(null=True, blank=True, db_column="rank_in_batch")
+
+    # Pipeline status: uploaded -> screened -> shortlisted/not_shortlisted
+    #                  -> selected -> rejected  (shortlisted -> rejected direct too)
+    status = models.TextField(default="uploaded", db_column="status")
+
+    screened_at = models.DateTimeField(null=True, blank=True, db_column="screened_at")
+    interview_invited_at = models.DateTimeField(null=True, blank=True, db_column="interview_invited_at")
+    interview_datetime = models.DateTimeField(null=True, blank=True, db_column="interview_datetime")
+    rejection_emailed_at = models.DateTimeField(null=True, blank=True, db_column="rejection_emailed_at")
+    notes = models.TextField(null=True, blank=True, db_column="notes")
+
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "screening_candidates"
+
+
+# ──────────────────────────────────────────────
 #  Attendance
 # ──────────────────────────────────────────────
 

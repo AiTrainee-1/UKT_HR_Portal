@@ -1036,7 +1036,47 @@ export type ShiftLogEntry = {
   lateReason?: string | null;
   casualLeave: { status: "pending" | "approved" | "rejected"; reason: string | null } | null;
   permission: { status: "pending" | "approved" | "rejected"; time: string | null; reason: string | null } | null;
+  leave: { status: "pending" | "approved" | "rejected"; type: string | null; reason: string | null } | null;
   source: "auto" | "manual";
+};
+
+export type MonthlySummaryRow = {
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department: string | null;
+  designation: string | null;
+  totalDays: number;
+  workingDays: number;
+  effectiveDays: string;   // Decimal as string
+  presentDays: number;
+  halfShiftDays: number;
+  absentDays: number;
+  onLeaveDays: number;
+  casualLeaveCount: number;
+  permissionCount: number;
+  holidays: number;
+  lateCount: number;
+  totalShifts: string;     // Decimal as string
+};
+
+export type ReportLogSummaryResponse = {
+  month: number;
+  year: number;
+  employees: MonthlySummaryRow[];
+};
+
+export type ReportLogDetailResponse = {
+  month: number;
+  year: number;
+  employee: {
+    id: number;
+    code: string;
+    name: string;
+    department: string | null;
+    designation: string | null;
+  };
+  days: ShiftLogEntry[];
 };
 
 export type LateSummaryEmployee = {
@@ -1101,7 +1141,7 @@ export type LateSummaryResponse = {
 };
 
 export type SyncBiometricMode = "day" | "week" | "month" | "all";
-export type SyncDeviceId = number | "all" | "env";
+export type SyncDeviceId = number | "all" | "env" | (number | "env")[];
 
 export const useSyncBiometric = () =>
   useMutation({
@@ -1135,20 +1175,51 @@ export const useSyncBiometricProgress = (enabled: boolean) =>
     staleTime: 0,
   });
 
-export const getReportLogQueryKey = (params: { date?: string; month?: number; year?: number; employeeId?: number }) =>
-  ["/api/attendance/report-log", params] as const;
+export type ReportLogSummaryParams = {
+  month: number;
+  year: number;
+  department?: number;
+  search?: string;
+};
 
-export const useAttendanceReportLog = (params: { date?: string; month?: number; year?: number; employeeId?: number }, enabled = true) =>
-  useQuery<ShiftLogEntry[]>({
-    queryKey: getReportLogQueryKey(params),
-    queryFn: () => {
-      const qs = new URLSearchParams();
-      if (params.date) qs.set("date", params.date);
-      if (params.month) qs.set("month", String(params.month));
-      if (params.year) qs.set("year", String(params.year));
-      if (params.employeeId) qs.set("employeeId", String(params.employeeId));
-      return customFetch<ShiftLogEntry[]>(`/api/attendance/report-log?${qs}`);
-    },
+export type ReportLogDetailParams = {
+  month: number;
+  year: number;
+  employeeId: number;
+};
+
+const reportLogQueryString = (params: Record<string, string | number | undefined>): string => {
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") qs.set(key, String(value));
+  }
+  return qs.toString();
+};
+
+export const getReportLogSummaryQueryKey = (params: ReportLogSummaryParams) =>
+  ["/api/attendance/report-log", "summary", params] as const;
+
+// Mode A — one row per employee for the month, optionally narrowed by
+// department and/or an employee code/name search.
+export const useAttendanceReportSummary = (params: ReportLogSummaryParams, enabled = true) =>
+  useQuery<ReportLogSummaryResponse>({
+    queryKey: getReportLogSummaryQueryKey(params),
+    queryFn: () => customFetch<ReportLogSummaryResponse>(
+      `/api/attendance/report-log?${reportLogQueryString(params)}`,
+    ),
+    enabled,
+  });
+
+export const getReportLogDetailQueryKey = (params: ReportLogDetailParams) =>
+  ["/api/attendance/report-log", "detail", params] as const;
+
+// Mode B — one employee's full day-by-day month.
+export const useAttendanceReportDetail = (params: ReportLogDetailParams, enabled = true) =>
+  useQuery<ReportLogDetailResponse>({
+    queryKey: getReportLogDetailQueryKey(params),
+    queryFn: () => customFetch<ReportLogDetailResponse>(
+      `/api/attendance/report-log?${reportLogQueryString(params)}`,
+    ),
     enabled,
   });
 
@@ -1410,6 +1481,8 @@ export type PayrollRunItem = {
   bankAccount?: string | null;
   bankIfsc?: string | null;
   bankName?: string | null;
+  departmentId?: number | null;
+  departmentName?: string | null;
   salaryMode: string;
   month: number;
   year: number;
@@ -1467,6 +1540,59 @@ export const useGeneratePayroll = () =>
         body: JSON.stringify(data),
       }),
   });
+
+// ── Payroll Generation Progress ─────────────────────────────────────────────
+
+export type PayrollGenerateProgress = {
+  stage: "idle" | "running" | "completed";
+  total: number;
+  completed: number;
+  generated: number;
+  skipped: number;
+  currentEmployee: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+};
+
+export const useGeneratePayrollProgress = (enabled: boolean) =>
+  useQuery<PayrollGenerateProgress>({
+    queryKey: ["/api/payroll/generate-progress"],
+    queryFn: () => customFetch<PayrollGenerateProgress>("/api/payroll/generate-progress"),
+    enabled,
+    refetchInterval: enabled ? 600 : false,
+    // The pipeline only cares about the freshest snapshot — never serve a stale one.
+    staleTime: 0,
+  });
+
+// ── Salary Slip Bulk Download/Email Progress ──────────────────────────────────
+
+export type SalarySlipBulkProgress = {
+  stage: "idle" | "running" | "completed";
+  kind: "pdf" | "email" | null;
+  total: number;
+  completed: number;
+  succeeded: number;
+  failed: number;
+  currentEmployee: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+};
+
+export const useSalarySlipBulkProgress = (enabled: boolean) =>
+  useQuery<SalarySlipBulkProgress>({
+    queryKey: ["/api/salary-slips/bulk-progress"],
+    queryFn: () => customFetch<SalarySlipBulkProgress>("/api/salary-slips/bulk-progress"),
+    enabled,
+    refetchInterval: enabled ? 600 : false,
+    staleTime: 0,
+  });
+
+export type SalarySlipBulkEmailResult = {
+  ok: boolean;
+  sent: number;
+  failed: number;
+  failures: { employeeName: string; employeeCode: string; error: string }[];
+};
 
 export const useUpdatePayrollRecord = () =>
   useMutation({
@@ -2914,6 +3040,237 @@ export const useUpdateDepartmentHeadcount = () =>
         method: "PATCH",
         body: JSON.stringify(data),
       }),
+  });
+
+// ── Resume Screening (ATS) ──────────────────────────────────────────────────
+
+export type HiringRuleSetItem = {
+  id: number;
+  name: string;
+  departmentId: number;
+  departmentName: string | null;
+  requiredSkills: string[];
+  softSkills: string[];
+  educationQualification: string | null;
+  minExperienceYears: number;
+  preferredCity: string | null;
+  otherRequirements: string | null;
+  isActive: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+export type ScreeningCandidateStatus =
+  | "uploaded" | "screened" | "shortlisted" | "not_shortlisted" | "selected" | "rejected";
+
+export const EDUCATION_LEVEL_OPTIONS = [
+  "10th", "12th", "Diploma", "B.E.", "B.Tech", "UG", "PG",
+  "More than 10th", "More than 12th", "More than Diploma", "More than B.E.",
+  "More than B.Sc.", "More than B.Tech.", "More than M.Sc.",
+] as const;
+
+export type ScoreBreakdown = {
+  total: number;
+  components: {
+    skills: { score: number; weight: number; matched: string[]; missing: string[] };
+    softSkills: { score: number; weight: number; matched: string[]; missing: string[] };
+    similarity: { score: number; weight: number; rawCosine?: number; raw_cosine?: number };
+    experience: { score: number; weight: number; required: number; extracted: number | null };
+    education: { score: number; weight: number; required: string | null; extracted: string | null; meets: boolean };
+    location: { score: number; weight: number; preferred: string | null; extracted: string | null; meets: boolean };
+  };
+};
+
+export type ScreeningCandidateItem = {
+  id: number;
+  ruleSetId: number;
+  ruleSetName: string | null;
+  departmentId: number | null;
+  departmentName: string | null;
+  originalFilename: string;
+  hasResume: boolean;
+  source: "single" | "bulk";
+  candidateName: string | null;
+  email: string | null;
+  phone: string | null;
+  city: string | null;
+  extractedSkills: string[];
+  extractedSoftSkills: string[];
+  extractedExperienceYears: number | null;
+  extractedEducation: string | null;
+  matchScore: number | null;
+  scoreBreakdown: ScoreBreakdown | null;
+  rankInBatch: number | null;
+  status: ScreeningCandidateStatus;
+  screenedAt: string | null;
+  interviewInvitedAt: string | null;
+  interviewDatetime: string | null;
+  rejectionEmailedAt: string | null;
+  notes: string | null;
+  createdAt: string | null;
+  resumeUrl: string;
+};
+
+const RESUME_SCREENING_BASE = "/api/recruitment/resume-screening";
+
+export const getListHiringRuleSetsQueryKey = (params?: { departmentId?: number; isActive?: boolean }) =>
+  [`${RESUME_SCREENING_BASE}/rule-sets`, params] as const;
+
+export const useListHiringRuleSets = (
+  params?: { departmentId?: number; isActive?: boolean },
+  options?: UseQueryOptions<HiringRuleSetItem[]>,
+) => {
+  const qs = new URLSearchParams();
+  if (params?.departmentId) qs.set("departmentId", String(params.departmentId));
+  if (params?.isActive !== undefined) qs.set("isActive", String(params.isActive));
+  const q = qs.toString();
+  return useQuery<HiringRuleSetItem[]>({
+    queryKey: getListHiringRuleSetsQueryKey(params),
+    queryFn: () => customFetch<HiringRuleSetItem[]>(`${RESUME_SCREENING_BASE}/rule-sets${q ? `?${q}` : ""}`),
+    ...options,
+  });
+};
+
+export type HiringRuleSetInput = {
+  name: string;
+  departmentId: number;
+  requiredSkills: string[];
+  softSkills?: string[];
+  educationQualification?: string;
+  minExperienceYears?: number;
+  preferredCity?: string;
+  otherRequirements?: string;
+  isActive?: boolean;
+};
+
+export const useCreateHiringRuleSet = () =>
+  useMutation({
+    mutationFn: (data: HiringRuleSetInput) =>
+      customFetch<HiringRuleSetItem>(`${RESUME_SCREENING_BASE}/rule-sets`, {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+  });
+
+export const useUpdateHiringRuleSet = () =>
+  useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Partial<HiringRuleSetInput> }) =>
+      customFetch<HiringRuleSetItem>(`${RESUME_SCREENING_BASE}/rule-sets/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+  });
+
+export const useDeleteHiringRuleSet = () =>
+  useMutation({
+    mutationFn: (id: number) =>
+      customFetch<{ ok: boolean }>(`${RESUME_SCREENING_BASE}/rule-sets/${id}`, { method: "DELETE" }),
+  });
+
+export const useUploadSingleResume = () =>
+  useMutation({
+    mutationFn: ({ file, ruleSetId }: { file: File; ruleSetId: number }) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("ruleSetId", String(ruleSetId));
+      return customFetch<ScreeningCandidateItem>(`${RESUME_SCREENING_BASE}/upload-single`, {
+        method: "POST",
+        body: formData,
+      });
+    },
+  });
+
+export const useShortlistCandidate = () =>
+  useMutation({
+    mutationFn: (id: number) =>
+      customFetch<ScreeningCandidateItem>(`${RESUME_SCREENING_BASE}/candidates/${id}/shortlist`, {
+        method: "POST",
+      }),
+  });
+
+export const getListScreeningCandidatesQueryKey = (params?: {
+  status?: ScreeningCandidateStatus; ruleSetId?: number; departmentId?: number; search?: string;
+}) => [`${RESUME_SCREENING_BASE}/candidates`, params] as const;
+
+export const useListScreeningCandidates = (
+  params?: { status?: ScreeningCandidateStatus; ruleSetId?: number; departmentId?: number; search?: string },
+  options?: UseQueryOptions<ScreeningCandidateItem[]>,
+) => {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.ruleSetId) qs.set("ruleSetId", String(params.ruleSetId));
+  if (params?.departmentId) qs.set("departmentId", String(params.departmentId));
+  if (params?.search) qs.set("search", params.search);
+  const q = qs.toString();
+  return useQuery<ScreeningCandidateItem[]>({
+    queryKey: getListScreeningCandidatesQueryKey(params),
+    queryFn: () => customFetch<ScreeningCandidateItem[]>(`${RESUME_SCREENING_BASE}/candidates${q ? `?${q}` : ""}`),
+    ...options,
+  });
+};
+
+export const useUpdateCandidateStatus = () =>
+  useMutation({
+    mutationFn: ({ id, data }: { id: number; data: { status?: ScreeningCandidateStatus; notes?: string } }) =>
+      customFetch<ScreeningCandidateItem>(`${RESUME_SCREENING_BASE}/candidates/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+  });
+
+export const useDeleteScreeningCandidate = () =>
+  useMutation({
+    mutationFn: (id: number) =>
+      customFetch<{ ok: boolean }>(`${RESUME_SCREENING_BASE}/candidates/${id}`, { method: "DELETE" }),
+  });
+
+export const useSendRejectionEmailsAll = () =>
+  useMutation({
+    mutationFn: () =>
+      customFetch<{ sent: number; failed: { candidateId: number; name: string | null; error: string }[] }>(
+        `${RESUME_SCREENING_BASE}/candidates/reject-email-all`,
+        { method: "POST" },
+      ),
+  });
+
+export const useSendInterviewInvite = () =>
+  useMutation({
+    mutationFn: ({ id, interviewDateTime }: { id: number; interviewDateTime: string }) =>
+      customFetch<ScreeningCandidateItem>(`${RESUME_SCREENING_BASE}/candidates/${id}/interview-invite`, {
+        method: "POST",
+        body: JSON.stringify({ interviewDateTime }),
+      }),
+  });
+
+export const useSendInterviewInviteBulk = () =>
+  useMutation({
+    mutationFn: (interviewDateTime: string) =>
+      customFetch<{ sent: number; failed: { candidateId: number; name: string | null; error: string }[] }>(
+        `${RESUME_SCREENING_BASE}/candidates/interview-invite-bulk`,
+        { method: "POST", body: JSON.stringify({ interviewDateTime }) },
+      ),
+  });
+
+// ── Resume Screening bulk upload progress ───────────────────────────────────
+
+export type ResumeScreeningProgress = {
+  stage: "idle" | "running" | "completed";
+  total: number;
+  completed: number;
+  screened: number;
+  failed: number;
+  currentFile: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+};
+
+export const useResumeScreeningProgress = (enabled: boolean) =>
+  useQuery<ResumeScreeningProgress>({
+    queryKey: [`${RESUME_SCREENING_BASE}/upload-bulk-progress`],
+    queryFn: () => customFetch<ResumeScreeningProgress>(`${RESUME_SCREENING_BASE}/upload-bulk-progress`),
+    enabled,
+    refetchInterval: enabled ? 600 : false,
+    staleTime: 0,
   });
 
 export const useResignationEmail = () =>

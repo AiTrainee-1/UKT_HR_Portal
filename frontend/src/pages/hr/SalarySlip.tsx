@@ -1,12 +1,15 @@
 import { useState } from "react";
 import HrLayout from "@/components/HrLayout";
+import { Card, CardContent } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { useListSalarySlips, useEmailSalarySlip, SalarySlipItem } from "@/lib/api-client";
 import { previewDocumentPdf, downloadDocumentPdf } from "@/lib/api-client/custom-hooks";
 import { useAuth } from "@/contexts/AuthContext";
+import { useSalarySlipBulk } from "@/contexts/SalarySlipBulkContext";
+import SalarySlipBulkPipeline from "@/components/SalarySlipBulkPipeline";
 import {
   FileText, Download, Mail, FileSearch,
-  Search, Users, Loader2, Layers,
+  Search, Users, Loader2, Layers, IndianRupee, TrendingUp, CheckCircle2,
 } from "lucide-react";
 
 // ─── Months ───────────────────────────────────────────────────────────────────
@@ -31,7 +34,7 @@ export default function SalarySlip() {
   const [search, setSearch]       = useState("");
   const [emailing, setEmailing]   = useState<number | null>(null);
   const [pdfBusy, setPdfBusy]     = useState<{ id: number; mode: "preview" | "download" } | null>(null);
-  const [bulkDownloading, setBulkDownloading] = useState(false);
+  const { isRunning: bulkRunning, showPipeline, progress, dismiss: dismissBulkPipeline, triggerBulkDownload, triggerBulkEmail } = useSalarySlipBulk();
 
   const { data: slips = [], isLoading } = useListSalarySlips({
     month,
@@ -49,6 +52,13 @@ export default function SalarySlip() {
     );
   });
 
+  // Month overview — based on the full tab-filtered set (not the search box),
+  // since these cards describe the whole month's payroll, not a lookup.
+  const totalEmployees = slips.length;
+  const totalGross = slips.reduce((sum, s) => sum + s.grossSalary, 0);
+  const totalDeductions = slips.reduce((sum, s) => sum + s.totalDeductions, 0);
+  const totalNet = slips.reduce((sum, s) => sum + s.netSalary, 0);
+
   async function doPdf(slip: SalarySlipItem, mode: "preview" | "download") {
     setPdfBusy({ id: slip.id, mode });
     try {
@@ -62,17 +72,18 @@ export default function SalarySlip() {
     }
   }
 
-  async function doBulkDownload() {
-    setBulkDownloading(true);
-    try {
-      for (const slip of filtered) {
-        await downloadDocumentPdf(`/api/salary-slips/${slip.id}/pdf`, () => token);
-      }
-    } catch {
-      toast({ title: "Failed to download all slips", variant: "destructive" });
-    } finally {
-      setBulkDownloading(false);
-    }
+  function doBulkDownload() {
+    triggerBulkDownload({
+      month, year, employmentType: tab,
+      ...(prodWeek ? { weekNumber: Number(prodWeek) } : {}),
+    });
+  }
+
+  function doBulkEmail() {
+    triggerBulkEmail({
+      month, year, employmentType: tab,
+      ...(prodWeek ? { weekNumber: Number(prodWeek) } : {}),
+    });
   }
 
   async function doEmail(slip: SalarySlipItem) {
@@ -95,22 +106,59 @@ export default function SalarySlip() {
     <HrLayout>
       <div className="space-y-5">
         {/* ── Page Header ─────────────────────────────────────────── */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h2 className="text-2xl font-black text-gray-900">Salary Slips</h2>
             <p className="text-sm text-gray-500 mt-0.5">
               Generate, preview, and distribute payslips
             </p>
           </div>
-          <button
-            onClick={doBulkDownload}
-            disabled={bulkDownloading || filtered.length === 0}
-            className="flex items-center gap-2 px-4 py-2 text-sm bg-slate-800 text-white rounded-xl hover:bg-slate-900 transition-colors disabled:opacity-50"
-          >
-            {bulkDownloading ? <Loader2 size={15} className="animate-spin" /> : <Layers size={15} />}
-            Bulk Download All ({filtered.length})
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={doBulkEmail}
+              disabled={bulkRunning || slips.length === 0}
+              className="flex items-center gap-2 px-4 py-2 text-sm bg-purple-600 text-white rounded-xl hover:bg-purple-700 transition-colors disabled:opacity-50"
+            >
+              {bulkRunning && progress?.kind === "email" ? <Loader2 size={15} className="animate-spin" /> : <Mail size={15} />}
+              Bulk Send ({slips.length})
+            </button>
+            <button
+              onClick={doBulkDownload}
+              disabled={bulkRunning || slips.length === 0}
+              className="flex items-center gap-2 px-4 py-2 text-sm bg-slate-800 text-white rounded-xl hover:bg-slate-900 transition-colors disabled:opacity-50"
+            >
+              {bulkRunning && progress?.kind === "pdf" ? <Loader2 size={15} className="animate-spin" /> : <Layers size={15} />}
+              Bulk Download All ({slips.length})
+            </button>
+          </div>
         </div>
+
+        {/* ── Bulk download/email progress ───────────────────────────── */}
+        <SalarySlipBulkPipeline active={showPipeline} data={progress} onDismiss={dismissBulkPipeline} />
+
+        {/* ── Month Overview ──────────────────────────────────────── */}
+        {!isLoading && slips.length > 0 && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[
+              { label: "Total Employees", value: `${totalEmployees}`, color: "text-indigo-700", icon: Users, bg: "bg-indigo-50" },
+              { label: "Total Gross", value: `₹${totalGross.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`, color: "text-blue-700", icon: TrendingUp, bg: "bg-blue-50" },
+              { label: "Deductions", value: `₹${totalDeductions.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`, color: "text-red-600", icon: IndianRupee, bg: "bg-red-50" },
+              { label: "Total Salary Amount", value: `₹${totalNet.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`, color: "text-green-700", icon: CheckCircle2, bg: "bg-green-50" },
+            ].map(s => (
+              <Card key={s.label} className="border-0 shadow-sm">
+                <CardContent className="p-4 flex items-center gap-3">
+                  <div className={`w-9 h-9 rounded-lg ${s.bg} flex items-center justify-center shrink-0`}>
+                    <s.icon size={16} className={s.color} />
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">{s.label}</p>
+                    <p className={`text-base font-black ${s.color}`}>{s.value}</p>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
 
         {/* ── Filters ─────────────────────────────────────────────── */}
         <div className="flex flex-wrap items-center gap-3 clay-card rounded-2xl px-4 py-3">
@@ -231,7 +279,7 @@ export default function SalarySlip() {
                   <div className="flex items-center gap-1.5 shrink-0">
                     <ActionBtn
                       icon={pdfBusy?.id === slip.id && pdfBusy.mode === "preview" ? <Loader2 size={13} className="animate-spin" /> : <FileSearch size={13} />}
-                      label="Preview PDF"
+                      label="View PDF"
                       onClick={() => doPdf(slip, "preview")}
                       disabled={pdfBusy !== null}
                       color="gray"

@@ -8,6 +8,16 @@ Two salary modes:
 All calculations are stored with full day-by-day breakdown in SalarySlip.breakdown_details
 so every rupee can be explained to the employee.
 """
+
+
+class PayrollSkip(Exception):
+    """Raised by the payroll engines with a precise, user-facing reason an
+    employee was skipped — so the Generate Payroll result always tells HR
+    exactly what to fix, instead of one generic catch-all message covering
+    unrelated conditions (no salary configured vs. no working days vs. a
+    real computation error)."""
+
+
 import calendar
 import io
 from collections import defaultdict
@@ -266,14 +276,15 @@ def _pending_advance_repayments(emp: Employee, month: int, year: int) -> tuple[D
 #  STAFF payroll engine
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None:
+def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
     """
     Pro-rated monthly payroll for a staff employee.
     Returns a dict with 'payroll' and 'slip' keys (model instances).
-    Returns None if the employee has no salary configured.
+    Raises PayrollSkip with a precise reason if this employee can't be paid
+    for this month (no salary configured, no working days, etc).
     """
     if not emp.salary_amount:
-        return None
+        raise PayrollSkip("No Salary Amount set on this employee's profile")
 
     # 1. Get shift assignment for middle of month (representative date).
     #    Shift start and grace come solely from the assigned shift — there is
@@ -303,7 +314,10 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict | None
     total_working_days = len(working_days_list)
 
     if total_working_days == 0:
-        return None
+        raise PayrollSkip(
+            f"No working days found in {month}/{year} for this employee's shift "
+            "(check Holidays and Saturday-off configuration)"
+        )
 
     # 4a. Fetch AttendanceLog punch records (biometric / Excel import)
     logs = AttendanceLog.objects.filter(employee=emp, date__year=year, date__month=month)
@@ -695,7 +709,7 @@ def _get_biweekly_range(month: int, year: int, week_number: int) -> tuple[date, 
         return date(year, month, 16), date(year, month, calendar.monthrange(year, month)[1])
 
 
-def _generate_production_payroll(emp: Employee, month: int, year: int, week_number: int) -> dict | None:
+def _generate_production_payroll(emp: Employee, month: int, year: int, week_number: int) -> dict:
     """
     Shift-based bi-weekly payroll for production employees — completely
     separate from the staff engine. No monthly salary, no proration, no
@@ -703,7 +717,7 @@ def _generate_production_payroll(emp: Employee, month: int, year: int, week_numb
     week_number: 1 (days 1-15) or 2 (days 16-end).
     """
     if not emp.salary_per_shift or emp.salary_per_shift <= 0:
-        return None  # Salary Per Shift not configured for this employee
+        raise PayrollSkip("No Salary Per Shift set on this employee's profile")
 
     from .attendance_final import compute_range_records
 
@@ -1225,7 +1239,7 @@ def work_session_detail(request: Request, pk: int) -> Response:
 @api_view(["GET"])
 @require_hr
 def payroll_list(request: Request) -> Response:
-    qs = Payroll.objects.select_related("employee").order_by("-year", "-month", "employee__first_name")
+    qs = Payroll.objects.select_related("employee", "employee__department").order_by("-year", "-month", "employee__first_name")
     qs = scope_to_branch(qs, request, field="employee__branch_id")
     emp_id = request.query_params.get("employeeId")
     month = request.query_params.get("month")
@@ -1250,6 +1264,8 @@ def payroll_list(request: Request) -> Response:
         row["bankName"] = emp.bank_name or ""
         row["employeeCode"] = emp.employee_code or ""
         row["email"] = emp.email or ""
+        row["departmentId"] = emp.department_id
+        row["departmentName"] = emp.department.name if emp.department_id and emp.department else None
         result.append(row)
     return Response(result)
 
@@ -1289,34 +1305,34 @@ def generate_payroll(request: Request) -> Response:
             return _error("weekNumber (1 or 2) is required for biweekly run")
         week_number = int(week_number)
 
-    employees = Employee.objects.filter(status="active")
+    employees = list(Employee.objects.filter(status="active"))
     generated = []
     skipped = []
 
+    from . import payroll_progress
+    payroll_progress.start(len(employees))
+
     for emp in employees:
         emp_name = f"{emp.first_name} {emp.last_name}"
+        before_count = len(generated)
         try:
             if emp.employment_type == "staff" and run_type in ("monthly", "all"):
                 result = _generate_staff_payroll(emp, month, year)
-                if result:
-                    generated.append(_payroll_json(result["payroll"], emp_name))
-                else:
-                    skipped.append({"employeeId": emp.id, "name": emp_name, "reason": "No salary configured"})
+                generated.append(_payroll_json(result["payroll"], emp_name))
 
             elif emp.employment_type == "production" and run_type in ("biweekly", "all"):
                 wk = week_number if run_type == "biweekly" else None
                 weeks_to_run = [wk] if wk else [1, 2]
                 for wk in weeks_to_run:
                     result = _generate_production_payroll(emp, month, year, wk)
-                    if result:
-                        generated.append(_payroll_json(result["payroll"], emp_name))
-                    else:
-                        skipped.append({
-                            "employeeId": emp.id, "name": emp_name,
-                            "reason": "Salary Per Shift not set for this employee",
-                        })
+                    generated.append(_payroll_json(result["payroll"], emp_name))
+        except PayrollSkip as e:
+            skipped.append({"employeeId": emp.id, "name": emp_name, "reason": str(e)})
         except Exception as e:
             skipped.append({"employeeId": emp.id, "name": emp_name, "reason": str(e)})
+        payroll_progress.step(emp_name, len(generated) > before_count)
+
+    payroll_progress.finish()
 
     from .audit_utils import log_action as _log
     _log(request, "create", "payroll", description=(
@@ -1332,6 +1348,14 @@ def generate_payroll(request: Request) -> Response:
         "skipped": len(skipped),
         "skippedDetails": skipped,
     }, status=201)
+
+
+@api_view(["GET"])
+@require_hr
+def generate_payroll_progress(request: Request) -> Response:
+    """Poll target for the live payroll generation progress UI."""
+    from . import payroll_progress
+    return Response(payroll_progress.snapshot())
 
 
 # ─────────────────────────────────────────────────────────────────────────────

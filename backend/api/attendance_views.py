@@ -686,7 +686,7 @@ def run_biometric_sync(mode: str = "day", device_id=None) -> dict:
 @require_hr
 def sync_biometric_api(request: Request) -> Response:
     mode = request.data.get("mode", "day")       # "day" | "week" | "month" | "all"
-    device_id = request.data.get("deviceId")     # int | "env" | "all" | None
+    device_id = request.data.get("deviceId")     # int | "env" | "all" | list[int] | None
     result = run_biometric_sync(mode, device_id)
     status_code = 200 if result["ok"] else 502
     return Response(result, status=status_code)
@@ -713,12 +713,12 @@ def _assigned_shift_json(shift) -> dict | None:
     }
 
 
-def _full_day_row(emp, rec, shift, dsl, cl, perm) -> dict:
+def _full_day_row(emp, rec, shift, dsl, cl, perm, leave=None) -> dict:
     """
-    One employee's full attendance picture for one day — used by the
-    redesigned Report Log page. Built entirely from data the existing
-    engines already compute (AttendanceDayRecord / DailyShiftLog / Casual
-    Leave / Permission); nothing here recalculates anything.
+    One employee's full attendance picture for one day — used by the Report
+    Log page's detail view. Built entirely from data the existing engines
+    already compute (AttendanceDayRecord / DailyShiftLog / Casual Leave /
+    Permission / Leave); nothing here recalculates anything.
     """
     if dsl:
         punch1 = dsl.punch1.strftime("%H:%M") if dsl.punch1 else None
@@ -763,7 +763,41 @@ def _full_day_row(emp, rec, shift, dsl, cl, perm) -> dict:
             }
             if perm else None
         ),
+        "leave": (
+            {"status": leave.status, "type": getattr(leave, "type", None), "reason": leave.reason}
+            if leave else None
+        ),
         "source": rec.source,
+    }
+
+
+def _month_summary_row(emp, summary: dict, cl_count: int, perm_count: int) -> dict:
+    """
+    One employee's aggregate attendance picture for a month — used by the
+    Report Log page's summary view. Built entirely from
+    month_summary_from_records() (attendance_final.py), the same monthly
+    aggregation used elsewhere in the app — including onLeave, which is
+    already correct here because compute_month_records() feeds
+    compute_day_record() the real approved-leave date set for every day.
+    """
+    return {
+        "employeeId": emp.id,
+        "employeeCode": emp.employee_code,
+        "employeeName": f"{emp.first_name} {emp.last_name}",
+        "department": emp.department.name if emp.department else None,
+        "designation": emp.designation.title if emp.designation else None,
+        "totalDays": summary["totalDays"],
+        "workingDays": summary["workingDays"],
+        "effectiveDays": summary["effectiveDays"],
+        "presentDays": summary["present"],
+        "halfShiftDays": summary["halfShift"],
+        "absentDays": summary["absent"],
+        "onLeaveDays": summary["onLeave"],
+        "casualLeaveCount": cl_count,
+        "permissionCount": perm_count,
+        "holidays": summary["holidays"],
+        "lateCount": summary["late"],
+        "totalShifts": summary["totalShifts"],
     }
 
 
@@ -771,66 +805,45 @@ def _full_day_row(emp, rec, shift, dsl, cl, perm) -> dict:
 @require_hr
 def attendance_report_log(request: Request) -> Response:
     """
-    GET /api/attendance/report-log/?date=2026-07-01
-        → every active staff employee's full attendance picture for that date
-          (present, absent, on leave, holiday — everyone, not just those who punched)
+    GET /api/attendance/report-log?month=7&year=2026[&department=3&search=ram]
+        → summary mode: one aggregate row per active staff employee for that
+          month, optionally narrowed to one department and/or an employee
+          code/name search.
 
-    GET /api/attendance/report-log/?month=7&year=2026&employeeId=123
-        → one employee's full month, day by day
+    GET /api/attendance/report-log?month=7&year=2026&employeeId=123
+        → detail mode: one employee's full month, day by day — every punch
+          slot, status, late/half-shift, Casual Leave, Permission, and Leave.
 
     Built on the same AttendanceDayRecord/DailyShiftLog engines used
     everywhere else (compute_day_record / compute_daily_shift_log via
     compute_month_records) — this endpoint only reads and joins their
     output for display, it does not change how anything is calculated.
-    Casual Leave and Permission rows for the same date(s) are attached so
-    a day's full story (shift, punches, late/half/absent, CL, permission)
-    is visible in one place.
+    View-only: nothing here writes anything HR didn't already trigger
+    elsewhere (compute_month_records persists AttendanceDayRecord as a
+    side effect, same as every other page that reads attendance).
     """
     from .models import PayrollSettings, CasualLeaveRequest, EmployeePermission
-    from .attendance_final import compute_day_record, compute_month_records
+    from .attendance_final import compute_month_records, month_summary_from_records
     from .shift_engine import _get_shift_for_date
 
     settings = PayrollSettings.get()
-    date_param = request.query_params.get("date")
     month_param = request.query_params.get("month")
     year_param = request.query_params.get("year")
     emp_id_param = request.query_params.get("employeeId")
+    department_param = request.query_params.get("department")
+    search_param = request.query_params.get("search")
     is_strict = settings.attendance_mode != "simple"
 
-    if date_param:
-        try:
-            d = date_type.fromisoformat(date_param)
-        except (ValueError, TypeError):
-            d = _today()
+    if not month_param or not year_param:
+        return Response({"error": "Provide month and year"}, status=400)
+    try:
+        m = int(month_param)
+        y = int(year_param)
+    except (ValueError, TypeError):
+        return Response({"error": "Invalid month/year"}, status=400)
 
-        emps = list(
-            scope_to_branch(Employee.objects, request)
-            .filter(status="active", employment_type="staff")
-            .select_related("department", "designation")
-            .order_by("first_name")
-        )
-        # Only approved CL/Permission requests are shown here — pending ones
-        # aren't final yet and rejected ones didn't happen, so neither belongs
-        # on an attendance report.
-        cl_map = {c.employee_id: c for c in CasualLeaveRequest.objects.filter(date=d, status="approved")}
-        perm_map = {p.employee_id: p for p in EmployeePermission.objects.filter(date=d, status="approved")}
-
-        rows = []
-        for emp in emps:
-            rec = compute_day_record(emp, d, settings=settings)
-            shift = _get_shift_for_date(emp, d)
-            dsl = DailyShiftLog.objects.filter(employee=emp, date=d).first() if is_strict else None
-            rows.append(_full_day_row(emp, rec, shift, dsl, cl_map.get(emp.id), perm_map.get(emp.id)))
-        return Response(rows)
-
-    if month_param and year_param:
-        try:
-            m = int(month_param)
-            y = int(year_param)
-        except (ValueError, TypeError):
-            return Response({"error": "Invalid month/year"}, status=400)
-        if not emp_id_param:
-            return Response({"error": "employeeId is required for the month view"}, status=400)
+    # ── Detail mode: one employee, full day-by-day month ────────────────────
+    if emp_id_param:
         emp = (
             scope_to_branch(Employee.objects, request)
             .select_related("department", "designation")
@@ -841,8 +854,9 @@ def attendance_report_log(request: Request) -> Response:
             return Response({"error": "Employee not found"}, status=404)
 
         records = compute_month_records(emp, y, m, settings)
-        # Only approved CL/Permission requests are shown here — see the
-        # matching comment in the day-view branch above.
+        # Only approved CL/Permission/Leave requests are shown here — pending
+        # ones aren't final yet and rejected ones didn't happen, so none of
+        # the three belong on an attendance report.
         cl_map = {
             c.date: c for c in CasualLeaveRequest.objects.filter(
                 employee=emp, date__year=y, date__month=m, status="approved",
@@ -853,6 +867,20 @@ def attendance_report_log(request: Request) -> Response:
                 employee=emp, date__year=y, date__month=m, status="approved",
             )
         }
+        month_start = date_type(y, m, 1)
+        month_end = date_type(y, m, calendar.monthrange(y, m)[1])
+        leave_map: dict = {}
+        for lr in LeaveRequest.objects.filter(
+            employee=emp, status="approved",
+            start_date__lte=month_end.isoformat(), end_date__gte=month_start.isoformat(),
+        ):
+            lr_start = max(date_type.fromisoformat(str(lr.start_date)[:10]), month_start)
+            lr_end = min(date_type.fromisoformat(str(lr.end_date)[:10]), month_end)
+            cur = lr_start
+            while cur <= lr_end:
+                leave_map[cur] = lr
+                cur += timedelta(days=1)
+
         dsl_map = {}
         if is_strict:
             dsl_map = {
@@ -861,16 +889,68 @@ def attendance_report_log(request: Request) -> Response:
                 )
             }
 
-        rows = []
+        days = []
         for rec in records:
             shift = _get_shift_for_date(emp, rec.date)
-            rows.append(_full_day_row(
+            days.append(_full_day_row(
                 emp, rec, shift, dsl_map.get(rec.date),
-                cl_map.get(rec.date), perm_map.get(rec.date),
+                cl_map.get(rec.date), perm_map.get(rec.date), leave_map.get(rec.date),
             ))
-        return Response(rows)
+        return Response({
+            "month": m, "year": y,
+            "employee": {
+                "id": emp.id,
+                "code": emp.employee_code,
+                "name": f"{emp.first_name} {emp.last_name}",
+                "department": emp.department.name if emp.department else None,
+                "designation": emp.designation.title if emp.designation else None,
+            },
+            "days": days,
+        })
 
-    return Response({"error": "Provide date or month+year"}, status=400)
+    # ── Summary mode: every matching employee, aggregate for the month ──────
+    emps_qs = (
+        scope_to_branch(Employee.objects, request)
+        .filter(status="active", employment_type="staff")
+        .select_related("department", "designation")
+        .order_by("first_name")
+    )
+    if department_param:
+        emps_qs = emps_qs.filter(department_id=department_param)
+    if search_param:
+        q = search_param.strip()
+        emps_qs = emps_qs.filter(
+            Q(employee_code__icontains=q) | Q(first_name__icontains=q) | Q(last_name__icontains=q)
+        )
+    emps = list(emps_qs)
+    emp_ids = [e.id for e in emps]
+
+    # Batched CL/Permission counts (one query each for every matching
+    # employee) instead of a per-employee query — avoids N+1 as the employee
+    # list grows.
+    cl_counts: dict[int, int] = defaultdict(int)
+    for row in (
+        CasualLeaveRequest.objects.filter(
+            employee_id__in=emp_ids, date__year=y, date__month=m, status="approved",
+        ).values("employee_id").annotate(n=Count("id"))
+    ):
+        cl_counts[row["employee_id"]] = row["n"]
+
+    perm_counts: dict[int, int] = defaultdict(int)
+    for row in (
+        EmployeePermission.objects.filter(
+            employee_id__in=emp_ids, date__year=y, date__month=m, status="approved",
+        ).values("employee_id").annotate(n=Count("id"))
+    ):
+        perm_counts[row["employee_id"]] = row["n"]
+
+    employees = []
+    for emp in emps:
+        records = compute_month_records(emp, y, m, settings)
+        summary = month_summary_from_records(records)
+        employees.append(_month_summary_row(emp, summary, cl_counts[emp.id], perm_counts[emp.id]))
+
+    return Response({"month": m, "year": y, "employees": employees})
 
 
 @api_view(["POST"])

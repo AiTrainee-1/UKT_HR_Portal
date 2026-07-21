@@ -99,6 +99,7 @@ const navGroups: NavGroupData[] = [
           { path: '/hr/recruitment/resignations', label: 'Resignations' },
           { path: '/hr/recruitment/required-roles', label: 'Required Roles' },
           { path: '/hr/interviews', label: 'Interviews' },
+          { path: '/hr/recruitment/resume-screening', label: 'Resume Screening' },
         ],
       },
     ],
