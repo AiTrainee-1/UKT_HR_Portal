@@ -1,4 +1,6 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import html2canvas from "html2canvas";
+import JSZip from "jszip";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,7 +17,7 @@ import {
 } from "@/components/idcard/IdCardViews";
 import {
   CreditCard, Search, Printer, Mail, CheckSquare, Square,
-  Briefcase, Factory,
+  Briefcase, Factory, Download,
 } from "lucide-react";
 
 // ── Page ───────────────────────────────────────────────────────────────────
@@ -29,6 +31,8 @@ export default function IdCards() {
   const { data: employees } = useListEmployees({ status: "active" });
   const { data: cards, isLoading: cardsLoading } = useIdCards(selectedIds);
   const emailMutation = useEmailIdCard();
+  const cardRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const [downloading, setDownloading] = useState(false);
 
   const filtered = useMemo(() => (employees ?? []).filter(e => {
     const q = search.trim().toLowerCase();
@@ -54,6 +58,46 @@ export default function IdCards() {
       return;
     }
     window.print();
+  };
+
+  const handleDownload = async () => {
+    const list = cards ?? [];
+    if (list.length === 0) {
+      toast({ title: "Select at least one employee first", variant: "destructive" });
+      return;
+    }
+    setDownloading(true);
+    try {
+      const zip = new JSZip();
+      let captured = 0;
+      for (const card of list) {
+        const el = cardRefs.current[card.id];
+        if (!el) continue;
+        const canvas = await html2canvas(el, {
+          backgroundColor: "#ffffff",
+          scale: 3,
+          useCORS: true,
+        });
+        const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/png"));
+        if (!blob) continue;
+        const safeName = `${card.name}`.replace(/[^a-z0-9]+/gi, "_");
+        zip.file(`ID-Card-${card.code}-${safeName}.png`, blob);
+        captured++;
+      }
+      if (captured === 0) throw new Error("No cards could be captured");
+      const zipBlob = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(zipBlob);
+      const link = document.createElement("a");
+      link.download = `ID-Cards-${new Date().toISOString().slice(0, 10)}.zip`;
+      link.href = url;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast({ title: `${captured} ID card${captured === 1 ? "" : "s"} downloaded` });
+    } catch {
+      toast({ title: "Failed to download ID cards", variant: "destructive" });
+    } finally {
+      setDownloading(false);
+    }
   };
 
   const handleEmail = async (card: IdCardData) => {
@@ -87,9 +131,19 @@ export default function IdCards() {
               QR verification built in
             </p>
           </div>
-          <Button onClick={handlePrint} className="gap-2 h-9" disabled={(cards ?? []).length === 0}>
-            <Printer size={14} /> Print Selected ({selectedIds.length})
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={handleDownload}
+              className="gap-2 h-9"
+              disabled={(cards ?? []).length === 0 || downloading}
+            >
+              <Download size={14} /> {downloading ? "Preparing…" : `Download Selected (${selectedIds.length})`}
+            </Button>
+            <Button onClick={handlePrint} className="gap-2 h-9" disabled={(cards ?? []).length === 0}>
+              <Printer size={14} /> Print Selected ({selectedIds.length})
+            </Button>
+          </div>
         </div>
 
         <div className="grid lg:grid-cols-[320px_1fr] gap-4 items-start">
@@ -187,7 +241,10 @@ export default function IdCards() {
                         <Mail size={11} /> Email to employee
                       </Button>
                     </div>
-                    <div className="flex gap-4 flex-wrap">
+                    <div
+                      ref={el => { cardRefs.current[card.id] = el; }}
+                      className="flex gap-4 flex-wrap"
+                    >
                       {card.employmentType === "production" ? (
                         <>
                           <ProductionCardFront card={card} />

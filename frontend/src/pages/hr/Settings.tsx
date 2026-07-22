@@ -10,7 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import {
   Building2, Clock, Mail, Database, IndianRupee, FileText, Upload, X,
-  Fingerprint, CreditCard, Plus, Trash2, Power, Pencil, FileSignature, Award,
+  Fingerprint, CreditCard, Plus, Trash2, Power, Pencil, FileSignature, Award, Eye,
 } from "lucide-react";
 import {
   usePayrollSettings, useUpdatePayrollSettings,
@@ -20,8 +20,26 @@ import {
   useDocumentSettings, useUpdateDocumentSettings, previewDocumentPdf,
   type DocumentType,
 } from "@/lib/api-client/custom-hooks";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth, permissionLevel } from "@/contexts/AuthContext";
 import ProductionShiftConfigCard from "@/components/ProductionShiftConfigCard";
+import { lockMutatingControls } from "@/lib/view-only-lock";
+
+// Settings tab -> its own permission key. Each Settings tab has a distinct
+// settings.* entry in Account Management (see permission_registry.py) except
+// "idcard", which is deliberately governed by the existing "id_cards"
+// permission — the same one that already gates the ID Cards feature page,
+// not a separate Settings concern.
+const SETTINGS_TAB_MODULE: Record<string, string> = {
+  company: "settings.company",
+  attendance: "settings.attendance",
+  devices: "settings.devices",
+  idcard: "id_cards",
+  documents: "settings.documents",
+  payroll: "settings.payroll",
+  "salary-slip": "settings.salary_slip",
+  smtp: "settings.smtp",
+  backup: "settings.backup",
+};
 
 function DocumentThemeCard({
   docType, title, icon, description,
@@ -173,7 +191,34 @@ function DocumentThemeCard({
 
 export default function Settings() {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [settingsTab, setSettingsTab] = useState("company");
+
+  const tabLevel = (tab: string) => permissionLevel(user, SETTINGS_TAB_MODULE[tab] ?? "settings");
+  const isTabViewOnly = tabLevel(settingsTab) === "view";
+
+  // Land on the first tab this role can actually see if the default
+  // ("company") — or whichever tab was active before a permission change —
+  // is hidden for them.
+  useEffect(() => {
+    if (tabLevel(settingsTab) === "hidden") {
+      const firstVisible = Object.keys(SETTINGS_TAB_MODULE).find((t) => tabLevel(t) !== "hidden");
+      if (firstVisible) setSettingsTab(firstVisible);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, settingsTab]);
+
+  // Radix Tabs only mounts the active TabsContent, so locking document.body
+  // whenever the active tab is view-only (same mechanism HrLayout uses
+  // page-wide) only ever touches that one tab's controls.
+  useEffect(() => {
+    if (!isTabViewOnly) return;
+    const relock = () => lockMutatingControls(document.body);
+    relock();
+    const observer = new MutationObserver(relock);
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [isTabViewOnly, settingsTab]);
 
   // ── Company profile — persisted to PayrollSettings via the API ─────────
   const [company, setCompany] = useState({
@@ -329,11 +374,14 @@ export default function Settings() {
     }
   };
 
-  // All Settings tabs (Payroll, PF/EF Rules, SMTP, Salary Slip) share one
-  // PayrollSettings record on the backend, so they share this one save call —
-  // but each tab reports its own accurate result rather than a generic
-  // "Payroll settings saved" message no matter which tab was actually edited.
-  const savePayroll = async (result?: { title: string; description?: string }, errorTitle?: string) => {
+  // Company/Attendance/Payroll/Salary Slip/SMTP all persist to one shared
+  // PayrollSettings record via one endpoint, but each tab now sends only its
+  // own fields (rather than one bundled payload covering every tab) — the
+  // backend checks edit permission per settings.* field group (see
+  // FIELD_GROUPS in payroll_views.py), so a role with edit on only e.g.
+  // Payroll must not have its save blocked by SMTP/Salary Slip fields it
+  // never touched riding along in the same request.
+  const savePayrollRates = async (result?: { title: string; description?: string }, errorTitle?: string) => {
     try {
       await updatePayrollSettings.mutateAsync({
         pfRate: payroll.pfRate,
@@ -349,18 +397,6 @@ export default function Settings() {
         prodPfEfRules: pfEfRules,
         staffPayrollRulesEnabled: staffRulesEnabled,
         prodPayrollRulesEnabled: prodRulesEnabled,
-        slipCompanyName: payroll.slipCompanyName,
-        slipCompanyAddress: payroll.slipCompanyAddress,
-        minWageRate: payroll.minWageRate,
-        signatureImage: payroll.signatureImage ?? undefined,
-        companyLogo: payroll.companyLogo ?? undefined,
-        authorizedSignature: payroll.authorizedSignature ?? undefined,
-        smtpHost: payroll.smtpHost,
-        smtpPort: payroll.smtpPort,
-        smtpUsername: payroll.smtpUsername,
-        smtpPassword: payroll.smtpPassword,
-        smtpFromEmail: payroll.smtpFromEmail,
-        smtpFromName: payroll.smtpFromName,
       } as never);
       toast(result ?? {
         title: "Payroll settings saved",
@@ -368,6 +404,41 @@ export default function Settings() {
       });
     } catch {
       toast({ title: errorTitle ?? "Failed to save payroll settings", variant: "destructive" });
+    }
+  };
+
+  const saveSmtp = async () => {
+    try {
+      await updatePayrollSettings.mutateAsync({
+        smtpHost: payroll.smtpHost,
+        smtpPort: payroll.smtpPort,
+        smtpUsername: payroll.smtpUsername,
+        smtpPassword: payroll.smtpPassword,
+        smtpFromEmail: payroll.smtpFromEmail,
+        smtpFromName: payroll.smtpFromName,
+      } as never);
+      toast({
+        title: "SMTP settings saved",
+        description: "Email sending will use these credentials from now on.",
+      });
+    } catch {
+      toast({ title: "Failed to save SMTP settings", variant: "destructive" });
+    }
+  };
+
+  const saveSalarySlip = async () => {
+    try {
+      await updatePayrollSettings.mutateAsync({
+        slipCompanyName: payroll.slipCompanyName,
+        slipCompanyAddress: payroll.slipCompanyAddress,
+        minWageRate: payroll.minWageRate,
+        signatureImage: payroll.signatureImage ?? undefined,
+        companyLogo: payroll.companyLogo ?? undefined,
+        authorizedSignature: payroll.authorizedSignature ?? undefined,
+      } as never);
+      toast({ title: "Salary Slip settings saved" });
+    } catch {
+      toast({ title: "Failed to save Salary Slip settings", variant: "destructive" });
     }
   };
 
@@ -516,11 +587,25 @@ export default function Settings() {
               { value: "salary-slip", label: "Salary Slip", icon: <FileText size={13} /> },
               { value: "smtp", label: "SMTP / Email", icon: <Mail size={13} /> },
               { value: "backup", label: "Backup", icon: <Database size={13} /> },
-            ]}
+            ].filter((t) => tabLevel(t.value) !== "hidden")}
             value={settingsTab}
             onChange={setSettingsTab}
             size="sm"
           />
+
+          {isTabViewOnly && (
+            <div
+              className="flex items-center gap-2 mt-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold"
+              style={{
+                background: "rgba(245,158,11,0.08)",
+                color: "#b45309",
+                boxShadow: "inset 3px 3px 8px rgba(245,158,11,0.06), inset -3px -3px 8px rgba(255,255,255,0.9)",
+              }}
+            >
+              <Eye size={15} strokeWidth={2} />
+              View only — browse and inspect freely, changes can't be saved.
+            </div>
+          )}
 
           {/* Company */}
           <TabsContent value="company" className="mt-4">
@@ -1197,7 +1282,7 @@ export default function Settings() {
 
                 <Button
                   size="sm"
-                  onClick={() => savePayroll()}
+                  onClick={() => savePayrollRates()}
                   disabled={updatePayrollSettings.isPending || psLoading}
                 >
                   {updatePayrollSettings.isPending ? "Saving…" : "Save Payroll Settings"}
@@ -1286,7 +1371,7 @@ export default function Settings() {
                   </Button>
                   <Button
                     size="sm"
-                    onClick={() => savePayroll({ title: "PF/EF rules saved" }, "Failed to save PF/EF rules")}
+                    onClick={() => savePayrollRates({ title: "PF/EF rules saved" }, "Failed to save PF/EF rules")}
                     disabled={updatePayrollSettings.isPending}
                   >
                     {updatePayrollSettings.isPending ? "Saving…" : "Save PF/EF Rules"}
@@ -1331,10 +1416,7 @@ export default function Settings() {
                 <div className="flex gap-3">
                   <Button
                     size="sm"
-                    onClick={() => savePayroll(
-                      { title: "SMTP settings saved", description: "Email sending will use these credentials from now on." },
-                      "Failed to save SMTP settings",
-                    )}
+                    onClick={() => saveSmtp()}
                     disabled={updatePayrollSettings.isPending || psLoading}
                   >
                     {updatePayrollSettings.isPending ? "Saving…" : "Save SMTP Settings"}
@@ -1568,7 +1650,7 @@ export default function Settings() {
 
                 <Button
                   size="sm"
-                  onClick={() => savePayroll({ title: "Salary Slip settings saved" }, "Failed to save Salary Slip settings")}
+                  onClick={() => saveSalarySlip()}
                   disabled={updatePayrollSettings.isPending}
                 >
                   {updatePayrollSettings.isPending ? "Saving…" : "Save Salary Slip Settings"}

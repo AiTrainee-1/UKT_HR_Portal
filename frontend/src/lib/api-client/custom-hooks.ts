@@ -1541,6 +1541,42 @@ export const useGeneratePayroll = () =>
       }),
   });
 
+// ── Payroll Skip Check (read-only, on-demand — no generation required) ─────
+
+export type PayrollSkipReason = {
+  employeeId: number;
+  employeeCode: string;
+  name: string;
+  reason: string;
+};
+
+export type PayrollSkipCheckResult = {
+  totalChecked: number;
+  skippedCount: number;
+  skipped: PayrollSkipReason[];
+};
+
+export const getPayrollSkipCheckQueryKey = (params: {
+  month: number; year: number; runType: "monthly" | "biweekly"; weekNumber?: number;
+}) => ["/api/payroll/skip-check", params] as const;
+
+export const usePayrollSkipCheck = (
+  params: { month: number; year: number; runType: "monthly" | "biweekly"; weekNumber?: number } | null,
+) => {
+  const qs = new URLSearchParams();
+  if (params) {
+    qs.set("month", String(params.month));
+    qs.set("year", String(params.year));
+    qs.set("runType", params.runType);
+    if (params.weekNumber) qs.set("weekNumber", String(params.weekNumber));
+  }
+  return useQuery<PayrollSkipCheckResult>({
+    queryKey: getPayrollSkipCheckQueryKey(params ?? { month: 0, year: 0, runType: "monthly" }),
+    queryFn: () => customFetch<PayrollSkipCheckResult>(`/api/payroll/skip-check?${qs.toString()}`),
+    enabled: !!params,
+  });
+};
+
 // ── Payroll Generation Progress ─────────────────────────────────────────────
 
 export type PayrollGenerateProgress = {
@@ -3279,6 +3315,110 @@ export const useResignationEmail = () =>
       customFetch<{ ok: boolean; sentTo: string; pdfAttached: boolean }>(
         `/api/recruitment/resignations/${id}/email`,
         { method: "POST", body: JSON.stringify({ toEmail }) },
+      ),
+  });
+
+// ── Employee Documents ──────────────────────────────────────────────────────
+
+export type EmployeeDocumentCategory =
+  | "pan_card"
+  | "aadhaar_card"
+  | "educational_certificate"
+  | "voter_id_or_birth_certificate"
+  | "bank_passbook"
+  | "offer_letter"
+  | "experience_letter"
+  | "resignation_letter"
+  | "staff_letter"
+  | "production_employee_documents";
+
+export const EMPLOYEE_DOCUMENT_CATEGORIES: { value: EmployeeDocumentCategory; label: string }[] = [
+  { value: "pan_card", label: "PAN Card" },
+  { value: "aadhaar_card", label: "Aadhaar Card" },
+  { value: "educational_certificate", label: "Educational Certificates" },
+  { value: "voter_id_or_birth_certificate", label: "Voter ID or Birth Certificate" },
+  { value: "bank_passbook", label: "Bank Passbook" },
+  { value: "offer_letter", label: "Offer Letter" },
+  { value: "experience_letter", label: "Experience Letter" },
+  { value: "resignation_letter", label: "Resignation Letter" },
+  { value: "staff_letter", label: "Staff Letter" },
+  { value: "production_employee_documents", label: "Production Employee Documents" },
+];
+
+export type EmployeeDocumentItem = {
+  id: number;
+  employeeId: number;
+  category: EmployeeDocumentCategory;
+  categoryLabel: string;
+  originalFilename: string;
+  uploadedBy: string | null;
+  uploadedAt: string | null;
+  fileUrl: string;
+};
+
+export const getEmployeeDocumentsQueryKey = (employeeId: number | null) =>
+  ["/api/recruitment/employee-documents", employeeId] as const;
+
+export const useEmployeeDocuments = (employeeId: number | null, enabled = true) =>
+  useQuery<EmployeeDocumentItem[]>({
+    queryKey: getEmployeeDocumentsQueryKey(employeeId),
+    queryFn: () => customFetch<EmployeeDocumentItem[]>(`/api/recruitment/employee-documents/${employeeId}`),
+    enabled: enabled && !!employeeId,
+  });
+
+export const useUploadEmployeeDocument = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ employeeId, category, file }: { employeeId: number; category: EmployeeDocumentCategory; file: File }) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("category", category);
+      return customFetch<EmployeeDocumentItem>(`/api/recruitment/employee-documents/${employeeId}/upload`, {
+        method: "POST",
+        body: formData,
+      });
+    },
+    onSuccess: (_data, { employeeId }) =>
+      queryClient.invalidateQueries({ queryKey: getEmployeeDocumentsQueryKey(employeeId) }),
+  });
+};
+
+export const useDeleteEmployeeDocument = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      customFetch<{ ok: boolean }>(`/api/employee-documents/${id}`, { method: "DELETE" }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["/api/recruitment/employee-documents"] }),
+  });
+};
+
+export type DocumentCompletionEmployee = {
+  id: number;
+  employeeCode: string;
+  name: string;
+  departmentName: string | null;
+};
+
+export type DocumentCompletionStats = {
+  totalCount: number;
+  uploadedCount: number;
+  pendingCount: number;
+  uploadedEmployees: DocumentCompletionEmployee[];
+  pendingEmployees: (DocumentCompletionEmployee & {
+    missingCategories: { value: EmployeeDocumentCategory; label: string }[];
+  })[];
+};
+
+export const getDocumentCompletionStatsQueryKey = (employmentType: "staff" | "production") =>
+  ["/api/recruitment/employee-documents/completion-stats", employmentType] as const;
+
+export const useDocumentCompletionStats = (employmentType: "staff" | "production") =>
+  useQuery<DocumentCompletionStats>({
+    queryKey: getDocumentCompletionStatsQueryKey(employmentType),
+    queryFn: () =>
+      customFetch<DocumentCompletionStats>(
+        `/api/recruitment/employee-documents/completion-stats?employmentType=${employmentType}`,
       ),
   });
 

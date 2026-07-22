@@ -24,6 +24,7 @@ from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
+from django.db import transaction
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.request import Request
@@ -31,6 +32,7 @@ from rest_framework.response import Response
 
 from .auth import require_hr
 from .branch_scope import scope_to_branch
+from .permission_registry import resolve_permission
 from .models import (
     Advance,
     AdvanceRepayment,
@@ -478,8 +480,18 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
     # effective_days = sum of shifts_completed for present days + paid leave days
     # (half shift days contribute 0.5 instead of 1.0)
     effective_days = effective_present + Decimal(str(paid_leave_count))
-    daily_rate = _d2(emp.salary_amount / Decimal(str(total_working_days)))
-    base_gross = _d2(daily_rate * effective_days)
+    # Keep full precision through the division AND the multiplication —
+    # rounding the daily rate first (then multiplying back by the same
+    # working-days count) silently loses a few paise per day, so a fully
+    # present employee's gross salary came out short of their actual
+    # configured salary_amount (e.g. 8000/26=307.6923..., rounded to
+    # 307.69, x26 = 7999.94 instead of exactly 8000). Round only the final
+    # result, once. `daily_rate` (rounded) is kept for display/breakdown
+    # and the late-penalty calc below — those are fine to round, since
+    # neither one needs to algebraically reconstruct the full salary.
+    daily_rate_exact = emp.salary_amount / Decimal(str(total_working_days))
+    base_gross = _d2(daily_rate_exact * effective_days)
+    daily_rate = _d2(daily_rate_exact)
 
     # Basic = 50% of full monthly salary (not prorated — this is the component base)
     basic_full = _d2(emp.salary_amount * Decimal("0.50"))
@@ -1076,109 +1088,11 @@ def attendance_logs(request: Request) -> Response:
     return Response(_att_log_json(log), status=201)
 
 
-@api_view(["POST"])
-@parser_classes([MultiPartParser, FormParser])
-@require_hr
-def upload_attendance_excel(request: Request) -> Response:
-    """
-    Parse an Excel file with columns:
-      Employee ID | Employee Name | Date | Time | Type
-    """
-    file = request.FILES.get("file")
-    if not file:
-        return _error("No file uploaded. Send as multipart/form-data with key 'file'.")
-    try:
-        import openpyxl
-        wb = openpyxl.load_workbook(io.BytesIO(file.read()), data_only=True)
-        ws = wb.active
-        rows = list(ws.iter_rows(values_only=True))
-    except Exception as e:
-        return _error(f"Failed to read Excel: {e}")
-
-    if not rows:
-        return _error("The uploaded file is empty.")
-
-    columns = [str(c).strip().lower().replace(" ", "_") if c is not None else "" for c in rows[0]]
-    id_col = next((i for i, c in enumerate(columns) if "employee" in c and "id" in c), None)
-    date_col = next((i for i, c in enumerate(columns) if "date" in c), None)
-    time_col = next((i for i, c in enumerate(columns) if "time" in c), None)
-    type_col = next((i for i, c in enumerate(columns) if "type" in c), None)
-
-    if any(c is None for c in [id_col, date_col, time_col, type_col]):
-        return _error(
-            f"Could not find required columns. Detected: {[c for c in columns if c]}. "
-            "Expected: Employee ID, Date, Time, Type"
-        )
-
-    created = 0
-    skipped = 0
-    errors = []
-
-    def cell(row, i):
-        return row[i] if i < len(row) else None
-
-    for idx, row in enumerate(rows[1:], start=2):
-        if not row or all(c is None or str(c).strip() == "" for c in row):
-            continue
-        try:
-            emp_id = int(cell(row, id_col))
-            emp = Employee.objects.filter(id=emp_id).first()
-            if not emp:
-                errors.append(f"Row {idx}: Employee ID {emp_id} not found.")
-                skipped += 1
-                continue
-
-            raw_date_val = cell(row, date_col)
-            if isinstance(raw_date_val, datetime):
-                log_date = raw_date_val.date()
-            elif isinstance(raw_date_val, date):
-                log_date = raw_date_val
-            else:
-                raw_date = str(raw_date_val).strip()
-                for fmt in ("%d-%m-%Y", "%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"):
-                    try:
-                        log_date = datetime.strptime(raw_date, fmt).date()
-                        break
-                    except ValueError:
-                        continue
-                else:
-                    errors.append(f"Row {idx}: Cannot parse date '{raw_date}'.")
-                    skipped += 1
-                    continue
-
-            raw_time_val = cell(row, time_col)
-            if isinstance(raw_time_val, time):
-                punch_time_val = raw_time_val
-            elif isinstance(raw_time_val, datetime):
-                punch_time_val = raw_time_val.time()
-            else:
-                raw_time = str(raw_time_val).strip()
-                if ":" not in raw_time:
-                    raw_time = raw_time[:2] + ":" + raw_time[2:]
-                punch_time_val = time.fromisoformat(raw_time[:5])
-
-            punch_type = str(cell(row, type_col) or "").strip().upper()
-            if punch_type not in ("IN", "OUT"):
-                punch_type = "IN"
-
-            AttendanceLog.objects.create(
-                employee=emp,
-                date=log_date,
-                punch_time=punch_time_val,
-                punch_type=punch_type,
-                source="excel",
-            )
-            created += 1
-        except Exception as e:
-            errors.append(f"Row {idx}: {e}")
-            skipped += 1
-
-    return Response({
-        "message": f"Imported {created} punch logs, skipped {skipped}.",
-        "created": created,
-        "skipped": skipped,
-        "errors": errors[:20],
-    }, status=201)
+# Manual Excel-import of attendance punches now lives in
+# manual_attendance_import_views.py (routed at attendance/manual-import/upload)
+# — it matches by Employee Code rather than internal id, also writes the
+# Attendance presence table, and shares its write path with live biometric
+# sync via biometric_sync._ingest_punches.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1268,6 +1182,93 @@ def payroll_list(request: Request) -> Response:
         row["departmentName"] = emp.department.name if emp.department_id and emp.department else None
         result.append(row)
     return Response(result)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Skip-check preview (read-only, dry-run — reuses the real engines)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _DryRunAbort(Exception):
+    """Internal-only — used purely to force a rollback of a savepoint we
+    always intend to discard, never surfaced to a caller."""
+
+
+def _dry_run_skip_reason(fn, *args) -> str | None:
+    """
+    Call a payroll-generation function inside a transaction that is always
+    rolled back, to discover whether it would succeed or exactly why it
+    would be skipped — without ever persisting anything. Returns None if it
+    would succeed, or the skip/error reason string otherwise.
+    """
+    try:
+        with transaction.atomic():
+            fn(*args)
+            raise _DryRunAbort()
+    except _DryRunAbort:
+        return None
+    except PayrollSkip as e:
+        return str(e)
+    except Exception as e:
+        return str(e)
+
+
+@api_view(["GET"])
+@require_hr
+def payroll_skip_check(request: Request) -> Response:
+    """
+    GET /api/payroll/skip-check?month=&year=&runType=monthly|biweekly&weekNumber=
+    Read-only preview of exactly which active employees Generate Payroll
+    would currently skip, and why. Runs the exact same engine functions
+    generate_payroll uses, each inside its own savepoint that's always
+    rolled back — so this can be called any time, as often as needed,
+    without ever writing to the database. This is what powers the
+    "Skipped Employees" view on the Payroll page — unlike the transient
+    post-generation toast, it works whenever HR wants to check, not only
+    immediately after a run.
+    """
+    month = request.query_params.get("month")
+    year = request.query_params.get("year")
+    run_type = request.query_params.get("runType", "monthly")
+    week_number = request.query_params.get("weekNumber")
+
+    if not month or not year:
+        return _error("month and year are required")
+    try:
+        month, year = int(month), int(year)
+    except ValueError:
+        return _error("month and year must be integers")
+
+    employment_type = (
+        Employee.EMPLOYMENT_TYPE_STAFF if run_type == "monthly"
+        else Employee.EMPLOYMENT_TYPE_PRODUCTION
+    )
+    employees = list(
+        scope_to_branch(Employee.objects, request)
+        .filter(status="active", employment_type=employment_type)
+        .order_by("first_name", "last_name")
+    )
+
+    skipped = []
+    for emp in employees:
+        emp_name = f"{emp.first_name} {emp.last_name}".strip()
+        if run_type == "monthly":
+            reason = _dry_run_skip_reason(_generate_staff_payroll, emp, month, year)
+        else:
+            wk = int(week_number) if week_number else 1
+            reason = _dry_run_skip_reason(_generate_production_payroll, emp, month, year, wk)
+        if reason:
+            skipped.append({
+                "employeeId": emp.id,
+                "employeeCode": emp.employee_code,
+                "name": emp_name,
+                "reason": reason,
+            })
+
+    return Response({
+        "totalChecked": len(employees),
+        "skippedCount": len(skipped),
+        "skipped": skipped,
+    })
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1614,6 +1615,77 @@ def _ps_response(ps) -> dict:
     }
 
 
+# Company/Attendance/Payroll/Salary Slip/SMTP (Settings page tabs) all read
+# and write through this one PayrollSettings record via this one endpoint, so
+# URL_MODULE_MAP can't give them separate permissions (see the comment there).
+# This maps each writable field to the settings.* group(s) that may write it —
+# a tuple because "companyLogo" has upload widgets on both the Company and
+# Salary Slip tabs, so edit access on either is sufficient for that one field.
+FIELD_GROUPS: dict[str, tuple[str, ...]] = {
+    "companyName": ("settings.company",),
+    "companyTagline": ("settings.company",),
+    "companyPhone": ("settings.company",),
+    "companyEmail": ("settings.company",),
+    "companyWebsite": ("settings.company",),
+    "companyGstin": ("settings.company",),
+    "companyPan": ("settings.company",),
+    "companyAddress": ("settings.company",),
+    "companyRegistration": ("settings.company",),
+    "companyLogo": ("settings.company", "settings.salary_slip"),
+    "attendanceMode": ("settings.attendance",),
+    "simpleHalfShiftCutoff": ("settings.attendance",),
+    "prodFirstHalfStart": ("settings.attendance",),
+    "prodFirstHalfEnd": ("settings.attendance",),
+    "prodSecondHalfStart": ("settings.attendance",),
+    "prodSecondHalfEnd": ("settings.attendance",),
+    "prodExtraStart": ("settings.attendance",),
+    "prodExtraEnd": ("settings.attendance",),
+    "nightShiftEnabled": ("settings.attendance",),
+    "pfRate": ("settings.payroll",),
+    "esiRate": ("settings.payroll",),
+    "esiApplicableBelow": ("settings.payroll",),
+    "prodPfRate": ("settings.payroll",),
+    "prodEsiRate": ("settings.payroll",),
+    "prodEsiApplicableBelow": ("settings.payroll",),
+    "payDay": ("settings.payroll",),
+    "productionPayType": ("settings.payroll",),
+    "defaultSalaryPerShift": ("settings.payroll",),
+    "prodPfEfEnabled": ("settings.payroll",),
+    "prodPfEfRules": ("settings.payroll",),
+    "staffPayrollRulesEnabled": ("settings.payroll",),
+    "prodPayrollRulesEnabled": ("settings.payroll",),
+    "slipCompanyName": ("settings.salary_slip",),
+    "slipCompanyAddress": ("settings.salary_slip",),
+    "minWageRate": ("settings.salary_slip",),
+    "signatureImage": ("settings.salary_slip",),
+    "authorizedSignature": ("settings.salary_slip",),
+    "smtpHost": ("settings.smtp",),
+    "smtpPort": ("settings.smtp",),
+    "smtpUsername": ("settings.smtp",),
+    "smtpPassword": ("settings.smtp",),
+    "smtpFromEmail": ("settings.smtp",),
+    "smtpFromName": ("settings.smtp",),
+    "backupDirectory": ("settings.backup",),
+}
+
+
+def _hr_role_permissions(request) -> tuple[dict, bool]:
+    """Returns (role.permissions dict, is_super_admin) for the requesting HR
+    user, resolved fresh from the DB — mirrors the lookup permission_middleware
+    already does, needed here because this one endpoint enforces multiple
+    settings.* permissions itself rather than a single URL-level module_key."""
+    from .models import HRUser
+
+    hr_user_id = request.jwt_user.get("hrUserId") if hasattr(request, "jwt_user") else None
+    hr_user = (
+        HRUser.objects.select_related("role").filter(id=hr_user_id, is_active=True).first()
+        if hr_user_id else None
+    )
+    if hr_user is None:
+        return {}, False
+    return (hr_user.role.permissions if hr_user.role else {}) or {}, hr_user.is_super_admin
+
+
 @api_view(["GET", "PUT"])
 @require_hr
 def payroll_settings_view(request: Request) -> Response:
@@ -1623,6 +1695,24 @@ def payroll_settings_view(request: Request) -> Response:
         return Response(_ps_response(ps))
 
     data = request.data
+
+    permissions, is_super_admin = _hr_role_permissions(request)
+    if not is_super_admin:
+        denied_fields = [
+            key for key in data
+            if key in FIELD_GROUPS
+            and not any(resolve_permission(permissions, group) == "edit" for group in FIELD_GROUPS[key])
+        ]
+        if denied_fields:
+            return Response(
+                {
+                    "error": "permission_denied",
+                    "message": "You do not have edit access to this settings section.",
+                    "fields": denied_fields,
+                },
+                status=403,
+            )
+
     field_map = {
         "companyName": ("company_name", str),
         "companyTagline": ("company_tagline", str),

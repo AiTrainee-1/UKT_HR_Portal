@@ -165,8 +165,8 @@ export function StaffCardBack({ card, qr }: { card: IdCardData; qr?: string }) {
   return (
     <div className={`idcard w-[240px] h-[380px] bg-white overflow-hidden shadow-lg border flex flex-col shrink-0 ${rounded ? "rounded-2xl" : "rounded-none"}`} style={{ fontFamily: font }}>
       <div className="h-2.5" style={{ background: `linear-gradient(90deg, ${secondary}, ${primary})` }} />
-      <div className="flex-1 px-4 pt-3 space-y-2">
-        <div className="space-y-1 text-[9px]">
+      <div className="flex-1 flex flex-col px-4 pt-3">
+        <div className="space-y-1 text-[9px] shrink-0">
           {[
             { icon: Droplets, k: "Blood Group", v: card.bloodGroup ?? "—" },
             { icon: Cake, k: "Date of Birth", v: card.dateOfBirth ?? "—" },
@@ -178,26 +178,34 @@ export function StaffCardBack({ card, qr }: { card: IdCardData; qr?: string }) {
               <span className="ml-auto font-bold text-gray-900 text-right">{v}</span>
             </div>
           ))}
-          <div className="flex items-start gap-1.5 pb-0.5">
-            <MapPin size={9} style={{ color: primary }} className="shrink-0 mt-0.5" />
-            <span className="text-gray-400 font-semibold shrink-0">Address</span>
-            <span className="ml-auto font-semibold text-gray-800 text-right leading-tight line-clamp-3">
-              {card.address ?? "—"}
-            </span>
-          </div>
         </div>
 
+        {/* Address — its own centered block with room to breathe, not squeezed
+            into a right-aligned single line like the rows above. */}
+        <div className="shrink-0 pt-2 pb-2 border-b border-dashed border-gray-200 text-center">
+          <div className="flex items-center justify-center gap-1 mb-1">
+            <MapPin size={9} style={{ color: primary }} />
+            <span className="text-[7.5px] text-gray-400 font-semibold uppercase tracking-[0.1em]">Address</span>
+          </div>
+          <p className="text-[9.5px] font-semibold text-gray-800 leading-relaxed px-1">
+            {card.address ?? "—"}
+          </p>
+        </div>
+
+        {/* Fills the remaining space (previously left blank at the bottom of
+            the card) and centers the QR within it, instead of the QR sitting
+            immediately under the address with a gap left unused below. */}
         {showQr && (
-          <div className="flex flex-col items-center pt-0.5">
+          <div className="flex-1 flex flex-col items-center justify-center min-h-0">
             {qr ? <img src={qr} className="w-20 h-20" alt="QR" /> : <div className="w-20 h-20 bg-gray-100 rounded" />}
-            <p className="text-[7px] text-gray-400 font-semibold mt-0.5">SCAN TO VERIFY EMPLOYEE</p>
+            <p className="text-[7px] text-gray-400 font-semibold mt-1">SCAN TO VERIFY EMPLOYEE</p>
           </div>
         )}
 
-        <div className="text-[7px] text-gray-500 leading-snug">
+        <div className="text-[7px] text-gray-500 leading-snug shrink-0 pb-1">
           <p className="font-bold text-gray-600 mb-0.5">INSTRUCTIONS</p>
           <p>• This card must be worn visibly inside company premises.</p>
-          <p>• Card is company property — return on exit/resignation.</p>
+          <p>• Card is company property - return on exit/resignation.</p>
           <p>• If found, please return to {card.company.name}, {card.company.address}.</p>
           {footerText && <p className="italic">{footerText}</p>}
         </div>

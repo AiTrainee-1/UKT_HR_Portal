@@ -469,9 +469,12 @@ def biometric_punch(request: Request) -> Response:
     if not person_id or not punch_time_raw:
         return Response({"error": "personId and time are required"}, status=400)
 
-    emp = Employee.objects.filter(
-        Q(employee_code=str(person_id)) | Q(id=str(person_id))
-    ).first()
+    # Employee Code ONLY — the code enrolled on the device IS the Employee
+    # Code in this company, always. This used to also fall back to the
+    # internal database row id, which could silently attribute a punch to a
+    # completely different person whenever a code happened to collide with
+    # another employee's row id (e.g. code "73" vs db id 73). Never again.
+    emp = Employee.objects.filter(employee_code=str(person_id).strip()).first()
     if not emp:
         return Response({"error": f"Employee '{person_id}' not found"}, status=404)
 

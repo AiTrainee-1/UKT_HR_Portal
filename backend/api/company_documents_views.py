@@ -181,7 +181,7 @@ def build_offer_letter_pdf(emp: Employee, opts: dict) -> bytes:
     if emp.address:
         story.append(Paragraph(emp.address, st["body"]))
     story.append(Spacer(1, 0.25 * cm))
-    story.append(Paragraph(f"<b>Subject: Offer of Employment — {desig_title}</b>", st["bodyBold"]))
+    story.append(Paragraph(f"<b>Subject: Offer of Employment - {desig_title}</b>", st["bodyBold"]))
     story.append(Spacer(1, 0.3 * cm))
 
     story.append(Paragraph(f"Dear {emp.first_name},", st["body"]))
@@ -737,23 +737,19 @@ def _compact_salary_slip_flowables(s: SalarySlip, ds: CompanyDocumentSettings, p
         colWidths=[CW * 0.19, CW * 0.31, CW * 0.19, CW * 0.31],
     )
     info_table.setStyle(TableStyle([
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
         ("LINEBELOW", (0, 0), (-1, -2), 0.3, colors.HexColor("#e5e7eb")),
     ]))
     story.append(info_table)
-    story.append(Spacer(1, 0.3 * cm))
+    story.append(Spacer(1, 0.22 * cm))
 
     earn_rows = [
         ["Earnings", "Amount"],
         ["Basic Pay", rupee(s.basic)],
-        ["DA", rupee(0)],
         ["HRA", rupee(s.hra)],
-        ["CA", rupee(0)],
-        ["EA", rupee(0)],
         ["Other Allowances", rupee(other_allowances)],
         ["OT Wages", rupee(s.ot_amount)],
-        ["PTRL", rupee(0)],
         ["Total Earnings", rupee(s.gross_salary)],
     ]
     ded_rows = [
@@ -761,9 +757,6 @@ def _compact_salary_slip_flowables(s: SalarySlip, ds: CompanyDocumentSettings, p
         ["P.F", rupee(s.pf_deduction)],
         ["E.S.I", rupee(s.esi_deduction)],
         ["Advance", rupee(s.advance_deduction)],
-        ["T.Advance", rupee(0)],
-        ["TDS", rupee(0)],
-        ["LOP", rupee(0)],
         ["Other Deductions", rupee(s.other_deductions)],
         ["Total Deductions", rupee(s.total_deductions)],
     ]
@@ -809,8 +802,8 @@ def _compact_salary_slip_flowables(s: SalarySlip, ds: CompanyDocumentSettings, p
         ("FONTSIZE", (0, 0), (-1, -1), 8),
         ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#4b5563")),
         ("RIGHTPADDING", (0, 0), (0, -1), 6),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.5),
     ]))
 
     if balances:

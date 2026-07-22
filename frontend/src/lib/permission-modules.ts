@@ -28,10 +28,12 @@ export const MODULE_TREE: ModuleNode[] = [
   { key: "id_cards", label: "ID Cards" },
   {
     key: "recruitment", label: "Recruitment", children: [
+      { key: "recruitment.new_joinees", label: "New Joinees" },
       { key: "recruitment.resignations", label: "Resignations" },
       { key: "recruitment.required_roles", label: "Required Roles" },
       { key: "recruitment.interviews", label: "Interviews" },
       { key: "recruitment.resume_screening", label: "Resume Screening" },
+      { key: "recruitment.documents", label: "Documents" },
     ],
   },
   { key: "payroll", label: "Payroll" },
@@ -44,7 +46,18 @@ export const MODULE_TREE: ModuleNode[] = [
   { key: "chat", label: "Chat" },
   { key: "notifications", label: "Notifications" },
   { key: "night_shift", label: "Night Shift" },
-  { key: "settings", label: "Settings" },
+  {
+    key: "settings", label: "Settings", children: [
+      { key: "settings.company", label: "Company" },
+      { key: "settings.attendance", label: "Attendance" },
+      { key: "settings.devices", label: "Devices" },
+      { key: "settings.documents", label: "Company Documents" },
+      { key: "settings.payroll", label: "Payroll" },
+      { key: "settings.salary_slip", label: "Salary Slip" },
+      { key: "settings.smtp", label: "SMTP / Email" },
+      { key: "settings.backup", label: "Backup" },
+    ],
+  },
 ];
 
 export function allModuleKeys(): string[] {
@@ -75,6 +88,33 @@ export function resolvePermission(
   return "hidden";
 }
 
+/**
+ * Like resolvePermission, but for a parent module with children that all
+ * live on one shared route (e.g. "settings" — its tabs have no routes of
+ * their own, unlike Employees/Recruitment's children which do). A parent
+ * whose own bare key is unset ("hidden") but that has at least one visible
+ * child should still be reachable, otherwise granting only e.g.
+ * "settings.payroll" would leave the whole /hr/settings page unreachable —
+ * defeating the point of the per-tab permission. Employees/Recruitment don't
+ * need this: their sidebar entries branch on `item.children` before ever
+ * checking the parent's own moduleKey (see dashboard-sidebar.tsx), and each
+ * child has its own route. Safe to use in place of resolvePermission for any
+ * single-route parent — for keys with no MODULE_TREE children, it's
+ * identical to resolvePermission.
+ */
+export function resolvePermissionOrChildren(
+  permissions: Record<string, PermissionLevel> | undefined,
+  key: string,
+): PermissionLevel {
+  const direct = resolvePermission(permissions, key);
+  if (direct !== "hidden") return direct;
+  const node = MODULE_TREE.find((n) => n.key === key);
+  const childLevel = (node?.children ?? [])
+    .map((c) => resolvePermission(permissions, c.key))
+    .find((lvl) => lvl !== "hidden");
+  return childLevel ?? "hidden";
+}
+
 /** Frontend HR route -> module_key mapping (dotted for real submodules). */
 export const ROUTE_MODULE_MAP: Record<string, string> = {
   "/hr/dashboard": "dashboard",
@@ -91,9 +131,11 @@ export const ROUTE_MODULE_MAP: Record<string, string> = {
   "/hr/increment": "increment",
   "/hr/bonus": "bonus",
   "/hr/id-cards": "id_cards",
+  "/hr/recruitment/new-joinees": "recruitment.new_joinees",
   "/hr/recruitment/resignations": "recruitment.resignations",
   "/hr/recruitment/required-roles": "recruitment.required_roles",
   "/hr/recruitment/resume-screening": "recruitment.resume_screening",
+  "/hr/recruitment/documents": "recruitment.documents",
   "/hr/interviews": "recruitment.interviews",
   "/hr/recruitment": "recruitment",
   "/hr/payroll": "payroll",

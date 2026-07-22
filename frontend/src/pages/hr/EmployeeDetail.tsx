@@ -14,7 +14,9 @@ import {
 } from "@/lib/api-client";
 import {
   useIdCards, useAttendanceEmployeeHistory, previewDocumentPdf, downloadDocumentPdf,
+  useEmployeeDocuments, EMPLOYEE_DOCUMENT_CATEGORIES,
 } from "@/lib/api-client/custom-hooks";
+import { Link } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   StaffCardFront, StaffCardBack, ProductionCardFront, ProductionCardBack, useQrCodes,
@@ -24,7 +26,7 @@ import { Label } from "@/components/ui/label";
 import {
   ArrowLeft, Phone, Mail, MapPin, CreditCard, Building, Calendar, Droplets,
   ShieldAlert, Cake, Download, CalendarCheck, CalendarX, CalendarDays, Briefcase, User,
-  FileSignature, Award, Eye,
+  FileSignature, Award, Eye, FolderOpen, ExternalLink,
 } from "lucide-react";
 import Loader from "@/components/Loader";
 import EmployeeAvatar from "@/components/EmployeeAvatar";
@@ -48,6 +50,7 @@ export default function EmployeeDetail() {
     empId || null, now.getMonth() + 1, now.getFullYear(),
   );
   const { data: leaveRequests } = useListLeaveRequests({ employeeId: empId } as never);
+  const { data: uploadedDocuments } = useEmployeeDocuments(empId || null);
 
   const { token } = useAuth();
   const cardRef = useRef<HTMLDivElement>(null);
@@ -291,6 +294,58 @@ export default function EmployeeDetail() {
                 </Button>
               </div>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Uploaded Documents — read-only here; upload/delete happens on the dedicated Documents page */}
+        <Card>
+          <CardHeader className="pb-3 flex flex-row items-center justify-between">
+            <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+              <FolderOpen size={15} />Uploaded Documents
+            </CardTitle>
+            <Link href="/hr/recruitment/documents" className="text-xs text-indigo-600 hover:text-indigo-700 flex items-center gap-1">
+              Manage <ExternalLink size={12} />
+            </Link>
+          </CardHeader>
+          <CardContent>
+            {!uploadedDocuments || uploadedDocuments.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-2">
+                No documents uploaded yet. Use the Documents page to add PAN, Aadhaar, certificates, and more.
+              </p>
+            ) : (
+              <div className="grid sm:grid-cols-2 gap-2">
+                {EMPLOYEE_DOCUMENT_CATEGORIES.map(({ value, label }) => {
+                  const files = uploadedDocuments.filter(d => d.category === value);
+                  if (files.length === 0) return null;
+                  return (
+                    <div key={value} className="rounded-lg border p-3">
+                      <p className="text-xs font-semibold text-gray-700 mb-1.5">{label} ({files.length})</p>
+                      <div className="space-y-1">
+                        {files.map(doc => (
+                          <div key={doc.id} className="flex items-center gap-2 text-xs">
+                            <span className="flex-1 truncate text-muted-foreground">{doc.originalFilename}</span>
+                            <button
+                              onClick={() => previewDocumentPdf(doc.fileUrl, () => token)}
+                              className="p-1 rounded hover:bg-gray-100 text-gray-500"
+                              title="View"
+                            >
+                              <Eye size={12} />
+                            </button>
+                            <button
+                              onClick={() => downloadDocumentPdf(doc.fileUrl, () => token)}
+                              className="p-1 rounded hover:bg-gray-100 text-gray-500"
+                              title="Download"
+                            >
+                              <Download size={12} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </CardContent>
         </Card>
 

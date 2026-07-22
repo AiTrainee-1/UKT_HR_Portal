@@ -47,6 +47,11 @@ from .resume_screening_views import (
     candidates, candidate_detail, candidate_resume,
     reject_email_all, interview_invite_single, interview_invite_bulk,
 )
+from .employee_documents_views import (
+    employee_documents, upload_employee_document,
+    delete_employee_document, employee_document_file, my_documents,
+    document_completion_stats,
+)
 from .manager_views import (
     department_managers, department_manager_detail,
     manager_department_assignments, manager_employee_assignments,
@@ -86,11 +91,13 @@ from .night_shift_views import (
 )
 from .payroll_views import (
     session_configs, session_config_detail,
-    attendance_logs, upload_attendance_excel, process_punch_sessions,
+    attendance_logs, process_punch_sessions,
     work_sessions, work_session_detail,
     payroll_list, generate_payroll, generate_payroll_progress, payroll_detail, payroll_breakdown,
+    payroll_skip_check,
     seed_attendance, payroll_settings_view,
 )
+from .manual_attendance_import_views import export_punch_records, import_punch_excel
 from .chat_views import (
     chat_channels, chat_messages, chat_message_reactions,
 )
@@ -119,6 +126,7 @@ urlpatterns = [
     path("employees/<int:pk>", views.employee_detail),
     path("employees/<int:pk>/status", views.employee_status),
     path("employees/bulk-upload", views.bulk_upload_employees),
+    path("employees/bulk-update", views.bulk_update_employees),
 
     # ── Shift Management ────────────────────────────────────────────────────
     path("shifts", shift_templates),
@@ -166,6 +174,7 @@ urlpatterns = [
     path("salary-slips/<int:pk>/email", email_salary_slip),
     path("salary-slips/<int:pk>/pdf", salary_slip_pdf),
     path("my/salary-slips", employee_salary_slips),
+    path("my/documents", my_documents),
 
     # ── Company Documents (Offer Letter / Experience Letter / Salary Slip theming) ──
     path("document-settings", document_settings_list),
@@ -206,6 +215,11 @@ urlpatterns = [
     path("recruitment/resume-screening/candidates/<int:pk>/interview-invite", interview_invite_single),
     path("recruitment/resume-screening/candidates/reject-email-all", reject_email_all),
     path("recruitment/resume-screening/candidates/interview-invite-bulk", interview_invite_bulk),
+    path("recruitment/employee-documents/completion-stats", document_completion_stats),
+    path("recruitment/employee-documents/<int:employee_id>", employee_documents),
+    path("recruitment/employee-documents/<int:employee_id>/upload", upload_employee_document),
+    path("employee-documents/<int:pk>", delete_employee_document),
+    path("employee-documents/<int:pk>/file", employee_document_file),
     path("my/resignation", my_resignation),
     path("manager/resignations", manager_pending_resignations),
     path("manager/resignations/<int:pk>/action", manager_resignation_action),
@@ -219,6 +233,8 @@ urlpatterns = [
     path("attendance/manual", manual_attendance),
     path("attendance/sync-biometric", sync_biometric_api),
     path("attendance/sync-biometric-progress", sync_biometric_progress),
+    path("attendance/manual-import/export", export_punch_records),
+    path("attendance/manual-import/upload", import_punch_excel),
     path("attendance/report-log", attendance_report_log),
     path("attendance/compute-shifts", compute_shift_logs),
     path("attendance/late-summary", attendance_late_summary),
@@ -270,12 +286,12 @@ urlpatterns = [
     path("session-configs", session_configs),
     path("session-configs/<int:pk>", session_config_detail),
     path("attendance-logs", attendance_logs),
-    path("attendance-logs/upload-excel", upload_attendance_excel),
     path("attendance-logs/process-sessions", process_punch_sessions),
     path("attendance-logs/seed", seed_attendance),
     path("work-sessions", work_sessions),
     path("work-sessions/<int:pk>", work_session_detail),
     path("payroll", payroll_list),
+    path("payroll/skip-check", payroll_skip_check),
     path("payroll/generate", generate_payroll),
     path("payroll/generate-progress", generate_payroll_progress),
     path("payroll/<int:pk>/breakdown", payroll_breakdown),

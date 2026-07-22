@@ -13,12 +13,16 @@ it hierarchy: setting "employees"="edit" cascades to every "employees.*"
 child unless that child has its own explicit entry overriding it. This keeps
 the stored JSON simple while still supporting per-submodule overrides.
 
-Not every sidebar group has been split into submodules — only Employees and
-Recruitment currently have children with genuinely separate REST endpoints
-(see URL_MODULE_MAP). Others (e.g. Attendance's Staff/Production/Report Log
-pages) share the same underlying endpoints distinguished by query params
-rather than URL path, so the API can't enforce a per-tab split without a
-view-level change; they stay single-level for now.
+Not every sidebar group has been split into submodules — only Employees,
+Recruitment, and Settings currently have children with genuinely separate
+REST endpoints or (for Settings' Company/Attendance/Payroll/Salary Slip/SMTP
+tabs) a view-level field-group check (see payroll_views.py::FIELD_GROUPS —
+those five tabs share one PayrollSettings record/endpoint, so URL-level
+gating alone can't split them; the view itself checks which settings.* group
+each submitted field belongs to). Others (e.g. Attendance's Staff/Production/
+Report Log pages) share the same underlying endpoints distinguished by query
+params rather than URL path, so the API can't enforce a per-tab split without
+similar view-level work; they stay single-level for now.
 """
 
 MODULE_TREE: list[dict] = [
@@ -38,10 +42,12 @@ MODULE_TREE: list[dict] = [
     {"key": "bonus", "label": "Bonus"},
     {"key": "id_cards", "label": "ID Cards"},
     {"key": "recruitment", "label": "Recruitment", "children": [
+        {"key": "recruitment.new_joinees", "label": "New Joinees"},
         {"key": "recruitment.resignations", "label": "Resignations"},
         {"key": "recruitment.required_roles", "label": "Required Roles"},
         {"key": "recruitment.interviews", "label": "Interviews"},
         {"key": "recruitment.resume_screening", "label": "Resume Screening"},
+        {"key": "recruitment.documents", "label": "Documents"},
     ]},
     {"key": "payroll", "label": "Payroll"},
     {"key": "salary", "label": "Salary"},
@@ -53,7 +59,16 @@ MODULE_TREE: list[dict] = [
     {"key": "chat", "label": "Chat"},
     {"key": "notifications", "label": "Notifications"},
     {"key": "night_shift", "label": "Night Shift"},
-    {"key": "settings", "label": "Settings"},
+    {"key": "settings", "label": "Settings", "children": [
+        {"key": "settings.company", "label": "Company"},
+        {"key": "settings.attendance", "label": "Attendance"},
+        {"key": "settings.devices", "label": "Devices"},
+        {"key": "settings.documents", "label": "Company Documents"},
+        {"key": "settings.payroll", "label": "Payroll"},
+        {"key": "settings.salary_slip", "label": "Salary Slip"},
+        {"key": "settings.smtp", "label": "SMTP / Email"},
+        {"key": "settings.backup", "label": "Backup"},
+    ]},
 ]
 
 
@@ -116,9 +131,12 @@ URL_MODULE_MAP: dict[str, str] = {
     "idcard-settings": "id_cards",
     "verify-employee": "id_cards",
 
+    "recruitment/new-joinees": "recruitment.new_joinees",
     "recruitment/resignations": "recruitment.resignations",
     "recruitment/department-headcount": "recruitment.required_roles",
     "recruitment/resume-screening": "recruitment.resume_screening",
+    "recruitment/employee-documents": "recruitment.documents",
+    "employee-documents": "recruitment.documents",
     "interviews": "recruitment.interviews",
     "recruitment": "recruitment",
     "jobs": "recruitment",
@@ -150,11 +168,21 @@ URL_MODULE_MAP: dict[str, str] = {
 
     "notifications": "notifications",
 
-    "payroll-settings": "settings",
-    "biometric-devices": "settings",
-    "production-shift-config": "settings",
-    "production-shift-segments": "settings",
-    "backup": "settings",
+    # "payroll-settings" (Settings → Company/Attendance/Payroll/Salary Slip/
+    # SMTP tabs) is deliberately absent here — those five tabs write to one
+    # shared PayrollSettings record via one endpoint, so a single URL-level
+    # module_key can't separate them. payroll_settings_view() does its own
+    # per-field settings.* permission check instead (see FIELD_GROUPS in
+    # payroll_views.py). GET stays in ALWAYS_READABLE_GET_PREFIXES below,
+    # same as before.
+    "biometric-devices": "settings.devices",
+    "production-shift-config": "settings.attendance",
+    "production-shift-segments": "settings.attendance",
+    "document-settings": "settings.documents",
+    "backup": "settings.backup",
+    # idcard-settings (Settings → ID Card tab) intentionally maps to "id_cards"
+    # above, not a settings.* key — it's the same permission that already
+    # governs the ID Cards feature page, not a separate Settings concern.
 }
 
 

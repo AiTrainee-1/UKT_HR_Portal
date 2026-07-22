@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import ConnectivityOverlay from "@/components/ConnectivityOverlay";
-import { AuthProvider, useAuth, canView } from "@/contexts/AuthContext";
+import { AuthProvider, useAuth, canViewPage } from "@/contexts/AuthContext";
 import { moduleForPath } from "@/lib/permission-modules";
 import { ApiError } from "@/lib/api-client/custom-fetch";
 import { toast } from "@/hooks/use-toast";
@@ -32,6 +32,7 @@ import HrDashboard from "@/pages/hr/Dashboard";
 import Employees from "@/pages/hr/Employees";
 import NewEmployee from "@/pages/hr/NewEmployee";
 import BulkUploadEmployees from "@/pages/hr/BulkUploadEmployees";
+import ManualPunchImport from "@/pages/hr/ManualPunchImport";
 import EmployeeDetail from "@/pages/hr/EmployeeDetail";
 import EditEmployee from "@/pages/hr/EditEmployee";
 import Leave from "@/pages/hr/Leave";
@@ -43,6 +44,7 @@ import NewJoinees from "@/pages/hr/recruitment/NewJoinees";
 import Resignations from "@/pages/hr/recruitment/Resignations";
 import RequiredRoles from "@/pages/hr/recruitment/RequiredRoles";
 import ResumeScreening from "@/pages/hr/recruitment/ResumeScreening";
+import Documents from "@/pages/hr/recruitment/Documents";
 import Attendance from "@/pages/hr/Attendance";
 import AttendanceReportLog from "@/pages/hr/AttendanceReportLog";
 import Departments from "@/pages/hr/Departments";
@@ -165,7 +167,7 @@ function ProtectedRoute({
   // this just avoids flashing a broken page if a restricted user hits the
   // URL directly (e.g. from a stale bookmark after their access changed).
   const moduleKey = moduleForPath(location);
-  if (moduleKey && !canView(user, moduleKey)) {
+  if (moduleKey && !canViewPage(user, moduleKey)) {
     navigate("/hr/dashboard");
     return null;
   }
@@ -217,6 +219,9 @@ function Router() {
       </Route>
       <Route path="/hr/attendance/report-log">
         {() => <ProtectedRoute component={AttendanceReportLog} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/attendance/manual-import">
+        {() => <ProtectedRoute component={ManualPunchImport} allowedRoles={["hr"]} />}
       </Route>
       <Route path="/hr/attendance/staff">
         {() => <ProtectedRoute component={Attendance} allowedRoles={["hr"]} />}
@@ -304,6 +309,9 @@ function Router() {
       </Route>
       <Route path="/hr/recruitment/resume-screening">
         {() => <ProtectedRoute component={ResumeScreening} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/recruitment/documents">
+        {() => <ProtectedRoute component={Documents} allowedRoles={["hr"]} />}
       </Route>
 
       {/* ── Employee Routes ───────────────────────────────────── */}

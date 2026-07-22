@@ -13,7 +13,7 @@ Two device sources, both supported together:
 """
 
 import os
-from datetime import date as date_type
+from datetime import date as date_type, time as time_type
 
 from .models import Attendance, AttendanceLog, Employee
 
@@ -152,14 +152,12 @@ def get_sync_targets(device_id=None) -> list[dict]:
     return targets
 
 
-def pull_from_device(host: str, port: int, password: int, date_from: date_type | None,
-                      device_label: str = "") -> dict:
-    """
-    Connect to one device, pull attendance, write logs. Returns a summary dict:
-    {"created": int, "skipped": int, "notFound": set[str], "total": int,
-     "suspiciousDays": list[dict]}
-    Raises BiometricSyncError on connection failure.
-    """
+def _connect_and_fetch(host: str, port: int, password: int) -> list:
+    """Connect to one device and pull its raw attendance buffer. Raises
+    BiometricSyncError on connection failure. Used by both the live-sync
+    write path (pull_from_device) and the read-only export path
+    (fetch_records_for_export) — device connection logic lives in exactly
+    one place."""
     try:
         from zk import ZK
     except ImportError:
@@ -170,7 +168,7 @@ def pull_from_device(host: str, port: int, password: int, date_from: date_type |
     try:
         conn = zk.connect()
         conn.disable_device()
-        raw_records = conn.get_attendance()
+        return conn.get_attendance()
     except Exception as exc:
         raise BiometricSyncError(
             f"Could not connect to device at {host}:{port} — {exc}"
@@ -183,41 +181,61 @@ def pull_from_device(host: str, port: int, password: int, date_from: date_type |
             except Exception:
                 pass
 
+
+def _active_employee_lookup() -> dict:
+    """Employee-Code → Employee map of active employees.
+
+    Employee Code is the ONE AND ONLY identifier ever used to match a device
+    punch to an employee. In this company, the code enrolled on the biometric
+    device IS the Employee Code — always, with no exceptions — so no other
+    field (not Biometric Device ID, not name, and NEVER the internal database
+    row id) may participate in matching. A device user_id that doesn't equal
+    an active Employee Code exactly is reported as "not found" rather than
+    guessed, so a punch can never be silently attributed to the wrong person.
+
+    History note: this used to also consult Employee.biometric_device_id as a
+    fallback map, which caused real misattribution when that field held stale
+    or wrong values. That field is now profile information only — it plays no
+    part in attendance matching."""
     active_employees = list(Employee.objects.filter(status="active"))
-    # Employee Code is the ONLY identifier ever used to match a device punch to
-    # an employee — never name, never the internal database row id. A device
-    # user_id must equal either the employee's assigned Biometric Device ID or
-    # their Employee Code, exactly. Anything else is reported as "not found"
-    # rather than guessed, so two different people can never be silently
-    # merged onto one employee record.
-    by_device_id = {
-        str(e.biometric_device_id).strip(): e
-        for e in active_employees if e.biometric_device_id
-    }
-    by_code = {str(e.employee_code): e for e in active_employees}
+    return {str(e.employee_code).strip(): e for e in active_employees}
+
+
+def _ingest_punches(punches: list[tuple[str, date_type, time_type, str]],
+                     date_from: date_type | None, source_tag: str) -> dict:
+    """
+    Write already-resolved punches to AttendanceLog + Attendance. Each punch
+    is (uid, punch_date, punch_time, punch_type) — punch_type must already be
+    AttendanceLog.PUNCH_IN/PUNCH_OUT. This is the single write path shared by
+    live device sync (pull_from_device, status-codes mapped to IN/OUT first)
+    and the manual Excel import (IN/OUT read straight from the sheet) — so
+    the two can never silently diverge in how a punch gets recorded.
+
+    uid is matched against Employee Code ONLY — see _active_employee_lookup
+    for why no other identifier is ever consulted.
+
+    Returns {"created": int, "skipped": int, "notFound": set[str],
+    "suspiciousDays": list[dict]} — "total" is the caller's responsibility
+    since it means something different for a device pull (raw record count)
+    vs an Excel import (uploaded row count).
+    """
+    by_code = _active_employee_lookup()
 
     created = 0
     skipped = 0
     not_found: set[str] = set()
-    source_tag = f"biometric:{device_label}" if device_label else "biometric:essl"
     daily_punch_counts: dict[tuple[int, date_type], int] = {}
 
-    for rec in raw_records:
-        if date_from and rec.timestamp.date() < date_from:
+    for uid, punch_date, punch_time, punch_type in punches:
+        if date_from and punch_date < date_from:
             skipped += 1
             continue
 
-        uid = str(rec.user_id).strip()
-        emp = by_device_id.get(uid) or by_code.get(uid)
-
+        emp = by_code.get(uid)
         if not emp:
             not_found.add(uid)
             skipped += 1
             continue
-
-        punch_date = rec.timestamp.date()
-        punch_time = rec.timestamp.time().replace(microsecond=0)
-        punch_type = _STATUS_MAP.get(rec.status, AttendanceLog.PUNCH_IN)
 
         try:
             _, was_created = AttendanceLog.objects.get_or_create(
@@ -227,7 +245,7 @@ def pull_from_device(host: str, port: int, password: int, date_from: date_type |
         except AttendanceLog.MultipleObjectsReturned:
             # A pre-existing duplicate for this exact punch (shouldn't happen now
             # that the table has a real unique constraint, but never let one bad
-            # row abort every employee after it in this device's sync batch).
+            # row abort every employee after it in this batch).
             was_created = False
         if was_created:
             created += 1
@@ -256,6 +274,65 @@ def pull_from_device(host: str, port: int, password: int, date_from: date_type |
 
     return {
         "created": created, "skipped": skipped,
-        "notFound": not_found, "total": len(raw_records),
-        "suspiciousDays": suspicious,
+        "notFound": not_found, "suspiciousDays": suspicious,
     }
+
+
+def pull_from_device(host: str, port: int, password: int, date_from: date_type | None,
+                      device_label: str = "") -> dict:
+    """
+    Connect to one device, pull attendance, write logs. Returns a summary dict:
+    {"created": int, "skipped": int, "notFound": set[str], "total": int,
+     "suspiciousDays": list[dict]}
+    Raises BiometricSyncError on connection failure.
+    """
+    raw_records = _connect_and_fetch(host, port, password)
+
+    source_tag = f"biometric:{device_label}" if device_label else "biometric:essl"
+    punches = [
+        (
+            str(rec.user_id).strip(),
+            rec.timestamp.date(),
+            rec.timestamp.time().replace(microsecond=0),
+            _STATUS_MAP.get(rec.status, AttendanceLog.PUNCH_IN),
+        )
+        for rec in raw_records
+    ]
+
+    result = _ingest_punches(punches, date_from, source_tag)
+    result["total"] = len(raw_records)
+    return result
+
+
+def fetch_records_for_export(host: str, port: int, password: int,
+                              date_from: date_type | None) -> list[dict]:
+    """
+    Read-only pull for the manual Excel export — does NOT write to
+    AttendanceLog/Attendance, purely for HR to eyeball before deciding
+    whether to import. Uses the exact same employee-matching rules as
+    pull_from_device, so the "Matched" column reflects precisely what a
+    live sync would have matched.
+    """
+    raw_records = _connect_and_fetch(host, port, password)
+    by_code = _active_employee_lookup()
+
+    rows = []
+    for rec in raw_records:
+        punch_date = rec.timestamp.date()
+        if date_from and punch_date < date_from:
+            continue
+        uid = str(rec.user_id).strip()
+        emp = by_code.get(uid)
+        punch_type = _STATUS_MAP.get(rec.status, AttendanceLog.PUNCH_IN)
+        rows.append({
+            "deviceUserId": uid,
+            "employeeCode": emp.employee_code if emp else "",
+            "employeeName": f"{emp.first_name} {emp.last_name}".strip() if emp else "",
+            "matched": emp is not None,
+            "date": punch_date,
+            "time": rec.timestamp.time().replace(microsecond=0),
+            "punchType": "IN" if punch_type == AttendanceLog.PUNCH_IN else "OUT",
+        })
+
+    rows.sort(key=lambda r: (r["employeeCode"] or "￿", r["date"], r["time"]))
+    return rows

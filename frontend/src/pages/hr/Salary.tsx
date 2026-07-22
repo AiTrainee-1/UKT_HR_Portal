@@ -16,12 +16,13 @@ import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Plus, CheckCircle, Cpu, FileSpreadsheet, UploadCloud, RefreshCw, Edit, Trash, Settings, Clock, CreditCard, Layers } from "lucide-react";
+import { Plus, CheckCircle, Cpu, FileSpreadsheet, UploadCloud, RefreshCw, Edit, Trash, Settings, Clock, CreditCard, Layers, Download } from "lucide-react";
 import EmployeeSearchSelect from "@/components/EmployeeSearchSelect";
 import Loader from "@/components/Loader";
 import { customFetch } from "@/lib/api-client/custom-fetch";
 import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
 import PayrollGenerationPipeline from "@/components/PayrollGenerationPipeline";
+import { exportPayrollToExcel } from "@/lib/payrollExcelExport";
 
 // Form schemas
 const manualPunchSchema = z.object({
@@ -421,10 +422,25 @@ export default function Salary() {
           
           <div className="flex flex-wrap gap-2">
             {activeTab === "payroll" && (
-              <Button onClick={() => { setGenMonth(monthFilter); setGenYear(yearFilter); setRunPayrollOpen(true); }} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition duration-200">
-                <Cpu size={16} className="mr-2 animate-pulse" />
-                Generate Period Payroll
-              </Button>
+              <>
+                {groupedPayrolls.length > 0 && (
+                  <Button
+                    variant="outline"
+                    className="gap-2 border-green-600 text-green-700 hover:bg-green-50"
+                    onClick={() => exportPayrollToExcel(
+                      groupedPayrolls,
+                      payrollGroup === "staff" ? "Staff" : "Production",
+                      `${new Date(2000, Number(monthFilter) - 1).toLocaleDateString("en-US", { month: "long" })}_${yearFilter}`,
+                    )}
+                  >
+                    <Download size={16} /> Export to Excel
+                  </Button>
+                )}
+                <Button onClick={() => { setGenMonth(monthFilter); setGenYear(yearFilter); setRunPayrollOpen(true); }} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition duration-200">
+                  <Cpu size={16} className="mr-2 animate-pulse" />
+                  Generate Period Payroll
+                </Button>
+              </>
             )}
             {activeTab === "punches" && (
               <Button onClick={() => setManualPunchOpen(true)} variant="outline" className="border-indigo-200 hover:bg-indigo-50">

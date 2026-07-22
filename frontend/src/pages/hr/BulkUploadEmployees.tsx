@@ -68,6 +68,18 @@ type UploadResult = {
   warnings: string[];
 };
 
+type UpdateResult = {
+  message: string;
+  updated: number;
+  unchanged: number;
+  failed: number;
+  notFound: string[];
+  sampleRowsSkipped?: number;
+  errors: string[];
+  warnings: string[];
+  changes: string[];
+};
+
 /** "Unit1", "Head Office" for a branch-scoped login; "Admin" for the super admin; "AllBranches" for any other unscoped role (MD, Directors, branch-less HR). Used in downloaded filenames so it's obvious whose data a sheet belongs to. */
 function scopeLabel(user: ReturnType<typeof useAuth>["user"]): string {
   if (user?.branchName) return user.branchName.replace(/[^a-zA-Z0-9]+/g, "");
@@ -216,6 +228,11 @@ export default function BulkUploadEmployees() {
   const [invalidTemplate, setInvalidTemplate] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
 
+  const updateFileInputRef = useRef<HTMLInputElement>(null);
+  const [updating, setUpdating] = useState(false);
+  const [updateResult, setUpdateResult] = useState<UpdateResult | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+
   const { data: employees, isLoading: employeesLoading } = useListEmployees();
 
   const pickFile = (f: File | null) => {
@@ -264,6 +281,40 @@ export default function BulkUploadEmployees() {
       toast({ title: "Upload failed", description: err.message, variant: "destructive" });
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleUpdateUpload = async (updateFile: File | null) => {
+    if (!updateFile) return;
+    setUpdating(true);
+    setUpdateResult(null);
+    setUpdateError(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", updateFile);
+      const response = await fetch(`${window.location.origin}/api/employees/bulk-update`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${localStorage.getItem("uk_textile_token")}` },
+        body: formData,
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        if (body.error === "invalid_template") setUpdateError(body.message);
+        else throw new Error(body.message || body.error || "Update failed");
+        return;
+      }
+      setUpdateResult(body as UpdateResult);
+      if (body.updated > 0) {
+        queryClient.invalidateQueries({ queryKey: getListEmployeesQueryKey() });
+        toast({ title: `${body.updated} employee${body.updated === 1 ? "" : "s"} updated` });
+      } else {
+        toast({ title: "No changes found — everything already matches" });
+      }
+    } catch (err: any) {
+      toast({ title: "Update failed", description: err.message, variant: "destructive" });
+    } finally {
+      setUpdating(false);
+      if (updateFileInputRef.current) updateFileInputRef.current.value = "";
     }
   };
 
@@ -502,6 +553,7 @@ export default function BulkUploadEmployees() {
                 "Employee Code and First Name are required for every row; every other column — including Last Name and Phone — can be left blank and filled in later.",
                 "Department, Designation and Branch are matched by name — spell them exactly as they appear in Manage Branch / Departments / Designations.",
                 "Already have employees in the system? Use \"Download Current Employees\" below instead — it's the same sheet with your real data already in it, so you can just add new rows at the bottom.",
+                "Missed or mistyped something for existing employees? Download their Excel below, correct just those cells, and upload it via \"Update Employees\" — no need to redo the whole bulk upload.",
                 "After uploading, review the Created/Failed summary — failed rows list the exact reason, so you can fix just those rows and re-upload only them.",
               ].map((step, i) => (
                 <li key={i} className="flex gap-2.5">
@@ -531,16 +583,119 @@ export default function BulkUploadEmployees() {
                 <CardTitle className="text-base font-bold text-gray-900">Existing Employees</CardTitle>
                 <span className="text-xs text-muted-foreground">({employees?.length ?? 0} records)</span>
               </div>
-              <Button
-                variant="outline" size="sm" className="gap-2"
-                disabled={!employees?.length}
-                onClick={() => employees && downloadCurrentEmployees(employees, user)}
-              >
-                <Download size={13} /> Download Current Employees
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline" size="sm" className="gap-2"
+                  disabled={!employees?.length}
+                  onClick={() => employees && downloadCurrentEmployees(employees, user)}
+                >
+                  <Download size={13} /> Download Current Employees
+                </Button>
+                <input
+                  ref={updateFileInputRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  className="hidden"
+                  onChange={(e) => handleUpdateUpload(e.target.files?.[0] ?? null)}
+                />
+                <Button
+                  size="sm" className="gap-2"
+                  disabled={!employees?.length || updating}
+                  onClick={() => updateFileInputRef.current?.click()}
+                >
+                  <UploadCloud size={13} /> {updating ? "Updating…" : "Update Employees"}
+                </Button>
+              </div>
             </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              To fix or fill in details for employees already in the system: download the Excel, edit only the cells
+              you want to change, then upload it back with <span className="font-semibold">Update Employees</span>.
+              Rows are matched by Employee Code, blank cells never erase existing data, and only fields with new
+              values are written. New employees are ignored here — add those with the Bulk Upload above.
+            </p>
           </CardHeader>
           <CardContent className="p-0">
+            {updateError && (
+              <div className="mx-4 mb-4 rounded-lg border border-red-200 bg-red-50 p-3 flex items-start gap-2.5">
+                <XCircle size={16} className="text-red-600 shrink-0 mt-0.5" />
+                <p className="text-sm text-red-700 font-medium">{updateError}</p>
+              </div>
+            )}
+
+            {updateResult && (
+              <div className="mx-4 mb-4 rounded-xl border border-gray-100 overflow-hidden">
+                <div
+                  className={`px-4 py-3 flex items-center gap-2.5 ${
+                    updateResult.failed === 0 && updateResult.notFound.length === 0
+                      ? "bg-green-50"
+                      : updateResult.updated === 0
+                      ? "bg-red-50"
+                      : "bg-amber-50"
+                  }`}
+                >
+                  {updateResult.failed === 0 && updateResult.notFound.length === 0 ? (
+                    <CheckCircle2 size={18} className="text-green-600 shrink-0" />
+                  ) : updateResult.updated === 0 ? (
+                    <XCircle size={18} className="text-red-600 shrink-0" />
+                  ) : (
+                    <AlertTriangle size={18} className="text-amber-600 shrink-0" />
+                  )}
+                  <p className="text-sm font-semibold text-gray-800">{updateResult.message}</p>
+                </div>
+
+                <div className="grid grid-cols-3 gap-3 p-4">
+                  <div className="rounded-xl border border-green-100 bg-green-50/50 p-3 text-center">
+                    <p className="text-2xl font-black text-green-700 leading-none">{updateResult.updated}</p>
+                    <p className="text-[11px] font-semibold text-green-700/70 uppercase tracking-wide mt-1">Updated</p>
+                  </div>
+                  <div className="rounded-xl border border-gray-100 bg-gray-50/50 p-3 text-center">
+                    <p className="text-2xl font-black text-gray-500 leading-none">{updateResult.unchanged}</p>
+                    <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mt-1">Unchanged</p>
+                  </div>
+                  <div className={`rounded-xl border p-3 text-center ${updateResult.failed + updateResult.notFound.length > 0 ? "border-red-100 bg-red-50/50" : "border-gray-100 bg-gray-50/50"}`}>
+                    <p className={`text-2xl font-black leading-none ${updateResult.failed + updateResult.notFound.length > 0 ? "text-red-700" : "text-gray-400"}`}>
+                      {updateResult.failed + updateResult.notFound.length}
+                    </p>
+                    <p className={`text-[11px] font-semibold uppercase tracking-wide mt-1 ${updateResult.failed + updateResult.notFound.length > 0 ? "text-red-700/70" : "text-gray-400"}`}>
+                      Failed / Not Found
+                    </p>
+                  </div>
+                </div>
+
+                {updateResult.changes.length > 0 && (
+                  <div className="border-t border-gray-100 p-4 space-y-2 max-h-52 overflow-y-auto">
+                    <p className="text-xs font-bold text-green-700 flex items-center gap-1.5">
+                      <CheckCircle2 size={12} /> What changed ({updateResult.changes.length})
+                    </p>
+                    {updateResult.changes.map((c, i) => (
+                      <p key={i} className="text-xs text-gray-600 rounded-lg bg-green-50/60 border border-green-100 px-3 py-2 leading-relaxed">{c}</p>
+                    ))}
+                  </div>
+                )}
+
+                {[...updateResult.notFound, ...updateResult.errors].length > 0 && (
+                  <div className="border-t border-gray-100 p-4 space-y-2 max-h-52 overflow-y-auto">
+                    <p className="text-xs font-bold text-red-700 flex items-center gap-1.5">
+                      <XCircle size={12} /> Rows skipped ({updateResult.notFound.length + updateResult.errors.length})
+                    </p>
+                    {[...updateResult.notFound, ...updateResult.errors].map((e, i) => (
+                      <p key={i} className="text-xs text-red-700 rounded-lg bg-red-50/60 border border-red-100 px-3 py-2 leading-relaxed">{e}</p>
+                    ))}
+                  </div>
+                )}
+
+                {updateResult.warnings.length > 0 && (
+                  <div className="border-t border-gray-100 p-4 space-y-2 max-h-44 overflow-y-auto">
+                    <p className="text-xs font-bold text-amber-700 flex items-center gap-1.5">
+                      <AlertTriangle size={12} /> Warnings ({updateResult.warnings.length})
+                    </p>
+                    {updateResult.warnings.map((w, i) => (
+                      <p key={i} className="text-xs text-amber-700 rounded-lg bg-amber-50/60 border border-amber-100 px-3 py-2 leading-relaxed">{w}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {employeesLoading ? (
               <p className="text-sm text-muted-foreground p-4">Loading…</p>
             ) : !employees?.length ? (

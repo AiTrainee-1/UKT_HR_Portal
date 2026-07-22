@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from "react";
 import { useGetMe, getGetMeQueryKey } from "@/lib/api-client";
 import { useQueryClient } from "@tanstack/react-query";
 import type { PermissionLevel } from "@/lib/api-client/custom-hooks";
-import { resolvePermission } from "@/lib/permission-modules";
+import { resolvePermission, resolvePermissionOrChildren } from "@/lib/permission-modules";
 
 type Role = "hr" | "employee";
 
@@ -34,6 +34,17 @@ export function canView(user: UserInfo | null, moduleKey: string): boolean {
 
 export function canEdit(user: UserInfo | null, moduleKey: string): boolean {
   return permissionLevel(user, moduleKey) === "edit";
+}
+
+// Route-level reachability for a single-page parent module (e.g. "settings",
+// whose tabs share one route with no routes of their own) — true if the
+// user can view/edit the module itself OR any of its MODULE_TREE children.
+// See resolvePermissionOrChildren for why this differs from canView.
+export function canViewPage(user: UserInfo | null, moduleKey: string): boolean {
+  if (!user || user.role !== "hr") return true;
+  if (user.isSuperAdmin) return true;
+  const level = resolvePermissionOrChildren(user.permissions, moduleKey);
+  return level === "view" || level === "edit";
 }
 
 interface AuthContextType {

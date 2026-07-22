@@ -1,5 +1,4 @@
 import { useState } from "react";
-import ExcelJS from "exceljs";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,12 +20,14 @@ import {
   getListPayrollRunsQueryKey, getSessionConfigsQueryKey,
   type PayrollRunItem, type PayrollBreakdown, type SessionConfigItem,
 } from "@/lib/api-client";
+import { usePayrollSkipCheck } from "@/lib/api-client/custom-hooks";
 import { useQueryClient } from "@tanstack/react-query";
+import { exportPayrollToExcel } from "@/lib/payrollExcelExport";
 import {
   IndianRupee, Play, Lock, CheckCircle2, Clock, Users,
   TrendingUp, ChevronDown, ChevronUp, AlertCircle, Info,
   Factory, UserCheck, Settings, Plus, Trash2, Edit, X,
-  CalendarDays, ArrowRight, Download, Search,
+  CalendarDays, ArrowRight, Download, Search, AlertTriangle, RefreshCcw,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -46,100 +47,6 @@ const STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
   approved: { label: "Approved", cls: "bg-blue-50 text-blue-700 border-blue-200" },
   locked:   { label: "Locked",   cls: "bg-purple-50 text-purple-700 border-purple-200" },
 };
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Excel Export — Bank Transfer Format (styled with exceljs)
-// ─────────────────────────────────────────────────────────────────────────────
-
-async function exportPayrollToExcel(
-  runs: PayrollRunItem[],
-  sheetLabel: string,
-  monthYear: string,
-) {
-  const wb = new ExcelJS.Workbook();
-  wb.creator = "UKTextiles HRMS";
-  const ws = wb.addWorksheet(sheetLabel.substring(0, 31));
-
-  // Column definitions — widths match the bank template
-  ws.columns = [
-    { key: "A", width: 18 },  // Txn type
-    { key: "B", width: 22 },  // Beneficiary Code
-    { key: "C", width: 24 },  // Bene A/c No
-    { key: "D", width: 14 },  // Amount
-    { key: "E", width: 32 },  // Beneficiary Name
-    { key: "F", width: 16 },  // IFSC code
-    { key: "G", width: 30 },  // Bene Bank Name
-    { key: "H", width: 30 },  // Bene Bank Branch Name
-    { key: "I", width: 32 },  // Bene Email ID
-  ];
-
-  const GREEN  = "FF5B8C00";   // olive-green matching the image
-  const WHITE  = "FFFFFFFF";
-  const RED    = "FFFF0000";   // Amount header is red in the template
-
-  const styleHeader = (cell: ExcelJS.Cell, isAmount = false) => {
-    cell.fill      = { type: "pattern", pattern: "solid", fgColor: { argb: GREEN } };
-    cell.font      = { bold: true, color: { argb: isAmount ? RED : WHITE } };
-    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-  };
-  const styleData = (cell: ExcelJS.Cell) => {
-    cell.alignment = { horizontal: "center", vertical: "middle" };
-  };
-
-  // ── Row 1: Header labels ─────────────────────────────────────────────────
-  const HEADERS = [
-    "TXN TYPE\nRTGS-R\nNEFT-N\nHDFC TRF-I\nIMPS - M(1)",
-    "BENEFICIARY CODE\n(MANDATORY ONLY FOR\nTXN TYPE \"I\")\n(13)",
-    "BENE A/C NO\n(25)",
-    "AMOUNT\n(20)",
-    "BENEFICIARY NAME\n(35)",
-    "IFSC CODE\n(11)",
-    "BENE BANK NAME\n(40)",
-    "BENE BANK BRANCH NAME\n(40)",
-    "BENE EMAIL ID\n(100)",
-  ];
-
-  const hRow = ws.addRow(HEADERS);
-  hRow.height = 72;
-  hRow.eachCell((cell, col) => styleHeader(cell, col === 4));
-
-  // ── Row 2: M / O indicators ──────────────────────────────────────────────
-  const INDICATORS = ["M", "M / O", "M", "M", "M", "M", "M", "O", "M"];
-  const mRow = ws.addRow(INDICATORS);
-  mRow.height = 18;
-  mRow.eachCell(cell => styleHeader(cell));
-
-  // ── Data rows ────────────────────────────────────────────────────────────
-  for (const r of runs) {
-    const dataRow = ws.addRow([
-      "",                                       // Txn type — blank
-      "",                                       // Beneficiary Code — blank
-      (r.bankAccount || "").toUpperCase(),      // Bene A/c No
-      r.finalSalary,                            // Amount (numeric)
-      (r.employeeName || "").toUpperCase(),     // Beneficiary Name
-      (r.bankIfsc || "").toUpperCase(),         // IFSC code
-      (r.bankName || "").toUpperCase(),         // Bene Bank Name
-      "",                                       // Branch Name — blank
-      "",                                       // Email — blank
-    ]);
-    dataRow.height = 16;
-    dataRow.eachCell({ includeEmpty: true }, cell => styleData(cell));
-  }
-
-  // ── Download ─────────────────────────────────────────────────────────────
-  const buffer = await wb.xlsx.writeBuffer();
-  const blob = new Blob([buffer], {
-    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `Payroll_${sheetLabel.replace(/[^a-zA-Z0-9]/g, "_")}_${monthYear.replace(/\s/g, "_")}.xlsx`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Session Config Panel
@@ -978,6 +885,71 @@ function GeneratePayrollDialog({ onClose, onSuccess }: { onClose: () => void; on
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Skipped Employees Dialog — on-demand, read-only preview of who Generate
+//  Payroll would currently skip and why. Unlike the post-generation toast,
+//  this works any time HR wants to check, not just right after a run.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SkippedEmployeesDialog({ params, periodLabel, onClose }: {
+  params: { month: number; year: number; runType: "monthly" | "biweekly"; weekNumber?: number };
+  periodLabel: string;
+  onClose: () => void;
+}) {
+  const { data, isLoading, isFetching, refetch } = usePayrollSkipCheck(params);
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <AlertTriangle size={16} className="text-amber-600" /> Skipped Employees
+          </DialogTitle>
+          <p className="text-xs text-muted-foreground">
+            {params.runType === "monthly" ? "Staff" : "Production"} · {periodLabel}
+          </p>
+        </DialogHeader>
+
+        {isLoading ? (
+          <div className="space-y-2 py-4">
+            {[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}
+          </div>
+        ) : !data || data.skipped.length === 0 ? (
+          <div className="py-10 text-center text-muted-foreground">
+            <CheckCircle2 size={28} className="mx-auto mb-2 text-green-300" />
+            <p className="text-sm font-semibold text-gray-700">Nobody would be skipped</p>
+            <p className="text-xs mt-0.5">All {data?.totalChecked ?? 0} active employees checked out fine for this period.</p>
+          </div>
+        ) : (
+          <div className="space-y-3 py-2">
+            <p className="text-xs text-gray-500">
+              {data.skippedCount} of {data.totalChecked} active employees would be skipped if you ran Generate Payroll now:
+            </p>
+            <div className="space-y-2 max-h-80 overflow-y-auto">
+              {data.skipped.map(s => (
+                <div key={s.employeeId} className="rounded-lg border border-amber-100 bg-amber-50/60 px-3 py-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-semibold text-sm text-amber-900">{s.name}</span>
+                    <span className="text-xs text-amber-600 font-mono">{s.employeeCode}</span>
+                  </div>
+                  <p className="text-xs text-amber-700 mt-0.5">{s.reason}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => refetch()} disabled={isFetching}>
+            <RefreshCcw size={12} className={isFetching ? "animate-spin" : ""} /> Re-check
+          </Button>
+          <Button onClick={onClose}><X size={14} className="mr-1" />Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  Payroll record row
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1053,6 +1025,7 @@ export default function PayrollFull() {
   const queryClient = useQueryClient();
   const [showGenerate, setShowGenerate] = useState(false);
   const [showSessionConfig, setShowSessionConfig] = useState(false);
+  const [showSkipCheck, setShowSkipCheck] = useState(false);
   const [breakdownId, setBreakdownId] = useState<number | null>(null);
 
   const [filterMonth, setFilterMonth] = useState<number>(new Date().getMonth() + 1);
@@ -1104,6 +1077,16 @@ export default function PayrollFull() {
     }
   };
 
+  const skipCheckParams = {
+    month: filterMonth,
+    year: filterYear,
+    runType: (filterType === "staff" ? "monthly" : "biweekly") as "monthly" | "biweekly",
+    weekNumber: filterType === "production" ? (prodWeek === "week12" ? 1 : 2) : undefined,
+  };
+  const skipCheckPeriodLabel = filterType === "staff"
+    ? `${MONTH_NAMES[filterMonth - 1]} ${filterYear}`
+    : `${MONTH_NAMES[filterMonth - 1]} ${filterYear} — ${prodWeek === "week12" ? "Week 1 & 2" : "Week 3 & 4"}`;
+
   return (
     <HrLayout>
       <div className="space-y-6">
@@ -1116,6 +1099,12 @@ export default function PayrollFull() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              variant="outline" className="gap-2 h-9 border-amber-200 text-amber-700 hover:bg-amber-50"
+              onClick={() => setShowSkipCheck(true)}
+            >
+              <AlertTriangle size={14} /> Skipped Employees
+            </Button>
             <Button
               variant="outline" className="gap-2 h-9"
               onClick={() => setShowSessionConfig(s => !s)}
@@ -1139,6 +1128,15 @@ export default function PayrollFull() {
           <GeneratePayrollDialog
             onClose={() => setShowGenerate(false)}
             onSuccess={() => queryClient.invalidateQueries({ queryKey: getListPayrollRunsQueryKey({ month: filterMonth, year: filterYear }) })}
+          />
+        )}
+
+        {/* Skipped employees preview */}
+        {showSkipCheck && (
+          <SkippedEmployeesDialog
+            params={skipCheckParams}
+            periodLabel={skipCheckPeriodLabel}
+            onClose={() => setShowSkipCheck(false)}
           />
         )}
 

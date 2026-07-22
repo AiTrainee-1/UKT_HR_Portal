@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'wouter';
-import { useAuth, canView } from '@/contexts/AuthContext';
+import { useAuth, canView, canViewPage } from '@/contexts/AuthContext';
 import { moduleForPath } from '@/lib/permission-modules';
 import { useListLeaveRequests, useListPermissions, useListResignations, useListAdvances } from '@/lib/api-client';
 import { usePayrollSettings } from '@/lib/api-client/custom-hooks';
@@ -9,7 +9,7 @@ import {
   Wallet, BarChart3, Shield, Activity, Settings, FileText, LogOut,
   ChevronRight, Search, X, Command, UserCheck, UserMinus, Banknote,
   CalendarCheck, Bell, Award, TrendingUp, Gift, CreditCard,
-  CalendarHeart, MoonStar, MessageCircle, UserCog,
+  CalendarHeart, MoonStar, MessageCircle, UserCog, FolderOpen,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -73,6 +73,7 @@ const navGroups: NavGroupData[] = [
       { path: '/hr/increment', label: 'Increment', icon: TrendingUp },
       { path: '/hr/bonus', label: 'Bonus', icon: Gift },
       { path: '/hr/id-cards', label: 'ID Cards', icon: CreditCard },
+      { path: '/hr/recruitment/documents', label: 'Documents', icon: FolderOpen },
     ],
   },
 {
@@ -420,6 +421,15 @@ function NavItem({
 
 // ── Exported Sidebar ───────────────────────────────────────────────────────
 
+// Every HR page renders its own <HrLayout>, so HrSidebar fully remounts on
+// every route change (fresh DOM, scrollTop back to 0). This module-level
+// variable is the sidebar's scroll memory across those remounts — unlike
+// HrLayout's per-path scrollPositions Map for the main content area, the
+// sidebar shows the same nav list on every page, so one remembered value is
+// all it needs. Resets naturally on a real page load/refresh since the
+// module re-executes from scratch.
+let sidebarScrollTop = 0;
+
 export function HrSidebar({ onClose }: { onClose: () => void }) {
   const [location] = useLocation();
   const { user, logout } = useAuth();
@@ -458,6 +468,42 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
   const { data: settings } = usePayrollSettings();
   const companyName = settings?.companyName || 'UKTextiles';
   const companyLogo = settings?.companyLogo;
+
+  const navRef = useRef<HTMLElement>(null);
+
+  useLayoutEffect(() => {
+    const el = navRef.current;
+    if (!el) return;
+    const saved = sidebarScrollTop;
+
+    // Nav item visibility depends on data that loads async (permissions,
+    // settings-gated items, badge counts) — the list can grow after mount,
+    // so a single scrollTop assignment can get clamped to a shorter list.
+    // Keep re-applying until it sticks, the user scrolls, or time runs out.
+    let restoring = saved > 0;
+    let cancelled = false;
+    if (restoring) {
+      const tryRestore = () => {
+        if (cancelled || !restoring) return;
+        el.scrollTop = saved;
+        if (Math.abs(el.scrollTop - saved) < 2) restoring = false;
+      };
+      tryRestore();
+      const observer = new ResizeObserver(tryRestore);
+      for (const child of Array.from(el.children)) observer.observe(child);
+      const timer = setTimeout(() => { restoring = false; observer.disconnect(); }, 3000);
+      const stop = () => { restoring = false; observer.disconnect(); clearTimeout(timer); };
+      el.addEventListener('wheel', stop, { once: true, passive: true });
+      el.addEventListener('touchmove', stop, { once: true, passive: true });
+    }
+
+    const onScroll = () => { if (!restoring) sidebarScrollTop = el.scrollTop; };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      cancelled = true;
+      el.removeEventListener('scroll', onScroll);
+    };
+  }, []);
 
   return (
     <div className="relative flex flex-col h-full" style={{ fontFamily: "'Hanken Grotesk', 'Inter', sans-serif" }}>
@@ -518,6 +564,7 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
 
       {/* ── Navigation ── */}
       <nav
+        ref={navRef}
         className="flex-1 overflow-y-auto py-3 px-2.5 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col gap-4"
       >
         {navGroups.map((group, idx) => {
@@ -545,7 +592,12 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
               if (item.path === '/hr/account-management') return !!user?.isSuperAdmin;
               if (item.children) return item.children.length > 0;
               const moduleKey = moduleForPath(item.path);
-              return moduleKey ? canView(user, moduleKey) : true;
+              // canViewPage (not canView): a flat single-route item like
+              // Settings has no nav children but does have MODULE_TREE
+              // children (its tabs) — reachable if any tab is visible even
+              // when the bare "settings" key itself is unset. See
+              // resolvePermissionOrChildren in permission-modules.ts.
+              return moduleKey ? canViewPage(user, moduleKey) : true;
             });
 
           if (visibleItems.length === 0) return null;

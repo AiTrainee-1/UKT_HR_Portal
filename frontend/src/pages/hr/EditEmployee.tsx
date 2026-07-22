@@ -1,19 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import { useParams, useLocation } from "wouter";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
 import PhotoUpload from "@/components/PhotoUpload";
 import {
   useGetEmployee, useUpdateEmployee,
   getListEmployeesQueryKey, getGetEmployeeQueryKey,
-  useListDepartments, useListDesignations,
+  useListDepartments, useListDesignations, type Employee,
 } from "@/lib/api-client";
 import { useListBranches, getListBranchesQueryKey } from "@/lib/api-client/custom-hooks";
 import { useQueryClient } from "@tanstack/react-query";
@@ -25,14 +23,14 @@ import { z } from "zod";
 import { ArrowLeft } from "lucide-react";
 import Loader from "@/components/Loader";
 
+const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
+
 const schema = z.object({
   employeeCode: z.string().min(1, "Employee code is required"),
   firstName: z.string().min(1, "First name is required"),
   lastName: z.string().min(1, "Last name is required"),
   email: z.string().email("Valid email required").or(z.literal("")).optional(),
   phone: z.string().min(10, "Phone number required"),
-  // Plain strings (not z.enum) — the Select options already constrain the choices,
-  // and an enum here rejects "" during the brief window before async data loads.
   gender: z.string().optional(),
   dateOfBirth: z.string().optional(),
   employmentType: z.string().optional(),
@@ -59,80 +57,106 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>;
 
+// Pure mapping from the stored record to form field strings — called exactly
+// once, by the parent, only after the employee has actually loaded (see
+// EditEmployeeForm below). There is no async gap for this to race against.
+function employeeToFormData(employee: Employee): FormData {
+  const e = employee as Employee & {
+    fatherName?: string | null; motherName?: string | null;
+    biometricDeviceId?: string | null; salaryPerShift?: number | null;
+  };
+  return {
+    employeeCode: e.employeeCode ?? "",
+    firstName: e.firstName ?? "",
+    lastName: e.lastName ?? "",
+    email: e.email ?? "",
+    phone: e.phone ?? "",
+    gender: e.gender ?? "",
+    dateOfBirth: e.dateOfBirth ?? "",
+    employmentType: e.employmentType ?? "staff",
+    departmentId: e.departmentId ? String(e.departmentId) : "",
+    designationId: e.designationId ? String(e.designationId) : "",
+    branchId: e.branchId ? String(e.branchId) : "",
+    salaryType: e.salaryType ?? "monthly",
+    salaryAmount: e.salaryAmount ? String(e.salaryAmount) : "",
+    salaryPerShift: e.salaryPerShift ? String(e.salaryPerShift) : "",
+    joinDate: e.joinDate ?? "",
+    bankName: e.bankName ?? "",
+    bankAccount: e.bankAccount ?? "",
+    bankIfsc: e.bankIfsc ?? "",
+    pfNumber: e.pfNumber ?? "",
+    esiNumber: e.esiNumber ?? "",
+    address: e.address ?? "",
+    idProof: e.idProof ?? "",
+    fatherName: e.fatherName ?? "",
+    motherName: e.motherName ?? "",
+    biometricDeviceId: e.biometricDeviceId ?? "",
+    bloodGroup: e.bloodGroup ?? "",
+    emergencyContact: e.emergencyContact ?? "",
+  };
+}
+
 export default function EditEmployee() {
   const { id } = useParams<{ id: string }>();
   const [, navigate] = useLocation();
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
   const empId = Number(id);
 
   const { data: employee, isLoading } = useGetEmployee(empId, {
     query: { enabled: !!empId, queryKey: getGetEmployeeQueryKey(empId) } as any,
   });
+
+  if (isLoading) {
+    return (
+      <HrLayout>
+        <div className="flex items-center justify-center min-h-[calc(100vh-140px)]">
+          <Loader />
+        </div>
+      </HrLayout>
+    );
+  }
+
+  if (!employee) {
+    return (
+      <HrLayout>
+        <div className="flex flex-col items-center justify-center py-24 text-muted-foreground">
+          <p className="text-lg font-semibold">Employee not found</p>
+          <Button className="mt-4" onClick={() => navigate("/hr/employees")}>Back to List</Button>
+        </div>
+      </HrLayout>
+    );
+  }
+
+  // `employee` is guaranteed non-null from here on, so mounting this child
+  // now (never before) means every hook inside it — including useForm — runs
+  // for the very first time with the real, already-loaded record. There is
+  // no "form exists before its data does" window for any value to be lost in.
+  return <EditEmployeeForm key={employee.id} empId={empId} employee={employee} />;
+}
+
+function EditEmployeeForm({ empId, employee }: { empId: number; employee: Employee }) {
+  const [, navigate] = useLocation();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
   const mutation = useUpdateEmployee();
-  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const { user } = useAuth();
+
+  const [photoUrl, setPhotoUrl] = useState<string | null>(employee.photoUrl ?? null);
+  const [selectedDeptId, setSelectedDeptId] = useState<string>(
+    employee.departmentId ? String(employee.departmentId) : "",
+  );
 
   const { data: departments } = useListDepartments();
   const { data: branches } = useListBranches({ enabled: !user?.branchId, queryKey: getListBranchesQueryKey() });
-  const [selectedDeptId, setSelectedDeptId] = useState<string>("");
   const { data: designations } = useListDesignations(
     selectedDeptId ? { departmentId: Number(selectedDeptId) } : undefined,
   );
 
-  // Derive the form's populated values directly from the fetched employee.
-  // Using RHF's `values` option (instead of a manual useEffect + form.reset)
-  // keeps every field — including the Gender and Employment Type selects —
-  // in sync the instant the employee data arrives, with no race condition
-  // between the async fetch and the Select components' initial mount.
-  const formValues = useMemo<FormData | undefined>(() => {
-    if (!employee) return undefined;
-    return {
-      employeeCode: employee.employeeCode ?? "",
-      firstName: employee.firstName ?? "",
-      lastName: employee.lastName ?? "",
-      email: employee.email ?? "",
-      phone: employee.phone ?? "",
-      gender: employee.gender ?? "",
-      dateOfBirth: employee.dateOfBirth ?? "",
-      employmentType: employee.employmentType ?? "staff",
-      departmentId: employee.departmentId ? String(employee.departmentId) : "",
-      designationId: employee.designationId ? String(employee.designationId) : "",
-      branchId: employee.branchId ? String(employee.branchId) : "",
-      salaryType: employee.salaryType ?? "monthly",
-      salaryAmount: employee.salaryAmount ? String(employee.salaryAmount) : "",
-      salaryPerShift: (employee as any).salaryPerShift ? String((employee as any).salaryPerShift) : "",
-      joinDate: employee.joinDate ?? "",
-      bankName: employee.bankName ?? "",
-      bankAccount: employee.bankAccount ?? "",
-      bankIfsc: employee.bankIfsc ?? "",
-      pfNumber: employee.pfNumber ?? "",
-      esiNumber: employee.esiNumber ?? "",
-      address: employee.address ?? "",
-      idProof: employee.idProof ?? "",
-      fatherName: (employee as any).fatherName ?? "",
-      motherName: (employee as any).motherName ?? "",
-      biometricDeviceId: (employee as any).biometricDeviceId ?? "",
-      bloodGroup: employee.bloodGroup ?? "",
-      emergencyContact: employee.emergencyContact ?? "",
-    };
-  }, [employee]);
-
   const form = useForm<FormData>({
     resolver: zodResolver(schema),
-    defaultValues: { salaryType: "monthly", salaryAmount: "" },
-    values: formValues,
+    defaultValues: employeeToFormData(employee),
   });
 
   const employmentType = form.watch("employmentType");
-
-  // Non-form-field side effects that still need to react to the employee load
-  useEffect(() => {
-    if (employee) {
-      setSelectedDeptId(employee.departmentId ? String(employee.departmentId) : "");
-      setPhotoUrl(employee.photoUrl ?? null);
-    }
-  }, [employee]);
 
   const onSubmit = (data: FormData) => {
     mutation.mutate(
@@ -184,27 +208,6 @@ export default function EditEmployee() {
     );
   };
 
-  if (isLoading) {
-    return (
-      <HrLayout>
-        <div className="flex items-center justify-center min-h-[calc(100vh-140px)]">
-          <Loader />
-        </div>
-      </HrLayout>
-    );
-  }
-
-  if (!employee) {
-    return (
-      <HrLayout>
-        <div className="flex flex-col items-center justify-center py-24 text-muted-foreground">
-          <p className="text-lg font-semibold">Employee not found</p>
-          <Button className="mt-4" onClick={() => navigate("/hr/employees")}>Back to List</Button>
-        </div>
-      </HrLayout>
-    );
-  }
-
   return (
     <HrLayout>
       <div className="space-y-5">
@@ -254,17 +257,27 @@ export default function EditEmployee() {
                 <FormField control={form.control} name="phone" render={({ field }) => (
                   <FormItem><FormLabel>Phone *</FormLabel><FormControl><Input data-testid="input-phone" {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
+                {/* Plain native <select> — Department/Designation/Branch below have always
+                    used this and have never had a display bug; the Radix-based dropdown
+                    component this page used to use here could not. */}
                 <FormField control={form.control} name="gender" render={({ field }) => (
-                  <FormItem><FormLabel>Gender</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value ?? ""}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select gender" /></SelectTrigger></FormControl>
-                      <SelectContent>
-                        <SelectItem value="male">Male</SelectItem>
-                        <SelectItem value="female">Female</SelectItem>
-                        <SelectItem value="other">Other</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  <FormMessage /></FormItem>
+                  <FormItem>
+                    <FormLabel>Gender</FormLabel>
+                    <FormControl>
+                      <select
+                        value={field.value ?? ""}
+                        onChange={field.onChange}
+                        className="w-full h-9 rounded-md border px-3 text-sm bg-background"
+                        data-testid="select-gender"
+                      >
+                        <option value="">Select gender</option>
+                        <option value="male">Male</option>
+                        <option value="female">Female</option>
+                        <option value="other">Other</option>
+                      </select>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
                 )} />
                 <FormField control={form.control} name="dateOfBirth" render={({ field }) => (
                   <FormItem><FormLabel>Date of Birth</FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
@@ -273,15 +286,21 @@ export default function EditEmployee() {
                   <FormItem><FormLabel>Join Date</FormLabel><FormControl><Input type="date" data-testid="input-join-date" {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="employmentType" render={({ field }) => (
-                  <FormItem><FormLabel>Employment Type</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value ?? ""}>
-                      <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
-                      <SelectContent>
-                        <SelectItem value="staff">Staff (Monthly)</SelectItem>
-                        <SelectItem value="production">Production (Weekly)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  <FormMessage /></FormItem>
+                  <FormItem>
+                    <FormLabel>Employment Type</FormLabel>
+                    <FormControl>
+                      <select
+                        value={field.value ?? ""}
+                        onChange={field.onChange}
+                        className="w-full h-9 rounded-md border px-3 text-sm bg-background"
+                        data-testid="select-employment-type"
+                      >
+                        <option value="staff">Staff (Monthly)</option>
+                        <option value="production">Production (Weekly)</option>
+                      </select>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
                 )} />
               </CardContent>
             </Card>
@@ -381,14 +400,20 @@ export default function EditEmployee() {
                 ) : (
                   <>
                     <FormField control={form.control} name="salaryType" render={({ field }) => (
-                      <FormItem><FormLabel>Salary Type *</FormLabel>
-                        <Select onValueChange={field.onChange} value={field.value ?? "monthly"}>
-                          <FormControl><SelectTrigger data-testid="select-salary-type"><SelectValue /></SelectTrigger></FormControl>
-                          <SelectContent>
-                            <SelectItem value="monthly">Monthly</SelectItem>
-                            <SelectItem value="weekly">Weekly</SelectItem>
-                          </SelectContent>
-                        </Select><FormMessage />
+                      <FormItem>
+                        <FormLabel>Salary Type *</FormLabel>
+                        <FormControl>
+                          <select
+                            value={field.value ?? "monthly"}
+                            onChange={field.onChange}
+                            className="w-full h-9 rounded-md border px-3 text-sm bg-background"
+                            data-testid="select-salary-type"
+                          >
+                            <option value="monthly">Monthly</option>
+                            <option value="weekly">Weekly</option>
+                          </select>
+                        </FormControl>
+                        <FormMessage />
                       </FormItem>
                     )} />
                     <FormField control={form.control} name="salaryAmount" render={({ field }) => (
@@ -445,16 +470,23 @@ export default function EditEmployee() {
                   <FormItem><FormLabel>ID Proof</FormLabel><FormControl><Input data-testid="input-id-proof" {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="bloodGroup" render={({ field }) => (
-                  <FormItem><FormLabel>Blood Group</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value ?? ""}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select blood group" /></SelectTrigger></FormControl>
-                      <SelectContent>
-                        {["A+","A-","B+","B-","AB+","AB-","O+","O-"].map(bg => (
-                          <SelectItem key={bg} value={bg}>{bg}</SelectItem>
+                  <FormItem>
+                    <FormLabel>Blood Group</FormLabel>
+                    <FormControl>
+                      <select
+                        value={field.value ?? ""}
+                        onChange={field.onChange}
+                        className="w-full h-9 rounded-md border px-3 text-sm bg-background"
+                        data-testid="select-blood-group"
+                      >
+                        <option value="">Select blood group</option>
+                        {BLOOD_GROUPS.map((bg) => (
+                          <option key={bg} value={bg}>{bg}</option>
                         ))}
-                      </SelectContent>
-                    </Select>
-                  <FormMessage /></FormItem>
+                      </select>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
                 )} />
                 <FormField control={form.control} name="emergencyContact" render={({ field }) => (
                   <FormItem><FormLabel>Emergency Contact</FormLabel><FormControl><Input placeholder="Name and phone number" {...field} /></FormControl><FormMessage /></FormItem>

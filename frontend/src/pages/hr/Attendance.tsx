@@ -34,7 +34,7 @@ import {
   Users, UserCheck, UserX, CalendarDays, Plus,
   Factory, Briefcase, Fingerprint, PenLine, ChevronRight, RefreshCw,
   Search, ChevronDown,
-  TrendingUp, Calendar, ChevronLeft,
+  TrendingUp, Calendar, ChevronLeft, FileSpreadsheet,
 } from "lucide-react";
 
 // ── Pagination ─────────────────────────────────────────────────────────────
@@ -434,6 +434,15 @@ export default function AttendancePage() {
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            {/* Manual punch import — backup path alongside Sync Biometric, never touches its state/flow */}
+            <Button
+              variant="outline"
+              onClick={() => navigate("/hr/attendance/manual-import")}
+              className="gap-2 h-9 border-gray-200 text-gray-600 hover:bg-gray-50"
+            >
+              <FileSpreadsheet size={14} />
+              Manual Import
+            </Button>
             {/* Sync split-button */}
             <div ref={syncMenuRef} className="relative flex items-center">
               <Button

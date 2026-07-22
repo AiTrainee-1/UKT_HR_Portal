@@ -878,6 +878,57 @@ class ScreeningCandidate(models.Model):
 
 
 # ──────────────────────────────────────────────
+#  Employee Documents
+# ──────────────────────────────────────────────
+
+class EmployeeDocument(models.Model):
+    """
+    One uploaded file (image or PDF) attached to an employee — PAN/Aadhaar/
+    educational certs/etc., plus scanned copies of Offer/Experience/
+    Resignation/Staff letters. Distinct from the on-demand PDF *generators*
+    in company_documents_views.py (those synthesize a letter from Employee
+    data; this stores whatever HR actually uploads). Multiple files per
+    category are allowed (e.g. several educational certificates) — no
+    "replace" semantics, HR deletes individually.
+    """
+    CATEGORY_PAN = "pan_card"
+    CATEGORY_AADHAAR = "aadhaar_card"
+    CATEGORY_EDUCATION = "educational_certificate"
+    CATEGORY_VOTER_BIRTH = "voter_id_or_birth_certificate"
+    CATEGORY_BANK_PASSBOOK = "bank_passbook"
+    CATEGORY_OFFER_LETTER = "offer_letter"
+    CATEGORY_EXPERIENCE_LETTER = "experience_letter"
+    CATEGORY_RESIGNATION_LETTER = "resignation_letter"
+    CATEGORY_STAFF_LETTER = "staff_letter"
+    CATEGORY_PRODUCTION_DOCS = "production_employee_documents"
+    CATEGORY_CHOICES = [
+        (CATEGORY_PAN, "PAN Card"),
+        (CATEGORY_AADHAAR, "Aadhaar Card"),
+        (CATEGORY_EDUCATION, "Educational Certificates"),
+        (CATEGORY_VOTER_BIRTH, "Voter ID or Birth Certificate"),
+        (CATEGORY_BANK_PASSBOOK, "Bank Passbook"),
+        (CATEGORY_OFFER_LETTER, "Offer Letter"),
+        (CATEGORY_EXPERIENCE_LETTER, "Experience Letter"),
+        (CATEGORY_RESIGNATION_LETTER, "Resignation Letter"),
+        (CATEGORY_STAFF_LETTER, "Staff Letter"),
+        (CATEGORY_PRODUCTION_DOCS, "Production Employee Documents"),
+    ]
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="documents",
+    )
+    category = models.TextField(choices=CATEGORY_CHOICES, db_column="category")
+    file = models.FileField(upload_to="employee_documents/%Y/%m/", db_column="file")
+    original_filename = models.TextField(db_column="original_filename")
+    uploaded_by = models.TextField(null=True, blank=True, db_column="uploaded_by")
+    uploaded_at = models.DateTimeField(auto_now_add=True, db_column="uploaded_at")
+
+    class Meta:
+        db_table = "employee_documents"
+        ordering = ["-uploaded_at"]
+
+
+# ──────────────────────────────────────────────
 #  Attendance
 # ──────────────────────────────────────────────
 
