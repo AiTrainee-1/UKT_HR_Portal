@@ -328,3 +328,58 @@ Remove-Item -Recurse -Force ..\www\* -ErrorAction SilentlyContinue
 Copy-Item -Recurse dist\* ..\www\
 cd ..
 .\nssm.exe restart UKTextilesDjango
+
+
+
+
+===========================================================================================================
+=====================================================================================================================
+===========================================================================================================
+
+
+
+First, one important thing from your transcript: **the python path you're chasing is a red herring.** On Python 3.13/3.14, a venv's `Scripts\python.exe` is just a small redirector — the actual running process will *always* show `C:\Users\uktex\AppData\...\python.exe` as its path, even when the venv is working correctly. So seeing that path in `Get-Process` does **not** mean the venv isn't being used. To truly verify, run this on the company system:
+
+```bash
+D:\HRMS\UKT_HR_Portal\backend\.venv\Scripts\python.exe -c "import sys; print(sys.prefix)"
+```
+
+If it prints the `.venv` path, your NSSM config is already correct — stop killing processes.
+
+## The deploy steps after `git pull`
+
+Save this as `D:\HRMS\UKT_HR_Portal\deploy.ps1` on the company system, and run just this one script after every pull:
+
+```bash
+cd D:\HRMS\UKT_HR_Portal
+
+# 1. Pull latest code
+git pull
+
+# 2. Backend: install any new dependencies (safe to run every time)
+.\backend\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+
+# 3. Backend: apply any new database migrations (safe to run every time)
+.\backend\.venv\Scripts\python.exe backend\manage.py migrate
+
+# 4. Frontend: rebuild the production bundle
+cd frontend
+npm install
+npm run build
+cd ..
+
+# 5. Restart only the Django service (Nginx and Tunnel don't need restarting for code changes)
+.\nssm.exe restart UKTextilesDjango
+```
+
+## What went wrong in your session, and the rules that avoid it
+
+1. **Never use `Stop-Process` / kill python manually.** That's what created your confusion: killing the process out from under NSSM makes NSSM auto-restart it, so you end up with PIDs that don't match what you expect, and sometimes an orphan holding port 8000. Always use `.\nssm.exe restart UKTextilesDjango` (or `Restart-Service`) — nothing else.
+
+2. **You don't need to restart Nginx or the Tunnel** after a code deploy. Nginx only serves files and proxies — restart it only if you changed `nginx.conf`. The tunnel never needs restarting for deploys. Restarting everything each time just adds more moving parts to go wrong.
+
+3. **Migrations are the step people forget.** If you pull code that expects a new column and never run `migrate`, the backend starts fine but errors on specific pages — which often gets misdiagnosed as a "deployment issue" and leads to the restart-everything spiral.
+
+4. **The frontend must be rebuilt** (`npm run build`) after every pull that touches `frontend/` — Nginx serves the built files, not the source, so without a rebuild the browser keeps showing old UI against a new backend.
+
+That's the whole process: `git pull` → pip install → migrate → npm build → nssm restart Django. If a page still misbehaves after that, check the service log (`.\nssm.exe` writes stdout/stderr wherever `AppStdout`/`AppStderr` point) instead of touching processes.
