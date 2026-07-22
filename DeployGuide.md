@@ -383,3 +383,42 @@ cd ..
 4. **The frontend must be rebuilt** (`npm run build`) after every pull that touches `frontend/` — Nginx serves the built files, not the source, so without a rebuild the browser keeps showing old UI against a new backend.
 
 That's the whole process: `git pull` → pip install → migrate → npm build → nssm restart Django. If a page still misbehaves after that, check the service log (`.\nssm.exe` writes stdout/stderr wherever `AppStdout`/`AppStderr` point) instead of touching processes.
+
+
+
+
+
+
+Your script is right — the problem is that the restart at step 5 isn't actually replacing the process serving port 8000. Remember your earlier session: you killed python processes manually while NSSM was managing the service. That very likely left an **orphan python process that NSSM doesn't own** holding port 8000. When NSSM restarts "its" service, its new process can't bind port 8000 (already taken) and dies — while the old orphan, started from the old code, keeps answering requests. So you restart all day and nothing changes.
+
+Prove it with this on the company system:
+
+```bash
+$p = (Get-NetTCPConnection -LocalPort 8000 -State Listen).OwningProcess; Get-Process -Id $p | Select-Object Id, StartTime
+```
+
+If that `StartTime` is **older than your deploy** (e.g. still showing 21-07-2026), it's an orphan serving old code — restart can never fix it. Do this one-time cleanup:
+
+```bash
+Stop-Service UKTextilesDjango -Force; Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Service UKTextilesDjango
+```
+
+(Stopping every python is safe here *only because* the service is stopped first — that's the correct order, unlike killing while it runs.)
+
+Then re-run the check above: `StartTime` should now be seconds ago, and the upload should work.
+
+Two more things to verify if it still 404s after that:
+
+1. **Is the new code actually there?**
+```bash
+git log -1 --oneline
+```
+Compare with your latest commit on your dev machine. If it doesn't match, the pull didn't bring it (wrong branch / uncommitted conflict).
+
+2. **Is the NSSM service even configured correctly after your edits?** You changed `Application` mid-troubleshooting; if `AppParameters`/`AppDirectory` no longer line up, the service starts and instantly dies (and Windows may not tell you). Check:
+```bash
+D:\HRMS\UKT_HR_Portal\nssm.exe dump UKTextilesDjango
+```
+`Application` should be `...backend\.venv\Scripts\python.exe`, and `AppParameters`/`AppDirectory` should point at your actual server command (waitress/manage.py) inside `backend\`.
+
+The orphan process is the most likely culprit — check the `StartTime` first.
