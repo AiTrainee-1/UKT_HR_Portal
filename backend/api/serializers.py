@@ -77,6 +77,7 @@ def employee_json(emp, department_name: str | None = None) -> dict:
         "motherName": emp.mother_name,
         "biometricDeviceId": emp.biometric_device_id,
         "hasPassword": bool(emp.password_hash),
+        "locationTrackingEnabled": emp.location_tracking_enabled,
         "createdAt": _dt(emp.created_at),
     }
 

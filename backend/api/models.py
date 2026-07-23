@@ -22,6 +22,19 @@ class Branch(models.Model):
     # views.py::_assign_unit_code. Only ever incremented, never reused, even
     # if an employee with an earlier number is later deleted or moved out.
     next_employee_seq = models.IntegerField(default=0, db_column="next_employee_seq")
+    # Geofence center for location-based attendance (Geo Attendance feature).
+    # All three are null until HR sets a location on this branch — geo-punch
+    # is simply unavailable for employees here until then (see
+    # geo_attendance_views.py::_branch_geofence).
+    geofence_lat = models.DecimalField(
+        max_digits=9, decimal_places=6, null=True, blank=True, db_column="geofence_lat"
+    )
+    geofence_lng = models.DecimalField(
+        max_digits=9, decimal_places=6, null=True, blank=True, db_column="geofence_lng"
+    )
+    geofence_radius_m = models.IntegerField(
+        null=True, blank=True, default=200, db_column="geofence_radius_m"
+    )
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
 
     class Meta:
@@ -129,6 +142,13 @@ class Employee(models.Model):
         help_text="Salary at time of joining — baseline for increment tracking."
     )
     password_hash = models.TextField(null=True, blank=True, db_column="password_hash")
+    # Live location tracking (Geo Attendance feature) is opt-in per employee,
+    # toggled by HR — never on by default. The mobile/web app only ever
+    # starts sending location pings when it sees this true on the employee's
+    # own profile (GET /employees/<id> — see _serialize_employee).
+    location_tracking_enabled = models.BooleanField(
+        default=False, db_column="location_tracking_enabled"
+    )
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
@@ -1257,6 +1277,7 @@ class DepartmentManager(models.Model):
     can_approve_resignations = models.BooleanField(default=True, db_column="can_approve_resignations")
     can_approve_attendance = models.BooleanField(default=True, db_column="can_approve_attendance")
     can_approve_casual_leave = models.BooleanField(default=True, db_column="can_approve_casual_leave")
+    can_approve_on_duty = models.BooleanField(default=True, db_column="can_approve_on_duty")
     is_active = models.BooleanField(default=True, db_column="is_active")
     notes = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
@@ -1442,6 +1463,99 @@ class AttendanceOverrideRequest(models.Model):
     class Meta:
         db_table = "attendance_override_requests"
         ordering = ["-created_at"]
+
+
+# ──────────────────────────────────────────────
+#  Geo Attendance (location-based punching)
+# ──────────────────────────────────────────────
+
+class OnDutyRequest(models.Model):
+    """
+    An employee working away from the branch (field visit, driver, offsite
+    work) declares On-Duty attendance: two photos, a reason, and GPS —
+    distinct from a plain Office Geo Punch (geo_attendance_views.py::
+    geo_punch), which is only ever for someone physically inside the
+    geofence and has no approval step at all. Nothing is written to
+    AttendanceLog until BOTH stages approve, in order:
+      1. pending_hod  -> the employee's Department Head approves/rejects
+         (mobile Approvals screen, manager_views.py::manager_update_on_duty_status)
+      2. pending_hr   -> HR gives the final approval (HR portal dashboard)
+    A HOD rejection short-circuits straight to "rejected" — HR is never
+    consulted. HR may also act directly on a still-pending_hod request as a
+    fallback (e.g. no Department Head assigned), finalizing to
+    approved/rejected in one step. On final approval the punch is written
+    via the same biometric_sync._ingest_punches() path every other punch
+    source uses (source_tag="on_duty:approved"), at the ORIGINAL captured
+    punch_time, never the approval time.
+    """
+    STATUS_PENDING_HOD = "pending_hod"
+    STATUS_PENDING_HR = "pending_hr"
+    STATUS_APPROVED = "approved"
+    STATUS_REJECTED = "rejected"
+    STATUS_CHOICES = [
+        (STATUS_PENDING_HOD, "Pending HOD Approval"),
+        (STATUS_PENDING_HR, "Pending HR Approval"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id",
+        related_name="on_duty_requests",
+    )
+    punch_date = models.DateField(db_column="punch_date")
+    punch_time = models.TimeField(db_column="punch_time")
+    punch_type = models.TextField(choices=AttendanceLog.PUNCH_CHOICES, db_column="punch_type")
+    reason = models.TextField()
+    # Snapshot of the branch the employee was assigned to at request time,
+    # kept even if they're later moved to a different branch. On-Duty has no
+    # geofence check (that's the whole point — they're meant to be offsite),
+    # this is purely informational context for the approver.
+    branch = models.ForeignKey(
+        Branch, on_delete=models.SET_NULL, null=True, blank=True, db_column="branch_id",
+    )
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, db_column="latitude")
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, db_column="longitude")
+    accuracy_m = models.FloatField(null=True, blank=True, db_column="accuracy_m")
+    is_mocked = models.BooleanField(default=False, db_column="is_mocked")
+    photo1 = models.FileField(upload_to="on_duty_requests/%Y/%m/", db_column="photo1")
+    photo2 = models.FileField(upload_to="on_duty_requests/%Y/%m/", db_column="photo2")
+    status = models.TextField(choices=STATUS_CHOICES, default=STATUS_PENDING_HOD)
+    hod_reviewed_by = models.TextField(null=True, blank=True, db_column="hod_reviewed_by")
+    hod_review_comment = models.TextField(null=True, blank=True, db_column="hod_review_comment")
+    hod_reviewed_at = models.DateTimeField(null=True, blank=True, db_column="hod_reviewed_at")
+    hr_reviewed_by = models.TextField(null=True, blank=True, db_column="hr_reviewed_by")
+    hr_review_comment = models.TextField(null=True, blank=True, db_column="hr_review_comment")
+    hr_reviewed_at = models.DateTimeField(null=True, blank=True, db_column="hr_reviewed_at")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "on_duty_requests"
+        ordering = ["-created_at"]
+
+
+class LiveLocationPing(models.Model):
+    """
+    One GPS sample from an employee with location_tracking_enabled=True.
+    Append-only (not upsert) so the HR map can draw today's breadcrumb trail,
+    not just a single current dot — see geo_attendance_views.py::live_location_ping,
+    which also prunes each employee's pings older than 24h on every write so
+    this table never grows unbounded (no cron/Celery in this project).
+    """
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id",
+        related_name="location_pings",
+    )
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, db_column="latitude")
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, db_column="longitude")
+    accuracy_m = models.FloatField(null=True, blank=True, db_column="accuracy_m")
+    is_mocked = models.BooleanField(default=False, db_column="is_mocked")
+    recorded_at = models.DateTimeField(auto_now_add=True, db_column="recorded_at")
+
+    class Meta:
+        db_table = "live_location_pings"
+        ordering = ["-recorded_at"]
+        indexes = [models.Index(fields=["employee", "-recorded_at"])]
 
 
 # ──────────────────────────────────────────────

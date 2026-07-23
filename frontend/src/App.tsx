@@ -67,6 +67,8 @@ import Bonus from "@/pages/hr/Bonus";
 import IdCards from "@/pages/hr/IdCards";
 import CasualLeave from "@/pages/hr/CasualLeave";
 import NightShift from "@/pages/hr/NightShift";
+import GeoAttendance from "@/pages/hr/GeoAttendance";
+import AttendancePunchSearch from "@/pages/hr/AttendancePunchSearch";
 import HrChat from "@/pages/hr/Chat";
 import VerifyEmployee from "@/pages/VerifyEmployee";
 
@@ -220,6 +222,9 @@ function Router() {
       <Route path="/hr/attendance/report-log">
         {() => <ProtectedRoute component={AttendanceReportLog} allowedRoles={["hr"]} />}
       </Route>
+      <Route path="/hr/attendance/search">
+        {() => <ProtectedRoute component={AttendancePunchSearch} allowedRoles={["hr"]} />}
+      </Route>
       <Route path="/hr/attendance/manual-import">
         {() => <ProtectedRoute component={ManualPunchImport} allowedRoles={["hr"]} />}
       </Route>
@@ -249,6 +254,9 @@ function Router() {
       </Route>
       <Route path="/hr/night-shift">
         {() => <ProtectedRoute component={NightShift} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/geo-attendance">
+        {() => <ProtectedRoute component={GeoAttendance} allowedRoles={["hr"]} />}
       </Route>
       <Route path="/hr/chat">
         {() => <ProtectedRoute component={HrChat} allowedRoles={["hr"]} />}

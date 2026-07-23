@@ -46,6 +46,7 @@ function CreateUserDialog({
   const [canApproveResignations, setCanApproveResignations] = useState(true);
   const [canApproveAttendance, setCanApproveAttendance] = useState(true);
   const [canApproveCasualLeave, setCanApproveCasualLeave] = useState(true);
+  const [canApproveOnDuty, setCanApproveOnDuty] = useState(true);
   const [notes, setNotes] = useState("");
 
   const { data: employees } = useListEmployees({ status: "active" });
@@ -69,6 +70,7 @@ function CreateUserDialog({
         canApproveResignations,
         canApproveAttendance,
         canApproveCasualLeave,
+        canApproveOnDuty,
         notes: notes || undefined,
       });
       toast({ title: `${emp.firstName} ${emp.lastName} added as department user` });
@@ -79,6 +81,7 @@ function CreateUserDialog({
       setCanApproveResignations(true);
       setCanApproveAttendance(true);
       setCanApproveCasualLeave(true);
+      setCanApproveOnDuty(true);
       onClose();
     } catch (e: any) {
       toast({
@@ -120,6 +123,7 @@ function CreateUserDialog({
                 { label: "Can approve resignations", value: canApproveResignations, set: setCanApproveResignations },
                 { label: "Can approve attendance edits", value: canApproveAttendance, set: setCanApproveAttendance },
                 { label: "Can approve casual leave", value: canApproveCasualLeave, set: setCanApproveCasualLeave },
+                { label: "Can approve On-Duty attendance requests", value: canApproveOnDuty, set: setCanApproveOnDuty },
               ].map(({ label, value, set }) => (
                 <label key={label} className="flex items-center gap-2.5 cursor-pointer group">
                   <button
@@ -225,7 +229,7 @@ function ManagerDetailDialog({
     }
   };
 
-  const togglePerm = async (field: "canApproveLeaves" | "canApprovePermissions" | "canApproveResignations" | "canApproveAttendance" | "canApproveCasualLeave") => {
+  const togglePerm = async (field: "canApproveLeaves" | "canApprovePermissions" | "canApproveResignations" | "canApproveAttendance" | "canApproveCasualLeave" | "canApproveOnDuty") => {
     if (!manager || !managerId) return;
     await updateMutation.mutateAsync({
       id: managerId,
@@ -286,6 +290,7 @@ function ManagerDetailDialog({
                   { key: "canApproveResignations" as const, label: "Approve Resignations" },
                   { key: "canApproveAttendance" as const, label: "Approve Attendance Edits" },
                   { key: "canApproveCasualLeave" as const, label: "Approve Casual Leave" },
+                  { key: "canApproveOnDuty" as const, label: "Approve On-Duty" },
                 ].map(({ key, label }) => (
                   <button
                     key={key}
@@ -663,6 +668,16 @@ export default function UserManagement() {
                           >
                             {m.canApproveCasualLeave ? <CheckCircle size={10} /> : <XCircle size={10} />}
                             Casual Leave
+                          </span>
+                          <span
+                            className={`flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border ${
+                              m.canApproveOnDuty
+                                ? "bg-green-50 text-green-700 border-green-200"
+                                : "bg-gray-50 text-gray-400 border-gray-200"
+                            }`}
+                          >
+                            {m.canApproveOnDuty ? <CheckCircle size={10} /> : <XCircle size={10} />}
+                            Geo-Punch
                           </span>
                         </div>
                       </div>

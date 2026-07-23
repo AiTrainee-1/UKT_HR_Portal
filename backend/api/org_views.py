@@ -18,6 +18,9 @@ def branch_json(b):
         "phone": b.phone,
         "isHeadOffice": b.is_head_office,
         "isActive": b.is_active,
+        "geofenceLat": float(b.geofence_lat) if b.geofence_lat is not None else None,
+        "geofenceLng": float(b.geofence_lng) if b.geofence_lng is not None else None,
+        "geofenceRadiusM": b.geofence_radius_m,
         "createdAt": b.created_at.isoformat() if b.created_at else None,
     }
 
@@ -61,6 +64,9 @@ def branches(request: Request) -> Response:
         manager_name=data.get("managerName"),
         phone=data.get("phone"),
         is_head_office=is_head_office,
+        geofence_lat=data.get("geofenceLat") or None,
+        geofence_lng=data.get("geofenceLng") or None,
+        geofence_radius_m=data.get("geofenceRadiusM") or 200,
     )
     return Response(branch_json(b), status=201)
 
@@ -84,6 +90,8 @@ def branch_detail(request: Request, pk: int) -> Response:
             ("name", "name"), ("code", "code"), ("location", "location"), ("address", "address"),
             ("managerName", "manager_name"), ("phone", "phone"),
             ("isHeadOffice", "is_head_office"), ("isActive", "is_active"),
+            ("geofenceLat", "geofence_lat"), ("geofenceLng", "geofence_lng"),
+            ("geofenceRadiusM", "geofence_radius_m"),
         ]:
             if field in data:
                 setattr(b, attr, data[field])

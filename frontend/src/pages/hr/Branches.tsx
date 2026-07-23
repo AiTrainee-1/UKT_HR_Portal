@@ -18,9 +18,13 @@ import {
 } from "@/lib/api-client";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
-import { MapPin, Plus, Trash2, Pencil, Search, Phone, Building2 } from "lucide-react";
+import { MapPin, Plus, Trash2, Pencil, Search, Phone, Building2, Navigation } from "lucide-react";
+import GeofencePicker from "@/components/geo/GeofencePicker";
 
-const EMPTY_FORM = { name: "", code: "", location: "", address: "", phone: "", isHeadOffice: false };
+const EMPTY_FORM = {
+  name: "", code: "", location: "", address: "", phone: "", isHeadOffice: false,
+  geofenceLat: null as number | null, geofenceLng: null as number | null, geofenceRadiusM: 200,
+};
 
 export default function Branches() {
   const { toast } = useToast();
@@ -58,6 +62,9 @@ export default function Branches() {
       address: b.address ?? "",
       phone: b.phone ?? "",
       isHeadOffice: b.isHeadOffice,
+      geofenceLat: b.geofenceLat ?? null,
+      geofenceLng: b.geofenceLng ?? null,
+      geofenceRadiusM: b.geofenceRadiusM ?? 200,
     });
     setShowDialog(true);
   }
@@ -74,6 +81,9 @@ export default function Branches() {
       address: form.address.trim() || undefined,
       phone: form.phone.trim() || undefined,
       isHeadOffice: form.isHeadOffice,
+      geofenceLat: form.geofenceLat,
+      geofenceLng: form.geofenceLng,
+      geofenceRadiusM: form.geofenceRadiusM,
     };
     try {
       if (editingId) {
@@ -194,6 +204,15 @@ export default function Branches() {
                           <Building2 size={10} /> Head Office
                         </span>
                       )}
+                      {b.geofenceLat != null ? (
+                        <span className="flex items-center gap-1 text-[11px] font-semibold text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded">
+                          <Navigation size={10} /> Geofence set ({b.geofenceRadiusM ?? 200}m)
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1 text-[11px] font-semibold text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded">
+                          <Navigation size={10} /> No location set
+                        </span>
+                      )}
                       {b.location && (
                         <span className="text-sm text-muted-foreground">{b.location}</span>
                       )}
@@ -257,7 +276,7 @@ export default function Branches() {
 
       {/* Create / Edit Dialog */}
       <Dialog open={showDialog} onOpenChange={setShowDialog}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingId ? "Edit Branch" : "Add Branch"}</DialogTitle>
           </DialogHeader>
@@ -325,6 +344,55 @@ export default function Branches() {
                 </span>
               </span>
             </label>
+
+            <div className="space-y-2 rounded-lg border p-3">
+              <div className="flex items-center justify-between">
+                <Label className="flex items-center gap-1.5">
+                  <Navigation size={13} className="text-teal-700" /> Attendance Location (Geofence)
+                </Label>
+                {form.geofenceLat != null && (
+                  <button
+                    type="button"
+                    className="text-[11px] text-red-500 hover:underline"
+                    onClick={() => setForm((f) => ({ ...f, geofenceLat: null, geofenceLng: null }))}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Click the map to set this branch's location. Employees inside the radius below can mark attendance
+                from the mobile or web app; outside it, they'll need photo + Department-Head approval.
+              </p>
+              <GeofencePicker
+                key={editingId ?? "new"}
+                lat={form.geofenceLat}
+                lng={form.geofenceLng}
+                radiusM={form.geofenceRadiusM}
+                onPick={(lat, lng) => setForm((f) => ({ ...f, geofenceLat: lat, geofenceLng: lng }))}
+              />
+              {form.geofenceLat != null && (
+                <div className="grid grid-cols-2 gap-3 items-end">
+                  <div className="text-xs text-muted-foreground font-mono">
+                    {form.geofenceLat.toFixed(6)}, {form.geofenceLng!.toFixed(6)}
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="br-radius" className="text-xs">Radius (meters)</Label>
+                    <Input
+                      id="br-radius"
+                      type="number"
+                      min={20}
+                      max={2000}
+                      value={form.geofenceRadiusM}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, geofenceRadiusM: Math.max(20, Number(e.target.value) || 200) }))
+                      }
+                      className="h-8"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDialog(false)}>Cancel</Button>

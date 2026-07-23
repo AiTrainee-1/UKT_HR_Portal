@@ -3,7 +3,7 @@ import { Link, useLocation } from 'wouter';
 import { useAuth, canView, canViewPage } from '@/contexts/AuthContext';
 import { moduleForPath } from '@/lib/permission-modules';
 import { useListLeaveRequests, useListPermissions, useListResignations, useListAdvances } from '@/lib/api-client';
-import { usePayrollSettings } from '@/lib/api-client/custom-hooks';
+import { usePayrollSettings, useOnDutyRequestsHR } from '@/lib/api-client/custom-hooks';
 import {
   LayoutDashboard, Users, Clock, Calendar, CheckCircle2, IndianRupee,
   Wallet, BarChart3, Shield, Activity, Settings, FileText, LogOut,
@@ -58,6 +58,8 @@ const navGroups: NavGroupData[] = [
           { path: '/hr/attendance/staff', label: 'Staff Attendance' },
           { path: '/hr/attendance/production', label: 'Production Attendance' },
           { path: '/hr/attendance/report-log', label: 'Report Log' },
+          { path: '/hr/attendance/search', label: 'Attendance Search' },
+          { path: '/hr/geo-attendance', label: 'Geo Attendance' },
         ],
       },
     ],
@@ -443,11 +445,13 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
   const canSeeRequests = canView(user, 'requests');
   const canSeeResignations = canView(user, 'recruitment.resignations');
   const canSeeSettlement = canView(user, 'settlement');
+  const canSeeGeoAttendance = canView(user, 'geo_attendance');
 
   const { data: leaveData }  = useListLeaveRequests(undefined, { query: { refetchInterval: 30_000, enabled: canSeeRequests } } as any);
   const { data: permData }   = useListPermissions(undefined, { refetchInterval: 30_000, enabled: canSeeRequests } as any);
   const { data: resignData } = useListResignations(undefined, { refetchInterval: 30_000, enabled: canSeeResignations } as any);
   const { data: advanceData } = useListAdvances(undefined, { refetchInterval: 30_000, enabled: canSeeSettlement } as any);
+  const { data: onDutyData } = useOnDutyRequestsHR('pending', canSeeGeoAttendance);
   const pendingCount =
     ((leaveData ?? []).filter((l: any) => l.status === 'pending').length) +
     ((permData  ?? []).filter((p: any) => p.status === 'pending').length);
@@ -457,6 +461,7 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
   const pendingAdvancesCount = (advanceData ?? []).filter(
     (a: any) => a.status === 'pending'
   ).length;
+  const pendingOnDutyCount = canSeeGeoAttendance ? (onDutyData ?? []).length : 0;
 
   const initials = (user?.name ?? 'H')
     .split(' ')
@@ -627,6 +632,15 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
                         children: item.children?.map((c) =>
                           c.path === '/hr/recruitment/resignations'
                             ? { ...c, badge: activeResignationsCount || undefined }
+                            : c
+                        ),
+                      }
+                    : item.path === '/hr/attendance'
+                    ? {
+                        ...item,
+                        children: item.children?.map((c) =>
+                          c.path === '/hr/geo-attendance'
+                            ? { ...c, badge: pendingOnDutyCount || undefined }
                             : c
                         ),
                       }

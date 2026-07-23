@@ -12,6 +12,7 @@ from rest_framework.response import Response
 
 from .auth import require_hr, require_auth, get_token_employee_id
 from .branch_scope import get_branch_scope, scope_to_branch
+from .geo_attendance_views import source_label
 from .models import (
     Attendance, AttendanceLog, Employee, EmployeeShiftAssignment, LeaveRequest,
     DailyShiftLog, MonthlyShiftSummary,
@@ -255,6 +256,7 @@ def attendance_daily(request: Request) -> Response:
             "firstPunch": first_in.punch_time.strftime("%H:%M") if first_in else None,
             "lastPunch": last_out.punch_time.strftime("%H:%M") if last_out else None,
             "source": source,
+            "sourceLabel": source_label(source) if source else None,
             "totalPunches": len(emp_logs),
         })
 
@@ -351,6 +353,7 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
             "time": log.punch_time.strftime("%H:%M"),
             "type": log.punch_type,
             "source": log.source,
+            "sourceLabel": source_label(log.source),
         })
 
     manual_by_date = {str(a.date): a for a in att_qs}
@@ -956,6 +959,74 @@ def attendance_report_log(request: Request) -> Response:
     return Response({"month": m, "year": y, "employees": employees})
 
 
+@api_view(["GET"])
+@require_hr
+def attendance_search(request: Request) -> Response:
+    """
+    GET /api/attendance/search?query=<employee code or name>&date=YYYY-MM-DD
+    (date defaults to today) — HR-facing lookup: find an employee by Employee
+    Code or Name and see their shift plus all 4 punch slots for that day,
+    each tagged with its source (Biometric, Geo Punch, On-Duty, HR Entry,
+    Manual Entry). Branch-scoped, capped at 25 matches.
+    """
+    from .shift_engine import _get_shift_for_date
+
+    query = (request.query_params.get("query") or "").strip()
+    if not query:
+        return Response({"error": "query is required"}, status=400)
+
+    date_str = request.query_params.get("date")
+    d = date_type.today()
+    if date_str:
+        try:
+            d = datetime.fromisoformat(date_str).date()
+        except ValueError:
+            return Response({"error": "Invalid date format"}, status=400)
+
+    emps = (
+        scope_to_branch(Employee.objects, request)
+        .select_related("department", "designation")
+        .filter(
+            Q(employee_code__icontains=query)
+            | Q(first_name__icontains=query)
+            | Q(last_name__icontains=query),
+            status="active",
+        )
+        .order_by("employee_code")[:25]
+    )
+
+    results = []
+    for emp in emps:
+        logs = list(
+            AttendanceLog.objects.filter(employee=emp, date=d).order_by("punch_time")[:4]
+        )
+        punches = [
+            {
+                "time": log.punch_time.strftime("%H:%M:%S"),
+                "type": log.punch_type,
+                "source": log.source,
+                "sourceLabel": source_label(log.source),
+            }
+            for log in logs
+        ]
+        while len(punches) < 4:
+            punches.append(None)
+
+        shift = _get_shift_for_date(emp, d)
+        results.append({
+            "employeeId": emp.id,
+            "employeeCode": emp.employee_code,
+            "employeeName": f"{emp.first_name} {emp.last_name}",
+            "department": emp.department.name if emp.department_id and emp.department else None,
+            "designation": emp.designation.title if emp.designation_id and emp.designation else None,
+            "shift": _assigned_shift_json(shift),
+            "punches": punches,
+            "totalPunches": len(logs),
+        })
+
+    return Response({"date": str(d), "query": query, "count": len(results), "results": results})
+
+
 @api_view(["POST"])
 @require_hr
 def compute_shift_logs(request: Request) -> Response:
@@ -1138,6 +1209,7 @@ def employee_shift_monthly_stats(request: Request) -> Response:
             "time": log.punch_time.strftime("%H:%M"),
             "type": log.punch_type,
             "source": log.source,
+            "sourceLabel": source_label(log.source),
         })
 
     # ── Manual attendance records ────────────────────────────────────────────
@@ -1184,6 +1256,7 @@ def employee_shift_monthly_stats(request: Request) -> Response:
         first_in = punches[0]["time"] if punches else None
         last_out = punches[-1]["time"] if len(punches) > 1 else None
         source = punches[0]["source"] if punches else ("manual" if manual else None)
+        source_lbl = punches[0]["sourceLabel"] if punches else (source_label("manual") if manual else None)
 
         if is_sunday:
             status = "holiday"
@@ -1228,6 +1301,7 @@ def employee_shift_monthly_stats(request: Request) -> Response:
             "lastPunch": last_out,
             "totalPunches": len(punches),
             "source": source,
+            "sourceLabel": source_lbl,
             "leaveType": leave_date_map.get(date_str),
             "shiftsCompleted": str(shifts_done) if sl else None,
             "isHalfShift": is_half,

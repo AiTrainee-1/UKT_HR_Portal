@@ -26,6 +26,7 @@ import {
   Users, UserCheck, Calendar, CreditCard, TrendingUp, AlertCircle,
   ChevronRight, Clock, Building2, Gift, Activity,
   CheckCircle2, ClipboardList, Wallet, ArrowUp, ArrowDown, RefreshCw,
+  MapPinned, Navigation, Radar, ShieldCheck,
 } from "lucide-react";
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -241,6 +242,12 @@ export default function HrDashboard() {
   const pendingLeaves    = summary?.pendingLeaves ?? 0;
   const pendingPermCount = (pendingPerms ?? []).length;
   const monthlyPayroll   = summary?.monthlySalaryTotal ?? 0;
+
+  const geoPunchesToday      = (summary as any)?.geoPunchesToday ?? 0;
+  const onDutyPending        = (summary as any)?.onDutyPendingApprovals ?? 0;
+  const onDutyApprovedToday  = (summary as any)?.onDutyApprovedToday ?? 0;
+  const employeesOnDutyToday = (summary as any)?.employeesOnDutyToday ?? 0;
+  const liveTrackingEnabled  = (summary as any)?.liveTrackingEnabledCount ?? 0;
 
   const headerDate = now.toLocaleDateString("en-IN", {
     weekday: "long", day: "numeric", month: "long", year: "numeric",
@@ -625,6 +632,7 @@ export default function HrDashboard() {
                 {[
                   { label: "Leave Approvals",      value: pendingLeaves,    color: "#f59e0b", icon: Calendar,      path: "/hr/leave" },
                   { label: "Permission Requests",  value: pendingPermCount, color: "#8b5cf6", icon: Clock,         path: "/hr/requests" },
+                  { label: "On-Duty Approvals",    value: onDutyPending,    color: "#d97706", icon: MapPinned,     path: "/hr/geo-attendance" },
                   { label: "Open Advances",        value: openAdvances,     color: "#ef4444", icon: CreditCard,    path: "/hr/settlement" },
                   { label: "Notifications",        value: (summary as any)?.unreadNotifications ?? 0, color: "#006496", icon: AlertCircle, path: "/hr/notifications" },
                 ].map(({ label, value, color, icon: Icon, path }) => (
@@ -695,6 +703,40 @@ export default function HrDashboard() {
                 <p className="text-xs text-center py-3" style={{ color: "rgba(0,60,100,0.55)" }}>No upcoming holidays</p>
               )}
             </div>
+          </div>
+        </div>
+
+        {/* ── Geo Attendance Snapshot ─────────────────────────────────────── */}
+        <div className="rounded-2xl p-5 clay-card">
+          <SectionTitle action="Open Geo Attendance" onAction={() => navigate("/hr/geo-attendance")}>
+            <span className="flex items-center gap-1.5">
+              <Navigation size={12} style={{ color: "#006496" }} />
+              Geo Attendance — Today
+            </span>
+          </SectionTitle>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[
+              { label: "Office Geo Punches", value: geoPunchesToday, color: "#006496", icon: MapPinned },
+              { label: "On-Duty Approved", value: onDutyApprovedToday, color: "#059669", icon: ShieldCheck },
+              { label: "Employees On-Duty", value: employeesOnDutyToday, color: "#d97706", icon: Users },
+              { label: "Live Tracking Enabled", value: liveTrackingEnabled, color: "#7c3aed", icon: Radar },
+            ].map(({ label, value, color, icon: Icon }) => (
+              <button
+                key={label}
+                onClick={() => navigate("/hr/geo-attendance")}
+                className="text-left rounded-xl p-3 transition-all hover:scale-[1.02]"
+                style={{ background: color + "0d" }}
+              >
+                <div
+                  className="w-7 h-7 rounded-lg flex items-center justify-center mb-2"
+                  style={{ background: color + "18", boxShadow: `3px 3px 8px ${color}20, -2px -2px 5px rgba(255,255,255,0.8)` }}
+                >
+                  <Icon size={13} style={{ color }} />
+                </div>
+                <p className="text-xl font-black" style={{ color: "#1a3a4a" }}>{value}</p>
+                <p className="text-[11px] font-semibold mt-0.5" style={{ color: "#1e5a7a" }}>{label}</p>
+              </button>
+            ))}
           </div>
         </div>
 

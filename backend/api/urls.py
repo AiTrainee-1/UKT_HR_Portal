@@ -58,6 +58,12 @@ from .manager_views import (
     manager_me, manager_pending_requests,
     manager_update_leave_status, manager_update_permission_status,
     manager_update_attendance_status, manager_update_casual_leave_status,
+    manager_update_on_duty_status,
+)
+from .geo_attendance_views import (
+    geo_punch, geo_punch_precheck, geo_punch_status, live_location_ping,
+    on_duty_request, on_duty_requests_hr, on_duty_request_hr_status, on_duty_request_photo,
+    live_location_team, live_location_trail, live_location_route, on_duty_map,
 )
 from .reports_views import (
     attendance_report, attendance_summary_report,
@@ -70,6 +76,7 @@ from .attendance_views import (
     attendance_summary, attendance_daily, attendance_monthly_trend,
     attendance_employee_history, biometric_punch, manual_attendance,
     sync_biometric_api, sync_biometric_progress, attendance_report_log, compute_shift_logs,
+    attendance_search,
     attendance_late_summary, employee_shift_monthly_stats,
 )
 from .growth_views import (
@@ -236,6 +243,7 @@ urlpatterns = [
     path("attendance/manual-import/export", export_punch_records),
     path("attendance/manual-import/upload", import_punch_excel),
     path("attendance/report-log", attendance_report_log),
+    path("attendance/search", attendance_search),
     path("attendance/compute-shifts", compute_shift_logs),
     path("attendance/late-summary", attendance_late_summary),
     path("attendance/employee-shift-stats", employee_shift_monthly_stats),
@@ -243,6 +251,20 @@ urlpatterns = [
     path("attendance/override", attendance_day_override),
     path("attendance/override-requests", attendance_override_requests),
     path("biometric/punch", biometric_punch),
+
+    # ── Geo Attendance (location-based punching + live tracking) ────────────
+    path("attendance/geo-punch", geo_punch),
+    path("attendance/geo-punch/precheck", geo_punch_precheck),
+    path("attendance/geo-punch/status", geo_punch_status),
+    path("attendance/on-duty/request", on_duty_request),
+    path("on-duty-requests", on_duty_requests_hr),
+    path("on-duty-requests/<int:pk>/status", on_duty_request_hr_status),
+    path("on-duty-requests/<int:pk>/photo/<int:n>", on_duty_request_photo),
+    path("on-duty-map", on_duty_map),
+    path("live-location/ping", live_location_ping),
+    path("live-location/team", live_location_team),
+    path("live-location/team/<int:employee_id>/trail", live_location_trail),
+    path("live-location/team/<int:employee_id>/route", live_location_route),
 
     # ── Casual Leave (CL) ───────────────────────────────────────────────────
     path("casual-leaves", casual_leaves),
@@ -325,6 +347,7 @@ urlpatterns = [
     path("manager/permissions/<int:pk>/status", manager_update_permission_status),
     path("manager/attendance-requests/<int:pk>/status", manager_update_attendance_status),
     path("manager/casual-leaves/<int:pk>/status", manager_update_casual_leave_status),
+    path("manager/on-duty-requests/<int:pk>/status", manager_update_on_duty_status),
 
     # ── Audit Logs ───────────────────────────────────────────────────────────
     path("audit-logs", audit_logs),

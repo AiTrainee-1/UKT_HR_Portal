@@ -46,6 +46,7 @@ export const MODULE_TREE: ModuleNode[] = [
   { key: "chat", label: "Chat" },
   { key: "notifications", label: "Notifications" },
   { key: "night_shift", label: "Night Shift" },
+  { key: "geo_attendance", label: "Geo Attendance" },
   {
     key: "settings", label: "Settings", children: [
       { key: "settings.company", label: "Company" },
@@ -148,6 +149,7 @@ export const ROUTE_MODULE_MAP: Record<string, string> = {
   "/hr/chat": "chat",
   "/hr/notifications": "notifications",
   "/hr/night-shift": "night_shift",
+  "/hr/geo-attendance": "geo_attendance",
   "/hr/settings": "settings",
 };
 

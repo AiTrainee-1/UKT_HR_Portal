@@ -59,6 +59,7 @@ MODULE_TREE: list[dict] = [
     {"key": "chat", "label": "Chat"},
     {"key": "notifications", "label": "Notifications"},
     {"key": "night_shift", "label": "Night Shift"},
+    {"key": "geo_attendance", "label": "Geo Attendance"},
     {"key": "settings", "label": "Settings", "children": [
         {"key": "settings.company", "label": "Company"},
         {"key": "settings.attendance", "label": "Attendance"},
@@ -157,6 +158,15 @@ URL_MODULE_MAP: dict[str, str] = {
     "session-configs": "attendance",
 
     "night-shift": "night_shift",
+
+    # Employee-facing geo-punch/live-location routes (attendance/geo-punch*,
+    # live-location/ping) are called with employee tokens, not HR ones, so
+    # HrPermissionMiddleware never gates them regardless of this table (it
+    # only checks role=="hr"). Only the HR-dashboard-facing routes need an
+    # entry here.
+    "on-duty-requests": "geo_attendance",
+    "on-duty-map": "geo_attendance",
+    "live-location/team": "geo_attendance",
 
     "payroll": "payroll",
 

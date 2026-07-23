@@ -33,6 +33,7 @@ from .models import (
     LeaveBalance,
     LeaveRequest,
     Notification,
+    OnDutyRequest,
     Payroll,
     PushToken,
     SalaryRecord,
@@ -548,6 +549,7 @@ def _employee_update(request: Request, pk: int) -> Response:
         "photoUrl": "photo_url",
         "bloodGroup": "blood_group",
         "emergencyContact": "emergency_contact",
+        "locationTrackingEnabled": "location_tracking_enabled",
     }
     if "employmentType" in request.data:
         emp_type = request.data.get("employmentType")
@@ -1594,6 +1596,18 @@ def hr_dashboard_summary(_request: Request) -> Response:
         female=Count("id", filter=Q(gender="female")),
         other=Count("id", filter=~Q(gender__in=["male", "female"])),
     )
+
+    today = date.today()
+    geo_punches_today = AttendanceLog.objects.filter(date=today, source="geo:auto").count()
+    on_duty_pending = OnDutyRequest.objects.filter(
+        status__in=[OnDutyRequest.STATUS_PENDING_HOD, OnDutyRequest.STATUS_PENDING_HR]
+    ).count()
+    on_duty_approved_today = OnDutyRequest.objects.filter(
+        punch_date=today, status=OnDutyRequest.STATUS_APPROVED
+    ).count()
+    employees_on_duty_today = OnDutyRequest.objects.filter(punch_date=today).values("employee_id").distinct().count()
+    live_tracking_enabled = Employee.objects.filter(location_tracking_enabled=True, status="active").count()
+
     return Response(
         {
             "totalEmployees": emp_stats["total"] or 0,
@@ -1609,6 +1623,11 @@ def hr_dashboard_summary(_request: Request) -> Response:
             "maleEmployees": gender_stats["male"] or 0,
             "femaleEmployees": gender_stats["female"] or 0,
             "otherEmployees": gender_stats["other"] or 0,
+            "geoPunchesToday": geo_punches_today,
+            "onDutyPendingApprovals": on_duty_pending,
+            "onDutyApprovedToday": on_duty_approved_today,
+            "employeesOnDutyToday": employees_on_duty_today,
+            "liveTrackingEnabledCount": live_tracking_enabled,
         }
     )
 

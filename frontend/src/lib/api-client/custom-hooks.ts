@@ -14,6 +14,9 @@ export type Branch = {
   phone?: string | null;
   isHeadOffice: boolean;
   isActive: boolean;
+  geofenceLat?: number | null;
+  geofenceLng?: number | null;
+  geofenceRadiusM?: number | null;
   createdAt?: string | null;
 };
 
@@ -187,6 +190,9 @@ export const useCreateBranch = () =>
       managerName?: string;
       phone?: string;
       isHeadOffice?: boolean;
+      geofenceLat?: number | null;
+      geofenceLng?: number | null;
+      geofenceRadiusM?: number | null;
     }) =>
       customFetch<Branch>("/api/branches", {
         method: "POST",
@@ -1221,6 +1227,31 @@ export const useAttendanceReportDetail = (params: ReportLogDetailParams, enabled
       `/api/attendance/report-log?${reportLogQueryString(params)}`,
     ),
     enabled,
+  });
+
+export type AttendanceSearchPunch = {
+  time: string;
+  type: "IN" | "OUT";
+  source: string;
+  sourceLabel: string;
+} | null;
+
+export type AttendanceSearchResult = {
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department: string | null;
+  designation: string | null;
+  shift: { name: string; startTime: string | null; endTime: string | null; gracePeriodMinutes: number | null } | null;
+  punches: AttendanceSearchPunch[];
+  totalPunches: number;
+};
+
+export const useAttendanceSearch = (query: string, date: string, enabled = true) =>
+  useQuery<{ date: string; query: string; count: number; results: AttendanceSearchResult[] }>({
+    queryKey: ["/api/attendance/search", query, date],
+    queryFn: () => customFetch(`/api/attendance/search?query=${encodeURIComponent(query)}&date=${date}`),
+    enabled: enabled && query.trim().length > 0,
   });
 
 export const useComputeShiftLogs = () =>
@@ -2712,6 +2743,7 @@ export type DepartmentManagerItem = {
   canApproveResignations: boolean;
   canApproveAttendance: boolean;
   canApproveCasualLeave: boolean;
+  canApproveOnDuty: boolean;
   isActive: boolean;
   notes?: string | null;
   createdAt?: string | null;
@@ -2753,6 +2785,7 @@ export const useCreateDepartmentManager = () => {
       canApproveResignations?: boolean;
       canApproveAttendance?: boolean;
       canApproveCasualLeave?: boolean;
+      canApproveOnDuty?: boolean;
       notes?: string;
     }) =>
       customFetch<DepartmentManagerItem>("/api/department-managers", {
@@ -2779,6 +2812,7 @@ export const useUpdateDepartmentManager = () => {
         canApproveResignations: boolean;
         canApproveAttendance: boolean;
         canApproveCasualLeave: boolean;
+        canApproveOnDuty: boolean;
         isActive: boolean;
         notes: string;
       }>;
@@ -3526,6 +3560,156 @@ export const useSendChatMessage = () => {
       }),
     onSuccess: (_data, vars) => {
       queryClient.invalidateQueries({ queryKey: ["/api/chat/channels", vars.channelId, "messages"] });
+    },
+  });
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Geo Attendance (Office Geo Punch + On-Duty two-stage approval + live tracking)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type OnDutyRequestItem = {
+  id: number;
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department: string | null;
+  punchDate: string;
+  punchTime: string;
+  punchType: "IN" | "OUT";
+  reason: string;
+  branchId: number | null;
+  branchName: string | null;
+  latitude: number;
+  longitude: number;
+  accuracyM: number | null;
+  isMocked: boolean;
+  hasPhotos: boolean;
+  status: "pending_hod" | "pending_hr" | "approved" | "rejected";
+  hodReviewedBy: string | null;
+  hodReviewComment: string | null;
+  hodReviewedAt: string | null;
+  hrReviewedBy: string | null;
+  hrReviewComment: string | null;
+  hrReviewedAt: string | null;
+  createdAt: string | null;
+};
+
+export const useOnDutyRequestsHR = (
+  status: "pending" | "pending_hod" | "pending_hr" | "approved" | "rejected" | "all" = "pending",
+  enabled = true,
+) =>
+  useQuery<OnDutyRequestItem[]>({
+    queryKey: ["/api/on-duty-requests", status],
+    queryFn: () => customFetch<OnDutyRequestItem[]>(`/api/on-duty-requests?status=${status}`),
+    refetchInterval: 30_000,
+    enabled,
+  });
+
+export const useUpdateOnDutyRequestHR = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, status, comment }: { id: number; status: "approved" | "rejected"; comment?: string }) =>
+      customFetch<OnDutyRequestItem>(`/api/on-duty-requests/${id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status, comment }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/on-duty-requests"] });
+    },
+  });
+};
+
+/** Fetches an auth-protected image (geo-punch photos) and returns a blob
+ * object URL — img src can't carry an Authorization header, so this mirrors
+ * _fetchPdfBlob's fetch-then-objectURL pattern for images instead. Caller
+ * owns revoking the URL when done with it. */
+export const fetchAuthedImageObjectUrl = async (url: string, getToken: () => string | null): Promise<string> => {
+  const token = getToken();
+  const response = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!response.ok) throw new Error("Failed to load photo");
+  const blob = await response.blob();
+  return URL.createObjectURL(blob);
+};
+
+export type LiveLocationTeamMember = {
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department: string | null;
+  branchName: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  isMocked: boolean;
+  lastSeenAt: string | null;
+};
+
+export const useLiveLocationTeam = (enabled = true) =>
+  useQuery<LiveLocationTeamMember[]>({
+    queryKey: ["/api/live-location/team"],
+    queryFn: () => customFetch<LiveLocationTeamMember[]>("/api/live-location/team"),
+    refetchInterval: 20_000,
+    enabled,
+  });
+
+export type LiveLocationTrailPoint = { latitude: number; longitude: number; recordedAt: string; isMocked: boolean };
+
+export const useLiveLocationTrail = (employeeId: number | null) =>
+  useQuery<LiveLocationTrailPoint[]>({
+    queryKey: ["/api/live-location/trail", employeeId],
+    queryFn: () => customFetch<LiveLocationTrailPoint[]>(`/api/live-location/team/${employeeId}/trail`),
+    enabled: employeeId != null,
+    refetchInterval: 20_000,
+  });
+
+export type LiveLocationRoute = {
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  date: string;
+  points: { latitude: number; longitude: number; recordedAt: string; isMocked: boolean }[];
+};
+
+export const useLiveLocationRoute = (employeeId: number | null, date: string) =>
+  useQuery<LiveLocationRoute>({
+    queryKey: ["/api/live-location/route", employeeId, date],
+    queryFn: () => customFetch<LiveLocationRoute>(`/api/live-location/team/${employeeId}/route?date=${date}`),
+    enabled: employeeId != null,
+  });
+
+export type OnDutyMapEmployee = {
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department: string | null;
+  locationTrackingEnabled: boolean;
+  latitude: number | null;
+  longitude: number | null;
+  lastSeenAt: string | null;
+  routePoints: { latitude: number; longitude: number; recordedAt: string }[];
+  requests: { id: number; punchType: "IN" | "OUT"; punchTime: string; reason: string; status: string }[];
+};
+
+export const useOnDutyMap = (date: string) =>
+  useQuery<{ date: string; employees: OnDutyMapEmployee[] }>({
+    queryKey: ["/api/on-duty-map", date],
+    queryFn: () => customFetch<{ date: string; employees: OnDutyMapEmployee[] }>(`/api/on-duty-map?date=${date}`),
+    refetchInterval: 20_000,
+  });
+
+export const useUpdateEmployeeLocationTracking = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ employeeId, enabled }: { employeeId: number; enabled: boolean }) =>
+      customFetch(`/api/employees/${employeeId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ locationTrackingEnabled: enabled }),
+      }),
+    onSuccess: () => {
+      // /api/employees list + /api/live-location/team both need a refetch —
+      // matches by query-key prefix so every params variant is caught.
+      queryClient.invalidateQueries({ queryKey: ["/api/employees"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/live-location/team"] });
     },
   });
 };

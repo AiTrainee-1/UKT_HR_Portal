@@ -32,6 +32,7 @@ from rest_framework.response import Response
 
 from .auth import require_hr
 from .branch_scope import scope_to_branch
+from .geo_attendance_views import source_label
 from .permission_registry import resolve_permission
 from .models import (
     Advance,
@@ -938,6 +939,7 @@ def _att_log_json(log: AttendanceLog) -> dict:
         "punchTime": log.punch_time.strftime("%H:%M"),
         "punchType": log.punch_type,
         "source": log.source,
+        "sourceLabel": source_label(log.source),
     }
 
 

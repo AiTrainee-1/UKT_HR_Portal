@@ -12,6 +12,7 @@ from rest_framework.response import Response
 
 from .auth import require_hr
 from .branch_scope import scope_to_branch
+from .geo_attendance_views import source_label
 from .models import (
     Employee, Attendance, AttendanceLog, LeaveRequest, LeaveBalance, LeaveType,
     Department, Branch, Advance, AdvanceRepayment, SalarySlip,
@@ -161,6 +162,7 @@ def attendance_report(request: Request):
             "punchType": log.punch_type,
             "punchTime": log.punch_time.strftime("%H:%M"),
             "source": log.source,
+            "sourceLabel": source_label(log.source),
         }
         for log in qs[:2000]
     ]

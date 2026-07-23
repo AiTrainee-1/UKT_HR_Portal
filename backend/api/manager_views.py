@@ -9,7 +9,7 @@ from .models import (
     Employee, Department,
     DepartmentManager, ManagerDepartmentAssignment, ManagerEmployeeAssignment,
     ResignationRequest, AttendanceOverrideRequest, AttendanceDayRecord,
-    CasualLeaveRequest, Notification,
+    CasualLeaveRequest, Notification, OnDutyRequest,
 )
 
 
@@ -33,6 +33,7 @@ def _manager_json(m, include_assignments=False):
         "canApproveResignations": m.can_approve_resignations,
         "canApproveAttendance": m.can_approve_attendance,
         "canApproveCasualLeave": m.can_approve_casual_leave,
+        "canApproveOnDuty": m.can_approve_on_duty,
         "isActive": m.is_active,
         "notes": m.notes,
         "createdAt": m.created_at.isoformat() if m.created_at else None,
@@ -107,6 +108,7 @@ def department_managers(request: Request) -> Response:
         can_approve_resignations=bool(data.get("canApproveResignations", True)),
         can_approve_attendance=bool(data.get("canApproveAttendance", True)),
         can_approve_casual_leave=bool(data.get("canApproveCasualLeave", True)),
+        can_approve_on_duty=bool(data.get("canApproveOnDuty", True)),
         notes=data.get("notes"),
     )
     return Response(_manager_json(m, include_assignments=True), status=201)
@@ -144,6 +146,8 @@ def department_manager_detail(request: Request, pk: int) -> Response:
         m.can_approve_attendance = bool(data["canApproveAttendance"])
     if "canApproveCasualLeave" in data:
         m.can_approve_casual_leave = bool(data["canApproveCasualLeave"])
+    if "canApproveOnDuty" in data:
+        m.can_approve_on_duty = bool(data["canApproveOnDuty"])
     if "isActive" in data:
         m.is_active = bool(data["isActive"])
     if "notes" in data:
@@ -273,9 +277,13 @@ def manager_me(request: Request) -> Response:
         CasualLeaveRequest.objects.filter(emp_filter, status="pending").count()
         if m.can_approve_casual_leave else 0
     )
+    pending_on_duty = (
+        OnDutyRequest.objects.filter(emp_filter, status=OnDutyRequest.STATUS_PENDING_HOD).count()
+        if m.can_approve_on_duty else 0
+    )
     pending_count = (
         pending_leaves + pending_perms + pending_resignations
-        + pending_attendance + pending_casual
+        + pending_attendance + pending_casual + pending_on_duty
     )
 
     return Response({
@@ -284,12 +292,14 @@ def manager_me(request: Request) -> Response:
         "canApproveResignations": m.can_approve_resignations,
         "canApproveAttendance": m.can_approve_attendance,
         "canApproveCasualLeave": m.can_approve_casual_leave,
+        "canApproveOnDuty": m.can_approve_on_duty,
         "pendingApprovalsCount": pending_count,
         "pendingLeavesCount": pending_leaves,
         "pendingPermissionsCount": pending_perms,
         "pendingResignationsCount": pending_resignations,
         "pendingAttendanceCount": pending_attendance,
         "pendingCasualLeaveCount": pending_casual,
+        "pendingOnDutyCount": pending_on_duty,
         **_manager_json(m, include_assignments=True),
     })
 
@@ -393,18 +403,33 @@ def manager_pending_requests(request: Request) -> Response:
         casual_qs = CasualLeaveRequest.objects.none()
     casual_qs = casual_qs.order_by("-created_at")
 
+    from .geo_attendance_views import _on_duty_request_dict
+    on_duty_qs = OnDutyRequest.objects.select_related(
+        "employee__department", "employee__designation", "branch"
+    ).filter(emp_filter)
+    if m.can_approve_on_duty:
+        if status_filter == "pending":
+            on_duty_qs = on_duty_qs.filter(status=OnDutyRequest.STATUS_PENDING_HOD)
+        elif status_filter != "all":
+            on_duty_qs = on_duty_qs.filter(status=status_filter)
+    else:
+        on_duty_qs = OnDutyRequest.objects.none()
+    on_duty_qs = on_duty_qs.order_by("-created_at")
+
     return Response({
         "leaveRequests": [_leave_with_emp(r) for r in leave_qs],
         "permissions": [_perm_with_emp(p) for p in perm_qs],
         "resignations": [_resignation_json(r) for r in resign_qs],
         "attendanceRequests": [_override_request_dict(r) for r in attendance_qs],
         "casualLeaves": [_cl_dict(r) for r in casual_qs],
+        "onDutyRequests": [_on_duty_request_dict(r) for r in on_duty_qs],
         "totalPending": (
             LeaveRequest.objects.filter(emp_filter, status="pending").count()
             + EmployeePermission.objects.filter(emp_filter, status="pending").count()
             + (ResignationRequest.objects.filter(emp_filter, status="pending").count() if m.can_approve_resignations else 0)
             + (AttendanceOverrideRequest.objects.filter(emp_filter, status="pending").count() if m.can_approve_attendance else 0)
             + (CasualLeaveRequest.objects.filter(emp_filter, status="pending").count() if m.can_approve_casual_leave else 0)
+            + (OnDutyRequest.objects.filter(emp_filter, status=OnDutyRequest.STATUS_PENDING_HOD).count() if m.can_approve_on_duty else 0)
         ),
     })
 
@@ -588,6 +613,61 @@ def manager_update_attendance_status(request: Request, pk: int) -> Response:
         message=f"Your attendance correction request for {req.date} was {status_val}.",
     )
     return Response(_override_request_dict(req))
+
+
+@api_view(["PATCH"])
+@require_auth
+def manager_update_on_duty_status(request: Request, pk: int) -> Response:
+    """
+    Department Head — stage 1 of the On-Duty approval chain. Approval moves
+    the request to pending_hr (HR still has to approve before the punch is
+    recorded); rejection is terminal. Shares resolve_on_duty_hod() with
+    nothing else — it's the only caller of stage 1 — but writes the same
+    request row HR's endpoints (geo_attendance_views.py) read from.
+    """
+    from .geo_attendance_views import _on_duty_request_dict, resolve_on_duty_hod
+
+    token_emp_id = get_token_employee_id(request)
+    if not token_emp_id:
+        return Response({"error": "Employee authentication required"}, status=403)
+
+    try:
+        m = DepartmentManager.objects.select_related("employee").prefetch_related(
+            "department_assignments", "employee_assignments"
+        ).get(employee_id=token_emp_id, is_active=True)
+    except DepartmentManager.DoesNotExist:
+        return Response({"error": "Not a department manager"}, status=403)
+
+    if not m.can_approve_on_duty:
+        return Response({
+            "error": "Approve-on-duty access is disabled for your account. Ask HR to enable it.",
+            "code": "APPROVE_ON_DUTY_DISABLED",
+        }, status=403)
+
+    dept_ids, direct_ids = _get_manager_employee_ids(m)
+    emp_filter = Q(employee_id__in=direct_ids)
+    if dept_ids:
+        emp_filter |= Q(employee__department_id__in=dept_ids)
+
+    try:
+        req = OnDutyRequest.objects.select_related(
+            "employee__department", "employee__designation", "branch"
+        ).filter(emp_filter).get(pk=pk)
+    except OnDutyRequest.DoesNotExist:
+        if OnDutyRequest.objects.filter(pk=pk).exists():
+            return Response({"error": "This request is not in your approval scope"}, status=403)
+        return Response({"error": "On-Duty request not found"}, status=404)
+
+    if req.status != OnDutyRequest.STATUS_PENDING_HOD:
+        return Response({"error": f"This request was already actioned (status: {req.status})"}, status=400)
+
+    status_val = request.data.get("status")
+    if status_val not in ("approved", "rejected"):
+        return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
+
+    reviewer_name = f"{m.employee.first_name} {m.employee.last_name}"
+    resolve_on_duty_hod(req, status_val, reviewer_name, request.data.get("comment"))
+    return Response(_on_duty_request_dict(req))
 
 
 @api_view(["PATCH"])
