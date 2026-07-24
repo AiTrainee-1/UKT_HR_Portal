@@ -1469,57 +1469,61 @@ class AttendanceOverrideRequest(models.Model):
 #  Geo Attendance (location-based punching)
 # ──────────────────────────────────────────────
 
-class OnDutyRequest(models.Model):
+class OnDutySession(models.Model):
     """
-    An employee working away from the branch (field visit, driver, offsite
-    work) declares On-Duty attendance: two photos, a reason, and GPS —
-    distinct from a plain Office Geo Punch (geo_attendance_views.py::
-    geo_punch), which is only ever for someone physically inside the
-    geofence and has no approval step at all. Nothing is written to
-    AttendanceLog until BOTH stages approve, in order:
-      1. pending_hod  -> the employee's Department Head approves/rejects
+    An employee working away from the branch for a day (field visit, driver,
+    offsite work) declares an On-Duty session: just a destination and a
+    reason to go, no photos or GPS at request time — that verification now
+    happens per-punch (see OnDutyPunchVerification below), not at the gate.
+    Same two-stage approval chain as before:
+      1. pending_hod -> the employee's Department Head approves/rejects
          (mobile Approvals screen, manager_views.py::manager_update_on_duty_status)
-      2. pending_hr   -> HR gives the final approval (HR portal dashboard)
+      2. pending_hr  -> HR gives the final approval (HR portal dashboard)
     A HOD rejection short-circuits straight to "rejected" — HR is never
-    consulted. HR may also act directly on a still-pending_hod request as a
+    consulted. HR may also act directly on a still-pending_hod session as a
     fallback (e.g. no Department Head assigned), finalizing to
-    approved/rejected in one step. On final approval the punch is written
-    via the same biometric_sync._ingest_punches() path every other punch
-    source uses (source_tag="on_duty:approved"), at the ORIGINAL captured
-    punch_time, never the approval time.
+    active/rejected in one step.
+
+    Once HR approves, status becomes "active" and started_at is stamped —
+    this is what gates live-location tracking (geo_attendance_views.py::
+    live_location_ping) and routes the employee's regular attendance punches
+    through the photo+GPS verification flow instead of a plain punch. The
+    session ends in "completed", either automatically (their 4th punch of
+    the day gets HR-approved — see OnDutyPunchVerification) or manually (the
+    employee taps "Done" in the mobile app — nobody else can end it early).
     """
     STATUS_PENDING_HOD = "pending_hod"
     STATUS_PENDING_HR = "pending_hr"
-    STATUS_APPROVED = "approved"
+    STATUS_ACTIVE = "active"
+    STATUS_COMPLETED = "completed"
     STATUS_REJECTED = "rejected"
     STATUS_CHOICES = [
         (STATUS_PENDING_HOD, "Pending HOD Approval"),
         (STATUS_PENDING_HR, "Pending HR Approval"),
-        (STATUS_APPROVED, "Approved"),
+        (STATUS_ACTIVE, "Active"),
+        (STATUS_COMPLETED, "Completed"),
         (STATUS_REJECTED, "Rejected"),
+    ]
+
+    COMPLETION_MANUAL = "manual"
+    COMPLETION_AUTO_4TH_PUNCH = "auto_4th_punch"
+    COMPLETION_CHOICES = [
+        (COMPLETION_MANUAL, "Manual — Employee Marked Done"),
+        (COMPLETION_AUTO_4TH_PUNCH, "Automatic — 4th Punch Approved"),
     ]
 
     employee = models.ForeignKey(
         Employee, on_delete=models.CASCADE, db_column="employee_id",
-        related_name="on_duty_requests",
+        related_name="on_duty_sessions",
     )
-    punch_date = models.DateField(db_column="punch_date")
-    punch_time = models.TimeField(db_column="punch_time")
-    punch_type = models.TextField(choices=AttendanceLog.PUNCH_CHOICES, db_column="punch_type")
-    reason = models.TextField()
+    destination = models.TextField()
     # Snapshot of the branch the employee was assigned to at request time,
-    # kept even if they're later moved to a different branch. On-Duty has no
-    # geofence check (that's the whole point — they're meant to be offsite),
-    # this is purely informational context for the approver.
+    # kept even if they're later moved to a different branch. Purely
+    # informational context for the approver — On-Duty has no geofence
+    # check of its own (that's the whole point — they're meant to be offsite).
     branch = models.ForeignKey(
         Branch, on_delete=models.SET_NULL, null=True, blank=True, db_column="branch_id",
     )
-    latitude = models.DecimalField(max_digits=9, decimal_places=6, db_column="latitude")
-    longitude = models.DecimalField(max_digits=9, decimal_places=6, db_column="longitude")
-    accuracy_m = models.FloatField(null=True, blank=True, db_column="accuracy_m")
-    is_mocked = models.BooleanField(default=False, db_column="is_mocked")
-    photo1 = models.FileField(upload_to="on_duty_requests/%Y/%m/", db_column="photo1")
-    photo2 = models.FileField(upload_to="on_duty_requests/%Y/%m/", db_column="photo2")
     status = models.TextField(choices=STATUS_CHOICES, default=STATUS_PENDING_HOD)
     hod_reviewed_by = models.TextField(null=True, blank=True, db_column="hod_reviewed_by")
     hod_review_comment = models.TextField(null=True, blank=True, db_column="hod_review_comment")
@@ -1527,10 +1531,71 @@ class OnDutyRequest(models.Model):
     hr_reviewed_by = models.TextField(null=True, blank=True, db_column="hr_reviewed_by")
     hr_review_comment = models.TextField(null=True, blank=True, db_column="hr_review_comment")
     hr_reviewed_at = models.DateTimeField(null=True, blank=True, db_column="hr_reviewed_at")
+    started_at = models.DateTimeField(null=True, blank=True, db_column="started_at")
+    completed_at = models.DateTimeField(null=True, blank=True, db_column="completed_at")
+    completed_by = models.TextField(null=True, blank=True, db_column="completed_by")
+    completion_reason = models.TextField(choices=COMPLETION_CHOICES, null=True, blank=True, db_column="completion_reason")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
 
     class Meta:
-        db_table = "on_duty_requests"
+        db_table = "on_duty_sessions"
+        ordering = ["-created_at"]
+
+
+class OnDutyPunchVerification(models.Model):
+    """
+    One of the employee's 4 daily attendance punches, made while an
+    OnDutySession is active — reuses the SAME shared 4-punch-per-day slot
+    system every other punch source uses (biometric, Office Geo Punch), it
+    does not add a separate on-duty punch count. The difference is that an
+    on-duty punch is never written straight to AttendanceLog: it's captured
+    with a selfie + GPS + the original time, held as "pending", and only
+    becomes a real punch (via biometric_sync._ingest_punches(), tagged
+    "on_duty:approved", at the ORIGINAL captured punch_time) once HR
+    approves it — this is the fraud check the office/biometric paths don't
+    need, since this employee is off-site and unsupervised. Only one
+    verification may be pending at a time per employee (see
+    geo_attendance_views.py::on_duty_punch_request) — a rejected one simply
+    leaves that punch slot open for a fresh submission.
+
+    When the punch this verification resolves to is the day's 4th, approving
+    it also auto-completes the parent OnDutySession
+    (completion_reason=auto_4th_punch) — see resolve_on_duty_punch_hr().
+    """
+    STATUS_PENDING = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_REJECTED = "rejected"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending HR Approval"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+
+    session = models.ForeignKey(
+        OnDutySession, on_delete=models.CASCADE, db_column="session_id",
+        related_name="punch_verifications",
+    )
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id",
+        related_name="on_duty_punch_verifications",
+    )
+    punch_date = models.DateField(db_column="punch_date")
+    punch_time = models.TimeField(db_column="punch_time")
+    punch_type = models.TextField(choices=AttendanceLog.PUNCH_CHOICES, db_column="punch_type")
+    punch_number = models.IntegerField(db_column="punch_number")
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, db_column="latitude")
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, db_column="longitude")
+    accuracy_m = models.FloatField(null=True, blank=True, db_column="accuracy_m")
+    is_mocked = models.BooleanField(default=False, db_column="is_mocked")
+    photo = models.FileField(upload_to="on_duty_punch_verifications/%Y/%m/", db_column="photo")
+    status = models.TextField(choices=STATUS_CHOICES, default=STATUS_PENDING)
+    hr_reviewed_by = models.TextField(null=True, blank=True, db_column="hr_reviewed_by")
+    hr_review_comment = models.TextField(null=True, blank=True, db_column="hr_review_comment")
+    hr_reviewed_at = models.DateTimeField(null=True, blank=True, db_column="hr_reviewed_at")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "on_duty_punch_verifications"
         ordering = ["-created_at"]
 
 

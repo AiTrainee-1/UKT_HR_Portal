@@ -33,7 +33,8 @@ from .models import (
     LeaveBalance,
     LeaveRequest,
     Notification,
-    OnDutyRequest,
+    OnDutyPunchVerification,
+    OnDutySession,
     Payroll,
     PushToken,
     SalaryRecord,
@@ -1599,13 +1600,19 @@ def hr_dashboard_summary(_request: Request) -> Response:
 
     today = date.today()
     geo_punches_today = AttendanceLog.objects.filter(date=today, source="geo:auto").count()
-    on_duty_pending = OnDutyRequest.objects.filter(
-        status__in=[OnDutyRequest.STATUS_PENDING_HOD, OnDutyRequest.STATUS_PENDING_HR]
+    on_duty_pending = OnDutySession.objects.filter(
+        status__in=[OnDutySession.STATUS_PENDING_HOD, OnDutySession.STATUS_PENDING_HR]
     ).count()
-    on_duty_approved_today = OnDutyRequest.objects.filter(
-        punch_date=today, status=OnDutyRequest.STATUS_APPROVED
+    on_duty_sessions_active = OnDutySession.objects.filter(status=OnDutySession.STATUS_ACTIVE).count()
+    on_duty_completed_today = OnDutySession.objects.filter(
+        status=OnDutySession.STATUS_COMPLETED, completed_at__date=today
     ).count()
-    employees_on_duty_today = OnDutyRequest.objects.filter(punch_date=today).values("employee_id").distinct().count()
+    employees_on_duty_today = OnDutySession.objects.filter(
+        Q(created_at__date=today) | Q(status=OnDutySession.STATUS_ACTIVE)
+    ).values("employee_id").distinct().count()
+    pending_punch_verifications = OnDutyPunchVerification.objects.filter(
+        status=OnDutyPunchVerification.STATUS_PENDING
+    ).count()
     live_tracking_enabled = Employee.objects.filter(location_tracking_enabled=True, status="active").count()
 
     return Response(
@@ -1625,8 +1632,10 @@ def hr_dashboard_summary(_request: Request) -> Response:
             "otherEmployees": gender_stats["other"] or 0,
             "geoPunchesToday": geo_punches_today,
             "onDutyPendingApprovals": on_duty_pending,
-            "onDutyApprovedToday": on_duty_approved_today,
+            "onDutySessionsActive": on_duty_sessions_active,
+            "onDutyCompletedToday": on_duty_completed_today,
             "employeesOnDutyToday": employees_on_duty_today,
+            "pendingPunchVerifications": pending_punch_verifications,
             "liveTrackingEnabledCount": live_tracking_enabled,
         }
     )

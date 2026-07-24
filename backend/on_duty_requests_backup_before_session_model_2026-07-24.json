@@ -1,0 +1,25 @@
+[
+  {
+    "id": 5,
+    "punch_date": "2026-07-23",
+    "punch_time": "17:03:48",
+    "punch_type": "IN",
+    "reason": "Die to purchase machines",
+    "latitude": "11.131268",
+    "longitude": "77.318804",
+    "accuracy_m": 26.08099937438965,
+    "is_mocked": false,
+    "photo1": "on_duty_requests/2026/07/photo1.jpg",
+    "photo2": "on_duty_requests/2026/07/photo2.jpg",
+    "status": "approved",
+    "hod_reviewed_by": null,
+    "hod_review_comment": null,
+    "hod_reviewed_at": null,
+    "hr_reviewed_by": "Administrator",
+    "hr_review_comment": null,
+    "hr_reviewed_at": "2026-07-23T17:04:50.261976+05:30",
+    "created_at": "2026-07-23T17:03:48.514092+05:30",
+    "branch_id": 1,
+    "employee_id": 73
+  }
+]

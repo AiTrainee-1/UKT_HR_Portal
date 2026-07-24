@@ -9,7 +9,7 @@ from .models import (
     Employee, Department,
     DepartmentManager, ManagerDepartmentAssignment, ManagerEmployeeAssignment,
     ResignationRequest, AttendanceOverrideRequest, AttendanceDayRecord,
-    CasualLeaveRequest, Notification, OnDutyRequest,
+    CasualLeaveRequest, Notification, OnDutySession,
 )
 
 
@@ -278,7 +278,7 @@ def manager_me(request: Request) -> Response:
         if m.can_approve_casual_leave else 0
     )
     pending_on_duty = (
-        OnDutyRequest.objects.filter(emp_filter, status=OnDutyRequest.STATUS_PENDING_HOD).count()
+        OnDutySession.objects.filter(emp_filter, status=OnDutySession.STATUS_PENDING_HOD).count()
         if m.can_approve_on_duty else 0
     )
     pending_count = (
@@ -403,17 +403,17 @@ def manager_pending_requests(request: Request) -> Response:
         casual_qs = CasualLeaveRequest.objects.none()
     casual_qs = casual_qs.order_by("-created_at")
 
-    from .geo_attendance_views import _on_duty_request_dict
-    on_duty_qs = OnDutyRequest.objects.select_related(
+    from .geo_attendance_views import _on_duty_session_dict
+    on_duty_qs = OnDutySession.objects.select_related(
         "employee__department", "employee__designation", "branch"
     ).filter(emp_filter)
     if m.can_approve_on_duty:
         if status_filter == "pending":
-            on_duty_qs = on_duty_qs.filter(status=OnDutyRequest.STATUS_PENDING_HOD)
+            on_duty_qs = on_duty_qs.filter(status=OnDutySession.STATUS_PENDING_HOD)
         elif status_filter != "all":
             on_duty_qs = on_duty_qs.filter(status=status_filter)
     else:
-        on_duty_qs = OnDutyRequest.objects.none()
+        on_duty_qs = OnDutySession.objects.none()
     on_duty_qs = on_duty_qs.order_by("-created_at")
 
     return Response({
@@ -422,14 +422,14 @@ def manager_pending_requests(request: Request) -> Response:
         "resignations": [_resignation_json(r) for r in resign_qs],
         "attendanceRequests": [_override_request_dict(r) for r in attendance_qs],
         "casualLeaves": [_cl_dict(r) for r in casual_qs],
-        "onDutyRequests": [_on_duty_request_dict(r) for r in on_duty_qs],
+        "onDutySessions": [_on_duty_session_dict(s) for s in on_duty_qs],
         "totalPending": (
             LeaveRequest.objects.filter(emp_filter, status="pending").count()
             + EmployeePermission.objects.filter(emp_filter, status="pending").count()
             + (ResignationRequest.objects.filter(emp_filter, status="pending").count() if m.can_approve_resignations else 0)
             + (AttendanceOverrideRequest.objects.filter(emp_filter, status="pending").count() if m.can_approve_attendance else 0)
             + (CasualLeaveRequest.objects.filter(emp_filter, status="pending").count() if m.can_approve_casual_leave else 0)
-            + (OnDutyRequest.objects.filter(emp_filter, status=OnDutyRequest.STATUS_PENDING_HOD).count() if m.can_approve_on_duty else 0)
+            + (OnDutySession.objects.filter(emp_filter, status=OnDutySession.STATUS_PENDING_HOD).count() if m.can_approve_on_duty else 0)
         ),
     })
 
@@ -619,13 +619,14 @@ def manager_update_attendance_status(request: Request, pk: int) -> Response:
 @require_auth
 def manager_update_on_duty_status(request: Request, pk: int) -> Response:
     """
-    Department Head — stage 1 of the On-Duty approval chain. Approval moves
-    the request to pending_hr (HR still has to approve before the punch is
-    recorded); rejection is terminal. Shares resolve_on_duty_hod() with
-    nothing else — it's the only caller of stage 1 — but writes the same
-    request row HR's endpoints (geo_attendance_views.py) read from.
+    Department Head — stage 1 of the On-Duty approval chain, deciding on the
+    employee's destination request. Approval moves the session to pending_hr
+    (HR still has to approve before the session goes active); rejection is
+    terminal. Shares resolve_on_duty_session_hod() with nothing else — it's
+    the only caller of stage 1 — but writes the same session row HR's
+    endpoints (geo_attendance_views.py) read from.
     """
-    from .geo_attendance_views import _on_duty_request_dict, resolve_on_duty_hod
+    from .geo_attendance_views import _on_duty_session_dict, resolve_on_duty_session_hod
 
     token_emp_id = get_token_employee_id(request)
     if not token_emp_id:
@@ -650,24 +651,24 @@ def manager_update_on_duty_status(request: Request, pk: int) -> Response:
         emp_filter |= Q(employee__department_id__in=dept_ids)
 
     try:
-        req = OnDutyRequest.objects.select_related(
+        session = OnDutySession.objects.select_related(
             "employee__department", "employee__designation", "branch"
         ).filter(emp_filter).get(pk=pk)
-    except OnDutyRequest.DoesNotExist:
-        if OnDutyRequest.objects.filter(pk=pk).exists():
-            return Response({"error": "This request is not in your approval scope"}, status=403)
-        return Response({"error": "On-Duty request not found"}, status=404)
+    except OnDutySession.DoesNotExist:
+        if OnDutySession.objects.filter(pk=pk).exists():
+            return Response({"error": "This session is not in your approval scope"}, status=403)
+        return Response({"error": "On-Duty session not found"}, status=404)
 
-    if req.status != OnDutyRequest.STATUS_PENDING_HOD:
-        return Response({"error": f"This request was already actioned (status: {req.status})"}, status=400)
+    if session.status != OnDutySession.STATUS_PENDING_HOD:
+        return Response({"error": f"This session was already actioned (status: {session.status})"}, status=400)
 
     status_val = request.data.get("status")
     if status_val not in ("approved", "rejected"):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
 
     reviewer_name = f"{m.employee.first_name} {m.employee.last_name}"
-    resolve_on_duty_hod(req, status_val, reviewer_name, request.data.get("comment"))
-    return Response(_on_duty_request_dict(req))
+    resolve_on_duty_session_hod(session, status_val, reviewer_name, request.data.get("comment"))
+    return Response(_on_duty_session_dict(session))
 
 
 @api_view(["PATCH"])

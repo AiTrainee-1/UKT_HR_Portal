@@ -6,7 +6,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import { PillTabs } from "@/components/ui/pill-tabs";
+import {
+  Pagination, PaginationContent, PaginationItem, PaginationLink,
+  PaginationNext, PaginationPrevious,
+} from "@/components/ui/pagination";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -14,14 +19,15 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { useListEmployees, useListBranches, type Employee } from "@/lib/api-client";
 import {
-  useOnDutyRequestsHR, useUpdateOnDutyRequestHR,
+  useOnDutySessionsHR, useUpdateOnDutySessionHR,
+  useOnDutyPunchVerificationsHR, useUpdateOnDutyPunchVerificationHR,
   useLiveLocationTeam, useLiveLocationTrail, useLiveLocationRoute, useOnDutyMap,
   useUpdateEmployeeLocationTracking,
-  fetchAuthedImageObjectUrl, type OnDutyRequestItem, type LiveLocationTeamMember,
+  fetchAuthedImageObjectUrl, type OnDutySessionItem, type OnDutyPunchVerificationItem, type LiveLocationTeamMember,
 } from "@/lib/api-client/custom-hooks";
 import {
   MapPinned, CheckCircle2, XCircle, Navigation, Search, Radar, Clock, AlertTriangle,
-  Image as ImageIcon, Building2, User, Route as RouteIcon, Users, ShieldCheck, ShieldAlert,
+  Image as ImageIcon, Building2, User, Route as RouteIcon, Users, ShieldCheck, ShieldAlert, Camera,
 } from "lucide-react";
 
 const INDIA_CENTER: [number, number] = [20.5937, 78.9629];
@@ -105,9 +111,16 @@ function Legend({ items }: { items: { color: string; label: string; icon?: "buil
   );
 }
 
-const STAGE_LABEL: Record<OnDutyRequestItem["status"], string> = {
+const STAGE_LABEL: Record<OnDutySessionItem["status"], string> = {
   pending_hod: "Awaiting Department Head",
   pending_hr: "Awaiting HR",
+  active: "Active",
+  completed: "Completed",
+  rejected: "Rejected",
+};
+
+const PUNCH_STATUS_LABEL: Record<OnDutyPunchVerificationItem["status"], string> = {
+  pending: "Awaiting HR",
   approved: "Approved",
   rejected: "Rejected",
 };
@@ -237,25 +250,38 @@ function LiveMapTab() {
   );
 }
 
-// ── Route Map tab ────────────────────────────────────────────────────────
+// ── On-Duty Map tab ───────────────────────────────────────────────────────
+// Two views sharing one date-scoped map: "All On-Duty" is the live overview
+// of everyone On-Duty on the selected day (colored per employee), "Single
+// Employee" is a detailed directional route lookup for one tracked employee
+// on that day — the two used to be separate tabs (Route Map / On-Duty Map)
+// but overlapped enough (both draw routes on a map) that HR asked for them
+// combined into one, with nothing lost.
 
-function RouteMapTab() {
+function OnDutyMapTab() {
+  const [viewMode, setViewMode] = useState<"all" | "single">("all");
+  const [date, setDate] = useState(todayStr());
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [date, setDate] = useState(todayStr());
-  const { data: employees, isLoading: employeesLoading } = useListEmployees({ status: "active" });
-  const trackedEmployees = (employees ?? []).filter(
+
+  const { data: mapData, isLoading: mapLoading } = useOnDutyMap(date);
+  const employees = mapData?.employees ?? [];
+  const withFix = employees.filter((e) => e.latitude != null && e.longitude != null);
+  const centerAll: [number, number] = withFix.length > 0 ? [withFix[0].latitude!, withFix[0].longitude!] : INDIA_CENTER;
+
+  const { data: trackedList, isLoading: employeesLoading } = useListEmployees({ status: "active" });
+  const trackedEmployees = (trackedList ?? []).filter(
     (e) => (e as Employee & { locationTrackingEnabled?: boolean }).locationTrackingEnabled,
   );
-  const filtered = trackedEmployees.filter((e) => {
+  const filteredTracked = trackedEmployees.filter((e) => {
     const q = search.trim().toLowerCase();
     if (!q) return true;
     return e.employeeCode.toLowerCase().includes(q) || `${e.firstName} ${e.lastName}`.toLowerCase().includes(q);
   });
 
-  const { data: route, isLoading: routeLoading } = useLiveLocationRoute(selectedId, date);
+  const { data: route, isLoading: routeLoading } = useLiveLocationRoute(viewMode === "single" ? selectedId : null, date);
   const points = (route?.points ?? []).map((p) => [p.latitude, p.longitude] as [number, number]);
-  const center = points.length > 0 ? points[Math.floor(points.length / 2)] : INDIA_CENTER;
+  const centerSingle = points.length > 0 ? points[Math.floor(points.length / 2)] : INDIA_CENTER;
 
   // Sample a handful of interior points to place direction arrows along the
   // path without cluttering the map — start/end get their own distinct pins.
@@ -270,55 +296,143 @@ function RouteMapTab() {
   }, [points]);
 
   return (
-    <div className="grid lg:grid-cols-[280px_1fr] gap-4 items-start">
+    <div className="grid lg:grid-cols-[300px_1fr] gap-4 items-start">
       <Card className="border-0 shadow-sm">
         <CardContent className="p-3 space-y-2.5">
           <div>
             <p className="text-xs font-bold text-gray-600 px-1 mb-1.5 flex items-center gap-1.5">
-              <RouteIcon size={13} className="text-teal-700" /> Route Map
+              <Users size={13} className="text-teal-700" /> On-Duty Map
             </p>
             <Input type="date" className="h-9 text-sm" value={date} max={todayStr()} onChange={(e) => setDate(e.target.value)} />
           </div>
-          <div className="relative">
-            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-            <Input className="pl-8 h-9 text-sm" placeholder="Search On-Duty/tracked staff…" value={search} onChange={(e) => setSearch(e.target.value)} />
-          </div>
-          {employeesLoading ? (
-            <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 rounded-lg" />)}</div>
-          ) : filtered.length === 0 ? (
-            <p className="text-xs text-center text-gray-400 py-8">
-              No tracking-enabled employees match. Route Map only shows staff with Live Tracking turned on (mainly On-Duty employees).
-            </p>
+
+          <PillTabs
+            items={[
+              { value: "all", label: `All On-Duty${employees.length ? ` (${employees.length})` : ""}`, icon: <Users size={12} /> },
+              { value: "single", label: "Single Employee", icon: <RouteIcon size={12} /> },
+            ]}
+            value={viewMode}
+            onChange={(v) => { setViewMode(v as typeof viewMode); setSelectedId(null); }}
+            size="sm"
+          />
+
+          {viewMode === "all" ? (
+            mapLoading ? (
+              <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-14 rounded-lg" />)}</div>
+            ) : employees.length === 0 ? (
+              <p className="text-xs text-center text-gray-400 py-8">No employees were On-Duty on {date}.</p>
+            ) : (
+              <div className="max-h-[360px] overflow-y-auto space-y-1.5">
+                {employees.map((e, i) => (
+                  <div key={e.employeeId} className="px-2.5 py-2 rounded-lg border border-transparent hover:bg-gray-50">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: colorFor(i) }} />
+                      <p className="text-xs font-semibold truncate flex-1">{e.employeeName}</p>
+                    </div>
+                    <p className="text-[10px] text-gray-400 mt-0.5 ml-4.5">
+                      {e.department ?? "—"} · {e.locationTrackingEnabled ? timeAgo(e.lastSeenAt) : "tracking off"}
+                    </p>
+                    <p className="text-[10px] text-gray-500 mt-1 ml-4.5 italic truncate">
+                      {e.session.destination} · <span className="not-italic font-bold">{STAGE_LABEL[e.session.status as OnDutySessionItem["status"]] ?? e.session.status}</span>
+                    </p>
+                    <div className="flex flex-wrap gap-1 mt-1 ml-4.5">
+                      {e.punches.map((p) => (
+                        <span
+                          key={p.punchNumber}
+                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                            p.status === "approved" ? "bg-green-50 text-green-700"
+                            : p.status === "rejected" ? "bg-red-50 text-red-600"
+                            : "bg-amber-50 text-amber-700"
+                          }`}
+                        >
+                          #{p.punchNumber} {p.punchType} {p.punchTime.slice(0, 5)} · {PUNCH_STATUS_LABEL[p.status as OnDutyPunchVerificationItem["status"]] ?? p.status}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
           ) : (
-            <div className="max-h-[380px] overflow-y-auto space-y-1">
-              {filtered.map((e) => (
-                <button
-                  key={e.id}
-                  onClick={() => setSelectedId(e.id)}
-                  className={`w-full text-left px-2.5 py-2 rounded-lg border transition-colors ${
-                    selectedId === e.id ? "bg-teal-50 border-teal-200" : "border-transparent hover:bg-gray-50"
-                  }`}
-                >
-                  <p className="text-xs font-semibold truncate">{e.firstName} {e.lastName}</p>
-                  <p className="text-[10px] text-gray-400 mt-0.5">{e.employeeCode} · {e.departmentName ?? "—"}</p>
-                </button>
-              ))}
-            </div>
+            <>
+              <div className="relative">
+                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Input className="pl-8 h-9 text-sm" placeholder="Search tracked staff…" value={search} onChange={(e) => setSearch(e.target.value)} />
+              </div>
+              {employeesLoading ? (
+                <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 rounded-lg" />)}</div>
+              ) : filteredTracked.length === 0 ? (
+                <p className="text-xs text-center text-gray-400 py-8">
+                  No tracking-enabled employees match. This view only shows staff with Live Tracking turned on (mainly On-Duty employees).
+                </p>
+              ) : (
+                <div className="max-h-[320px] overflow-y-auto space-y-1">
+                  {filteredTracked.map((e) => (
+                    <button
+                      key={e.id}
+                      onClick={() => setSelectedId(e.id)}
+                      className={`w-full text-left px-2.5 py-2 rounded-lg border transition-colors ${
+                        selectedId === e.id ? "bg-teal-50 border-teal-200" : "border-transparent hover:bg-gray-50"
+                      }`}
+                    >
+                      <p className="text-xs font-semibold truncate">{e.firstName} {e.lastName}</p>
+                      <p className="text-[10px] text-gray-400 mt-0.5">{e.employeeCode} · {e.departmentName ?? "—"}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
           )}
+
           <div className="pt-2 mt-1 border-t">
-            <Legend
-              items={[
-                { color: COLOR_START, label: "Route start" },
-                { color: COLOR_END, label: "Latest position" },
-              ]}
-            />
+            {viewMode === "all" ? (
+              employees.length > 0 && <Legend items={employees.map((e, i) => ({ color: colorFor(i), label: e.employeeName }))} />
+            ) : (
+              <Legend
+                items={[
+                  { color: COLOR_START, label: "Route start" },
+                  { color: COLOR_END, label: "Latest position" },
+                ]}
+              />
+            )}
           </div>
         </CardContent>
       </Card>
 
       <Card className="border-0 shadow-sm overflow-hidden">
         <div className="h-[560px] relative">
-          {!selectedId ? (
+          {viewMode === "all" ? (
+            mapLoading ? (
+              <Skeleton className="h-full w-full" />
+            ) : withFix.length === 0 ? (
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
+                <Users size={32} className="mb-2 text-gray-200" />
+                <p className="text-sm">No live positions to show for On-Duty staff on {date}.</p>
+              </div>
+            ) : (
+              <MapContainer center={centerAll} zoom={11} style={{ height: "100%", width: "100%" }}>
+                <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap contributors" />
+                {employees.map((e, i) => {
+                  const color = colorFor(i);
+                  const empRoute = e.routePoints.map((p) => [p.latitude, p.longitude] as [number, number]);
+                  return (
+                    <div key={e.employeeId}>
+                      {empRoute.length > 1 && <Polyline positions={empRoute} pathOptions={{ color, weight: 3, opacity: 0.65 }} />}
+                      {e.latitude != null && e.longitude != null && (
+                        <Marker position={[e.latitude, e.longitude]} icon={pinIcon(color, "person")}>
+                          <Popup>
+                            <p className="font-semibold">{e.employeeName}</p>
+                            <p className="text-xs text-gray-500">{e.department ?? "—"}</p>
+                            <p className="text-xs text-gray-400 mt-1">Last seen {timeAgo(e.lastSeenAt)}</p>
+                          </Popup>
+                        </Marker>
+                      )}
+                    </div>
+                  );
+                })}
+              </MapContainer>
+            )
+          ) : !selectedId ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
               <RouteIcon size={32} className="mb-2 text-gray-200" />
               <p className="text-sm">Select an employee to view their travel route.</p>
@@ -331,7 +445,7 @@ function RouteMapTab() {
               <p className="text-sm">No location pings recorded for {route?.employeeName ?? "this employee"} on {date}.</p>
             </div>
           ) : (
-            <MapContainer center={center} zoom={13} style={{ height: "100%", width: "100%" }}>
+            <MapContainer center={centerSingle} zoom={13} style={{ height: "100%", width: "100%" }}>
               <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap contributors" />
               <Polyline positions={points} pathOptions={{ color: COLOR_NORMAL, weight: 4, opacity: 0.7 }} />
               {arrowSamples.map((a, i) => (
@@ -351,149 +465,150 @@ function RouteMapTab() {
   );
 }
 
-// ── On-Duty Map tab ───────────────────────────────────────────────────────
+// ── On-Duty Approvals tab (session destination gate — no photos) ─────────
 
-function OnDutyMapTab() {
-  const [date, setDate] = useState(todayStr());
-  const { data, isLoading } = useOnDutyMap(date);
-  const employees = data?.employees ?? [];
-  const withFix = employees.filter((e) => e.latitude != null && e.longitude != null);
-  const center: [number, number] = withFix.length > 0 ? [withFix[0].latitude!, withFix[0].longitude!] : INDIA_CENTER;
+function ApprovalsTab() {
+  const { toast } = useToast();
+  const [statusFilter, setStatusFilter] = useState<"pending" | "active" | "completed" | "rejected">("pending");
+  const { data: sessions, isLoading } = useOnDutySessionsHR(statusFilter);
+  const updateMutation = useUpdateOnDutySessionHR();
+
+  const handleDecision = async (session: OnDutySessionItem, status: "approved" | "rejected") => {
+    try {
+      await updateMutation.mutateAsync({ id: session.id, status });
+      toast({ title: `Session ${status}`, description: `${session.employeeName}'s On-Duty request for ${session.destination}.` });
+    } catch (err: any) {
+      toast({ title: "Failed to update session", description: err?.message, variant: "destructive" });
+    }
+  };
 
   return (
-    <div className="grid lg:grid-cols-[300px_1fr] gap-4 items-start">
-      <Card className="border-0 shadow-sm">
-        <CardContent className="p-3 space-y-2.5">
-          <div>
-            <p className="text-xs font-bold text-gray-600 px-1 mb-1.5 flex items-center gap-1.5">
-              <Users size={13} className="text-teal-700" /> On-Duty Today ({employees.length})
-            </p>
-            <Input type="date" className="h-9 text-sm" value={date} max={todayStr()} onChange={(e) => setDate(e.target.value)} />
-          </div>
-          {isLoading ? (
-            <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-14 rounded-lg" />)}</div>
-          ) : employees.length === 0 ? (
-            <p className="text-xs text-center text-gray-400 py-8">No employees were On-Duty on {date}.</p>
-          ) : (
-            <div className="max-h-[440px] overflow-y-auto space-y-1.5">
-              {employees.map((e, i) => (
-                <div key={e.employeeId} className="px-2.5 py-2 rounded-lg border border-transparent hover:bg-gray-50">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: colorFor(i) }} />
-                    <p className="text-xs font-semibold truncate flex-1">{e.employeeName}</p>
-                  </div>
-                  <p className="text-[10px] text-gray-400 mt-0.5 ml-4.5">
-                    {e.department ?? "—"} · {e.locationTrackingEnabled ? timeAgo(e.lastSeenAt) : "tracking off"}
-                  </p>
-                  <div className="flex flex-wrap gap-1 mt-1 ml-4.5">
-                    {e.requests.map((r) => (
-                      <span
-                        key={r.id}
-                        className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                          r.status === "approved" ? "bg-green-50 text-green-700"
-                          : r.status === "rejected" ? "bg-red-50 text-red-600"
-                          : "bg-amber-50 text-amber-700"
-                        }`}
-                      >
-                        {r.punchType} {r.punchTime.slice(0, 5)} · {STAGE_LABEL[r.status as OnDutyRequestItem["status"]] ?? r.status}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+    <div className="space-y-3">
+      <PillTabs
+        items={[
+          { value: "pending", label: "Pending" },
+          { value: "active", label: "Active" },
+          { value: "completed", label: "Completed" },
+          { value: "rejected", label: "Rejected" },
+        ]}
+        value={statusFilter}
+        onChange={(v) => setStatusFilter(v as typeof statusFilter)}
+        size="sm"
+      />
 
-      <Card className="border-0 shadow-sm overflow-hidden">
-        <div className="h-[560px] relative">
-          {isLoading ? (
-            <Skeleton className="h-full w-full" />
-          ) : withFix.length === 0 ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
-              <Users size={32} className="mb-2 text-gray-200" />
-              <p className="text-sm">No live positions to show for On-Duty staff on {date}.</p>
-            </div>
-          ) : (
-            <MapContainer center={center} zoom={11} style={{ height: "100%", width: "100%" }}>
-              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap contributors" />
-              {employees.map((e, i) => {
-                const color = colorFor(i);
-                const route = e.routePoints.map((p) => [p.latitude, p.longitude] as [number, number]);
-                return (
-                  <div key={e.employeeId}>
-                    {route.length > 1 && <Polyline positions={route} pathOptions={{ color, weight: 3, opacity: 0.65 }} />}
-                    {e.latitude != null && e.longitude != null && (
-                      <Marker position={[e.latitude, e.longitude]} icon={pinIcon(color, "person")}>
-                        <Popup>
-                          <p className="font-semibold">{e.employeeName}</p>
-                          <p className="text-xs text-gray-500">{e.department ?? "—"}</p>
-                          <p className="text-xs text-gray-400 mt-1">Last seen {timeAgo(e.lastSeenAt)}</p>
-                        </Popup>
-                      </Marker>
-                    )}
+      {isLoading ? (
+        <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}</div>
+      ) : (sessions ?? []).length === 0 ? (
+        <Card className="border-0 shadow-sm">
+          <CardContent className="py-14 text-center">
+            <MapPinned size={32} className="text-gray-200 mx-auto mb-3" />
+            <p className="text-sm text-gray-500">No {statusFilter} On-Duty sessions.</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid gap-3">
+          {(sessions ?? []).map((session) => (
+            <Card key={session.id} className="border-0 shadow-sm">
+              <CardContent className="p-4 flex items-start gap-4 flex-wrap">
+                <div className="flex-1 min-w-[240px]">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-bold text-gray-900">{session.employeeName}</p>
+                    <span className="text-[11px] font-mono text-gray-400">({session.employeeCode})</span>
+                    <span className={`flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                      session.status === "active" ? "bg-teal-50 text-teal-700"
+                      : session.status === "completed" ? "bg-green-50 text-green-700"
+                      : session.status === "rejected" ? "bg-red-50 text-red-600"
+                      : session.status === "pending_hr" ? "bg-blue-50 text-blue-700"
+                      : "bg-amber-50 text-amber-700"
+                    }`}>
+                      {session.status === "pending_hod" ? <ShieldAlert size={10} /> : session.status === "pending_hr" ? <ShieldCheck size={10} /> : null}
+                      {STAGE_LABEL[session.status]}
+                    </span>
                   </div>
-                );
-              })}
-            </MapContainer>
-          )}
+                  <p className="text-xs text-gray-500 mt-1">{session.department ?? "—"} · {session.branchName ?? "no branch"}</p>
+                  <p className="text-xs text-gray-700 mt-1.5 italic">Destination: "{session.destination}"</p>
+                  {session.hodReviewedBy && (
+                    <p className="text-[11px] text-gray-400 mt-1.5">
+                      HOD: {session.status === "rejected" && !session.hrReviewedBy ? "rejected" : "approved"} by {session.hodReviewedBy}
+                      {session.hodReviewComment ? ` — "${session.hodReviewComment}"` : ""}
+                    </p>
+                  )}
+                  {session.hrReviewedBy && (
+                    <p className="text-[11px] text-gray-400">
+                      HR: {session.status === "rejected" ? "rejected" : "approved"} by {session.hrReviewedBy}
+                      {session.hrReviewComment ? ` — "${session.hrReviewComment}"` : ""}
+                    </p>
+                  )}
+                  {session.status === "completed" && (
+                    <p className="text-[11px] text-gray-400 mt-1">
+                      Ended {session.completionReason === "auto_4th_punch" ? "automatically (4th punch approved)" : "manually by the employee"}
+                      {session.completedAt ? ` at ${new Date(session.completedAt).toLocaleString()}` : ""}
+                    </p>
+                  )}
+                  {session.status === "pending_hod" && (
+                    <p className="text-[11px] text-amber-600 mt-1">No Department Head has acted yet — approving here finalizes it directly.</p>
+                  )}
+                </div>
+                {(session.status === "pending_hod" || session.status === "pending_hr") && (
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Button
+                      size="sm" className="h-8 gap-1.5 text-xs bg-green-600 hover:bg-green-700"
+                      disabled={updateMutation.isPending}
+                      onClick={() => handleDecision(session, "approved")}
+                    >
+                      <CheckCircle2 size={12} /> Approve
+                    </Button>
+                    <Button
+                      size="sm" variant="destructive" className="h-8 gap-1.5 text-xs"
+                      disabled={updateMutation.isPending}
+                      onClick={() => handleDecision(session, "rejected")}
+                    >
+                      <XCircle size={12} /> Reject
+                    </Button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          ))}
         </div>
-        {employees.length > 0 && (
-          <div className="px-4 py-2.5 border-t">
-            <Legend items={employees.map((e, i) => ({ color: colorFor(i), label: e.employeeName }))} />
-          </div>
-        )}
-      </Card>
+      )}
     </div>
   );
 }
 
-// ── Pending Approvals tab ────────────────────────────────────────────────
+// ── Punch Verifications tab (per-punch selfie + GPS, HR-only) ────────────
 
-function PhotoDialog({ requestId, onClose }: { requestId: number | null; onClose: () => void }) {
+function PhotoDialog({ verificationId, onClose }: { verificationId: number | null; onClose: () => void }) {
   const { token } = useAuth();
-  const [urls, setUrls] = useState<[string | null, string | null]>([null, null]);
+  const [url, setUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   useMemo(() => {
-    if (requestId == null) {
-      setUrls([null, null]);
+    if (verificationId == null) {
+      setUrl(null);
       return;
     }
     setLoading(true);
-    Promise.all([
-      fetchAuthedImageObjectUrl(`/api/on-duty-requests/${requestId}/photo/1`, () => token),
-      fetchAuthedImageObjectUrl(`/api/on-duty-requests/${requestId}/photo/2`, () => token),
-    ])
-      .then(([a, b]) => setUrls([a, b]))
-      .catch(() => setUrls([null, null]))
+    fetchAuthedImageObjectUrl(`/api/on-duty-punch-verifications/${verificationId}/photo`, () => token)
+      .then(setUrl)
+      .catch(() => setUrl(null))
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requestId]);
+  }, [verificationId]);
 
   return (
-    <Dialog open={requestId != null} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-lg">
+    <Dialog open={verificationId != null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><ImageIcon size={16} /> Verification Photos</DialogTitle>
+          <DialogTitle className="flex items-center gap-2"><Camera size={16} /> Punch Verification Photo</DialogTitle>
         </DialogHeader>
         {loading ? (
-          <div className="grid grid-cols-2 gap-3">
-            <Skeleton className="h-56 rounded-lg" />
-            <Skeleton className="h-56 rounded-lg" />
-          </div>
+          <Skeleton className="h-72 rounded-lg" />
+        ) : url ? (
+          <img src={url} className="w-full h-72 object-cover rounded-lg border" alt="Punch verification selfie" />
         ) : (
-          <div className="grid grid-cols-2 gap-3">
-            {urls.map((u, i) =>
-              u ? (
-                <img key={i} src={u} className="w-full h-56 object-cover rounded-lg border" alt={`Verification ${i + 1}`} />
-              ) : (
-                <div key={i} className="h-56 rounded-lg border bg-gray-50 flex items-center justify-center text-xs text-gray-400">
-                  Failed to load
-                </div>
-              ),
-            )}
+          <div className="h-72 rounded-lg border bg-gray-50 flex items-center justify-center text-xs text-gray-400">
+            Failed to load
           </div>
         )}
       </DialogContent>
@@ -501,19 +616,19 @@ function PhotoDialog({ requestId, onClose }: { requestId: number | null; onClose
   );
 }
 
-function ApprovalsTab() {
+function PunchVerificationsTab() {
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<"pending" | "approved" | "rejected">("pending");
-  const { data: requests, isLoading } = useOnDutyRequestsHR(statusFilter);
-  const updateMutation = useUpdateOnDutyRequestHR();
-  const [photoRequestId, setPhotoRequestId] = useState<number | null>(null);
+  const { data: verifications, isLoading } = useOnDutyPunchVerificationsHR(statusFilter);
+  const updateMutation = useUpdateOnDutyPunchVerificationHR();
+  const [photoId, setPhotoId] = useState<number | null>(null);
 
-  const handleDecision = async (req: OnDutyRequestItem, status: "approved" | "rejected") => {
+  const handleDecision = async (v: OnDutyPunchVerificationItem, status: "approved" | "rejected") => {
     try {
-      await updateMutation.mutateAsync({ id: req.id, status });
-      toast({ title: `Request ${status}`, description: `${req.employeeName}'s ${req.punchType === "IN" ? "Check-In" : "Check-Out"} On-Duty request.` });
+      await updateMutation.mutateAsync({ id: v.id, status });
+      toast({ title: `Punch ${status}`, description: `${v.employeeName}'s punch #${v.punchNumber} (${v.punchType === "IN" ? "Check-In" : "Check-Out"}).` });
     } catch (err: any) {
-      toast({ title: "Failed to update request", description: err?.message, variant: "destructive" });
+      toast({ title: "Failed to update punch", description: err?.message, variant: "destructive" });
     }
   };
 
@@ -532,78 +647,67 @@ function ApprovalsTab() {
 
       {isLoading ? (
         <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}</div>
-      ) : (requests ?? []).length === 0 ? (
+      ) : (verifications ?? []).length === 0 ? (
         <Card className="border-0 shadow-sm">
           <CardContent className="py-14 text-center">
-            <MapPinned size={32} className="text-gray-200 mx-auto mb-3" />
-            <p className="text-sm text-gray-500">No {statusFilter} On-Duty requests.</p>
+            <Camera size={32} className="text-gray-200 mx-auto mb-3" />
+            <p className="text-sm text-gray-500">No {statusFilter} punch verifications.</p>
           </CardContent>
         </Card>
       ) : (
         <div className="grid gap-3">
-          {(requests ?? []).map((req) => (
-            <Card key={req.id} className="border-0 shadow-sm">
+          {(verifications ?? []).map((v) => (
+            <Card key={v.id} className="border-0 shadow-sm">
               <CardContent className="p-4 flex items-start gap-4 flex-wrap">
                 <div className="flex-1 min-w-[240px]">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-bold text-gray-900">{req.employeeName}</p>
-                    <span className="text-[11px] font-mono text-gray-400">({req.employeeCode})</span>
-                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${req.punchType === "IN" ? "bg-green-50 text-green-700" : "bg-orange-50 text-orange-700"}`}>
-                      {req.punchType === "IN" ? "CHECK-IN" : "CHECK-OUT"}
+                    <p className="font-bold text-gray-900">{v.employeeName}</p>
+                    <span className="text-[11px] font-mono text-gray-400">({v.employeeCode})</span>
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${v.punchType === "IN" ? "bg-green-50 text-green-700" : "bg-orange-50 text-orange-700"}`}>
+                      #{v.punchNumber} {v.punchType === "IN" ? "CHECK-IN" : "CHECK-OUT"}
                     </span>
-                    <span className={`flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                      req.status === "approved" ? "bg-green-50 text-green-700"
-                      : req.status === "rejected" ? "bg-red-50 text-red-600"
-                      : req.status === "pending_hr" ? "bg-blue-50 text-blue-700"
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                      v.status === "approved" ? "bg-green-50 text-green-700"
+                      : v.status === "rejected" ? "bg-red-50 text-red-600"
                       : "bg-amber-50 text-amber-700"
                     }`}>
-                      {req.status === "pending_hod" ? <ShieldAlert size={10} /> : req.status === "pending_hr" ? <ShieldCheck size={10} /> : null}
-                      {STAGE_LABEL[req.status]}
+                      {PUNCH_STATUS_LABEL[v.status]}
                     </span>
-                    {req.isMocked && (
+                    {v.isMocked && (
                       <span className="flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-50 text-red-600">
                         <AlertTriangle size={10} /> Simulated location
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-gray-500 mt-1">{req.department ?? "—"} · {req.branchName ?? "no branch"}</p>
-                  <p className="text-xs text-gray-700 mt-1.5 italic">"{req.reason}"</p>
+                  <p className="text-xs text-gray-500 mt-1">{v.department ?? "—"}</p>
                   <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
-                    <span className="flex items-center gap-1"><Clock size={11} /> {req.punchTime.slice(0, 5)} on {req.punchDate}</span>
+                    <span className="flex items-center gap-1"><Clock size={11} /> {v.punchTime.slice(0, 5)} on {v.punchDate}</span>
+                    <span className="flex items-center gap-1"><MapPinned size={11} /> {v.latitude.toFixed(5)}, {v.longitude.toFixed(5)}</span>
                   </div>
-                  {req.hodReviewedBy && (
+                  {v.hrReviewedBy && (
                     <p className="text-[11px] text-gray-400 mt-1.5">
-                      HOD: {req.status === "rejected" && !req.hrReviewedBy ? "rejected" : "approved"} by {req.hodReviewedBy}
-                      {req.hodReviewComment ? ` — "${req.hodReviewComment}"` : ""}
+                      {v.status === "rejected" ? "Rejected" : "Approved"} by {v.hrReviewedBy}
+                      {v.hrReviewComment ? ` — "${v.hrReviewComment}"` : ""}
                     </p>
-                  )}
-                  {req.hrReviewedBy && (
-                    <p className="text-[11px] text-gray-400">
-                      HR: {req.status === "rejected" ? "rejected" : "approved"} by {req.hrReviewedBy}
-                      {req.hrReviewComment ? ` — "${req.hrReviewComment}"` : ""}
-                    </p>
-                  )}
-                  {req.status === "pending_hod" && (
-                    <p className="text-[11px] text-amber-600 mt-1">No Department Head has acted yet — approving here finalizes it directly.</p>
                   )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  <Button size="sm" variant="outline" className="gap-1.5 h-8 text-xs" onClick={() => setPhotoRequestId(req.id)}>
-                    <ImageIcon size={12} /> View Photos
+                  <Button size="sm" variant="outline" className="gap-1.5 h-8 text-xs" onClick={() => setPhotoId(v.id)}>
+                    <ImageIcon size={12} /> View Photo
                   </Button>
-                  {(req.status === "pending_hod" || req.status === "pending_hr") && (
+                  {v.status === "pending" && (
                     <>
                       <Button
                         size="sm" className="h-8 gap-1.5 text-xs bg-green-600 hover:bg-green-700"
                         disabled={updateMutation.isPending}
-                        onClick={() => handleDecision(req, "approved")}
+                        onClick={() => handleDecision(v, "approved")}
                       >
                         <CheckCircle2 size={12} /> Approve
                       </Button>
                       <Button
                         size="sm" variant="destructive" className="h-8 gap-1.5 text-xs"
                         disabled={updateMutation.isPending}
-                        onClick={() => handleDecision(req, "rejected")}
+                        onClick={() => handleDecision(v, "rejected")}
                       >
                         <XCircle size={12} /> Reject
                       </Button>
@@ -616,24 +720,41 @@ function ApprovalsTab() {
         </div>
       )}
 
-      <PhotoDialog requestId={photoRequestId} onClose={() => setPhotoRequestId(null)} />
+      <PhotoDialog verificationId={photoId} onClose={() => setPhotoId(null)} />
     </div>
   );
 }
 
 // ── Tracking Settings tab ────────────────────────────────────────────────
 
+const TRACKING_PAGE_SIZE = 10;
+
 function TrackingSettingsTab() {
   const { toast } = useToast();
   const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<"all" | "enabled" | "disabled">("all");
+  const [page, setPage] = useState(1);
   const { data: employees, isLoading } = useListEmployees({ status: "active" });
   const toggleMutation = useUpdateEmployeeLocationTracking();
 
-  const filtered = (employees ?? []).filter((e) => {
+  const withEnabled = (employees ?? []).map((e) => ({
+    ...e,
+    trackingEnabled: (e as Employee & { locationTrackingEnabled?: boolean }).locationTrackingEnabled ?? false,
+  }));
+  const enabledCount = withEnabled.filter((e) => e.trackingEnabled).length;
+  const disabledCount = withEnabled.length - enabledCount;
+
+  const searched = withEnabled.filter((e) => {
     const q = search.trim().toLowerCase();
     if (!q) return true;
     return e.employeeCode.toLowerCase().includes(q) || `${e.firstName} ${e.lastName}`.toLowerCase().includes(q);
   });
+  const filtered = searched.filter((e) =>
+    filter === "all" ? true : filter === "enabled" ? e.trackingEnabled : !e.trackingEnabled
+  );
+  const totalPages = Math.max(1, Math.ceil(filtered.length / TRACKING_PAGE_SIZE));
+  const pageSafe = Math.min(page, totalPages);
+  const paged = filtered.slice((pageSafe - 1) * TRACKING_PAGE_SIZE, pageSafe * TRACKING_PAGE_SIZE);
 
   const handleToggle = async (emp: Employee, next: boolean) => {
     try {
@@ -646,10 +767,57 @@ function TrackingSettingsTab() {
 
   return (
     <div className="space-y-3">
-      <div className="relative max-w-sm">
-        <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-        <Input className="pl-8 h-9 text-sm" placeholder="Search employees…" value={search} onChange={(e) => setSearch(e.target.value)} />
+      <div className="grid grid-cols-3 gap-3">
+        <Card className="border-0 shadow-sm">
+          <CardContent className="p-3.5 flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center shrink-0"><Users size={15} className="text-gray-500" /></div>
+            <div className="min-w-0">
+              <p className="text-lg font-black text-gray-900 leading-none">{withEnabled.length}</p>
+              <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide mt-1">Total Employees</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border-0 shadow-sm">
+          <CardContent className="p-3.5 flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-teal-50 flex items-center justify-center shrink-0"><Radar size={15} className="text-teal-600" /></div>
+            <div className="min-w-0">
+              <p className="text-lg font-black text-teal-700 leading-none">{enabledCount}</p>
+              <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide mt-1">Tracking Enabled</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border-0 shadow-sm">
+          <CardContent className="p-3.5 flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center shrink-0"><Radar size={15} className="text-gray-400" /></div>
+            <div className="min-w-0">
+              <p className="text-lg font-black text-gray-500 leading-none">{disabledCount}</p>
+              <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide mt-1">Tracking Disabled</p>
+            </div>
+          </CardContent>
+        </Card>
       </div>
+
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="relative max-w-sm w-full">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+          <Input
+            className="pl-8 h-9 text-sm"
+            placeholder="Search employees…"
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+          />
+        </div>
+        <PillTabs
+          items={[
+            { value: "all", label: `All (${withEnabled.length})` },
+            { value: "enabled", label: `Enabled (${enabledCount})` },
+            { value: "disabled", label: `Disabled (${disabledCount})` },
+          ]}
+          value={filter}
+          onChange={(v) => { setFilter(v as typeof filter); setPage(1); }}
+        />
+      </div>
+
       <Card className="border-0 shadow-sm">
         <CardContent className="p-0">
           {isLoading ? (
@@ -657,10 +825,9 @@ function TrackingSettingsTab() {
           ) : filtered.length === 0 ? (
             <p className="text-sm text-center text-gray-400 py-10">No employees match.</p>
           ) : (
-            <div className="max-h-[560px] overflow-y-auto divide-y">
-              {filtered.map((emp) => {
-                const enabled = (emp as Employee & { locationTrackingEnabled?: boolean }).locationTrackingEnabled ?? false;
-                return (
+            <>
+              <div className="divide-y">
+                {paged.map((emp) => (
                   <div key={emp.id} className="flex items-center gap-3 px-4 py-2.5">
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold truncate">{emp.firstName} {emp.lastName}</p>
@@ -668,20 +835,48 @@ function TrackingSettingsTab() {
                         {emp.employeeCode} · {emp.departmentName ?? "—"} · {emp.branchName ?? "no branch"}
                       </p>
                     </div>
-                    <button
-                      onClick={() => handleToggle(emp, !enabled)}
+                    <Switch
+                      checked={emp.trackingEnabled}
+                      onCheckedChange={(v) => handleToggle(emp, v)}
                       disabled={toggleMutation.isPending}
-                      className={`relative w-10 h-5.5 h-6 rounded-full transition-colors shrink-0 ${enabled ? "bg-teal-600" : "bg-gray-200"}`}
                       aria-label="Toggle live location tracking"
-                    >
-                      <span
-                        className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-[18px]" : "translate-x-0.5"}`}
-                      />
-                    </button>
+                    />
                   </div>
-                );
-              })}
-            </div>
+                ))}
+              </div>
+              {totalPages > 1 && (
+                <div className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between border-t border-gray-50">
+                  <p className="text-xs text-gray-400">
+                    Showing {(pageSafe - 1) * TRACKING_PAGE_SIZE + 1}–{Math.min(pageSafe * TRACKING_PAGE_SIZE, filtered.length)} of {filtered.length}
+                  </p>
+                  <Pagination className="mx-0 w-auto">
+                    <PaginationContent>
+                      <PaginationItem>
+                        <PaginationPrevious
+                          href="#"
+                          className={pageSafe === 1 ? "pointer-events-none opacity-50" : undefined}
+                          onClick={(e) => { e.preventDefault(); if (pageSafe > 1) setPage(pageSafe - 1); }}
+                        />
+                      </PaginationItem>
+                      {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
+                        <PaginationItem key={p}>
+                          <PaginationLink href="#" isActive={p === pageSafe} onClick={(e) => { e.preventDefault(); setPage(p); }}>
+                            {p}
+                          </PaginationLink>
+                        </PaginationItem>
+                      ))}
+                      <PaginationItem>
+                        <PaginationNext
+                          href="#"
+                          className={pageSafe === totalPages ? "pointer-events-none opacity-50" : undefined}
+                          onClick={(e) => { e.preventDefault(); if (pageSafe < totalPages) setPage(pageSafe + 1); }}
+                        />
+                      </PaginationItem>
+                    </PaginationContent>
+                  </Pagination>
+                </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>
@@ -692,8 +887,9 @@ function TrackingSettingsTab() {
 // ── Page ───────────────────────────────────────────────────────────────────
 
 export default function GeoAttendance() {
-  const [tab, setTab] = useState<"approvals" | "map" | "route" | "onduty" | "tracking">("approvals");
-  const { data: pending } = useOnDutyRequestsHR("pending");
+  const [tab, setTab] = useState<"approvals" | "verifications" | "map" | "onduty" | "tracking">("approvals");
+  const { data: pendingSessions } = useOnDutySessionsHR("pending");
+  const { data: pendingPunches } = useOnDutyPunchVerificationsHR("pending");
 
   return (
     <HrLayout>
@@ -701,15 +897,15 @@ export default function GeoAttendance() {
         <div>
           <h2 className="text-2xl font-black text-gray-900">Geo Attendance</h2>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Office Geo Punch, On-Duty approvals, live tracking, and travel routes for employees working on and off premises.
+            Office Geo Punch, On-Duty approvals, punch verification, live tracking, and travel routes for employees working on and off premises.
           </p>
         </div>
 
         <PillTabs
           items={[
-            { value: "approvals", label: `On-Duty Approvals${pending?.length ? ` (${pending.length})` : ""}`, icon: <MapPinned size={13} /> },
+            { value: "approvals", label: `On-Duty Approvals${pendingSessions?.length ? ` (${pendingSessions.length})` : ""}`, icon: <MapPinned size={13} /> },
+            { value: "verifications", label: `Punch Verifications${pendingPunches?.length ? ` (${pendingPunches.length})` : ""}`, icon: <Camera size={13} /> },
             { value: "map", label: "Live Map", icon: <Radar size={13} /> },
-            { value: "route", label: "Route Map", icon: <RouteIcon size={13} /> },
             { value: "onduty", label: "On-Duty Map", icon: <Users size={13} /> },
             { value: "tracking", label: "Tracking Settings", icon: <Navigation size={13} /> },
           ]}
@@ -718,8 +914,8 @@ export default function GeoAttendance() {
         />
 
         {tab === "approvals" && <ApprovalsTab />}
+        {tab === "verifications" && <PunchVerificationsTab />}
         {tab === "map" && <LiveMapTab />}
-        {tab === "route" && <RouteMapTab />}
         {tab === "onduty" && <OnDutyMapTab />}
         {tab === "tracking" && <TrackingSettingsTab />}
       </div>

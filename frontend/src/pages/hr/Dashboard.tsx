@@ -26,7 +26,7 @@ import {
   Users, UserCheck, Calendar, CreditCard, TrendingUp, AlertCircle,
   ChevronRight, Clock, Building2, Gift, Activity,
   CheckCircle2, ClipboardList, Wallet, ArrowUp, ArrowDown, RefreshCw,
-  MapPinned, Navigation, Radar, ShieldCheck,
+  MapPinned, Navigation, Radar, ShieldCheck, Camera,
 } from "lucide-react";
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -243,11 +243,12 @@ export default function HrDashboard() {
   const pendingPermCount = (pendingPerms ?? []).length;
   const monthlyPayroll   = summary?.monthlySalaryTotal ?? 0;
 
-  const geoPunchesToday      = (summary as any)?.geoPunchesToday ?? 0;
-  const onDutyPending        = (summary as any)?.onDutyPendingApprovals ?? 0;
-  const onDutyApprovedToday  = (summary as any)?.onDutyApprovedToday ?? 0;
-  const employeesOnDutyToday = (summary as any)?.employeesOnDutyToday ?? 0;
-  const liveTrackingEnabled  = (summary as any)?.liveTrackingEnabledCount ?? 0;
+  const geoPunchesToday        = (summary as any)?.geoPunchesToday ?? 0;
+  const onDutyPending          = (summary as any)?.onDutyPendingApprovals ?? 0;
+  const onDutyCompletedToday   = (summary as any)?.onDutyCompletedToday ?? 0;
+  const employeesOnDutyToday   = (summary as any)?.employeesOnDutyToday ?? 0;
+  const pendingPunchVerifications = (summary as any)?.pendingPunchVerifications ?? 0;
+  const liveTrackingEnabled    = (summary as any)?.liveTrackingEnabledCount ?? 0;
 
   const headerDate = now.toLocaleDateString("en-IN", {
     weekday: "long", day: "numeric", month: "long", year: "numeric",
@@ -714,10 +715,12 @@ export default function HrDashboard() {
               Geo Attendance — Today
             </span>
           </SectionTitle>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             {[
               { label: "Office Geo Punches", value: geoPunchesToday, color: "#006496", icon: MapPinned },
-              { label: "On-Duty Approved", value: onDutyApprovedToday, color: "#059669", icon: ShieldCheck },
+              { label: "On-Duty Sessions Pending", value: onDutyPending, color: "#f59e0b", icon: Clock },
+              { label: "Punches Awaiting Verification", value: pendingPunchVerifications, color: "#dc2626", icon: Camera },
+              { label: "On-Duty Completed", value: onDutyCompletedToday, color: "#059669", icon: ShieldCheck },
               { label: "Employees On-Duty", value: employeesOnDutyToday, color: "#d97706", icon: Users },
               { label: "Live Tracking Enabled", value: liveTrackingEnabled, color: "#7c3aed", icon: Radar },
             ].map(({ label, value, color, icon: Icon }) => (

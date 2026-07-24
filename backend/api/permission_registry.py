@@ -164,7 +164,8 @@ URL_MODULE_MAP: dict[str, str] = {
     # HrPermissionMiddleware never gates them regardless of this table (it
     # only checks role=="hr"). Only the HR-dashboard-facing routes need an
     # entry here.
-    "on-duty-requests": "geo_attendance",
+    "on-duty-sessions": "geo_attendance",
+    "on-duty-punch-verifications": "geo_attendance",
     "on-duty-map": "geo_attendance",
     "live-location/team": "geo_attendance",
 

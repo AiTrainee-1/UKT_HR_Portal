@@ -10,38 +10,53 @@ payroll engine, or AttendanceDayRecord computation):
    inside the branch's geofence, the punch is written immediately through
    the exact same _ingest_punches() path biometric sync and Excel import
    already share, tagged source="geo:auto". Outside the fence, the punch is
-   hard-rejected (nothing is recorded) — the app should have already shown
-   the employee they're out of range via geo_punch_precheck before they
-   even tried. This is NOT for off-site work; that's On-Duty below.
+   hard-rejected (nothing is recorded). Also blocked outright while the
+   employee has an ACTIVE On-Duty session (see below) — they're expected to
+   be off-site, so their punches route through the On-Duty verification
+   flow instead.
 
 2. On-Duty Attendance: for employees working away from the branch (field
-   visits, drivers, offsite work). Two photos + a reason + GPS are captured,
-   but nothing touches AttendanceLog until BOTH stages approve, in order:
-     - pending_hod -> the employee's Department Head approves/rejects
-       (mobile Approvals screen, manager_views.py::manager_update_on_duty_status)
-     - pending_hr  -> HR gives the final approval (HR portal dashboard)
-   A HOD rejection short-circuits straight to "rejected" — HR is never
-   consulted. HR may also act directly on a still-pending_hod request as a
-   fallback (e.g. no Department Head assigned), finalizing to
-   approved/rejected in one step. On final approval the punch is written via
-   the same _ingest_punches() path, tagged "on_duty:approved", at the
-   ORIGINAL captured punch_time, never the approval time.
+   visits, drivers, offsite work). This reuses the SAME 4-punches-per-day
+   attendance system every other source uses — it does not add a separate
+   on-duty punch count — split into two layers:
+     a. OnDutySession — a lightweight gate. The employee submits just a
+        destination (no photos/GPS at this stage) and it goes through the
+        existing two-stage chain:
+          - pending_hod -> Department Head approves/rejects
+            (mobile Approvals screen, manager_views.py::manager_update_on_duty_status)
+          - pending_hr  -> HR gives the final approval
+        A HOD rejection is terminal; HR may also act on a still-pending_hod
+        session as a fallback (no Department Head assigned), collapsing
+        straight to active/rejected. Approval flips status to "active" and
+        stamps started_at — this is what gates live-location tracking
+        (live_location_ping) and routes the employee's regular attendance
+        punches through the photo+GPS verification flow below instead of a
+        plain punch.
+     b. OnDutyPunchVerification — one of the day's (up to 4) attendance
+        punches, captured with a selfie + GPS + the ORIGINAL time while the
+        session is active. Held "pending" until HR approves it (the fraud
+        check an unsupervised off-site punch needs, unlike Office/biometric)
+        — only then is it written via the shared _ingest_punches() path,
+        tagged "on_duty:approved". Approving the day's 4th punch also
+        auto-completes the parent session. The employee can also end the
+        session manually at any point via "Mark as Done" — nobody else can
+        end it early.
 
-3. Live location tracking: strictly opt-in per employee (Employee.
-   location_tracking_enabled, set by HR) — the app only starts sending
-   pings when it sees that flag true on the employee's own profile. Pings
-   are append-only and self-prune past PING_RETENTION_HOURS on every write
-   (no cron/Celery in this project) — kept long enough (72h) to back both
-   the Live Map's "current position" and the Route Map's "today/yesterday's
-   travel path" views.
+3. Live location tracking: opt-in either by Employee.location_tracking_enabled
+   (HR's manual per-employee toggle) OR by having an active OnDutySession —
+   the app only sends pings when one of those is true. Pings are append-only
+   and self-prune past PING_RETENTION_HOURS on every write (no cron/Celery
+   in this project) — kept long enough (72h) to back both the Live Map's
+   "current position" and the Route Map's "today/yesterday's travel path".
 
 Same conventions as the rest of this codebase: plain @api_view + @require_hr
 /@require_auth functions, no serializers/viewsets, camelCase response JSON,
 branch scoping via scope_to_branch for every HR-facing list/action.
 """
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 
 from django.core.files.base import ContentFile
+from django.db.models import Q
 from django.http import FileResponse
 from django.utils import timezone
 from rest_framework.decorators import api_view, parser_classes
@@ -53,7 +68,10 @@ from .auth import get_token_employee_id, is_hr, require_auth, require_hr
 from .biometric_sync import _ingest_punches
 from .branch_scope import get_branch_scope, scope_to_branch
 from .geo_utils import haversine_distance_m
-from .models import AttendanceLog, Employee, OnDutyRequest, LiveLocationPing, Notification
+from .models import (
+    AttendanceLog, DepartmentManager, Employee, LiveLocationPing, Notification,
+    OnDutyPunchVerification, OnDutySession,
+)
 
 ALLOWED_PHOTO_EXTENSIONS = {"jpg", "jpeg", "png"}
 MAX_PHOTO_BYTES = 8 * 1024 * 1024  # 8MB
@@ -127,111 +145,186 @@ def _day_bounds_utc(d: date) -> tuple[datetime, datetime]:
     start_naive = datetime.combine(d, time.min)
     start_utc = start_naive - IST_OFFSET
     end_utc = start_utc + timedelta(days=1)
-    return timezone.make_aware(start_utc, timezone.utc), timezone.make_aware(end_utc, timezone.utc)
+    return timezone.make_aware(start_utc, dt_timezone.utc), timezone.make_aware(end_utc, dt_timezone.utc)
 
 
-def _on_duty_request_dict(req: OnDutyRequest) -> dict:
-    emp = req.employee
+def _active_on_duty_session(emp: Employee) -> OnDutySession | None:
+    return OnDutySession.objects.filter(employee=emp, status=OnDutySession.STATUS_ACTIVE).order_by("-started_at").first()
+
+
+def _current_on_duty_session(emp: Employee) -> OnDutySession | None:
+    """The session most relevant to show the employee right now: whichever
+    is pending/active, else today's most recently completed/rejected one
+    (so the app can show "session ended" instead of going blank)."""
+    live = OnDutySession.objects.filter(
+        employee=emp,
+        status__in=[OnDutySession.STATUS_PENDING_HOD, OnDutySession.STATUS_PENDING_HR, OnDutySession.STATUS_ACTIVE],
+    ).order_by("-created_at").first()
+    if live:
+        return live
+    today = date.today()
+    return OnDutySession.objects.filter(
+        employee=emp, status__in=[OnDutySession.STATUS_COMPLETED, OnDutySession.STATUS_REJECTED],
+        created_at__date=today,
+    ).order_by("-created_at").first()
+
+
+def _on_duty_session_dict(session: OnDutySession) -> dict:
+    emp = session.employee
     return {
-        "id": req.id,
+        "id": session.id,
         "employeeId": emp.id,
         "employeeCode": emp.employee_code,
         "employeeName": f"{emp.first_name} {emp.last_name}",
         "department": emp.department.name if emp.department_id and emp.department else None,
-        "punchDate": str(req.punch_date),
-        "punchTime": req.punch_time.strftime("%H:%M:%S"),
-        "punchType": req.punch_type,
-        "reason": req.reason,
-        "branchId": req.branch_id,
-        "branchName": req.branch.name if req.branch_id and req.branch else None,
-        "latitude": float(req.latitude),
-        "longitude": float(req.longitude),
-        "accuracyM": req.accuracy_m,
-        "isMocked": req.is_mocked,
-        "hasPhotos": bool(req.photo1 and req.photo2),
-        "status": req.status,
-        "hodReviewedBy": req.hod_reviewed_by,
-        "hodReviewComment": req.hod_review_comment,
-        "hodReviewedAt": req.hod_reviewed_at.isoformat() if req.hod_reviewed_at else None,
-        "hrReviewedBy": req.hr_reviewed_by,
-        "hrReviewComment": req.hr_review_comment,
-        "hrReviewedAt": req.hr_reviewed_at.isoformat() if req.hr_reviewed_at else None,
-        "createdAt": req.created_at.isoformat() if req.created_at else None,
+        "destination": session.destination,
+        "branchId": session.branch_id,
+        "branchName": session.branch.name if session.branch_id and session.branch else None,
+        "status": session.status,
+        "hodReviewedBy": session.hod_reviewed_by,
+        "hodReviewComment": session.hod_review_comment,
+        "hodReviewedAt": session.hod_reviewed_at.isoformat() if session.hod_reviewed_at else None,
+        "hrReviewedBy": session.hr_reviewed_by,
+        "hrReviewComment": session.hr_review_comment,
+        "hrReviewedAt": session.hr_reviewed_at.isoformat() if session.hr_reviewed_at else None,
+        "startedAt": session.started_at.isoformat() if session.started_at else None,
+        "completedAt": session.completed_at.isoformat() if session.completed_at else None,
+        "completedBy": session.completed_by,
+        "completionReason": session.completion_reason,
+        "createdAt": session.created_at.isoformat() if session.created_at else None,
     }
 
 
-def resolve_on_duty_hod(req: OnDutyRequest, decision: str, reviewer_name: str, comment: str | None) -> None:
+def _on_duty_punch_verification_dict(v: OnDutyPunchVerification) -> dict:
+    emp = v.employee
+    return {
+        "id": v.id,
+        "sessionId": v.session_id,
+        "employeeId": emp.id,
+        "employeeCode": emp.employee_code,
+        "employeeName": f"{emp.first_name} {emp.last_name}",
+        "department": emp.department.name if emp.department_id and emp.department else None,
+        "punchDate": str(v.punch_date),
+        "punchTime": v.punch_time.strftime("%H:%M:%S"),
+        "punchType": v.punch_type,
+        "punchNumber": v.punch_number,
+        "latitude": float(v.latitude),
+        "longitude": float(v.longitude),
+        "accuracyM": v.accuracy_m,
+        "isMocked": v.is_mocked,
+        "hasPhoto": bool(v.photo),
+        "status": v.status,
+        "hrReviewedBy": v.hr_reviewed_by,
+        "hrReviewComment": v.hr_review_comment,
+        "hrReviewedAt": v.hr_reviewed_at.isoformat() if v.hr_reviewed_at else None,
+        "createdAt": v.created_at.isoformat() if v.created_at else None,
+    }
+
+
+def resolve_on_duty_session_hod(session: OnDutySession, decision: str, reviewer_name: str, comment: str | None) -> None:
     """
-    Stage 1 — Department Head decision. Called from manager_views.py::
-    manager_update_on_duty_status. Approval moves the request to pending_hr
-    (nothing is written to AttendanceLog yet); rejection is terminal — HR
-    never sees it.
+    Stage 1 — Department Head decision on the destination request. Called
+    from manager_views.py::manager_update_on_duty_status. Approval moves the
+    session to pending_hr; rejection is terminal — HR never sees it.
     """
-    req.status = OnDutyRequest.STATUS_PENDING_HR if decision == "approved" else OnDutyRequest.STATUS_REJECTED
-    req.hod_reviewed_by = reviewer_name
-    req.hod_reviewed_at = timezone.now()
+    session.status = OnDutySession.STATUS_PENDING_HR if decision == "approved" else OnDutySession.STATUS_REJECTED
+    session.hod_reviewed_by = reviewer_name
+    session.hod_reviewed_at = timezone.now()
     if comment:
-        req.hod_review_comment = comment
-    req.save()
-    punch_label = "Check-In" if req.punch_type == AttendanceLog.PUNCH_IN else "Check-Out"
+        session.hod_review_comment = comment
+    session.save()
     if decision == "approved":
-        message = f"Your On-Duty {punch_label} request for {req.punch_date} was approved by your Department Head and is now awaiting HR approval."
+        message = f"Your On-Duty request for {session.destination} was approved by your Department Head and is now awaiting HR approval."
     else:
-        message = f"Your On-Duty {punch_label} request for {req.punch_date} was rejected by your Department Head."
-    Notification.objects.create(employee=req.employee, type="on_duty", message=message)
+        message = f"Your On-Duty request for {session.destination} was rejected by your Department Head."
+    Notification.objects.create(employee=session.employee, type="on_duty", message=message)
 
 
-def resolve_on_duty_hr(req: OnDutyRequest, decision: str, reviewer_name: str, comment: str | None) -> None:
+def resolve_on_duty_session_hr(session: OnDutySession, decision: str, reviewer_name: str, comment: str | None) -> None:
     """
-    Stage 2 — HR's final decision. Called both for a request already at
-    pending_hr (the normal path) and directly on a still-pending_hod request
+    Stage 2 — HR's final decision. Called both for a session already at
+    pending_hr (the normal path) and directly on a still-pending_hod session
     (HR's fallback when there's no Department Head to act, or they haven't).
-    Either way this call is the one that finalizes the request: approval
-    writes a real punch via the same shared ingestion path every other punch
-    source uses, at the ORIGINAL captured time — never the approval time.
+    Approval starts the session (status=active, started_at=now) — this is
+    what live_location_ping and the mobile on-duty punch flow key off of.
+    """
+    if decision == "approved":
+        session.status = OnDutySession.STATUS_ACTIVE
+        session.started_at = timezone.now()
+    else:
+        session.status = OnDutySession.STATUS_REJECTED
+    session.hr_reviewed_by = reviewer_name
+    session.hr_reviewed_at = timezone.now()
+    if comment:
+        session.hr_review_comment = comment
+    session.save()
+    if decision == "approved":
+        message = f"Your On-Duty request for {session.destination} was approved by HR — you can now begin."
+    else:
+        message = f"Your On-Duty request for {session.destination} was rejected by HR."
+    Notification.objects.create(employee=session.employee, type="on_duty", message=message)
+
+
+def resolve_on_duty_punch_hr(v: OnDutyPunchVerification, decision: str, reviewer_name: str, comment: str | None) -> None:
+    """
+    HR's single-stage decision on a captured on-duty punch. Approval writes
+    the punch via the same shared ingestion path every other source uses, at
+    the ORIGINAL captured time — never the approval time. If this is the
+    day's 4th punch, approving it also auto-completes the parent session (a
+    still-active session only — a manually-completed one is left alone).
+    Rejection just leaves the punch slot open for the employee to retry.
     """
     if decision == "approved":
         _ingest_punches(
-            [(req.employee.employee_code, req.punch_date, req.punch_time, req.punch_type)],
+            [(v.employee.employee_code, v.punch_date, v.punch_time, v.punch_type)],
             None,
             "on_duty:approved",
         )
-        req.status = OnDutyRequest.STATUS_APPROVED
+        v.status = OnDutyPunchVerification.STATUS_APPROVED
     else:
-        req.status = OnDutyRequest.STATUS_REJECTED
-    req.hr_reviewed_by = reviewer_name
-    req.hr_reviewed_at = timezone.now()
+        v.status = OnDutyPunchVerification.STATUS_REJECTED
+    v.hr_reviewed_by = reviewer_name
+    v.hr_reviewed_at = timezone.now()
     if comment:
-        req.hr_review_comment = comment
-    req.save()
-    punch_label = "Check-In" if req.punch_type == AttendanceLog.PUNCH_IN else "Check-Out"
+        v.hr_review_comment = comment
+    v.save()
+
+    punch_label = "Check-In" if v.punch_type == AttendanceLog.PUNCH_IN else "Check-Out"
     Notification.objects.create(
-        employee=req.employee,
-        type="on_duty",
-        message=f"Your On-Duty {punch_label} request for {req.punch_date} was {req.status} by HR.",
+        employee=v.employee, type="on_duty",
+        message=f"Your On-Duty {punch_label} (punch {v.punch_number}) was {v.status} by HR.",
     )
 
+    if decision == "approved" and v.punch_number == 4:
+        session = v.session
+        if session.status == OnDutySession.STATUS_ACTIVE:
+            session.status = OnDutySession.STATUS_COMPLETED
+            session.completed_at = timezone.now()
+            session.completed_by = "system"
+            session.completion_reason = OnDutySession.COMPLETION_AUTO_4TH_PUNCH
+            session.save()
+            Notification.objects.create(
+                employee=v.employee, type="on_duty",
+                message="Your On-Duty session was automatically completed after your 4th punch was approved.",
+            )
 
-def _notify_hod_approvers(req: OnDutyRequest) -> None:
+
+def _notify_hod_approvers(session: OnDutySession) -> None:
     """Push a Notification to every active Department Head covering this
     employee with on-duty approval enabled. HR always sees the request too,
     via the Pending Approvals tab on the HR dashboard (no push needed there —
     HRUser accounts aren't push-token-registered, only employees are)."""
-    from django.db.models import Q
-    from .models import DepartmentManager
-
-    emp = req.employee
+    emp = session.employee
     managers = DepartmentManager.objects.select_related("employee").filter(
         Q(employee_assignments__employee_id=emp.id) | Q(department_assignments__department_id=emp.department_id),
         is_active=True,
         can_approve_on_duty=True,
     ).distinct()
-    punch_label = "Check-In" if req.punch_type == AttendanceLog.PUNCH_IN else "Check-Out"
     for m in managers:
         Notification.objects.create(
             employee=m.employee,
             type="on_duty",
-            message=f"{emp.first_name} {emp.last_name} submitted an On-Duty {punch_label} request — {req.reason[:80]}",
+            message=f"{emp.first_name} {emp.last_name} submitted an On-Duty request — {session.destination[:80]}",
         )
 
 
@@ -267,6 +360,7 @@ def geo_punch_precheck(request: Request) -> Response:
 
     today = date.today()
     punch_num, punch_type = _next_punch(emp, today)
+    active_session = _active_on_duty_session(emp)
 
     return Response({
         "insideRadius": inside,
@@ -275,7 +369,10 @@ def geo_punch_precheck(request: Request) -> Response:
         "branchName": branch.name,
         "nextPunchNumber": punch_num,
         "nextPunchType": punch_type,
+        "activeOnDutySession": active_session is not None,
         "message": (
+            "You have an active On-Duty session — use the On-Duty page to punch instead of Office Geo Punch."
+            if active_session else
             f"You are inside the allowed company radius ({round(distance)}m from {branch.name})."
             if inside else
             f"You are outside the allowed company radius — {round(distance)}m from {branch.name} (allowed: {radius}m)."
@@ -291,13 +388,19 @@ def geo_punch(request: Request) -> Response:
     Office Geo Punch: an alternative to biometric punching for staff
     physically on-premises. No photos, no approval step. Inside the branch's
     geofence, the punch is written immediately. Outside it, the punch is
-    hard-rejected — nothing is recorded, and no approval request is created.
-    Employees working off-site should use the On-Duty flow instead
-    (on_duty_request below).
+    hard-rejected — nothing is recorded. Blocked outright while the employee
+    has an active On-Duty session — they should punch from the On-Duty page
+    instead, where each punch is photo+GPS verified.
     """
     emp = _employee_from_token(request)
     if not emp:
         return _error("Employee authentication required", 403)
+
+    if _active_on_duty_session(emp):
+        return _error(
+            "You have an active On-Duty session — use the On-Duty page to record your punches instead of Office Geo Punch.",
+            409,
+        )
 
     data = request.data
     try:
@@ -346,22 +449,101 @@ def geo_punch(request: Request) -> Response:
     return Response({"status": "already_recorded", "punchNumber": punch_num, "punchType": punch_type})
 
 
-# ── Employee-facing: On-Duty Attendance (Type 2) ────────────────────────────
+# ── Employee-facing: On-Duty session lifecycle ──────────────────────────────
 
 @api_view(["POST"])
-@parser_classes([MultiPartParser, FormParser])
 @require_auth
-def on_duty_request(request: Request) -> Response:
+def on_duty_session_request(request: Request) -> Response:
     """
-    POST /api/attendance/on-duty/request — multipart:
-      latitude, longitude, accuracy?, isMocked?, reason, photo1 (file), photo2 (file)
-    For employees working away from the branch. Creates a pending_hod
-    OnDutyRequest — the punch is NOT recorded until the Department Head then
-    HR both approve it.
+    POST /api/on-duty-sessions/request — JSON {destination}
+    Starts the two-stage approval chain for a day of On-Duty work. No
+    photos/GPS at this stage — that verification happens per-punch once the
+    session is active (see on_duty_punch_request below).
     """
     emp = _employee_from_token(request)
     if not emp:
         return _error("Employee authentication required", 403)
+
+    existing = OnDutySession.objects.filter(
+        employee=emp,
+        status__in=[OnDutySession.STATUS_PENDING_HOD, OnDutySession.STATUS_PENDING_HR, OnDutySession.STATUS_ACTIVE],
+    ).first()
+    if existing:
+        return _error(f"You already have an On-Duty session that is {existing.status.replace('_', ' ')}", 409)
+
+    destination = (request.data.get("destination") or "").strip()
+    if not destination:
+        return _error("A destination is required")
+
+    session = OnDutySession.objects.create(employee=emp, destination=destination, branch=emp.branch)
+    _notify_hod_approvers(session)
+
+    return Response({"status": "pending_hod_approval", "sessionId": session.id}, status=201)
+
+
+@api_view(["POST"])
+@require_auth
+def on_duty_session_complete(request: Request) -> Response:
+    """POST /api/on-duty-sessions/complete — the employee manually marks
+    their own active session as Done. Nobody else can end a session early."""
+    emp = _employee_from_token(request)
+    if not emp:
+        return _error("Employee authentication required", 403)
+
+    session = _active_on_duty_session(emp)
+    if not session:
+        return _error("You don't have an active On-Duty session", 404)
+
+    session.status = OnDutySession.STATUS_COMPLETED
+    session.completed_at = timezone.now()
+    session.completed_by = "employee"
+    session.completion_reason = OnDutySession.COMPLETION_MANUAL
+    session.save()
+    return Response(_on_duty_session_dict(session))
+
+
+@api_view(["GET"])
+@require_auth
+def on_duty_session_status(request: Request) -> Response:
+    """GET /api/on-duty-sessions/status — the employee's current/most recent
+    On-Duty session (pending/active, or today's completed/rejected one) plus
+    its punch verifications, for the dedicated On-Duty page."""
+    emp = _employee_from_token(request)
+    if not emp:
+        return _error("Employee authentication required", 403)
+
+    session = _current_on_duty_session(emp)
+    if not session:
+        return Response({"session": None, "punchVerifications": []})
+
+    verifications = session.punch_verifications.order_by("punch_number", "created_at")
+    return Response({
+        "session": _on_duty_session_dict(session),
+        "punchVerifications": [_on_duty_punch_verification_dict(v) for v in verifications],
+    })
+
+
+@api_view(["POST"])
+@parser_classes([MultiPartParser, FormParser])
+@require_auth
+def on_duty_punch_request(request: Request) -> Response:
+    """
+    POST /api/on-duty-sessions/punch — multipart:
+      latitude, longitude, accuracy?, isMocked?, photo (file)
+    Captures one of the day's (up to 4) attendance punches while an On-Duty
+    session is active. Held pending until HR approves it — see
+    resolve_on_duty_punch_hr().
+    """
+    emp = _employee_from_token(request)
+    if not emp:
+        return _error("Employee authentication required", 403)
+
+    session = _active_on_duty_session(emp)
+    if not session:
+        return _error("You don't have an active On-Duty session", 404)
+
+    if OnDutyPunchVerification.objects.filter(employee=emp, status=OnDutyPunchVerification.STATUS_PENDING).exists():
+        return _error("You already have a punch awaiting HR approval", 409)
 
     data = request.data
     try:
@@ -376,20 +558,14 @@ def on_duty_request(request: Request) -> Response:
     except (TypeError, ValueError):
         accuracy = None
 
-    reason = (data.get("reason") or "").strip()
-    if not reason:
-        return _error("A reason for the on-duty work is required")
-
-    photo1 = request.FILES.get("photo1")
-    photo2 = request.FILES.get("photo2")
-    if not photo1 or not photo2:
-        return _error("Two photos (photo1, photo2) are required for an On-Duty request")
-    for f in (photo1, photo2):
-        ext = f.name.rsplit(".", 1)[-1].lower() if "." in f.name else ""
-        if ext not in ALLOWED_PHOTO_EXTENSIONS:
-            return _error(f"Unsupported photo type '.{ext}' — only JPG and PNG are accepted")
-        if f.size > MAX_PHOTO_BYTES:
-            return _error(f"Photo is too large ({f.size / 1024 / 1024:.1f}MB) — the limit is 8MB")
+    photo = request.FILES.get("photo")
+    if not photo:
+        return _error("A selfie photo is required to verify this punch")
+    ext = photo.name.rsplit(".", 1)[-1].lower() if "." in photo.name else ""
+    if ext not in ALLOWED_PHOTO_EXTENSIONS:
+        return _error(f"Unsupported photo type '.{ext}' — only JPG and PNG are accepted")
+    if photo.size > MAX_PHOTO_BYTES:
+        return _error(f"Photo is too large ({photo.size / 1024 / 1024:.1f}MB) — the limit is 8MB")
 
     today = date.today()
     now_time = datetime.now().time().replace(microsecond=0)
@@ -397,18 +573,16 @@ def on_duty_request(request: Request) -> Response:
     if punch_type is None:
         return _error("All 4 punches have already been recorded for today")
 
-    req = OnDutyRequest(
-        employee=emp, punch_date=today, punch_time=now_time, punch_type=punch_type,
-        reason=reason, branch=emp.branch, latitude=lat, longitude=lng,
-        accuracy_m=accuracy, is_mocked=is_mocked,
+    v = OnDutyPunchVerification(
+        session=session, employee=emp, punch_date=today, punch_time=now_time,
+        punch_type=punch_type, punch_number=punch_num,
+        latitude=lat, longitude=lng, accuracy_m=accuracy, is_mocked=is_mocked,
     )
-    req.photo1.save(photo1.name, ContentFile(photo1.read()), save=False)
-    req.photo2.save(photo2.name, ContentFile(photo2.read()), save=False)
-    req.save()
-    _notify_hod_approvers(req)
+    v.photo.save(photo.name, ContentFile(photo.read()), save=False)
+    v.save()
 
     return Response({
-        "status": "pending_hod_approval", "requestId": req.id,
+        "status": "pending_hr_approval", "verificationId": v.id,
         "punchNumber": punch_num, "punchType": punch_type,
     }, status=201)
 
@@ -417,8 +591,10 @@ def on_duty_request(request: Request) -> Response:
 @require_auth
 def geo_punch_status(request: Request) -> Response:
     """GET /api/attendance/geo-punch/status?date=YYYY-MM-DD (defaults to today)
-    Today's recorded punches (any source) + this employee's pending/recent
-    On-Duty requests — lets the app show "Punch 2 pending HOD approval" etc."""
+    Today's recorded punches (any source) + a lightweight snapshot of the
+    employee's current On-Duty session (full detail lives at
+    on_duty_session_status) — used by the compact status banners on the
+    Attendance page and home screen."""
     emp = _employee_from_token(request)
     if not emp:
         return _error("Employee authentication required", 403)
@@ -432,7 +608,7 @@ def geo_punch_status(request: Request) -> Response:
             return _error("Invalid date format")
 
     logs = AttendanceLog.objects.filter(employee=emp, date=d).order_by("punch_time")
-    requests_qs = OnDutyRequest.objects.filter(employee=emp, punch_date=d).order_by("punch_time")
+    session = _current_on_duty_session(emp)
 
     punch_num, next_type = _next_punch(emp, d)
     return Response({
@@ -446,7 +622,7 @@ def geo_punch_status(request: Request) -> Response:
             }
             for log in logs
         ],
-        "onDutyRequests": [_on_duty_request_dict(r) for r in requests_qs],
+        "onDutySession": _on_duty_session_dict(session) if session else None,
         "nextPunchNumber": punch_num,
         "nextPunchType": next_type,
     })
@@ -457,14 +633,14 @@ def geo_punch_status(request: Request) -> Response:
 def live_location_ping(request: Request) -> Response:
     """
     POST /api/live-location/ping — JSON {latitude, longitude, accuracy?, isMocked?}
-    Only accepted while Employee.location_tracking_enabled is true — the app
-    should stop its ping loop the moment it sees this 403 back, since it
-    means HR turned tracking off for this employee.
+    Accepted while Employee.location_tracking_enabled is true OR the
+    employee has an active On-Duty session — the app should stop its ping
+    loop the moment it sees this 403 back.
     """
     emp = _employee_from_token(request)
     if not emp:
         return _error("Employee authentication required", 403)
-    if not emp.location_tracking_enabled:
+    if not emp.location_tracking_enabled and not _active_on_duty_session(emp):
         return Response(
             {"error": "Location tracking is not enabled for your account", "code": "TRACKING_DISABLED"},
             status=403,
@@ -495,102 +671,129 @@ def live_location_ping(request: Request) -> Response:
 
 @api_view(["GET"])
 @require_hr
-def on_duty_requests_hr(request: Request) -> Response:
-    """GET /api/on-duty-requests?status=pending|pending_hod|pending_hr|approved|rejected|all
+def on_duty_sessions_hr(request: Request) -> Response:
+    """GET /api/on-duty-sessions?status=pending|pending_hod|pending_hr|active|completed|rejected|all
     — branch-scoped. "pending" (the default) covers both pending_hod and
     pending_hr so HR's Pending Approvals tab sees everything awaiting either
     stage in one list."""
     status_filter = request.query_params.get("status", "pending")
-    qs = OnDutyRequest.objects.select_related(
-        "employee__department", "employee__designation", "branch"
-    )
-    qs = scope_to_branch(qs, request)  # OnDutyRequest.branch_id is a direct field
+    qs = OnDutySession.objects.select_related("employee__department", "employee__designation", "branch")
+    qs = scope_to_branch(qs, request)  # OnDutySession.branch_id is a direct field
     if status_filter == "pending":
-        qs = qs.filter(status__in=[OnDutyRequest.STATUS_PENDING_HOD, OnDutyRequest.STATUS_PENDING_HR])
+        qs = qs.filter(status__in=[OnDutySession.STATUS_PENDING_HOD, OnDutySession.STATUS_PENDING_HR])
     elif status_filter != "all":
         qs = qs.filter(status=status_filter)
     qs = qs.order_by("-created_at")[:200]
-    return Response([_on_duty_request_dict(r) for r in qs])
+    return Response([_on_duty_session_dict(s) for s in qs])
 
 
 @api_view(["PATCH"])
 @require_hr
-def on_duty_request_hr_status(request: Request, pk: int) -> Response:
+def on_duty_session_hr_status(request: Request, pk: int) -> Response:
     """
-    PATCH /api/on-duty-requests/<pk>/status — HR's decision. Works on a
-    request at EITHER stage: if it's still pending_hod (Department Head
+    PATCH /api/on-duty-sessions/<pk>/status — HR's decision. Works on a
+    session at EITHER stage: if it's still pending_hod (Department Head
     hasn't acted, or there isn't one), HR's decision finalizes it directly
     in one step; if it's pending_hr, this is the normal second-stage
-    approval. Either way resolve_on_duty_hr() writes the punch identically.
+    approval.
     """
-    req = scope_to_branch(
-        OnDutyRequest.objects.select_related("employee__department", "employee__designation", "branch"),
+    session = scope_to_branch(
+        OnDutySession.objects.select_related("employee__department", "employee__designation", "branch"),
         request,
     ).filter(pk=pk).first()
-    if not req:
-        return _error("On-Duty request not found", 404)
-    if req.status not in (OnDutyRequest.STATUS_PENDING_HOD, OnDutyRequest.STATUS_PENDING_HR):
-        return _error(f"This request was already {req.status}")
+    if not session:
+        return _error("On-Duty session not found", 404)
+    if session.status not in (OnDutySession.STATUS_PENDING_HOD, OnDutySession.STATUS_PENDING_HR):
+        return _error(f"This session was already {session.status}")
 
     status_val = request.data.get("status")
     if status_val not in ("approved", "rejected"):
         return _error("status must be 'approved' or 'rejected'")
 
     reviewer_name = request.jwt_user.get("name") or "HR"
-    resolve_on_duty_hr(req, status_val, reviewer_name, request.data.get("comment"))
-    return Response(_on_duty_request_dict(req))
+    resolve_on_duty_session_hr(session, status_val, reviewer_name, request.data.get("comment"))
+    return Response(_on_duty_session_dict(session))
+
+
+@api_view(["GET"])
+@require_hr
+def on_duty_punch_verifications_hr(request: Request) -> Response:
+    """GET /api/on-duty-punch-verifications?status=pending|approved|rejected|all — branch-scoped."""
+    status_filter = request.query_params.get("status", "pending")
+    qs = OnDutyPunchVerification.objects.select_related("employee__department", "employee__designation", "session")
+    qs = scope_to_branch(qs, request, field="employee__branch_id")
+    if status_filter != "all":
+        qs = qs.filter(status=status_filter)
+    qs = qs.order_by("-created_at")[:200]
+    return Response([_on_duty_punch_verification_dict(v) for v in qs])
+
+
+@api_view(["PATCH"])
+@require_hr
+def on_duty_punch_verification_hr_status(request: Request, pk: int) -> Response:
+    """PATCH /api/on-duty-punch-verifications/<pk>/status — HR approves/rejects
+    one captured on-duty punch. Single-stage (HR only) — see
+    resolve_on_duty_punch_hr() for what happens on approval."""
+    v = scope_to_branch(
+        OnDutyPunchVerification.objects.select_related("employee__department", "employee__designation", "session"),
+        request, field="employee__branch_id",
+    ).filter(pk=pk).first()
+    if not v:
+        return _error("Punch verification not found", 404)
+    if v.status != OnDutyPunchVerification.STATUS_PENDING:
+        return _error(f"This punch was already {v.status}")
+
+    status_val = request.data.get("status")
+    if status_val not in ("approved", "rejected"):
+        return _error("status must be 'approved' or 'rejected'")
+
+    reviewer_name = request.jwt_user.get("name") or "HR"
+    resolve_on_duty_punch_hr(v, status_val, reviewer_name, request.data.get("comment"))
+    return Response(_on_duty_punch_verification_dict(v))
 
 
 @api_view(["GET"])
 @require_auth
-def on_duty_request_photo(request: Request, pk: int, n: int) -> Response:
-    """GET /api/on-duty-requests/<pk>/photo/<1|2> — owner, branch-scoped HR,
-    or a Department Head with this employee in their approval scope."""
-    from django.db.models import Q
-    from .models import DepartmentManager
-
-    req = OnDutyRequest.objects.select_related("employee").filter(pk=pk).first()
-    if not req:
-        return _error("Request not found", 404)
+def on_duty_punch_verification_photo(request: Request, pk: int) -> Response:
+    """GET /api/on-duty-punch-verifications/<pk>/photo — owner, branch-scoped
+    HR, or a Department Head with this employee in their approval scope."""
+    v = OnDutyPunchVerification.objects.select_related("employee").filter(pk=pk).first()
+    if not v:
+        return _error("Punch verification not found", 404)
 
     owner_employee_id = get_token_employee_id(request)
     allowed = False
-    if owner_employee_id == req.employee_id:
+    if owner_employee_id == v.employee_id:
         allowed = True
     elif is_hr(request):
-        allowed = scope_to_branch(Employee.objects, request).filter(pk=req.employee_id).exists()
+        allowed = scope_to_branch(Employee.objects, request).filter(pk=v.employee_id).exists()
     elif owner_employee_id:
         allowed = DepartmentManager.objects.filter(
-            Q(employee_assignments__employee_id=req.employee_id)
-            | Q(department_assignments__department_id=req.employee.department_id),
+            Q(employee_assignments__employee_id=v.employee_id)
+            | Q(department_assignments__department_id=v.employee.department_id),
             employee_id=owner_employee_id, is_active=True,
         ).exists()
     if not allowed:
         return _error("Access denied", 403)
 
-    photo = req.photo1 if n == 1 else req.photo2 if n == 2 else None
-    if not photo:
+    if not v.photo:
         return _error("Photo not found", 404)
-    return FileResponse(photo.open("rb"))
+    return FileResponse(v.photo.open("rb"))
 
 
 @api_view(["GET"])
 @require_hr
 def live_location_team(request: Request) -> Response:
     """GET /api/live-location/team — latest ping per tracking-enabled employee, branch-scoped.
-    Also flags whether each employee has an active On-Duty request today, so
+    Also flags whether each employee has an active On-Duty session today, so
     the Live Map can render On-Duty staff in a distinct color."""
     employees = scope_to_branch(
         Employee.objects.select_related("department", "branch"), request
     ).filter(location_tracking_enabled=True, status="active")
 
     cutoff = timezone.now() - timedelta(hours=PING_RETENTION_HOURS)
-    today = date.today()
     on_duty_emp_ids = set(
-        OnDutyRequest.objects.filter(
-            punch_date=today,
-            status__in=[OnDutyRequest.STATUS_PENDING_HOD, OnDutyRequest.STATUS_PENDING_HR, OnDutyRequest.STATUS_APPROVED],
-        ).values_list("employee_id", flat=True)
+        OnDutySession.objects.filter(status=OnDutySession.STATUS_ACTIVE).values_list("employee_id", flat=True)
     )
     out = []
     for emp in employees:
@@ -669,9 +872,10 @@ def live_location_route(request: Request, employee_id: int) -> Response:
 @require_hr
 def on_duty_map(request: Request) -> Response:
     """GET /api/on-duty-map?date=YYYY-MM-DD (defaults today) — branch-scoped.
-    Every employee with an On-Duty request on the given day, each with their
-    current live position (if location tracking is enabled) and today's
-    route points, for the dedicated On-Duty Map tab."""
+    Every employee with On-Duty activity on the given day (a session opened
+    that day, or one still active), each with their current live position
+    (if location tracking is enabled), today's route points, and their
+    session + punch-verification status, for the dedicated On-Duty Map tab."""
     date_str = request.query_params.get("date")
     d = date.today()
     if date_str:
@@ -680,43 +884,43 @@ def on_duty_map(request: Request) -> Response:
         except ValueError:
             return _error("Invalid date format")
 
-    reqs = scope_to_branch(
-        OnDutyRequest.objects.select_related("employee__department", "employee__branch", "branch"),
+    sessions = scope_to_branch(
+        OnDutySession.objects.select_related("employee__department", "employee__branch", "branch")
+        .prefetch_related("punch_verifications"),
         request,
-    ).filter(punch_date=d).order_by("employee_id", "punch_time")
+    ).filter(Q(created_at__date=d) | Q(status=OnDutySession.STATUS_ACTIVE)).order_by("employee_id", "-created_at")
 
     cutoff = timezone.now() - timedelta(hours=PING_RETENTION_HOURS)
     day_start, day_end = _day_bounds_utc(d)
 
     by_employee: dict[int, dict] = {}
-    for r in reqs:
-        emp = r.employee
-        entry = by_employee.get(emp.id)
-        if entry is None:
-            latest = None
-            points = []
-            if emp.location_tracking_enabled:
-                latest = emp.location_pings.filter(recorded_at__gte=cutoff).order_by("-recorded_at").first()
-                points = [
-                    {"latitude": float(p.latitude), "longitude": float(p.longitude), "recordedAt": p.recorded_at.isoformat()}
-                    for p in emp.location_pings.filter(recorded_at__gte=day_start, recorded_at__lt=day_end).order_by("recorded_at")
-                ]
-            entry = {
-                "employeeId": emp.id,
-                "employeeCode": emp.employee_code,
-                "employeeName": f"{emp.first_name} {emp.last_name}",
-                "department": emp.department.name if emp.department_id and emp.department else None,
-                "locationTrackingEnabled": emp.location_tracking_enabled,
-                "latitude": float(latest.latitude) if latest else None,
-                "longitude": float(latest.longitude) if latest else None,
-                "lastSeenAt": latest.recorded_at.isoformat() if latest else None,
-                "routePoints": points,
-                "requests": [],
-            }
-            by_employee[emp.id] = entry
-        entry["requests"].append({
-            "id": r.id, "punchType": r.punch_type, "punchTime": r.punch_time.strftime("%H:%M:%S"),
-            "reason": r.reason, "status": r.status,
-        })
+    for s in sessions:
+        emp = s.employee
+        if emp.id in by_employee:
+            continue  # one entry per employee — most recent session for the day (already ordered)
+        latest = None
+        points = []
+        if emp.location_tracking_enabled:
+            latest = emp.location_pings.filter(recorded_at__gte=cutoff).order_by("-recorded_at").first()
+            points = [
+                {"latitude": float(p.latitude), "longitude": float(p.longitude), "recordedAt": p.recorded_at.isoformat()}
+                for p in emp.location_pings.filter(recorded_at__gte=day_start, recorded_at__lt=day_end).order_by("recorded_at")
+            ]
+        by_employee[emp.id] = {
+            "employeeId": emp.id,
+            "employeeCode": emp.employee_code,
+            "employeeName": f"{emp.first_name} {emp.last_name}",
+            "department": emp.department.name if emp.department_id and emp.department else None,
+            "locationTrackingEnabled": emp.location_tracking_enabled,
+            "latitude": float(latest.latitude) if latest else None,
+            "longitude": float(latest.longitude) if latest else None,
+            "lastSeenAt": latest.recorded_at.isoformat() if latest else None,
+            "routePoints": points,
+            "session": {"id": s.id, "destination": s.destination, "status": s.status},
+            "punches": [
+                {"punchNumber": v.punch_number, "punchType": v.punch_type, "punchTime": v.punch_time.strftime("%H:%M:%S"), "status": v.status}
+                for v in s.punch_verifications.order_by("punch_number")
+            ],
+        }
 
     return Response({"date": str(d), "employees": list(by_employee.values())})

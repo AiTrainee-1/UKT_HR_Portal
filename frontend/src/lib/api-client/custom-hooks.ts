@@ -3568,8 +3568,65 @@ export const useSendChatMessage = () => {
 //  Geo Attendance (Office Geo Punch + On-Duty two-stage approval + live tracking)
 // ═══════════════════════════════════════════════════════════════════════════
 
-export type OnDutyRequestItem = {
+/** The destination-request gate — no photos/GPS at this stage, that
+ * verification now happens per-punch (see OnDutyPunchVerificationItem
+ * below). Two-stage HOD->HR chain same as before; approval flips status to
+ * "active" (started_at stamped), and the session ends in "completed" either
+ * automatically (4th punch approved) or manually (employee taps Done). */
+export type OnDutySessionItem = {
   id: number;
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department: string | null;
+  destination: string;
+  branchId: number | null;
+  branchName: string | null;
+  status: "pending_hod" | "pending_hr" | "active" | "completed" | "rejected";
+  hodReviewedBy: string | null;
+  hodReviewComment: string | null;
+  hodReviewedAt: string | null;
+  hrReviewedBy: string | null;
+  hrReviewComment: string | null;
+  hrReviewedAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  completedBy: string | null;
+  completionReason: "manual" | "auto_4th_punch" | null;
+  createdAt: string | null;
+};
+
+export const useOnDutySessionsHR = (
+  status: "pending" | "pending_hod" | "pending_hr" | "active" | "completed" | "rejected" | "all" = "pending",
+  enabled = true,
+) =>
+  useQuery<OnDutySessionItem[]>({
+    queryKey: ["/api/on-duty-sessions", status],
+    queryFn: () => customFetch<OnDutySessionItem[]>(`/api/on-duty-sessions?status=${status}`),
+    refetchInterval: 30_000,
+    enabled,
+  });
+
+export const useUpdateOnDutySessionHR = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, status, comment }: { id: number; status: "approved" | "rejected"; comment?: string }) =>
+      customFetch<OnDutySessionItem>(`/api/on-duty-sessions/${id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status, comment }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/on-duty-sessions"] });
+    },
+  });
+};
+
+/** One of the day's (up to 4) attendance punches, captured with a selfie +
+ * GPS while a session is active — held pending until HR approves it, then
+ * written as a real punch. Single-stage (HR only), unlike the session gate. */
+export type OnDutyPunchVerificationItem = {
+  id: number;
+  sessionId: number;
   employeeId: number;
   employeeCode: string;
   employeeName: string;
@@ -3577,45 +3634,40 @@ export type OnDutyRequestItem = {
   punchDate: string;
   punchTime: string;
   punchType: "IN" | "OUT";
-  reason: string;
-  branchId: number | null;
-  branchName: string | null;
+  punchNumber: number;
   latitude: number;
   longitude: number;
   accuracyM: number | null;
   isMocked: boolean;
-  hasPhotos: boolean;
-  status: "pending_hod" | "pending_hr" | "approved" | "rejected";
-  hodReviewedBy: string | null;
-  hodReviewComment: string | null;
-  hodReviewedAt: string | null;
+  hasPhoto: boolean;
+  status: "pending" | "approved" | "rejected";
   hrReviewedBy: string | null;
   hrReviewComment: string | null;
   hrReviewedAt: string | null;
   createdAt: string | null;
 };
 
-export const useOnDutyRequestsHR = (
-  status: "pending" | "pending_hod" | "pending_hr" | "approved" | "rejected" | "all" = "pending",
+export const useOnDutyPunchVerificationsHR = (
+  status: "pending" | "approved" | "rejected" | "all" = "pending",
   enabled = true,
 ) =>
-  useQuery<OnDutyRequestItem[]>({
-    queryKey: ["/api/on-duty-requests", status],
-    queryFn: () => customFetch<OnDutyRequestItem[]>(`/api/on-duty-requests?status=${status}`),
-    refetchInterval: 30_000,
+  useQuery<OnDutyPunchVerificationItem[]>({
+    queryKey: ["/api/on-duty-punch-verifications", status],
+    queryFn: () => customFetch<OnDutyPunchVerificationItem[]>(`/api/on-duty-punch-verifications?status=${status}`),
+    refetchInterval: 20_000,
     enabled,
   });
 
-export const useUpdateOnDutyRequestHR = () => {
+export const useUpdateOnDutyPunchVerificationHR = () => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ id, status, comment }: { id: number; status: "approved" | "rejected"; comment?: string }) =>
-      customFetch<OnDutyRequestItem>(`/api/on-duty-requests/${id}/status`, {
+      customFetch<OnDutyPunchVerificationItem>(`/api/on-duty-punch-verifications/${id}/status`, {
         method: "PATCH",
         body: JSON.stringify({ status, comment }),
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/on-duty-requests"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/on-duty-punch-verifications"] });
     },
   });
 };
@@ -3687,7 +3739,8 @@ export type OnDutyMapEmployee = {
   longitude: number | null;
   lastSeenAt: string | null;
   routePoints: { latitude: number; longitude: number; recordedAt: string }[];
-  requests: { id: number; punchType: "IN" | "OUT"; punchTime: string; reason: string; status: string }[];
+  session: { id: number; destination: string; status: string };
+  punches: { punchNumber: number; punchType: "IN" | "OUT"; punchTime: string; status: string }[];
 };
 
 export const useOnDutyMap = (date: string) =>
