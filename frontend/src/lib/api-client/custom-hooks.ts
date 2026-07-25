@@ -809,6 +809,7 @@ export type AttendanceDailyRecord = {
   firstPunch?: string | null;
   lastPunch?: string | null;
   source?: string | null;
+  sourceLabel?: string | null;
   totalPunches: number;
 };
 
@@ -840,9 +841,10 @@ export type AttendanceEmployeeHistory = {
     firstPunch?: string | null;
     lastPunch?: string | null;
     totalPunches: number;
-    punches: { time: string; type: string; source: string }[];
+    punches: { time: string; type: string; source: string; sourceLabel: string }[];
     hoursWorked?: string | null;
     source?: string | null;
+    sourceLabel?: string | null;
     notes?: string | null;
     leaveType?: string | null;
   }[];
@@ -1254,6 +1256,42 @@ export const useAttendanceSearch = (query: string, date: string, enabled = true)
     enabled: enabled && query.trim().length > 0,
   });
 
+// One employee's full day-by-day attendance across an arbitrary range —
+// same punch shape as attendance_search above, plus each day's computed
+// status/late flag and any approved Leave or Permission covering that date.
+export type AttendanceSearchDay = {
+  date: string;
+  status: "present" | "half_shift" | "absent" | "on_leave" | "holiday";
+  isLate: boolean;
+  isHalfShift: boolean;
+  totalPunches: number;
+  punches: AttendanceSearchPunch[];
+  casualLeave: { status: string; reason: string | null } | null;
+  leave: { status: string; type: string; reason: string | null } | null;
+  permission: { status: string; time: string | null; reason: string | null } | null;
+};
+
+export type AttendanceSearchRangeResponse = {
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department: string | null;
+  designation: string | null;
+  shift: { name: string; startTime: string | null; endTime: string | null; gracePeriodMinutes: number | null } | null;
+  startDate: string;
+  endDate: string;
+  days: AttendanceSearchDay[];
+};
+
+export const useAttendanceSearchRange = (employeeId: number | null, startDate: string, endDate: string, enabled = true) =>
+  useQuery<AttendanceSearchRangeResponse>({
+    queryKey: ["/api/attendance/search/range", employeeId, startDate, endDate],
+    queryFn: () => customFetch(
+      `/api/attendance/search/range?employeeId=${employeeId}&startDate=${startDate}&endDate=${endDate}`,
+    ),
+    enabled: enabled && employeeId != null && !!startDate && !!endDate,
+  });
+
 export const useComputeShiftLogs = () =>
   useMutation({
     mutationFn: (data: { date?: string; month?: number; year?: number; employeeId?: number }) =>
@@ -1380,6 +1418,7 @@ export type PayrollBreakdown = {
   // Which attendance calculation produced this payroll (strict | simple)
   attendanceMode?: "strict" | "simple" | null;
   simpleHalfShiftCutoff?: string | null;
+  shiftPunctualityWindowMinutes?: number | null;
   // staff
   shift?: {
     id?: number | null;
@@ -1773,6 +1812,7 @@ export type PayrollSettingsItem = {
   attendanceMode: "strict" | "simple";
   simpleHalfShiftCutoff: string;
   simpleGraceMinutes: number;
+  shiftPunctualityWindowMinutes: number;
   // Production attendance windows (1.5-shift day)
   prodFirstHalfStart: string;
   prodFirstHalfEnd: string;
@@ -3761,6 +3801,21 @@ export const useUpdateEmployeeLocationTracking = () => {
     onSuccess: () => {
       // /api/employees list + /api/live-location/team both need a refetch —
       // matches by query-key prefix so every params variant is caught.
+      queryClient.invalidateQueries({ queryKey: ["/api/employees"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/live-location/team"] });
+    },
+  });
+};
+
+export const useBulkUpdateLocationTracking = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ enabled, employeeIds }: { enabled: boolean; employeeIds?: number[] }) =>
+      customFetch<{ updated: number; enabled: boolean }>("/api/employees/location-tracking/bulk", {
+        method: "PATCH",
+        body: JSON.stringify({ enabled, ...(employeeIds ? { employeeIds } : {}) }),
+      }),
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/employees"] });
       queryClient.invalidateQueries({ queryKey: ["/api/live-location/team"] });
     },

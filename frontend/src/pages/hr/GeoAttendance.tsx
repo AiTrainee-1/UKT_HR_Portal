@@ -15,6 +15,10 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { useListEmployees, useListBranches, type Employee } from "@/lib/api-client";
@@ -22,7 +26,7 @@ import {
   useOnDutySessionsHR, useUpdateOnDutySessionHR,
   useOnDutyPunchVerificationsHR, useUpdateOnDutyPunchVerificationHR,
   useLiveLocationTeam, useLiveLocationTrail, useLiveLocationRoute, useOnDutyMap,
-  useUpdateEmployeeLocationTracking,
+  useUpdateEmployeeLocationTracking, useBulkUpdateLocationTracking,
   fetchAuthedImageObjectUrl, type OnDutySessionItem, type OnDutyPunchVerificationItem, type LiveLocationTeamMember,
 } from "@/lib/api-client/custom-hooks";
 import {
@@ -734,8 +738,10 @@ function TrackingSettingsTab() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "enabled" | "disabled">("all");
   const [page, setPage] = useState(1);
+  const [bulkConfirm, setBulkConfirm] = useState<null | boolean>(null);
   const { data: employees, isLoading } = useListEmployees({ status: "active" });
   const toggleMutation = useUpdateEmployeeLocationTracking();
+  const bulkMutation = useBulkUpdateLocationTracking();
 
   const withEnabled = (employees ?? []).map((e) => ({
     ...e,
@@ -762,6 +768,20 @@ function TrackingSettingsTab() {
       toast({ title: next ? "Live tracking enabled" : "Live tracking disabled", description: `${emp.firstName} ${emp.lastName}` });
     } catch {
       toast({ title: "Failed to update tracking", variant: "destructive" });
+    }
+  };
+
+  const handleBulkToggle = async (enabled: boolean) => {
+    try {
+      const res = await bulkMutation.mutateAsync({ enabled });
+      toast({
+        title: enabled ? "Live tracking enabled for everyone" : "Live tracking disabled for everyone",
+        description: `${res.updated} employee${res.updated === 1 ? "" : "s"} updated`,
+      });
+    } catch {
+      toast({ title: "Failed to update tracking", variant: "destructive" });
+    } finally {
+      setBulkConfirm(null);
     }
   };
 
@@ -807,16 +827,62 @@ function TrackingSettingsTab() {
             onChange={(e) => { setSearch(e.target.value); setPage(1); }}
           />
         </div>
-        <PillTabs
-          items={[
-            { value: "all", label: `All (${withEnabled.length})` },
-            { value: "enabled", label: `Enabled (${enabledCount})` },
-            { value: "disabled", label: `Disabled (${disabledCount})` },
-          ]}
-          value={filter}
-          onChange={(v) => { setFilter(v as typeof filter); setPage(1); }}
-        />
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-9 text-xs gap-1.5"
+            disabled={bulkMutation.isPending}
+            onClick={() => setBulkConfirm(true)}
+          >
+            <Radar size={13} className="text-teal-600" />
+            Enable All
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-9 text-xs gap-1.5"
+            disabled={bulkMutation.isPending}
+            onClick={() => setBulkConfirm(false)}
+          >
+            <Radar size={13} className="text-gray-400" />
+            Disable All
+          </Button>
+          <PillTabs
+            items={[
+              { value: "all", label: `All (${withEnabled.length})` },
+              { value: "enabled", label: `Enabled (${enabledCount})` },
+              { value: "disabled", label: `Disabled (${disabledCount})` },
+            ]}
+            value={filter}
+            onChange={(v) => { setFilter(v as typeof filter); setPage(1); }}
+          />
+        </div>
       </div>
+
+      <AlertDialog open={bulkConfirm !== null} onOpenChange={(open) => { if (!open) setBulkConfirm(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {bulkConfirm ? "Enable live tracking for everyone?" : "Disable live tracking for everyone?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {bulkConfirm
+                ? `This turns on live location tracking for all ${withEnabled.length} active employees, not just the ones currently shown in this list.`
+                : `This turns off live location tracking for all ${withEnabled.length} active employees, not just the ones currently shown in this list.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={bulkMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={bulkMutation.isPending}
+              onClick={() => handleBulkToggle(bulkConfirm === true)}
+            >
+              {bulkMutation.isPending ? "Updating…" : bulkConfirm ? "Enable All" : "Disable All"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Card className="border-0 shadow-sm">
         <CardContent className="p-0">

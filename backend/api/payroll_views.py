@@ -20,7 +20,6 @@ class PayrollSkip(Exception):
 
 import calendar
 import io
-from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -141,91 +140,13 @@ def _build_working_days(month: int, year: int, saturday_off: bool, holiday_dates
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Per-day attendance status classifier (staff)
+#  Per-day attendance status — sourced entirely from attendance_final's
+#  compute_month_records (see _generate_staff_payroll below). This used to
+#  have its own independent classifier here (_classify_day, reading raw
+#  AttendanceLog/Attendance rows directly) for strict-mode staff, running
+#  alongside — and capable of disagreeing with — the engine every other
+#  screen uses. Retired 2026-07-25: one engine, one answer, everywhere.
 # ─────────────────────────────────────────────────────────────────────────────
-
-def _check_leave(day: date, approved_leaves: list) -> dict | None:
-    """Return leave status dict if this day falls within an approved leave, else None."""
-    for lr in approved_leaves:
-        start_str = str(lr.start_date)
-        end_str = str(lr.end_date)
-        if start_str <= day.isoformat() <= end_str:
-            is_paid = lr.leave_type_ref.is_paid if lr.leave_type_ref else True
-            return {
-                "status": "paid_leave" if is_paid else "unpaid_leave",
-                "is_late": False,
-                "first_in": None,
-                "last_out": None,
-                "leave_type": lr.leave_type_ref.name if lr.leave_type_ref else lr.type,
-            }
-    return None
-
-
-def _classify_day(
-    day: date,
-    logs_by_date: dict[date, list],          # AttendanceLog punch records (biometric/excel)
-    attendance_by_date: dict[str, object],    # Attendance simple records (manual)
-    approved_leaves: list,
-    shift_start: time | None,                 # None = no shift assigned → no late detection
-    grace_minutes: int | None,
-) -> dict:
-    """
-    Classify a working day into: present | paid_leave | unpaid_leave | absent.
-
-    Priority order:
-      1. Approved leave → paid_leave / unpaid_leave
-      2. AttendanceLog punch records (if they exist for this day) → present with late detection
-      3. Attendance simple record (present=True) → present without late detection
-      4. No data → absent
-    """
-    leave = _check_leave(day, approved_leaves)
-    if leave:
-        return leave
-
-    # AttendanceLog (punch-based): biometric, Excel, or manual punch entry
-    day_logs = logs_by_date.get(day, [])
-    in_logs = [l for l in day_logs if l.punch_type == "IN"]
-    out_logs = [l for l in day_logs if l.punch_type == "OUT"]
-
-    if in_logs:
-        first_in = min(l.punch_time for l in in_logs)
-        if out_logs:
-            last_out = max(l.punch_time for l in out_logs)
-        elif len(day_logs) > 1:
-            # Biometric device records all punches as "IN"; the last punch of the day is the evening checkout
-            last_out = max(l.punch_time for l in day_logs)
-        else:
-            last_out = None
-
-        if shift_start is not None and grace_minutes is not None:
-            total_grace_secs = grace_minutes * 60
-            shift_start_secs = shift_start.hour * 3600 + shift_start.minute * 60
-            first_in_secs = first_in.hour * 3600 + first_in.minute * 60
-            is_late = (first_in_secs - shift_start_secs) > total_grace_secs
-        else:
-            # No assigned shift → no basis for lateness
-            is_late = False
-
-        return {
-            "status": "present",
-            "is_late": is_late,
-            "first_in": first_in.strftime("%H:%M"),
-            "last_out": last_out.strftime("%H:%M") if last_out else None,
-            "leave_type": None,
-        }
-
-    # Attendance simple record (present boolean — manual attendance module)
-    att = attendance_by_date.get(day.isoformat())
-    if att and att.present:
-        return {
-            "status": "present",
-            "is_late": False,   # can't detect late without punch time
-            "first_in": None,
-            "last_out": None,
-            "leave_type": None,
-        }
-
-    return {"status": "absent", "is_late": False, "first_in": None, "last_out": None, "leave_type": None}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -322,31 +243,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
             "(check Holidays and Saturday-off configuration)"
         )
 
-    # 4a. Fetch AttendanceLog punch records (biometric / Excel import)
-    logs = AttendanceLog.objects.filter(employee=emp, date__year=year, date__month=month)
-    logs_by_date: dict[date, list] = defaultdict(list)
-    for log in logs:
-        logs_by_date[log.date].append(log)
-
-    # 4b. Fetch Attendance simple records (manual attendance module — present boolean)
-    #     Attendance.date is stored as TEXT ("YYYY-MM-DD"), filter by string prefix
-    att_qs = Attendance.objects.filter(
-        employee=emp,
-        date__gte=f"{year}-{str(month).zfill(2)}-01",
-        date__lte=f"{year}-{str(month).zfill(2)}-31",
-    )
-    attendance_by_date: dict[str, Attendance] = {a.date: a for a in att_qs}
-
-    # 4c. Fetch DailyShiftLog for half-shift detection (staff 4-punch engine results)
-    from .models import DailyShiftLog as _DSL
-    shift_logs_by_date: dict[date, object] = {}
-    if emp.employment_type == "staff":
-        shift_logs_by_date = {
-            sl.date: sl
-            for sl in _DSL.objects.filter(employee=emp, date__year=year, date__month=month)
-        }
-
-    # 5. Fetch approved leave requests that overlap this month
+    # 4. Fetch approved leave requests that overlap this month
     month_start = date(year, month, 1)
     month_end = date(year, month, calendar.monthrange(year, month)[1])
     approved_leaves = list(
@@ -360,23 +257,18 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
         )
     )
 
-    # 5b. Final attendance records (auto-computed + HR overrides).
-    #     Manual overrides are ALWAYS authoritative. In simple attendance mode
-    #     the auto records replace the strict 4-punch classification entirely.
-    from .models import AttendanceDayRecord as _ADR, PayrollSettings as _PS
+    # 5. Final attendance records — the ONE engine every screen in the app
+    #    uses (attendance_final.compute_month_records), for every day and
+    #    every attendance mode. Internally this already applies the correct
+    #    strict/simple classification, night-shift relaxation, and manual
+    #    HR overrides (source="manual" rows are returned untouched) — payroll
+    #    no longer needs (or has) its own separate classification path.
+    from .models import PayrollSettings as _PS
+    from .attendance_final import compute_month_records
     _settings = _PS.get()
     use_simple = _settings.attendance_mode == "simple"
-    if use_simple:
-        from .attendance_final import compute_month_records
-        final_records = compute_month_records(emp, year, month, _settings)
-        final_by_date = {r.date: r for r in final_records}
-    else:
-        final_by_date = {
-            r.date: r
-            for r in _ADR.objects.filter(
-                employee=emp, date__year=year, date__month=month, source="manual"
-            )
-        }
+    final_records = compute_month_records(emp, year, month, _settings)
+    final_by_date = {r.date: r for r in final_records}
 
     # 6. Classify each working day
     DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -391,9 +283,8 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
     effective_present = Decimal("0")  # accumulates 0.5 or 1.0 per present day
 
     for d in working_days_list:
-        # Final record (override / simple mode) takes priority over strict classification
         fr = final_by_date.get(d)
-        if fr is not None and (fr.source == "manual" or use_simple):
+        if fr is not None:
             fr_status = fr.status
             if fr_status in ("present", "half_shift"):
                 status = "present"
@@ -414,20 +305,14 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
             forced_shifts = Decimal(str(fr.shifts_earned or 0))
             forced_half = fr.is_half_shift or fr_status == "half_shift"
         else:
-            info = _classify_day(d, logs_by_date, attendance_by_date, approved_leaves, shift_start, grace_minutes)
-            status = info["status"]
-            forced_shifts = None
+            # A working day beyond what compute_month_records has reached yet
+            # (it only computes up to today) — nothing has happened there,
+            # so simply absent for now; this in-progress-month preview gets
+            # recalculated once those days actually elapse.
+            status = "absent"
+            info = {"status": "absent", "is_late": False, "first_in": None, "last_out": None, "leave_type": None}
+            forced_shifts = Decimal("0")
             forced_half = False
-            # Night-shift relaxation: worked late last night → late arrival
-            # today within the allowed window is not counted as Late.
-            if info["is_late"] and info.get("first_in"):
-                from .night_shift import get_relaxation_for
-                _relax = get_relaxation_for(emp, d)
-                if _relax:
-                    from datetime import datetime as _dtm
-                    _fi = _dtm.strptime(info["first_in"], "%H:%M").time()
-                    if _fi <= _relax.allowed_until:
-                        info["is_late"] = False
 
         is_late = info["is_late"]
         is_half = False
@@ -437,26 +322,12 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
             present_count += 1
             if is_late:
                 late_count += 1
-            if forced_shifts is not None:
-                # Value from the final-attendance record (override or simple mode)
-                day_shifts = forced_shifts if forced_shifts > 0 else Decimal("1.00")
-                if forced_half or day_shifts == Decimal("0.50"):
-                    is_half = True
-                    half_shift_count += 1
-                else:
-                    full_shift_count += 1
+            day_shifts = forced_shifts if forced_shifts > 0 else Decimal("1.00")
+            if forced_half or day_shifts == Decimal("0.50"):
+                is_half = True
+                half_shift_count += 1
             else:
-                # Strict mode: use DailyShiftLog.shifts_completed to detect half shifts
-                sl = shift_logs_by_date.get(d)
-                if sl and sl.shifts_completed > 0:
-                    day_shifts = sl.shifts_completed
-                    if day_shifts == Decimal("0.50"):
-                        is_half = True
-                        half_shift_count += 1
-                    else:
-                        full_shift_count += 1
-                else:
-                    full_shift_count += 1
+                full_shift_count += 1
             effective_present += day_shifts
         elif status == "paid_leave":
             paid_leave_count += 1
@@ -526,51 +397,41 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
         esi_deduction = Decimal("0")
 
     # 8. Late shift penalty — 3 free lates/month, every 3 billable = ¼ shift.
-    #    Late counts follow the active attendance mode:
-    #      simple → is_late flags on the final AttendanceDayRecords (incl. overrides)
-    #      strict → 4-punch engine summary (morning late + lunch-return late)
-    #    All approved permission requests this month count as late entries too,
-    #    merged into the same late-punch pool (applies to both modes — see
-    #    shift_engine.compute_monthly_shift_summary for the strict-mode
-    #    equivalent). ONE shared 3-free allowance covers the combined raw
-    #    total — permissions are NOT pre-filtered by their own 3-free before
-    #    merging, since that would double-discount the free allowance.
-    late_penalty = Decimal("0")
+    #    late_count comes from the day loop above, itself sourced entirely
+    #    from compute_month_records — one number regardless of attendance
+    #    mode, instead of the old two-formula split (simple: is_late flags /
+    #    strict: a separate DailyShiftLog-based MonthlyShiftSummary). All
+    #    approved permission requests this month count as late entries too,
+    #    merged into the same late-punch pool. ONE shared 3-free allowance
+    #    covers the combined raw total — permissions are NOT pre-filtered by
+    #    their own 3-free before merging, since that would double-discount
+    #    the free allowance.
+    from .models import EmployeePermission
+    approved_permissions = EmployeePermission.objects.filter(
+        employee=emp, date__year=year, date__month=month, status="approved",
+    ).count()
+
+    total_late = late_count + approved_permissions
+    free_permissions = 3
+    billable_late = max(0, total_late - free_permissions)
+    shift_deductions = Decimal(str(billable_late // 3)) * Decimal("0.25")
+    late_penalty = _d2(shift_deductions * daily_rate) if shift_deductions > 0 else Decimal("0")
     late_summary_data = {
         "totalLateCount": late_count,
-        "permissionsUsed": 0,
-        "billableLateCount": 0,
-        "shiftDeductions": 0.0,
+        "permissionsUsed": min(total_late, free_permissions),
+        "billableLateCount": billable_late,
+        "shiftDeductions": float(shift_deductions),
     }
-    if use_simple:
-        from .models import EmployeePermission
-        approved_permissions = EmployeePermission.objects.filter(
-            employee=emp, date__year=year, date__month=month, status="approved",
-        ).count()
 
-        total_late = late_count + approved_permissions  # counted in the day loop from final records
-        free_permissions = 3
-        billable_late = max(0, total_late - free_permissions)
-        shift_deductions = Decimal(str(billable_late // 3)) * Decimal("0.25")
-        late_summary_data = {
-            "totalLateCount": late_count,
-            "permissionsUsed": min(total_late, free_permissions),
-            "billableLateCount": billable_late,
-            "shiftDeductions": float(shift_deductions),
-        }
-        if shift_deductions > 0:
-            late_penalty = _d2(shift_deductions * daily_rate)
-    else:
+    if not use_simple:
+        # Strict mode still gets its DailyShiftLog/MonthlyShiftSummary
+        # refreshed here (mirrors what compute_month_records already did to
+        # DailyShiftLog as a side effect of computing each day above) — the
+        # mobile/web "My Shift" screens read MonthlyShiftSummary directly.
+        # Its return value is intentionally NOT used for late_penalty above;
+        # that always comes from the single day-loop-derived late_count now.
         from .shift_engine import compute_monthly_shift_summary
-        shift_summary = compute_monthly_shift_summary(emp, year, month, daily_rate)
-        if shift_summary and shift_summary.salary_deduction_amount > 0:
-            late_penalty = shift_summary.salary_deduction_amount
-            late_summary_data = {
-                "totalLateCount": shift_summary.total_late_count,
-                "permissionsUsed": shift_summary.permissions_used,
-                "billableLateCount": shift_summary.billable_late_count,
-                "shiftDeductions": float(shift_summary.shift_deductions),
-            }
+        compute_monthly_shift_summary(emp, year, month, daily_rate)
 
     # 9. Advances
     advance_total, advance_details = _pending_advance_repayments(emp, month, year)
@@ -583,6 +444,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
         "type": "staff",
         "attendanceMode": "simple" if use_simple else "strict",
         "simpleHalfShiftCutoff": str(_settings.simple_half_shift_cutoff)[:5] if use_simple else None,
+        "shiftPunctualityWindowMinutes": _settings.shift_punctuality_window_minutes,
         "shift": {
             "id": shift_id,
             "name": shift_name,
@@ -1591,6 +1453,7 @@ def _ps_response(ps) -> dict:
         # Attendance calculation mode
         "attendanceMode": ps.attendance_mode,
         "simpleHalfShiftCutoff": str(ps.simple_half_shift_cutoff)[:5],
+        "shiftPunctualityWindowMinutes": ps.shift_punctuality_window_minutes,
         # Production attendance windows (1.5-shift day)
         "prodFirstHalfStart": str(ps.prod_first_half_start)[:5],
         "prodFirstHalfEnd": str(ps.prod_first_half_end)[:5],
@@ -1636,6 +1499,7 @@ FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "companyLogo": ("settings.company", "settings.salary_slip"),
     "attendanceMode": ("settings.attendance",),
     "simpleHalfShiftCutoff": ("settings.attendance",),
+    "shiftPunctualityWindowMinutes": ("settings.attendance",),
     "prodFirstHalfStart": ("settings.attendance",),
     "prodFirstHalfEnd": ("settings.attendance",),
     "prodSecondHalfStart": ("settings.attendance",),
@@ -1748,6 +1612,7 @@ def payroll_settings_view(request: Request) -> Response:
         "smtpFromName": ("smtp_from_name", str),
         "attendanceMode": ("attendance_mode", str),
         "simpleHalfShiftCutoff": ("simple_half_shift_cutoff", str),
+        "shiftPunctualityWindowMinutes": ("shift_punctuality_window_minutes", int),
         "prodFirstHalfStart": ("prod_first_half_start", str),
         "prodFirstHalfEnd": ("prod_first_half_end", str),
         "prodSecondHalfStart": ("prod_second_half_start", str),

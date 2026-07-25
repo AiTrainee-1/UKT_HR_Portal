@@ -208,7 +208,18 @@ def get_relaxation_for(
     on every call.
 
     See detect_night_for_employee() for what the optional prefetch params do.
+
+    Master off-switch (2026-07-25 fix): PayrollSettings.night_shift_enabled
+    used to only control whether the Night Shift Relaxation page appears in
+    the sidebar — every call site here still applied relaxation regardless
+    of the toggle, so a day's Late flag / Half Shift could still be silently
+    overridden even with the feature switched off in Settings. Now checked
+    at this single choke point every caller already goes through, so
+    turning it off genuinely disables the whole feature everywhere at once.
     """
+    from .models import PayrollSettings
+    if not PayrollSettings.get().night_shift_enabled:
+        return None
     return detect_night_for_employee(
         emp, d - timedelta(days=1),
         assignments=assignments, logs_by_date=logs_by_date,

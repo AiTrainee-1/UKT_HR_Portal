@@ -8,6 +8,7 @@ import {
   type ShiftLogEntry, type MonthlySummaryRow,
 } from "@/lib/api-client/custom-hooks";
 import { useListDepartments } from "@/lib/api-client";
+import { AttendanceLoader } from "@/components/ui/AttendanceLoader";
 import {
   ClipboardList, AlertTriangle, ChevronLeft, ChevronDown, ChevronUp, Search, Users, Building2, Loader2,
 } from "lucide-react";
@@ -275,10 +276,7 @@ export default function AttendanceReportLog() {
           <>
             <div className="rounded-xl border bg-white overflow-hidden shadow-sm">
               {summaryLoading ? (
-                <div className="py-20 flex flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
-                  <Loader2 size={22} className="animate-spin text-indigo-500" />
-                  <span>Computing attendance for every employee this month…</span>
-                </div>
+                <AttendanceLoader />
               ) : !summaryData || summaryData.employees.length === 0 ? (
                 <div className="py-20 text-center">
                   <Users size={36} className="text-gray-200 mx-auto mb-3" />

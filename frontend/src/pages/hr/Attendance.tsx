@@ -246,10 +246,10 @@ function EmployeeTable({
                     {rec.lastPunch ?? <span className="text-gray-300">—</span>}
                   </td>
                   <td className="px-4 py-3 hidden lg:table-cell">
-                    {rec.source ? (
+                    {rec.sourceLabel ? (
                       <span className="flex items-center gap-1 text-xs text-gray-400">
-                        {rec.source.startsWith("biometric") ? <Fingerprint size={11} /> : <PenLine size={11} />}
-                        {rec.source.startsWith("biometric") ? "Biometric" : "Manual"}
+                        {rec.sourceLabel === "Biometric" ? <Fingerprint size={11} /> : <PenLine size={11} />}
+                        {rec.sourceLabel}
                       </span>
                     ) : <span className="text-gray-300">—</span>}
                   </td>
@@ -990,10 +990,11 @@ export default function AttendancePage() {
                             {rec.totalPunches > 0 ? rec.totalPunches : "—"}
                           </td>
                           <td className="py-2.5 px-3 text-xs text-gray-400 hidden md:table-cell">
-                            {rec.source?.startsWith("biometric") ? (
-                              <span className="flex items-center gap-1"><Fingerprint size={11} /> Biometric</span>
-                            ) : rec.source === "manual" ? (
-                              <span className="flex items-center gap-1"><PenLine size={11} /> Manual</span>
+                            {rec.sourceLabel ? (
+                              <span className="flex items-center gap-1">
+                                {rec.sourceLabel === "Biometric" ? <Fingerprint size={11} /> : <PenLine size={11} />}
+                                {rec.sourceLabel}
+                              </span>
                             ) : "—"}
                           </td>
                         </tr>

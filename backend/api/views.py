@@ -599,6 +599,34 @@ def employee_status(request: Request, pk: int) -> Response:
     return Response(_serialize_employee(emp))
 
 
+@api_view(["PATCH"])
+@require_hr
+def bulk_location_tracking(request: Request) -> Response:
+    """
+    PATCH /api/employees/location-tracking/bulk
+    Body: { enabled: bool, employeeIds?: number[] }
+    Turns live location tracking on/off for many employees at once — powers
+    the "Enable All" / "Disable All" buttons on the Tracking Settings tab.
+    Without employeeIds, applies to every active employee in the caller's
+    branch scope; with it, applies only to the given ids (still branch-scoped).
+    """
+    if "enabled" not in request.data:
+        return _error("enabled is required")
+    enabled = bool(request.data.get("enabled"))
+
+    qs = scope_to_branch(Employee.objects, request).filter(status="active")
+    employee_ids = request.data.get("employeeIds")
+    if employee_ids:
+        qs = qs.filter(pk__in=employee_ids)
+
+    updated = qs.update(location_tracking_enabled=enabled)
+    log_action(
+        request, "update", "employees",
+        description=f"Bulk {'enabled' if enabled else 'disabled'} live location tracking for {updated} employee(s)",
+    )
+    return Response({"updated": updated, "enabled": enabled})
+
+
 # --- Bulk employee upload ---
 #
 # Column order/text is the enforced contract with the downloaded template —

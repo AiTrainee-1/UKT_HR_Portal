@@ -79,8 +79,8 @@ from .attendance_views import (
     attendance_summary, attendance_daily, attendance_monthly_trend,
     attendance_employee_history, biometric_punch, manual_attendance,
     sync_biometric_api, sync_biometric_progress, attendance_report_log, compute_shift_logs,
-    attendance_search,
-    attendance_late_summary, employee_shift_monthly_stats,
+    attendance_search, attendance_search_range,
+    attendance_late_summary, employee_shift_monthly_stats, attendance_sync_status,
 )
 from .growth_views import (
     employee_monthly_attendance, attendance_day_override, attendance_override_requests,
@@ -137,6 +137,7 @@ urlpatterns = [
     path("employees/<int:pk>/status", views.employee_status),
     path("employees/bulk-upload", views.bulk_upload_employees),
     path("employees/bulk-update", views.bulk_update_employees),
+    path("employees/location-tracking/bulk", views.bulk_location_tracking),
 
     # ── Shift Management ────────────────────────────────────────────────────
     path("shifts", shift_templates),
@@ -241,12 +242,14 @@ urlpatterns = [
     path("attendance/monthly-trend", attendance_monthly_trend),
     path("attendance/employee/<int:pk>", attendance_employee_history),
     path("attendance/manual", manual_attendance),
+    path("attendance/sync-status", attendance_sync_status),
     path("attendance/sync-biometric", sync_biometric_api),
     path("attendance/sync-biometric-progress", sync_biometric_progress),
     path("attendance/manual-import/export", export_punch_records),
     path("attendance/manual-import/upload", import_punch_excel),
     path("attendance/report-log", attendance_report_log),
     path("attendance/search", attendance_search),
+    path("attendance/search/range", attendance_search_range),
     path("attendance/compute-shifts", compute_shift_logs),
     path("attendance/late-summary", attendance_late_summary),
     path("attendance/employee-shift-stats", employee_shift_monthly_stats),

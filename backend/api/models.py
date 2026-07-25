@@ -1197,6 +1197,18 @@ class PayrollSettings(models.Model):
         default="13:30", db_column="simple_half_shift_cutoff",
         help_text="Simple mode: first punch after this time = half shift."
     )
+    shift_punctuality_window_minutes = models.IntegerField(
+        default=60, db_column="shift_punctuality_window_minutes",
+        help_text=(
+            "Staff only. Even with a first+last punch pair, Full Shift also "
+            "requires the first punch within this many minutes of the "
+            "employee's assigned shift start time, and the last punch "
+            "within the same window of the assigned shift end time — "
+            "otherwise the day is capped at Half Shift, regardless of any "
+            "approved Permission. Employees with no assigned shift have no "
+            "reference to check against, so this never applies to them."
+        ),
+    )
 
     # ── Production attendance windows (1.5-shift day) ─────────────────────
     prod_first_half_start = models.TimeField(default="08:30", db_column="prod_first_half_start")
@@ -1361,6 +1373,16 @@ class AttendanceDayRecord(models.Model):
     total_punches = models.IntegerField(default=0, db_column="total_punches")
     computed_mode = models.TextField(null=True, blank=True, db_column="computed_mode")  # strict/simple
     source = models.TextField(default="auto")  # auto | manual
+    primary_source = models.TextField(
+        null=True, blank=True, db_column="primary_source",
+        help_text=(
+            "Which punch source this day's attendance actually came from — "
+            "'Biometric' / 'On-Duty' / 'Geo Punch' / 'HR Entry', or null if "
+            "no punches. Biometric always wins whenever it contributed "
+            "anything that day, regardless of what else is present. Purely "
+            "a display field — never used in shift-value calculations."
+        ),
+    )
     override_by = models.TextField(null=True, blank=True, db_column="override_by")
     override_note = models.TextField(null=True, blank=True, db_column="override_note")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")

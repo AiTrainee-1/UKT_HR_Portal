@@ -52,6 +52,7 @@ def _record_dict(r: AttendanceDayRecord) -> dict:
         "lastPunch": r.last_punch.strftime("%H:%M") if r.last_punch else None,
         "totalPunches": r.total_punches,
         "source": r.source,
+        "primarySource": r.primary_source,
         "overrideBy": r.override_by,
         "overrideNote": r.override_note,
         "computedMode": r.computed_mode,

@@ -9,26 +9,36 @@ single source of truth for Payroll/Salary:
                           Settings (strict | simple)
   • source == "manual" → HR override; NEVER recomputed automatically
 
-Modes
------
-strict (staff): existing 4-punch engine (DailyShiftLog) — lunch delays,
-                return-late detection, half shift when only 2 punches.
+Modes (staff, current rule — d >= NEW_ATTENDANCE_RULE_CUTOVER; both modes
+share the same Full/Half/Absent decision, see _punctuality_ok in
+shift_engine.py; simple vs strict now only differs in whether lunch-return
+lateness is additionally tracked):
+  • Full Shift  → a first punch AND a distinct last punch both exist, AND
+                  both fall within PayrollSettings.shift_punctuality_window_
+                  minutes (default 60) of the employee's assigned shift's
+                  start/end time. No assigned shift = no reference to check
+                  against, so only the punch-presence half of the rule
+                  applies then.
+  • Half Shift  → any other punch pattern with >=1 punch (a single punch,
+                  or a first+last pair outside the punctuality window).
+  • Absent      → zero punches (and not on leave/holiday).
+  • Night Shift Relaxation can still upgrade a punctuality-caused Half
+    Shift back to Full once the day completes — see get_relaxation_for.
 
-simple (staff): • valid morning punch + evening last punch  → full shift
-                • first punch after cutoff (default 13:30)  → half shift
-                • no lunch/afternoon delay tracking at all
-                • late = first punch > shift start + grace
-                • early_leave = last punch < shift end
+Pre-cutover days stay frozen under the OLD rule (punch3+punch4 required
+for strict, a 13:30 cutoff for simple) so already-paid history never
+silently changes — see NEW_ATTENDANCE_RULE_CUTOVER.
 
 production:     1.5-shift day (works in both modes):
                 • first half   08:30–12:30  → 0.50
                 • second half  13:30–17:30  → 0.50
                 • extra half   17:50–20:00  → 0.50
-                windows configurable in PayrollSettings.
+                windows configurable in PayrollSettings. Unaffected by the
+                punctuality-window rule above (staff-only).
 """
 
 import calendar
-from datetime import date as date_type, datetime, timedelta
+from datetime import date as date_type, datetime, time as time_type, timedelta
 from decimal import Decimal
 
 from django.db.models import Q
@@ -37,7 +47,17 @@ from .models import (
     AttendanceDayRecord, AttendanceLog, Attendance, Employee, Holiday,
     LeaveRequest, PayrollSettings, ProductionShiftConfig, ProductionShiftSegment,
 )
-from .shift_engine import _get_shift_for_date, _t2s
+from .shift_engine import (
+    _get_shift_for_date, _t2s, NEW_ATTENDANCE_RULE_CUTOVER,
+    _punctuality_ok, _punctuality_window_minutes,
+)
+
+# The simple-mode half-shift cutoff as it actually stood at
+# NEW_ATTENDANCE_RULE_CUTOVER — frozen here, deliberately NOT read from the
+# live (HR-editable) PayrollSettings.simple_half_shift_cutoff, so a future
+# edit to that setting can never retroactively change how a pre-cutover day
+# recomputes. See the legacy_rule branch in _compute_staff_simple.
+LEGACY_SIMPLE_HALF_SHIFT_CUTOFF = time_type(13, 30)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -67,31 +87,44 @@ def _holiday_dates_for_month(year: int, month: int) -> set:
     )
 
 
+def _resolve_primary_source(punch_logs, has_manual: bool = False) -> str | None:
+    """
+    Which RAW source tag this day's attendance actually came from — for
+    display only, never used in shift-value math. Biometric always wins
+    whenever it contributed anything that day (never silently overridden by
+    a later or lesser source, per the "don't replace biometric data" rule),
+    else On-Duty, else Geo Punch, else "manual" (a manual punch or a bare
+    Attendance.present=True row from the Add Attendance button). Feed the
+    result through geo_attendance_views.source_label() to get the display
+    label — kept as two steps so callers that just need the raw tag (e.g.
+    to reuse existing source_label() call sites) don't have to reverse a
+    human label back into one.
+    """
+    sources = {p.source for p in punch_logs}
+    if any(s.startswith("biometric") for s in sources):
+        return "biometric"
+    if "on_duty:approved" in sources:
+        return "on_duty:approved"
+    if "geo:auto" in sources:
+        return "geo:auto"
+    if sources or has_manual:
+        return "manual"
+    return None
+
+
 def _sunday(d: date_type) -> bool:
     return d.weekday() == 6
 
 
 # ── Staff: simple mode ─────────────────────────────────────────────────────
 
-def _compute_staff_simple(emp, d, punch_times, settings, shift):
+def _compute_staff_simple(emp, d, punch_times, settings, shift, legacy_rule: bool = False):
     """Return dict of computed fields for a staff day in simple mode."""
     if not punch_times:
         return {"status": "absent", "shifts_earned": Decimal("0")}
 
     first = punch_times[0]
     last = punch_times[-1] if len(punch_times) > 1 else None
-
-    cutoff = settings.simple_half_shift_cutoff
-    if isinstance(cutoff, str):
-        cutoff = datetime.strptime(cutoff[:5], "%H:%M").time()
-
-    # Half shift: the day only started after the cutoff (e.g. 13:30)
-    if _t2s(first) > _t2s(cutoff):
-        return {
-            "status": "half_shift", "is_half_shift": True,
-            "shifts_earned": Decimal("0.50"),
-            "first_punch": first, "last_punch": last,
-        }
 
     # Late: morning punch beyond shift start + grace — both values come solely
     # from the employee's assigned ShiftTemplate (Shift Management). There is
@@ -106,12 +139,53 @@ def _compute_staff_simple(emp, d, punch_times, settings, shift):
         if last and _t2s(last) < _t2s(shift.end_time):
             early_leave = True
 
-    # Full shift needs a distinct evening punch; single punch = half day
+    if legacy_rule:
+        # Frozen pre-2026-07-25 behavior: arriving after the cutoff always
+        # forced Half Shift, even with a valid first+last pair. Hardcoded
+        # to the value simple_half_shift_cutoff actually held at the
+        # cutover (13:30) — NOT read live from settings, which is still an
+        # HR-editable field going forward. Reading it live here would mean
+        # any future edit to that setting retroactively changes how every
+        # pre-cutover historical day recomputes the next time it's viewed,
+        # defeating the entire point of freezing history at the cutover.
+        cutoff = LEGACY_SIMPLE_HALF_SHIFT_CUTOFF
+        if _t2s(first) > _t2s(cutoff):
+            return {
+                "status": "half_shift", "is_half_shift": True,
+                "shifts_earned": Decimal("0.50"),
+                "first_punch": first, "last_punch": last,
+            }
+
+    # Current rule: Full Shift whenever a first punch AND a distinct last
+    # punch both exist — no cutoff exception. Single punch = Half Shift.
     if last is None:
         return {
             "status": "half_shift", "is_half_shift": True, "is_late": is_late,
             "shifts_earned": Decimal("0.50"), "first_punch": first,
         }
+
+    # Shift punctuality window (current rule only): a first+last pair isn't
+    # enough on its own — both also need to fall within the punctuality
+    # window of the assigned shift's actual start/end time, or the day is
+    # capped at Half Shift. This is a single universal threshold — see
+    # _punctuality_window_minutes — the same for every employee, not gated
+    # by an approved Permission (a punch inside the window but past the
+    # shift's own small grace_period_minutes is still just Late, per
+    # is_late above; only a punch past this wider window caps the day at
+    # Half Shift). No shift assigned = no reference to check against, so
+    # this never applies then (matches is_late's own convention).
+    #
+    # This is the same 4-case rule spelled out in _punctuality_ok's
+    # docstring (shift_engine.py) — a first punch at 11am/noon/1:30pm/later
+    # is Half Shift here regardless of an otherwise-valid last punch,
+    # confirmed against a 14/14 boundary test on 2026-07-25.
+    if not legacy_rule:
+        window_minutes = _punctuality_window_minutes(shift)
+        if not _punctuality_ok(first, last, shift, window_minutes):
+            return {
+                "status": "half_shift", "is_half_shift": True, "is_late": is_late,
+                "shifts_earned": Decimal("0.50"), "first_punch": first, "last_punch": last,
+            }
 
     return {
         "status": "present", "is_late": is_late, "early_leave": early_leave,
@@ -122,11 +196,14 @@ def _compute_staff_simple(emp, d, punch_times, settings, shift):
 
 # ── Staff: strict mode (reuse 4-punch engine result) ───────────────────────
 
-def _compute_staff_strict(emp, d, punch_logs, punch_times, assignments=None, relaxation=None):
+def _compute_staff_strict(emp, d, punch_logs, punch_times, assignments=None, relaxation=None, legacy_rule: bool = False):
     from .shift_engine import compute_daily_shift_log
     if not punch_times:
         return {"status": "absent", "shifts_earned": Decimal("0")}
-    log = compute_daily_shift_log(emp, d, punch_logs, assignments=assignments, relaxation=relaxation)
+    log = compute_daily_shift_log(
+        emp, d, punch_logs, assignments=assignments, relaxation=relaxation,
+        legacy=legacy_rule,
+    )
     shifts = Decimal(log.shifts_completed or 0)
     is_half = shifts == Decimal("0.50")
     return {
@@ -295,6 +372,7 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
     }
 
     is_production = emp.employment_type == "production"
+    legacy_rule = d < NEW_ATTENDANCE_RULE_CUTOVER
 
     if day_times or has_manual:
         if not day_times and has_manual:
@@ -303,9 +381,9 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
             computed = _compute_production(emp, d, day_times, settings, prod_config, prod_segments)
         elif settings.attendance_mode == "simple":
             shift = _get_shift_for_date(emp, d, assignments=assignments)
-            computed = _compute_staff_simple(emp, d, day_times, settings, shift)
+            computed = _compute_staff_simple(emp, d, day_times, settings, shift, legacy_rule=legacy_rule)
         else:
-            computed = _compute_staff_strict(emp, d, punch_logs, day_times, assignments=assignments, relaxation=relaxation)
+            computed = _compute_staff_strict(emp, d, punch_logs, day_times, assignments=assignments, relaxation=relaxation, legacy_rule=legacy_rule)
     elif punch_times and relaxation and relaxation.crossed_midnight:
         # Only last night's checkout punches exist so far today — the employee
         # has not yet reported for the new day. Not absent; still within the
@@ -345,6 +423,12 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         "production" if emp.employment_type == "production" else settings.attendance_mode
     )
     fields["source"] = "auto"
+    _primary_raw = _resolve_primary_source(punch_logs, has_manual=has_manual)
+    if _primary_raw:
+        from .geo_attendance_views import source_label
+        fields["primary_source"] = source_label(_primary_raw)
+    else:
+        fields["primary_source"] = None
     # Normalize to the field's actual DB precision (2 decimal places) so a
     # freshly computed value (e.g. the literal Decimal("0")) compares equal
     # in *representation*, not just value, to one read back from the DB —

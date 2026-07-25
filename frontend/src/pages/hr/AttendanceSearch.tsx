@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Skeleton } from "@/components/ui/skeleton";
+import { AttendanceLoader } from "@/components/ui/AttendanceLoader";
 import { useToast } from "@/hooks/use-toast";
 import {
   useEmployeeMonthlyAttendance, useAttendanceOverride, useAttendanceOverrideRequests,
@@ -228,8 +228,8 @@ export default function AttendanceSearchSection({
             Enter an employee code above and click Search (or press Enter) to load their monthly attendance.
           </div>
         ) : isLoading ? (
-          <div className="space-y-3 border-t pt-4">
-            {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
+          <div className="border-t">
+            <AttendanceLoader />
           </div>
         ) : isError || !data ? (
           <div className="py-10 text-center text-sm text-red-500 border-t">

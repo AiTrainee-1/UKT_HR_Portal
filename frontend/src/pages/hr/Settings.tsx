@@ -232,6 +232,7 @@ export default function Settings() {
   const [attMode, setAttMode] = useState({
     attendanceMode: "strict" as "strict" | "simple",
     simpleHalfShiftCutoff: "13:30",
+    shiftPunctualityWindowMinutes: 60,
     prodFirstHalfStart: "08:30",
     prodFirstHalfEnd: "12:30",
     prodSecondHalfStart: "13:30",
@@ -326,6 +327,7 @@ export default function Settings() {
       setAttMode({
         attendanceMode: (payrollSettingsData.attendanceMode as "strict" | "simple") || "strict",
         simpleHalfShiftCutoff: payrollSettingsData.simpleHalfShiftCutoff || "13:30",
+        shiftPunctualityWindowMinutes: payrollSettingsData.shiftPunctualityWindowMinutes ?? 60,
         prodFirstHalfStart: payrollSettingsData.prodFirstHalfStart || "08:30",
         prodFirstHalfEnd: payrollSettingsData.prodFirstHalfEnd || "12:30",
         prodSecondHalfStart: payrollSettingsData.prodSecondHalfStart || "13:30",
@@ -550,6 +552,7 @@ export default function Settings() {
       await updatePayrollSettings.mutateAsync({
         attendanceMode: attMode.attendanceMode,
         simpleHalfShiftCutoff: attMode.simpleHalfShiftCutoff,
+        shiftPunctualityWindowMinutes: attMode.shiftPunctualityWindowMinutes,
         prodFirstHalfStart: attMode.prodFirstHalfStart,
         prodFirstHalfEnd: attMode.prodFirstHalfEnd,
         prodSecondHalfStart: attMode.prodSecondHalfStart,
@@ -1032,8 +1035,7 @@ export default function Settings() {
                     </div>
                     <p className="text-xs text-gray-500 leading-relaxed">
                       Tracks all 4 punches: morning IN, lunch OUT, lunch return, evening OUT.
-                      Detects lunch-return delays, half shifts from missing punches, and applies
-                      the 3-free-late penalty rule.
+                      Half shift from missing punches, and applies the 3-free-late penalty rule.
                     </p>
                   </button>
                   {/* Simple */}
@@ -1052,30 +1054,59 @@ export default function Settings() {
                       )}
                     </div>
                     <p className="text-xs text-gray-500 leading-relaxed">
-                      Morning punch + evening last punch = full shift. First punch after the
-                      cutoff time = half shift. No lunch-break tracking. Late = morning punch
-                      beyond grace period. Early leave is flagged.
+                      Morning punch + evening last punch = full shift. No lunch-break tracking.
+                      Late = morning punch beyond grace period. Early leave is flagged.
                     </p>
                   </button>
                 </div>
 
+                {/* Both modes now share the same Full/Half Shift decision — a first
+                    AND a distinct last punch, both within the punctuality window
+                    below of the employee's assigned shift start/end time. Strict
+                    mode additionally tracks lunch-return lateness on top of this. */}
+                <div className="grid sm:grid-cols-2 gap-4 p-3 bg-amber-50/50 border border-amber-100 rounded-lg">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Shift Punctuality Window — Maximum First Punch Allowed (minutes)</Label>
+                    <p className="text-[11px] text-gray-500 -mt-1">
+                      First punch must be within this many minutes of shift start (and last punch within the
+                      same window of shift end) to still count as Full Shift
+                    </p>
+                    <Input
+                      type="number"
+                      min={0}
+                      step={5}
+                      value={attMode.shiftPunctualityWindowMinutes}
+                      onChange={e => setAttMode(a => ({ ...a, shiftPunctualityWindowMinutes: Math.max(0, Number(e.target.value) || 0) }))}
+                      className="max-w-[140px]"
+                    />
+                  </div>
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <p className="text-[11px] text-gray-500">
+                      Applies to every employee, every day — arriving within this window still counts toward a
+                      Full Shift (though it's flagged <strong>Late</strong> once past the shift's own small
+                      Grace Period, set per shift in <strong>Manage Shift</strong>). Only arriving <strong>past
+                      this window</strong> caps the day at Half Shift. Applies to both calculation modes, staff
+                      only. Shift start/end times and grace period always come from the shift assigned to each
+                      employee — an employee with no shift assigned has no reference to check against, so this
+                      never applies to them.
+                    </p>
+                  </div>
+                </div>
+
                 {attMode.attendanceMode === "simple" && (
-                  <div className="grid sm:grid-cols-2 gap-4 p-3 bg-green-50/50 border border-green-100 rounded-lg">
+                  <div className="grid sm:grid-cols-2 gap-4 p-3 bg-gray-50 border border-gray-200 rounded-lg">
                     <div className="space-y-1.5">
-                      <Label className="text-xs">Half-Shift Cutoff Time</Label>
-                      <p className="text-[11px] text-gray-500 -mt-1">First punch after this time = half shift</p>
+                      <Label className="text-xs text-gray-400">Legacy Half-Shift Cutoff Time</Label>
+                      <p className="text-[11px] text-gray-400 -mt-1">
+                        Historical only — no longer used for new calculations since the punctuality
+                        window above replaced it. Kept only for reference.
+                      </p>
                       <Input
                         type="time"
                         value={attMode.simpleHalfShiftCutoff}
                         onChange={e => setAttMode(a => ({ ...a, simpleHalfShiftCutoff: e.target.value }))}
+                        disabled
                       />
-                    </div>
-                    <div className="space-y-1.5 sm:col-span-2">
-                      <p className="text-[11px] text-gray-500">
-                        Grace period and shift start/end times come solely from the shift assigned
-                        to each employee in <strong>Manage Shift</strong> — there is no Settings-level default.
-                        An employee with no shift assigned is never flagged late.
-                      </p>
                     </div>
                   </div>
                 )}

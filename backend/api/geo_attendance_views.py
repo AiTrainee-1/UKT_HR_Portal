@@ -295,7 +295,14 @@ def resolve_on_duty_punch_hr(v: OnDutyPunchVerification, decision: str, reviewer
         message=f"Your On-Duty {punch_label} (punch {v.punch_number}) was {v.status} by HR.",
     )
 
-    if decision == "approved" and v.punch_number == 4:
+    # Live recount, not the frozen `v.punch_number` — that number was assigned
+    # from whatever was in AttendanceLog at the moment this punch was
+    # CAPTURED (see _next_punch), which can go stale if biometric sync
+    # backfills an earlier punch for the same day before this one gets
+    # approved. Re-deriving from the actual current count is the only way
+    # to know reliably whether today's 4th punch has really landed.
+    day_punch_count = AttendanceLog.objects.filter(employee=v.employee, date=v.punch_date).count()
+    if decision == "approved" and day_punch_count >= 4:
         session = v.session
         if session.status == OnDutySession.STATUS_ACTIVE:
             session.status = OnDutySession.STATUS_COMPLETED

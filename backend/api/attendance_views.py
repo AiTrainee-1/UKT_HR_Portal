@@ -225,10 +225,17 @@ def attendance_daily(request: Request) -> Response:
         manual = manual_by_emp.get(emp.id)
 
         if emp_logs:
-            first_in = next((l for l in emp_logs if l.punch_type == "IN"), None)
-            last_out = next((l for l in reversed(emp_logs) if l.punch_type == "OUT"), None)
+            from .attendance_final import _resolve_primary_source
+            # First/last punch of the day by time position, not by
+            # filtering for a stored "IN"/"OUT" type — biometric devices
+            # often record every punch as "IN", which would silently blank
+            # out last_out on those days if this filtered by type instead.
+            first_in = emp_logs[0]
+            last_out = emp_logs[-1] if len(emp_logs) > 1 else None
             status = "present"
-            source = emp_logs[0].source
+            # Biometric wins whenever it contributed anything that day —
+            # not just "whichever punch happens to be first in the list".
+            source = _resolve_primary_source(emp_logs)
         elif manual and manual.present:
             first_in = None
             last_out = None
@@ -346,12 +353,17 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
     # Approved leaves that overlap with this month
     leave_qs = LeaveRequest.objects.filter(employee_id=pk, status="approved")
 
-    # Build punch map
+    # Build punch map. IN/OUT alternates by time-sorted position within the
+    # day (the current list length is that position, since logs_qs is
+    # ordered by date/punch_time already) rather than the raw stored
+    # punch_type — see attendance_search()'s comment for why.
     by_date: dict[str, list] = defaultdict(list)
     for log in logs_qs:
-        by_date[str(log.date)].append({
+        date_key = str(log.date)
+        position = len(by_date[date_key])
+        by_date[date_key].append({
             "time": log.punch_time.strftime("%H:%M"),
-            "type": log.punch_type,
+            "type": "IN" if position % 2 == 0 else "OUT",
             "source": log.source,
             "sourceLabel": source_label(log.source),
         })
@@ -383,9 +395,34 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
 
         punches   = by_date.get(date_str, [])
         manual    = manual_by_date.get(date_str)
-        first_in  = next((p["time"] for p in punches if p["type"] == "IN"), None)
-        last_out  = next((p["time"] for p in reversed(punches) if p["type"] == "OUT"), None)
+        # First/last punch of the day by time position, not by filtering for
+        # a stored "IN"/"OUT" type — biometric devices often record every
+        # punch as "IN", which would silently blank out last_out on those
+        # days if this filtered by type instead.
+        first_in  = punches[0]["time"] if punches else None
+        last_out  = punches[-1]["time"] if len(punches) > 1 else None
         has_punch = bool(punches) or bool(manual and manual.present)
+
+        # Which source this day's attendance actually came from — biometric
+        # wins whenever it contributed anything that day (never a stale
+        # "whichever punch happened to be first" guess), else On-Duty, else
+        # Geo Punch, else HR Entry. Same priority as
+        # attendance_final._resolve_primary_source, inlined here since this
+        # endpoint builds plain dicts rather than AttendanceLog objects, but
+        # converted through the one shared source_label() so the label text
+        # itself never diverges from every other page that shows it.
+        punch_sources = {p["source"] for p in punches}
+        if any(s.startswith("biometric") for s in punch_sources):
+            primary_raw = "biometric"
+        elif "on_duty:approved" in punch_sources:
+            primary_raw = "on_duty:approved"
+        elif "geo:auto" in punch_sources:
+            primary_raw = "geo:auto"
+        elif punch_sources or manual:
+            primary_raw = "manual"
+        else:
+            primary_raw = None
+        source_label_for_day = source_label(primary_raw) if primary_raw else None
 
         if is_sunday:
             status = "holiday"
@@ -413,6 +450,7 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
             "leaveType":   leave_dates.get(date_str),
             "hoursWorked": str(manual.hours_worked) if manual and manual.hours_worked else None,
             "source":      punches[0]["source"] if punches else ("manual" if manual else None),
+            "sourceLabel": source_label_for_day,
             "notes":       manual.notes if manual else None,
         })
 
@@ -586,6 +624,48 @@ def manual_attendance(request: Request) -> Response:
         "employee": f"{emp.first_name} {emp.last_name}",
         "date": str(d),
     }, status=201)
+
+
+@api_view(["GET"])
+@require_auth
+def attendance_sync_status(request: Request) -> Response:
+    """
+    GET /api/attendance/sync-status — employee-facing.
+
+    Tells the employee apps whether today's attendance might still be
+    incomplete because biometric hasn't been synced yet. `pendingSync` is
+    true only when BOTH: (1) today already has a punch from a non-biometric
+    source (Geo Punch / On-Duty / HR Entry) for this employee, AND (2) no
+    active biometric device has synced since midnight today — since a
+    biometric-device-recorded punch for the same physical check-in could
+    still be sitting unsynced on the device, which would change today's
+    picture once HR runs Sync Biometric. Never flags a day with zero
+    punches at all (nothing to be "incomplete" yet) or a day biometric has
+    already contributed to.
+    """
+    from .models import BiometricDevice
+    from .geo_attendance_views import _day_bounds_utc
+
+    emp_id = get_token_employee_id(request)
+    if not emp_id:
+        return Response({"error": "Employee authentication required"}, status=403)
+
+    today = _today()
+    today_logs = list(AttendanceLog.objects.filter(employee_id=emp_id, date=today))
+    has_non_biometric_punch = any(not l.source.startswith("biometric") for l in today_logs)
+    has_biometric_punch = any(l.source.startswith("biometric") for l in today_logs)
+
+    # IST day boundary, not a naive make_aware() — this server's clock is
+    # IST but Django's TIME_ZONE is UTC, so a naive midnight would silently
+    # anchor 5:30 hours off. See geo_attendance_views._day_bounds_utc, the
+    # one already-correct helper for this in the codebase.
+    today_start_utc, _today_end_utc = _day_bounds_utc(today)
+    synced_today = BiometricDevice.objects.filter(
+        is_active=True, last_synced_at__gte=today_start_utc,
+    ).exists()
+
+    pending_sync = has_non_biometric_punch and not has_biometric_punch and not synced_today
+    return Response({"pendingSync": pending_sync})
 
 
 # ── Biometric Sync ────────────────────────────────────────────────────────────
@@ -1000,14 +1080,20 @@ def attendance_search(request: Request) -> Response:
         logs = list(
             AttendanceLog.objects.filter(employee=emp, date=d).order_by("punch_time")[:4]
         )
+        # Displayed IN/OUT alternates by time-sorted position rather than the
+        # raw stored punch_type — a Geo/On-Duty punch captured before that
+        # day's biometric sync catches up can end up with a stale stored
+        # type once sync backfills an earlier punch (see
+        # geo_attendance_views._next_punch); position-based labeling can't
+        # go stale the same way, since it's derived fresh every read.
         punches = [
             {
                 "time": log.punch_time.strftime("%H:%M:%S"),
-                "type": log.punch_type,
+                "type": "IN" if i % 2 == 0 else "OUT",
                 "source": log.source,
                 "sourceLabel": source_label(log.source),
             }
-            for log in logs
+            for i, log in enumerate(logs)
         ]
         while len(punches) < 4:
             punches.append(None)
@@ -1027,6 +1113,137 @@ def attendance_search(request: Request) -> Response:
     return Response({"date": str(d), "query": query, "count": len(results), "results": results})
 
 
+@api_view(["GET"])
+@require_hr
+def attendance_search_range(request: Request) -> Response:
+    """
+    GET /api/attendance/search/range?employeeId=123&startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+    One employee's full day-by-day attendance picture across an arbitrary
+    date range — powers the Week/Month/Custom Range filters on the
+    Attendance Search page once a specific employee has been picked from
+    the query match list. Each day carries the same punch/source shape as
+    attendance_search() above, plus the day's computed status/late flag
+    and any approved Leave or Permission record covering that date.
+    Capped at 100 days per request to keep this a bounded single-employee
+    lookup rather than an unbounded report query.
+    """
+    from .attendance_final import compute_range_records
+    from .models import CasualLeaveRequest, EmployeePermission
+    from .shift_engine import _get_shift_for_date
+
+    emp_id = request.query_params.get("employeeId")
+    if not emp_id:
+        return Response({"error": "employeeId is required"}, status=400)
+
+    emp = (
+        scope_to_branch(Employee.objects, request)
+        .select_related("department", "designation")
+        .filter(pk=emp_id, status="active")
+        .first()
+    )
+    if not emp:
+        return Response({"error": "Employee not found"}, status=404)
+
+    start_str = request.query_params.get("startDate")
+    end_str = request.query_params.get("endDate")
+    try:
+        date_from = date_type.fromisoformat(start_str) if start_str else _today()
+        date_to = date_type.fromisoformat(end_str) if end_str else _today()
+    except ValueError:
+        return Response({"error": "Invalid date format"}, status=400)
+
+    if date_from > date_to:
+        date_from, date_to = date_to, date_from
+    if (date_to - date_from).days > 100:
+        return Response({"error": "Date range is too large — please select 100 days or fewer"}, status=400)
+
+    records = compute_range_records(emp, date_from, date_to)
+
+    logs = list(
+        AttendanceLog.objects.filter(employee=emp, date__gte=date_from, date__lte=date_to)
+        .order_by("date", "punch_time")
+    )
+    logs_by_date: dict = {}
+    for log in logs:
+        logs_by_date.setdefault(log.date, []).append(log)
+
+    leave_map: dict = {}
+    for lr in LeaveRequest.objects.filter(
+        employee=emp, status="approved",
+        start_date__lte=date_to.isoformat(), end_date__gte=date_from.isoformat(),
+    ):
+        lr_start = max(date_type.fromisoformat(str(lr.start_date)[:10]), date_from)
+        lr_end = min(date_type.fromisoformat(str(lr.end_date)[:10]), date_to)
+        cur = lr_start
+        while cur <= lr_end:
+            leave_map[cur] = lr
+            cur += timedelta(days=1)
+
+    perm_map = {
+        p.date: p for p in EmployeePermission.objects.filter(
+            employee=emp, date__gte=date_from, date__lte=date_to, status="approved",
+        )
+    }
+    cl_map = {
+        c.date: c for c in CasualLeaveRequest.objects.filter(
+            employee=emp, date__gte=date_from, date__lte=date_to, status="approved",
+        )
+    }
+
+    days = []
+    for rec in records:
+        day_logs = logs_by_date.get(rec.date, [])[:4]
+        # See attendance_search()'s identical comment above — IN/OUT is
+        # derived from time-sorted position, not the raw stored punch_type,
+        # so a stale label from the cross-source ordering bug can't surface.
+        punches = [
+            {
+                "time": log.punch_time.strftime("%H:%M:%S"),
+                "type": "IN" if i % 2 == 0 else "OUT",
+                "source": log.source,
+                "sourceLabel": source_label(log.source),
+            }
+            for i, log in enumerate(day_logs)
+        ]
+        while len(punches) < 4:
+            punches.append(None)
+
+        leave = leave_map.get(rec.date)
+        perm = perm_map.get(rec.date)
+        cl = cl_map.get(rec.date)
+        days.append({
+            "date": str(rec.date),
+            "status": rec.status,
+            "isLate": bool(rec.is_late),
+            "isHalfShift": bool(rec.is_half_shift),
+            "totalPunches": rec.total_punches,
+            "punches": punches,
+            "casualLeave": {"status": cl.status, "reason": cl.reason} if cl else None,
+            "leave": {"status": leave.status, "type": leave.type, "reason": leave.reason} if leave else None,
+            "permission": (
+                {
+                    "status": perm.status,
+                    "time": perm.permission_time.strftime("%H:%M") if perm.permission_time else None,
+                    "reason": perm.reason,
+                }
+                if perm else None
+            ),
+        })
+
+    shift = _get_shift_for_date(emp, date_to)
+    return Response({
+        "employeeId": emp.id,
+        "employeeCode": emp.employee_code,
+        "employeeName": f"{emp.first_name} {emp.last_name}",
+        "department": emp.department.name if emp.department_id and emp.department else None,
+        "designation": emp.designation.title if emp.designation_id and emp.designation else None,
+        "shift": _assigned_shift_json(shift),
+        "startDate": str(date_from),
+        "endDate": str(date_to),
+        "days": days,
+    })
+
+
 @api_view(["POST"])
 @require_hr
 def compute_shift_logs(request: Request) -> Response:
@@ -1036,7 +1253,7 @@ def compute_shift_logs(request: Request) -> Response:
     Body: { "month": 7, "year": 2026 }  — recompute entire month
     Body: { "month": 7, "year": 2026, "employeeId": 123 }  — one employee
     """
-    from .shift_engine import compute_daily_shift_log, compute_monthly_shift_summary, recompute_date
+    from .shift_engine import compute_daily_shift_log, compute_monthly_shift_summary, recompute_date, NEW_ATTENDANCE_RULE_CUTOVER
     from collections import defaultdict
 
     data = request.data
@@ -1088,7 +1305,7 @@ def compute_shift_logs(request: Request) -> Response:
             emp_map = {e.id: e for e in emps}
             for emp in emps:
                 punches = by_emp.get(emp.id, [])
-                compute_daily_shift_log(emp, d, punches)
+                compute_daily_shift_log(emp, d, punches, legacy=d < NEW_ATTENDANCE_RULE_CUTOVER)
                 total_computed += 1
 
         # Recompute monthly summaries
@@ -1205,9 +1422,15 @@ def employee_shift_monthly_stats(request: Request) -> Response:
     for log in AttendanceLog.objects.filter(
         employee=emp, date__year=y, date__month=m
     ).order_by("date", "punch_time"):
-        punches_by_date[log.date.isoformat()].append({
+        date_key = log.date.isoformat()
+        # IN/OUT alternates by time-sorted position within the day (the
+        # current list length is that position, since rows arrive in
+        # date/punch_time order already) rather than the raw stored
+        # punch_type — see attendance_search()'s comment for why.
+        position = len(punches_by_date[date_key])
+        punches_by_date[date_key].append({
             "time": log.punch_time.strftime("%H:%M"),
-            "type": log.punch_type,
+            "type": "IN" if position % 2 == 0 else "OUT",
             "source": log.source,
             "sourceLabel": source_label(log.source),
         })
