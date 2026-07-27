@@ -9,6 +9,7 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { TimePicker12h } from "@/components/ui/time-picker-12h";
 import { useToast } from "@/hooks/use-toast";
 import {
   useListHolidays, useCreateHoliday, useDeleteHoliday,
@@ -279,6 +280,12 @@ export default function LeaveHoliday() {
                               &nbsp;·&nbsp; {days} day{days !== 1 ? "s" : ""}
                             </p>
                             {leave.reason && <p className="text-xs text-gray-400 mt-0.5 truncate">{leave.reason}</p>}
+                            {(leave as any).approvedBy && (
+                              <p className="text-[11px] text-gray-400 mt-0.5">
+                                {leave.status === "rejected" ? "Rejected By" : "Approved By"}: {(leave as any).approvedBy}
+                                {(leave as any).approverRole === "dept_head" ? " (Dept Head)" : " (HR)"}
+                              </p>
+                            )}
                           </div>
                           <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
                             {leave.status === "pending" && (
@@ -380,6 +387,12 @@ export default function LeaveHoliday() {
                             </p>
                             {p.reason && <p className="text-xs text-gray-400 mt-0.5 truncate">{p.reason}</p>}
                             {p.hrComment && <p className="text-xs text-blue-600 mt-0.5 italic">HR: {p.hrComment}</p>}
+                            {p.approvedBy && (
+                              <p className="text-[11px] text-gray-400 mt-0.5">
+                                {p.status === "rejected" ? "Rejected By" : "Approved By"}: {p.approvedBy}
+                                {p.approverRole === "dept_head" ? " (Dept Head)" : " (HR)"}
+                              </p>
+                            )}
                             {p.monthlyUsed != null && (
                               <div className="flex items-center gap-2 mt-2">
                                 <div className="flex gap-0.5">
@@ -443,11 +456,8 @@ export default function LeaveHoliday() {
                       <Input type="date" value={permForm.date}
                         onChange={e => setPermForm(f => ({ ...f, date: e.target.value }))} />
                     </div>
-                    <div className="space-y-1.5">
-                      <Label>Time (optional)</Label>
-                      <Input type="time" value={permForm.permissionTime}
-                        onChange={e => setPermForm(f => ({ ...f, permissionTime: e.target.value }))} />
-                    </div>
+                    <TimePicker12h label="Time (optional)" value={permForm.permissionTime}
+                      onChange={v => setPermForm(f => ({ ...f, permissionTime: v }))} />
                   </div>
                   <div className="space-y-1.5">
                     <Label>Reason (optional)</Label>
@@ -676,6 +686,12 @@ export default function LeaveHoliday() {
                       <p className="text-sm text-blue-700 bg-blue-50 rounded-lg p-3 border border-blue-100">{selectedLeave.hrComment}</p>
                     </div>
                   )}
+                  {selectedLeave.approvedBy && (
+                    <p className="text-xs text-gray-500">
+                      {selectedLeave.status === "rejected" ? "Rejected By" : "Approved By"}: <strong>{selectedLeave.approvedBy}</strong>
+                      {selectedLeave.approverRole === "dept_head" ? " (Department Head)" : " (HR)"}
+                    </p>
+                  )}
                   <p className="text-xs text-gray-300">
                     Submitted: {selectedLeave.createdAt ? new Date(selectedLeave.createdAt).toLocaleString("en-IN") : "—"}
                   </p>
@@ -793,6 +809,12 @@ export default function LeaveHoliday() {
                       <p className="text-xs text-gray-400 mb-1">HR Comment</p>
                       <p className="text-sm text-blue-700 bg-blue-50 rounded-lg p-3 border border-blue-100">{selectedPerm.hrComment}</p>
                     </div>
+                  )}
+                  {selectedPerm.approvedBy && (
+                    <p className="text-xs text-gray-500">
+                      {selectedPerm.status === "rejected" ? "Rejected By" : "Approved By"}: <strong>{selectedPerm.approvedBy}</strong>
+                      {selectedPerm.approverRole === "dept_head" ? " (Department Head)" : " (HR)"}
+                    </p>
                   )}
                   <p className="text-xs text-gray-300">
                     Submitted: {selectedPerm.createdAt ? new Date(selectedPerm.createdAt).toLocaleString("en-IN") : "—"}

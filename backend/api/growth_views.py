@@ -15,7 +15,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from .auth import require_hr, require_auth, get_token_employee_id
+from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name
 from .models import (
     AttendanceDayRecord, AttendanceOverrideRequest, Department, Designation, Employee,
     PayrollSettings, Promotion, SalaryIncrement,
@@ -248,7 +248,7 @@ def attendance_day_override(request: Request) -> Response:
     except (ValueError, TypeError):
         return Response({"error": "Invalid date"}, status=400)
 
-    hr_name = getattr(request, "hr_user_name", None) or "HR"
+    hr_name = get_hr_display_name(request)
 
     if data.get("reset"):
         AttendanceDayRecord.objects.filter(employee=emp, date=d).delete()
@@ -365,7 +365,7 @@ def promotions(request: Request) -> Response:
         new_designation=new_desig,
         effective_date=eff,
         notes=data.get("notes"),
-        promoted_by=getattr(request, "hr_user_name", None) or "HR",
+        promoted_by=get_hr_display_name(request),
     )
     emp.department = new_dept
     emp.designation = new_desig
@@ -478,7 +478,7 @@ def add_increment(request: Request) -> Response:
         percent=percent,
         effective_date=eff,
         notes=data.get("notes"),
-        added_by=getattr(request, "hr_user_name", None) or "HR",
+        added_by=get_hr_display_name(request),
     )
     emp.salary_amount = new_salary
     emp.save(update_fields=["salary_amount", "initial_salary", "updated_at"])

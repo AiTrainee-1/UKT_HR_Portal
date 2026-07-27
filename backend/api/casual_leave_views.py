@@ -20,7 +20,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from .auth import require_hr, require_auth, get_token_employee_id
+from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name
 from .branch_scope import scope_to_branch
 from .models import AttendanceDayRecord, CasualLeaveRequest, Employee, Notification
 
@@ -228,7 +228,7 @@ def casual_leave_detail(request: Request, pk: int) -> Response:
     if cl.status != "pending":
         return Response({"error": f"This request was already {cl.status}"}, status=400)
 
-    reviewer = getattr(request, "hr_user_name", None) or "HR"
+    reviewer = get_hr_display_name(request)
     apply_cl_decision(cl, status_val, reviewer, "hr", request.data.get("comment"))
     return Response(_cl_dict(cl))
 

@@ -58,7 +58,7 @@ from .manager_views import (
     manager_me, manager_pending_requests,
     manager_update_leave_status, manager_update_permission_status,
     manager_update_attendance_status, manager_update_casual_leave_status,
-    manager_update_on_duty_status,
+    manager_update_on_duty_status, manager_update_missing_punch_status,
 )
 from .geo_attendance_views import (
     geo_punch, geo_punch_precheck, geo_punch_status, live_location_ping,
@@ -94,6 +94,9 @@ from .system_settings_views import (
 )
 from .casual_leave_views import (
     casual_leaves, casual_leave_detail, casual_leave_eligibility,
+)
+from .missing_punch_views import (
+    missing_punch_requests, missing_punch_request_hr_status,
 )
 from .night_shift_views import (
     night_shift_dashboard, night_shift_recompute,
@@ -282,6 +285,10 @@ urlpatterns = [
     path("casual-leaves/eligibility", casual_leave_eligibility),
     path("casual-leaves/<int:pk>", casual_leave_detail),
 
+    # ── Missing Punch ────────────────────────────────────────────────────────
+    path("missing-punch-requests", missing_punch_requests),
+    path("missing-punch-requests/<int:pk>/status", missing_punch_request_hr_status),
+
     # ── Night Shift Relaxation ──────────────────────────────────────────────
     path("night-shift/dashboard", night_shift_dashboard),
     path("night-shift/recompute", night_shift_recompute),
@@ -359,6 +366,7 @@ urlpatterns = [
     path("manager/attendance-requests/<int:pk>/status", manager_update_attendance_status),
     path("manager/casual-leaves/<int:pk>/status", manager_update_casual_leave_status),
     path("manager/on-duty-sessions/<int:pk>/status", manager_update_on_duty_status),
+    path("manager/missing-punch-requests/<int:pk>/status", manager_update_missing_punch_status),
 
     # ── Audit Logs ───────────────────────────────────────────────────────────
     path("audit-logs", audit_logs),

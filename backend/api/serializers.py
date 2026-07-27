@@ -118,6 +118,8 @@ def leave_request_json(record, employee_name: str | None = None) -> dict:
         "reason": record.reason,
         "status": record.status,
         "hrComment": record.hr_comment,
+        "approvedBy": record.approved_by,
+        "approverRole": record.approver_role,
         "createdAt": _dt(record.created_at),
     }
 

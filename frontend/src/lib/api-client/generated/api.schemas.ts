@@ -340,6 +340,10 @@ export interface LeaveRequest {
   status: LeaveRequestStatus;
   /** @nullable */
   hrComment?: string | null;
+  /** @nullable */
+  approvedBy?: string | null;
+  /** @nullable */
+  approverRole?: string | null;
   createdAt: string;
 }
 

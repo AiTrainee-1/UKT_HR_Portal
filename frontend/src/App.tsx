@@ -66,6 +66,7 @@ import Increment from "@/pages/hr/Increment";
 import Bonus from "@/pages/hr/Bonus";
 import IdCards from "@/pages/hr/IdCards";
 import CasualLeave from "@/pages/hr/CasualLeave";
+import MissingPunch from "@/pages/hr/MissingPunch";
 import NightShift from "@/pages/hr/NightShift";
 import GeoAttendance from "@/pages/hr/GeoAttendance";
 import AttendancePunchSearch from "@/pages/hr/AttendancePunchSearch";
@@ -251,6 +252,9 @@ function Router() {
       </Route>
       <Route path="/hr/casual-leave">
         {() => <ProtectedRoute component={CasualLeave} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/missing-punch">
+        {() => <ProtectedRoute component={MissingPunch} allowedRoles={["hr"]} />}
       </Route>
       <Route path="/hr/night-shift">
         {() => <ProtectedRoute component={NightShift} allowedRoles={["hr"]} />}

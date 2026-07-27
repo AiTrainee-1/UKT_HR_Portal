@@ -105,6 +105,8 @@ def _resolve_primary_source(punch_logs, has_manual: bool = False) -> str | None:
         return "biometric"
     if "on_duty:approved" in sources:
         return "on_duty:approved"
+    if "missing_punch:approved" in sources:
+        return "missing_punch:approved"
     if "geo:auto" in sources:
         return "geo:auto"
     if sources or has_manual:

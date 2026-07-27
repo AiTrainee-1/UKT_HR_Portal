@@ -9,7 +9,7 @@ import {
   Wallet, BarChart3, Shield, Activity, Settings, FileText, LogOut,
   ChevronRight, Search, X, Command, UserCheck, UserMinus, Banknote,
   CalendarCheck, Bell, Award, TrendingUp, Gift, CreditCard,
-  CalendarHeart, MoonStar, MessageCircle, UserCog, FolderOpen,
+  CalendarHeart, MoonStar, MessageCircle, UserCog, FolderOpen, Fingerprint,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -72,6 +72,7 @@ const navGroups: NavGroupData[] = [
       { path: '/hr/shifts', label: 'Manage Shift', icon: Clock },
       { path: '/hr/leave', label: 'Leave & Holiday', icon: Calendar },
       { path: '/hr/casual-leave', label: 'Casual Leave', icon: CalendarHeart },
+      { path: '/hr/missing-punch', label: 'Missing Punch', icon: Fingerprint },
       { path: '/hr/requests', label: 'Requests', icon: CheckCircle2 },
       { path: '/hr/promotion', label: 'Promotion', icon: Award },
       { path: '/hr/increment', label: 'Increment', icon: TrendingUp },

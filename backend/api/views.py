@@ -16,7 +16,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 
-from .auth import require_auth, require_hr, get_token_employee_id
+from .auth import require_auth, require_hr, get_token_employee_id, get_hr_display_name
 from .branch_scope import get_branch_scope, scope_to_branch
 from .jwt_utils import sign_token
 from .audit_utils import log_action, _get_ip
@@ -1314,6 +1314,9 @@ def update_leave_status(request: Request, pk: int) -> Response:
     record.status = new_status
     if "hrComment" in request.data:
         record.hr_comment = request.data["hrComment"]
+    if new_status in ("approved", "rejected") and old_status != new_status:
+        record.approved_by = get_hr_display_name(request)
+        record.approver_role = "hr"
     record.save()
 
     if new_status == "approved" and old_status != "approved":

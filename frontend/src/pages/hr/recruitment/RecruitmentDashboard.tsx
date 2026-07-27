@@ -33,6 +33,7 @@ import {
   ClipboardList,
   TrendingUp,
   CheckCircle2,
+  type LucideIcon,
 } from "lucide-react";
 
 type DetailModal =
@@ -55,8 +56,8 @@ function StatCard({
   urgent,
 }: {
   label: string;
-  value: number | string;
-  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
+  value: number;
+  icon: LucideIcon;
   color: string;
   subLabel?: string;
   onClick?: () => void;

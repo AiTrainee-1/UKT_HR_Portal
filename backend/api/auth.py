@@ -74,3 +74,17 @@ def get_token_employee_id(request: Request) -> int | None:
 
 def is_hr(request: Request) -> bool:
     return getattr(request, "jwt_user", {}).get("role") == "hr"
+
+
+def get_hr_display_name(request: Request) -> str:
+    """
+    Real name of the logged-in HR user, for attribution fields like
+    reviewed_by/approved_by/requested_by. hr_login() already embeds
+    `"name": account.full_name or account.username` into the JWT payload
+    (views.py), and require_auth decodes it back onto request.jwt_user on
+    every authenticated call — so this is always available on any
+    @require_hr view without a fresh DB lookup. Falls back to the literal
+    "HR" only if somehow absent (e.g. a still-valid token issued before
+    this field existed).
+    """
+    return getattr(request, "jwt_user", {}).get("name") or "HR"

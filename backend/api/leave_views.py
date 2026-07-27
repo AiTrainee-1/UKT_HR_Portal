@@ -4,7 +4,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from .auth import require_hr, require_auth, get_token_employee_id, is_hr
+from .auth import require_hr, require_auth, get_token_employee_id, is_hr, get_hr_display_name
 from .branch_scope import scope_to_branch
 from .models import LeaveType, LeaveBalance, Holiday, LeaveRequest, Employee, Notification, EmployeePermission
 
@@ -342,6 +342,7 @@ def _permission_json(p, monthly_used=None):
         "status": p.status,
         "hrComment": p.hr_comment,
         "approvedBy": p.approved_by,
+        "approverRole": p.approver_role,
         "createdAt": p.created_at.isoformat() if p.created_at else None,
         "monthlyUsed": monthly_used,
         "monthlyLimit": MONTHLY_PERMISSION_LIMIT,
@@ -445,8 +446,11 @@ def employee_permission_detail(request: Request, pk: int) -> Response:
         p.status = data["status"]
     if "hrComment" in data:
         p.hr_comment = data["hrComment"]
-    if "approvedBy" in data:
-        p.approved_by = data["approvedBy"]
+    # approvedBy is always server-derived from the logged-in HR user — never
+    # trust a client-supplied value here (a caller could spoof any name).
+    if p.status != prev_status and p.status in ("approved", "rejected"):
+        p.approved_by = get_hr_display_name(request)
+        p.approver_role = "hr"
     p.save()
     if p.status != prev_status and p.status in ("approved", "rejected"):
         Notification.objects.create(

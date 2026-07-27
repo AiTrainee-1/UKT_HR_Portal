@@ -96,6 +96,8 @@ def source_label(source: str) -> str:
         return "Geo Punch"
     if source == "on_duty:approved":
         return "On-Duty"
+    if source == "missing_punch:approved":
+        return "Missing Punch"
     if source == "manual":
         return "HR Entry"
     return source.replace("_", " ").replace(":", " ").title()

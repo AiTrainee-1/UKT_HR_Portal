@@ -942,6 +942,7 @@ export type PermissionItem = {
   status: string;
   hrComment?: string | null;
   approvedBy?: string | null;
+  approverRole?: string | null;
   createdAt?: string | null;
   monthlyUsed?: number | null;
   monthlyLimit: number;
@@ -988,7 +989,9 @@ export const useCreatePermission = () =>
 
 export const useUpdatePermissionStatus = () =>
   useMutation({
-    mutationFn: ({ id, data }: { id: number; data: { status: string; hrComment?: string; approvedBy?: string } }) =>
+    // approvedBy is never client-sendable — it's always server-derived from
+    // the logged-in HR user (a client-supplied name could be spoofed).
+    mutationFn: ({ id, data }: { id: number; data: { status: string; hrComment?: string } }) =>
       customFetch<PermissionItem>(`/api/permissions/${id}`, {
         method: "PUT",
         body: JSON.stringify(data),
@@ -2653,6 +2656,65 @@ export const useDeleteCasualLeave = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: getCasualLeavesQueryKey() });
       queryClient.invalidateQueries({ queryKey: ["/api/casual-leaves/eligibility"] });
+    },
+  });
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Missing Punch (two-stage: Department Head, then HR — same status machine
+//  as OnDutySession; HR approval writes a real AttendanceLog row)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Which of the day's 4 punches this request represents — purely descriptive
+// (maps onto punchType: morning_in/lunch_in -> IN, lunch_out/evening_out ->
+// OUT). Never the source of truth for real P1-P4 identity, which the
+// attendance engine derives from punch time, not a stored label.
+export type MissingPunchSlot = "morning_in" | "lunch_out" | "lunch_in" | "evening_out";
+
+export type MissingPunchItem = {
+  id: number;
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department: string | null;
+  designation: string | null;
+  date: string;
+  punchTime: string;
+  punchType: "IN" | "OUT";
+  punchSlot: MissingPunchSlot | null;
+  reason: string;
+  status: "pending_hod" | "pending_hr" | "approved" | "rejected";
+  hodReviewedBy: string | null;
+  hodReviewComment: string | null;
+  hodReviewedAt: string | null;
+  hrReviewedBy: string | null;
+  hrReviewComment: string | null;
+  hrReviewedAt: string | null;
+  createdAt: string | null;
+};
+
+export const getMissingPunchRequestsQueryKey = () => ["/api/missing-punch-requests"] as const;
+
+export const useMissingPunchRequestsHR = (
+  status: "pending" | "pending_hod" | "pending_hr" | "approved" | "rejected" | "all" = "pending",
+) =>
+  useQuery<MissingPunchItem[]>({
+    queryKey: ["/api/missing-punch-requests", status],
+    queryFn: () => customFetch<MissingPunchItem[]>(`/api/missing-punch-requests?status=${status}`),
+    refetchInterval: 30_000,
+  });
+
+export const useUpdateMissingPunchHR = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, status, comment }: { id: number; status: "approved" | "rejected"; comment?: string }) =>
+      customFetch<MissingPunchItem>(`/api/missing-punch-requests/${id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status, comment }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getMissingPunchRequestsQueryKey() });
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance/employee-monthly"] });
     },
   });
 };

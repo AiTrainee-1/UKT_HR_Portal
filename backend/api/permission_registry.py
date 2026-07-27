@@ -36,6 +36,7 @@ MODULE_TREE: list[dict] = [
     {"key": "shifts", "label": "Manage Shift"},
     {"key": "leave", "label": "Leave & Holiday"},
     {"key": "casual_leave", "label": "Casual Leave"},
+    {"key": "missing_punch", "label": "Missing Punch"},
     {"key": "requests", "label": "Requests"},
     {"key": "promotion", "label": "Promotion"},
     {"key": "increment", "label": "Increment"},
@@ -120,6 +121,8 @@ URL_MODULE_MAP: dict[str, str] = {
     "leave-requests": "leave",
 
     "casual-leaves": "casual_leave",
+
+    "missing-punch-requests": "missing_punch",
 
     "employee-requests": "requests",
     "permissions": "requests",

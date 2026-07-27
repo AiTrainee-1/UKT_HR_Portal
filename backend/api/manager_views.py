@@ -34,6 +34,7 @@ def _manager_json(m, include_assignments=False):
         "canApproveAttendance": m.can_approve_attendance,
         "canApproveCasualLeave": m.can_approve_casual_leave,
         "canApproveOnDuty": m.can_approve_on_duty,
+        "canApproveMissingPunch": m.can_approve_missing_punch,
         "isActive": m.is_active,
         "notes": m.notes,
         "createdAt": m.created_at.isoformat() if m.created_at else None,
@@ -109,6 +110,7 @@ def department_managers(request: Request) -> Response:
         can_approve_attendance=bool(data.get("canApproveAttendance", True)),
         can_approve_casual_leave=bool(data.get("canApproveCasualLeave", True)),
         can_approve_on_duty=bool(data.get("canApproveOnDuty", True)),
+        can_approve_missing_punch=bool(data.get("canApproveMissingPunch", True)),
         notes=data.get("notes"),
     )
     return Response(_manager_json(m, include_assignments=True), status=201)
@@ -148,6 +150,8 @@ def department_manager_detail(request: Request, pk: int) -> Response:
         m.can_approve_casual_leave = bool(data["canApproveCasualLeave"])
     if "canApproveOnDuty" in data:
         m.can_approve_on_duty = bool(data["canApproveOnDuty"])
+    if "canApproveMissingPunch" in data:
+        m.can_approve_missing_punch = bool(data["canApproveMissingPunch"])
     if "isActive" in data:
         m.is_active = bool(data["isActive"])
     if "notes" in data:
@@ -281,9 +285,14 @@ def manager_me(request: Request) -> Response:
         OnDutySession.objects.filter(emp_filter, status=OnDutySession.STATUS_PENDING_HOD).count()
         if m.can_approve_on_duty else 0
     )
+    from .models import MissingPunchRequest
+    pending_missing_punch = (
+        MissingPunchRequest.objects.filter(emp_filter, status=MissingPunchRequest.STATUS_PENDING_HOD).count()
+        if m.can_approve_missing_punch else 0
+    )
     pending_count = (
         pending_leaves + pending_perms + pending_resignations
-        + pending_attendance + pending_casual + pending_on_duty
+        + pending_attendance + pending_casual + pending_on_duty + pending_missing_punch
     )
 
     return Response({
@@ -293,6 +302,7 @@ def manager_me(request: Request) -> Response:
         "canApproveAttendance": m.can_approve_attendance,
         "canApproveCasualLeave": m.can_approve_casual_leave,
         "canApproveOnDuty": m.can_approve_on_duty,
+        "canApproveMissingPunch": m.can_approve_missing_punch,
         "pendingApprovalsCount": pending_count,
         "pendingLeavesCount": pending_leaves,
         "pendingPermissionsCount": pending_perms,
@@ -300,6 +310,7 @@ def manager_me(request: Request) -> Response:
         "pendingAttendanceCount": pending_attendance,
         "pendingCasualLeaveCount": pending_casual,
         "pendingOnDutyCount": pending_on_duty,
+        "pendingMissingPunchCount": pending_missing_punch,
         **_manager_json(m, include_assignments=True),
     })
 
@@ -416,6 +427,20 @@ def manager_pending_requests(request: Request) -> Response:
         on_duty_qs = OnDutySession.objects.none()
     on_duty_qs = on_duty_qs.order_by("-created_at")
 
+    from .models import MissingPunchRequest
+    from .missing_punch_views import _missing_punch_dict
+    missing_punch_qs = MissingPunchRequest.objects.select_related(
+        "employee__department", "employee__designation"
+    ).filter(emp_filter)
+    if m.can_approve_missing_punch:
+        if status_filter == "pending":
+            missing_punch_qs = missing_punch_qs.filter(status=MissingPunchRequest.STATUS_PENDING_HOD)
+        elif status_filter != "all":
+            missing_punch_qs = missing_punch_qs.filter(status=status_filter)
+    else:
+        missing_punch_qs = MissingPunchRequest.objects.none()
+    missing_punch_qs = missing_punch_qs.order_by("-created_at")
+
     return Response({
         "leaveRequests": [_leave_with_emp(r) for r in leave_qs],
         "permissions": [_perm_with_emp(p) for p in perm_qs],
@@ -423,6 +448,7 @@ def manager_pending_requests(request: Request) -> Response:
         "attendanceRequests": [_override_request_dict(r) for r in attendance_qs],
         "casualLeaves": [_cl_dict(r) for r in casual_qs],
         "onDutySessions": [_on_duty_session_dict(s) for s in on_duty_qs],
+        "missingPunchRequests": [_missing_punch_dict(r) for r in missing_punch_qs],
         "totalPending": (
             LeaveRequest.objects.filter(emp_filter, status="pending").count()
             + EmployeePermission.objects.filter(emp_filter, status="pending").count()
@@ -430,6 +456,7 @@ def manager_pending_requests(request: Request) -> Response:
             + (AttendanceOverrideRequest.objects.filter(emp_filter, status="pending").count() if m.can_approve_attendance else 0)
             + (CasualLeaveRequest.objects.filter(emp_filter, status="pending").count() if m.can_approve_casual_leave else 0)
             + (OnDutySession.objects.filter(emp_filter, status=OnDutySession.STATUS_PENDING_HOD).count() if m.can_approve_on_duty else 0)
+            + (MissingPunchRequest.objects.filter(emp_filter, status=MissingPunchRequest.STATUS_PENDING_HOD).count() if m.can_approve_missing_punch else 0)
         ),
     })
 
@@ -480,6 +507,8 @@ def manager_update_leave_status(request: Request, pk: int) -> Response:
     leave.status = status
     if comment := request.data.get("comment"):
         leave.hr_comment = comment
+    leave.approved_by = f"{m.employee.first_name} {m.employee.last_name}"
+    leave.approver_role = "dept_head"
     leave.save()
     Notification.objects.create(
         employee=leave.employee,
@@ -534,6 +563,8 @@ def manager_update_permission_status(request: Request, pk: int) -> Response:
     perm.status = status
     if comment := request.data.get("comment"):
         perm.hr_comment = comment
+    perm.approved_by = f"{m.employee.first_name} {m.employee.last_name}"
+    perm.approver_role = "dept_head"
     perm.save()
     Notification.objects.create(
         employee=perm.employee,
@@ -669,6 +700,61 @@ def manager_update_on_duty_status(request: Request, pk: int) -> Response:
     reviewer_name = f"{m.employee.first_name} {m.employee.last_name}"
     resolve_on_duty_session_hod(session, status_val, reviewer_name, request.data.get("comment"))
     return Response(_on_duty_session_dict(session))
+
+
+@api_view(["PATCH"])
+@require_auth
+def manager_update_missing_punch_status(request: Request, pk: int) -> Response:
+    """
+    Department Head — stage 1 of the Missing Punch approval chain. Approval
+    moves the request to pending_hr (HR still has to give the final
+    approval before the punch is actually added to attendance); rejection
+    is terminal — HR never sees it.
+    """
+    from .models import MissingPunchRequest
+    from .missing_punch_views import _missing_punch_dict, resolve_missing_punch_hod
+
+    token_emp_id = get_token_employee_id(request)
+    if not token_emp_id:
+        return Response({"error": "Employee authentication required"}, status=403)
+
+    try:
+        m = DepartmentManager.objects.select_related("employee").prefetch_related(
+            "department_assignments", "employee_assignments"
+        ).get(employee_id=token_emp_id, is_active=True)
+    except DepartmentManager.DoesNotExist:
+        return Response({"error": "Not a department manager"}, status=403)
+
+    if not m.can_approve_missing_punch:
+        return Response({
+            "error": "Approve-missing-punch access is disabled for your account. Ask HR to enable it.",
+            "code": "APPROVE_MISSING_PUNCH_DISABLED",
+        }, status=403)
+
+    dept_ids, direct_ids = _get_manager_employee_ids(m)
+    emp_filter = Q(employee_id__in=direct_ids)
+    if dept_ids:
+        emp_filter |= Q(employee__department_id__in=dept_ids)
+
+    try:
+        req = MissingPunchRequest.objects.select_related(
+            "employee__department", "employee__designation"
+        ).filter(emp_filter).get(pk=pk)
+    except MissingPunchRequest.DoesNotExist:
+        if MissingPunchRequest.objects.filter(pk=pk).exists():
+            return Response({"error": "This request is not in your approval scope"}, status=403)
+        return Response({"error": "Missing Punch request not found"}, status=404)
+
+    if req.status != MissingPunchRequest.STATUS_PENDING_HOD:
+        return Response({"error": f"This request was already actioned (status: {req.status})"}, status=400)
+
+    status_val = request.data.get("status")
+    if status_val not in ("approved", "rejected"):
+        return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
+
+    reviewer_name = f"{m.employee.first_name} {m.employee.last_name}"
+    resolve_missing_punch_hod(req, status_val, reviewer_name, request.data.get("comment"))
+    return Response(_missing_punch_dict(req))
 
 
 @api_view(["PATCH"])

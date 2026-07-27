@@ -303,6 +303,7 @@ class LeaveRequest(models.Model):
     status = models.TextField(default="pending")  # pending/approved/rejected
     hr_comment = models.TextField(null=True, blank=True, db_column="hr_comment")
     approved_by = models.TextField(null=True, blank=True, db_column="approved_by")
+    approver_role = models.TextField(null=True, blank=True, db_column="approver_role")  # "hr" | "dept_head"
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
 
     class Meta:
@@ -666,6 +667,7 @@ class EmployeePermission(models.Model):
     status = models.TextField(choices=STATUS_CHOICES, default=STATUS_PENDING)
     hr_comment = models.TextField(null=True, blank=True, db_column="hr_comment")
     approved_by = models.TextField(null=True, blank=True, db_column="approved_by")
+    approver_role = models.TextField(null=True, blank=True, db_column="approver_role")  # "hr" | "dept_head"
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
@@ -1325,6 +1327,7 @@ class DepartmentManager(models.Model):
     can_approve_attendance = models.BooleanField(default=True, db_column="can_approve_attendance")
     can_approve_casual_leave = models.BooleanField(default=True, db_column="can_approve_casual_leave")
     can_approve_on_duty = models.BooleanField(default=True, db_column="can_approve_on_duty")
+    can_approve_missing_punch = models.BooleanField(default=True, db_column="can_approve_missing_punch")
     is_active = models.BooleanField(default=True, db_column="is_active")
     notes = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
@@ -1653,6 +1656,88 @@ class OnDutyPunchVerification(models.Model):
 
     class Meta:
         db_table = "on_duty_punch_verifications"
+        ordering = ["-created_at"]
+
+
+class MissingPunchRequest(models.Model):
+    """
+    Employee self-service "I forgot to punch" request — date + time + reason,
+    approved by the Department Head first, then HR gives the final approval.
+    Same two-stage status machine as OnDutySession above (the only other
+    genuine HOD-then-HR workflow in this codebase): a HOD rejection is
+    terminal (HR never sees it); HR only ever acts on a row already at
+    pending_hr.
+
+    On HR approval, this does NOT overwrite the day's AttendanceDayRecord
+    directly (unlike CasualLeaveRequest/AttendanceOverrideRequest, which
+    decide an entire day's outcome) — it creates one ordinary AttendanceLog
+    row (source="missing_punch:approved") via resolve_missing_punch_hr() in
+    missing_punch_views.py, so it becomes just another punch that day and
+    flows through the normal engine (punch-order combination rule,
+    punctuality window, cross-midnight reattribution) exactly like a real
+    biometric punch would. Idempotent against double-approval because
+    AttendanceLog already has unique_together on
+    (employee, date, punch_time, punch_type).
+    """
+    STATUS_PENDING_HOD = "pending_hod"
+    STATUS_PENDING_HR = "pending_hr"
+    STATUS_APPROVED = "approved"
+    STATUS_REJECTED = "rejected"
+    STATUS_CHOICES = [
+        (STATUS_PENDING_HOD, "Pending HOD Approval"),
+        (STATUS_PENDING_HR, "Pending HR Approval"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+
+    # Which of the day's (up to) 4 punches this request represents — purely
+    # descriptive, shown to the employee/HOD/HR so it's clear which specific
+    # punch is missing. Deliberately NOT the source of truth for P1-P4
+    # identity: that's derived by shift_engine.compute_daily_shift_log from
+    # each punch's actual TIME relative to the shift's lunch window, computed
+    # fresh every time attendance is calculated — never stored anywhere. This
+    # field only maps onto punch_type (morning_in/lunch_in -> IN,
+    # lunch_out/evening_out -> OUT), which is what actually gets written to
+    # AttendanceLog on HR approval.
+    PUNCH_SLOT_MORNING_IN = "morning_in"
+    PUNCH_SLOT_LUNCH_OUT = "lunch_out"
+    PUNCH_SLOT_LUNCH_IN = "lunch_in"
+    PUNCH_SLOT_EVENING_OUT = "evening_out"
+    PUNCH_SLOT_CHOICES = [
+        (PUNCH_SLOT_MORNING_IN, "Morning Check-In"),
+        (PUNCH_SLOT_LUNCH_OUT, "Lunch Check-Out"),
+        (PUNCH_SLOT_LUNCH_IN, "Lunch Check-In"),
+        (PUNCH_SLOT_EVENING_OUT, "Evening Check-Out"),
+    ]
+    PUNCH_SLOT_TO_TYPE = {
+        PUNCH_SLOT_MORNING_IN: AttendanceLog.PUNCH_IN,
+        PUNCH_SLOT_LUNCH_OUT: AttendanceLog.PUNCH_OUT,
+        PUNCH_SLOT_LUNCH_IN: AttendanceLog.PUNCH_IN,
+        PUNCH_SLOT_EVENING_OUT: AttendanceLog.PUNCH_OUT,
+    }
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id",
+        related_name="missing_punch_requests",
+    )
+    date = models.DateField()
+    punch_time = models.TimeField(db_column="punch_time")
+    punch_type = models.TextField(choices=AttendanceLog.PUNCH_CHOICES, db_column="punch_type")
+    punch_slot = models.TextField(
+        choices=PUNCH_SLOT_CHOICES, null=True, blank=True, db_column="punch_slot",
+    )
+    reason = models.TextField()
+    status = models.TextField(choices=STATUS_CHOICES, default=STATUS_PENDING_HOD)
+    hod_reviewed_by = models.TextField(null=True, blank=True, db_column="hod_reviewed_by")
+    hod_review_comment = models.TextField(null=True, blank=True, db_column="hod_review_comment")
+    hod_reviewed_at = models.DateTimeField(null=True, blank=True, db_column="hod_reviewed_at")
+    hr_reviewed_by = models.TextField(null=True, blank=True, db_column="hr_reviewed_by")
+    hr_review_comment = models.TextField(null=True, blank=True, db_column="hr_review_comment")
+    hr_reviewed_at = models.DateTimeField(null=True, blank=True, db_column="hr_reviewed_at")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "missing_punch_requests"
         ordering = ["-created_at"]
 
 
