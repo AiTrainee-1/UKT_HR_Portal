@@ -1,4 +1,5 @@
 from datetime import time
+from decimal import Decimal
 
 from django.db import models
 from django.db.models import Q
@@ -1207,6 +1208,40 @@ class PayrollSettings(models.Model):
             "otherwise the day is capped at Half Shift, regardless of any "
             "approved Permission. Employees with no assigned shift have no "
             "reference to check against, so this never applies to them."
+        ),
+    )
+
+    # ── Cross-midnight punch reattribution (staff only) ────────────────────
+    # A forgotten evening exit punch is sometimes made hours late, after
+    # midnight — the biometric device stamps it under the NEXT calendar
+    # date, which (without this) gets misread as tomorrow's first punch,
+    # shifting all of tomorrow's real punches down a slot. These two
+    # settings jointly define the reattribution window; setting either to
+    # 0 disables it (last_punch_post_shift_grace_hours=0 turns the window
+    # itself off entirely; first_punch_pre_shift_buffer_hours=0 just
+    # removes the protective cap, letting the grace window reach all the
+    # way to the next shift's start time). See shift_engine.py's
+    # _cross_midnight_claim_cutoff for exactly how these combine.
+    last_punch_post_shift_grace_hours = models.DecimalField(
+        max_digits=4, decimal_places=1, default=Decimal("9.0"),
+        db_column="last_punch_post_shift_grace_hours",
+        help_text=(
+            "Staff only. A punch on the NEXT calendar date, up to this many "
+            "hours after the shift's end time, is treated as this day's "
+            "forgotten last-out instead of tomorrow's first punch — e.g. 9 "
+            "hours after a 20:00 end covers a punch made as late as 05:00. "
+            "Only applies when this day doesn't already have a punch at or "
+            "after its own shift end. Set to 0 to disable."
+        ),
+    )
+    first_punch_pre_shift_buffer_hours = models.DecimalField(
+        max_digits=4, decimal_places=1, default=Decimal("2.0"),
+        db_column="first_punch_pre_shift_buffer_hours",
+        help_text=(
+            "Staff only. Protects a genuinely early arrival from being "
+            "stolen by the setting above — the reattribution window above "
+            "can never reach closer than this many hours before the next "
+            "day's own shift start time. Set to 0 to remove this cap."
         ),
     )
 

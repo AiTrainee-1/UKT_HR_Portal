@@ -233,6 +233,8 @@ export default function Settings() {
     attendanceMode: "strict" as "strict" | "simple",
     simpleHalfShiftCutoff: "13:30",
     shiftPunctualityWindowMinutes: 60,
+    lastPunchPostShiftGraceHours: 9,
+    firstPunchPreShiftBufferHours: 2,
     prodFirstHalfStart: "08:30",
     prodFirstHalfEnd: "12:30",
     prodSecondHalfStart: "13:30",
@@ -328,6 +330,8 @@ export default function Settings() {
         attendanceMode: (payrollSettingsData.attendanceMode as "strict" | "simple") || "strict",
         simpleHalfShiftCutoff: payrollSettingsData.simpleHalfShiftCutoff || "13:30",
         shiftPunctualityWindowMinutes: payrollSettingsData.shiftPunctualityWindowMinutes ?? 60,
+        lastPunchPostShiftGraceHours: payrollSettingsData.lastPunchPostShiftGraceHours ?? 9,
+        firstPunchPreShiftBufferHours: payrollSettingsData.firstPunchPreShiftBufferHours ?? 2,
         prodFirstHalfStart: payrollSettingsData.prodFirstHalfStart || "08:30",
         prodFirstHalfEnd: payrollSettingsData.prodFirstHalfEnd || "12:30",
         prodSecondHalfStart: payrollSettingsData.prodSecondHalfStart || "13:30",
@@ -553,6 +557,8 @@ export default function Settings() {
         attendanceMode: attMode.attendanceMode,
         simpleHalfShiftCutoff: attMode.simpleHalfShiftCutoff,
         shiftPunctualityWindowMinutes: attMode.shiftPunctualityWindowMinutes,
+        lastPunchPostShiftGraceHours: attMode.lastPunchPostShiftGraceHours,
+        firstPunchPreShiftBufferHours: attMode.firstPunchPreShiftBufferHours,
         prodFirstHalfStart: attMode.prodFirstHalfStart,
         prodFirstHalfEnd: attMode.prodFirstHalfEnd,
         prodSecondHalfStart: attMode.prodSecondHalfStart,
@@ -1089,6 +1095,52 @@ export default function Settings() {
                       only. Shift start/end times and grace period always come from the shift assigned to each
                       employee — an employee with no shift assigned has no reference to check against, so this
                       never applies to them.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Cross-midnight punch reattribution — a forgotten evening exit
+                    punch made hours late, after midnight, gets misread as the
+                    NEXT day's first punch without this, shifting every one of
+                    that day's real punches down a slot. */}
+                <div className="grid sm:grid-cols-2 gap-4 p-3 bg-blue-50/50 border border-blue-100 rounded-lg">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Forgotten Last-Out Grace (hours after shift end)</Label>
+                    <p className="text-[11px] text-gray-500 -mt-1">
+                      A punch made this many hours after shift end — even after midnight — is treated as that
+                      day's own last-out instead of tomorrow's first punch. E.g. 9 hours after a 20:00 end
+                      covers a punch as late as 05:00. Set to 0 to disable.
+                    </p>
+                    <Input
+                      type="number"
+                      min={0}
+                      step={0.5}
+                      value={attMode.lastPunchPostShiftGraceHours}
+                      onChange={e => setAttMode(a => ({ ...a, lastPunchPostShiftGraceHours: Math.max(0, Number(e.target.value) || 0) }))}
+                      className="max-w-[140px]"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Next-Day Early-Arrival Protection (hours before shift start)</Label>
+                    <p className="text-[11px] text-gray-500 -mt-1">
+                      The grace window above can never reach closer than this many hours before the next day's
+                      own shift start — protects a genuinely early arrival from being stolen and misattributed
+                      to yesterday. Set to 0 to remove this cap.
+                    </p>
+                    <Input
+                      type="number"
+                      min={0}
+                      step={0.5}
+                      value={attMode.firstPunchPreShiftBufferHours}
+                      onChange={e => setAttMode(a => ({ ...a, firstPunchPreShiftBufferHours: Math.max(0, Number(e.target.value) || 0) }))}
+                      className="max-w-[140px]"
+                    />
+                  </div>
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <p className="text-[11px] text-gray-500">
+                      Only reattributes a punch when the earlier day genuinely looks like it's missing its own
+                      closing punch (nothing recorded at or after that day's shift end) — an already-complete
+                      day never has a stray next-day punch stolen from it. Staff only.
                     </p>
                   </div>
                 </div>

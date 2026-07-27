@@ -1813,6 +1813,8 @@ export type PayrollSettingsItem = {
   simpleHalfShiftCutoff: string;
   simpleGraceMinutes: number;
   shiftPunctualityWindowMinutes: number;
+  lastPunchPostShiftGraceHours: number;
+  firstPunchPreShiftBufferHours: number;
   // Production attendance windows (1.5-shift day)
   prodFirstHalfStart: string;
   prodFirstHalfEnd: string;

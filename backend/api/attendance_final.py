@@ -49,7 +49,7 @@ from .models import (
 )
 from .shift_engine import (
     _get_shift_for_date, _t2s, NEW_ATTENDANCE_RULE_CUTOVER,
-    _punctuality_ok, _punctuality_window_minutes,
+    _punctuality_ok, _punctuality_window_minutes, resolve_day_punch_logs,
 )
 
 # The simple-mode half-shift cutoff as it actually stood at
@@ -354,6 +354,22 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
     else:
         day_times = punch_times
 
+    # ── Cross-midnight punch reattribution ───────────────────────────────
+    # Separate from Night Shift Relaxation above (that's for a genuine
+    # continuous night-shift session); this is for an ordinary day's
+    # forgotten evening exit punch made hours late, after midnight, which
+    # would otherwise be misread as tomorrow's first punch — silently
+    # shifting every one of tomorrow's real punches down a slot. See
+    # resolve_day_punch_logs. No-ops (returns punch_logs unchanged) when
+    # disabled in Settings or for non-staff employees.
+    resolved_logs = resolve_day_punch_logs(
+        emp, d, punch_logs, settings, assignments=assignments,
+        logs_by_date=prefetch.get("night_logs_by_date"),
+    )
+    if resolved_logs is not punch_logs:
+        punch_logs = resolved_logs
+        day_times = [p.punch_time for p in punch_logs]
+
     # Manual attendance entries (Attendance table) count as presence too
     manual_attendance_dates = prefetch.get("manual_attendance_dates")
     if manual_attendance_dates is not None:
@@ -470,10 +486,12 @@ def compute_month_records(emp, year: int, month: int, settings=None):
     month_start = date_type(year, month, 1)
     month_end = date_type(year, month, days_in_month)
 
-    # One day before the month too — night-shift detection for day 1 needs
-    # the previous night's (last day of the prior month) punches.
+    # One day before AND after the month too — night-shift detection for
+    # day 1 needs the previous night's punches, and cross-midnight punch
+    # reattribution (resolve_day_punch_logs) for the LAST day of the month
+    # needs the following day's early punches to check.
     logs = AttendanceLog.objects.filter(
-        employee=emp, date__gte=month_start - timedelta(days=1), date__lte=month_end,
+        employee=emp, date__gte=month_start - timedelta(days=1), date__lte=month_end + timedelta(days=1),
     ).order_by("punch_time")
     logs_by_date = {}
     for log in logs:
@@ -548,8 +566,11 @@ def compute_range_records(emp, date_from: date_type, date_to: date_type, setting
         settings = PayrollSettings.get()
 
     today = date_type.today()
+    # One day of padding on each side — night-shift detection for the
+    # first day and cross-midnight punch reattribution (resolve_day_punch_logs)
+    # for the last day both need a neighboring day's punches to check.
     logs = AttendanceLog.objects.filter(
-        employee=emp, date__gte=date_from, date__lte=date_to
+        employee=emp, date__gte=date_from - timedelta(days=1), date__lte=date_to + timedelta(days=1),
     ).order_by("punch_time")
     logs_by_date = {}
     for log in logs:
@@ -580,6 +601,7 @@ def compute_range_records(emp, date_from: date_type, date_to: date_type, setting
             holiday_dates=holiday_dates,
             prod_config=prod_config,
             prod_segments=prod_segments,
+            prefetch={"night_logs_by_date": logs_by_date},
         ))
         d += timedelta(days=1)
     return records

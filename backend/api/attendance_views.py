@@ -1078,7 +1078,7 @@ def attendance_search(request: Request) -> Response:
     results = []
     for emp in emps:
         logs = list(
-            AttendanceLog.objects.filter(employee=emp, date=d).order_by("punch_time")[:4]
+            AttendanceLog.objects.filter(employee=emp, date=d).order_by("punch_time")
         )
         # Displayed IN/OUT alternates by time-sorted position rather than the
         # raw stored punch_type — a Geo/On-Duty punch captured before that
@@ -1086,6 +1086,11 @@ def attendance_search(request: Request) -> Response:
         # type once sync backfills an earlier punch (see
         # geo_attendance_views._next_punch); position-based labeling can't
         # go stale the same way, since it's derived fresh every read.
+        #
+        # Every punch that exists is shown here, uncapped — this is display
+        # only. Shift-value calculation elsewhere still uses just the first
+        # and last punch (P1/P4); showing every punch on this search page
+        # doesn't change that logic at all.
         punches = [
             {
                 "time": log.punch_time.strftime("%H:%M:%S"),
@@ -1192,10 +1197,12 @@ def attendance_search_range(request: Request) -> Response:
 
     days = []
     for rec in records:
-        day_logs = logs_by_date.get(rec.date, [])[:4]
+        day_logs = logs_by_date.get(rec.date, [])
         # See attendance_search()'s identical comment above — IN/OUT is
         # derived from time-sorted position, not the raw stored punch_type,
         # so a stale label from the cross-source ordering bug can't surface.
+        # Every punch is shown, uncapped (display only — shift-value math
+        # elsewhere still only uses the first and last punch).
         punches = [
             {
                 "time": log.punch_time.strftime("%H:%M:%S"),
@@ -1253,7 +1260,8 @@ def compute_shift_logs(request: Request) -> Response:
     Body: { "month": 7, "year": 2026 }  — recompute entire month
     Body: { "month": 7, "year": 2026, "employeeId": 123 }  — one employee
     """
-    from .shift_engine import compute_daily_shift_log, compute_monthly_shift_summary, recompute_date, NEW_ATTENDANCE_RULE_CUTOVER
+    from .shift_engine import compute_daily_shift_log, compute_monthly_shift_summary, recompute_date, NEW_ATTENDANCE_RULE_CUTOVER, resolve_day_punch_logs
+    from .models import PayrollSettings
     from collections import defaultdict
 
     data = request.data
@@ -1287,24 +1295,34 @@ def compute_shift_logs(request: Request) -> Response:
 
         emps = list(emp_qs)
         total_computed = 0
+        payroll_settings = PayrollSettings.get()
+
+        # One query for the whole month (+1 day padding each side, for
+        # cross-midnight punch reattribution's neighbor-day lookups) instead
+        # of one per day — {employee_id: {date: [AttendanceLog, ...]}}.
+        month_start = date_type(y, m, 1)
+        month_end = date_type(y, m, days_in_month)
+        all_logs = list(
+            AttendanceLog.objects.filter(
+                date__gte=month_start - timedelta(days=1),
+                date__lte=month_end + timedelta(days=1),
+                employee__in=emps,
+            ).order_by("punch_time")
+        )
+        logs_by_emp: dict = defaultdict(lambda: defaultdict(list))
+        for log in all_logs:
+            logs_by_emp[log.employee_id][log.date].append(log)
 
         for day in range(1, days_in_month + 1):
             d = date_type(y, m, day)
             if d > today_d:
                 break
-            logs = list(
-                AttendanceLog.objects.filter(
-                    date=d,
-                    employee__in=emps,
-                ).select_related("employee")
-            )
-            by_emp: dict = defaultdict(list)
-            for log in logs:
-                by_emp[log.employee_id].append(log)
-
-            emp_map = {e.id: e for e in emps}
             for emp in emps:
-                punches = by_emp.get(emp.id, [])
+                emp_logs_by_date = logs_by_emp.get(emp.id, {})
+                punches = resolve_day_punch_logs(
+                    emp, d, emp_logs_by_date.get(d, []), payroll_settings,
+                    logs_by_date=emp_logs_by_date,
+                )
                 compute_daily_shift_log(emp, d, punches, legacy=d < NEW_ATTENDANCE_RULE_CUTOVER)
                 total_computed += 1
 

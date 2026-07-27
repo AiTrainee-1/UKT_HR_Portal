@@ -141,6 +141,135 @@ def _punctuality_ok(punch1, punch4, shift, window_minutes: int) -> bool:
     return True
 
 
+# ── Cross-midnight punch reattribution (2026-07-26, user-mandated) ────────
+#
+# A forgotten evening exit punch is sometimes made hours late, after
+# midnight — the biometric device stamps it under the NEXT calendar date,
+# which (without this) gets misread as tomorrow's first punch, silently
+# shifting every one of tomorrow's real punches down a slot (P1->P2,
+# P2->P3, ...) and corrupting tomorrow's whole shift calculation, on top
+# of today showing a missing/wrong last-out.
+#
+# Configurable via PayrollSettings.last_punch_post_shift_grace_hours (how
+# far past shift end the grace extends — e.g. 9 hours past a 20:00 end
+# reaches 05:00) and first_punch_pre_shift_buffer_hours (a protective cap
+# so that grace window can never reach into tomorrow's own pre-shift-start
+# buffer, so a genuinely early arrival is never stolen and misattributed
+# to yesterday). Either at 0 disables its respective effect;
+# last_punch_post_shift_grace_hours=0 disables the whole feature.
+
+def _cross_midnight_claim_cutoff(shift_for_prev_day, shift_for_this_day, settings) -> int | None:
+    """
+    The latest seconds-since-midnight of THIS day (0-86399) at or before
+    which an early punch is claimed as the PREVIOUS day's forgotten
+    last-out, instead of counting as this day's own first punch. None
+    means the rule doesn't apply here (disabled in Settings, or no
+    reference shift for the previous day to anchor "shift end" from).
+    """
+    if not shift_for_prev_day or not shift_for_prev_day.end_time:
+        return None
+    grace_hours = settings.last_punch_post_shift_grace_hours
+    if not grace_hours or grace_hours <= 0:
+        return None
+    grace_end_secs = _t2s(shift_for_prev_day.end_time) + int(float(grace_hours) * 3600)
+    if shift_for_this_day and shift_for_this_day.start_time:
+        buffer_hours = settings.first_punch_pre_shift_buffer_hours or 0
+        cap_secs = 86400 + _t2s(shift_for_this_day.start_time) - int(float(buffer_hours) * 3600)
+        grace_end_secs = min(grace_end_secs, cap_secs)
+    if grace_end_secs <= 86400:
+        return None
+    return max(0, min(86399, grace_end_secs - 86400))
+
+
+def _claimed_by_previous_day(punch_time, prev_day_last_punch, shift_for_prev_day, shift_for_this_day, settings) -> bool:
+    """
+    True iff a punch at `punch_time` on THIS day should be reattributed as
+    the PREVIOUS day's last-out rather than counting toward this day's own
+    punches. Two conditions must both hold:
+      1. `punch_time` is at/before the cutoff from
+         _cross_midnight_claim_cutoff.
+      2. The previous day doesn't already have a punch at or after its own
+         shift end — an already-complete day never has anything stolen
+         from a stray next-day punch (which just stays that next day's own).
+    """
+    cutoff = _cross_midnight_claim_cutoff(shift_for_prev_day, shift_for_this_day, settings)
+    if cutoff is None:
+        return False
+    if _t2s(punch_time) > cutoff:
+        return False
+    if prev_day_last_punch is not None and _t2s(prev_day_last_punch) >= _t2s(shift_for_prev_day.end_time):
+        return False
+    return True
+
+
+def resolve_day_punch_logs(emp, d: date_type, own_day_logs: list, settings, assignments=None, logs_by_date=None) -> list:
+    """
+    The definitive punch list for (emp, d) once cross-midnight
+    reattribution is applied in both directions:
+      - EXCLUDES any of this day's own early-morning punches that are
+        actually yesterday's forgotten last-out, made late.
+      - INCLUDES tomorrow's early-morning punches that are actually
+        today's own forgotten last-out.
+    Every staff shift-value computation (simple mode via compute_day_record
+    and strict mode via compute_daily_shift_log alike) should source its
+    punches through this instead of a raw `AttendanceLog.filter(date=d)`
+    query. Production employees are unaffected (their segment-coverage
+    model doesn't use punch-order logic) — returns `own_day_logs` untouched
+    for them.
+
+    `logs_by_date`, when given, is a {date: [AttendanceLog, ...]} map a
+    bulk caller (compute_month_records/compute_range_records) already
+    fetched once for the employee's whole range, spanning at least one day
+    before and one day after the range being computed — this looks up
+    `d-1`/`d+1` from it instead of querying. Omitted, both are queried
+    directly (cheap: one employee, one day, at most a handful of rows).
+
+    Disabled entirely when PayrollSettings.last_punch_post_shift_grace_hours
+    is 0 — returns `own_day_logs` unchanged, matching exact pre-feature
+    behavior.
+    """
+    if emp.employment_type != "staff":
+        return own_day_logs
+    if not settings.last_punch_post_shift_grace_hours:
+        return own_day_logs
+
+    from .models import AttendanceLog
+    prev_d = d - timedelta(days=1)
+    next_d = d + timedelta(days=1)
+
+    shift_for_prev_d = _get_shift_for_date(emp, prev_d, assignments=assignments)
+    shift_for_d = _get_shift_for_date(emp, d, assignments=assignments)
+    shift_for_next_d = _get_shift_for_date(emp, next_d, assignments=assignments)
+
+    def _logs_for(date_val):
+        if logs_by_date is not None:
+            return logs_by_date.get(date_val, [])
+        return list(AttendanceLog.objects.filter(employee=emp, date=date_val).order_by("punch_time"))
+
+    # ── Exclude: this day's own early punches actually belong to yesterday ──
+    result = own_day_logs
+    if shift_for_prev_d and result:
+        prev_logs = _logs_for(prev_d)
+        prev_last_punch = max((p.punch_time for p in prev_logs), default=None)
+        result = [
+            p for p in result
+            if not _claimed_by_previous_day(p.punch_time, prev_last_punch, shift_for_prev_d, shift_for_d, settings)
+        ]
+
+    # ── Claim: tomorrow's early punches actually belong to today ───────────
+    if shift_for_d:
+        this_day_last_punch = max((p.punch_time for p in result), default=None)
+        next_logs = _logs_for(next_d)
+        claimed = [
+            p for p in next_logs
+            if _claimed_by_previous_day(p.punch_time, this_day_last_punch, shift_for_d, shift_for_next_d, settings)
+        ]
+        if claimed:
+            result = result + claimed
+
+    return result
+
+
 def _get_assignment_for_date(emp, d: date_type, assignments=None):
     """
     Return the active EmployeeShiftAssignment for an employee on a date (or None).
@@ -229,8 +358,12 @@ def compute_daily_shift_log(emp, d: date_type, punches: list, assignments=None, 
 
     shift = _get_shift_for_date(emp, d, assignments=assignments)
 
-    # Sort punches by time
-    sorted_punches = sorted(punches, key=lambda p: p.punch_time)
+    # Sort punches chronologically by (date, time) rather than bare time —
+    # a cross-midnight punch reattributed onto this day (see
+    # resolve_day_punch_logs) carries a real .date one day later than `d`
+    # and an early-morning .punch_time (e.g. 02:00); sorting by bare time
+    # alone would wrongly put it FIRST instead of last.
+    sorted_punches = sorted(punches, key=lambda p: (p.date, p.punch_time))
 
     # Extract the 4 logical punches from raw logs
     punch1 = punch2 = punch3 = punch4 = None
@@ -451,15 +584,22 @@ def recompute_date(d: date_type):
     Recompute DailyShiftLog for ALL staff employees for a given date.
     Called after biometric sync or manual attendance entry.
     """
-    from .models import AttendanceLog, Employee
+    from .models import AttendanceLog, Employee, PayrollSettings
     from collections import defaultdict
 
-    logs = list(
-        AttendanceLog.objects.filter(date=d).select_related("employee")
+    # +/-1 day padding so cross-midnight punch reattribution
+    # (resolve_day_punch_logs) has the neighboring days' punches to check —
+    # a forgotten evening exit punch made after midnight lands under d+1's
+    # date, and needs to be pulled back into d's computation here too, not
+    # just in the AttendanceDayRecord path (compute_day_record).
+    padded_logs = list(
+        AttendanceLog.objects.filter(
+            date__gte=d - timedelta(days=1), date__lte=d + timedelta(days=1),
+        ).select_related("employee")
     )
-    by_emp: dict = defaultdict(list)
-    for log in logs:
-        by_emp[log.employee_id].append(log)
+    logs_by_emp: dict = defaultdict(lambda: defaultdict(list))
+    for log in padded_logs:
+        logs_by_emp[log.employee_id][log.date].append(log)
 
     staff_ids = set(
         Employee.objects.filter(status="active", employment_type="staff")
@@ -467,17 +607,24 @@ def recompute_date(d: date_type):
     )
 
     # Only process employees who have punches today (staff only)
-    emp_ids_with_punches = set(by_emp.keys()) & staff_ids
+    emp_ids_with_punches = {
+        emp_id for emp_id, by_date in logs_by_emp.items() if by_date.get(d)
+    } & staff_ids
     if not emp_ids_with_punches:
         return 0
 
     emps = {e.id: e for e in Employee.objects.filter(id__in=emp_ids_with_punches)}
+    settings = PayrollSettings.get()
     count = 0
-    for emp_id, punches in by_emp.items():
-        if emp_id not in staff_ids:
-            continue
+    for emp_id in emp_ids_with_punches:
         emp = emps.get(emp_id)
-        if emp:
-            compute_daily_shift_log(emp, d, punches, legacy=d < NEW_ATTENDANCE_RULE_CUTOVER)
-            count += 1
+        if not emp:
+            continue
+        emp_logs_by_date = logs_by_emp.get(emp_id, {})
+        punches = resolve_day_punch_logs(
+            emp, d, emp_logs_by_date.get(d, []), settings,
+            logs_by_date=emp_logs_by_date,
+        )
+        compute_daily_shift_log(emp, d, punches, legacy=d < NEW_ATTENDANCE_RULE_CUTOVER)
+        count += 1
     return count
