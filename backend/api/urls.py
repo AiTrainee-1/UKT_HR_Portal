@@ -81,6 +81,7 @@ from .attendance_views import (
     sync_biometric_api, sync_biometric_progress, attendance_report_log, compute_shift_logs,
     attendance_search, attendance_search_range,
     attendance_late_summary, employee_shift_monthly_stats, attendance_sync_status,
+    mobile_home_summary, attendance_live_feed,
 )
 from .growth_views import (
     employee_monthly_attendance, attendance_day_override, attendance_override_requests,
@@ -93,11 +94,12 @@ from .system_settings_views import (
     production_shift_config_view, production_shift_segments, production_shift_segment_detail,
 )
 from .casual_leave_views import (
-    casual_leaves, casual_leave_detail, casual_leave_eligibility,
+    casual_leaves, casual_leave_detail, casual_leave_eligibility, my_casual_leave_eligibility,
 )
 from .missing_punch_views import (
     missing_punch_requests, missing_punch_request_hr_status,
 )
+from .auto_sync_views import auto_sync_rules, auto_sync_rule_detail
 from .night_shift_views import (
     night_shift_dashboard, night_shift_recompute,
     night_shift_rules, night_shift_rule_detail,
@@ -200,6 +202,7 @@ urlpatterns = [
 
     # ── Notifications ───────────────────────────────────────────────────────
     path("notifications", views.notifications),
+    path("notifications/mark-all-read", views.mark_all_notifications_read),
     path("notifications/<int:pk>/read", views.mark_notification_read),
     path("my/push-token", views.register_push_token),
 
@@ -242,12 +245,16 @@ urlpatterns = [
     path("attendance", views.attendance),
     path("attendance/summary", attendance_summary),
     path("attendance/daily", attendance_daily),
+    path("dashboard/mobile-home-summary", mobile_home_summary),
+    path("attendance/live-feed", attendance_live_feed),
     path("attendance/monthly-trend", attendance_monthly_trend),
     path("attendance/employee/<int:pk>", attendance_employee_history),
     path("attendance/manual", manual_attendance),
     path("attendance/sync-status", attendance_sync_status),
     path("attendance/sync-biometric", sync_biometric_api),
     path("attendance/sync-biometric-progress", sync_biometric_progress),
+    path("auto-sync-rules", auto_sync_rules),
+    path("auto-sync-rules/<int:pk>", auto_sync_rule_detail),
     path("attendance/manual-import/export", export_punch_records),
     path("attendance/manual-import/upload", import_punch_excel),
     path("attendance/report-log", attendance_report_log),
@@ -283,6 +290,7 @@ urlpatterns = [
     # ── Casual Leave (CL) ───────────────────────────────────────────────────
     path("casual-leaves", casual_leaves),
     path("casual-leaves/eligibility", casual_leave_eligibility),
+    path("casual-leaves/my-eligibility", my_casual_leave_eligibility),
     path("casual-leaves/<int:pk>", casual_leave_detail),
 
     # ── Missing Punch ────────────────────────────────────────────────────────

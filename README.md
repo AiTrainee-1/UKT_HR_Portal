@@ -1,7 +1,7 @@
 python manage.py flush
 
 
-# UKTextiles HR & ERP System
+# UKTextiles HR System
 
 A complete, on-premise HR and ERP platform built for UKTextiles — a garments manufacturing company. The system covers attendance (biometric), leave, payroll, shift management, settlement, reporting, and a React Native employee mobile app.
 

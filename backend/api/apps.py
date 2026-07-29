@@ -11,10 +11,6 @@ class ApiConfig(AppConfig):
     name = "api"
 
     def ready(self):
-        # Guard against double-invocation by Django's auto-reloader
-        if os.environ.get("RUN_MAIN") != "true" and os.environ.get("DJANGO_SETTINGS_MODULE"):
-            # In production (gunicorn/waitress) RUN_MAIN isn't set — allow once
-            pass
         from . import signals  # noqa: F401 — registers the push-notification signal receiver
 
         self._bootstrap_admin_account()
@@ -64,29 +60,26 @@ class ApiConfig(AppConfig):
             logger.warning("Admin account bootstrap skipped: %s", e)
 
     def _start_scheduler(self):
-        try:
-            from apscheduler.schedulers.background import BackgroundScheduler
-            from apscheduler.triggers.cron import CronTrigger
-        except ImportError:
-            logger.warning("APScheduler not installed — biometric auto-sync disabled. Run: pip install apscheduler")
+        # runserver's autoreloader calls ready() in both the watcher process
+        # and the actual reloaded worker (RUN_MAIN=true in the worker only) —
+        # without this guard the scheduler would start twice in dev, firing
+        # every job twice. Any other entrypoint (--noreload, gunicorn/waitress
+        # in production, where RUN_MAIN is never set at all) starts normally.
+        import sys
+        watcher_process = "runserver" in sys.argv and "--noreload" not in sys.argv and os.environ.get("RUN_MAIN") != "true"
+        if watcher_process:
             return
 
-        from .attendance_views import run_biometric_sync
+        from . import auto_sync
 
-        def _scheduled_sync():
-            logger.info("Scheduled biometric sync started")
-            result = run_biometric_sync(mode="today")
-            if result["ok"]:
-                logger.info("Scheduled biometric sync complete — %d new records", result.get("created", 0))
-            else:
-                logger.error("Scheduled biometric sync failed: %s", result.get("error"))
-
-        scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
-        scheduler.add_job(_scheduled_sync, CronTrigger(hour=7,  minute=30), id="bio_sync_morning", replace_existing=True)
-        scheduler.add_job(_scheduled_sync, CronTrigger(hour=20, minute=30), id="bio_sync_evening", replace_existing=True)
+        if not auto_sync.is_available():
+            logger.warning("APScheduler not installed — Auto Sync disabled. Run: pip install apscheduler")
+            return
 
         try:
-            scheduler.start()
-            logger.info("Biometric scheduler started — jobs: 07:30 and 20:30 IST daily")
+            auto_sync.load_all_rules_into_scheduler()
+            auto_sync.start_scheduler_if_needed()
         except Exception as e:
-            logger.error("Failed to start biometric scheduler: %s", e)
+            # DB not migrated yet, or unavailable at boot — safe to skip,
+            # retried on every subsequent process start.
+            logger.warning("Auto Sync scheduler bootstrap skipped: %s", e)

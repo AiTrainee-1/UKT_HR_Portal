@@ -35,9 +35,15 @@ def employee_json(emp, department_name: str | None = None) -> dict:
         designation_title = emp.designation.title
     branch_name = None
     branch_code = None
+    branch_address = None
+    branch_lat = None
+    branch_lng = None
     if hasattr(emp, "branch") and emp.branch_id and emp.branch:
         branch_name = emp.branch.name
         branch_code = emp.branch.code
+        branch_address = emp.branch.address or emp.branch.location
+        branch_lat = _float_or_none(emp.branch.geofence_lat)
+        branch_lng = _float_or_none(emp.branch.geofence_lng)
     return {
         "id": emp.id,
         "employeeCode": emp.employee_code,
@@ -59,6 +65,9 @@ def employee_json(emp, department_name: str | None = None) -> dict:
         "branchId": emp.branch_id,
         "branchName": branch_name,
         "branchCode": branch_code,
+        "branchAddress": branch_address,
+        "branchLat": branch_lat,
+        "branchLng": branch_lng,
         "unitCode": emp.unit_code,
         "salaryType": emp.salary_type,
         "salaryAmount": _float_or_none(emp.salary_amount),

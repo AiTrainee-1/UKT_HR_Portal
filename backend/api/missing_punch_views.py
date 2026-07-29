@@ -22,6 +22,7 @@ AttendanceLog already has unique_together on
 
 from datetime import date as date_type, time as time_type
 
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
@@ -29,7 +30,7 @@ from rest_framework.response import Response
 
 from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name
 from .branch_scope import scope_to_branch
-from .models import AttendanceLog, Employee, MissingPunchRequest, Notification
+from .models import AttendanceLog, DepartmentManager, Employee, MissingPunchRequest, Notification
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -57,6 +58,26 @@ def _missing_punch_dict(r: MissingPunchRequest) -> dict:
         "hrReviewedAt": r.hr_reviewed_at.isoformat() if r.hr_reviewed_at else None,
         "createdAt": r.created_at.isoformat() if r.created_at else None,
     }
+
+
+def _notify_hod_approvers(req: MissingPunchRequest) -> None:
+    """Push a Notification to every active Department Head covering this
+    employee with Missing Punch approval enabled — same submission-time
+    pattern as OnDutySession's _notify_hod_approvers (geo_attendance_views.py).
+    HR always sees the request too via the HR portal's pending queue (no push
+    needed there — HRUser accounts aren't push-token-registered)."""
+    emp = req.employee
+    managers = DepartmentManager.objects.select_related("employee").filter(
+        Q(employee_assignments__employee_id=emp.id) | Q(department_assignments__department_id=emp.department_id),
+        is_active=True,
+        can_approve_missing_punch=True,
+    ).distinct()
+    for m in managers:
+        Notification.objects.create(
+            employee=m.employee,
+            type="missing_punch",
+            message=f"{emp.first_name} {emp.last_name} submitted a Missing Punch request for {req.date.isoformat()}.",
+        )
 
 
 def resolve_missing_punch_hod(req: MissingPunchRequest, decision: str, reviewer_name: str, comment: str | None) -> None:
@@ -123,6 +144,10 @@ def missing_punch_requests(request: Request) -> Response:
             qs = qs.filter(status__in=[MissingPunchRequest.STATUS_PENDING_HOD, MissingPunchRequest.STATUS_PENDING_HR])
         elif status_filter and status_filter != "all":
             qs = qs.filter(status=status_filter)
+        if month := request.query_params.get("month"):
+            qs = qs.filter(date__month=int(month))
+        if year := request.query_params.get("year"):
+            qs = qs.filter(date__year=int(year))
         return Response([_missing_punch_dict(r) for r in qs.order_by("-created_at")[:300]])
 
     # POST — submit a Missing Punch request (mobile/web app only, self-bound).
@@ -183,6 +208,7 @@ def missing_punch_requests(request: Request) -> Response:
         employee=emp, date=req_date, punch_time=punch_time, punch_type=punch_type,
         punch_slot=punch_slot or None, reason=data["reason"],
     )
+    _notify_hod_approvers(req)
     return Response(_missing_punch_dict(req), status=201)
 
 

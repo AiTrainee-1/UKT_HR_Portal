@@ -1797,6 +1797,38 @@ class BiometricDevice(models.Model):
         ordering = ["-is_default", "name"]
 
 
+class AutoSyncRule(models.Model):
+    """A configurable timing rule for background biometric sync — one
+    APScheduler CronTrigger job per enabled rule (see auto_sync.py). Replaces
+    the old hardcoded 07:30/20:30 schedule in apps.py with HR-editable rules."""
+
+    MODE_CHOICES = [
+        ("day", "Today"),
+        ("week", "Last One Week"),
+        ("month", "Last One Month"),
+        ("all", "All Records"),
+    ]
+
+    name = models.TextField(blank=True, default="")
+    time = models.TimeField(help_text="Time of day (Asia/Kolkata) this rule fires")
+    # Cron-compatible day-of-week string, e.g. "*" (every day) or "mon,tue,wed,thu,fri".
+    days_of_week = models.TextField(default="*")
+    # Empty list = every enabled device (matches the manual Sync Biometric
+    # "no selection = all" convention). Entries are device PKs or "env".
+    device_selection = models.JSONField(default=list, blank=True)
+    mode = models.TextField(choices=MODE_CHOICES, default="day")
+    is_enabled = models.BooleanField(default=True)
+    last_run_at = models.DateTimeField(null=True, blank=True)
+    last_run_status = models.TextField(null=True, blank=True)
+    last_run_summary = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "auto_sync_rules"
+        ordering = ["time"]
+
+
 # ──────────────────────────────────────────────
 #  Employee ID Card Template Settings
 # ──────────────────────────────────────────────

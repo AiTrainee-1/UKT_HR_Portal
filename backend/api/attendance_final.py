@@ -50,6 +50,7 @@ from .models import (
 from .shift_engine import (
     _get_shift_for_date, _t2s, NEW_ATTENDANCE_RULE_CUTOVER,
     _punctuality_ok, _punctuality_window_minutes, resolve_day_punch_logs,
+    _is_after_half_shift_late_reference,
 )
 
 # The simple-mode half-shift cutoff as it actually stood at
@@ -141,6 +142,16 @@ def _compute_staff_simple(emp, d, punch_times, settings, shift, legacy_rule: boo
         if last and _t2s(last) < _t2s(shift.end_time):
             early_leave = True
 
+    # For a day that resolves to Half Shift, Late is decided purely against
+    # the fixed HALF_SHIFT_LATE_REFERENCE_TIME (2:30 PM) instead of the
+    # shift's own start/grace — see that constant's docstring in
+    # shift_engine.py. A punch at or before 2:30 PM is never late for Half
+    # Shift purposes; only strictly after 2:30 PM is. This REPLACES `is_late`
+    # in the two Half Shift return branches below — the Full Shift
+    # ("present") branch keeps using the original `is_late` completely
+    # unchanged.
+    is_late_half_shift = _is_after_half_shift_late_reference(first)
+
     if legacy_rule:
         # Frozen pre-2026-07-25 behavior: arriving after the cutoff always
         # forced Half Shift, even with a valid first+last pair. Hardcoded
@@ -162,7 +173,8 @@ def _compute_staff_simple(emp, d, punch_times, settings, shift, legacy_rule: boo
     # punch both exist — no cutoff exception. Single punch = Half Shift.
     if last is None:
         return {
-            "status": "half_shift", "is_half_shift": True, "is_late": is_late,
+            "status": "half_shift", "is_half_shift": True,
+            "is_late": is_late_half_shift,
             "shifts_earned": Decimal("0.50"), "first_punch": first,
         }
 
@@ -185,7 +197,8 @@ def _compute_staff_simple(emp, d, punch_times, settings, shift, legacy_rule: boo
         window_minutes = _punctuality_window_minutes(shift)
         if not _punctuality_ok(first, last, shift, window_minutes):
             return {
-                "status": "half_shift", "is_half_shift": True, "is_late": is_late,
+                "status": "half_shift", "is_half_shift": True,
+                "is_late": is_late_half_shift,
                 "shifts_earned": Decimal("0.50"), "first_punch": first, "last_punch": last,
             }
 

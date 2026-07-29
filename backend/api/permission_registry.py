@@ -159,6 +159,7 @@ URL_MODULE_MAP: dict[str, str] = {
     "attendance-logs": "attendance",
     "work-sessions": "attendance",
     "session-configs": "attendance",
+    "auto-sync-rules": "attendance",
 
     "night-shift": "night_shift",
 

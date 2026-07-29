@@ -63,6 +63,35 @@ from django.db.models import Q
 # untouched; regenerating them is its own, separately-approved action.
 NEW_ATTENDANCE_RULE_CUTOVER = date_type(2000, 1, 1)
 
+# Half Shift Late reference time (2026-07-29, user-mandated, corrected same
+# day after an initial "punch >= 14:30 is never late" version was wrong).
+# For a day that resolves to Half Shift, Late is no longer determined by
+# the shift's own morning start+grace at all — it's determined solely by
+# this fixed clock time: a first punch strictly AFTER 2:30 PM is Late, a
+# first punch AT or BEFORE 2:30 PM is not, regardless of what the shift's
+# own start time or grace period says. This completely REPLACES the Late
+# computation for Half Shift days — it does not merely suppress it past a
+# threshold. Morning Late detection and Full Shift days are entirely
+# unaffected: this constant is only ever consulted once a day has already
+# resolved to Half Shift on its own merits (via the punctuality window in
+# _punctuality_ok / _compute_staff_simple).
+HALF_SHIFT_LATE_REFERENCE_TIME = time_type(14, 30)
+
+
+def _is_after_half_shift_late_reference(punch1: time_type) -> bool:
+    """
+    True iff `punch1` is Late for Half Shift purposes, per
+    HALF_SHIFT_LATE_REFERENCE_TIME — compared at MINUTE granularity, not
+    exact seconds. Real punches carry a seconds component (e.g. a biometric
+    punch at 14:30:43), and the user's rule is stated in whole minutes: "at
+    exactly 2:30 PM = not late; 2:31 PM or later = late". Flooring both
+    sides to (hour, minute) before comparing means any punch still within
+    the 14:30 minute (14:30:00 through 14:30:59) counts as "at 2:30 PM", not
+    "after" it — only 14:31:00 onward is Late.
+    """
+    punch1_minute = time_type(punch1.hour, punch1.minute)
+    return punch1_minute > HALF_SHIFT_LATE_REFERENCE_TIME
+
 
 def _t2s(t: time_type) -> int:
     """Convert time to seconds-since-midnight."""
@@ -449,16 +478,29 @@ def compute_daily_shift_log(emp, d: date_type, punches: list, assignments=None, 
     late_reasons = []
 
     if shift and punch1:
-        grace_secs = (shift.grace_period_minutes or 0) * 60
-        shift_start_secs = _t2s(shift.start_time)
-        deadline_secs = shift_start_secs + grace_secs
-        if _t2s(punch1) > deadline_secs:
-            late_morning = True
-            expected = _s2t(deadline_secs)
-            late_reasons.append(
-                f"Late morning: arrived {punch1.strftime('%H:%M')}, "
-                f"deadline {expected.strftime('%H:%M')}"
-            )
+        if shifts_completed == Decimal("0.50"):
+            # Half Shift day: Late is decided purely against the fixed
+            # HALF_SHIFT_LATE_REFERENCE_TIME (2:30 PM), not the shift's own
+            # morning start/grace — see that constant's docstring. A punch
+            # at or before 2:30 PM is never late; only strictly after 2:30
+            # PM is. Full Shift days never enter this branch.
+            if _is_after_half_shift_late_reference(punch1):
+                late_morning = True
+                late_reasons.append(
+                    f"Late (Half Shift): arrived {punch1.strftime('%H:%M')}, "
+                    f"Half Shift reference {HALF_SHIFT_LATE_REFERENCE_TIME.strftime('%H:%M')}"
+                )
+        else:
+            grace_secs = (shift.grace_period_minutes or 0) * 60
+            shift_start_secs = _t2s(shift.start_time)
+            deadline_secs = shift_start_secs + grace_secs
+            if _t2s(punch1) > deadline_secs:
+                late_morning = True
+                expected = _s2t(deadline_secs)
+                late_reasons.append(
+                    f"Late morning: arrived {punch1.strftime('%H:%M')}, "
+                    f"deadline {expected.strftime('%H:%M')}"
+                )
 
     if shift and punch2 and punch3:
         lunch_dur_secs = (shift.lunch_duration_minutes or 60) * 60

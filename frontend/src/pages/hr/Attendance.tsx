@@ -25,21 +25,34 @@ import {
 import {
   useAttendanceSummaryTyped, useAttendanceTrendTyped,
   useListBiometricDevices, type SyncBiometricMode, type SyncDeviceId,
+  useListAutoSyncRules, useCreateAutoSyncRule, useUpdateAutoSyncRule, useDeleteAutoSyncRule,
+  type AutoSyncRuleItem, type AutoSyncRuleInput,
 } from "@/lib/api-client/custom-hooks";
 import { useBiometricSync } from "@/contexts/BiometricSyncContext";
+import { TimePicker12h } from "@/components/ui/time-picker-12h";
+import { MarbleSwitch } from "@/components/ui/marble-switch";
 import EmployeeSearchSelect from "@/components/EmployeeSearchSelect";
 import BiometricSyncPipeline from "@/components/BiometricSyncPipeline";
 import AttendanceSearchSection from "./AttendanceSearch";
 import {
   Users, UserCheck, UserX, CalendarDays, Plus,
   Factory, Briefcase, Fingerprint, PenLine, ChevronRight, RefreshCw,
-  Search, ChevronDown,
+  Search, ChevronDown, CalendarClock, Trash2,
   TrendingUp, Calendar, ChevronLeft, FileSpreadsheet,
 } from "lucide-react";
 
 // ── Pagination ─────────────────────────────────────────────────────────────
 
-const PAGE_SIZE = 5;
+const PAGE_SIZE = 10;
+
+const HISTORY_STATUS_META: Record<string, { label: string; cls: string }> = {
+  present:    { label: "Present",    cls: "bg-green-100 text-green-800 border-green-200" },
+  half_shift: { label: "Half Shift", cls: "bg-amber-100 text-amber-800 border-amber-200" },
+  absent:     { label: "Absent",     cls: "bg-red-100 text-red-800 border-red-200" },
+  on_leave:   { label: "On Leave",   cls: "bg-purple-100 text-purple-800 border-purple-200" },
+  holiday:    { label: "Holiday",    cls: "bg-slate-100 text-slate-600 border-slate-200" },
+  future:     { label: "Upcoming",   cls: "bg-gray-50 text-gray-400 border-gray-200" },
+};
 
 
 function Pagination({
@@ -346,6 +359,90 @@ export default function AttendancePage() {
     void triggerSync(mode, deviceId);
   };
 
+  // ── Auto Sync (configurable background biometric sync rules) ───────────────
+  const DAYS_OF_WEEK: { key: string; label: string }[] = [
+    { key: "mon", label: "Mon" }, { key: "tue", label: "Tue" }, { key: "wed", label: "Wed" },
+    { key: "thu", label: "Thu" }, { key: "fri", label: "Fri" }, { key: "sat", label: "Sat" }, { key: "sun", label: "Sun" },
+  ];
+  const emptyRuleForm: AutoSyncRuleInput = { name: "", time: "07:30", daysOfWeek: "*", deviceSelection: [], mode: "day", isEnabled: true };
+
+  const [showAutoSyncMenu, setShowAutoSyncMenu] = useState(false);
+  const autoSyncMenuRef = useRef<HTMLDivElement>(null);
+  const [ruleDialogOpen, setRuleDialogOpen] = useState(false);
+  const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
+  const [ruleForm, setRuleForm] = useState<AutoSyncRuleInput>(emptyRuleForm);
+
+  const { data: autoSyncRules } = useListAutoSyncRules();
+  const createAutoSyncRule = useCreateAutoSyncRule();
+  const updateAutoSyncRule = useUpdateAutoSyncRule();
+  const deleteAutoSyncRule = useDeleteAutoSyncRule();
+
+  const lastAutoSyncAt = (autoSyncRules ?? [])
+    .map(r => r.lastRunAt)
+    .filter((v): v is string => !!v)
+    .sort()
+    .at(-1);
+  const lastAutoSyncLabel = lastAutoSyncAt
+    ? new Date(lastAutoSyncAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })
+    : null;
+  const activeRuleCount = (autoSyncRules ?? []).filter(r => r.isEnabled).length;
+
+  const selectedDays = ruleForm.daysOfWeek === "*" || !ruleForm.daysOfWeek
+    ? DAYS_OF_WEEK.map(d => d.key)
+    : ruleForm.daysOfWeek.split(",").filter(Boolean);
+  const toggleRuleDay = (key: string) => {
+    const next = selectedDays.includes(key) ? selectedDays.filter(d => d !== key) : [...selectedDays, key];
+    const value = next.length === 0 || next.length === 7
+      ? "*"
+      : DAYS_OF_WEEK.filter(d => next.includes(d.key)).map(d => d.key).join(",");
+    setRuleForm(f => ({ ...f, daysOfWeek: value }));
+  };
+  const toggleRuleDevice = (id: number | "env") => {
+    setRuleForm(f => {
+      const sel = f.deviceSelection ?? [];
+      return { ...f, deviceSelection: sel.includes(id) ? sel.filter(x => x !== id) : [...sel, id] };
+    });
+  };
+
+  const openAddRule = () => {
+    setEditingRuleId(null);
+    setRuleForm(emptyRuleForm);
+    setShowAutoSyncMenu(false);
+    setRuleDialogOpen(true);
+  };
+  const openEditRule = (rule: AutoSyncRuleItem) => {
+    setEditingRuleId(rule.id);
+    setRuleForm({
+      name: rule.name, time: rule.time, daysOfWeek: rule.daysOfWeek,
+      deviceSelection: rule.deviceSelection, mode: rule.mode, isEnabled: rule.isEnabled,
+    });
+    setShowAutoSyncMenu(false);
+    setRuleDialogOpen(true);
+  };
+  const toggleRuleEnabled = (rule: AutoSyncRuleItem) => {
+    updateAutoSyncRule.mutate({ id: rule.id, data: { isEnabled: !rule.isEnabled } });
+  };
+  const removeRule = (rule: AutoSyncRuleItem) => {
+    if (!window.confirm(`Delete the ${rule.time} Auto Sync rule?`)) return;
+    deleteAutoSyncRule.mutate(rule.id);
+  };
+  const saveRule = () => {
+    if (!ruleForm.time) {
+      toast({ title: "Time is required", variant: "destructive" });
+      return;
+    }
+    const onSuccess = () => {
+      toast({ title: editingRuleId ? "Auto Sync rule updated" : "Auto Sync rule added" });
+      setRuleDialogOpen(false);
+    };
+    const onError = (err: any) => toast({ title: err?.message ?? "Failed to save Auto Sync rule", variant: "destructive" });
+    if (editingRuleId) {
+      updateAutoSyncRule.mutate({ id: editingRuleId, data: ruleForm }, { onSuccess, onError });
+    } else {
+      createAutoSyncRule.mutate(ruleForm, { onSuccess, onError });
+    }
+  };
+
   // The context invalidates "/api/attendance" queries broadly on completion;
   // this page just needs to also refresh the one-employee history dialog key
   // (not covered by that prefix) when a sync finishes while it's open.
@@ -413,8 +510,8 @@ export default function AttendancePage() {
       <div className="space-y-5">
 
         {/* ── Header ── */}
-        <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div>
+        <div className="flex items-start justify-between gap-3">
+          <div className="shrink-0">
             <h2 className="text-2xl font-black text-gray-900">
               {view === "staff" ? "Staff Attendance" : "Production Attendance"}
             </h2>
@@ -433,39 +530,41 @@ export default function AttendancePage() {
               />
             </div>
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
             {/* Manual punch import — backup path alongside Sync Biometric, never touches its state/flow */}
             <Button
               variant="outline"
               onClick={() => navigate("/hr/attendance/manual-import")}
-              className="gap-2 h-9 border-gray-200 text-gray-600 hover:bg-gray-50"
+              className="clay-btn gap-1.5 h-9 px-3 rounded-xl border-0 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-700 shrink-0"
             >
               <FileSpreadsheet size={14} />
-              Manual Import
+              <span className="text-[13px] font-semibold">Manual Import</span>
             </Button>
             {/* Sync split-button */}
-            <div ref={syncMenuRef} className="relative flex items-center">
+            <div ref={syncMenuRef} className="relative flex items-center shrink-0">
               <Button
                 variant="outline"
                 onClick={() => handleSync()}
                 disabled={isSyncing}
-                className="gap-2 h-9 border-cyan-200 text-cyan-700 hover:bg-cyan-50 rounded-r-none border-r-0"
+                className="clay-btn gap-1.5 h-9 pl-3 pr-2.5 rounded-l-xl rounded-r-none border-0 bg-cyan-50 text-cyan-700 hover:bg-cyan-100"
               >
                 <RefreshCw size={14} className={isSyncing ? "animate-spin" : ""} />
-                {isSyncing ? "Syncing…" : "Sync Biometric"}
-                {lastSyncedAt && !isSyncing && (
-                  <span className="text-[10px] text-cyan-500 font-normal">· {lastSyncedAt}</span>
-                )}
+                <span className="flex flex-col items-start leading-none">
+                  <span className="text-[13px] font-semibold">{isSyncing ? "Syncing…" : "Sync Biometric"}</span>
+                  {lastSyncedAt && !isSyncing && (
+                    <span className="text-[10px] text-cyan-500 font-normal mt-0.5">Last {lastSyncedAt}</span>
+                  )}
+                </span>
               </Button>
               <button
                 onClick={() => setShowSyncMenu(v => !v)}
-                className="h-9 px-2 border border-l-0 border-cyan-200 rounded-r-md text-cyan-700 hover:bg-cyan-50 flex items-center"
+                className="h-9 px-2 rounded-r-xl text-cyan-700 bg-cyan-50 hover:bg-cyan-100 flex items-center border-l border-cyan-200/70 transition-colors"
                 title={syncModeLabel}
               >
                 <ChevronDown size={13} />
               </button>
               {showSyncMenu && (
-                <div className="absolute top-full right-0 mt-1 z-50 bg-white border rounded-xl shadow-lg overflow-hidden min-w-[220px]">
+                <div className="absolute top-full right-0 mt-1.5 z-50 bg-white border rounded-xl shadow-lg overflow-hidden min-w-[220px]">
                   <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400 px-3 pt-2.5 pb-1">Device</p>
                   <label className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-cyan-50 cursor-pointer transition-colors">
                     <input
@@ -515,14 +614,94 @@ export default function AttendancePage() {
                 </div>
               )}
             </div>
+            {/* Auto Sync — configurable background sync rules */}
+            <div ref={autoSyncMenuRef} className="relative flex items-center shrink-0">
+              <Button
+                variant="outline"
+                onClick={() => setShowAutoSyncMenu(v => !v)}
+                className={`clay-btn gap-1.5 h-9 pl-3 pr-2 rounded-xl border-0 ${
+                  activeRuleCount > 0 ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100" : "bg-slate-50 text-slate-600 hover:bg-slate-100"
+                }`}
+              >
+                <CalendarClock size={14} />
+                <span className="flex flex-col items-start leading-none">
+                  <span className="flex items-center gap-1 text-[13px] font-semibold">
+                    Auto Sync
+                    {activeRuleCount > 0 && (
+                      <span className="inline-flex items-center justify-center min-w-[15px] h-[15px] px-1 rounded-full text-[9px] font-bold bg-emerald-500 text-white">
+                        {activeRuleCount}
+                      </span>
+                    )}
+                  </span>
+                  <span className={`text-[10px] font-normal mt-0.5 ${activeRuleCount > 0 ? "text-emerald-500" : "text-slate-400"}`}>
+                    {lastAutoSyncLabel ? `Last ${lastAutoSyncLabel}` : "Never synced"}
+                  </span>
+                </span>
+                <ChevronDown size={13} className="ml-0.5" />
+              </Button>
+              {showAutoSyncMenu && (
+                <div className="absolute top-full right-0 mt-1.5 z-50 bg-white border rounded-xl shadow-lg overflow-hidden min-w-[300px]">
+                  <div className="px-3 pt-2.5 pb-1.5 flex items-center justify-between">
+                    <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400">Timing Rules</p>
+                    {lastAutoSyncAt && (
+                      <p className="text-[10px] text-gray-400">Last sync · {new Date(lastAutoSyncAt).toLocaleString()}</p>
+                    )}
+                  </div>
+                  <div className="max-h-[280px] overflow-y-auto">
+                    {(autoSyncRules ?? []).length === 0 && (
+                      <p className="px-3 py-3 text-xs text-gray-400">No rules yet — add one to sync automatically in the background.</p>
+                    )}
+                    {(autoSyncRules ?? []).map(rule => (
+                      <div key={rule.id} className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-emerald-50/60 transition-colors border-t first:border-t-0">
+                        <MarbleSwitch
+                          id={`auto-sync-rule-${rule.id}`}
+                          checked={rule.isEnabled}
+                          onChange={() => toggleRuleEnabled(rule)}
+                          title={rule.isEnabled ? "Enabled — click to disable" : "Disabled — click to enable"}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className={`font-semibold truncate ${rule.isEnabled ? "text-gray-800" : "text-gray-400"}`}>
+                            {new Date(`2000-01-01T${rule.time}`).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                            {rule.name && <span className="font-normal text-gray-400"> · {rule.name}</span>}
+                          </p>
+                          <p className="text-[11px] text-gray-400 truncate">
+                            {rule.daysOfWeek === "*" ? "Every day" : rule.daysOfWeek.split(",").map(d => d[0].toUpperCase() + d.slice(1)).join(", ")}
+                            {" · "}{SYNC_MODES.find(m => m.key === rule.mode)?.label}
+                            {rule.lastRunStatus === "failed" && <span className="text-red-500"> · last run failed</span>}
+                          </p>
+                        </div>
+                        <button onClick={() => openEditRule(rule)} className="p-1 text-gray-400 hover:text-cyan-600 shrink-0">
+                          <PenLine size={13} />
+                        </button>
+                        <button onClick={() => removeRule(rule)} className="p-1 text-gray-400 hover:text-red-500 shrink-0">
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="border-t">
+                    <button
+                      onClick={openAddRule}
+                      className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 text-sm font-semibold text-cyan-700 hover:bg-cyan-50 transition-colors"
+                    >
+                      <Plus size={14} /> Add Rule
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
             <Input
               type="date"
               value={selectedDate}
               onChange={(e) => setSelectedDate(e.target.value)}
-              className="h-9 text-sm w-40"
+              className="clay-input h-9 text-sm w-36 shrink-0 rounded-xl"
             />
-            <Button onClick={() => setShowManualDialog(true)} className="gap-2 h-9">
-              <Plus size={14} /> Add Attendance
+            <Button
+              onClick={() => setShowManualDialog(true)}
+              className="clay-btn gap-1.5 h-9 px-3.5 rounded-xl border-0 bg-gradient-to-br from-[#006496] to-[#0080bf] text-white hover:brightness-105 shrink-0"
+            >
+              <Plus size={14} />
+              <span className="text-[13px] font-semibold">Add Attendance</span>
             </Button>
           </div>
         </div>
@@ -866,12 +1045,127 @@ export default function AttendancePage() {
         </DialogContent>
       </Dialog>
 
+      {/* ── Auto Sync Rule Dialog ── */}
+      <Dialog open={ruleDialogOpen} onOpenChange={setRuleDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{editingRuleId ? "Edit Auto Sync Rule" : "Add Auto Sync Rule"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label>Label (optional)</Label>
+              <Input
+                placeholder="e.g. Morning sync"
+                value={ruleForm.name ?? ""}
+                onChange={(e) => setRuleForm(f => ({ ...f, name: e.target.value }))}
+              />
+            </div>
+
+            <TimePicker12h
+              label="Time"
+              value={ruleForm.time ?? "07:30"}
+              onChange={(v) => setRuleForm(f => ({ ...f, time: v }))}
+            />
+
+            <div className="space-y-1.5">
+              <Label>Repeat on</Label>
+              <div className="flex gap-1.5 flex-wrap">
+                {DAYS_OF_WEEK.map(d => (
+                  <button
+                    key={d.key}
+                    type="button"
+                    onClick={() => toggleRuleDay(d.key)}
+                    className={`h-8 px-2.5 rounded-lg text-xs font-semibold border transition-colors ${
+                      selectedDays.includes(d.key)
+                        ? "bg-cyan-600 text-white border-cyan-600"
+                        : "bg-white text-gray-500 border-gray-200 hover:bg-gray-50"
+                    }`}
+                  >
+                    {d.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Sync range</Label>
+              <div className="grid grid-cols-2 gap-1.5">
+                {SYNC_MODES.map(m => (
+                  <button
+                    key={m.key}
+                    type="button"
+                    onClick={() => setRuleForm(f => ({ ...f, mode: m.key }))}
+                    className={`h-8 px-2.5 rounded-lg text-xs font-semibold border transition-colors ${
+                      ruleForm.mode === m.key
+                        ? "bg-cyan-600 text-white border-cyan-600"
+                        : "bg-white text-gray-500 border-gray-200 hover:bg-gray-50"
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Devices</Label>
+              <div className="border rounded-lg max-h-32 overflow-y-auto">
+                <label className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 cursor-pointer border-b">
+                  <input
+                    type="checkbox"
+                    checked={(ruleForm.deviceSelection ?? []).length === 0}
+                    onChange={() => setRuleForm(f => ({ ...f, deviceSelection: [] }))}
+                    className="accent-cyan-600"
+                  />
+                  <span className={(ruleForm.deviceSelection ?? []).length === 0 ? "text-cyan-700 font-semibold" : "text-gray-700"}>
+                    All enabled devices
+                  </span>
+                </label>
+                {enabledDevices.map(d => (
+                  <label key={d.id} className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={(ruleForm.deviceSelection ?? []).includes(d.id)}
+                      onChange={() => toggleRuleDevice(d.id)}
+                      className="accent-cyan-600"
+                    />
+                    <span className={(ruleForm.deviceSelection ?? []).includes(d.id) ? "text-cyan-700 font-semibold" : "text-gray-700"}>
+                      {d.name}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 text-sm">
+              <MarbleSwitch
+                id="auto-sync-rule-form-enabled"
+                checked={ruleForm.isEnabled ?? true}
+                onChange={() => setRuleForm(f => ({ ...f, isEnabled: !(f.isEnabled ?? true) }))}
+              />
+              Enabled
+            </div>
+
+            <div className="flex gap-2 pt-1">
+              <Button variant="outline" className="flex-1" onClick={() => setRuleDialogOpen(false)}>Cancel</Button>
+              <Button
+                className="flex-1"
+                onClick={saveRule}
+                disabled={createAutoSyncRule.isPending || updateAutoSyncRule.isPending}
+              >
+                {createAutoSyncRule.isPending || updateAutoSyncRule.isPending ? "Saving…" : "Save Rule"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* ── Employee Detail Dialog ── */}
       <Dialog
         open={!!detailEmpId}
         onOpenChange={(open) => { if (!open) { setDetailEmpId(null); setHistorySearch(""); } }}
       >
-        <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
+        <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col">
           <DialogHeader>
             <DialogTitle>
               {empDetail ? `${empDetail.employee.name} — Attendance History` : "Attendance History"}
@@ -940,22 +1234,66 @@ export default function AttendancePage() {
             <div className="space-y-3 py-4">
               {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
             </div>
-          ) : empDetail ? (
+          ) : empDetail ? (() => {
+            const holidays = empDetail.records.filter(r => r.status === "holiday").length;
+            const upcoming = empDetail.records.filter(r => r.status === "future").length;
+            const elapsedWorkable = empDetail.records.length - holidays - upcoming;
+            const attendanceRate = elapsedWorkable > 0
+              ? Math.round((empDetail.totalPresent / elapsedWorkable) * 100)
+              : 0;
+            return (
             <div className="flex flex-col gap-4 overflow-hidden">
-              <div className="flex items-center gap-4 p-3 bg-gray-50 rounded-lg text-sm flex-wrap">
-                <span className="text-gray-500">Code: <strong className="text-gray-800 font-mono">{empDetail.employee.code}</strong></span>
-                {empDetail.employee.department && (
-                  <span className="text-gray-500">Dept: <strong className="text-gray-800">{empDetail.employee.department}</strong></span>
-                )}
-                <span className="text-gray-500">Type: <strong className="text-gray-800 capitalize">{empDetail.employee.employmentType}</strong></span>
-                <span className="flex gap-3 ml-auto">
-                  <span className="text-green-700 font-semibold">{empDetail.totalPresent} Present</span>
-                  <span className="text-red-600 font-semibold">{empDetail.totalAbsent} Absent</span>
-                  {empDetail.summary.onLeave > 0 && (
-                    <span className="text-purple-600 font-semibold">{empDetail.summary.onLeave} On Leave</span>
+              {/* ── Profile + month summary ── */}
+              <div className="flex flex-col gap-3 p-4 bg-gray-50 rounded-xl text-sm">
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span className="text-gray-500">Code <strong className="text-gray-800 font-mono">{empDetail.employee.code}</strong></span>
+                  {empDetail.employee.designation && (
+                    <span className="text-gray-500">Designation <strong className="text-gray-800">{empDetail.employee.designation}</strong></span>
                   )}
-                </span>
+                  {empDetail.employee.department && (
+                    <span className="text-gray-500">Dept <strong className="text-gray-800">{empDetail.employee.department}</strong></span>
+                  )}
+                  <span className="text-gray-500">Type <strong className="text-gray-800 capitalize">{empDetail.employee.employmentType}</strong></span>
+                  <span className="ml-auto flex items-center gap-1.5">
+                    <span className="text-xs text-gray-400">Attendance</span>
+                    <span className={`text-base font-black ${attendanceRate >= 90 ? "text-green-600" : attendanceRate >= 75 ? "text-amber-600" : "text-red-600"}`}>
+                      {attendanceRate}%
+                    </span>
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+                  <div className="bg-white rounded-lg px-3 py-2 border border-green-100">
+                    <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Present</p>
+                    <p className="text-lg font-black text-green-700">{empDetail.totalPresent}</p>
+                  </div>
+                  <div className="bg-white rounded-lg px-3 py-2 border border-amber-100">
+                    <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Half Shift</p>
+                    <p className="text-lg font-black text-amber-600">{empDetail.summary.halfShift}</p>
+                  </div>
+                  <div className="bg-white rounded-lg px-3 py-2 border border-amber-100">
+                    <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Late</p>
+                    <p className="text-lg font-black text-amber-600">{empDetail.summary.late}</p>
+                  </div>
+                  <div className="bg-white rounded-lg px-3 py-2 border border-red-100">
+                    <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Absent</p>
+                    <p className="text-lg font-black text-red-600">{empDetail.totalAbsent}</p>
+                  </div>
+                  <div className="bg-white rounded-lg px-3 py-2 border border-purple-100">
+                    <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">On Leave</p>
+                    <p className="text-lg font-black text-purple-600">{empDetail.summary.onLeave}</p>
+                  </div>
+                  <div className="bg-white rounded-lg px-3 py-2 border border-slate-100">
+                    <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Holidays</p>
+                    <p className="text-lg font-black text-slate-500">{holidays}</p>
+                  </div>
+                  <div className="bg-white rounded-lg px-3 py-2 border border-gray-100">
+                    <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Upcoming</p>
+                    <p className="text-lg font-black text-gray-400">{upcoming}</p>
+                  </div>
+                </div>
               </div>
+
+              {/* ── Day-by-day breakdown ── */}
               <div className="overflow-y-auto flex-1">
                 {empDetail.records.length === 0 ? (
                   <p className="text-center py-8 text-muted-foreground text-sm">No attendance records found.</p>
@@ -965,31 +1303,54 @@ export default function AttendancePage() {
                       <tr className="border-b">
                         <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Date</th>
                         <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Status</th>
-                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">First In</th>
-                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Last Out</th>
                         <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Punches</th>
-                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Source</th>
+                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase hidden sm:table-cell">Source</th>
+                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase hidden lg:table-cell">Hours</th>
+                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase hidden lg:table-cell">Notes</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {empDetail.records.map((rec) => (
-                        <tr key={rec.date} className="border-b hover:bg-gray-50">
-                          <td className="py-2.5 px-3 font-mono text-xs text-gray-700">{rec.date}</td>
+                      {empDetail.records.map((rec) => {
+                        const meta = HISTORY_STATUS_META[rec.status] ?? HISTORY_STATUS_META.absent;
+                        const isDim = rec.status === "future" || rec.status === "holiday";
+                        return (
+                        <tr key={rec.date} className={`border-b hover:bg-gray-50 ${isDim ? "opacity-70" : ""}`}>
                           <td className="py-2.5 px-3">
-                            <Badge className={`text-xs border ${rec.present ? "bg-green-100 text-green-800 border-green-200" : "bg-red-100 text-red-800 border-red-200"}`}>
-                              {rec.present ? "Present" : "Absent"}
-                            </Badge>
+                            <span className="font-mono text-xs text-gray-700">{rec.date}</span>
+                            <span className="ml-1.5 text-[10px] text-gray-400">{rec.day}</span>
                           </td>
-                          <td className="py-2.5 px-3 font-mono text-xs text-gray-700">
-                            {rec.firstPunch ?? <span className="text-gray-300">—</span>}
+                          <td className="py-2.5 px-3">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <Badge className={`text-xs border ${meta.cls}`}>
+                                {rec.status === "on_leave" && rec.leaveType ? `${rec.leaveType} Leave` : meta.label}
+                              </Badge>
+                              {rec.isLate && (rec.status === "present" || rec.status === "half_shift") && (
+                                <Badge className="text-xs border bg-amber-50 text-amber-700 border-amber-200">Late</Badge>
+                              )}
+                            </div>
                           </td>
-                          <td className="py-2.5 px-3 font-mono text-xs text-gray-700">
-                            {rec.lastPunch ?? <span className="text-gray-300">—</span>}
+                          <td className="py-2.5 px-3">
+                            {rec.punches.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {rec.punches.map((p, i) => (
+                                  <span
+                                    key={i}
+                                    className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold ${
+                                      p.type === "IN" ? "bg-emerald-50 text-emerald-700" : "bg-orange-50 text-orange-700"
+                                    }`}
+                                    title={`${p.type} · ${p.sourceLabel}`}
+                                  >
+                                    {p.time}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-xs text-gray-300">
+                                {rec.status === "on_leave" ? "—" : rec.status === "holiday" ? "Weekly off" : rec.status === "future" ? "—" : "No punches"}
+                              </span>
+                            )}
                           </td>
-                          <td className="py-2.5 px-3 text-center text-xs text-gray-500">
-                            {rec.totalPunches > 0 ? rec.totalPunches : "—"}
-                          </td>
-                          <td className="py-2.5 px-3 text-xs text-gray-400 hidden md:table-cell">
+                          <td className="py-2.5 px-3 text-xs text-gray-400 hidden sm:table-cell">
                             {rec.sourceLabel ? (
                               <span className="flex items-center gap-1">
                                 {rec.sourceLabel === "Biometric" ? <Fingerprint size={11} /> : <PenLine size={11} />}
@@ -997,14 +1358,22 @@ export default function AttendancePage() {
                               </span>
                             ) : "—"}
                           </td>
+                          <td className="py-2.5 px-3 text-xs text-gray-600 hidden lg:table-cell">
+                            {rec.hoursWorked ?? <span className="text-gray-300">—</span>}
+                          </td>
+                          <td className="py-2.5 px-3 text-xs text-gray-500 hidden lg:table-cell max-w-[160px] truncate" title={rec.notes ?? undefined}>
+                            {rec.notes ?? <span className="text-gray-300">—</span>}
+                          </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 )}
               </div>
             </div>
-          ) : null}
+            );
+          })() : null}
         </DialogContent>
       </Dialog>
     </HrLayout>

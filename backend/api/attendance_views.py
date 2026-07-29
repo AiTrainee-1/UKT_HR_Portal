@@ -14,8 +14,8 @@ from .auth import require_hr, require_auth, get_token_employee_id
 from .branch_scope import get_branch_scope, scope_to_branch
 from .geo_attendance_views import source_label
 from .models import (
-    Attendance, AttendanceLog, Employee, EmployeeShiftAssignment, LeaveRequest,
-    DailyShiftLog, MonthlyShiftSummary,
+    Attendance, AttendanceLog, Employee, EmployeePermission, EmployeeShiftAssignment,
+    LeaveRequest, DailyShiftLog, MonthlyShiftSummary,
 )
 
 logger = logging.getLogger(__name__)
@@ -191,6 +191,95 @@ def attendance_summary(request: Request) -> Response:
     })
 
 
+# ── Mobile Home — "Today at a Glance" + Live Feed ─────────────────────────────
+
+@api_view(["GET"])
+@require_auth
+def mobile_home_summary(request: Request) -> Response:
+    """Company-wide today snapshot for the mobile app's Home screen — scoped
+    to the requesting employee's own branch (derived from their own row,
+    since get_branch_scope() only ever resolves for HR tokens). Reuses the
+    exact same counting helpers as attendance_summary (HR portal) so the two
+    can never disagree on what "present"/"late" means for the same day."""
+    d = _today()
+    token_emp_id = get_token_employee_id(request)
+    branch_id = None
+    if token_emp_id:
+        branch_id = Employee.objects.filter(pk=token_emp_id).values_list("branch_id", flat=True).first()
+
+    base_qs = Employee.objects.filter(status="active")
+    if branch_id is not None:
+        base_qs = base_qs.filter(branch_id=branch_id)
+    restrict_ids = set(base_qs.values_list("id", flat=True)) if branch_id is not None else None
+
+    total = base_qs.count()
+    present_ids = _punched_ids(d) | _manual_present_ids(d)
+    leave_ids = _leave_ids(d)
+    if restrict_ids is not None:
+        present_ids &= restrict_ids
+        leave_ids &= restrict_ids
+    present_today = len(present_ids)
+    absent_today = max(0, total - present_today - len(leave_ids))
+    late_today = _late_count(d, restrict_ids)
+
+    permission_qs = EmployeePermission.objects.filter(date=d, status="approved")
+    if restrict_ids is not None:
+        permission_qs = permission_qs.filter(employee_id__in=restrict_ids)
+    permission_today = permission_qs.count()
+
+    return Response({
+        "date": str(d),
+        "presentToday": present_today,
+        "absentToday": absent_today,
+        "lateToday": late_today,
+        "permissionToday": permission_today,
+    })
+
+
+@api_view(["GET"])
+@require_auth
+def attendance_live_feed(request: Request) -> Response:
+    """Today's own punches ticker for the mobile Home screen — self-scoped
+    to the requesting employee only (never another employee's punches).
+    IN/OUT is derived by time-position within the employee's day — never
+    the raw stored punch_type — same rule as attendance_employee_history,
+    since biometric devices often record every punch as IN."""
+    d = _today()
+    try:
+        limit = min(max(int(request.query_params.get("limit") or 20), 1), 50)
+    except (TypeError, ValueError):
+        limit = 20
+
+    token_emp_id = get_token_employee_id(request)
+
+    logs_qs = AttendanceLog.objects.filter(date=d).select_related(
+        "employee", "employee__department"
+    ).order_by("employee_id", "punch_time")
+    if token_emp_id:
+        logs_qs = logs_qs.filter(employee_id=token_emp_id)
+
+    items = []
+    position_by_emp: dict[int, int] = defaultdict(int)
+    for log in logs_qs:
+        position = position_by_emp[log.employee_id]
+        position_by_emp[log.employee_id] += 1
+        emp = log.employee
+        items.append({
+            "employeeName": f"{emp.first_name} {emp.last_name}",
+            "department": emp.department.name if emp.department_id and emp.department else None,
+            "event": "in" if position % 2 == 0 else "out",
+            "time": log.punch_time.strftime("%H:%M"),
+            "date": str(d),
+            "_sortKey": log.punch_time,
+        })
+
+    items.sort(key=lambda item: item["_sortKey"], reverse=True)
+    for item in items:
+        del item["_sortKey"]
+
+    return Response({"items": items[:limit]})
+
+
 # ── Daily employee list ───────────────────────────────────────────────────────
 
 @api_view(["GET"])
@@ -336,27 +425,29 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
     if not emp:
         return Response({"error": "Employee not found"}, status=404)
 
+    from .attendance_final import compute_month_records, month_summary_from_records
+
     today = date_type.today()
     month = int(request.query_params.get("month") or today.month)
     year  = int(request.query_params.get("year")  or today.year)
     _, days_in_month = calendar.monthrange(year, month)
 
-    # Punch logs for the month
+    # The exact same day-by-day engine payroll and the HR portal's
+    # Attendance Search page use (compute_day_record / compute_month_records
+    # in attendance_final.py) — so Present / Half Shift / Late can never
+    # disagree between HRMS and this endpoint (which both the mobile app and
+    # this page's own Employee Detail dialog consume). Previously this view
+    # ran its own simplified inline classification that never produced
+    # "half_shift" at all and used a plain grace-period late check instead
+    # of the shift punctuality-window rule — the root cause of Half Shift /
+    # Late looking wrong on mobile compared to the HR portal.
+    day_records = {r.date: r for r in compute_month_records(emp, year, month)}
+
+    # Punch logs for the month — display only now; status/late/half-shift
+    # all come from day_records above, not from re-deriving punches here.
     logs_qs = AttendanceLog.objects.filter(
         employee_id=pk, date__year=year, date__month=month,
     ).order_by("date", "punch_time")
-
-    # Manual attendance records
-    prefix = f"{year}-{str(month).zfill(2)}"
-    att_qs = Attendance.objects.filter(employee_id=pk, date__startswith=prefix)
-
-    # Approved leaves that overlap with this month
-    leave_qs = LeaveRequest.objects.filter(employee_id=pk, status="approved")
-
-    # Build punch map. IN/OUT alternates by time-sorted position within the
-    # day (the current list length is that position, since logs_qs is
-    # ordered by date/punch_time already) rather than the raw stored
-    # punch_type — see attendance_search()'s comment for why.
     by_date: dict[str, list] = defaultdict(list)
     for log in logs_qs:
         date_key = str(log.date)
@@ -368,11 +459,14 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
             "sourceLabel": source_label(log.source),
         })
 
-    manual_by_date = {str(a.date): a for a in att_qs}
+    # Manual attendance records — display only (notes/hours worked)
+    prefix = f"{year}-{str(month).zfill(2)}"
+    manual_by_date = {str(a.date): a for a in Attendance.objects.filter(employee_id=pk, date__startswith=prefix)}
 
-    # Build leave date map
+    # Leave type per date — compute_day_record only exposes status=on_leave,
+    # not which leave type, so that's still resolved separately for display.
     leave_dates: dict[str, str] = {}
-    for leave in leave_qs:
+    for leave in LeaveRequest.objects.filter(employee_id=pk, status="approved"):
         try:
             start = date_type.fromisoformat(str(leave.start_date))
             end   = date_type.fromisoformat(str(leave.end_date))
@@ -385,74 +479,44 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
             pass
 
     records = []
-    present_count = absent_count = on_leave_count = 0
-
     for day in range(1, days_in_month + 1):
         cur_date = date_type(year, month, day)
         date_str = cur_date.isoformat()
-        is_sunday = cur_date.weekday() == 6
         is_future = cur_date > today
 
-        punches   = by_date.get(date_str, [])
-        manual    = manual_by_date.get(date_str)
-        # First/last punch of the day by time position, not by filtering for
-        # a stored "IN"/"OUT" type — biometric devices often record every
-        # punch as "IN", which would silently blank out last_out on those
-        # days if this filtered by type instead.
-        first_in  = punches[0]["time"] if punches else None
-        last_out  = punches[-1]["time"] if len(punches) > 1 else None
-        has_punch = bool(punches) or bool(manual and manual.present)
+        punches = by_date.get(date_str, [])
+        manual  = manual_by_date.get(date_str)
+        rec     = day_records.get(cur_date)
 
-        # Which source this day's attendance actually came from — biometric
-        # wins whenever it contributed anything that day (never a stale
-        # "whichever punch happened to be first" guess), else On-Duty, else
-        # Geo Punch, else HR Entry. Same priority as
-        # attendance_final._resolve_primary_source, inlined here since this
-        # endpoint builds plain dicts rather than AttendanceLog objects, but
-        # converted through the one shared source_label() so the label text
-        # itself never diverges from every other page that shows it.
-        punch_sources = {p["source"] for p in punches}
-        if any(s.startswith("biometric") for s in punch_sources):
-            primary_raw = "biometric"
-        elif "on_duty:approved" in punch_sources:
-            primary_raw = "on_duty:approved"
-        elif "geo:auto" in punch_sources:
-            primary_raw = "geo:auto"
-        elif punch_sources or manual:
-            primary_raw = "manual"
-        else:
-            primary_raw = None
-        source_label_for_day = source_label(primary_raw) if primary_raw else None
-
-        if is_sunday:
-            status = "holiday"
-        elif is_future:
+        if is_future:
             status = "future"
-        elif date_str in leave_dates:
-            status = "on_leave"
-            on_leave_count += 1
-        elif has_punch:
-            status = "present"
-            present_count += 1
+        elif rec is not None:
+            status = rec.status
         else:
             status = "absent"
-            absent_count += 1
+
+        first_in = rec.first_punch.strftime("%H:%M") if rec and rec.first_punch else (punches[0]["time"] if punches else None)
+        last_out = rec.last_punch.strftime("%H:%M") if rec and rec.last_punch else (punches[-1]["time"] if len(punches) > 1 else None)
 
         records.append({
-            "date":        date_str,
-            "day":         cur_date.strftime("%a"),
-            "status":      status,
-            "present":     has_punch,
-            "firstPunch":  first_in,
-            "lastPunch":   last_out,
-            "totalPunches": len(punches),
-            "punches":     punches,
-            "leaveType":   leave_dates.get(date_str),
-            "hoursWorked": str(manual.hours_worked) if manual and manual.hours_worked else None,
-            "source":      punches[0]["source"] if punches else ("manual" if manual else None),
-            "sourceLabel": source_label_for_day,
-            "notes":       manual.notes if manual else None,
+            "date":         date_str,
+            "day":          cur_date.strftime("%a"),
+            "status":       status,
+            "isLate":       bool(rec.is_late) if rec else False,
+            "isHalfShift":  bool(rec.is_half_shift) if rec else False,
+            "present":      status in ("present", "half_shift"),
+            "firstPunch":   first_in,
+            "lastPunch":    last_out,
+            "totalPunches": rec.total_punches if rec else len(punches),
+            "punches":      punches,
+            "leaveType":    leave_dates.get(date_str),
+            "hoursWorked":  str(manual.hours_worked) if manual and manual.hours_worked else None,
+            "source":       (punches[0]["source"] if punches else ("manual" if manual else None)),
+            "sourceLabel":  (rec.primary_source if rec and rec.primary_source else None) or (source_label(punches[0]["source"]) if punches else None),
+            "notes":        manual.notes if manual else None,
         })
+
+    summary = month_summary_from_records(list(day_records.values()))
 
     return Response({
         "employee": {
@@ -466,13 +530,18 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
         "month": month,
         "year":  year,
         "summary": {
-            "present": present_count,
-            "absent":  absent_count,
-            "onLeave": on_leave_count,
-            "late":    0,
+            "present":   summary["present"],
+            "halfShift": summary["halfShift"],
+            "absent":    summary["absent"],
+            "onLeave":   summary["onLeave"],
+            "late":      summary["late"],
         },
-        "totalPresent": present_count,
-        "totalAbsent":  absent_count,
+        # "Was present in some form" — full + half shift days combined,
+        # matching this field's pre-existing meaning (used for the HR
+        # portal's attendance-rate %), now with Half Shift correctly
+        # counted in it instead of silently missing.
+        "totalPresent": summary["present"] + summary["halfShift"],
+        "totalAbsent":  summary["absent"],
         "records": records,
     })
 
@@ -1429,13 +1498,31 @@ def employee_shift_monthly_stats(request: Request) -> Response:
     days_in_month = _cal.monthrange(y, m)[1]
     today = _today()
 
-    # ── DailyShiftLog rows keyed by date ────────────────────────────────────
+    from .attendance_final import compute_month_records, month_summary_from_records
+
+    # The exact same day-by-day engine payroll and the HR portal's
+    # Attendance Search / Attendance page use — so this endpoint (mobile My
+    # Shift, the Employee Web App's My Shift + Attendance pages, and HR's
+    # Manage Shift panel) can never disagree with the Attendance page again.
+    # Previously this view ran its own inline day loop keyed off
+    # DailyShiftLog, a table that is ONLY ever written in strict attendance
+    # mode — in simple mode (this deployment's mode) DailyShiftLog rows are
+    # never created at all, so every count below silently computed as 0/near-
+    # zero regardless of real attendance. That was the root cause of "Monthly
+    # Attendance Summary" showing wrong numbers on mobile.
+    day_records = {r.date: r for r in compute_month_records(emp, y, m)}
+
+    # DailyShiftLog is still consulted per-day, purely for the granular
+    # Late-Morning-vs-Late-Return split that only strict mode's 4-punch
+    # engine actually computes (simple mode has no lunch-return concept at
+    # all) — when it doesn't exist for a day, both fall back to the
+    # canonical single is_late flag attributed to "morning".
     shift_logs: dict[date_type, object] = {
         sl.date: sl
         for sl in DailyShiftLog.objects.filter(employee=emp, date__year=y, date__month=m)
     }
 
-    # ── Raw biometric/manual punches keyed by date string ───────────────────
+    # ── Raw biometric/manual punches keyed by date string — display only ────
     punches_by_date: dict[str, list] = _dd(list)
     for log in AttendanceLog.objects.filter(
         employee=emp, date__year=y, date__month=m
@@ -1453,14 +1540,15 @@ def employee_shift_monthly_stats(request: Request) -> Response:
             "sourceLabel": source_label(log.source),
         })
 
-    # ── Manual attendance records ────────────────────────────────────────────
+    # ── Manual attendance records — display only (notes/hours worked) ───────
     prefix = f"{y}-{str(m).zfill(2)}"
     manual_by_date = {
         str(a.date): a
         for a in Attendance.objects.filter(employee=emp, date__startswith=prefix)
     }
 
-    # ── Approved leave dates ─────────────────────────────────────────────────
+    # ── Leave type per date — compute_day_record only exposes status=on_leave,
+    #    not which leave type, so that's still resolved separately for display.
     month_start = date_type(y, m, 1)
     month_end = date_type(y, m, days_in_month)
     leave_date_map: dict[str, str] = {}
@@ -1476,63 +1564,32 @@ def employee_shift_monthly_stats(request: Request) -> Response:
             leave_date_map[cur.isoformat()] = getattr(lr, "type", "Leave")
             cur += timedelta(days=1)
 
-    # ── Build full daily records for every day in month ──────────────────────
-    present_days = half_shift_days = full_shift_days = 0
-    absent_days = leave_days = late_morning_days = late_return_days = 0
-    total_effective_shifts = _D("0")
-
     daily = []
     for day in range(1, days_in_month + 1):
         cur = date_type(y, m, day)
         date_str = cur.isoformat()
-        is_sunday = cur.weekday() == 6
         is_future = cur > today
 
         punches = punches_by_date.get(date_str, [])
         manual = manual_by_date.get(date_str)
-        has_punch = bool(punches) or bool(manual and manual.present)
+        rec = day_records.get(cur)
 
-        # All punches are stored as "IN" by the biometric device;
-        # first punch = morning IN, last punch = evening OUT
-        first_in = punches[0]["time"] if punches else None
-        last_out = punches[-1]["time"] if len(punches) > 1 else None
-        source = punches[0]["source"] if punches else ("manual" if manual else None)
-        source_lbl = punches[0]["sourceLabel"] if punches else (source_label("manual") if manual else None)
-
-        if is_sunday:
-            status = "holiday"
-        elif is_future:
+        if is_future:
             status = "future"
-        elif date_str in leave_date_map:
-            status = "on_leave"
-            leave_days += 1
-        elif has_punch:
-            status = "present"
-            present_days += 1
+        elif rec is not None:
+            status = rec.status
         else:
             status = "absent"
-            absent_days += 1
+
+        first_in = rec.first_punch.strftime("%H:%M") if rec and rec.first_punch else (punches[0]["time"] if punches else None)
+        last_out = rec.last_punch.strftime("%H:%M") if rec and rec.last_punch else (punches[-1]["time"] if len(punches) > 1 else None)
+        shifts_done = rec.shifts_earned if rec else _D("0")
+        is_half = bool(rec.is_half_shift) if rec else False
+        is_late = bool(rec.is_late) if rec else False
 
         sl = shift_logs.get(cur)
-        shifts_done = _D("0")
-        is_half = False
-        late_am = late_ret = False
-
-        if sl:
-            shifts_done = sl.shifts_completed
-            is_half = shifts_done == _D("0.50")
-            late_am = sl.late_morning
-            late_ret = sl.late_return
-            if status == "present":
-                total_effective_shifts += shifts_done
-                if is_half:
-                    half_shift_days += 1
-                elif shifts_done >= _D("1.00"):
-                    full_shift_days += 1
-        if late_am:
-            late_morning_days += 1
-        if late_ret:
-            late_return_days += 1
+        late_am = sl.late_morning if sl else is_late
+        late_ret = sl.late_return if sl else False
 
         daily.append({
             "date": date_str,
@@ -1540,32 +1597,74 @@ def employee_shift_monthly_stats(request: Request) -> Response:
             "status": status,
             "firstPunch": first_in,
             "lastPunch": last_out,
-            "totalPunches": len(punches),
-            "source": source,
-            "sourceLabel": source_lbl,
+            "totalPunches": rec.total_punches if rec else len(punches),
+            "source": (punches[0]["source"] if punches else ("manual" if manual else None)),
+            "sourceLabel": (rec.primary_source if rec and rec.primary_source else None) or (source_label(punches[0]["source"]) if punches else None),
             "leaveType": leave_date_map.get(date_str),
-            "shiftsCompleted": str(shifts_done) if sl else None,
+            "shiftsCompleted": str(shifts_done) if rec else None,
             "isHalfShift": is_half,
+            "isLate": is_late,
             "lateMorning": late_am,
             "lateReturn": late_ret,
         })
 
-    total_late = late_morning_days + late_return_days
+    summary = month_summary_from_records(list(day_records.values()))
+    # "Present" here means full-shift days specifically — Half Shift is its
+    # own bucket, matching the Attendance page / Attendance Search's summary
+    # cards (present + halfShift kept distinct there too, not merged).
+    present_days = summary["present"]
+    full_shift_days = summary["present"]
+    half_shift_days = summary["halfShift"]
+    absent_days = summary["absent"]
+    leave_days = summary["onLeave"]
+    total_late = summary["late"]
+    total_effective_shifts = summary["totalShifts"]
+    late_morning_days = sum(1 for d in daily if d["lateMorning"])
+    late_return_days = sum(1 for d in daily if d["lateReturn"])
 
-    # ── MonthlyShiftSummary (payroll engine result) ──────────────────────────
-    try:
-        s = MonthlyShiftSummary.objects.get(employee=emp, year=y, month=m)
-        summary_data = {
-            "totalShifts": str(s.total_shifts),
-            "totalLateCount": s.total_late_count,
-            "permissionsUsed": s.permissions_used,
-            "permissionOverageCount": s.permission_overage_count,
-            "billableLateCount": s.billable_late_count,
-            "shiftDeductions": str(s.shift_deductions),
-            "salaryDeductionAmount": str(s.salary_deduction_amount),
-        }
-    except MonthlyShiftSummary.DoesNotExist:
-        summary_data = None
+    # ── Live permission/late-deduction preview — same formula payroll uses
+    #    (payroll_views.py), computed fresh from the day loop above rather
+    #    than depending on a MonthlyShiftSummary row that only exists once
+    #    HR has actually run payroll for this month (previously this whole
+    #    block was `None` — and silently wrong before that, since it too
+    #    read from DailyShiftLog-derived late counts — until the first
+    #    payroll run of the month).
+    from .models import EmployeePermission
+    approved_permissions = EmployeePermission.objects.filter(
+        employee=emp, date__year=y, date__month=m, status="approved",
+    ).count()
+    total_late_for_deduction = total_late + approved_permissions
+    free_permissions = 3
+    permissions_used = min(total_late_for_deduction, free_permissions)
+    billable_late = max(0, total_late_for_deduction - free_permissions)
+    shift_deductions = _D(str(billable_late // 3)) * _D("0.25")
+    permission_overage_count = max(0, approved_permissions - free_permissions)
+
+    salary_deduction_amount = _D("0")
+    if shift_deductions > 0 and emp.employment_type == "staff" and emp.salary_amount:
+        from .payroll_views import _build_working_days, _d2
+        from .models import Holiday
+        assignment = (
+            EmployeeShiftAssignment.objects.filter(employee=emp, effective_from__lte=month_end)
+            .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=month_start))
+            .order_by("-effective_from").first()
+        )
+        saturday_off = bool(assignment.saturday_off) if assignment else False
+        holiday_dates = set(Holiday.objects.filter(date__year=y, date__month=m).values_list("date", flat=True))
+        working_days_list = _build_working_days(m, y, saturday_off, holiday_dates)
+        if working_days_list:
+            daily_rate = _d2(emp.salary_amount / _D(str(len(working_days_list))))
+            salary_deduction_amount = _d2(shift_deductions * daily_rate)
+
+    summary_data = {
+        "totalShifts": str(total_effective_shifts),
+        "totalLateCount": total_late,
+        "permissionsUsed": permissions_used,
+        "permissionOverageCount": permission_overage_count,
+        "billableLateCount": billable_late,
+        "shiftDeductions": str(shift_deductions),
+        "salaryDeductionAmount": str(salary_deduction_amount),
+    }
 
     return Response({
         "employeeId": emp.id,

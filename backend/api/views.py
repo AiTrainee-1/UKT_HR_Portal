@@ -1380,6 +1380,14 @@ def notifications(request: Request) -> Response:
         rows = [_notif_with_name(r) for r in qs]
         rows.sort(key=lambda r: r["createdAt"] or "", reverse=True)
         return Response(rows)
+    # POST is HR-only — every legitimate notification is created server-side
+    # by the business-logic views themselves (approvals, leave, etc.) calling
+    # Notification.objects.create() directly, never through this generic
+    # endpoint. Without this check any employee token could POST an
+    # arbitrary employeeId + message and plant a fake notification in
+    # anyone else's inbox.
+    if get_token_employee_id(request):
+        return _error("HR access required", 403)
     return _notifications_create(request)
 
 
@@ -1395,13 +1403,29 @@ def _notifications_create(request: Request) -> Response:
 
 @api_view(["PATCH"])
 @require_auth
-def mark_notification_read(_request: Request, pk: int) -> Response:
+def mark_notification_read(request: Request, pk: int) -> Response:
     record = Notification.objects.filter(pk=pk).first()
     if not record:
         return _error("Not found", 404)
+    # An employee token may only mark their OWN notifications read — without
+    # this check any logged-in employee could PATCH an arbitrary pk and
+    # silently mark another employee's notification as read.
+    token_employee_id = get_token_employee_id(request)
+    if token_employee_id and record.employee_id != token_employee_id:
+        return _error("Access denied", 403)
     record.is_read = True
     record.save(update_fields=["is_read"])
     return Response(_notif_with_name(record))
+
+
+@api_view(["PATCH"])
+@require_auth
+def mark_all_notifications_read(request: Request) -> Response:
+    employee_id = get_token_employee_id(request)
+    if not employee_id:
+        return _error("Employee access required", 403)
+    updated = Notification.objects.filter(employee_id=employee_id, is_read=False).update(is_read=True)
+    return Response({"updated": updated})
 
 
 @api_view(["POST"])

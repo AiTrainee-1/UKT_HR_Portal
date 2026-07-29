@@ -832,11 +832,13 @@ export type AttendanceEmployeeHistory = {
   };
   month: number;
   year: number;
-  summary: { present: number; absent: number; onLeave: number; late: number };
+  summary: { present: number; halfShift: number; absent: number; onLeave: number; late: number };
   records: {
     date: string;
     day: string;
     status: string;
+    isLate: boolean;
+    isHalfShift: boolean;
     present: boolean;
     firstPunch?: string | null;
     lastPunch?: string | null;
@@ -1933,6 +1935,76 @@ export const useDeleteBiometricDevice = () => {
     mutationFn: (id: number) =>
       customFetch<void>(`/api/biometric-devices/${id}`, { method: "DELETE" }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: getBiometricDevicesQueryKey() }),
+  });
+};
+
+// ── Auto Sync (configurable background biometric sync rules) ─────────────────
+
+export type AutoSyncRuleItem = {
+  id: number;
+  name: string;
+  /** "HH:MM", Asia/Kolkata */
+  time: string;
+  /** cron-compatible: "*" (every day) or e.g. "mon,tue,wed,thu,fri" */
+  daysOfWeek: string;
+  /** empty = every enabled device, same convention as manual Sync Biometric */
+  deviceSelection: (number | "env")[];
+  mode: SyncBiometricMode;
+  isEnabled: boolean;
+  lastRunAt: string | null;
+  lastRunStatus: "success" | "failed" | null;
+  lastRunSummary: string | null;
+  createdAt: string | null;
+};
+
+export type AutoSyncRuleInput = Partial<{
+  name: string;
+  time: string;
+  daysOfWeek: string;
+  deviceSelection: (number | "env")[];
+  mode: SyncBiometricMode;
+  isEnabled: boolean;
+}>;
+
+export const getAutoSyncRulesQueryKey = () => ["/api/auto-sync-rules"] as const;
+
+export const useListAutoSyncRules = () =>
+  useQuery<AutoSyncRuleItem[]>({
+    queryKey: getAutoSyncRulesQueryKey(),
+    queryFn: () => customFetch<AutoSyncRuleItem[]>("/api/auto-sync-rules"),
+    refetchInterval: 60_000,
+  });
+
+export const useCreateAutoSyncRule = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: AutoSyncRuleInput) =>
+      customFetch<AutoSyncRuleItem>("/api/auto-sync-rules", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: getAutoSyncRulesQueryKey() }),
+  });
+};
+
+export const useUpdateAutoSyncRule = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: number; data: AutoSyncRuleInput }) =>
+      customFetch<AutoSyncRuleItem>(`/api/auto-sync-rules/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: getAutoSyncRulesQueryKey() }),
+  });
+};
+
+export const useDeleteAutoSyncRule = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      customFetch<void>(`/api/auto-sync-rules/${id}`, { method: "DELETE" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: getAutoSyncRulesQueryKey() }),
   });
 };
 

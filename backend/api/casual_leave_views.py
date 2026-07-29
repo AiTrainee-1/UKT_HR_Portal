@@ -284,3 +284,41 @@ def casual_leave_eligibility(request: Request) -> Response:
         "eligibilityMonths": ELIGIBILITY_MONTHS,
         "employees": rows,
     })
+
+
+# ── Self-service eligibility (mobile / web employee apps) ────────────────────
+# casual_leave_eligibility() above is HR-only (@require_hr, lists every staff
+# employee) — an employee token 403s on it. This is the single-employee
+# equivalent, self-scoped, reusing the same check_cl_eligibility() rule so
+# the two never disagree. Also reports the yearly usage/entitlement (12/yr)
+# an employee actually wants to see, which the HR board doesn't compute.
+CL_YEARLY_ENTITLEMENT = 12
+
+
+@api_view(["GET"])
+@require_auth
+def my_casual_leave_eligibility(request: Request) -> Response:
+    token_emp_id = get_token_employee_id(request)
+    emp_id = token_emp_id or request.query_params.get("employeeId")
+    if not emp_id:
+        return Response({"error": "employeeId required"}, status=400)
+    emp = Employee.objects.filter(pk=emp_id).first()
+    if not emp:
+        return Response({"error": "Employee not found"}, status=404)
+
+    today = date_type.today()
+    eligible, reason = check_cl_eligibility(emp, today)
+
+    year = int(request.query_params.get("year") or today.year)
+    used = CasualLeaveRequest.objects.filter(
+        employee_id=emp.id, date__year=year, status="approved",
+    ).count()
+
+    return Response({
+        "eligible": eligible,
+        "reason": reason,
+        "year": year,
+        "yearlyEntitlement": CL_YEARLY_ENTITLEMENT,
+        "usedThisYear": used,
+        "remainingThisYear": max(0, CL_YEARLY_ENTITLEMENT - used),
+    })
