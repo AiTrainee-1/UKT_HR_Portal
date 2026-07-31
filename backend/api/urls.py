@@ -116,7 +116,10 @@ from .manual_attendance_import_views import export_punch_records, import_punch_e
 from .chat_views import (
     chat_channels, chat_messages, chat_message_reactions,
 )
-from .backup_views import backup_status, run_backup
+from .backup_views import (
+    backup_status, run_backup, backup_schedule_view, backup_drive_view, backup_drive_test,
+    backup_restore_validate, backup_restore_run, backup_restore_status,
+)
 
 urlpatterns = [
     # ── Health ──────────────────────────────────────────────────────────────
@@ -353,6 +356,12 @@ urlpatterns = [
     # ── Database Backup (Settings → Backup) ──────────────────────────────────
     path("backup", backup_status),
     path("backup/run", run_backup),
+    path("backup/schedule", backup_schedule_view),
+    path("backup/drive", backup_drive_view),
+    path("backup/drive/test", backup_drive_test),
+    path("backup/restore/validate", backup_restore_validate),
+    path("backup/restore/run", backup_restore_run),
+    path("backup/restore/status", backup_restore_status),
 
     # ── User Management ─────────────────────────────────────────────────────
     path("roles", roles),

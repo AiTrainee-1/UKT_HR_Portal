@@ -2138,4 +2138,57 @@ class HrLoginAttempt(models.Model):
     class Meta:
         db_table = "hr_login_attempts"
         indexes = [models.Index(fields=["username", "created_at"])]
+
+
+# ──────────────────────────────────────────────
+#  Full application backup — scheduling + optional Google Drive offsite copy
+# ──────────────────────────────────────────────
+
+class BackupSchedule(models.Model):
+    """Singleton — always fetch/update the row with pk=1. Mirrors
+    AutoSyncRule's shape (see auto_sync.py) for the scheduler."""
+
+    is_enabled = models.BooleanField(default=False)
+    time = models.TimeField(default="02:00", help_text="Time of day (Asia/Kolkata) this fires")
+    # Cron-compatible day-of-week string, e.g. "*" (every day) or "mon,tue,wed,thu,fri".
+    days_of_week = models.TextField(default="*")
+    # Oldest local backups beyond this count are pruned after a successful run.
+    retention_count = models.IntegerField(default=14)
+    last_run_at = models.DateTimeField(null=True, blank=True)
+    last_run_status = models.TextField(null=True, blank=True)
+    last_run_summary = models.TextField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "backup_schedule"
+
+    @classmethod
+    def get(cls) -> "BackupSchedule":
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
+class BackupDriveConfig(models.Model):
+    """Singleton — optional Google Drive upload destination for backups.
+    Local storage is always the primary/default copy; this is purely an
+    extra offsite copy of the same backup file, uploaded after it's already
+    written locally."""
+
+    is_enabled = models.BooleanField(default=False)
+    folder_id = models.TextField(blank=True, default="")
+    # Plaintext service-account JSON key — same convention as
+    # PayrollSettings.smtp_password already used in this codebase.
+    service_account_json = models.TextField(blank=True, default="")
+    last_upload_at = models.DateTimeField(null=True, blank=True)
+    last_upload_status = models.TextField(null=True, blank=True)
+    last_upload_summary = models.TextField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "backup_drive_config"
+
+    @classmethod
+    def get(cls) -> "BackupDriveConfig":
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
         ordering = ["-created_at"]

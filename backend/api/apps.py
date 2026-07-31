@@ -70,7 +70,7 @@ class ApiConfig(AppConfig):
         if watcher_process:
             return
 
-        from . import auto_sync
+        from . import auto_sync, backup_scheduler
 
         if not auto_sync.is_available():
             logger.warning("APScheduler not installed — Auto Sync disabled. Run: pip install apscheduler")
@@ -83,3 +83,9 @@ class ApiConfig(AppConfig):
             # DB not migrated yet, or unavailable at boot — safe to skip,
             # retried on every subsequent process start.
             logger.warning("Auto Sync scheduler bootstrap skipped: %s", e)
+
+        try:
+            backup_scheduler.load_schedule_into_scheduler()
+            backup_scheduler.start_scheduler_if_needed()
+        except Exception as e:
+            logger.warning("Backup scheduler bootstrap skipped: %s", e)

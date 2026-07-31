@@ -3,6 +3,9 @@ import { useLocation } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
 import { useHrLogin } from "@/lib/api-client";
 import { Eye, EyeOff, Lock, User, Users2, CalendarCheck2, Wallet2, ShieldCheck } from "lucide-react";
+import LightRays from "@/components/LightRays";
+import ScrambledText from "@/components/ScrambledText";
+import SplitText from "@/components/SplitText";
 
 const FEATURES = [
   { icon: Users2, label: "Employee lifecycle, in one place", desc: "Onboarding, records, documents and roles." },
@@ -66,29 +69,49 @@ export default function HrLogin() {
         className="hidden lg:flex lg:w-[46%] xl:w-[42%] relative overflow-hidden flex-col justify-between px-14 py-12"
         style={{ background: "linear-gradient(160deg, #002e46 0%, #006496 55%, #0096c7 100%)" }}
       >
-        {/* Mesh / grid texture */}
-        <div
-          className="absolute inset-0 opacity-[0.07] pointer-events-none"
-          style={{
-            backgroundImage:
-              "linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)",
-            backgroundSize: "42px 42px",
-          }}
-        />
-        <div
-          className="blob-animate absolute -top-24 -right-20 w-[420px] h-[420px] rounded-full opacity-20 pointer-events-none"
-          style={{ background: "radial-gradient(circle, #5dbbff 0%, transparent 65%)" }}
-        />
-        <div
-          className="blob-animate absolute bottom-[-15%] left-[-10%] w-[380px] h-[380px] rounded-full opacity-15 pointer-events-none"
-          style={{ background: "radial-gradient(circle, #ffffff 0%, transparent 65%)", animationDelay: "3s" }}
-        />
+        {/* Animated light-ray background */}
+        <div className="absolute inset-0">
+          <LightRays
+            raysOrigin="top-center"
+            raysColor="#e0a83a"
+            raysSpeed={0.85}
+            lightSpread={0.65}
+            rayLength={1.4}
+            fadeDistance={1.15}
+            saturation={0.8}
+            followMouse
+            mouseInfluence={0.12}
+            noiseAmount={0.14}
+            distortion={0.04}
+          />
+        </div>
 
         {/* Logo */}
         <div className="relative flex items-center gap-3 clay-fade-in">
           <UktMark className="h-9 w-auto text-white/95" />
-          <span className="text-lg font-black tracking-tight text-white">
-            UK<span style={{ color: "#8fd8ff" }}>Textiles</span>
+          <span className="text-lg font-black tracking-tight flex">
+            <SplitText
+              text="UK"
+              tag="span"
+              className="text-white"
+              splitType="chars"
+              delay={40}
+              duration={0.7}
+              from={{ opacity: 0, y: 14 }}
+              to={{ opacity: 1, y: 0 }}
+              textAlign="left"
+            />
+            <SplitText
+              text="Textiles"
+              tag="span"
+              className="text-[#8fd8ff]"
+              splitType="chars"
+              delay={40}
+              duration={0.7}
+              from={{ opacity: 0, y: 14 }}
+              to={{ opacity: 1, y: 0 }}
+              textAlign="left"
+            />
           </span>
         </div>
 
@@ -97,9 +120,17 @@ export default function HrLogin() {
           <p className="text-[11px] font-bold tracking-[0.35em] uppercase mb-4" style={{ color: "rgba(255,255,255,0.55)" }}>
             HR Management System
           </p>
-          <h1 className="text-4xl xl:text-[2.75rem] font-black leading-[1.1] tracking-tight text-white mb-10 max-w-md">
-            Run your workforce with precision, not paperwork.
-          </h1>
+          <div className="mb-10 max-w-md">
+            <ScrambledText
+              className="text-4xl xl:text-[2.75rem] font-black leading-[1.1] tracking-tight text-white"
+              radius={110}
+              duration={1}
+              speed={0.6}
+              scrambleChars="•·˙"
+            >
+              Run your workforce with precision, not paperwork.
+            </ScrambledText>
+          </div>
 
           <div className="flex flex-col gap-5">
             {FEATURES.map(({ icon: Icon, label, desc }) => (
