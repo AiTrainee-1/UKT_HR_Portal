@@ -44,8 +44,8 @@ A complete, on-premise HR and ERP platform built for UKTextiles — a garments m
 
 The system replaces manual HR work — attendance sheets, leave registers, salary slips — with a live digital system that syncs from the biometric device automatically.
 
----
 
+---
 ## 2. Architecture
 
 ```

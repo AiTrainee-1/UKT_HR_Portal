@@ -2,10 +2,10 @@ import { useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
 import { useHrLogin } from "@/lib/api-client";
-import { Eye, EyeOff, Lock, User, Users2, CalendarCheck2, Wallet2, ShieldCheck } from "lucide-react";
-import LightRays from "@/components/LightRays";
-import ScrambledText from "@/components/ScrambledText";
+import { Eye, EyeOff, Lock, User, Users2, CalendarCheck2, Wallet2, ShieldCheck, Sparkles } from "lucide-react";
+import Orb from "@/components/Orb";
 import SplitText from "@/components/SplitText";
+import TextType from "@/components/TextType";
 
 const FEATURES = [
   { icon: Users2, label: "Employee lifecycle, in one place", desc: "Onboarding, records, documents and roles." },
@@ -13,22 +13,19 @@ const FEATURES = [
   { icon: Wallet2, label: "Payroll without the spreadsheets", desc: "Salary, settlements and slips, automated." },
 ];
 
-function UktMark({ className = "h-10 w-auto", style }: { className?: string; style?: React.CSSProperties }) {
+const TAGLINES = ["HR MANAGEMENT SYSTEM", "PAYROLL & ATTENDANCE", "EMPLOYEE LIFECYCLE"];
+
+/** The real UKTextiles mark — the source PNG carries a busy vignette
+ * outside the oval, so it's cropped tight to just the oval via clip-path
+ * rather than shown as-is. */
+function UktMark({ className = "h-10 w-auto" }: { className?: string }) {
   return (
-    <svg viewBox="0 0 1536 1024" className={className} style={style} aria-label="UKTextiles Logo">
-      <defs>
-        <mask id="ukt-mark-ring-gap">
-          <rect x="0" y="0" width="1536" height="1024" fill="white" />
-          <ellipse cx="793" cy="512" rx="595" ry="382" fill="black" />
-        </mask>
-      </defs>
-      <ellipse cx="793" cy="512" rx="608" ry="391" fill="currentColor" mask="url(#ukt-mark-ring-gap)" />
-      <ellipse cx="793" cy="512" rx="585" ry="375" fill="currentColor" />
-      <path
-        fill="#ffffff"
-        d="M 447,215 L 448,642 L 452,674 L 461,710 L 476,744 L 493,768 L 510,784 L 524,793 L 556,805 L 582,809 L 616,809 L 642,804 L 668,793 L 691,774 L 708,750 L 727,707 L 836,804 L 923,805 L 771,669 L 824,494 L 905,267 L 974,266 L 975,805 L 1027,805 L 1027,267 L 1124,266 L 1124,216 L 875,216 L 777,487 L 733,629 L 732,216 L 681,216 L 681,638 L 677,673 L 667,710 L 658,727 L 641,745 L 618,755 L 586,756 L 559,749 L 539,736 L 519,711 L 507,682 L 499,633 L 499,215 Z"
-      />
-    </svg>
+    <img
+      src="/UKT_Company_Logo.png"
+      alt="UKTextiles Logo"
+      className={className}
+      style={{ clipPath: "ellipse(40% 38.5% at 51.6% 50%)", aspectRatio: "1536 / 1024" }}
+    />
   );
 }
 
@@ -69,31 +66,14 @@ export default function HrLogin() {
         className="hidden lg:flex lg:w-[46%] xl:w-[42%] relative overflow-hidden flex-col justify-between px-14 py-12"
         style={{ background: "linear-gradient(160deg, #002e46 0%, #006496 55%, #0096c7 100%)" }}
       >
-        {/* Animated light-ray background */}
-        <div className="absolute inset-0">
-          <LightRays
-            raysOrigin="top-center"
-            raysColor="#e0a83a"
-            raysSpeed={0.85}
-            lightSpread={0.65}
-            rayLength={1.4}
-            fadeDistance={1.15}
-            saturation={0.8}
-            followMouse
-            mouseInfluence={0.12}
-            noiseAmount={0.14}
-            distortion={0.04}
-          />
-        </div>
-
         {/* Logo */}
         <div className="relative flex items-center gap-3 clay-fade-in">
-          <UktMark className="h-9 w-auto text-white/95" />
-          <span className="text-lg font-black tracking-tight flex">
+          <UktMark className="h-14 w-auto" />
+          <span className="flex items-baseline">
             <SplitText
               text="UK"
               tag="span"
-              className="text-white"
+              className="text-3xl font-black tracking-tight text-white"
               splitType="chars"
               delay={40}
               duration={0.7}
@@ -104,7 +84,7 @@ export default function HrLogin() {
             <SplitText
               text="Textiles"
               tag="span"
-              className="text-[#8fd8ff]"
+              className="text-3xl font-black tracking-tight text-[#8fd8ff]"
               splitType="chars"
               delay={40}
               duration={0.7}
@@ -117,29 +97,35 @@ export default function HrLogin() {
 
         {/* Headline + features */}
         <div className="relative clay-fade-in" style={{ animationDelay: "0.05s" }}>
-          <p className="text-[11px] font-bold tracking-[0.35em] uppercase mb-4" style={{ color: "rgba(255,255,255,0.55)" }}>
-            HR Management System
-          </p>
-          <div className="mb-10 max-w-md">
-            <ScrambledText
-              className="text-4xl xl:text-[2.75rem] font-black leading-[1.1] tracking-tight text-white"
-              radius={110}
-              duration={1}
-              speed={0.6}
-              scrambleChars="•·˙"
-            >
-              Run your workforce with precision, not paperwork.
-            </ScrambledText>
+          <div className="flex items-center gap-2 mb-4">
+            <Sparkles size={13} style={{ color: "#e0a83a" }} strokeWidth={2.2} />
+            <TextType
+              as="p"
+              className="text-[11px] font-bold tracking-[0.35em] uppercase"
+              style={{ color: "rgba(255,255,255,0.55)" }}
+              text={TAGLINES}
+              typingSpeed={55}
+              deletingSpeed={25}
+              pauseDuration={2200}
+              cursorCharacter="_"
+              cursorClassName="text-[#e0a83a]"
+            />
           </div>
+          <h1 className="text-4xl xl:text-[2.75rem] font-black leading-[1.1] tracking-tight text-white mb-10 max-w-md">
+            Run your workforce with precision, not paperwork.
+          </h1>
 
           <div className="flex flex-col gap-5">
             {FEATURES.map(({ icon: Icon, label, desc }) => (
               <div key={label} className="flex items-start gap-4">
                 <div
-                  className="shrink-0 w-11 h-11 rounded-xl flex items-center justify-center"
-                  style={{ background: "rgba(255,255,255,0.12)", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.18)" }}
+                  className="shrink-0 w-12 h-12 rounded-2xl flex items-center justify-center"
+                  style={{
+                    background: "linear-gradient(135deg, rgba(79,184,240,0.35), rgba(0,150,199,0.18))",
+                    boxShadow: "0 6px 16px rgba(0,20,40,0.25), inset 0 0 0 1px rgba(255,255,255,0.3)",
+                  }}
                 >
-                  <Icon size={19} className="text-white" strokeWidth={1.8} />
+                  <Icon size={20} className="text-white" strokeWidth={1.8} />
                 </div>
                 <div>
                   <p className="text-sm font-bold text-white leading-snug">{label}</p>
@@ -164,23 +150,20 @@ export default function HrLogin() {
         className="flex-1 flex items-center justify-center px-6 py-12 relative overflow-hidden"
         style={{ background: "linear-gradient(135deg, #f6fafe 0%, #eef4fa 50%, #f0f6fc 100%)" }}
       >
-        <div className="absolute inset-0 overflow-hidden pointer-events-none lg:hidden">
-          <div
-            className="blob-animate absolute top-[-15%] right-[-10%] w-[420px] h-[420px] rounded-full opacity-20"
-            style={{ background: "radial-gradient(circle at 40% 40%, #4FB8F0 0%, transparent 65%)" }}
-          />
+        <div className="absolute inset-0">
+          <Orb hue={0} hoverIntensity={0.3} rotateOnHover backgroundColor="#f6fafe" />
         </div>
 
         <div className="relative w-full max-w-sm clay-fade-in">
           {/* Mobile-only logo */}
           <div className="flex lg:hidden items-center justify-center gap-2.5 mb-9">
-            <UktMark className="h-9 w-auto" style={{ color: "#4FB8F0" }} />
+            <UktMark className="h-12 w-auto" />
             <span className="text-xl font-black tracking-tight" style={{ color: "#006496" }}>
               UK<span style={{ color: "#4FB8F0" }}>Textiles</span>
             </span>
           </div>
 
-          <div className="mb-8">
+          <div className="mb-8 text-center">
             <h2 className="text-[28px] font-black tracking-tight" style={{ color: "#1a3a4a" }}>
               Welcome back
             </h2>
