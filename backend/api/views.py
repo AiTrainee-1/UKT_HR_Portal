@@ -16,10 +16,13 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 
+import uuid
+
 from .auth import require_auth, require_hr, get_token_employee_id, get_hr_display_name
 from .branch_scope import get_branch_scope, scope_to_branch
 from .jwt_utils import sign_token
 from .audit_utils import log_action, _get_ip
+from .session_utils import parse_user_agent
 from .models import (
     Applicant,
     Attendance,
@@ -32,6 +35,7 @@ from .models import (
     Job,
     LeaveBalance,
     LeaveRequest,
+    LoginSession,
     Notification,
     OnDutyPunchVerification,
     OnDutySession,
@@ -137,15 +141,27 @@ def hr_login(request: Request) -> Response:
     # Permissions are NOT baked into the token — see permission_middleware.py,
     # which re-checks HRUser.is_active/role.permissions fresh on every request
     # so an Admin revoking access takes effect immediately, not after expiry.
+    # jti ties this token to a revocable LoginSession row (see require_hr in
+    # auth.py) — powers the Login Devices page and remote/self logout.
+    jti = uuid.uuid4().hex
     token_payload = {
         "role": "hr",
         "name": label,
         "username": account.username,
         "hrUserId": account.id,
         "isSuperAdmin": account.is_super_admin,
+        "jti": jti,
     }
     token = sign_token(token_payload, expires_in=timedelta(hours=12))
     request.jwt_user = token_payload
+    user_agent = request.META.get("HTTP_USER_AGENT", "")
+    LoginSession.objects.create(
+        hr_user=account,
+        jti=jti,
+        device_label=parse_user_agent(user_agent),
+        user_agent=user_agent,
+        ip_address=_get_ip(request),
+    )
     log_action(request, "login", "auth", description=f"{label} ({account.username}) logged in")
     return Response({"token": token, "role": "hr", "employeeId": None, "name": label})
 
@@ -168,6 +184,15 @@ def employee_login(request: Request) -> Response:
     return Response(
         {"token": token, "role": "employee", "employeeId": employee.id, "name": name}
     )
+
+
+@api_view(["POST"])
+@require_auth
+def logout(request: Request) -> Response:
+    jti = request.jwt_user.get("jti")
+    if jti:
+        LoginSession.objects.filter(jti=jti, revoked_at__isnull=True).update(revoked_at=timezone.now())
+    return Response({"message": "Logged out"})
 
 
 @api_view(["POST"])
@@ -219,7 +244,8 @@ def auth_me(request: Request) -> Response:
 def departments(request: Request) -> Response:
     if request.method == "GET":
         rows = (
-            Department.objects.annotate(
+            scope_to_branch(Department.objects, request)
+            .annotate(
                 employee_count=Count("employees", filter=Q(employees__status="active"))
             )
             .order_by("id")
@@ -239,9 +265,19 @@ def departments(request: Request) -> Response:
 
 
 def _departments_create(request: Request) -> Response:
+    # A branch-scoped HR user's own branch always wins, same convention used
+    # for employee create/update — otherwise a department they create would
+    # be invisible to them the moment the list is branch-scoped. Unscoped
+    # users (super admin, branch-less roles) may pick one explicitly.
+    scoped_branch_id = get_branch_scope(request)
+    if scoped_branch_id is not None:
+        branch_id = scoped_branch_id
+    else:
+        branch_id = request.data.get("branchId")
     dept = Department.objects.create(
         name=request.data.get("name"),
         description=request.data.get("description"),
+        branch_id=branch_id,
     )
     return Response(department_json(dept, 0), status=201)
 
@@ -250,7 +286,7 @@ def _departments_create(request: Request) -> Response:
 @require_hr
 def delete_department(request: Request, pk: int) -> Response:
     try:
-        dept = Department.objects.get(pk=pk)
+        dept = scope_to_branch(Department.objects, request).get(pk=pk)
     except Department.DoesNotExist:
         return _error("Department not found", 404)
 
@@ -1627,17 +1663,26 @@ MONTH_NAMES = [
 
 @api_view(["GET"])
 @require_hr
-def hr_dashboard_summary(_request: Request) -> Response:
-    emp_stats = Employee.objects.aggregate(
+def hr_dashboard_summary(request: Request) -> Response:
+    # Every query below is branch-scoped — a branch-restricted HR user only
+    # ever sees totals for their own branch. scope_to_branch() is a no-op for
+    # super admins and branch-less legacy roles (see branch_scope.py), so
+    # they still see company-wide totals as before.
+    scoped_employees = scope_to_branch(Employee.objects, request)
+    emp_stats = scoped_employees.aggregate(
         total=Count("id"),
         active=Count("id", filter=Q(status="active")),
         inactive=Count("id", filter=Q(status="inactive")),
     )
-    pending_leaves = LeaveRequest.objects.filter(status="pending").count()
-    unread_notifications = Notification.objects.filter(is_read=False).count()
-    total_departments = Department.objects.count()
+    pending_leaves = scope_to_branch(
+        LeaveRequest.objects, request, field="employee__branch_id"
+    ).filter(status="pending").count()
+    unread_notifications = scope_to_branch(
+        Notification.objects, request, field="employee__branch_id"
+    ).filter(is_read=False).count()
+    total_departments = scope_to_branch(Department.objects, request).count()
     _zero = Value(Decimal("0"), output_field=DecimalField())
-    salary_stats = Employee.objects.filter(status="active").aggregate(
+    salary_stats = scoped_employees.filter(status="active").aggregate(
         monthly_total=Coalesce(
             Sum("salary_amount", filter=Q(salary_type="monthly")), _zero
         ),
@@ -1645,30 +1690,37 @@ def hr_dashboard_summary(_request: Request) -> Response:
             Sum("salary_amount", filter=Q(salary_type="weekly")), _zero
         ),
     )
-    open_jobs = Job.objects.filter(status="open").count()
-    pending_applicants = Applicant.objects.filter(status="applied").count()
-    gender_stats = Employee.objects.filter(status="active").aggregate(
+    open_jobs = scope_to_branch(
+        Job.objects, request, field="department__branch_id"
+    ).filter(status="open").count()
+    pending_applicants = scope_to_branch(
+        Applicant.objects, request, field="job__department__branch_id"
+    ).filter(status="applied").count()
+    gender_stats = scoped_employees.filter(status="active").aggregate(
         male=Count("id", filter=Q(gender="male")),
         female=Count("id", filter=Q(gender="female")),
         other=Count("id", filter=~Q(gender__in=["male", "female"])),
     )
 
     today = date.today()
-    geo_punches_today = AttendanceLog.objects.filter(date=today, source="geo:auto").count()
-    on_duty_pending = OnDutySession.objects.filter(
+    geo_punches_today = scope_to_branch(
+        AttendanceLog.objects, request, field="employee__branch_id"
+    ).filter(date=today, source="geo:auto").count()
+    scoped_on_duty = scope_to_branch(OnDutySession.objects, request)  # OnDutySession.branch_id is a direct field
+    on_duty_pending = scoped_on_duty.filter(
         status__in=[OnDutySession.STATUS_PENDING_HOD, OnDutySession.STATUS_PENDING_HR]
     ).count()
-    on_duty_sessions_active = OnDutySession.objects.filter(status=OnDutySession.STATUS_ACTIVE).count()
-    on_duty_completed_today = OnDutySession.objects.filter(
+    on_duty_sessions_active = scoped_on_duty.filter(status=OnDutySession.STATUS_ACTIVE).count()
+    on_duty_completed_today = scoped_on_duty.filter(
         status=OnDutySession.STATUS_COMPLETED, completed_at__date=today
     ).count()
-    employees_on_duty_today = OnDutySession.objects.filter(
+    employees_on_duty_today = scoped_on_duty.filter(
         Q(created_at__date=today) | Q(status=OnDutySession.STATUS_ACTIVE)
     ).values("employee_id").distinct().count()
-    pending_punch_verifications = OnDutyPunchVerification.objects.filter(
-        status=OnDutyPunchVerification.STATUS_PENDING
-    ).count()
-    live_tracking_enabled = Employee.objects.filter(location_tracking_enabled=True, status="active").count()
+    pending_punch_verifications = scope_to_branch(
+        OnDutyPunchVerification.objects, request, field="employee__branch_id"
+    ).filter(status=OnDutyPunchVerification.STATUS_PENDING).count()
+    live_tracking_enabled = scoped_employees.filter(location_tracking_enabled=True, status="active").count()
 
     return Response(
         {

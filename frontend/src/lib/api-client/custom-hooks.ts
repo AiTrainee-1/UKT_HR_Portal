@@ -577,6 +577,49 @@ export const useListAuditLogs = <TData = AuditLogsResponse>(
     ...options,
   });
 
+// ── Login Devices ─────────────────────────────────────────────────────────────
+
+export type LoginSessionEntry = {
+  id: number;
+  hrUserId: number;
+  username: string;
+  fullName: string;
+  roleName?: string | null;
+  deviceLabel: string;
+  ipAddress?: string | null;
+  createdAt: string;
+  lastSeenAt: string;
+  isCurrent: boolean;
+};
+
+export type LoginSessionsResponse = {
+  total: number;
+  results: LoginSessionEntry[];
+};
+
+export const getListLoginSessionsQueryKey = () => ["/api/login-sessions"] as const;
+
+export const useListLoginSessions = (
+  options?: UseQueryOptions<LoginSessionsResponse>,
+) =>
+  useQuery<LoginSessionsResponse>({
+    queryKey: getListLoginSessionsQueryKey(),
+    queryFn: () => customFetch<LoginSessionsResponse>("/api/login-sessions"),
+    refetchInterval: 15000,
+    ...options,
+  });
+
+export const useRevokeLoginSession = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (sessionId: number) =>
+      customFetch<{ message: string }>(`/api/login-sessions/${sessionId}/revoke`, {
+        method: "POST",
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: getListLoginSessionsQueryKey() }),
+  });
+};
+
 // ── Employee Search & Assignment ─────────────────────────────────────────────
 
 export const useSearchEmployees = (search: string, enabled = true) =>
@@ -2670,7 +2713,10 @@ export type CasualLeaveEligibility = {
 
 export const getCasualLeavesQueryKey = () => ["/api/casual-leaves"] as const;
 
-export const useListCasualLeaves = (params?: { status?: string; month?: number; year?: number }) => {
+export const useListCasualLeaves = (
+  params?: { status?: string; month?: number; year?: number },
+  enabled = true,
+) => {
   const qs = new URLSearchParams();
   if (params?.status) qs.set("status", params.status);
   if (params?.month) qs.set("month", String(params.month));
@@ -2679,6 +2725,7 @@ export const useListCasualLeaves = (params?: { status?: string; month?: number; 
   return useQuery<CasualLeaveItem[]>({
     queryKey: ["/api/casual-leaves", params?.status ?? null, params?.month ?? null, params?.year ?? null],
     queryFn: () => customFetch<CasualLeaveItem[]>(`/api/casual-leaves${q}`),
+    enabled,
   });
 };
 
@@ -2769,11 +2816,13 @@ export const getMissingPunchRequestsQueryKey = () => ["/api/missing-punch-reques
 
 export const useMissingPunchRequestsHR = (
   status: "pending" | "pending_hod" | "pending_hr" | "approved" | "rejected" | "all" = "pending",
+  enabled = true,
 ) =>
   useQuery<MissingPunchItem[]>({
     queryKey: ["/api/missing-punch-requests", status],
     queryFn: () => customFetch<MissingPunchItem[]>(`/api/missing-punch-requests?status=${status}`),
     refetchInterval: 30_000,
+    enabled,
   });
 
 export const useUpdateMissingPunchHR = () => {
@@ -3623,13 +3672,14 @@ export type DocumentCompletionStats = {
 export const getDocumentCompletionStatsQueryKey = (employmentType: "staff" | "production") =>
   ["/api/recruitment/employee-documents/completion-stats", employmentType] as const;
 
-export const useDocumentCompletionStats = (employmentType: "staff" | "production") =>
+export const useDocumentCompletionStats = (employmentType: "staff" | "production", enabled = true) =>
   useQuery<DocumentCompletionStats>({
     queryKey: getDocumentCompletionStatsQueryKey(employmentType),
     queryFn: () =>
       customFetch<DocumentCompletionStats>(
         `/api/recruitment/employee-documents/completion-stats?employmentType=${employmentType}`,
       ),
+    enabled,
   });
 
 export const useDeleteResignation = () =>

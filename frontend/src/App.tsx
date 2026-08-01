@@ -59,6 +59,7 @@ import Reports from "@/pages/hr/Reports";
 import UserManagement from "@/pages/hr/UserManagement";
 import AccountManagement from "@/pages/hr/AccountManagement";
 import ActivityLogs from "@/pages/hr/ActivityLogs";
+import LoginDevices from "@/pages/hr/LoginDevices";
 import Settings from "@/pages/hr/Settings";
 import SalarySlip from "@/pages/hr/SalarySlip";
 import Promotion from "@/pages/hr/Promotion";
@@ -294,6 +295,9 @@ function Router() {
       </Route>
       <Route path="/hr/activity-logs">
         {() => <ProtectedRoute component={ActivityLogs} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/login-devices">
+        {() => <ProtectedRoute component={LoginDevices} allowedRoles={["hr"]} />}
       </Route>
       <Route path="/hr/settings">
         {() => <ProtectedRoute component={Settings} allowedRoles={["hr"]} />}

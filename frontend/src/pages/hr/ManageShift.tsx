@@ -19,6 +19,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   useListShifts, useCreateShift, useUpdateShift, useDeleteShift,
   getListShiftsQueryKey, useListDepartments, useListDesignations,
+  useListEmployees,
   type ShiftTemplate,
 } from "@/lib/api-client";
 import {
@@ -524,11 +525,17 @@ function AssignedGroupCard({ group, onRemove }: {
 function AssignedShiftsTab() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [viewMode, setViewMode] = useState<"assigned" | "unassigned">("assigned");
   const [filterType, setFilterType] = useState<"all" | "production" | "staff">("all");
   const [globalSearch, setGlobalSearch] = useState("");
+  const [assignTarget, setAssignTarget] = useState<{ id: number; name: string } | null>(null);
 
   const { data: assignments, isLoading } = useListShiftAssignments({ activeOnly: true });
+  const { data: rawEmployees, isLoading: employeesLoading } = useListEmployees({ status: "active" });
+  const { data: shifts } = useListShifts();
   const deleteMutation = useDeleteShiftAssignment();
+
+  const staffShifts = (shifts ?? []).filter((s) => s.shiftType === "staff");
 
   const handleRemove = async (assignmentId: number, empName: string) => {
     try {
@@ -542,6 +549,10 @@ function AssignedShiftsTab() {
   };
 
   const allAssignments = assignments ?? [];
+  const assignedEmployeeIds = new Set(allAssignments.map((a) => a.employeeId));
+  const allEmployees = rawEmployees ?? [];
+  const unassignedEmployees = allEmployees.filter((e) => !assignedEmployeeIds.has(e.id));
+
   // Filter by the employee's employment type, not the shift template's type.
   // A production employee assigned to any shift should appear under "Production".
   const byType = filterType === "all"
@@ -555,19 +566,39 @@ function AssignedShiftsTab() {
       )
     : byType;
 
+  const unassignedByType = filterType === "all"
+    ? unassignedEmployees
+    : unassignedEmployees.filter((e) => (e.employmentType ?? "staff") === filterType);
+  const unassignedBySearch = globalSearch
+    ? unassignedByType.filter((e) =>
+        `${e.firstName} ${e.lastName}`.toLowerCase().includes(globalSearch.toLowerCase()) ||
+        e.employeeCode.toLowerCase().includes(globalSearch.toLowerCase())
+      )
+    : unassignedByType;
+
   const groups = groupAssignments(bySearch);
   const prodCount = allAssignments.filter((a) => (a.employmentType ?? "staff") === "production").length;
   const staffCount = allAssignments.filter((a) => (a.employmentType ?? "staff") === "staff").length;
 
   return (
     <div className="space-y-5">
+      {/* Assigned / Unassigned toggle */}
+      <PillTabs
+        items={[
+          { value: "assigned", label: "Assigned", count: allAssignments.length, color: "#16a34a" },
+          { value: "unassigned", label: "Unassigned", count: unassignedEmployees.length, color: "#dc2626" },
+        ]}
+        value={viewMode}
+        onChange={(v) => setViewMode(v as "assigned" | "unassigned")}
+      />
+
       {/* Summary pills */}
       <div className="flex items-center gap-3 flex-wrap">
         <PillTabs
           items={[
-            { value: "all", label: "All Assignments", count: allAssignments.length, color: "#374151" },
-            { value: "production", label: "Production", count: prodCount, color: "#d97706" },
-            { value: "staff", label: "Staff", count: staffCount, color: "#16a34a" },
+            { value: "all", label: "All", count: viewMode === "assigned" ? allAssignments.length : unassignedEmployees.length, color: "#374151" },
+            { value: "production", label: "Production", count: viewMode === "assigned" ? prodCount : unassignedEmployees.filter((e) => (e.employmentType ?? "staff") === "production").length, color: "#d97706" },
+            { value: "staff", label: "Staff", count: viewMode === "assigned" ? staffCount : unassignedEmployees.filter((e) => (e.employmentType ?? "staff") === "staff").length, color: "#16a34a" },
           ]}
           value={filterType}
           onChange={(v) => setFilterType(v as "all" | "production" | "staff")}
@@ -584,43 +615,105 @@ function AssignedShiftsTab() {
         </div>
       </div>
 
-      {/* Groups */}
-      {isLoading ? (
-        <div className="space-y-3">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Card key={i} className="border-0 shadow-sm">
-              <CardContent className="p-4 flex items-center gap-4">
-                <Skeleton className="h-11 w-11 rounded-xl" />
-                <div className="flex-1 space-y-2">
-                  <Skeleton className="h-4 w-40" />
-                  <Skeleton className="h-3 w-60" />
-                </div>
-                <Skeleton className="h-7 w-12 rounded-full" />
-              </CardContent>
-            </Card>
+      {viewMode === "assigned" ? (
+        isLoading ? (
+          <div className="space-y-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Card key={i} className="border-0 shadow-sm">
+                <CardContent className="p-4 flex items-center gap-4">
+                  <Skeleton className="h-11 w-11 rounded-xl" />
+                  <div className="flex-1 space-y-2">
+                    <Skeleton className="h-4 w-40" />
+                    <Skeleton className="h-3 w-60" />
+                  </div>
+                  <Skeleton className="h-7 w-12 rounded-full" />
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        ) : groups.length === 0 ? (
+          <Card className="border-0 shadow-sm">
+            <CardContent className="flex flex-col items-center py-16 text-center">
+              <Users size={36} className="text-muted-foreground/30 mb-3" />
+              <p className="font-semibold text-gray-700">
+                {globalSearch || filterType !== "all"
+                  ? "No assignments match your filters"
+                  : "No active shift assignments yet"}
+              </p>
+              <p className="text-sm text-muted-foreground mt-1">
+                {!(globalSearch || filterType !== "all") &&
+                  "Use the Production or Staff tab to create shifts and assign employees."}
+              </p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-3">
+            {groups.map((g) => (
+              <AssignedGroupCard key={g.shiftId} group={g} onRemove={handleRemove} />
+            ))}
+          </div>
+        )
+      ) : employeesLoading ? (
+        <div className="space-y-2">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <Skeleton key={i} className="h-12 w-full rounded-lg" />
           ))}
         </div>
-      ) : groups.length === 0 ? (
+      ) : unassignedBySearch.length === 0 ? (
         <Card className="border-0 shadow-sm">
           <CardContent className="flex flex-col items-center py-16 text-center">
-            <Users size={36} className="text-muted-foreground/30 mb-3" />
+            <UserMinus size={36} className="text-muted-foreground/30 mb-3" />
             <p className="font-semibold text-gray-700">
               {globalSearch || filterType !== "all"
-                ? "No assignments match your filters"
-                : "No active shift assignments yet"}
-            </p>
-            <p className="text-sm text-muted-foreground mt-1">
-              {!(globalSearch || filterType !== "all") &&
-                "Use the Production or Staff tab to create shifts and assign employees."}
+                ? "No unassigned employees match your filters"
+                : "Every active employee has a shift assigned"}
             </p>
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-3">
-          {groups.map((g) => (
-            <AssignedGroupCard key={g.shiftId} group={g} onRemove={handleRemove} />
-          ))}
-        </div>
+        <Card className="border-0 shadow-sm overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-red-50/40 text-left text-xs text-red-800 uppercase tracking-wide">
+                  <th className="px-4 py-2.5 font-semibold">Employee</th>
+                  <th className="px-4 py-2.5 font-semibold">Code</th>
+                  <th className="px-4 py-2.5 font-semibold">Department</th>
+                  <th className="px-4 py-2.5 font-semibold">Designation</th>
+                  <th className="px-4 py-2.5 font-semibold">Gender</th>
+                  <th className="px-4 py-2.5 font-semibold text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {unassignedBySearch.map((e) => (
+                  <tr key={e.id} className="hover:bg-gray-50/60 transition-colors">
+                    <td className="px-4 py-2.5 font-medium text-gray-900">{e.firstName} {e.lastName}</td>
+                    <td className="px-4 py-2.5 text-gray-500">{e.employeeCode}</td>
+                    <td className="px-4 py-2.5 text-gray-500">{e.departmentName ?? "—"}</td>
+                    <td className="px-4 py-2.5 text-gray-500">{e.designationTitle ?? "—"}</td>
+                    <td className="px-4 py-2.5 text-gray-500 capitalize">{e.gender ?? "—"}</td>
+                    <td className="px-4 py-2.5 text-right">
+                      <Button
+                        size="sm" variant="outline" className="h-7 text-xs gap-1"
+                        onClick={() => setAssignTarget({ id: e.id, name: `${e.firstName} ${e.lastName}` })}
+                      >
+                        <UserPlus size={12} /> Assign Shift
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
+      {assignTarget && (
+        <AssignIndividualDialog
+          staffShifts={staffShifts}
+          initialEmployee={assignTarget}
+          onClose={() => setAssignTarget(null)}
+        />
       )}
     </div>
   );
@@ -630,14 +723,18 @@ function AssignedShiftsTab() {
 // Assign dialogs
 // ─────────────────────────────────────────────────────────────────────────────
 
-function AssignIndividualDialog({ staffShifts, onClose }: { staffShifts: ShiftTemplate[]; onClose: () => void }) {
+function AssignIndividualDialog({ staffShifts, onClose, initialEmployee }: {
+  staffShifts: ShiftTemplate[];
+  onClose: () => void;
+  initialEmployee?: { id: number; name: string };
+}) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [shiftId, setShiftId] = useState("");
   const [effectiveFrom, setEffectiveFrom] = useState(new Date().toISOString().slice(0, 10));
   const [search, setSearch] = useState("");
-  const [selectedEmpId, setSelectedEmpId] = useState<number | null>(null);
-  const [selectedEmpName, setSelectedEmpName] = useState("");
+  const [selectedEmpId, setSelectedEmpId] = useState<number | null>(initialEmployee?.id ?? null);
+  const [selectedEmpName, setSelectedEmpName] = useState(initialEmployee?.name ?? "");
   const [customStartTime, setCustomStartTime] = useState("");
   const [customEndTime, setCustomEndTime] = useState("");
   const [saturdayOff, setSaturdayOff] = useState(false);

@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import HrLayout from "@/components/HrLayout";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -16,43 +17,29 @@ import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Plus, CheckCircle, Cpu, FileSpreadsheet, UploadCloud, RefreshCw, Edit, Trash, Settings, Clock, CreditCard, Layers, Download } from "lucide-react";
+import { Play, CheckCircle, Edit, Clock, CreditCard, Layers, Download, UserCheck, Factory, Info } from "lucide-react";
 import EmployeeSearchSelect from "@/components/EmployeeSearchSelect";
-import Loader from "@/components/Loader";
 import { customFetch } from "@/lib/api-client/custom-fetch";
 import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
 import PayrollGenerationPipeline from "@/components/PayrollGenerationPipeline";
 import { exportPayrollToExcel } from "@/lib/payrollExcelExport";
 
-// Form schemas
-const manualPunchSchema = z.object({
-  employeeId: z.string().min(1, "Employee is required"),
-  date: z.string().min(1, "Date is required"),
-  punchTime: z.string().min(1, "Time is required"),
-  punchType: z.enum(["IN", "OUT"]),
-});
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+const MONTH_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
+// Form schema
 const payrollAdjustmentSchema = z.object({
   bonus: z.string().min(1, "Bonus amount required"),
   deductions: z.string().min(1, "Deduction amount required"),
   notes: z.string().optional(),
 });
 
-const sessionConfigSchema = z.object({
-  name: z.string().min(1, "Session Name required"),
-  startTime: z.string().min(1, "Start Time required"),
-  endTime: z.string().min(1, "End Time required"),
-  payAmount: z.string().min(1, "Pay amount required"),
-  isOvertime: z.boolean().default(false),
-  order: z.string().min(1, "Order required"),
-});
-
 export default function Salary() {
   const { toast } = useToast();
   const { data: employees } = useListEmployees({ status: "active" });
-  
-  // Tabs
-  const [activeTab, setActiveTab] = useState<"payroll" | "punches" | "sessions" | "configs">("payroll");
 
   // Filter States
   const [empFilter, setEmpFilter] = useState("all");
@@ -60,54 +47,36 @@ export default function Salary() {
   const [yearFilter, setYearFilter] = useState(String(new Date().getFullYear()));
   const [statusFilter, setStatusFilter] = useState("all");
   const [payrollGroup, setPayrollGroup] = useState<"staff" | "production">("staff");
+  // Production is generated bi-weekly (1–15 / 16–end of month) — mirrors the
+  // Week 1&2 / Week 3&4 split already on the Payroll page.
+  const [prodWeek, setProdWeek] = useState<"week12" | "week34">("week12");
 
   // Data Loading States
   const [payrolls, setPayrolls] = useState<any[]>([]);
-  const [punches, setPunches] = useState<any[]>([]);
-  const [sessions, setSessions] = useState<any[]>([]);
-  const [configs, setConfigs] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // Generate Payroll dialog month/year (separate from display filter)
+  // Generate Payroll dialog state (separate from display filter)
   const [genMonth, setGenMonth] = useState(String(new Date().getMonth() + 1));
   const [genYear, setGenYear] = useState(String(new Date().getFullYear()));
+  const [genRunType, setGenRunType] = useState<"monthly" | "biweekly">("monthly");
+  const [genWeekNumber, setGenWeekNumber] = useState<1 | 2>(1);
 
   // Dialog open states
   const [runPayrollOpen, setRunPayrollOpen] = useState(false);
-  const [runProcessOpen, setRunProcessOpen] = useState(false);
-  const [manualPunchOpen, setManualPunchOpen] = useState(false);
   const [adjustPayrollOpen, setAdjustPayrollOpen] = useState(false);
-  const [configOpen, setConfigOpen] = useState(false);
-  
+
   // Selected state for editing
   const [selectedPayroll, setSelectedPayroll] = useState<any | null>(null);
-  const [selectedConfig, setSelectedConfig] = useState<any | null>(null);
-
-  // File Upload State
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
 
   // Pagination
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 10;
-
-  // Forms
-  const manualPunchForm = useForm<z.infer<typeof manualPunchSchema>>({
-    resolver: zodResolver(manualPunchSchema),
-    defaultValues: { punchType: "IN" },
-  });
 
   const payrollAdjustForm = useForm<z.infer<typeof payrollAdjustmentSchema>>({
     resolver: zodResolver(payrollAdjustmentSchema),
     defaultValues: { bonus: "0", deductions: "0", notes: "" },
   });
 
-  const sessionConfigForm = useForm<z.infer<typeof sessionConfigSchema>>({
-    resolver: zodResolver(sessionConfigSchema),
-    defaultValues: { name: "", startTime: "08:30", endTime: "11:00", payAmount: "150", isOvertime: false, order: "1" },
-  });
-
-  // Fetch functions using customFetch
   const fetchPayrolls = async (overrideMonth?: string, overrideYear?: string) => {
     try {
       setLoading(true);
@@ -125,52 +94,12 @@ export default function Salary() {
     }
   };
 
-  const fetchPunches = async () => {
-    try {
-      setLoading(true);
-      let url = `/api/attendance-logs?month=${monthFilter}&year=${yearFilter}`;
-      if (empFilter !== "all") url += `&employeeId=${empFilter}`;
-      const data = await customFetch<any[]>(url);
-      setPunches(data);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchSessions = async () => {
-    try {
-      setLoading(true);
-      let url = `/api/work-sessions?month=${monthFilter}&year=${yearFilter}`;
-      if (empFilter !== "all") url += `&employeeId=${empFilter}`;
-      const data = await customFetch<any[]>(url);
-      setSessions(data);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchConfigs = async () => {
-    try {
-      const data = await customFetch<any[]>("/api/session-configs");
-      setConfigs(data);
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
   useEffect(() => {
-    if (activeTab === "payroll") fetchPayrolls();
-    if (activeTab === "punches") fetchPunches();
-    if (activeTab === "sessions") fetchSessions();
-    if (activeTab === "configs") fetchConfigs();
+    fetchPayrolls();
     setPage(1);
-  }, [activeTab, empFilter, monthFilter, yearFilter, statusFilter]);
+  }, [empFilter, monthFilter, yearFilter, statusFilter]);
 
-  useEffect(() => { setPage(1); }, [payrollGroup]);
+  useEffect(() => { setPage(1); }, [payrollGroup, prodWeek]);
 
   // Payroll generation lives in a root-level context (PayrollGenerationProvider)
   // so it keeps running — and stays visible via the pipeline/banner — even if
@@ -183,7 +112,7 @@ export default function Salary() {
   useEffect(() => {
     if (wasGeneratingRef.current && !isGenerating && generatedParamsRef.current) {
       const { month, year } = generatedParamsRef.current;
-      if (activeTab === "payroll") fetchPayrolls(month, year);
+      fetchPayrolls(month, year);
       generatedParamsRef.current = null;
     }
     wasGeneratingRef.current = isGenerating;
@@ -196,96 +125,23 @@ export default function Salary() {
       return;
     }
     generatedParamsRef.current = { month: genMonth, year: genYear };
-    triggerGenerate({ month: Number(genMonth), year: Number(genYear) });
-    // Switch display filter to the generated month right away so the list
-    // is pointed at the right period once results land.
+    // Always send an explicit runType — omitting it falls back to the
+    // backend's "all" default, which generates staff monthly AND both
+    // production bi-weekly periods together in one call. Staff is generated
+    // monthly and Production is generated bi-weekly on separate schedules,
+    // so they must never be forced to run together.
+    triggerGenerate({
+      month: Number(genMonth), year: Number(genYear),
+      runType: genRunType,
+      weekNumber: genRunType === "biweekly" ? genWeekNumber : undefined,
+    });
+    // Switch display filter/group to the generated period right away so the
+    // list is pointed at the right period once results land.
     setMonthFilter(genMonth);
     setYearFilter(genYear);
+    setPayrollGroup(genRunType === "monthly" ? "staff" : "production");
+    if (genRunType === "biweekly") setProdWeek(genWeekNumber === 1 ? "week12" : "week34");
     setRunPayrollOpen(false);
-  };
-
-  const handleProcessSessions = async () => {
-    try {
-      setLoading(true);
-      const res = await customFetch<any>("/api/attendance-logs/process-sessions", {
-        method: "POST",
-        body: JSON.stringify({ month: Number(monthFilter), year: Number(yearFilter) }),
-      });
-      toast({
-        title: "Success",
-        description: res.message || "Punch sessions paired and processed successfully.",
-      });
-      fetchSessions();
-      setRunProcessOpen(false);
-    } catch (err: any) {
-      toast({
-        title: "Error",
-        description: err.data?.error || "Failed to process logs.",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleExcelUpload = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!uploadFile) return;
-    setUploading(true);
-    try {
-      const formData = new FormData();
-      formData.append("file", uploadFile);
-
-      // Fetch base options for customFetch with multipart body
-      const response = await fetch(`${window.location.origin}/api/attendance-logs/upload-excel`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem("uk_textile_token")}`,
-        },
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || "Failed to upload excel file");
-      }
-
-      const res = await response.json();
-      toast({
-        title: "Excel Upload Complete",
-        description: res.message || "Attendance punches imported successfully.",
-      });
-      fetchPunches();
-      setUploadFile(null);
-    } catch (err: any) {
-      toast({
-        title: "Excel Import Failed",
-        description: err.message || "Excel template parsing failed.",
-        variant: "destructive",
-      });
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const submitManualPunch = async (data: z.infer<typeof manualPunchSchema>) => {
-    try {
-      await customFetch("/api/attendance-logs", {
-        method: "POST",
-        body: JSON.stringify({
-          employeeId: Number(data.employeeId),
-          date: data.date,
-          punchTime: data.punchTime,
-          punchType: data.punchType,
-        }),
-      });
-      toast({ title: "Punch log added" });
-      fetchPunches();
-      setManualPunchOpen(false);
-      manualPunchForm.reset();
-    } catch (err: any) {
-      toast({ title: "Failed to add log", description: err.data?.error || "", variant: "destructive" });
-    }
   };
 
   const submitAdjustment = async (data: z.infer<typeof payrollAdjustmentSchema>) => {
@@ -320,90 +176,32 @@ export default function Salary() {
     }
   };
 
-  const submitSessionConfig = async (data: z.infer<typeof sessionConfigSchema>) => {
-    try {
-      if (selectedConfig) {
-        // Edit mode
-        await customFetch(`/api/session-configs/${selectedConfig.id}`, {
-          method: "PATCH",
-          body: JSON.stringify({
-            name: data.name,
-            startTime: data.startTime,
-            endTime: data.endTime,
-            payAmount: Number(data.payAmount),
-            isOvertime: data.isOvertime,
-            order: Number(data.order),
-          }),
-        });
-        toast({ title: "Session configuration updated" });
-      } else {
-        // Add mode
-        await customFetch("/api/session-configs", {
-          method: "POST",
-          body: JSON.stringify({
-            name: data.name,
-            startTime: data.startTime,
-            endTime: data.endTime,
-            payAmount: Number(data.payAmount),
-            isOvertime: data.isOvertime,
-            order: Number(data.order),
-          }),
-        });
-        toast({ title: "Session configuration created" });
-      }
-      fetchConfigs();
-      setConfigOpen(false);
-      setSelectedConfig(null);
-    } catch (err: any) {
-      toast({ title: "Operation failed", description: err.data?.error || "", variant: "destructive" });
-    }
-  };
-
-  const deleteConfig = async (id: number) => {
-    if (!confirm("Are you sure you want to delete this session config?")) return;
-    try {
-      await customFetch(`/api/session-configs/${id}`, { method: "DELETE" });
-      toast({ title: "Configuration deleted" });
-      fetchConfigs();
-    } catch (err: any) {
-      toast({ title: "Delete failed", description: err.data?.error || "", variant: "destructive" });
-    }
-  };
-
   // Staff vs Production split — staff pay is salaryMode "monthly", production is "session" (legacy) or "shift" (current)
   const isProductionMode = (mode: string) => mode === "session" || mode === "shift";
   const staffPayrolls = payrolls.filter(p => p.salaryMode === "monthly");
   const productionPayrolls = payrolls.filter(p => isProductionMode(p.salaryMode));
-  const groupedPayrolls = payrollGroup === "staff" ? staffPayrolls : productionPayrolls;
+  const week12Payrolls = productionPayrolls.filter(p => p.weekNumber === 1);
+  const week34Payrolls = productionPayrolls.filter(p => p.weekNumber === 2);
+  const groupedPayrolls = payrollGroup === "staff"
+    ? staffPayrolls
+    : (prodWeek === "week12" ? week12Payrolls : week34Payrolls);
 
-  // Stats calculation (reflects the selected Staff/Production group)
+  // Stats calculation (reflects the selected Staff/Production/Week group)
   const totalGross = groupedPayrolls.reduce((sum, p) => sum + p.grossSalary, 0);
   const totalPaid = groupedPayrolls.filter(p => p.status === "paid").reduce((sum, p) => sum + p.finalSalary, 0);
   const totalPending = groupedPayrolls.filter(p => p.status === "pending").reduce((sum, p) => sum + p.finalSalary, 0);
 
   // Paginated Data
-  const getPaginatedData = () => {
-    let dataList: any[] = [];
-    if (activeTab === "payroll") dataList = groupedPayrolls;
-    else if (activeTab === "punches") dataList = punches;
-    else if (activeTab === "sessions") dataList = sessions;
-    else if (activeTab === "configs") dataList = configs;
+  const totalRecords = groupedPayrolls.length;
+  const totalPages = Math.max(1, Math.ceil(totalRecords / PAGE_SIZE));
+  const currentPage = page > totalPages ? totalPages : page;
+  const paginated = groupedPayrolls.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
-    const totalRecords = dataList.length;
-    const totalPages = Math.max(1, Math.ceil(totalRecords / PAGE_SIZE));
-    
-    // Safety check on page limits
-    const currentPage = page > totalPages ? totalPages : page;
-
-    return {
-      paginated: dataList.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
-      totalRecords,
-      totalPages,
-      currentPage,
-    };
-  };
-
-  const { paginated, totalRecords, totalPages, currentPage } = getPaginatedData();
+  const lastDay = new Date(Number(genYear), Number(genMonth), 0).getDate();
+  const weekRange = genWeekNumber === 1
+    ? `1–15 ${MONTH_SHORT[Number(genMonth) - 1]}`
+    : `16–${lastDay} ${MONTH_SHORT[Number(genMonth) - 1]}`;
+  const filterLastDay = new Date(Number(yearFilter), Number(monthFilter), 0).getDate();
 
   return (
     <HrLayout>
@@ -413,51 +211,40 @@ export default function Salary() {
           <div>
             <h1 className="text-3xl font-black tracking-tight text-slate-900 flex items-center gap-2">
               <CreditCard size={28} className="text-indigo-600" />
-              Enterprise Payroll Dashboard
+              Salary
             </h1>
             <p className="text-muted-foreground text-sm mt-1">
-              Garment Industry Payroll processing including raw biometric logs, paired session rates, and weekly/monthly worker payroll.
+              Computed payroll records — Staff handled monthly, Production handled week-wise.
             </p>
           </div>
-          
+
           <div className="flex flex-wrap gap-2">
-            {activeTab === "payroll" && (
-              <>
-                {groupedPayrolls.length > 0 && (
-                  <Button
-                    variant="outline"
-                    className="gap-2 border-green-600 text-green-700 hover:bg-green-50"
-                    onClick={() => exportPayrollToExcel(
-                      groupedPayrolls,
-                      payrollGroup === "staff" ? "Staff" : "Production",
-                      `${new Date(2000, Number(monthFilter) - 1).toLocaleDateString("en-US", { month: "long" })}_${yearFilter}`,
-                    )}
-                  >
-                    <Download size={16} /> Export to Excel
-                  </Button>
+            {groupedPayrolls.length > 0 && (
+              <Button
+                variant="outline"
+                className="gap-2 border-green-600 text-green-700 hover:bg-green-50"
+                onClick={() => exportPayrollToExcel(
+                  groupedPayrolls,
+                  payrollGroup === "staff" ? "Staff" : `Production_${prodWeek === "week12" ? "Week1-2" : "Week3-4"}`,
+                  `${new Date(2000, Number(monthFilter) - 1).toLocaleDateString("en-US", { month: "long" })}_${yearFilter}`,
                 )}
-                <Button onClick={() => { setGenMonth(monthFilter); setGenYear(yearFilter); setRunPayrollOpen(true); }} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition duration-200">
-                  <Cpu size={16} className="mr-2 animate-pulse" />
-                  Generate Period Payroll
-                </Button>
-              </>
-            )}
-            {activeTab === "punches" && (
-              <Button onClick={() => setManualPunchOpen(true)} variant="outline" className="border-indigo-200 hover:bg-indigo-50">
-                <Plus size={16} className="mr-2" /> Manual Punch Log
+              >
+                <Download size={16} /> Export to Excel
               </Button>
             )}
-            {activeTab === "sessions" && (
-              <Button onClick={() => setRunProcessOpen(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition duration-200">
-                <RefreshCw size={16} className="mr-2 animate-spin-slow" />
-                Pair & Process Sessions
-              </Button>
-            )}
-            {activeTab === "configs" && (
-              <Button onClick={() => { setSelectedConfig(null); sessionConfigForm.reset(); setConfigOpen(true); }} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold">
-                <Plus size={16} className="mr-2" /> Add Session Rate
-              </Button>
-            )}
+            <Button
+              onClick={() => {
+                setGenMonth(monthFilter);
+                setGenYear(yearFilter);
+                setGenRunType(payrollGroup === "staff" ? "monthly" : "biweekly");
+                setGenWeekNumber(prodWeek === "week12" ? 1 : 2);
+                setRunPayrollOpen(true);
+              }}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition duration-200"
+            >
+              <Play size={16} className="mr-2" />
+              Generate Payroll
+            </Button>
           </div>
         </div>
 
@@ -478,7 +265,7 @@ export default function Salary() {
                 dataTestId="select-employee-filter"
               />
             </div>
-            
+
             <div>
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Target Month</label>
               <Select value={monthFilter} onValueChange={setMonthFilter}>
@@ -509,21 +296,19 @@ export default function Salary() {
               </Select>
             </div>
 
-            {activeTab === "payroll" && (
-              <div>
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Payment Status</label>
-                <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger className="w-36 font-medium">
-                    <SelectValue placeholder="Status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Payrolls</SelectItem>
-                    <SelectItem value="paid">Paid</SelectItem>
-                    <SelectItem value="pending">Pending</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
+            <div>
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Payment Status</label>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-36 font-medium">
+                  <SelectValue placeholder="Status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Payrolls</SelectItem>
+                  <SelectItem value="paid">Paid</SelectItem>
+                  <SelectItem value="pending">Pending</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
 
             <div className="self-end pb-0.5">
               {(empFilter !== "all" || statusFilter !== "all" || monthFilter !== String(new Date().getMonth() + 1)) && (
@@ -535,394 +320,158 @@ export default function Salary() {
           </CardContent>
         </Card>
 
-        {/* Dynamic Financial Overview Cards (Only on Payroll Tab) */}
-        {activeTab === "payroll" && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Card className="border-l-4 border-l-indigo-600 bg-white shadow-sm">
-              <CardContent className="p-5 flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Gross Payroll Amount</p>
-                  <h3 className="text-2xl font-black text-slate-900 mt-1">₹{totalGross.toLocaleString("en-IN")}</h3>
-                </div>
-                <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
-                  <Layers size={22} />
-                </div>
-              </CardContent>
-            </Card>
+        {/* Financial Overview Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <Card className="border-l-4 border-l-indigo-600 bg-white shadow-sm">
+            <CardContent className="p-5 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Gross Payroll Amount</p>
+                <h3 className="text-2xl font-black text-slate-900 mt-1">₹{totalGross.toLocaleString("en-IN")}</h3>
+              </div>
+              <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
+                <Layers size={22} />
+              </div>
+            </CardContent>
+          </Card>
 
-            <Card className="border-l-4 border-l-emerald-500 bg-white shadow-sm">
-              <CardContent className="p-5 flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Paid Payroll</p>
-                  <h3 className="text-2xl font-black text-slate-900 mt-1">₹{totalPaid.toLocaleString("en-IN")}</h3>
-                </div>
-                <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
-                  <CheckCircle size={22} />
-                </div>
-              </CardContent>
-            </Card>
+          <Card className="border-l-4 border-l-emerald-500 bg-white shadow-sm">
+            <CardContent className="p-5 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Paid Payroll</p>
+                <h3 className="text-2xl font-black text-slate-900 mt-1">₹{totalPaid.toLocaleString("en-IN")}</h3>
+              </div>
+              <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
+                <CheckCircle size={22} />
+              </div>
+            </CardContent>
+          </Card>
 
-            <Card className="border-l-4 border-l-amber-500 bg-white shadow-sm">
-              <CardContent className="p-5 flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Pending Release</p>
-                  <h3 className="text-2xl font-black text-slate-900 mt-1">₹{totalPending.toLocaleString("en-IN")}</h3>
-                </div>
-                <div className="p-3 bg-amber-50 text-amber-600 rounded-xl">
-                  <Clock size={22} />
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        )}
+          <Card className="border-l-4 border-l-amber-500 bg-white shadow-sm">
+            <CardContent className="p-5 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Pending Release</p>
+                <h3 className="text-2xl font-black text-slate-900 mt-1">₹{totalPending.toLocaleString("en-IN")}</h3>
+              </div>
+              <div className="p-3 bg-amber-50 text-amber-600 rounded-xl">
+                <Clock size={22} />
+              </div>
+            </CardContent>
+          </Card>
+        </div>
 
-        {/* Tab Navigation */}
+        {/* Staff / Production toggle */}
         <PillTabs
           items={[
-            { value: "payroll", label: "📊 Payroll Computed Records" },
-            { value: "punches", label: "📥 Biometric Raw Punches" },
-            { value: "sessions", label: "⚙️ Paired Work Sessions" },
-            { value: "configs", label: "🛠️ Session configurations" },
+            { value: "staff", label: "Staff", count: staffPayrolls.length },
+            { value: "production", label: "Production", count: productionPayrolls.length },
           ]}
-          value={activeTab}
-          onChange={(v) => setActiveTab(v as typeof activeTab)}
-          baseColor="#4f46e5"
+          value={payrollGroup}
+          onChange={(v) => setPayrollGroup(v as "staff" | "production")}
+          baseColor="#0f172a"
           pillBg="#f1f5f9"
         />
 
-        {/* Staff / Production toggle — payroll tab only */}
-        {activeTab === "payroll" && (
+        {/* Week 1&2 / Week 3&4 toggle — Production only */}
+        {payrollGroup === "production" && (
           <PillTabs
             items={[
-              { value: "staff", label: "Staff", count: staffPayrolls.length },
-              { value: "production", label: "Production", count: productionPayrolls.length },
+              { value: "week12", label: `Week 1 & 2 (1–15 ${MONTH_SHORT[Number(monthFilter) - 1]})`, count: week12Payrolls.length },
+              { value: "week34", label: `Week 3 & 4 (16–${filterLastDay} ${MONTH_SHORT[Number(monthFilter) - 1]})`, count: week34Payrolls.length },
             ]}
-            value={payrollGroup}
-            onChange={(v) => setPayrollGroup(v as "staff" | "production")}
-            baseColor="#0f172a"
+            value={prodWeek}
+            onChange={(v) => setProdWeek(v as "week12" | "week34")}
+            baseColor="#d97706"
             pillBg="#f1f5f9"
           />
         )}
 
-        {/* MAIN DATA PANELS */}
+        {/* PAYROLL COMPUTATION RECORDS */}
         <div className="flex-1">
-          {/* TAB 1: PAYROLL COMPUTATION RECORDS */}
-          {activeTab === "payroll" && (
-            <Card className="shadow-sm border-slate-100 bg-white">
-              <CardContent className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-slate-50">
-                      <TableHead className="pl-4 font-bold text-slate-700">Employee</TableHead>
-                      <TableHead className="font-bold text-slate-700">Mode</TableHead>
-                      <TableHead className="font-bold text-slate-700">Period</TableHead>
-                      <TableHead className="font-bold text-slate-700">{payrollGroup === "production" ? "Shifts Worked" : "Present (Days)"}</TableHead>
-                      <TableHead className="font-bold text-slate-700">Basic Rate</TableHead>
-                      <TableHead className="font-bold text-slate-700">OT Pay</TableHead>
-                      <TableHead className="font-bold text-slate-700">Bonus / Deduct</TableHead>
-                      <TableHead className="font-bold text-slate-700">Final Payout</TableHead>
-                      <TableHead className="font-bold text-slate-700">Status</TableHead>
-                      <TableHead className="pr-4 text-right font-bold text-slate-700">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {loading && paginated.length === 0 ? (
-                      Array.from({ length: 5 }).map((_, i) => (
-                        <TableRow key={i}>
-                          {Array.from({ length: 10 }).map((_, j) => (
-                            <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>
-                          ))}
-                        </TableRow>
-                      ))
-                    ) : paginated.length > 0 ? (
-                      paginated.map((rec) => (
-                        <TableRow key={rec.id} className="hover:bg-slate-50/50">
-                          <TableCell className="pl-4 font-semibold text-slate-900">
-                            <div>{rec.employeeName}</div>
-                            <span className="text-[10px] text-slate-400 block font-mono">ID: {rec.employeeId}</span>
-                          </TableCell>
-                          <TableCell className="text-xs font-semibold">
-                            <Badge variant="outline" className={rec.salaryMode === "monthly" ? "text-blue-700 bg-blue-50 border-blue-100" : "text-purple-700 bg-purple-50 border-purple-100"}>
-                              {rec.salaryMode === "monthly" ? "Monthly" : rec.salaryMode === "shift" ? "Shift" : "Session"}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-xs font-medium text-slate-600">{rec.month}/{rec.year}</TableCell>
-                          <TableCell className="text-xs font-mono font-medium text-slate-700">
-                            {isProductionMode(rec.salaryMode) ? `${rec.presentDays} Shifts` : `${rec.presentDays} Days`}
-                          </TableCell>
-                          <TableCell className="font-medium text-xs">₹{rec.baseSalary.toLocaleString("en-IN")}</TableCell>
-                          <TableCell className="font-medium text-xs text-indigo-600">₹{rec.otAmount.toLocaleString("en-IN")}</TableCell>
-                          <TableCell className="text-xs">
-                            <span className="text-emerald-600 font-semibold">+₹{rec.bonus}</span>
-                            <span className="text-rose-600 font-semibold ml-2">-₹{rec.deductions}</span>
-                          </TableCell>
-                          <TableCell className="font-black text-indigo-700 text-sm">₹{rec.finalSalary.toLocaleString("en-IN")}</TableCell>
-                          <TableCell>
-                            <Badge className={rec.status === "paid" ? "bg-emerald-100 text-emerald-800 border-transparent font-bold hover:bg-emerald-200" : "bg-amber-100 text-amber-800 border-transparent font-bold hover:bg-amber-200"}>
-                              {rec.status.toUpperCase()}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="pr-4 text-right flex gap-1 justify-end">
-                            <Button size="icon" variant="ghost" className="h-8 w-8 text-indigo-600 hover:text-indigo-800" onClick={() => {
-                              setSelectedPayroll(rec);
-                              payrollAdjustForm.setValue("bonus", String(rec.bonus));
-                              payrollAdjustForm.setValue("deductions", String(rec.deductions));
-                              payrollAdjustForm.setValue("notes", rec.notes || "");
-                              setAdjustPayrollOpen(true);
-                            }}>
-                              <Edit size={14} />
+          <Card className="shadow-sm border-slate-100 bg-white">
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-slate-50">
+                    <TableHead className="pl-4 font-bold text-slate-700">Employee</TableHead>
+                    <TableHead className="font-bold text-slate-700">Mode</TableHead>
+                    <TableHead className="font-bold text-slate-700">Period</TableHead>
+                    <TableHead className="font-bold text-slate-700">{payrollGroup === "production" ? "Shifts Worked" : "Present (Days)"}</TableHead>
+                    <TableHead className="font-bold text-slate-700">Basic Rate</TableHead>
+                    <TableHead className="font-bold text-slate-700">OT Pay</TableHead>
+                    <TableHead className="font-bold text-slate-700">Bonus / Deduct</TableHead>
+                    <TableHead className="font-bold text-slate-700">Final Payout</TableHead>
+                    <TableHead className="font-bold text-slate-700">Status</TableHead>
+                    <TableHead className="pr-4 text-right font-bold text-slate-700">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {loading && paginated.length === 0 ? (
+                    Array.from({ length: 5 }).map((_, i) => (
+                      <TableRow key={i}>
+                        {Array.from({ length: 10 }).map((_, j) => (
+                          <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>
+                        ))}
+                      </TableRow>
+                    ))
+                  ) : paginated.length > 0 ? (
+                    paginated.map((rec) => (
+                      <TableRow key={rec.id} className="hover:bg-slate-50/50">
+                        <TableCell className="pl-4 font-semibold text-slate-900">
+                          <div>{rec.employeeName}</div>
+                          <span className="text-[10px] text-slate-400 block font-mono">ID: {rec.employeeId}</span>
+                        </TableCell>
+                        <TableCell className="text-xs font-semibold">
+                          <Badge variant="outline" className={rec.salaryMode === "monthly" ? "text-blue-700 bg-blue-50 border-blue-100" : "text-purple-700 bg-purple-50 border-purple-100"}>
+                            {rec.salaryMode === "monthly" ? "Monthly" : rec.salaryMode === "shift" ? "Shift" : "Session"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-xs font-medium text-slate-600">
+                          {rec.month}/{rec.year}{rec.weekNumber ? ` · Wk ${rec.weekNumber}` : ""}
+                        </TableCell>
+                        <TableCell className="text-xs font-mono font-medium text-slate-700">
+                          {isProductionMode(rec.salaryMode) ? `${rec.presentDays} Shifts` : `${rec.presentDays} Days`}
+                        </TableCell>
+                        <TableCell className="font-medium text-xs">₹{rec.baseSalary.toLocaleString("en-IN")}</TableCell>
+                        <TableCell className="font-medium text-xs text-indigo-600">₹{rec.otAmount.toLocaleString("en-IN")}</TableCell>
+                        <TableCell className="text-xs">
+                          <span className="text-emerald-600 font-semibold">+₹{rec.bonus}</span>
+                          <span className="text-rose-600 font-semibold ml-2">-₹{rec.deductions}</span>
+                        </TableCell>
+                        <TableCell className="font-black text-indigo-700 text-sm">₹{rec.finalSalary.toLocaleString("en-IN")}</TableCell>
+                        <TableCell>
+                          <Badge className={rec.status === "paid" ? "bg-emerald-100 text-emerald-800 border-transparent font-bold hover:bg-emerald-200" : "bg-amber-100 text-amber-800 border-transparent font-bold hover:bg-amber-200"}>
+                            {rec.status.toUpperCase()}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="pr-4 text-right flex gap-1 justify-end">
+                          <Button size="icon" variant="ghost" className="h-8 w-8 text-indigo-600 hover:text-indigo-800" onClick={() => {
+                            setSelectedPayroll(rec);
+                            payrollAdjustForm.setValue("bonus", String(rec.bonus));
+                            payrollAdjustForm.setValue("deductions", String(rec.deductions));
+                            payrollAdjustForm.setValue("notes", rec.notes || "");
+                            setAdjustPayrollOpen(true);
+                          }}>
+                            <Edit size={14} />
+                          </Button>
+                          {rec.status === "pending" && (
+                            <Button size="sm" variant="ghost" className="h-8 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 px-2" onClick={() => markPayrollPaid(rec.id)}>
+                              <CheckCircle size={13} className="mr-1" /> Pay
                             </Button>
-                            {rec.status === "pending" && (
-                              <Button size="sm" variant="ghost" className="h-8 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 px-2" onClick={() => markPayrollPaid(rec.id)}>
-                                <CheckCircle size={13} className="mr-1" /> Pay
-                              </Button>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    ) : (
-                      <TableRow>
-                        <TableCell colSpan={11} className="text-center py-16 text-muted-foreground">
-                          No payroll computations generated for this month. Click "Generate Period Payroll" to run the wage engine.
-
+                          )}
                         </TableCell>
                       </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* TAB 2: BIOMETRIC RAW PUNCHES */}
-          {activeTab === "punches" && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                {/* Excel Import Card */}
-                <Card className="lg:col-span-1 border-slate-100 bg-white shadow-sm">
-                  <CardHeader className="pb-3"><CardTitle className="text-base font-bold text-slate-800">Import Biometric Sheets</CardTitle></CardHeader>
-                  <CardContent>
-                    <form onSubmit={handleExcelUpload} className="space-y-4">
-                      <div className="border-2 border-dashed border-slate-200 hover:border-indigo-400 transition rounded-xl p-6 text-center bg-slate-50/50 cursor-pointer relative">
-                        <input
-                          type="file"
-                          accept=".xlsx, .xls"
-                          onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
-                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                        />
-                        <div className="flex flex-col items-center gap-2">
-                          <UploadCloud size={32} className="text-indigo-500" />
-                          <span className="text-xs font-bold text-slate-700">
-                            {uploadFile ? uploadFile.name : "Drag Excel or Click to Browse"}
-                          </span>
-                          <span className="text-[10px] text-slate-400">Supports standard IN/OUT punch lists</span>
-                        </div>
-                      </div>
-                      
-                      <div className="text-[11px] bg-indigo-50 text-indigo-700 p-2.5 rounded-lg border border-indigo-100">
-                        <strong>Expected Columns:</strong> Employee ID, Employee Name, Date, Time, Type (IN/OUT)
-                      </div>
-
-                      <Button type="submit" disabled={!uploadFile || uploading} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition">
-                        {uploading ? "Importing punch lists..." : "Import punches from Excel"}
-                      </Button>
-                    </form>
-                  </CardContent>
-                </Card>
-
-                {/* Raw Punches Logs list */}
-                <Card className="lg:col-span-2 border-slate-100 bg-white shadow-sm">
-                  <CardHeader className="pb-3"><CardTitle className="text-base font-bold text-slate-800">Biometric Logs History</CardTitle></CardHeader>
-                  <CardContent className="p-0">
-                    <Table>
-                      <TableHeader>
-                        <TableRow className="bg-slate-50">
-                          <TableHead className="pl-4 font-bold text-slate-600">Employee ID</TableHead>
-                          <TableHead className="font-bold text-slate-600">Punch Date</TableHead>
-                          <TableHead className="font-bold text-slate-600">Punch Time</TableHead>
-                          <TableHead className="font-bold text-slate-600">Punch Type</TableHead>
-                          <TableHead className="pr-4 text-right font-bold text-slate-600">Source</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {loading && paginated.length === 0 ? (
-                          Array.from({ length: 5 }).map((_, i) => (
-                            <TableRow key={i}>
-                              {Array.from({ length: 5 }).map((_, j) => (
-                                <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>
-                              ))}
-                            </TableRow>
-                          ))
-                        ) : paginated.length > 0 ? (
-                          paginated.map((log) => {
-                            const emp = employees?.find(e => e.id === log.employeeId);
-                            const name = emp ? `${emp.firstName} ${emp.lastName}` : `ID: ${log.employeeId}`;
-                            return (
-                              <TableRow key={log.id} className="hover:bg-slate-50/50">
-                                <TableCell className="pl-4 font-semibold text-slate-900">
-                                  <div>{name}</div>
-                                  <span className="text-[10px] text-slate-400 font-mono">CODE: {emp?.employeeCode || "N/A"}</span>
-                                </TableCell>
-                                <TableCell className="text-xs font-mono font-medium text-slate-600">{log.date}</TableCell>
-                                <TableCell className="text-xs font-mono font-black text-indigo-700">{log.punchTime}</TableCell>
-                                <TableCell>
-                                  <Badge className={log.punchType === "IN" ? "bg-blue-100 text-blue-800 hover:bg-blue-200" : "bg-rose-100 text-rose-800 hover:bg-rose-200"}>
-                                    {log.punchType}
-                                  </Badge>
-                                </TableCell>
-                                <TableCell className="pr-4 text-right capitalize text-xs text-slate-400">{log.source}</TableCell>
-                              </TableRow>
-                            );
-                          })
-                        ) : (
-                          <TableRow>
-                            <TableCell colSpan={5} className="text-center py-16 text-muted-foreground">
-                              No raw biometric punch logs found. Try importing from an Excel sheet.
-                            </TableCell>
-                          </TableRow>
-                        )}
-                      </TableBody>
-                    </Table>
-                  </CardContent>
-                </Card>
-              </div>
-            </div>
-          )}
-
-          {/* TAB 3: PAIRED WORK SESSIONS */}
-          {activeTab === "sessions" && (
-            <Card className="shadow-sm border-slate-100 bg-white">
-              <CardContent className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-slate-50">
-                      <TableHead className="pl-4 font-bold text-slate-700">Employee</TableHead>
-                      <TableHead className="font-bold text-slate-700">Date</TableHead>
-                      <TableHead className="font-bold text-slate-700">Session Name</TableHead>
-                      <TableHead className="font-bold text-slate-700">Check In</TableHead>
-                      <TableHead className="font-bold text-slate-700">Check Out</TableHead>
-                      <TableHead className="font-bold text-slate-700">Hours Worked</TableHead>
-                      <TableHead className="font-bold text-slate-700">Computed Pay</TableHead>
-                      <TableHead className="font-bold text-slate-700">Overtime?</TableHead>
-                      <TableHead className="pr-4 text-right font-bold text-slate-700">Actions</TableHead>
+                    ))
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={10} className="text-center py-16 text-muted-foreground">
+                        No payroll computations generated for this period. Click "Generate Payroll" to run the wage engine.
+                      </TableCell>
                     </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {loading && paginated.length === 0 ? (
-                      Array.from({ length: 5 }).map((_, i) => (
-                        <TableRow key={i}>
-                          {Array.from({ length: 9 }).map((_, j) => (
-                            <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>
-                          ))}
-                        </TableRow>
-                      ))
-                    ) : paginated.length > 0 ? (
-                      paginated.map((ws) => (
-                        <TableRow key={ws.id} className="hover:bg-slate-50/50">
-                          <TableCell className="pl-4 font-semibold text-slate-900">{ws.employeeName}</TableCell>
-                          <TableCell className="text-xs font-mono">{ws.date}</TableCell>
-                          <TableCell className="font-medium text-xs text-indigo-700 capitalize">{ws.sessionName} Shift</TableCell>
-                          <TableCell className="text-xs font-mono text-slate-600">{ws.checkIn}</TableCell>
-                          <TableCell className="text-xs font-mono text-slate-600">{ws.checkOut}</TableCell>
-                          <TableCell className="font-mono text-xs font-semibold text-slate-700">{ws.hoursWorked} hrs</TableCell>
-                          <TableCell className="font-bold text-sm text-slate-900">₹{ws.sessionAmount.toLocaleString("en-IN")}</TableCell>
-                          <TableCell>
-                            {ws.isOvertime ? (
-                              <Badge className="bg-purple-100 text-purple-800 border-transparent font-bold">OT</Badge>
-                            ) : (
-                              <span className="text-xs text-slate-400">—</span>
-                            )}
-                          </TableCell>
-                          <TableCell className="pr-4 text-right">
-                            <Button size="icon" variant="ghost" className="h-8 w-8 text-rose-600 hover:text-rose-800 hover:bg-rose-50" onClick={async () => {
-                              if (confirm("Delete this processed work session?")) {
-                                await customFetch(`/work-sessions/${ws.id}`, { method: "DELETE" });
-                                toast({ title: "Work Session deleted" });
-                                fetchSessions();
-                              }
-                            }}>
-                              <Trash size={14} />
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    ) : (
-                      <TableRow>
-                        <TableCell colSpan={9} className="text-center py-16 text-muted-foreground">
-                          No paired work sessions found. Click "Pair & Process Sessions" to group IN/OUT logs into wage-calculable shifts.
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* TAB 4: SESSION CONFIGURATION */}
-          {activeTab === "configs" && (
-            <Card className="shadow-sm border-slate-100 bg-white">
-              <CardContent className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-slate-50">
-                      <TableHead className="pl-4 font-bold text-slate-700">Display Order</TableHead>
-                      <TableHead className="font-bold text-slate-700">Session Name</TableHead>
-                      <TableHead className="font-bold text-slate-700">Shift Hours</TableHead>
-                      <TableHead className="font-bold text-slate-700">Standard Payout Rate</TableHead>
-                      <TableHead className="font-bold text-slate-700">Overtime Premium?</TableHead>
-                      <TableHead className="pr-4 text-right font-bold text-slate-700">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {paginated.length > 0 ? (
-                      paginated.map((cfg) => (
-                        <TableRow key={cfg.id} className="hover:bg-slate-50/50">
-                          <TableCell className="pl-4 font-mono font-medium">{cfg.order}</TableCell>
-                          <TableCell className="font-semibold text-slate-900">{cfg.name} Session</TableCell>
-                          <TableCell className="text-xs font-mono font-semibold flex items-center gap-1.5 mt-2.5">
-                            <Clock size={12} className="text-slate-400" />
-                            {cfg.startTime} – {cfg.endTime}
-                          </TableCell>
-                          <TableCell className="font-bold text-indigo-700">₹{cfg.payAmount} per shift</TableCell>
-                          <TableCell>
-                            {cfg.isOvertime ? (
-                              <Badge className="bg-purple-100 text-purple-800 border-transparent font-bold">YES</Badge>
-                            ) : (
-                              <Badge variant="outline" className="text-slate-400 border-slate-200">NO</Badge>
-                            )}
-                          </TableCell>
-                          <TableCell className="pr-4 text-right flex gap-1 justify-end">
-                            <Button size="icon" variant="ghost" className="h-8 w-8 text-indigo-600 hover:text-indigo-800" onClick={() => {
-                              setSelectedConfig(cfg);
-                              sessionConfigForm.setValue("name", cfg.name);
-                              sessionConfigForm.setValue("startTime", cfg.startTime);
-                              sessionConfigForm.setValue("endTime", cfg.endTime);
-                              sessionConfigForm.setValue("payAmount", String(cfg.payAmount));
-                              sessionConfigForm.setValue("isOvertime", cfg.isOvertime);
-                              sessionConfigForm.setValue("order", String(cfg.order));
-                              setConfigOpen(true);
-                            }}>
-                              <Edit size={14} />
-                            </Button>
-                            <Button size="icon" variant="ghost" className="h-8 w-8 text-rose-600 hover:text-rose-800" onClick={() => deleteConfig(cfg.id)}>
-                              <Trash size={14} />
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    ) : (
-                      <TableRow>
-                        <TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
-                          No custom session configurations defined.
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-          )}
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
         </div>
 
         {/* BOTTOM PAGINATION ELEMENT (Kept fixed at page end) */}
@@ -956,151 +505,104 @@ export default function Salary() {
         )}
       </div>
 
-      {/* DIALOG 1: GENERATE PERIOD PAYROLL */}
+      {/* DIALOG: GENERATE PAYROLL — Staff/Production + Week aware, mirrors PayrollFull.tsx's
+          Generate dialog so this page can never fall back to generating everything at once. */}
       <Dialog open={runPayrollOpen} onOpenChange={setRunPayrollOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Cpu className="text-indigo-600" size={20} />
-              Automated Payroll Processing
+              <Play size={16} className="text-indigo-600" />
+              Generate Payroll
             </DialogTitle>
           </DialogHeader>
-          <div className="py-4 space-y-4">
-            <div className="flex gap-3">
-              <div className="flex-1">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Payroll Month</label>
-                <Select value={genMonth} onValueChange={setGenMonth}>
-                  <SelectTrigger className="font-medium">
-                    <SelectValue placeholder="Month" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Array.from({ length: 12 }, (_, i) => (
-                      <SelectItem key={i+1} value={String(i+1)}>
-                        {new Date(2000, i).toLocaleDateString("en-US", { month: "long" })}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+          <div className="space-y-4 py-2">
+
+            {/* Run type selector */}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setGenRunType("monthly")}
+                className={`p-3 rounded-lg border-2 text-left transition-all ${genRunType === "monthly" ? "border-indigo-600 bg-indigo-50" : "border-gray-200 hover:border-gray-300"}`}
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <UserCheck size={14} className={genRunType === "monthly" ? "text-indigo-700" : "text-gray-500"} />
+                  <span className={`font-semibold text-sm ${genRunType === "monthly" ? "text-indigo-800" : "text-gray-700"}`}>Staff Monthly</span>
+                </div>
+                <p className="text-xs text-muted-foreground">Pro-rated monthly salary for all staff</p>
+              </button>
+              <button
+                onClick={() => setGenRunType("biweekly")}
+                className={`p-3 rounded-lg border-2 text-left transition-all ${genRunType === "biweekly" ? "border-amber-500 bg-amber-50" : "border-gray-200 hover:border-gray-300"}`}
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <Factory size={14} className={genRunType === "biweekly" ? "text-amber-700" : "text-gray-500"} />
+                  <span className={`font-semibold text-sm ${genRunType === "biweekly" ? "text-amber-800" : "text-gray-700"}`}>Production Bi-Weekly</span>
+                </div>
+                <p className="text-xs text-muted-foreground">Shift-based pay for production</p>
+              </button>
+            </div>
+
+            {/* Period selection */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Month</Label>
+                <select value={genMonth} onChange={e => setGenMonth(e.target.value)} className="w-full h-9 rounded-md border px-3 text-sm bg-background">
+                  {MONTH_NAMES.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+                </select>
               </div>
-              <div>
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Year</label>
-                <Select value={genYear} onValueChange={setGenYear}>
-                  <SelectTrigger className="w-28 font-medium">
-                    <SelectValue placeholder="Year" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {["2025", "2026", "2027", "2028"].map(yr => (
-                      <SelectItem key={yr} value={yr}>{yr}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Year</Label>
+                <Input type="number" value={genYear} onChange={e => setGenYear(e.target.value)} className="h-9" min={2020} max={2030} />
               </div>
             </div>
-            <p className="text-sm text-slate-500">
-              Run calculations for all active employees for <strong>{new Date(2000, Number(genMonth)-1).toLocaleDateString("en-US", { month: "long" })} {genYear}</strong>.
-            </p>
-            <div className="bg-slate-50 p-3 rounded-lg border text-xs text-slate-600 space-y-1.5">
-              <div>• <strong>Monthly Staff:</strong> Pro-rated salary = (Base / 26) * present days</div>
-              <div>• <strong>Contract Workers:</strong> Sum of completed shift rates + OT premium</div>
+
+            {/* Week selector for biweekly */}
+            {genRunType === "biweekly" && (
+              <div className="space-y-2">
+                <Label className="text-xs">Pay Period</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  {([
+                    { wk: 1 as const, label: "Week 1 & 2", range: `1–15 ${MONTH_SHORT[Number(genMonth) - 1]}` },
+                    { wk: 2 as const, label: "Week 3 & 4", range: `16–${lastDay} ${MONTH_SHORT[Number(genMonth) - 1]}` },
+                  ]).map(({ wk, label, range }) => (
+                    <button
+                      key={wk}
+                      onClick={() => setGenWeekNumber(wk)}
+                      className={`p-2.5 rounded-lg border-2 text-center transition-all ${genWeekNumber === wk ? "border-amber-500 bg-amber-50" : "border-gray-200 hover:border-amber-200"}`}
+                    >
+                      <p className={`font-bold text-sm ${genWeekNumber === wk ? "text-amber-800" : "text-gray-700"}`}>{label}</p>
+                      <p className="text-xs text-muted-foreground">{range}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Summary box */}
+            <div className={`rounded-lg p-3 flex items-start gap-2 ${genRunType === "monthly" ? "bg-indigo-50 border border-indigo-100" : "bg-amber-50 border border-amber-100"}`}>
+              <Info size={14} className={`${genRunType === "monthly" ? "text-indigo-600" : "text-amber-600"} mt-0.5 shrink-0`} />
+              <p className={`text-xs ${genRunType === "monthly" ? "text-indigo-800" : "text-amber-800"}`}>
+                {genRunType === "monthly"
+                  ? `Will generate monthly payroll for all active staff employees for ${MONTH_NAMES[Number(genMonth) - 1]} ${genYear}. Calculations are based on attendance logs, approved leave, and advances.`
+                  : `Will generate shift-based payroll for all active production employees for ${weekRange} (${genWeekNumber === 1 ? "Week 1 & 2" : "Week 3 & 4"}). Pay = total shifts earned × salary per shift.`
+                }
+              </p>
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRunPayrollOpen(false)}>Cancel</Button>
-            <Button onClick={handleGeneratePayroll} disabled={isGenerating} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold">
-              {isGenerating ? "A run is already in progress…" : "Execute Payroll Engine"}
+            <Button
+              onClick={handleGeneratePayroll} disabled={isGenerating}
+              className={genRunType === "monthly" ? "bg-indigo-600 hover:bg-indigo-700 text-white font-bold" : "bg-amber-600 hover:bg-amber-700 text-white font-bold"}
+            >
+              {isGenerating ? "A run is already in progress…" : (
+                <><Play size={13} className="mr-1.5" />Generate {genRunType === "monthly" ? "Staff" : "Production"} Payroll</>
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* DIALOG 2: PAIR & PROCESS SESSIONS */}
-      <Dialog open={runProcessOpen} onOpenChange={setRunProcessOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <RefreshCw className="text-indigo-600 animate-spin-slow" size={20} />
-              Session Processor Engine
-            </DialogTitle>
-          </DialogHeader>
-          <div className="py-4 space-y-3">
-            <p className="text-sm text-slate-500">
-              Process biometric raw punches for <strong>{new Date(2000, Number(monthFilter)-1).toLocaleDateString("en-US", { month: "long" })} {yearFilter}</strong>.
-            </p>
-            <p className="text-xs text-amber-600 font-semibold bg-amber-50 p-2.5 rounded-md border border-amber-100">
-              Warning: This will group raw IN/OUT punch pairs into standard work shifts, calculate session rates, and overwrite any manual session logs for this month.
-            </p>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRunProcessOpen(false)}>Cancel</Button>
-            <Button onClick={handleProcessSessions} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold">
-              Pair IN/OUT Logs
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* DIALOG 3: MANUAL PUNCH LOG */}
-      <Dialog open={manualPunchOpen} onOpenChange={setManualPunchOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>Manual Punch Correction</DialogTitle></DialogHeader>
-          <Form {...manualPunchForm}>
-            <form onSubmit={manualPunchForm.handleSubmit(submitManualPunch)} className="space-y-4">
-              <FormField control={manualPunchForm.control} name="employeeId" render={({ field }) => (
-                <FormItem className="flex flex-col">
-                  <FormLabel>Employee</FormLabel>
-                  <FormControl>
-                    <EmployeeSearchSelect
-                      employees={employees}
-                      value={field.value}
-                      onChange={field.onChange}
-                      placeholder="Select employee"
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )} />
-              
-              <div className="grid grid-cols-2 gap-3">
-                <FormField control={manualPunchForm.control} name="date" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Date</FormLabel>
-                    <FormControl><Input type="date" {...field} /></FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-                <FormField control={manualPunchForm.control} name="punchTime" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Time (HH:MM)</FormLabel>
-                    <FormControl><Input type="time" {...field} /></FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-              </div>
-
-              <FormField control={manualPunchForm.control} name="punchType" render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Punch Type</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value}>
-                    <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
-                    <SelectContent>
-                      <SelectItem value="IN">IN Punch</SelectItem>
-                      <SelectItem value="OUT">OUT Punch</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
-              )} />
-
-              <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setManualPunchOpen(false)}>Cancel</Button>
-                <Button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold">Save Punch</Button>
-              </DialogFooter>
-            </form>
-          </Form>
-        </DialogContent>
-      </Dialog>
-
-      {/* DIALOG 4: ADJUST PAYROLL */}
+      {/* DIALOG: ADJUST PAYROLL */}
       <Dialog open={adjustPayrollOpen} onOpenChange={setAdjustPayrollOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -1142,87 +644,6 @@ export default function Salary() {
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setAdjustPayrollOpen(false)}>Cancel</Button>
                 <Button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold">Apply Changes</Button>
-              </DialogFooter>
-            </form>
-          </Form>
-        </DialogContent>
-      </Dialog>
-
-      {/* DIALOG 5: SESSION CONFIG RATE */}
-      <Dialog open={configOpen} onOpenChange={setConfigOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Settings className="text-indigo-600" size={20} />
-              {selectedConfig ? "Edit Session Rate" : "Add Session Rate"}
-            </DialogTitle>
-          </DialogHeader>
-          <Form {...sessionConfigForm}>
-            <form onSubmit={sessionConfigForm.handleSubmit(submitSessionConfig)} className="space-y-4">
-              <FormField control={sessionConfigForm.control} name="name" render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Session Name</FormLabel>
-                  <FormControl><Input placeholder="e.g. Morning Shift" {...field} /></FormControl>
-                  <FormMessage />
-                </FormItem>
-              )} />
-
-              <div className="grid grid-cols-2 gap-3">
-                <FormField control={sessionConfigForm.control} name="startTime" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Start Time</FormLabel>
-                    <FormControl><Input type="time" {...field} /></FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-                <FormField control={sessionConfigForm.control} name="endTime" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>End Time</FormLabel>
-                    <FormControl><Input type="time" {...field} /></FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <FormField control={sessionConfigForm.control} name="payAmount" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Pay Amount (₹)</FormLabel>
-                    <FormControl><Input type="number" {...field} /></FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-                <FormField control={sessionConfigForm.control} name="order" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Order Proximity</FormLabel>
-                    <FormControl><Input type="number" {...field} /></FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-              </div>
-
-              <FormField control={sessionConfigForm.control} name="isOvertime" render={({ field }) => (
-                <FormItem className="flex items-center justify-between p-3 bg-slate-50 border rounded-lg">
-                  <div className="space-y-0.5">
-                    <FormLabel className="font-bold text-sm">Overtime Premium Class</FormLabel>
-                    <p className="text-xs text-muted-foreground">Classifies this session as Overtime pay in computations.</p>
-                  </div>
-                  <FormControl>
-                    <input
-                      type="checkbox"
-                      checked={field.value}
-                      onChange={field.onChange}
-                      className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
-                    />
-                  </FormControl>
-                </FormItem>
-              )} />
-
-              <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setConfigOpen(false)}>Cancel</Button>
-                <Button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold">
-                  {selectedConfig ? "Update Rate" : "Create Rate"}
-                </Button>
               </DialogFooter>
             </form>
           </Form>

@@ -1170,7 +1170,7 @@ def generate_payroll(request: Request) -> Response:
             return _error("weekNumber (1 or 2) is required for biweekly run")
         week_number = int(week_number)
 
-    employees = list(Employee.objects.filter(status="active"))
+    employees = list(scope_to_branch(Employee.objects, request).filter(status="active"))
     generated = []
     skipped = []
 

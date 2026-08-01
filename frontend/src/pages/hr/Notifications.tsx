@@ -34,7 +34,7 @@ export default function Notifications() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  const { data: notifications, isLoading } = useListNotifications({});
+  const { data: notifications, isLoading } = useListNotifications({}, { query: { refetchInterval: 12000 } } as any);
   const mutation = useMarkNotificationRead();
 
   const unread = notifications?.filter((n) => !n.isRead) ?? [];

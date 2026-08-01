@@ -15,6 +15,10 @@ import {
   useListHolidays,
   useAuditLogStats,
   useListPermissions,
+  useMissingPunchRequestsHR,
+  useListCasualLeaves,
+  useDocumentCompletionStats,
+  useListScreeningCandidates,
 } from "@/lib/api-client/custom-hooks";
 import { useBiometricSync } from "@/contexts/BiometricSyncContext";
 import {
@@ -27,6 +31,7 @@ import {
   ChevronRight, Clock, Building2, Gift, Activity,
   CheckCircle2, ClipboardList, Wallet, ArrowUp, ArrowDown, RefreshCw,
   MapPinned, Navigation, Radar, ShieldCheck, Camera,
+  Briefcase, UserPlus, FileCheck, ScanSearch, UserMinus,
 } from "lucide-react";
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -194,6 +199,10 @@ export default function HrDashboard() {
   // has access to Settlement / Requests respectively.
   const canSeeSettlement = canView(user, "settlement");
   const canSeeRequests = canView(user, "requests");
+  const canSeeMissingPunch = canView(user, "missing_punch");
+  const canSeeCasualLeave = canView(user, "casual_leave");
+  const canSeeResumeScreening = canView(user, "recruitment.resume_screening");
+  const canSeeDocuments = canView(user, "recruitment.documents");
 
   const { data: summary, isLoading: sumLoading } = useGetHrDashboardSummary();
   const { data: trends  } = useGetSalaryTrends();
@@ -204,6 +213,14 @@ export default function HrDashboard() {
   const { data: holidays  } = useListHolidays({ year });
   const { data: auditStats } = useAuditLogStats();
   const { data: pendingPerms } = useListPermissions({ status: "pending", month, year }, { enabled: canSeeRequests } as any);
+  const { data: missingPunches } = useMissingPunchRequestsHR("pending", canSeeMissingPunch);
+  const { data: casualLeaves } = useListCasualLeaves({ status: "pending" }, canSeeCasualLeave);
+  const { data: screeningCandidates } = useListScreeningCandidates(
+    { status: "screened" },
+    { enabled: canSeeResumeScreening } as any
+  );
+  const { data: staffDocStats } = useDocumentCompletionStats("staff", canSeeDocuments);
+  const { data: productionDocStats } = useDocumentCompletionStats("production", canSeeDocuments);
 
   // ── Derived ────────────────────────────────────────────────────────────────
 
@@ -242,6 +259,16 @@ export default function HrDashboard() {
   const pendingLeaves    = summary?.pendingLeaves ?? 0;
   const pendingPermCount = (pendingPerms ?? []).length;
   const monthlyPayroll   = summary?.monthlySalaryTotal ?? 0;
+
+  const openJobs         = summary?.openJobs ?? 0;
+  const pendingApplicants = summary?.pendingApplicants ?? 0;
+  const missingPunchPending = (missingPunches ?? []).length;
+  const casualLeavePending  = (casualLeaves ?? []).length;
+  const screeningAwaitingReview = (screeningCandidates ?? []).length;
+  const docsTotal    = (staffDocStats?.totalCount ?? 0) + (productionDocStats?.totalCount ?? 0);
+  const docsUploaded = (staffDocStats?.uploadedCount ?? 0) + (productionDocStats?.uploadedCount ?? 0);
+  const docsPending  = (staffDocStats?.pendingCount ?? 0) + (productionDocStats?.pendingCount ?? 0);
+  const docsCompletionRate = docsTotal > 0 ? Math.round((docsUploaded / docsTotal) * 100) : 0;
 
   const geoPunchesToday        = (summary as any)?.geoPunchesToday ?? 0;
   const onDutyPending          = (summary as any)?.onDutyPendingApprovals ?? 0;
@@ -633,6 +660,8 @@ export default function HrDashboard() {
                 {[
                   { label: "Leave Approvals",      value: pendingLeaves,    color: "#f59e0b", icon: Calendar,      path: "/hr/leave" },
                   { label: "Permission Requests",  value: pendingPermCount, color: "#8b5cf6", icon: Clock,         path: "/hr/requests" },
+                  { label: "Missing Punch",        value: missingPunchPending, color: "#0ea5e9", icon: UserMinus,  path: "/hr/missing-punch" },
+                  { label: "Casual Leave Requests", value: casualLeavePending, color: "#16a34a", icon: Calendar,   path: "/hr/casual-leave" },
                   { label: "On-Duty Approvals",    value: onDutyPending,    color: "#d97706", icon: MapPinned,     path: "/hr/geo-attendance" },
                   { label: "Open Advances",        value: openAdvances,     color: "#ef4444", icon: CreditCard,    path: "/hr/settlement" },
                   { label: "Notifications",        value: (summary as any)?.unreadNotifications ?? 0, color: "#006496", icon: AlertCircle, path: "/hr/notifications" },
@@ -727,6 +756,41 @@ export default function HrDashboard() {
               <button
                 key={label}
                 onClick={() => navigate("/hr/geo-attendance")}
+                className="text-left rounded-xl p-3 transition-all hover:scale-[1.02]"
+                style={{ background: color + "0d" }}
+              >
+                <div
+                  className="w-7 h-7 rounded-lg flex items-center justify-center mb-2"
+                  style={{ background: color + "18", boxShadow: `3px 3px 8px ${color}20, -2px -2px 5px rgba(255,255,255,0.8)` }}
+                >
+                  <Icon size={13} style={{ color }} />
+                </div>
+                <p className="text-xl font-black" style={{ color: "#1a3a4a" }}>{value}</p>
+                <p className="text-[11px] font-semibold mt-0.5" style={{ color: "#1e5a7a" }}>{label}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* ── Recruitment & Documents Snapshot ─────────────────────────────── */}
+        <div className="rounded-2xl p-5 clay-card">
+          <SectionTitle action="View Recruitment" onAction={() => navigate("/hr/recruitment")}>
+            <span className="flex items-center gap-1.5">
+              <Briefcase size={12} style={{ color: "#006496" }} />
+              Recruitment & Documents
+            </span>
+          </SectionTitle>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            {[
+              { label: "Open Positions", value: openJobs, color: "#14b8a6", icon: Briefcase, path: "/hr/recruitment" },
+              { label: "Pending Applicants", value: pendingApplicants, color: "#0891b2", icon: UserPlus, path: "/hr/recruitment" },
+              { label: "Resumes Awaiting Review", value: screeningAwaitingReview, color: "#7c3aed", icon: ScanSearch, path: "/hr/recruitment/resume-screening" },
+              { label: "Documents Completion", value: `${docsCompletionRate}%`, color: "#059669", icon: FileCheck, path: "/hr/recruitment/documents" },
+              { label: "Documents Pending", value: docsPending, color: "#dc2626", icon: AlertCircle, path: "/hr/recruitment/documents" },
+            ].map(({ label, value, color, icon: Icon, path }) => (
+              <button
+                key={label}
+                onClick={() => navigate(path)}
                 className="text-left rounded-xl p-3 transition-all hover:scale-[1.02]"
                 style={{ background: color + "0d" }}
               >

@@ -245,13 +245,15 @@ def casual_leave_eligibility(request: Request) -> Response:
     check_date = date_type(year, month, 15)  # representative day of the month
 
     used_map: dict[int, CasualLeaveRequest] = {}
-    for r in CasualLeaveRequest.objects.filter(
+    for r in scope_to_branch(
+        CasualLeaveRequest.objects, request, field="employee__branch_id"
+    ).filter(
         date__year=year, date__month=month, status__in=["pending", "approved"]
     ).select_related("employee"):
         used_map[r.employee_id] = r
 
     rows = []
-    for emp in Employee.objects.filter(
+    for emp in scope_to_branch(Employee.objects, request).filter(
         status="active", employment_type="staff"
     ).select_related("department", "designation"):
         months = _service_months(emp, check_date)

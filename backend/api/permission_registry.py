@@ -57,6 +57,7 @@ MODULE_TREE: list[dict] = [
     {"key": "reports", "label": "Reports"},
     {"key": "user_management", "label": "User Management"},
     {"key": "activity_logs", "label": "Activity Logs"},
+    {"key": "login_devices", "label": "Login Devices"},
     {"key": "chat", "label": "Chat"},
     {"key": "notifications", "label": "Notifications"},
     {"key": "night_shift", "label": "Night Shift"},
@@ -178,6 +179,8 @@ URL_MODULE_MAP: dict[str, str] = {
     "department-managers": "user_management",
 
     "audit-logs": "activity_logs",
+
+    "login-sessions": "login_devices",
 
     "chat": "chat",
 

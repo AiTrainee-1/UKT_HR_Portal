@@ -16,6 +16,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name
+from .branch_scope import scope_to_branch
 from .models import (
     AttendanceDayRecord, AttendanceOverrideRequest, Department, Designation, Employee,
     PayrollSettings, Promotion, SalaryIncrement,
@@ -33,9 +34,9 @@ def _emp_by_code_or_id(request) -> Employee | None:
         request.data.get("employeeId") if hasattr(request, "data") else None
     )
     if emp_id:
-        return Employee.objects.filter(id=emp_id).first()
+        return scope_to_branch(Employee.objects, request).filter(id=emp_id).first()
     if code:
-        return Employee.objects.filter(employee_code__iexact=str(code).strip()).first()
+        return scope_to_branch(Employee.objects, request).filter(employee_code__iexact=str(code).strip()).first()
     return None
 
 
@@ -608,7 +609,9 @@ def idcard_data(request: Request) -> Response:
     ids = request.query_params.get("ids")
     if ids:
         id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
-        emps = Employee.objects.filter(id__in=id_list).select_related("department", "designation", "branch")
+        emps = scope_to_branch(Employee.objects, request).filter(
+            id__in=id_list
+        ).select_related("department", "designation", "branch")
         return Response([_idcard_dict(e, settings) for e in emps])
     emp = _emp_by_code_or_id(request)
     if not emp:

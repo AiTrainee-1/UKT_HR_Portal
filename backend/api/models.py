@@ -609,6 +609,31 @@ class HRUser(models.Model):
         db_table = "hr_users"
 
 
+class LoginSession(models.Model):
+    """
+    One row per HR-portal login — the JWT itself is stateless (see
+    jwt_utils.py), so this is what makes a login a revocable, listable
+    "session": each token carries a `jti` claim matching one row here, and
+    require_auth (auth.py) rejects any request whose jti is missing or
+    revoked, regardless of the JWT's own expiry. Powers the Login Devices
+    page and the POST /api/logout endpoint.
+    """
+    hr_user = models.ForeignKey(
+        HRUser, on_delete=models.CASCADE, db_column="hr_user_id", related_name="login_sessions"
+    )
+    jti = models.TextField(unique=True, db_index=True)
+    device_label = models.TextField(blank=True, default="")
+    user_agent = models.TextField(blank=True, default="")
+    ip_address = models.TextField(null=True, blank=True, db_column="ip_address")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    last_seen_at = models.DateTimeField(auto_now_add=True, db_column="last_seen_at")
+    revoked_at = models.DateTimeField(null=True, blank=True, db_column="revoked_at")
+
+    class Meta:
+        db_table = "login_sessions"
+        indexes = [models.Index(fields=["hr_user", "revoked_at"])]
+
+
 # ──────────────────────────────────────────────
 #  Audit Logs
 # ──────────────────────────────────────────────

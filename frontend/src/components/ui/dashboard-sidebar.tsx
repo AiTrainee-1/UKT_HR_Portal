@@ -2,14 +2,14 @@ import React, { useLayoutEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { useAuth, canView, canViewPage } from '@/contexts/AuthContext';
 import { moduleForPath } from '@/lib/permission-modules';
-import { useListLeaveRequests, useListPermissions, useListResignations, useListAdvances } from '@/lib/api-client';
+import { useListLeaveRequests, useListPermissions, useListResignations, useListAdvances, useListNotifications } from '@/lib/api-client';
 import { usePayrollSettings, useOnDutySessionsHR, useOnDutyPunchVerificationsHR } from '@/lib/api-client/custom-hooks';
 import {
   LayoutDashboard, Users, Clock, Calendar, CheckCircle2, IndianRupee,
   Wallet, BarChart3, Shield, Activity, Settings, FileText, LogOut,
   ChevronRight, Search, X, Command, UserCheck, UserMinus, Banknote,
   CalendarCheck, Bell, Award, TrendingUp, Gift, CreditCard,
-  CalendarHeart, MoonStar, MessageCircle, UserCog, FolderOpen,
+  CalendarHeart, MoonStar, MessageCircle, UserCog, FolderOpen, MonitorSmartphone,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -122,6 +122,7 @@ const navGroups: NavGroupData[] = [
       // Settings-gated: hidden at render time when the Night Shift Relaxation
       // toggle (Settings → Attendance) is off. Staff-only feature.
       { path: '/hr/night-shift', label: 'Night Shift', icon: MoonStar },
+      { path: '/hr/login-devices', label: 'Login Devices', icon: MonitorSmartphone },
       { path: '/hr/settings', label: 'Settings', icon: Settings },
     ],
   },
@@ -447,6 +448,7 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
   const canSeeResignations = canView(user, 'recruitment.resignations');
   const canSeeSettlement = canView(user, 'settlement');
   const canSeeGeoAttendance = canView(user, 'geo_attendance');
+  const canSeeNotifications = canView(user, 'notifications');
 
   const { data: leaveData }  = useListLeaveRequests(undefined, { query: { refetchInterval: 30_000, enabled: canSeeRequests } } as any);
   const { data: permData }   = useListPermissions(undefined, { refetchInterval: 30_000, enabled: canSeeRequests } as any);
@@ -454,6 +456,13 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
   const { data: advanceData } = useListAdvances(undefined, { refetchInterval: 30_000, enabled: canSeeSettlement } as any);
   const { data: onDutySessionData } = useOnDutySessionsHR('pending', canSeeGeoAttendance);
   const { data: onDutyPunchData } = useOnDutyPunchVerificationsHR('pending', canSeeGeoAttendance);
+  // Live notification count — polls independently of the Notifications page
+  // itself so the sidebar badge updates even while the user is elsewhere.
+  const { data: unreadNotifications } = useListNotifications(
+    { unreadOnly: true },
+    { query: { refetchInterval: 12_000, enabled: canSeeNotifications } } as any
+  );
+  const unreadNotificationCount = (unreadNotifications ?? []).length;
   const pendingCount =
     ((leaveData ?? []).filter((l: any) => l.status === 'pending').length) +
     ((permData  ?? []).filter((p: any) => p.status === 'pending').length);
@@ -630,6 +639,8 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
                     ? { ...item, badge: pendingCount || undefined }
                     : item.path === '/hr/settlement'
                     ? { ...item, badge: pendingAdvancesCount || undefined }
+                    : item.path === '/hr/notifications'
+                    ? { ...item, badge: unreadNotificationCount || undefined }
                     : item.path === '/hr/recruitment'
                     ? {
                         ...item,

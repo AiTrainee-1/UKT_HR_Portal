@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from .auth import require_hr, require_auth, get_token_employee_id, is_hr
+from .branch_scope import scope_to_branch
 from .models import ShiftTemplate, EmployeeShiftAssignment, Employee, Department
 
 
@@ -197,6 +198,7 @@ def shift_assignments(request: Request) -> Response:
             .filter(employee__status="active")
             .order_by("shift__name", "employee__first_name")
         )
+        qs = scope_to_branch(qs, request, field="employee__branch_id")
         if emp_id:
             qs = qs.filter(employee_id=emp_id)
         if shift_id:
@@ -216,7 +218,7 @@ def shift_assignments(request: Request) -> Response:
             return Response({"error": f"{f} is required"}, status=400)
 
     try:
-        emp = Employee.objects.get(pk=data["employeeId"])
+        emp = scope_to_branch(Employee.objects, request).get(pk=data["employeeId"])
         shift = ShiftTemplate.objects.get(pk=data["shiftId"])
     except (Employee.DoesNotExist, ShiftTemplate.DoesNotExist) as e:
         return Response({"error": str(e)}, status=404)
@@ -265,7 +267,7 @@ def bulk_shift_assignments(request: Request) -> Response:
     except ShiftTemplate.DoesNotExist:
         return Response({"error": "Shift not found"}, status=404)
 
-    qs = Employee.objects.filter(status="active")
+    qs = scope_to_branch(Employee.objects, request).filter(status="active")
 
     employee_ids = data.get("employeeIds")
     dept_id = data.get("departmentId")
@@ -326,7 +328,7 @@ def sync_production_shifts(request: Request) -> Response:
     Uses today as effective_from — no date needed from the caller.
     """
     today = date.today()
-    employees = Employee.objects.filter(employment_type="production", status="active")
+    employees = scope_to_branch(Employee.objects, request).filter(employment_type="production", status="active")
     synced = 0
     skipped = 0
     for emp in employees:
@@ -341,7 +343,9 @@ def sync_production_shifts(request: Request) -> Response:
 @require_hr
 def shift_assignment_detail(request: Request, pk: int) -> Response:
     try:
-        assignment = EmployeeShiftAssignment.objects.select_related("employee__department", "employee__designation", "shift").get(pk=pk)
+        assignment = scope_to_branch(
+            EmployeeShiftAssignment.objects, request, field="employee__branch_id"
+        ).select_related("employee__department", "employee__designation", "shift").get(pk=pk)
     except EmployeeShiftAssignment.DoesNotExist:
         return Response({"error": "Assignment not found"}, status=404)
 

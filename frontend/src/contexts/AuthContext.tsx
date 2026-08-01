@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { useGetMe, getGetMeQueryKey } from "@/lib/api-client";
+import { customFetch } from "@/lib/api-client/custom-fetch";
 import { useQueryClient } from "@tanstack/react-query";
 import type { PermissionLevel } from "@/lib/api-client/custom-hooks";
 import { resolvePermission, resolvePermissionOrChildren } from "@/lib/permission-modules";
@@ -91,6 +92,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = () => {
+    // Best-effort — revokes the LoginSession row so the device disappears
+    // from the Login Devices page immediately instead of lingering "active"
+    // until the JWT's own 12h expiry. Never blocks local logout on this.
+    if (token) {
+      customFetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    }
     localStorage.removeItem("uk_textile_token");
     setToken(null);
     queryClient.clear();

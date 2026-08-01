@@ -16,6 +16,7 @@ from .leave_views import (
 from .settlement_views import (
     advances, advance_detail, advance_repayments,
 )
+from .login_sessions_views import login_sessions, revoke_login_session
 from .hr_user_views import (
     roles, role_detail,
     hr_users, hr_user_detail,
@@ -130,6 +131,7 @@ urlpatterns = [
     path("auth/employee-login", views.employee_login),
     path("auth/set-password", views.set_password),
     path("auth/me", views.auth_me),
+    path("auth/logout", views.logout),
 
     # ── Organisation ────────────────────────────────────────────────────────
     path("branches", branches),
@@ -388,6 +390,8 @@ urlpatterns = [
     # ── Audit Logs ───────────────────────────────────────────────────────────
     path("audit-logs", audit_logs),
     path("audit-logs/stats", audit_logs_stats),
+    path("login-sessions", login_sessions),
+    path("login-sessions/<int:session_id>/revoke", revoke_login_session),
 
     # ── Reports ──────────────────────────────────────────────────────────────
     path("reports/attendance-log",      attendance_report),

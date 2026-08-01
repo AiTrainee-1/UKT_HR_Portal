@@ -23,6 +23,27 @@ def require_auth(view_func):
             request.jwt_user = verify_token(token)
         except Exception:
             return Response({"error": "Invalid or expired token"}, status=401)
+
+        # LoginSession revocation check — the JWT itself is stateless and
+        # stays "valid" for its full 12h lifetime, so a Login Devices revoke
+        # (or self logout) has to be enforced here via a live DB check, same
+        # pattern require_super_admin already uses for is_active/is_super_admin.
+        # Only HR tokens carry a jti (see hr_login in views.py) — employee
+        # tokens never set one, so this is a no-op on the employee/mobile path.
+        jti = request.jwt_user.get("jti")
+        if jti:
+            from django.utils import timezone
+
+            from .models import LoginSession
+
+            session = LoginSession.objects.filter(jti=jti).first()
+            if session is None or session.revoked_at is not None:
+                return Response({"error": "Session revoked"}, status=401)
+            now = timezone.now()
+            if (now - session.last_seen_at).total_seconds() > 60:
+                session.last_seen_at = now
+                session.save(update_fields=["last_seen_at"])
+
         return view_func(request, *args, **kwargs)
 
     return wrapper
