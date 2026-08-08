@@ -4,11 +4,11 @@ Unit1-1, ...) introduced alongside Branch.next_employee_seq /
 Employee.unit_code in 0037. Existing employees predate the feature, so this
 assigns each of them the next number in their branch (ordered by id, i.e.
 creation order) and leaves each Branch's counter pointing at the last number
-handed out — so the very next employee created for that branch continues
+handed out -so the very next employee created for that branch continues
 the sequence correctly rather than colliding with a backfilled one.
 
 Employees with no branch, or whose branch has no code set, are left with a
-null unit_code — there's nothing meaningful to generate for them.
+null unit_code -there's nothing meaningful to generate for them.
 """
 from django.db import migrations
 

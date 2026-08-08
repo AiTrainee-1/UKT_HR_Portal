@@ -11,7 +11,7 @@ EXEMPT_PREFIXES = ("auth/",)
 EXEMPT_PATHS = ("healthz",)
 
 # Read-only aggregate/config data pulled by many pages regardless of the
-# viewer's access to that data's "owning" module — company branding
+# viewer's access to that data's "owning" module -company branding
 # (payroll-settings), a device picker (biometric-devices), the company
 # holiday calendar, and audit-log *counts* (not the log entries themselves,
 # which stay behind activity_logs). None of these expose the kind of
@@ -46,13 +46,13 @@ class HrPermissionMiddleware:
     decorator-only check would miss those; middleware runs on every request
     regardless of which decorator (or none) the matched view uses.
 
-    Employee/manager-portal tokens (role != "hr") are untouched — this only
+    Employee/manager-portal tokens (role != "hr") are untouched -this only
     ever restricts the HR portal. Endpoints not present in the module
     registry (dashboard summaries, notifications, chat, roles/hr-users —
     the latter gated separately by require_super_admin) are left ungated.
 
     Also resolves branch scope for data isolation: request.hr_branch_id is
-    set to the requesting HR user's branch_id (None = unscoped — super
+    set to the requesting HR user's branch_id (None = unscoped -super
     admins and branch-less roles see every branch, same as today). Views
     read it via branch_scope.get_branch_scope()/scope_to_branch() rather
     than touching the attribute directly. Resolved fresh from the DB per
@@ -77,12 +77,12 @@ class HrPermissionMiddleware:
     def _check(self, request, rel_path):
         token = get_bearer_token(request)
         if not token:
-            return None  # no/absent token — let the view's own auth decorator 401 it
+            return None  # no/absent token -let the view's own auth decorator 401 it
 
         try:
             payload = verify_token(token)
         except Exception:
-            return None  # invalid/expired — let the view's own auth decorator handle it
+            return None  # invalid/expired -let the view's own auth decorator handle it
 
         if payload.get("role") != "hr":
             return None
@@ -97,7 +97,7 @@ class HrPermissionMiddleware:
         )
         if hr_user is None:
             # Token references an account that no longer exists or has been
-            # disabled — reject immediately rather than waiting for JWT expiry.
+            # disabled -reject immediately rather than waiting for JWT expiry.
             return JsonResponse({"error": "account_disabled", "message": "This account is disabled."}, status=401)
 
         if hr_user.is_super_admin:

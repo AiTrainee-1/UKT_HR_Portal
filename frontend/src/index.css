@@ -19,7 +19,7 @@
 .clay-tabs-list::-webkit-scrollbar { display: none; }
 
 /* Reusable utility: scrollable content with the scrollbar track hidden
-   (used by long lists inside dialogs — the content still scrolls normally). */
+   (used by long lists inside dialogs -the content still scrolls normally). */
 .scrollbar-hide { scrollbar-width: none; }
 .scrollbar-hide::-webkit-scrollbar { display: none; }
 
@@ -82,7 +82,7 @@
 
 /* ── UKT Claymorphism Design System ────────────────────────────── */
 
-/* Clay card — soft 3D paper effect */
+/* Clay card -soft 3D paper effect */
 .clay-card {
   background: #ffffff;
   box-shadow:
@@ -100,7 +100,7 @@
     inset -3px -3px 8px rgba(0, 100, 150, 0.05);
 }
 
-/* Clay panel — for sidebars and larger surfaces */
+/* Clay panel -for sidebars and larger surfaces */
 .clay-panel {
   background: #f6fafe;
   box-shadow:
@@ -108,7 +108,7 @@
     inset -2px 0 6px rgba(255, 255, 255, 0.6);
 }
 
-/* Clay button — elevated tactile button */
+/* Clay button -elevated tactile button */
 .clay-btn {
   box-shadow:
     6px 6px 14px rgba(0, 100, 150, 0.18),
@@ -134,7 +134,7 @@
   transform: scale(0.98) translateY(0);
 }
 
-/* Clay input — sunken inset look */
+/* Clay input -sunken inset look */
 .clay-input {
   background: #f0f4f8;
   box-shadow:
@@ -211,7 +211,7 @@
   border-radius: 0.75rem;
 }
 
-/* ── Marble Switch — supplied design, ported from styled-components to
+/* ── Marble Switch -supplied design, ported from styled-components to
    plain CSS (this codebase has no styled-components dependency, same
    approach as SpeederLoader.tsx) and rescaled from a 4rem showcase size
    down to compact inline-toggle scale via --round. ────────────────────── */
@@ -415,8 +415,8 @@
     --elevate-1: rgba(0,0,0, .08);
     --elevate-2: rgba(0,0,0, .15);
 
-    --background: 210 50% 97%;  /* #f0f5fa — UKT light blue-grey */
-    --foreground: 201 60% 12%; /* #0d2a38 — deep UKT navy */
+    --background: 210 50% 97%;  /* #f0f5fa -UKT light blue-grey */
+    --foreground: 201 60% 12%; /* #0d2a38 -deep UKT navy */
     --border: 210 30% 88%;
 
     --card: 0 0% 100%;

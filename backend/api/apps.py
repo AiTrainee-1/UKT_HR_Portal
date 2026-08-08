@@ -11,7 +11,7 @@ class ApiConfig(AppConfig):
     name = "api"
 
     def ready(self):
-        from . import signals  # noqa: F401 — registers the push-notification signal receiver
+        from . import signals  # noqa: F401 -registers the push-notification signal receiver
 
         self._bootstrap_admin_account()
         self._start_scheduler()
@@ -19,7 +19,7 @@ class ApiConfig(AppConfig):
     def _bootstrap_admin_account(self):
         """
         Ensure exactly one super-admin HRUser exists, sourced from
-        ADMIN_USERNAME/ADMIN_PASSWORD in .env. Idempotent — only inserts when
+        ADMIN_USERNAME/ADMIN_PASSWORD in .env. Idempotent -only inserts when
         no super-admin row exists yet, so editing the admin's password later
         is done from Account Management, not by touching .env again.
         Wrapped defensively: this runs on every app load, including before
@@ -55,7 +55,7 @@ class ApiConfig(AppConfig):
                 )
             logger.info("Admin account bootstrapped from ADMIN_USERNAME/.env: %s", username)
         except Exception as e:
-            # DB not migrated yet, or unavailable at boot — safe to skip,
+            # DB not migrated yet, or unavailable at boot -safe to skip,
             # this is retried on every subsequent process start.
             logger.warning("Admin account bootstrap skipped: %s", e)
 
@@ -73,14 +73,14 @@ class ApiConfig(AppConfig):
         from . import auto_sync, backup_scheduler
 
         if not auto_sync.is_available():
-            logger.warning("APScheduler not installed — Auto Sync disabled. Run: pip install apscheduler")
+            logger.warning("APScheduler not installed -Auto Sync disabled. Run: pip install apscheduler")
             return
 
         try:
             auto_sync.load_all_rules_into_scheduler()
             auto_sync.start_scheduler_if_needed()
         except Exception as e:
-            # DB not migrated yet, or unavailable at boot — safe to skip,
+            # DB not migrated yet, or unavailable at boot -safe to skip,
             # retried on every subsequent process start.
             logger.warning("Auto Sync scheduler bootstrap skipped: %s", e)
 

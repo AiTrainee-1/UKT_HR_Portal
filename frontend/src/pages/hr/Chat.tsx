@@ -13,7 +13,7 @@ import {
 /**
  * Company-wide chat for the HR Portal. Same backend the Employee App chat
  * uses; HR only sees the company channel (department channels stay private
- * to their employees). Messages poll every few seconds — no WebSockets.
+ * to their employees). Messages poll every few seconds -no WebSockets.
  */
 export default function Chat() {
   const { toast } = useToast();
@@ -62,7 +62,7 @@ export default function Chat() {
         <div className="shrink-0">
           <h2 className="text-2xl font-black text-gray-900">Company Chat</h2>
           <p className="text-muted-foreground text-sm mt-0.5">
-            One shared conversation with every staff member — messages sent here are
+            One shared conversation with every staff member -messages sent here are
             visible in the Employee App's Company chat too.
           </p>
         </div>
@@ -82,7 +82,7 @@ export default function Chat() {
               {isLoading && <p className="text-sm text-center text-muted-foreground py-8">Loading messages…</p>}
               {!isLoading && (messages ?? []).length === 0 && (
                 <p className="text-sm text-center text-muted-foreground py-8">
-                  No messages yet — say hello to the whole company.
+                  No messages yet -say hello to the whole company.
                 </p>
               )}
               {(messages ?? []).map(m => (

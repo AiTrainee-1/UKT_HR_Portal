@@ -361,7 +361,7 @@ export default function Designations() {
           <div>
             <h2 className="text-2xl font-black text-gray-900">Designations</h2>
             <p className="text-muted-foreground text-sm mt-0.5">
-              Manage job titles and assign employees — click a card to expand
+              Manage job titles and assign employees -click a card to expand
             </p>
           </div>
           <Button onClick={() => setShowDialog(true)} className="gap-2 self-start sm:self-auto">
@@ -454,7 +454,7 @@ export default function Designations() {
                 onChange={(e) => setForm((f) => ({ ...f, departmentId: e.target.value }))}
                 className="w-full h-9 rounded-md border px-3 text-sm bg-background"
               >
-                <option value="">— No department —</option>
+                <option value="">-No department —</option>
                 {(departments ?? []).map((d) => (
                   <option key={d.id} value={d.id}>{d.name}</option>
                 ))}

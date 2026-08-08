@@ -1,16 +1,16 @@
 """
-Combined multi-employee Salary Slip PDF — one continuous file, landscape A4,
+Combined multi-employee Salary Slip PDF -one continuous file, landscape A4,
 2 slips per page laid out side by side (left slip / right slip), meant to be
 printed and physically distributed.
 
 Reuses the exact same SalarySlip data/fields as the single-slip PDF
 (company_documents_views.build_salary_slip_pdf) via a dedicated compact
-flowables builder sized to fit one ~13cm-wide column — see
+flowables builder sized to fit one ~13cm-wide column -see
 company_documents_views._compact_salary_slip_flowables().
 
 Vector, not rasterized: each slip is drawn straight into the combined
 document's page frames (the same reportlab/Platypus content model as every
-other document in this app), not a PNG image — smaller file, crisp text at
+other document in this app), not a PNG image -smaller file, crisp text at
 any zoom/print size, no new PDF-to-image dependency.
 """
 import io

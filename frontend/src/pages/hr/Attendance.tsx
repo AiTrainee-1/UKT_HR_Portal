@@ -300,7 +300,7 @@ export default function AttendancePage() {
   const [selectedDate, setSelectedDate] = useState(today());
   const [selectedMonth, setSelectedMonth] = useState(currentMonth());
   const [selectedYear, setSelectedYear] = useState(currentYear());
-  // Staff / Production sub-section — derived from the route so the sidebar
+  // Staff / Production sub-section -derived from the route so the sidebar
   // stays in sync (/hr/attendance/staff | /hr/attendance/production)
   const view: "staff" | "production" =
     location.includes("/attendance/production") ? "production" : "staff";
@@ -331,7 +331,7 @@ export default function AttendancePage() {
   const enabledDevices = (devices ?? []).filter(d => d.isActive);
 
   // Sync lives in a root-level context (BiometricSyncProvider) so it keeps
-  // running — and stays visible — even if the user navigates away mid-sync.
+  // running -and stays visible -even if the user navigates away mid-sync.
   const { isSyncing, showPipeline, progress, lastSyncedAt, triggerSync, dismiss } = useBiometricSync();
 
   const SYNC_MODES: { key: SyncBiometricMode; label: string }[] = [
@@ -531,7 +531,7 @@ export default function AttendancePage() {
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
-            {/* Manual punch import — backup path alongside Sync Biometric, never touches its state/flow */}
+            {/* Manual punch import -backup path alongside Sync Biometric, never touches its state/flow */}
             <Button
               variant="outline"
               onClick={() => navigate("/hr/attendance/manual-import")}
@@ -594,7 +594,7 @@ export default function AttendancePage() {
                     </label>
                   ))}
                   {enabledDevices.length === 0 && (
-                    <p className="px-3 py-1.5 text-xs text-amber-600">No enabled devices — add one in Settings.</p>
+                    <p className="px-3 py-1.5 text-xs text-amber-600">No enabled devices -add one in Settings.</p>
                   )}
 
                   <div className="border-t mt-1" />
@@ -614,7 +614,7 @@ export default function AttendancePage() {
                 </div>
               )}
             </div>
-            {/* Auto Sync — configurable background sync rules */}
+            {/* Auto Sync -configurable background sync rules */}
             <div ref={autoSyncMenuRef} className="relative flex items-center shrink-0">
               <Button
                 variant="outline"
@@ -649,7 +649,7 @@ export default function AttendancePage() {
                   </div>
                   <div className="max-h-[280px] overflow-y-auto">
                     {(autoSyncRules ?? []).length === 0 && (
-                      <p className="px-3 py-3 text-xs text-gray-400">No rules yet — add one to sync automatically in the background.</p>
+                      <p className="px-3 py-3 text-xs text-gray-400">No rules yet -add one to sync automatically in the background.</p>
                     )}
                     {(autoSyncRules ?? []).map(rule => (
                       <div key={rule.id} className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-emerald-50/60 transition-colors border-t first:border-t-0">
@@ -657,7 +657,7 @@ export default function AttendancePage() {
                           id={`auto-sync-rule-${rule.id}`}
                           checked={rule.isEnabled}
                           onChange={() => toggleRuleEnabled(rule)}
-                          title={rule.isEnabled ? "Enabled — click to disable" : "Disabled — click to enable"}
+                          title={rule.isEnabled ? "Enabled -click to disable" : "Disabled -click to enable"}
                         />
                         <div className="min-w-0 flex-1">
                           <p className={`font-semibold truncate ${rule.isEnabled ? "text-gray-800" : "text-gray-400"}`}>
@@ -927,7 +927,7 @@ export default function AttendancePage() {
                 <p>
                   <strong>08:30–12:30</strong> First Half (0.5) ·{" "}
                   <strong>13:30–17:30</strong> Second Half (0.5) ·{" "}
-                  <strong>17:50–20:00</strong> Additional Half (0.5) — up to{" "}
+                  <strong>17:50–20:00</strong> Additional Half (0.5) -up to{" "}
                   <strong>1.5 shifts/day</strong>. Windows are configurable in Settings → Attendance.
                 </p>
               </div>
@@ -941,7 +941,7 @@ export default function AttendancePage() {
             <div className="flex items-center justify-between flex-wrap gap-3">
               <div>
                 <CardTitle className="text-sm font-semibold text-gray-700">
-                  Employee Attendance — {selectedDate}
+                  Employee Attendance -{selectedDate}
                 </CardTitle>
                 <p className="text-xs text-muted-foreground mt-0.5">Click any row to view full attendance history</p>
               </div>
@@ -1168,7 +1168,7 @@ export default function AttendancePage() {
         <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col">
           <DialogHeader>
             <DialogTitle>
-              {empDetail ? `${empDetail.employee.name} — Attendance History` : "Attendance History"}
+              {empDetail ? `${empDetail.employee.name} -Attendance History` : "Attendance History"}
             </DialogTitle>
           </DialogHeader>
 

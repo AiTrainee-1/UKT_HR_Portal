@@ -99,7 +99,7 @@ const queryClient = new QueryClient({
     mutations: {
       onError: (error) => {
         // Centralized so pages don't each need to special-case a view-only
-        // role's blocked write — see backend/api/permission_middleware.py,
+        // role's blocked write -see backend/api/permission_middleware.py,
         // which is the actual enforcer this is just explaining.
         if (error instanceof ApiError && error.status === 403 && (error.data as any)?.error === "permission_denied") {
           toast({
@@ -167,7 +167,7 @@ function ProtectedRoute({
     return null;
   }
 
-  // Defense in depth — the API is the authoritative 403 for a hidden module,
+  // Defense in depth -the API is the authoritative 403 for a hidden module,
   // this just avoids flashing a broken page if a restricted user hits the
   // URL directly (e.g. from a stale bookmark after their access changed).
   const moduleKey = moduleForPath(location);

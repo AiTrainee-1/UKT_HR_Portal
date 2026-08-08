@@ -13,7 +13,7 @@ import {
   XCircle, AlertTriangle, ListChecks, Info, Table2, X,
 } from "lucide-react";
 
-// Keep in sync with EMPLOYEE_UPLOAD_HEADERS in backend/api/views.py — the
+// Keep in sync with EMPLOYEE_UPLOAD_HEADERS in backend/api/views.py -the
 // backend rejects the file outright if these don't match exactly.
 const EMPLOYEE_TEMPLATE_HEADERS = [
   "Employee Code", "First Name", "Last Name", "Email", "Phone", "Gender",
@@ -29,7 +29,7 @@ const REQUIRED_COLUMNS = new Set(["Employee Code", "First Name"]);
 const COLUMN_NOTES: Partial<Record<(typeof EMPLOYEE_TEMPLATE_HEADERS)[number], string>> = {
   "Date of Birth": "Format: DD-MM-YYYY (e.g. 15-01-1995)",
   "Employment Type": "Type exactly: Staff or Production",
-  "Department": "Must match an existing department name — created automatically if new",
+  "Department": "Must match an existing department name -created automatically if new",
   "Designation": "Must match an existing designation title, or leave blank",
   "Branch": "Must match an existing branch name exactly, or leave blank",
   "Salary Type": "Type exactly: Monthly or Weekly",
@@ -39,7 +39,7 @@ const COLUMN_NOTES: Partial<Record<(typeof EMPLOYEE_TEMPLATE_HEADERS)[number], s
 
 // Reference rows baked into every downloaded template. The backend
 // recognises the "SAMPLE" prefix on Employee Code and skips these rows
-// outright — they're never imported, whether or not the user deletes them.
+// outright -they're never imported, whether or not the user deletes them.
 const SAMPLE_ROWS: (string | number)[][] = [
   ["SAMPLE001", "Priya", "Sharma", "priya.sharma@example.com", "9876543210", "Female",
     "12-03-1995", "Staff", "Human Resources", "HR Executive", "Head Office",
@@ -124,7 +124,7 @@ async function downloadTemplate(user: ReturnType<typeof useAuth>["user"]) {
 
   styleHeaderRow(ws.getRow(1));
 
-  // Sample rows — distinct amber fill so they read as "example", not "data".
+  // Sample rows -distinct amber fill so they read as "example", not "data".
   SAMPLE_ROWS.forEach((values) => {
     const row = ws.addRow(values);
     row.eachCell((cell) => {
@@ -146,7 +146,7 @@ async function downloadTemplate(user: ReturnType<typeof useAuth>["user"]) {
   const bannerRow = ws.addRow([]);
   ws.mergeCells(bannerRow.number, 1, bannerRow.number, EMPLOYEE_TEMPLATE_HEADERS.length);
   const bannerCell = bannerRow.getCell(1);
-  bannerCell.value = `SAMPLE ROWS ABOVE (2–${1 + SAMPLE_ROWS.length}) — for reference only, skipped automatically on upload. Enter your real employees starting from row ${bannerRow.number + 1} ⬇`;
+  bannerCell.value = `SAMPLE ROWS ABOVE (2–${1 + SAMPLE_ROWS.length}) -for reference only, skipped automatically on upload. Enter your real employees starting from row ${bannerRow.number + 1} ⬇`;
   bannerCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1B4B6E" } };
   bannerCell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 10 };
   bannerCell.alignment = { horizontal: "center", vertical: "middle" };
@@ -188,13 +188,20 @@ function employeeToRow(emp: Employee): (string | number)[] {
   ];
 }
 
-async function downloadCurrentEmployees(employees: Employee[], user: ReturnType<typeof useAuth>["user"]) {
+async function downloadCurrentEmployees(
+  employees: Employee[],
+  user: ReturnType<typeof useAuth>["user"],
+  employmentType?: "staff" | "production",
+) {
+  const rows = employmentType ? employees.filter((e) => e.employmentType === employmentType) : employees;
+  const typeLabel = employmentType === "staff" ? "Staff" : employmentType === "production" ? "Production" : "";
+
   const wb = new ExcelJS.Workbook();
   wb.creator = "UKTextiles HRMS";
   const ws = wb.addWorksheet("Employees");
   ws.columns = EMPLOYEE_TEMPLATE_HEADERS.map((h) => ({ key: h, width: Math.max(16, h.length + 4) }));
   styleHeaderRow(ws.getRow(1));
-  employees.forEach((emp) => ws.addRow(employeeToRow(emp)));
+  rows.forEach((emp) => ws.addRow(employeeToRow(emp)));
   ws.views = [{ state: "frozen", ySplit: 1 }];
 
   const buffer = await wb.xlsx.writeBuffer();
@@ -204,7 +211,7 @@ async function downloadCurrentEmployees(employees: Employee[], user: ReturnType<
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `Employee_Data_Export_${scopeLabel(user)}_${todayStamp()}.xlsx`;
+  a.download = `Employee_Data_Export_${typeLabel ? `${typeLabel}_` : ""}${scopeLabel(user)}_${todayStamp()}.xlsx`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -308,7 +315,7 @@ export default function BulkUploadEmployees() {
         queryClient.invalidateQueries({ queryKey: getListEmployeesQueryKey() });
         toast({ title: `${body.updated} employee${body.updated === 1 ? "" : "s"} updated` });
       } else {
-        toast({ title: "No changes found — everything already matches" });
+        toast({ title: "No changes found -everything already matches" });
       }
     } catch (err: any) {
       toast({ title: "Update failed", description: err.message, variant: "destructive" });
@@ -344,8 +351,8 @@ export default function BulkUploadEmployees() {
             </CardHeader>
             <CardContent className="space-y-4">
               <p className="text-sm text-muted-foreground">
-                The template has one column for every field on the Add Employee form — {EMPLOYEE_TEMPLATE_HEADERS.length} in
-                total — plus {SAMPLE_ROWS.length} sample rows showing how to fill it in. Columns marked with{" "}
+                The template has one column for every field on the Add Employee form -{EMPLOYEE_TEMPLATE_HEADERS.length} in
+                total -plus {SAMPLE_ROWS.length} sample rows showing how to fill it in. Columns marked with{" "}
                 <span className="font-semibold text-gray-700">*</span> are required.
               </p>
               <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/60 p-4 flex items-center gap-3">
@@ -356,7 +363,7 @@ export default function BulkUploadEmployees() {
                   <p className="text-sm font-semibold text-gray-800 truncate">
                     Employee_Bulk_Upload_Template_{scopeLabel(user)}_{todayStamp()}.xlsx
                   </p>
-                  <p className="text-xs text-muted-foreground">Column headers are locked — don't rename, reorder, or remove any of them.</p>
+                  <p className="text-xs text-muted-foreground">Column headers are locked -don't rename, reorder, or remove any of them.</p>
                 </div>
               </div>
               <Button onClick={() => downloadTemplate(user)} className="w-full gap-2">
@@ -548,13 +555,13 @@ export default function BulkUploadEmployees() {
           <CardContent className="space-y-4">
             <ol className="grid sm:grid-cols-2 gap-3 text-sm">
               {[
-                "Download the official template using the button above — don't build your own sheet from scratch.",
-                `Rows 2–${1 + SAMPLE_ROWS.length} are sample data (shaded) — they're for reference only and are always skipped, whether or not you delete them.`,
-                "Employee Code and First Name are required for every row; every other column — including Last Name and Phone — can be left blank and filled in later.",
-                "Department, Designation and Branch are matched by name — spell them exactly as they appear in Manage Branch / Departments / Designations.",
-                "Already have employees in the system? Use \"Download Current Employees\" below instead — it's the same sheet with your real data already in it, so you can just add new rows at the bottom.",
-                "Missed or mistyped something for existing employees? Download their Excel below, correct just those cells, and upload it via \"Update Employees\" — no need to redo the whole bulk upload.",
-                "After uploading, review the Created/Failed summary — failed rows list the exact reason, so you can fix just those rows and re-upload only them.",
+                "Download the official template using the button above -don't build your own sheet from scratch.",
+                `Rows 2–${1 + SAMPLE_ROWS.length} are sample data (shaded) -they're for reference only and are always skipped, whether or not you delete them.`,
+                "Employee Code and First Name are required for every row; every other column -including Last Name and Phone -can be left blank and filled in later.",
+                "Department, Designation and Branch are matched by name -spell them exactly as they appear in Manage Branch / Departments / Designations.",
+                "Already have employees in the system? Use \"Download Current Employees\" below instead -it's the same sheet with your real data already in it, so you can just add new rows at the bottom.",
+                "Missed or mistyped something for existing employees? Download their Excel below, correct just those cells, and upload it via \"Update Employees\" -no need to redo the whole bulk upload.",
+                "After uploading, review the Created/Failed summary -failed rows list the exact reason, so you can fix just those rows and re-upload only them.",
               ].map((step, i) => (
                 <li key={i} className="flex gap-2.5">
                   <span className="w-5 h-5 rounded-full bg-teal-50 text-teal-700 text-[11px] font-black flex items-center justify-center shrink-0 mt-0.5">{i + 1}</span>
@@ -566,8 +573,8 @@ export default function BulkUploadEmployees() {
               <Info size={14} className="text-blue-600 shrink-0 mt-0.5" />
               <p className="text-xs text-blue-800">
                 If the headers in your uploaded file don't match the official template exactly (renamed, reordered, or
-                removed columns), the whole file is rejected before anything is imported — download a fresh copy of the
-                template if you're unsure. Employee Code is the unique identifier for every employee — the system will
+                removed columns), the whole file is rejected before anything is imported -download a fresh copy of the
+                template if you're unsure. Employee Code is the unique identifier for every employee -the system will
                 never let two employees share one, in this upload or anywhere else.
               </p>
             </div>
@@ -583,13 +590,27 @@ export default function BulkUploadEmployees() {
                 <CardTitle className="text-base font-bold text-gray-900">Existing Employees</CardTitle>
                 <span className="text-xs text-muted-foreground">({employees?.length ?? 0} records)</span>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <Button
                   variant="outline" size="sm" className="gap-2"
                   disabled={!employees?.length}
                   onClick={() => employees && downloadCurrentEmployees(employees, user)}
                 >
                   <Download size={13} /> Download Current Employees
+                </Button>
+                <Button
+                  variant="outline" size="sm" className="gap-2"
+                  disabled={!employees?.some((e) => e.employmentType === "staff")}
+                  onClick={() => employees && downloadCurrentEmployees(employees, user, "staff")}
+                >
+                  <Download size={13} /> Download Staff
+                </Button>
+                <Button
+                  variant="outline" size="sm" className="gap-2"
+                  disabled={!employees?.some((e) => e.employmentType === "production")}
+                  onClick={() => employees && downloadCurrentEmployees(employees, user, "production")}
+                >
+                  <Download size={13} /> Download Production
                 </Button>
                 <input
                   ref={updateFileInputRef}
@@ -611,7 +632,7 @@ export default function BulkUploadEmployees() {
               To fix or fill in details for employees already in the system: download the Excel, edit only the cells
               you want to change, then upload it back with <span className="font-semibold">Update Employees</span>.
               Rows are matched by Employee Code, blank cells never erase existing data, and only fields with new
-              values are written. New employees are ignored here — add those with the Bulk Upload above.
+              values are written. New employees are ignored here -add those with the Bulk Upload above.
             </p>
           </CardHeader>
           <CardContent className="p-0">
@@ -699,7 +720,7 @@ export default function BulkUploadEmployees() {
             {employeesLoading ? (
               <p className="text-sm text-muted-foreground p-4">Loading…</p>
             ) : !employees?.length ? (
-              <p className="text-sm text-muted-foreground p-6 text-center">No employees yet — upload your first batch above.</p>
+              <p className="text-sm text-muted-foreground p-6 text-center">No employees yet -upload your first batch above.</p>
             ) : (
               <div className="overflow-auto border-t border-gray-100 max-h-[480px]" style={{ fontFamily: "ui-monospace, monospace" }}>
                 <table className="border-collapse text-[11px]" style={{ minWidth: "max-content" }}>

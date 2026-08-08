@@ -91,7 +91,7 @@ def healthz(_request: Request) -> Response:
 
 # --- Auth ---
 
-# HR Portal login lockout — independent of the DRF per-IP throttle below.
+# HR Portal login lockout -independent of the DRF per-IP throttle below.
 # This is per-username, so an attacker rotating IPs still gets locked out.
 HR_LOCKOUT_THRESHOLD = 5
 HR_LOCKOUT_WINDOW_MINUTES = 15
@@ -137,12 +137,12 @@ def hr_login(request: Request) -> Response:
     label = account.full_name or account.username
     account.last_login = timezone.now()
     account.save(update_fields=["last_login"])
-    # Shorter-lived token than employee sessions — this is the privileged portal.
-    # Permissions are NOT baked into the token — see permission_middleware.py,
+    # Shorter-lived token than employee sessions -this is the privileged portal.
+    # Permissions are NOT baked into the token -see permission_middleware.py,
     # which re-checks HRUser.is_active/role.permissions fresh on every request
     # so an Admin revoking access takes effect immediately, not after expiry.
     # jti ties this token to a revocable LoginSession row (see require_hr in
-    # auth.py) — powers the Login Devices page and remote/self logout.
+    # auth.py) -powers the Login Devices page and remote/self logout.
     jti = uuid.uuid4().hex
     token_payload = {
         "role": "hr",
@@ -266,7 +266,7 @@ def departments(request: Request) -> Response:
 
 def _departments_create(request: Request) -> Response:
     # A branch-scoped HR user's own branch always wins, same convention used
-    # for employee create/update — otherwise a department they create would
+    # for employee create/update -otherwise a department they create would
     # be invisible to them the moment the list is branch-scoped. Unscoped
     # users (super admin, branch-less roles) may pick one explicitly.
     scoped_branch_id = get_branch_scope(request)
@@ -344,7 +344,7 @@ def _employees_list(request: Request) -> Response:
 def _assign_unit_code(branch_id: int | None) -> str | None:
     """
     Next "<branch code>-<n>" identifier for a branch, e.g. HO-1, HO-2,
-    Unit1-1 — atomically incremented (select_for_update, inside a
+    Unit1-1 -atomically incremented (select_for_update, inside a
     transaction) so two concurrent requests can never be handed the same
     number, and a number is never reused even after the employee holding it
     is later deleted or moved to a different branch. None if the employee
@@ -395,7 +395,7 @@ def _resolve_employee_relations(data: dict, request: Request) -> tuple[dict, lis
         desig_qs = _Desig.objects.filter(title__iexact=desig_title)
         desig = (desig_qs.filter(department=dept).first() if dept else None) or desig_qs.first()
         if desig is None:
-            warnings.append(f"Designation '{desig_title}' not found — left blank")
+            warnings.append(f"Designation '{desig_title}' not found -left blank")
 
     # A branch-scoped HR user can only ever create employees in their own
     # branch, regardless of what the client/row sends. Unscoped users (super
@@ -410,7 +410,7 @@ def _resolve_employee_relations(data: dict, request: Request) -> tuple[dict, lis
         b = Branch.objects.filter(name__iexact=branch_name).first()
         branch_id = b.id if b else None
         if b is None:
-            warnings.append(f"Branch '{branch_name}' not found — left unassigned")
+            warnings.append(f"Branch '{branch_name}' not found -left unassigned")
     else:
         branch_id = None
 
@@ -421,13 +421,13 @@ def _create_employee_from_data(
     data: dict, request: Request, strict: bool = True,
 ) -> tuple[Employee | None, str | None, list[str]]:
     """
-    Create one Employee from a plain camelCase dict — the shape shared by
+    Create one Employee from a plain camelCase dict -the shape shared by
     both the single Add Employee JSON body and one row of a bulk-upload
     Excel import. Returns (employee, error, warnings): error is a hard-fail
     reason (nothing created); warnings are non-fatal notes about fields that
     were skipped (e.g. an unmatched department/branch name).
 
-    `strict` gates Last Name / Phone as required — on for the single Add
+    `strict` gates Last Name / Phone as required -on for the single Add
     Employee form, off for bulk upload (where only Employee Code and First
     Name are mandatory; Last Name and Phone may be filled in later).
     """
@@ -494,7 +494,7 @@ def _employees_create(request: Request) -> Response:
 
     emp = _employee_queryset().get(pk=emp.pk)
     log_action(request, "create", "employees", record_id=emp.id,
-               description=f"Created employee {emp.employee_code} — {emp.first_name} {emp.last_name}")
+               description=f"Created employee {emp.employee_code} -{emp.first_name} {emp.last_name}")
     return Response(_serialize_employee(emp), status=201)
 
 
@@ -546,7 +546,7 @@ def _employee_update(request: Request, pk: int) -> Response:
         emp.branch_id = int(raw) if raw else None
 
     if emp.branch_id != original_branch_id:
-        # Moved to a different branch (or removed from one) — the old Unit
+        # Moved to a different branch (or removed from one) -the old Unit
         # Code no longer describes them, so retire it and mint a fresh one
         # for the new branch (never touches the old branch's counter).
         emp.unit_code = _assign_unit_code(emp.branch_id)
@@ -610,7 +610,7 @@ def _employee_update(request: Request, pk: int) -> Response:
 
     emp = _employee_queryset().get(pk=pk)
     log_action(request, "update", "employees", record_id=pk,
-               description=f"Updated employee {emp.employee_code} — {emp.first_name} {emp.last_name}")
+               description=f"Updated employee {emp.employee_code} -{emp.first_name} {emp.last_name}")
     return Response(_serialize_employee(emp))
 
 
@@ -618,7 +618,7 @@ def _employee_delete(request: Request, pk: int) -> Response:
     emp = scope_to_branch(Employee.objects, request).filter(id=pk).first()
     if not emp:
         return _error("Employee not found", 404)
-    name = f"{emp.employee_code} — {emp.first_name} {emp.last_name}"
+    name = f"{emp.employee_code} -{emp.first_name} {emp.last_name}"
     emp.delete()
     log_action(request, "delete", "employees", record_id=pk, description=f"Deleted employee {name}")
     return Response({"message": "Employee deleted"})
@@ -641,7 +641,7 @@ def bulk_location_tracking(request: Request) -> Response:
     """
     PATCH /api/employees/location-tracking/bulk
     Body: { enabled: bool, employeeIds?: number[] }
-    Turns live location tracking on/off for many employees at once — powers
+    Turns live location tracking on/off for many employees at once -powers
     the "Enable All" / "Disable All" buttons on the Tracking Settings tab.
     Without employeeIds, applies to every active employee in the caller's
     branch scope; with it, applies only to the given ids (still branch-scoped).
@@ -695,12 +695,12 @@ def _parse_date_cell(value):
             return datetime.strptime(raw, fmt).date().isoformat()
         except ValueError:
             continue
-    return raw  # unparseable — let Django's own validation reject it with its own message
+    return raw  # unparseable -let Django's own validation reject it with its own message
 
 
 def _employee_row_to_data(row: dict) -> tuple[dict, str | None]:
     """Normalize one raw Excel row (header -> cell value) into the camelCase
-    dict _create_employee_from_data expects. Returns (data, error) — error is
+    dict _create_employee_from_data expects. Returns (data, error) -error is
     set when a restricted-choice column (Employment Type/Salary Type/Gender)
     holds something other than one of its known values or blank."""
 
@@ -778,7 +778,7 @@ def bulk_upload_employees(request: Request) -> Response:
 
     def _normalize_header(c) -> str:
         # The downloaded template marks required columns as "Employee Code *"
-        # for the user's benefit — strip that trailing marker back off before
+        # for the user's benefit -strip that trailing marker back off before
         # comparing, so an unmodified official template always validates.
         h = str(c).strip() if c is not None else ""
         return h[:-1].rstrip() if h.endswith("*") else h
@@ -806,7 +806,7 @@ def bulk_upload_employees(request: Request) -> Response:
             continue  # skip fully blank rows
         first_cell = str(raw_row[0]).strip() if raw_row[0] is not None else ""
         if first_cell.upper().startswith("SAMPLE"):
-            # Reference rows shipped in the downloaded template — never imported,
+            # Reference rows shipped in the downloaded template -never imported,
             # even if the user forgets to delete them before uploading.
             sample_skipped += 1
             continue
@@ -822,7 +822,7 @@ def bulk_upload_employees(request: Request) -> Response:
         created += 1
         log_action(
             request, "create", "employees", record_id=emp.id,
-            description=f"Bulk-imported employee {emp.employee_code} — {emp.first_name} {emp.last_name}",
+            description=f"Bulk-imported employee {emp.employee_code} -{emp.first_name} {emp.last_name}",
         )
         warnings.extend(f"Row {idx}: {w}" for w in row_warnings)
 
@@ -842,7 +842,7 @@ def bulk_upload_employees(request: Request) -> Response:
 # --- Bulk employee update (existing employees, matched by Employee Code) ---
 
 # Fields the Excel updater may change, as (header, model attr) pairs. Employee
-# Code is deliberately absent — it's the match key, so this flow can never
+# Code is deliberately absent -it's the match key, so this flow can never
 # rename it. Department/Designation/Branch are handled separately (FK
 # resolution), as are the choice-validated columns.
 _UPDATE_TEXT_FIELDS = {
@@ -882,7 +882,7 @@ def _apply_row_updates(emp, row: dict, request: Request) -> tuple[list[str], lis
         v = row.get(key)
         return "" if v is None else str(v).strip()
 
-    # Choice-validated columns — a bad value fails the whole row rather than
+    # Choice-validated columns -a bad value fails the whole row rather than
     # silently skipping, so typos get fixed instead of ignored.
     gender = cell("Gender").lower()
     if gender and gender not in _VALID_GENDERS:
@@ -937,13 +937,13 @@ def _apply_row_updates(emp, row: dict, request: Request) -> tuple[list[str], lis
         desig_qs = _Desig.objects.filter(title__iexact=desig_title)
         desig = (desig_qs.filter(department=emp.department).first() if emp.department_id else None) or desig_qs.first()
         if desig is None:
-            warnings.append(f"Designation '{desig_title}' not found — kept the current one")
+            warnings.append(f"Designation '{desig_title}' not found -kept the current one")
         else:
             emp.designation = desig
             changed.append("Designation")
 
     # Branch: a branch-scoped HR user can't move employees between branches
-    # (same rule as the Edit Employee form) — their rows silently keep the
+    # (same rule as the Edit Employee form) -their rows silently keep the
     # current branch. Unscoped users match by name; unknown names warn.
     branch_name = cell("Branch")
     if branch_name and get_branch_scope(request) is None:
@@ -951,10 +951,10 @@ def _apply_row_updates(emp, row: dict, request: Request) -> tuple[list[str], lis
         if branch_name.lower() != current_branch_name.lower():
             b = Branch.objects.filter(name__iexact=branch_name).first()
             if b is None:
-                warnings.append(f"Branch '{branch_name}' not found — kept the current one")
+                warnings.append(f"Branch '{branch_name}' not found -kept the current one")
             else:
                 emp.branch_id = b.id
-                # Old Unit Code described the old branch — mint a fresh one.
+                # Old Unit Code described the old branch -mint a fresh one.
                 emp.unit_code = _assign_unit_code(b.id)
                 changed.append("Branch")
 
@@ -969,7 +969,7 @@ def bulk_update_employees(request: Request) -> Response:
     Companion to bulk_upload_employees for EXISTING employees: HR downloads
     the current-employees export, fills in missing/corrected cells, and
     re-uploads it here. Rows match by Employee Code; codes not in the system
-    are reported (never created — that's what bulk upload is for); blank
+    are reported (never created -that's what bulk upload is for); blank
     cells never overwrite stored data; only genuinely changed fields are
     written, and the response lists exactly what changed per employee.
     """
@@ -1029,7 +1029,7 @@ def bulk_update_employees(request: Request) -> Response:
         row = dict(zip(EMPLOYEE_UPLOAD_HEADERS, raw_row))
         emp = scoped_qs.filter(employee_code=first_cell).first()
         if emp is None:
-            not_found.append(f"Row {idx}: no employee with code '{first_cell}' — use Bulk Upload to add new employees")
+            not_found.append(f"Row {idx}: no employee with code '{first_cell}' -use Bulk Upload to add new employees")
             continue
 
         changed, row_warnings, row_error = _apply_row_updates(emp, row, request)
@@ -1046,10 +1046,10 @@ def bulk_update_employees(request: Request) -> Response:
             from .shift_views import auto_assign_production_shift
             auto_assign_production_shift(emp)
         updated += 1
-        changes.append(f"{first_cell} — {emp.first_name} {emp.last_name}: {', '.join(changed)}")
+        changes.append(f"{first_cell} -{emp.first_name} {emp.last_name}: {', '.join(changed)}")
         log_action(
             request, "update", "employees", record_id=emp.id,
-            description=f"Bulk-updated employee {emp.employee_code} — changed {', '.join(changed)}",
+            description=f"Bulk-updated employee {emp.employee_code} -changed {', '.join(changed)}",
         )
 
     return Response(
@@ -1406,7 +1406,7 @@ def _notif_with_name(record: Notification) -> dict:
 def notifications(request: Request) -> Response:
     if request.method == "GET":
         qs = Notification.objects.select_related("employee")
-        # An employee token only ever sees their own notifications — HR sees
+        # An employee token only ever sees their own notifications -HR sees
         # everything (used for admin/debug, not a normal HR-portal screen).
         employee_id = get_token_employee_id(request)
         if employee_id:
@@ -1416,7 +1416,7 @@ def notifications(request: Request) -> Response:
         rows = [_notif_with_name(r) for r in qs]
         rows.sort(key=lambda r: r["createdAt"] or "", reverse=True)
         return Response(rows)
-    # POST is HR-only — every legitimate notification is created server-side
+    # POST is HR-only -every legitimate notification is created server-side
     # by the business-logic views themselves (approvals, leave, etc.) calling
     # Notification.objects.create() directly, never through this generic
     # endpoint. Without this check any employee token could POST an
@@ -1443,7 +1443,7 @@ def mark_notification_read(request: Request, pk: int) -> Response:
     record = Notification.objects.filter(pk=pk).first()
     if not record:
         return _error("Not found", 404)
-    # An employee token may only mark their OWN notifications read — without
+    # An employee token may only mark their OWN notifications read -without
     # this check any logged-in employee could PATCH an arbitrary pk and
     # silently mark another employee's notification as read.
     token_employee_id = get_token_employee_id(request)
@@ -1468,7 +1468,7 @@ def mark_all_notifications_read(request: Request) -> Response:
 @require_auth
 def register_push_token(request: Request) -> Response:
     """
-    Mobile app only — the web app has no push equivalent. Called once after
+    Mobile app only -the web app has no push equivalent. Called once after
     login (and again if Expo issues a new token). Upserts by token value so
     re-registering the same device just reassigns it, which also covers
     "a different employee logged into this phone".
@@ -1664,7 +1664,7 @@ MONTH_NAMES = [
 @api_view(["GET"])
 @require_hr
 def hr_dashboard_summary(request: Request) -> Response:
-    # Every query below is branch-scoped — a branch-restricted HR user only
+    # Every query below is branch-scoped -a branch-restricted HR user only
     # ever sees totals for their own branch. scope_to_branch() is a no-op for
     # super admins and branch-less legacy roles (see branch_scope.py), so
     # they still see company-wide totals as before.
@@ -1760,7 +1760,7 @@ def employee_dashboard_summary(request: Request) -> Response:
     month, year = today.month, today.year
     prefix = f"{year}-{str(month).zfill(2)}"
 
-    # Present days — from biometric logs + manual attendance
+    # Present days -from biometric logs + manual attendance
     present_dates: set = set()
     for d in AttendanceLog.objects.filter(
         employee_id=employee_id, date__year=year, date__month=month,

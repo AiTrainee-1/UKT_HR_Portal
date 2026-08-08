@@ -87,8 +87,8 @@ function PunchSlot({ slot, index }: { slot: AttendanceSearchPunch; index: number
   );
 }
 
-// Every status slot always renders — active (colored, carries data) or
-// inactive (dashed/faded, mirrors PunchSlot's empty-punch look) — so every
+// Every status slot always renders -active (colored, carries data) or
+// inactive (dashed/faded, mirrors PunchSlot's empty-punch look) -so every
 // day row has the same fixed set of tiles and reads like a consistent
 // table instead of ad-hoc text that only sometimes appears.
 function StatusSlot({
@@ -197,7 +197,7 @@ export default function AttendancePunchSearch() {
   const { data, isLoading, isFetching } = useAttendanceSearch(query, date);
 
   // In Week/Month/Range mode the match list only needs to resolve which
-  // employee(s) the query points at — punches for "today" are irrelevant
+  // employee(s) the query points at -punches for "today" are irrelevant
   // there, the actual day-by-day data comes from the range endpoint below.
   const isRangeMode = mode !== "day";
   const { data: matchData, isLoading: matchLoading, isFetching: matchFetching } = useAttendanceSearch(query, todayStr(), isRangeMode);
@@ -210,7 +210,7 @@ export default function AttendancePunchSearch() {
     // selectedEmployeeId must stay a real dependency here: the sibling
     // effect above resets it to null on every mode change (including
     // switching directly between two range modes, e.g. Month -> Week,
-    // where isRangeMode and matches.length both stay unchanged) — without
+    // where isRangeMode and matches.length both stay unchanged) -without
     // this in the deps array, that reset never re-triggers this effect,
     // leaving selectedEmployeeId stuck null and the whole results section
     // rendering nothing at all (see the `!selectedEmployeeId ? null` branch
@@ -233,7 +233,7 @@ export default function AttendancePunchSearch() {
         <div>
           <h2 className="text-2xl font-black text-gray-900">Attendance Search</h2>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Look up any employee by Employee Code or Name to see their shift, punch timings, late marks, leave and permission records — for a day, week, month, or custom date range.
+            Look up any employee by Employee Code or Name to see their shift, punch timings, late marks, leave and permission records -for a day, week, month, or custom date range.
           </p>
         </div>
 
@@ -349,7 +349,7 @@ export default function AttendancePunchSearch() {
           <Card className="border-0 shadow-sm">
             <CardContent className="p-4 flex flex-col gap-3">
               <p className="text-xs font-bold text-gray-500 flex items-center gap-1.5">
-                <Users size={13} /> Multiple employees match "{query}" — pick one to view their {mode === "week" ? "week" : mode === "month" ? "month" : "range"}
+                <Users size={13} /> Multiple employees match "{query}" -pick one to view their {mode === "week" ? "week" : mode === "month" ? "month" : "range"}
               </p>
               <div className="flex flex-wrap gap-2">
                 {matches.map((emp) => (

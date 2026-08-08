@@ -21,7 +21,7 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 # API key the AiFace-Mars device must send in the X-Device-Key header.
-# Set BIOMETRIC_API_KEY in your .env file — never hardcode this value.
+# Set BIOMETRIC_API_KEY in your .env file -never hardcode this value.
 
 
 def _today() -> date_type:
@@ -191,12 +191,12 @@ def attendance_summary(request: Request) -> Response:
     })
 
 
-# ── Mobile Home — "Today at a Glance" + Live Feed ─────────────────────────────
+# ── Mobile Home -"Today at a Glance" + Live Feed ─────────────────────────────
 
 @api_view(["GET"])
 @require_auth
 def mobile_home_summary(request: Request) -> Response:
-    """Company-wide today snapshot for the mobile app's Home screen — scoped
+    """Company-wide today snapshot for the mobile app's Home screen -scoped
     to the requesting employee's own branch (derived from their own row,
     since get_branch_scope() only ever resolves for HR tokens). Reuses the
     exact same counting helpers as attendance_summary (HR portal) so the two
@@ -239,10 +239,10 @@ def mobile_home_summary(request: Request) -> Response:
 @api_view(["GET"])
 @require_auth
 def attendance_live_feed(request: Request) -> Response:
-    """Today's own punches ticker for the mobile Home screen — self-scoped
+    """Today's own punches ticker for the mobile Home screen -self-scoped
     to the requesting employee only (never another employee's punches).
-    IN/OUT is derived by time-position within the employee's day — never
-    the raw stored punch_type — same rule as attendance_employee_history,
+    IN/OUT is derived by time-position within the employee's day -never
+    the raw stored punch_type -same rule as attendance_employee_history,
     since biometric devices often record every punch as IN."""
     d = _today()
     try:
@@ -316,7 +316,7 @@ def attendance_daily(request: Request) -> Response:
         if emp_logs:
             from .attendance_final import _resolve_primary_source
             # First/last punch of the day by time position, not by
-            # filtering for a stored "IN"/"OUT" type — biometric devices
+            # filtering for a stored "IN"/"OUT" type -biometric devices
             # often record every punch as "IN", which would silently blank
             # out last_out on those days if this filtered by type instead.
             first_in = emp_logs[0]
@@ -434,16 +434,16 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
 
     # The exact same day-by-day engine payroll and the HR portal's
     # Attendance Search page use (compute_day_record / compute_month_records
-    # in attendance_final.py) — so Present / Half Shift / Late can never
+    # in attendance_final.py) -so Present / Half Shift / Late can never
     # disagree between HRMS and this endpoint (which both the mobile app and
     # this page's own Employee Detail dialog consume). Previously this view
     # ran its own simplified inline classification that never produced
     # "half_shift" at all and used a plain grace-period late check instead
-    # of the shift punctuality-window rule — the root cause of Half Shift /
+    # of the shift punctuality-window rule -the root cause of Half Shift /
     # Late looking wrong on mobile compared to the HR portal.
     day_records = {r.date: r for r in compute_month_records(emp, year, month)}
 
-    # Punch logs for the month — display only now; status/late/half-shift
+    # Punch logs for the month -display only now; status/late/half-shift
     # all come from day_records above, not from re-deriving punches here.
     logs_qs = AttendanceLog.objects.filter(
         employee_id=pk, date__year=year, date__month=month,
@@ -459,11 +459,11 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
             "sourceLabel": source_label(log.source),
         })
 
-    # Manual attendance records — display only (notes/hours worked)
+    # Manual attendance records -display only (notes/hours worked)
     prefix = f"{year}-{str(month).zfill(2)}"
     manual_by_date = {str(a.date): a for a in Attendance.objects.filter(employee_id=pk, date__startswith=prefix)}
 
-    # Leave type per date — compute_day_record only exposes status=on_leave,
+    # Leave type per date -compute_day_record only exposes status=on_leave,
     # not which leave type, so that's still resolved separately for display.
     leave_dates: dict[str, str] = {}
     for leave in LeaveRequest.objects.filter(employee_id=pk, status="approved"):
@@ -536,7 +536,7 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
             "onLeave":   summary["onLeave"],
             "late":      summary["late"],
         },
-        # "Was present in some form" — full + half shift days combined,
+        # "Was present in some form" -full + half shift days combined,
         # matching this field's pre-existing meaning (used for the HR
         # portal's attendance-rate %), now with Half Shift correctly
         # counted in it instead of silently missing.
@@ -579,7 +579,7 @@ def biometric_punch(request: Request) -> Response:
     if not person_id or not punch_time_raw:
         return Response({"error": "personId and time are required"}, status=400)
 
-    # Employee Code ONLY — the code enrolled on the device IS the Employee
+    # Employee Code ONLY -the code enrolled on the device IS the Employee
     # Code in this company, always. This used to also fall back to the
     # internal database row id, which could silently attribute a punch to a
     # completely different person whenever a code happened to collide with
@@ -699,13 +699,13 @@ def manual_attendance(request: Request) -> Response:
 @require_auth
 def attendance_sync_status(request: Request) -> Response:
     """
-    GET /api/attendance/sync-status — employee-facing.
+    GET /api/attendance/sync-status -employee-facing.
 
     Tells the employee apps whether today's attendance might still be
     incomplete because biometric hasn't been synced yet. `pendingSync` is
     true only when BOTH: (1) today already has a punch from a non-biometric
     source (Geo Punch / On-Duty / HR Entry) for this employee, AND (2) no
-    active biometric device has synced since midnight today — since a
+    active biometric device has synced since midnight today -since a
     biometric-device-recorded punch for the same physical check-in could
     still be sitting unsynced on the device, which would change today's
     picture once HR runs Sync Biometric. Never flags a day with zero
@@ -724,7 +724,7 @@ def attendance_sync_status(request: Request) -> Response:
     has_non_biometric_punch = any(not l.source.startswith("biometric") for l in today_logs)
     has_biometric_punch = any(l.source.startswith("biometric") for l in today_logs)
 
-    # IST day boundary, not a naive make_aware() — this server's clock is
+    # IST day boundary, not a naive make_aware() -this server's clock is
     # IST but Django's TIME_ZONE is UTC, so a naive midnight would silently
     # anchor 5:30 hours off. See geo_attendance_views._day_bounds_utc, the
     # one already-correct helper for this in the codebase.
@@ -739,11 +739,11 @@ def attendance_sync_status(request: Request) -> Response:
 
 # ── Biometric Sync ────────────────────────────────────────────────────────────
 # Two device sources, both supported together:
-#   • backend/.env (BIOMETRIC_DEVICE_IP/PORT/PASSWORD) — always works, unchanged
-#   • Settings → Devices — any number of additional devices added from the UI
+#   • backend/.env (BIOMETRIC_DEVICE_IP/PORT/PASSWORD) -always works, unchanged
+#   • Settings → Devices -any number of additional devices added from the UI
 
 def _date_from_for_mode(mode: str):
-    """mode: 'day' | 'week' | 'month' | 'all' — the only 4 sync ranges HR needs."""
+    """mode: 'day' | 'week' | 'month' | 'all' -the only 4 sync ranges HR needs."""
     from datetime import date as _date
     today = _date.today()
     if mode == "day":
@@ -774,7 +774,7 @@ def run_biometric_sync(mode: str = "day", device_id=None) -> dict:
     except BiometricSyncError as exc:
         return {"ok": False, "error": str(exc)}
 
-    # Progress-tracking only (UI pipeline) — does not affect the sync itself.
+    # Progress-tracking only (UI pipeline) -does not affect the sync itself.
     sync_progress.start(targets)
 
     total_created = 0
@@ -827,7 +827,7 @@ def run_biometric_sync(mode: str = "day", device_id=None) -> dict:
         "syncedAt": datetime.utcnow().isoformat() + "Z",
         "unmatchedDeviceIds": sorted(not_found_ids),
         "deviceErrors": device_errors,
-        # Days where one employee logged 6+ punches — almost always means the
+        # Days where one employee logged 6+ punches -almost always means the
         # biometric device has two different people sharing one Device User
         # ID. Employee-Code-only matching can't split them since the device
         # itself sends one identical id for both; this needs to be fixed by
@@ -870,7 +870,7 @@ def _assigned_shift_json(shift) -> dict | None:
 
 def _full_day_row(emp, rec, shift, dsl, cl, perm, leave=None) -> dict:
     """
-    One employee's full attendance picture for one day — used by the Report
+    One employee's full attendance picture for one day -used by the Report
     Log page's detail view. Built entirely from data the existing engines
     already compute (AttendanceDayRecord / DailyShiftLog / Casual Leave /
     Permission / Leave); nothing here recalculates anything.
@@ -928,10 +928,10 @@ def _full_day_row(emp, rec, shift, dsl, cl, perm, leave=None) -> dict:
 
 def _month_summary_row(emp, summary: dict, cl_count: int, perm_count: int) -> dict:
     """
-    One employee's aggregate attendance picture for a month — used by the
+    One employee's aggregate attendance picture for a month -used by the
     Report Log page's summary view. Built entirely from
     month_summary_from_records() (attendance_final.py), the same monthly
-    aggregation used elsewhere in the app — including onLeave, which is
+    aggregation used elsewhere in the app -including onLeave, which is
     already correct here because compute_month_records() feeds
     compute_day_record() the real approved-leave date set for every day.
     """
@@ -966,12 +966,12 @@ def attendance_report_log(request: Request) -> Response:
           code/name search.
 
     GET /api/attendance/report-log?month=7&year=2026&employeeId=123
-        → detail mode: one employee's full month, day by day — every punch
+        → detail mode: one employee's full month, day by day -every punch
           slot, status, late/half-shift, Casual Leave, Permission, and Leave.
 
     Built on the same AttendanceDayRecord/DailyShiftLog engines used
     everywhere else (compute_day_record / compute_daily_shift_log via
-    compute_month_records) — this endpoint only reads and joins their
+    compute_month_records) -this endpoint only reads and joins their
     output for display, it does not change how anything is calculated.
     View-only: nothing here writes anything HR didn't already trigger
     elsewhere (compute_month_records persists AttendanceDayRecord as a
@@ -1009,7 +1009,7 @@ def attendance_report_log(request: Request) -> Response:
             return Response({"error": "Employee not found"}, status=404)
 
         records = compute_month_records(emp, y, m, settings)
-        # Only approved CL/Permission/Leave requests are shown here — pending
+        # Only approved CL/Permission/Leave requests are shown here -pending
         # ones aren't final yet and rejected ones didn't happen, so none of
         # the three belong on an attendance report.
         cl_map = {
@@ -1081,7 +1081,7 @@ def attendance_report_log(request: Request) -> Response:
     emp_ids = [e.id for e in emps]
 
     # Batched CL/Permission counts (one query each for every matching
-    # employee) instead of a per-employee query — avoids N+1 as the employee
+    # employee) instead of a per-employee query -avoids N+1 as the employee
     # list grows.
     cl_counts: dict[int, int] = defaultdict(int)
     for row in (
@@ -1113,7 +1113,7 @@ def attendance_report_log(request: Request) -> Response:
 def attendance_search(request: Request) -> Response:
     """
     GET /api/attendance/search?query=<employee code or name>&date=YYYY-MM-DD
-    (date defaults to today) — HR-facing lookup: find an employee by Employee
+    (date defaults to today) -HR-facing lookup: find an employee by Employee
     Code or Name and see their shift plus all 4 punch slots for that day,
     each tagged with its source (Biometric, Geo Punch, On-Duty, HR Entry,
     Manual Entry). Branch-scoped, capped at 25 matches.
@@ -1150,13 +1150,13 @@ def attendance_search(request: Request) -> Response:
             AttendanceLog.objects.filter(employee=emp, date=d).order_by("punch_time")
         )
         # Displayed IN/OUT alternates by time-sorted position rather than the
-        # raw stored punch_type — a Geo/On-Duty punch captured before that
+        # raw stored punch_type -a Geo/On-Duty punch captured before that
         # day's biometric sync catches up can end up with a stale stored
         # type once sync backfills an earlier punch (see
         # geo_attendance_views._next_punch); position-based labeling can't
         # go stale the same way, since it's derived fresh every read.
         #
-        # Every punch that exists is shown here, uncapped — this is display
+        # Every punch that exists is shown here, uncapped -this is display
         # only. Shift-value calculation elsewhere still uses just the first
         # and last punch (P1/P4); showing every punch on this search page
         # doesn't change that logic at all.
@@ -1193,7 +1193,7 @@ def attendance_search_range(request: Request) -> Response:
     """
     GET /api/attendance/search/range?employeeId=123&startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
     One employee's full day-by-day attendance picture across an arbitrary
-    date range — powers the Week/Month/Custom Range filters on the
+    date range -powers the Week/Month/Custom Range filters on the
     Attendance Search page once a specific employee has been picked from
     the query match list. Each day carries the same punch/source shape as
     attendance_search() above, plus the day's computed status/late flag
@@ -1229,7 +1229,7 @@ def attendance_search_range(request: Request) -> Response:
     if date_from > date_to:
         date_from, date_to = date_to, date_from
     if (date_to - date_from).days > 100:
-        return Response({"error": "Date range is too large — please select 100 days or fewer"}, status=400)
+        return Response({"error": "Date range is too large -please select 100 days or fewer"}, status=400)
 
     records = compute_range_records(emp, date_from, date_to)
 
@@ -1267,10 +1267,10 @@ def attendance_search_range(request: Request) -> Response:
     days = []
     for rec in records:
         day_logs = logs_by_date.get(rec.date, [])
-        # See attendance_search()'s identical comment above — IN/OUT is
+        # See attendance_search()'s identical comment above -IN/OUT is
         # derived from time-sorted position, not the raw stored punch_type,
         # so a stale label from the cross-source ordering bug can't surface.
-        # Every punch is shown, uncapped (display only — shift-value math
+        # Every punch is shown, uncapped (display only -shift-value math
         # elsewhere still only uses the first and last punch).
         punches = [
             {
@@ -1325,9 +1325,9 @@ def attendance_search_range(request: Request) -> Response:
 def compute_shift_logs(request: Request) -> Response:
     """
     POST /api/attendance/compute-shifts/
-    Body: { "date": "2026-07-01" }  — recompute for all staff that day
-    Body: { "month": 7, "year": 2026 }  — recompute entire month
-    Body: { "month": 7, "year": 2026, "employeeId": 123 }  — one employee
+    Body: { "date": "2026-07-01" }  -recompute for all staff that day
+    Body: { "month": 7, "year": 2026 }  -recompute entire month
+    Body: { "month": 7, "year": 2026, "employeeId": 123 }  -one employee
     """
     from .shift_engine import compute_daily_shift_log, compute_monthly_shift_summary, recompute_date, NEW_ATTENDANCE_RULE_CUTOVER, resolve_day_punch_logs
     from .models import PayrollSettings
@@ -1368,7 +1368,7 @@ def compute_shift_logs(request: Request) -> Response:
 
         # One query for the whole month (+1 day padding each side, for
         # cross-midnight punch reattribution's neighbor-day lookups) instead
-        # of one per day — {employee_id: {date: [AttendanceLog, ...]}}.
+        # of one per day -{employee_id: {date: [AttendanceLog, ...]}}.
         month_start = date_type(y, m, 1)
         month_end = date_type(y, m, days_in_month)
         all_logs = list(
@@ -1501,12 +1501,12 @@ def employee_shift_monthly_stats(request: Request) -> Response:
     from .attendance_final import compute_month_records, month_summary_from_records
 
     # The exact same day-by-day engine payroll and the HR portal's
-    # Attendance Search / Attendance page use — so this endpoint (mobile My
+    # Attendance Search / Attendance page use -so this endpoint (mobile My
     # Shift, the Employee Web App's My Shift + Attendance pages, and HR's
     # Manage Shift panel) can never disagree with the Attendance page again.
     # Previously this view ran its own inline day loop keyed off
     # DailyShiftLog, a table that is ONLY ever written in strict attendance
-    # mode — in simple mode (this deployment's mode) DailyShiftLog rows are
+    # mode -in simple mode (this deployment's mode) DailyShiftLog rows are
     # never created at all, so every count below silently computed as 0/near-
     # zero regardless of real attendance. That was the root cause of "Monthly
     # Attendance Summary" showing wrong numbers on mobile.
@@ -1515,14 +1515,14 @@ def employee_shift_monthly_stats(request: Request) -> Response:
     # DailyShiftLog is still consulted per-day, purely for the granular
     # Late-Morning-vs-Late-Return split that only strict mode's 4-punch
     # engine actually computes (simple mode has no lunch-return concept at
-    # all) — when it doesn't exist for a day, both fall back to the
+    # all) -when it doesn't exist for a day, both fall back to the
     # canonical single is_late flag attributed to "morning".
     shift_logs: dict[date_type, object] = {
         sl.date: sl
         for sl in DailyShiftLog.objects.filter(employee=emp, date__year=y, date__month=m)
     }
 
-    # ── Raw biometric/manual punches keyed by date string — display only ────
+    # ── Raw biometric/manual punches keyed by date string -display only ────
     punches_by_date: dict[str, list] = _dd(list)
     for log in AttendanceLog.objects.filter(
         employee=emp, date__year=y, date__month=m
@@ -1531,7 +1531,7 @@ def employee_shift_monthly_stats(request: Request) -> Response:
         # IN/OUT alternates by time-sorted position within the day (the
         # current list length is that position, since rows arrive in
         # date/punch_time order already) rather than the raw stored
-        # punch_type — see attendance_search()'s comment for why.
+        # punch_type -see attendance_search()'s comment for why.
         position = len(punches_by_date[date_key])
         punches_by_date[date_key].append({
             "time": log.punch_time.strftime("%H:%M"),
@@ -1540,14 +1540,14 @@ def employee_shift_monthly_stats(request: Request) -> Response:
             "sourceLabel": source_label(log.source),
         })
 
-    # ── Manual attendance records — display only (notes/hours worked) ───────
+    # ── Manual attendance records -display only (notes/hours worked) ───────
     prefix = f"{y}-{str(m).zfill(2)}"
     manual_by_date = {
         str(a.date): a
         for a in Attendance.objects.filter(employee=emp, date__startswith=prefix)
     }
 
-    # ── Leave type per date — compute_day_record only exposes status=on_leave,
+    # ── Leave type per date -compute_day_record only exposes status=on_leave,
     #    not which leave type, so that's still resolved separately for display.
     month_start = date_type(y, m, 1)
     month_end = date_type(y, m, days_in_month)
@@ -1609,7 +1609,7 @@ def employee_shift_monthly_stats(request: Request) -> Response:
         })
 
     summary = month_summary_from_records(list(day_records.values()))
-    # "Present" here means full-shift days specifically — Half Shift is its
+    # "Present" here means full-shift days specifically -Half Shift is its
     # own bucket, matching the Attendance page / Attendance Search's summary
     # cards (present + halfShift kept distinct there too, not merged).
     present_days = summary["present"]
@@ -1622,12 +1622,12 @@ def employee_shift_monthly_stats(request: Request) -> Response:
     late_morning_days = sum(1 for d in daily if d["lateMorning"])
     late_return_days = sum(1 for d in daily if d["lateReturn"])
 
-    # ── Live permission/late-deduction preview — same formula payroll uses
+    # ── Live permission/late-deduction preview -same formula payroll uses
     #    (payroll_views.py), computed fresh from the day loop above rather
     #    than depending on a MonthlyShiftSummary row that only exists once
     #    HR has actually run payroll for this month (previously this whole
-    #    block was `None` — and silently wrong before that, since it too
-    #    read from DailyShiftLog-derived late counts — until the first
+    #    block was `None` -and silently wrong before that, since it too
+    #    read from DailyShiftLog-derived late counts -until the first
     #    payroll run of the month).
     from .models import EmployeePermission
     approved_permissions = EmployeePermission.objects.filter(

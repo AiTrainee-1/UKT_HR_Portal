@@ -1,26 +1,26 @@
 """
-Shift Computation Engine — Staff employees (4-punch day model)
+Shift Computation Engine -Staff employees (4-punch day model)
 ==============================================================
 Determines first-half / second-half completion and late status from raw
 AttendanceLog punches, then persists results to DailyShiftLog and
 MonthlyShiftSummary.
 
 Punch flow:
-  punch1 — first IN  of the day            (morning check-in)
-  punch2 — first OUT after first_half_end  (going for lunch)
-  punch3 — first IN  after punch2          (return from lunch)
-  punch4 — last OUT  of the day            (end of day)
+  punch1 -first IN  of the day            (morning check-in)
+  punch2 -first OUT after first_half_end  (going for lunch)
+  punch3 -first IN  after punch2          (return from lunch)
+  punch4 -last OUT  of the day            (end of day)
 
 Late rules:
   late_morning  = punch1_time > shift.start_time + grace_period_minutes
   late_return   = punch3_time > punch2_time + lunch_duration_minutes
   (lunch_grace_minutes = how many extra minutes after first_half_end they
-   are allowed to leave — extends the window in which punch2 is valid)
+   are allowed to leave -extends the window in which punch2 is valid)
 
 Monthly deduction:
   late_punch_count = sum of (late_morning + late_return) across all days
   approved_permissions = count of approved EmployeePermission requests this month
-  total_late = late_punch_count + approved_permissions   (merged pool — every
+  total_late = late_punch_count + approved_permissions   (merged pool -every
                approved permission counts as a late entry here, on equal
                footing with a late punch)
   free_permissions = 3 per month (ONE shared allowance across the merged pool —
@@ -29,12 +29,12 @@ Monthly deduction:
   shift_deductions = floor(billable_late / 3) * 0.25
   salary_deduction_amount = shift_deductions * daily_rate
   permission_overage_count (stored, display-only) = max(0, approved_permissions - 3)
-               — shown to HR as "excess permissions" context, not used in the
+               -shown to HR as "excess permissions" context, not used in the
                billable_late math above (which uses the raw approved_permissions
                count merged with late_punch_count before the single 3-free cut)
 
 Note: employees may still SUBMIT more than 3 permission requests per month
-(the old hard submission cap was removed) — only the deduction math treats
+(the old hard submission cap was removed) -only the deduction math treats
 the 4th-and-beyond approved one as a late entry.
 """
 
@@ -55,42 +55,56 @@ from django.db.models import Q
 #
 # Retroactive recompute (2026-07-25, explicit user approval via
 # AskUserQuestion after reviewing a pre-cutover day that showed Full Shift
-# despite a ~3-hour-late first punch — legacy days had no punctuality check
+# despite a ~3-hour-late first punch -legacy days had no punctuality check
 # at all): pushed back to cover all real attendance history, so every
 # AttendanceDayRecord now recomputes under the current rule the next time
 # it's read. This does NOT retroactively change any already-generated
-# Payroll/SalarySlip record — those are separate frozen rows and were left
+# Payroll/SalarySlip record -those are separate frozen rows and were left
 # untouched; regenerating them is its own, separately-approved action.
 NEW_ATTENDANCE_RULE_CUTOVER = date_type(2000, 1, 1)
 
 # Half Shift Late reference time (2026-07-29, user-mandated, corrected same
 # day after an initial "punch >= 14:30 is never late" version was wrong).
 # For a day that resolves to Half Shift, Late is no longer determined by
-# the shift's own morning start+grace at all — it's determined solely by
+# the shift's own morning start+grace at all -it's determined solely by
 # this fixed clock time: a first punch strictly AFTER 2:30 PM is Late, a
 # first punch AT or BEFORE 2:30 PM is not, regardless of what the shift's
 # own start time or grace period says. This completely REPLACES the Late
-# computation for Half Shift days — it does not merely suppress it past a
+# computation for Half Shift days -it does not merely suppress it past a
 # threshold. Morning Late detection and Full Shift days are entirely
 # unaffected: this constant is only ever consulted once a day has already
 # resolved to Half Shift on its own merits (via the punctuality window in
 # _punctuality_ok / _compute_staff_simple).
-HALF_SHIFT_LATE_REFERENCE_TIME = time_type(14, 30)
+# Fallback only -the live value is HR-editable via
+# PayrollSettings.half_shift_late_reference_time (Settings → Attendance →
+# Staff). This constant is what that field defaults to, and what's used if
+# settings are somehow unreadable, so behavior is identical out of the box.
+HALF_SHIFT_LATE_REFERENCE_DEFAULT = time_type(14, 30)
 
 
-def _is_after_half_shift_late_reference(punch1: time_type) -> bool:
+def half_shift_late_reference() -> time_type:
+    """Live Half Shift late reference time from Settings (same lazy-read
+    pattern as _punctuality_window_minutes below)."""
+    from .models import PayrollSettings
+    return PayrollSettings.get().half_shift_late_reference_time or HALF_SHIFT_LATE_REFERENCE_DEFAULT
+
+
+def _is_after_half_shift_late_reference(punch1: time_type, reference: time_type | None = None) -> bool:
     """
-    True iff `punch1` is Late for Half Shift purposes, per
-    HALF_SHIFT_LATE_REFERENCE_TIME — compared at MINUTE granularity, not
-    exact seconds. Real punches carry a seconds component (e.g. a biometric
-    punch at 14:30:43), and the user's rule is stated in whole minutes: "at
-    exactly 2:30 PM = not late; 2:31 PM or later = late". Flooring both
-    sides to (hour, minute) before comparing means any punch still within
-    the 14:30 minute (14:30:00 through 14:30:59) counts as "at 2:30 PM", not
-    "after" it — only 14:31:00 onward is Late.
+    True iff `punch1` is Late for Half Shift purposes, per the configured
+    half-shift late reference -compared at MINUTE granularity, not exact
+    seconds. Real punches carry a seconds component (e.g. a biometric punch
+    at 14:30:43), and the rule is stated in whole minutes: "at exactly the
+    reference time = not late; one minute later = late". Flooring both sides
+    to (hour, minute) before comparing means any punch still within the
+    reference minute counts as "at" it, not "after" it.
+
+    `reference` lets a caller that already holds a PayrollSettings object
+    pass the value in and skip the extra lookup.
     """
+    ref = reference or half_shift_late_reference()
     punch1_minute = time_type(punch1.hour, punch1.minute)
-    return punch1_minute > HALF_SHIFT_LATE_REFERENCE_TIME
+    return punch1_minute > time_type(ref.hour, ref.minute)
 
 
 def _t2s(t: time_type) -> int:
@@ -106,18 +120,18 @@ def _s2t(s: int) -> time_type:
 def _punctuality_window_minutes(shift) -> int:
     """
     How many minutes of lateness/early-leave a first/last punch gets before
-    it caps the day at Half Shift — see _punctuality_ok.
+    it caps the day at Half Shift -see _punctuality_ok.
 
     2026-07-25(d), user-mandated correction: this is a single universal
-    threshold — PayrollSettings.shift_punctuality_window_minutes (default
-    60, the "maximum first punch allowed" setting) — applied to every
+    threshold -PayrollSettings.shift_punctuality_window_minutes (default
+    60, the "maximum first punch allowed" setting) -applied to every
     employee on every day, never conditioned on an approved
     EmployeePermission. An earlier pass, 2026-07-25(c), gated this window
     behind Permission approval, shrinking it to the shift's own tiny
     grace_period_minutes without one; the user clarified that was a
     misreading of their own instruction and reverted it. The shift's own
     grace_period_minutes still separately governs the is_late FLAG (see
-    compute_daily_shift_log's late-detection block below) — a punch inside
+    compute_daily_shift_log's late-detection block below) -a punch inside
     this wider window but past that small grace is Late but still a Full
     Shift; only a punch past this window caps the day at Half Shift.
     """
@@ -129,33 +143,33 @@ def _punctuality_ok(punch1, punch4, shift, window_minutes: int) -> bool:
     """
     True iff the first punch is within `window_minutes` of the shift's
     start time, and (when a distinct last punch exists) the last punch is
-    within the same window of the shift's end time — a first+last punch
+    within the same window of the shift's end time -a first+last punch
     PAIR existing isn't enough for Full Shift on its own; both ends must
     also land near the assigned shift's actual boundaries. `window_minutes`
-    comes from _punctuality_window_minutes — a single universal setting,
+    comes from _punctuality_window_minutes -a single universal setting,
     the same for every employee. Without a configured shift there's no
-    reference to validate against, so this is vacuously True — the punch-presence-only
+    reference to validate against, so this is vacuously True -the punch-presence-only
     rule is all that applies in that case (matches the existing "no shift,
     no basis for lateness" convention used for is_late elsewhere).
 
     AGREED RULE (2026-07-25, staff shift with start S / end E, lunch fixed
-    13:30-14:30, confirmed correct against a 14/14 boundary test — 11am,
+    13:30-14:30, confirmed correct against a 14/14 boundary test -11am,
     noon, 1:30pm, and an afternoon-only start all verified Half Shift):
       1. First punch in [S, S+window_minutes] -> still Full-Shift-eligible
          (pending the last punch too). Past the shift's own tiny
          grace_period_minutes it's flagged Late, but Late alone never
-         demotes the shift value — see the late-detection block below.
+         demotes the shift value -see the late-detection block below.
       2. First punch after S+window_minutes but before 13:30 -> capped at
          Half Shift, no matter what else happens that day (even a
          perfectly-formed last punch, even a full P1+P2+P3+P4 combo) —
          they missed too much of the morning for it to ever become Full.
       3. First punch at/after 13:30 (no morning attendance at all) -> same
-         outcome, Half Shift — treated as an afternoon-only day.
+         outcome, Half Shift -treated as an afternoon-only day.
       4. Full Shift only happens when case 1 holds for the first punch AND
-         the last punch correctly lands near the shift end — the P1+P2+P3+P4
+         the last punch correctly lands near the shift end -the P1+P2+P3+P4
          / P1+P2+P4 / P1+P3+P4 / P1+P4 combinations (P2/P3, the lunch
-         out/in punches, can be missing — people forget to punch for lunch).
-    Cases 2 and 3 are not two different rules — they're the same "past the
+         out/in punches, can be missing -people forget to punch for lunch).
+    Cases 2 and 3 are not two different rules -they're the same "past the
     window" outcome at different points on the clock, which is exactly why
     a single window check against S (below) is sufficient to implement all
     three cases without a separate 13:30 branch.
@@ -170,17 +184,53 @@ def _punctuality_ok(punch1, punch4, shift, window_minutes: int) -> bool:
     return True
 
 
+# ── Without-Permission detection (staff, Full-Shift days only) ─────────────
+#
+# NOT a change to _punctuality_ok/_punctuality_window_minutes above -that
+# window (Half Shift cutoff) stays a single universal threshold per the
+# 2026-07-25(d) decision recorded on _punctuality_window_minutes. This is a
+# narrower, separate question asked only once a day has already qualified
+# for Full Shift: within the same window, was the lateness/early-departure
+# actually covered by an approved EmployeePermission? If yes, no detection
+# at all. If no, the day is still exactly as Late as it always was -this
+# just labels *why* (see late_in_without_permission/early_out_without_
+# permission on AttendanceDayRecord) so it can be reported and, if HR
+# chooses to configure it, penalized through its own separate Settings pool.
+#
+# EmployeePermission has no morning/evening "type" field -just one date and
+# one optional `permission_time`. Whichever edge of the shift that time sits
+# near is the axis it covers; a permission with no time at all (or one that
+# matches neither edge) is treated as covering whichever edge was actually
+# in question that day -the same generous, non-typed reading the rest of
+# the app already gives Permission (see payroll_views.py's monthly pool).
+
+def _permission_covers_late_in(permission_time, shift, window_minutes: int) -> bool:
+    if permission_time is None:
+        return True
+    window_secs = window_minutes * 60
+    start_secs = _t2s(shift.start_time)
+    return start_secs <= _t2s(permission_time) <= start_secs + window_secs
+
+
+def _permission_covers_early_out(permission_time, shift, window_minutes: int) -> bool:
+    if permission_time is None:
+        return True
+    window_secs = window_minutes * 60
+    end_secs = _t2s(shift.end_time)
+    return end_secs - window_secs <= _t2s(permission_time) <= end_secs
+
+
 # ── Cross-midnight punch reattribution (2026-07-26, user-mandated) ────────
 #
 # A forgotten evening exit punch is sometimes made hours late, after
-# midnight — the biometric device stamps it under the NEXT calendar date,
+# midnight -the biometric device stamps it under the NEXT calendar date,
 # which (without this) gets misread as tomorrow's first punch, silently
 # shifting every one of tomorrow's real punches down a slot (P1->P2,
 # P2->P3, ...) and corrupting tomorrow's whole shift calculation, on top
 # of today showing a missing/wrong last-out.
 #
 # Configurable via PayrollSettings.last_punch_post_shift_grace_hours (how
-# far past shift end the grace extends — e.g. 9 hours past a 20:00 end
+# far past shift end the grace extends -e.g. 9 hours past a 20:00 end
 # reaches 05:00) and first_punch_pre_shift_buffer_hours (a protective cap
 # so that grace window can never reach into tomorrow's own pre-shift-start
 # buffer, so a genuinely early arrival is never stolen and misattributed
@@ -218,7 +268,7 @@ def _claimed_by_previous_day(punch_time, prev_day_last_punch, shift_for_prev_day
       1. `punch_time` is at/before the cutoff from
          _cross_midnight_claim_cutoff.
       2. The previous day doesn't already have a punch at or after its own
-         shift end — an already-complete day never has anything stolen
+         shift end -an already-complete day never has anything stolen
          from a stray next-day punch (which just stays that next day's own).
     """
     cutoff = _cross_midnight_claim_cutoff(shift_for_prev_day, shift_for_this_day, settings)
@@ -243,18 +293,18 @@ def resolve_day_punch_logs(emp, d: date_type, own_day_logs: list, settings, assi
     and strict mode via compute_daily_shift_log alike) should source its
     punches through this instead of a raw `AttendanceLog.filter(date=d)`
     query. Production employees are unaffected (their segment-coverage
-    model doesn't use punch-order logic) — returns `own_day_logs` untouched
+    model doesn't use punch-order logic) -returns `own_day_logs` untouched
     for them.
 
     `logs_by_date`, when given, is a {date: [AttendanceLog, ...]} map a
     bulk caller (compute_month_records/compute_range_records) already
     fetched once for the employee's whole range, spanning at least one day
-    before and one day after the range being computed — this looks up
+    before and one day after the range being computed -this looks up
     `d-1`/`d+1` from it instead of querying. Omitted, both are queried
     directly (cheap: one employee, one day, at most a handful of rows).
 
     Disabled entirely when PayrollSettings.last_punch_post_shift_grace_hours
-    is 0 — returns `own_day_logs` unchanged, matching exact pre-feature
+    is 0 -returns `own_day_logs` unchanged, matching exact pre-feature
     behavior.
     """
     if emp.employment_type != "staff":
@@ -304,7 +354,7 @@ def _get_assignment_for_date(emp, d: date_type, assignments=None):
     Return the active EmployeeShiftAssignment for an employee on a date (or None).
 
     `assignments`, when given, is this employee's full assignment list
-    (any order) prefetched once by the caller — e.g. compute_month_records
+    (any order) prefetched once by the caller -e.g. compute_month_records
     fetching it once per employee instead of once per day. Resolving "which
     assignment covers this date" then happens in Python instead of a fresh
     query, which is what makes a month-wide bulk computation viable.
@@ -332,14 +382,14 @@ def _get_shift_for_date(emp, d: date_type, assignments=None):
     """
     Return the effective ShiftTemplate for an employee on a given date (or None).
     Per-employee custom start/end overrides on the assignment take precedence
-    over the template's own times — HR sets these for individual schedules.
+    over the template's own times -HR sets these for individual schedules.
     """
     asgn = _get_assignment_for_date(emp, d, assignments=assignments)
     if not asgn:
         return None
     shift = asgn.shift
     if shift and (asgn.custom_start_time or asgn.custom_end_time):
-        # Never mutate the shared template row — apply overrides to a detached copy.
+        # Never mutate the shared template row -apply overrides to a detached copy.
         from copy import copy
         shift = copy(shift)
         if asgn.custom_start_time:
@@ -352,14 +402,15 @@ def _get_shift_for_date(emp, d: date_type, assignments=None):
 _UNSET = object()
 
 
-def compute_daily_shift_log(emp, d: date_type, punches: list, assignments=None, relaxation=_UNSET, legacy: bool = False) -> dict:
+def compute_daily_shift_log(emp, d: date_type, punches: list, assignments=None, relaxation=_UNSET, legacy: bool = False,
+                             has_permission: bool = False, permission_time=None) -> dict:
     """
     Given a list of AttendanceLog objects for (emp, date), compute the
     4-punch shift result and persist it to DailyShiftLog.
 
     `assignments` and `relaxation` let a bulk caller (compute_month_records)
     pass in data it already fetched/computed once for the whole month,
-    instead of this function re-querying per day — see the same parameters
+    instead of this function re-querying per day -see the same parameters
     on _get_shift_for_date / night_shift.get_relaxation_for. Any other
     caller (single-day recompute, etc.) can omit them and behavior is
     unchanged: everything is looked up fresh, exactly as before.
@@ -372,14 +423,19 @@ def compute_daily_shift_log(emp, d: date_type, punches: list, assignments=None, 
     last punch both exist that day AND both fall within the punctuality
     window of the assigned shift's start/end time (see _punctuality_ok) —
     otherwise the day is capped at Half Shift regardless of the middle two
-    punches. That window is a single universal threshold — see
-    _punctuality_window_minutes — applied the same way to every employee;
+    punches. That window is a single universal threshold -see
+    _punctuality_window_minutes -applied the same way to every employee;
     it is NOT conditioned on an approved EmployeePermission (a prior pass
     gated it that way and the user reverted it, see that function's
     docstring). See NEW_ATTENDANCE_RULE_CUTOVER in attendance_final.py for
     the exact cutover date and rationale. Punch1-4 *identification* (which raw punch
     fills which role, including the lunch-window heuristic for
     punch2/punch3) is unchanged either way.
+
+    `has_permission`/`permission_time` -this day's approved EmployeePermission,
+    if any (see the Without-Permission block below the late-detection block).
+    Purely additive: omit them and behavior is identical to before that
+    feature existed.
 
     Returns the resulting DailyShiftLog instance dict.
     """
@@ -460,9 +516,9 @@ def compute_daily_shift_log(emp, d: date_type, punches: list, assignments=None, 
         shifts_completed = Decimal("0.50")
 
     # ── Shift punctuality window (current rule only) ─────────────────────────
-    # A first+last punch pair isn't enough on its own for Full Shift — both
+    # A first+last punch pair isn't enough on its own for Full Shift -both
     # also need to land within the punctuality window (a single universal
-    # threshold — see _punctuality_window_minutes, not permission-gated) of
+    # threshold -see _punctuality_window_minutes, not permission-gated) of
     # the assigned shift's actual start/end time, or the day is capped at
     # Half Shift. Never reduces an already-half or already-absent day
     # further, and frozen out entirely under legacy=True so history never
@@ -475,31 +531,66 @@ def compute_daily_shift_log(emp, d: date_type, punches: list, assignments=None, 
     # ── Late detection ───────────────────────────────────────────────────────
     late_morning = False
     late_return = False
+    late_in_without_permission = False
+    early_out_without_permission = False
     late_reasons = []
 
     if shift and punch1:
         if shifts_completed == Decimal("0.50"):
-            # Half Shift day: Late is decided purely against the fixed
-            # HALF_SHIFT_LATE_REFERENCE_TIME (2:30 PM), not the shift's own
-            # morning start/grace — see that constant's docstring. A punch
-            # at or before 2:30 PM is never late; only strictly after 2:30
-            # PM is. Full Shift days never enter this branch.
-            if _is_after_half_shift_late_reference(punch1):
+            # Half Shift day: Late is decided purely against the configured
+            # half-shift late reference (Settings → Attendance → Staff, default
+            # 2:30 PM), not the shift's own morning start/grace -see that
+            # helper's docstring. A punch at or before the reference is never
+            # late; only strictly after it is. Full Shift days never enter here,
+            # and this branch is entirely unaffected by Permission -unchanged.
+            half_ref = half_shift_late_reference()
+            if _is_after_half_shift_late_reference(punch1, half_ref):
                 late_morning = True
                 late_reasons.append(
                     f"Late (Half Shift): arrived {punch1.strftime('%H:%M')}, "
-                    f"Half Shift reference {HALF_SHIFT_LATE_REFERENCE_TIME.strftime('%H:%M')}"
+                    f"Half Shift reference {half_ref.strftime('%H:%M')}"
                 )
         else:
+            # Full Shift day (shifts_completed == 1.00 here -see the note by
+            # first_half/second_half above; punch1 already passed the
+            # punctuality window check to get this far, so it's guaranteed
+            # within window_minutes of shift.start_time).
             grace_secs = (shift.grace_period_minutes or 0) * 60
             shift_start_secs = _t2s(shift.start_time)
             deadline_secs = shift_start_secs + grace_secs
             if _t2s(punch1) > deadline_secs:
-                late_morning = True
-                expected = _s2t(deadline_secs)
+                window_minutes = _punctuality_window_minutes(shift)
+                if has_permission and _permission_covers_late_in(permission_time, shift, window_minutes):
+                    late_reasons.append(
+                        f"Late-in covered by approved Permission: arrived {punch1.strftime('%H:%M')}"
+                    )
+                else:
+                    late_morning = True
+                    late_in_without_permission = True
+                    expected = _s2t(deadline_secs)
+                    late_reasons.append(
+                        f"Late morning (Without Permission): arrived {punch1.strftime('%H:%M')}, "
+                        f"deadline {expected.strftime('%H:%M')}"
+                    )
+
+    if shift and punch4 and shifts_completed == Decimal("1.00"):
+        # New: early departure was never detected at all before this -same
+        # grace/window structure as the morning side, mirrored onto the end
+        # of the shift.
+        grace_secs = (shift.grace_period_minutes or 0) * 60
+        shift_end_secs = _t2s(shift.end_time)
+        early_deadline_secs = shift_end_secs - grace_secs
+        if _t2s(punch4) < early_deadline_secs:
+            window_minutes = _punctuality_window_minutes(shift)
+            if has_permission and _permission_covers_early_out(permission_time, shift, window_minutes):
                 late_reasons.append(
-                    f"Late morning: arrived {punch1.strftime('%H:%M')}, "
-                    f"deadline {expected.strftime('%H:%M')}"
+                    f"Early-out covered by approved Permission: left {punch4.strftime('%H:%M')}"
+                )
+            else:
+                early_out_without_permission = True
+                late_reasons.append(
+                    f"Early out (Without Permission): left {punch4.strftime('%H:%M')}, "
+                    f"deadline {_s2t(early_deadline_secs).strftime('%H:%M')}"
                 )
 
     if shift and punch2 and punch3:
@@ -530,9 +621,10 @@ def compute_daily_shift_log(emp, d: date_type, punches: list, assignments=None, 
     if relaxation and punch1 and punch1 <= relaxation.allowed_until:
         if late_morning:
             late_morning = False
+            late_in_without_permission = False
             late_reason = (
                 f"Night-shift relaxation: worked until "
-                f"{relaxation.last_punch_out.strftime('%H:%M')} — allowed until "
+                f"{relaxation.last_punch_out.strftime('%H:%M')} -allowed until "
                 f"{relaxation.allowed_until.strftime('%H:%M')}"
             )
         # A half day caused purely by the late start becomes full once the
@@ -561,6 +653,11 @@ def compute_daily_shift_log(emp, d: date_type, punches: list, assignments=None, 
             "late_reason": late_reason,
         },
     )
+    # Not persisted on DailyShiftLog (a strict-mode-only internal detail
+    # table) -attached as plain attributes purely so _compute_staff_strict
+    # can read them without a schema change to a table with only one caller.
+    log.late_in_without_permission = late_in_without_permission
+    log.early_out_without_permission = early_out_without_permission
     return log
 
 
@@ -584,7 +681,7 @@ def compute_monthly_shift_summary(emp, year: int, month: int, daily_rate: Decima
     )
 
     # All approved permission requests this month are merged into the same
-    # late-entry pool as late punches — ONE shared 3-free allowance covers
+    # late-entry pool as late punches -ONE shared 3-free allowance covers
     # the combined raw total (not a separate 3-free for permissions, which
     # would double-discount). permission_overage below is display-only, so
     # HR can see how many permissions pushed past the free-3 mark.

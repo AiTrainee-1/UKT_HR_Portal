@@ -1,7 +1,7 @@
 """
 Sends an Expo push notification whenever a Notification row is created,
 regardless of which of the ~15 call sites across the codebase created it
-(leave approval, salary slip ready, chat message, etc.) — hooking in here via
+(leave approval, salary slip ready, chat message, etc.) -hooking in here via
 a signal means none of those call sites needed to change.
 
 Employees with no registered device (PushToken row) are silently skipped —
@@ -38,6 +38,6 @@ def send_push_on_notification(sender, instance: Notification, created: bool, **k
     try:
         requests.post(EXPO_PUSH_URL, json=messages, timeout=5)
     except Exception:
-        # Push delivery is best-effort — the in-app notification (already
+        # Push delivery is best-effort -the in-app notification (already
         # saved) is the source of truth regardless of whether this succeeds.
         logger.warning("Failed to send push notification for notification id=%s", instance.id, exc_info=True)

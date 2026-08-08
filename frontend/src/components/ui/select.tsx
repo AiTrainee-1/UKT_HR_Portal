@@ -85,7 +85,7 @@ const SelectContent = React.forwardRef<
     >
       <SelectScrollUpButton />
       <SelectPrimitive.Viewport
-        // Manual wheel handling — when this Select is nested inside a Dialog,
+        // Manual wheel handling -when this Select is nested inside a Dialog,
         // the Dialog's body-scroll-lock (react-remove-scroll) can swallow the
         // wheel event in its capture-phase listener before native scroll ever
         // happens here, leaving a long list (e.g. 60 minute options) stuck.

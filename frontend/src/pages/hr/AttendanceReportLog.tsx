@@ -46,7 +46,7 @@ function StatusBadge({ status }: { status: ShiftLogEntry["status"] }) {
 
 // The backend only ever sends approved CL/Permission/Leave rows here
 // (pending and rejected requests aren't final, so they don't belong on an
-// attendance report) — a present row is always "approved", hence the fixed
+// attendance report) -a present row is always "approved", hence the fixed
 // green style on all three badges below.
 function CasualLeaveBadge({ cl }: { cl: ShiftLogEntry["casualLeave"] }) {
   if (!cl) return <span className="text-gray-300 text-xs">—</span>;
@@ -198,14 +198,14 @@ export default function AttendanceReportLog() {
           <div>
             <h1 className="text-xl font-bold text-gray-900">Report Log</h1>
             <p className="text-xs text-muted-foreground">
-              Every punch, shift, status, and reason — CL, Permission, and Leave included — for every staff employee.
+              Every punch, shift, status, and reason -CL, Permission, and Leave included -for every staff employee.
             </p>
           </div>
           <span
             className={`ml-auto text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wide ${
               simpleMode ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"
             }`}
-            title="Attendance calculation mode — change it in Settings → Attendance"
+            title="Attendance calculation mode -change it in Settings → Attendance"
           >
             {simpleMode ? "Simple Mode" : "Strict Mode"}
           </span>

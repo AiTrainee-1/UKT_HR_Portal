@@ -39,7 +39,7 @@ const INDIA_CENTER: [number, number] = [20.5937, 78.9629];
 // ── Marker icons ─────────────────────────────────────────────────────────
 // Meaningful shaped icons (not plain dots) so the map reads at a glance:
 // a building pin for company/branch locations, a person pin for employees,
-// colored per status. All built as inline SVG divIcons — no external assets.
+// colored per status. All built as inline SVG divIcons -no external assets.
 
 function pinIcon(color: string, glyph: "building" | "person" | "flag" | "dot", size = 30) {
   const glyphSvg =
@@ -258,7 +258,7 @@ function LiveMapTab() {
 // Two views sharing one date-scoped map: "All On-Duty" is the live overview
 // of everyone On-Duty on the selected day (colored per employee), "Single
 // Employee" is a detailed directional route lookup for one tracked employee
-// on that day — the two used to be separate tabs (Route Map / On-Duty Map)
+// on that day -the two used to be separate tabs (Route Map / On-Duty Map)
 // but overlapped enough (both draw routes on a map) that HR asked for them
 // combined into one, with nothing lost.
 
@@ -288,7 +288,7 @@ function OnDutyMapTab() {
   const centerSingle = points.length > 0 ? points[Math.floor(points.length / 2)] : INDIA_CENTER;
 
   // Sample a handful of interior points to place direction arrows along the
-  // path without cluttering the map — start/end get their own distinct pins.
+  // path without cluttering the map -start/end get their own distinct pins.
   const arrowSamples = useMemo(() => {
     if (points.length < 2) return [];
     const step = Math.max(1, Math.floor(points.length / 8));
@@ -469,7 +469,7 @@ function OnDutyMapTab() {
   );
 }
 
-// ── On-Duty Approvals tab (session destination gate — no photos) ─────────
+// ── On-Duty Approvals tab (session destination gate -no photos) ─────────
 
 function ApprovalsTab() {
   const { toast } = useToast();
@@ -534,13 +534,13 @@ function ApprovalsTab() {
                   {session.hodReviewedBy && (
                     <p className="text-[11px] text-gray-400 mt-1.5">
                       HOD: {session.status === "rejected" && !session.hrReviewedBy ? "rejected" : "approved"} by {session.hodReviewedBy}
-                      {session.hodReviewComment ? ` — "${session.hodReviewComment}"` : ""}
+                      {session.hodReviewComment ? ` -"${session.hodReviewComment}"` : ""}
                     </p>
                   )}
                   {session.hrReviewedBy && (
                     <p className="text-[11px] text-gray-400">
                       HR: {session.status === "rejected" ? "rejected" : "approved"} by {session.hrReviewedBy}
-                      {session.hrReviewComment ? ` — "${session.hrReviewComment}"` : ""}
+                      {session.hrReviewComment ? ` -"${session.hrReviewComment}"` : ""}
                     </p>
                   )}
                   {session.status === "completed" && (
@@ -550,7 +550,7 @@ function ApprovalsTab() {
                     </p>
                   )}
                   {session.status === "pending_hod" && (
-                    <p className="text-[11px] text-amber-600 mt-1">No Department Head has acted yet — approving here finalizes it directly.</p>
+                    <p className="text-[11px] text-amber-600 mt-1">No Department Head has acted yet -approving here finalizes it directly.</p>
                   )}
                 </div>
                 {(session.status === "pending_hod" || session.status === "pending_hr") && (
@@ -691,7 +691,7 @@ function PunchVerificationsTab() {
                   {v.hrReviewedBy && (
                     <p className="text-[11px] text-gray-400 mt-1.5">
                       {v.status === "rejected" ? "Rejected" : "Approved"} by {v.hrReviewedBy}
-                      {v.hrReviewComment ? ` — "${v.hrReviewComment}"` : ""}
+                      {v.hrReviewComment ? ` -"${v.hrReviewComment}"` : ""}
                     </p>
                   )}
                 </div>

@@ -39,7 +39,7 @@ const CATEGORY_ICONS: Record<EmployeeDocumentCategory, LucideIcon> = {
 };
 
 // The system already generates Offer/Experience/Resignation letters on demand
-// (Company Documents Settings templates) — no reason to also let HR upload
+// (Company Documents Settings templates) -no reason to also let HR upload
 // manual copies of them here. Extra Documents keeps only the categories that
 // have no generator: ID proofs and scanned/signed paperwork.
 const EXTRA_DOCUMENT_CATEGORIES = EMPLOYEE_DOCUMENT_CATEGORIES.filter(

@@ -60,7 +60,7 @@ function hexToVec3(color: string): Vec3 {
 }
 
 /** Animated WebGL glowing orb (via ogl) that distorts and rotates on
- * hover. Purely decorative — renders into its own canvas and cleans
+ * hover. Purely decorative -renders into its own canvas and cleans
  * itself up on unmount. */
 export default function Orb({
   hue = 0,

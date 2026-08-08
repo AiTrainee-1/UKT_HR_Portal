@@ -3,7 +3,7 @@ import type { ResumeScreeningProgress } from "@/lib/api-client/custom-hooks";
 
 // Visual-only progress bar for bulk resume screening. Purely reflects the
 // `data` prop (sourced from ResumeScreeningContext, which owns the actual
-// polling) — mirrors PayrollGenerationPipeline's role for payroll generation.
+// polling) -mirrors PayrollGenerationPipeline's role for payroll generation.
 export default function ResumeScreeningPipeline({ active, data, onDismiss }: {
   active: boolean;
   data: ResumeScreeningProgress | undefined;

@@ -91,7 +91,7 @@ function ShiftCard({ shift, onEdit, onDelete }: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Assigned shifts tab — grouped expandable cards
+// Assigned shifts tab -grouped expandable cards
 // ─────────────────────────────────────────────────────────────────────────────
 
 type AssignedGroup = {
@@ -161,7 +161,7 @@ function EmployeeShiftStatsDialog({ employeeId, employeeName, onClose }: {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <BarChart2 size={18} className="text-indigo-600" />
-            {employeeName} — Attendance History
+            {employeeName} -Attendance History
           </DialogTitle>
           {data && (
             <p className="text-xs text-muted-foreground">
@@ -223,7 +223,7 @@ function EmployeeShiftStatsDialog({ employeeId, employeeName, onClose }: {
               <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-100 rounded-lg text-xs text-amber-800">
                 <AlertCircle size={13} className="text-amber-600 shrink-0 mt-0.5" />
                 <span>
-                  <strong>{data.halfShiftDays} half-shift day{data.halfShiftDays !== 1 ? "s" : ""}</strong> — each counts as 0.5 effective days.
+                  <strong>{data.halfShiftDays} half-shift day{data.halfShiftDays !== 1 ? "s" : ""}</strong> -each counts as 0.5 effective days.
                   Salary impact: <strong>−{(data.halfShiftDays * 0.5).toFixed(2)} days</strong> vs full attendance.
                 </span>
               </div>
@@ -769,12 +769,12 @@ function AssignIndividualDialog({ staffShifts, onClose, initialEmployee }: {
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="max-w-lg">
-        <DialogHeader><DialogTitle>Assign Shift — Individual Employee</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>Assign Shift -Individual Employee</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
             <Label>Shift</Label>
             <select value={shiftId} onChange={(e) => setShiftId(e.target.value)} className="w-full h-9 rounded-md border px-3 text-sm bg-background">
-              <option value="">— Select Shift —</option>
+              <option value="">-Select Shift —</option>
               {staffShifts.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.startTime}–{s.endTime})</option>)}
             </select>
           </div>
@@ -786,7 +786,7 @@ function AssignIndividualDialog({ staffShifts, onClose, initialEmployee }: {
           {/* Individual schedule overrides */}
           <div className="rounded-lg border border-dashed border-blue-200 bg-blue-50/40 p-3 space-y-3">
             <p className="text-xs font-semibold text-blue-800">
-              Schedule Overrides <span className="font-normal text-blue-600">(optional — leave blank to use shift defaults)</span>
+              Schedule Overrides <span className="font-normal text-blue-600">(optional -leave blank to use shift defaults)</span>
             </p>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
@@ -878,20 +878,20 @@ function AssignDepartmentDialog({ staffShifts, onClose }: { staffShifts: ShiftTe
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="max-w-md">
-        <DialogHeader><DialogTitle>Assign Shift — Department-wide</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>Assign Shift -Department-wide</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <p className="text-xs text-muted-foreground">All employees in the selected department (both staff and production) will be moved to this shift.</p>
           <div className="space-y-1.5">
             <Label>Department</Label>
             <select value={deptId} onChange={(e) => setDeptId(e.target.value)} className="w-full h-9 rounded-md border px-3 text-sm bg-background">
-              <option value="">— Select Department —</option>
+              <option value="">-Select Department —</option>
               {(departments ?? []).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
           </div>
           <div className="space-y-1.5">
             <Label>Shift</Label>
             <select value={shiftId} onChange={(e) => setShiftId(e.target.value)} className="w-full h-9 rounded-md border px-3 text-sm bg-background">
-              <option value="">— Select Shift —</option>
+              <option value="">-Select Shift —</option>
               {staffShifts.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.startTime}–{s.endTime})</option>)}
             </select>
           </div>
@@ -932,20 +932,20 @@ function AssignDesignationDialog({ staffShifts, onClose }: { staffShifts: ShiftT
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="max-w-md">
-        <DialogHeader><DialogTitle>Assign Shift — Designation-wide</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>Assign Shift -Designation-wide</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <p className="text-xs text-muted-foreground">All employees with the selected designation (both staff and production) will be moved to this shift.</p>
           <div className="space-y-1.5">
             <Label>Designation</Label>
             <select value={desigId} onChange={(e) => setDesigId(e.target.value)} className="w-full h-9 rounded-md border px-3 text-sm bg-background">
-              <option value="">— Select Designation —</option>
+              <option value="">-Select Designation —</option>
               {(designations ?? []).map((d) => <option key={d.id} value={d.id}>{d.title}</option>)}
             </select>
           </div>
           <div className="space-y-1.5">
             <Label>Shift</Label>
             <select value={shiftId} onChange={(e) => setShiftId(e.target.value)} className="w-full h-9 rounded-md border px-3 text-sm bg-background">
-              <option value="">— Select Shift —</option>
+              <option value="">-Select Shift —</option>
               {staffShifts.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.startTime}–{s.endTime})</option>)}
             </select>
           </div>
@@ -1100,7 +1100,7 @@ export default function ManageShift() {
       toast({ title: "Failed to save shift", variant: "destructive" });
       return;
     }
-    // Mutation succeeded — close dialog and toast before invalidating so a slow
+    // Mutation succeeded -close dialog and toast before invalidating so a slow
     // refetch never triggers a false "failed" state.
     toast({ title: editingShift ? "Shift updated" : "Shift created" });
     setShowDialog(false);
@@ -1156,7 +1156,7 @@ export default function ManageShift() {
                     <AlertCircle size={16} className="text-blue-600 mt-0.5 shrink-0" />
                     <div className="flex-1">
                       <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
-                        <p className="text-sm font-bold text-blue-900">Production Shift — Same For Every Employee</p>
+                        <p className="text-sm font-bold text-blue-900">Production Shift -Same For Every Employee</p>
                         <Button
                           size="sm"
                           variant="outline"
@@ -1170,7 +1170,7 @@ export default function ManageShift() {
                         </Button>
                       </div>
                       <p className="text-xs text-blue-700">
-                        Production shifts no longer split by gender — every production employee uses the
+                        Production shifts no longer split by gender -every production employee uses the
                         same shift, punch times, and shift-value segments. New production employees are
                         <strong> assigned automatically</strong> when added.
                       </p>
@@ -1181,7 +1181,7 @@ export default function ManageShift() {
 
               <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-100">
                 <AlertCircle size={14} className="text-amber-600 mt-0.5 shrink-0" />
-                <p className="text-xs text-amber-700">Production employees are paid <strong>bi-weekly</strong> — pay = Total Shifts Earned × Salary Per Shift. Sunday is a normal working day.</p>
+                <p className="text-xs text-amber-700">Production employees are paid <strong>bi-weekly</strong> -pay = Total Shifts Earned × Salary Per Shift. Sunday is a normal working day.</p>
               </div>
 
               <ProductionShiftConfigCard />
@@ -1312,7 +1312,7 @@ export default function ManageShift() {
                 <div className="rounded-lg border border-dashed border-green-200 bg-green-50/40 p-3 space-y-3">
                   <p className="text-xs font-semibold text-green-900">
                     Lunch Break Settings
-                    <span className="font-normal text-green-700 ml-1">— defines the 4-punch shift structure</span>
+                    <span className="font-normal text-green-700 ml-1">-defines the 4-punch shift structure</span>
                   </p>
                   <div className="grid grid-cols-3 gap-3">
                     <div className="space-y-1">

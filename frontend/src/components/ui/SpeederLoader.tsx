@@ -1,5 +1,5 @@
 // Loading animation supplied by the user for slow-fetch states (Attendance
-// Search etc.) — ported from their styled-components snippet to a scoped
+// Search etc.) -ported from their styled-components snippet to a scoped
 // <style> tag since this codebase doesn't otherwise depend on
 // styled-components, keeping markup/CSS/animation identical.
 export function SpeederLoader() {

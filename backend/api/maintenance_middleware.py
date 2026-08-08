@@ -5,7 +5,7 @@ from django.http import JsonResponse
 
 _MAINTENANCE_MARKER = os.path.join(str(dj_settings.BASE_DIR), "maintenance.lock")
 
-# Paths that must keep working even while a restore is in progress — the
+# Paths that must keep working even while a restore is in progress -the
 # Settings page's own status poll (so it can show real progress), and the
 # generic health check.
 _EXEMPT_PATHS = {"/api/healthz", "/api/backup/restore/status"}
@@ -16,7 +16,7 @@ class MaintenanceModeMiddleware:
     Returns the same 503 shape DatabaseHealthMiddleware already uses for
     "database unavailable" (the frontend's ConnectivityOverlay already
     treats that exact response as "show the reconnecting screen, poll until
-    it clears") — so a restore-in-progress gets the same graceful full-app
+    it clears") -so a restore-in-progress gets the same graceful full-app
     takeover with zero new frontend wiring. Runs before
     DatabaseHealthMiddleware so it takes precedence during the window before
     the database is actually dropped (file copies, subprocess startup),

@@ -1,9 +1,9 @@
 import type { PermissionLevel } from "@/lib/api-client/custom-hooks";
 
 /**
- * Canonical module/submodule tree — must mirror backend/api/permission_registry.py
+ * Canonical module/submodule tree -must mirror backend/api/permission_registry.py
  * MODULE_TREE key-for-key. Submodules only exist where the backend can
- * actually enforce them separately (distinct REST endpoints) — see the note
+ * actually enforce them separately (distinct REST endpoints) -see the note
  * in permission_registry.py for why e.g. Attendance's tabs aren't split.
  */
 export type ModuleNode = { key: string; label: string; children?: ModuleNode[] };
@@ -53,6 +53,7 @@ export const MODULE_TREE: ModuleNode[] = [
     key: "settings", label: "Settings", children: [
       { key: "settings.company", label: "Company" },
       { key: "settings.attendance", label: "Attendance" },
+      { key: "settings.late_detection", label: "Late Detection" },
       { key: "settings.devices", label: "Devices" },
       { key: "settings.documents", label: "Company Documents" },
       { key: "settings.payroll", label: "Payroll" },
@@ -74,7 +75,7 @@ export function allModuleKeys(): string[] {
 
 /**
  * Walks a dotted key ("employees.departments") from most specific to least
- * specific, returning the first explicit entry found — a child with no
+ * specific, returning the first explicit entry found -a child with no
  * override inherits its parent's level. Defaults to "hidden" (fail closed).
  * Mirrors backend/api/permission_registry.py::resolve_permission exactly.
  */
@@ -93,7 +94,7 @@ export function resolvePermission(
 
 /**
  * Like resolvePermission, but for a parent module with children that all
- * live on one shared route (e.g. "settings" — its tabs have no routes of
+ * live on one shared route (e.g. "settings" -its tabs have no routes of
  * their own, unlike Employees/Recruitment's children which do). A parent
  * whose own bare key is unset ("hidden") but that has at least one visible
  * child should still be reachable, otherwise granting only e.g.
@@ -102,7 +103,7 @@ export function resolvePermission(
  * need this: their sidebar entries branch on `item.children` before ever
  * checking the parent's own moduleKey (see dashboard-sidebar.tsx), and each
  * child has its own route. Safe to use in place of resolvePermission for any
- * single-route parent — for keys with no MODULE_TREE children, it's
+ * single-route parent -for keys with no MODULE_TREE children, it's
  * identical to resolvePermission.
  */
 export function resolvePermissionOrChildren(

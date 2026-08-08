@@ -24,11 +24,11 @@ def require_auth(view_func):
         except Exception:
             return Response({"error": "Invalid or expired token"}, status=401)
 
-        # LoginSession revocation check — the JWT itself is stateless and
+        # LoginSession revocation check -the JWT itself is stateless and
         # stays "valid" for its full 12h lifetime, so a Login Devices revoke
         # (or self logout) has to be enforced here via a live DB check, same
         # pattern require_super_admin already uses for is_active/is_super_admin.
-        # Only HR tokens carry a jti (see hr_login in views.py) — employee
+        # Only HR tokens carry a jti (see hr_login in views.py) -employee
         # tokens never set one, so this is a no-op on the employee/mobile path.
         jti = request.jwt_user.get("jti")
         if jti:
@@ -62,7 +62,7 @@ def require_hr(view_func):
 
 def require_super_admin(view_func):
     """
-    Gates the Account Management endpoints (roles, hr-users) — the control
+    Gates the Account Management endpoints (roles, hr-users) -the control
     plane for the whole RBAC system. Deliberately separate from the generic
     per-module hidden/view/edit permissions enforced in permission_middleware.py:
     a regular role can never be configured to grant access here, only
@@ -103,7 +103,7 @@ def get_hr_display_name(request: Request) -> str:
     reviewed_by/approved_by/requested_by. hr_login() already embeds
     `"name": account.full_name or account.username` into the JWT payload
     (views.py), and require_auth decodes it back onto request.jwt_user on
-    every authenticated call — so this is always available on any
+    every authenticated call -so this is always available on any
     @require_hr view without a fresh DB lookup. Falls back to the literal
     "HR" only if somehow absent (e.g. a still-valid token issued before
     this field existed).

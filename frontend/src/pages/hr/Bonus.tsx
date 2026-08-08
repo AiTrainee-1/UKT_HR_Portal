@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Gift, Info, Percent, Calendar, IndianRupee, Scale } from "lucide-react";
 
 /**
- * Bonus module — informational placeholder.
+ * Bonus module -informational placeholder.
  * Explains how bonus is typically calculated in the Indian garments industry
  * (Payment of Bonus Act, 1965). Calculation engine will be added once the
  * company's bonus policy is finalised.
@@ -15,7 +15,7 @@ export default function Bonus() {
         <div>
           <h2 className="text-2xl font-black text-gray-900">Bonus</h2>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Statutory & festival bonus — garments industry reference
+            Statutory & festival bonus -garments industry reference
           </p>
         </div>
 

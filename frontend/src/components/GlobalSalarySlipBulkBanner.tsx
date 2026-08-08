@@ -5,7 +5,7 @@ import { useSalarySlipBulk } from "@/contexts/SalarySlipBulkContext";
 // Floating indicator that keeps a Salary Slip bulk download/email visible
 // while the user browses other pages. Hidden on /hr/salary-slip itself,
 // since that page already renders the full inline SalarySlipBulkPipeline
-// for the same shared state — mirrors GlobalPayrollBanner's role.
+// for the same shared state -mirrors GlobalPayrollBanner's role.
 export default function GlobalSalarySlipBulkBanner() {
   const [pathname] = useLocation();
   const { showPipeline, isRunning, kind, progress, dismiss } = useSalarySlipBulk();
@@ -47,7 +47,7 @@ export default function GlobalSalarySlipBulkBanner() {
           </div>
           <p className="text-xs text-gray-500">
             {completed} / {total} slips processed
-            {!isRunning && <span className="text-green-600 font-semibold"> — running in the background is finished</span>}
+            {!isRunning && <span className="text-green-600 font-semibold"> -running in the background is finished</span>}
           </p>
           {isRunning && progress?.currentEmployee && (
             <p className="text-[11px] text-gray-400 truncate mt-1">Processing: {progress.currentEmployee}</p>

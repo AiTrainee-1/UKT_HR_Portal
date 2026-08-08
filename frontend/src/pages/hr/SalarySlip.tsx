@@ -52,7 +52,7 @@ export default function SalarySlip() {
     );
   });
 
-  // Month overview — based on the full tab-filtered set (not the search box),
+  // Month overview -based on the full tab-filtered set (not the search box),
   // since these cards describe the whole month's payroll, not a lookup.
   const totalEmployees = slips.length;
   const totalGross = slips.reduce((sum, s) => sum + s.grossSalary, 0);

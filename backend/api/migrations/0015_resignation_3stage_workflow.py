@@ -9,7 +9,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        # ResignationRequest — add dept-head and rejection tracking fields
+        # ResignationRequest -add dept-head and rejection tracking fields
         migrations.AddField(
             model_name="resignationrequest",
             name="dept_head",
@@ -39,13 +39,13 @@ class Migration(migrations.Migration):
             name="rejected_by",
             field=models.TextField(blank=True, db_column="rejected_by", null=True),
         ),
-        # DepartmentManager — add resignation approval flag
+        # DepartmentManager -add resignation approval flag
         migrations.AddField(
             model_name="departmentmanager",
             name="can_approve_resignations",
             field=models.BooleanField(db_column="can_approve_resignations", default=True),
         ),
-        # PayrollSettings — add company logo + authorized signature
+        # PayrollSettings -add company logo + authorized signature
         migrations.AddField(
             model_name="payrollsettings",
             name="company_logo",

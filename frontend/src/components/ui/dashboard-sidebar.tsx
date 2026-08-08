@@ -112,7 +112,7 @@ const navGroups: NavGroupData[] = [
   {
     heading: 'Administration',
     items: [
-      // Admin-only — filtered out for everyone else in HrSidebar below,
+      // Admin-only -filtered out for everyone else in HrSidebar below,
       // regardless of Role.permissions (it's not a gated module at all).
       { path: '/hr/account-management', label: 'Account Management', icon: UserCog },
       { path: '/hr/user-management', label: 'User Management', icon: Shield },
@@ -427,7 +427,7 @@ function NavItem({
 
 // Every HR page renders its own <HrLayout>, so HrSidebar fully remounts on
 // every route change (fresh DOM, scrollTop back to 0). This module-level
-// variable is the sidebar's scroll memory across those remounts — unlike
+// variable is the sidebar's scroll memory across those remounts -unlike
 // HrLayout's per-path scrollPositions Map for the main content area, the
 // sidebar shows the same nav list on every page, so one remembered value is
 // all it needs. Resets naturally on a real page load/refresh since the
@@ -439,7 +439,7 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
   const { user, logout } = useAuth();
   const [isSearchOpen, setIsSearchOpen] = useState(false);
 
-  // Gated on the nav item each badge actually attaches to — if "Requests" (or
+  // Gated on the nav item each badge actually attaches to -if "Requests" (or
   // "Recruitment > Resignations" / "Settlement") is hidden for this role, the
   // badge never renders, so there's no reason to fetch the full record list
   // just to compute a count nobody sees (and these endpoints correctly 403
@@ -456,7 +456,7 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
   const { data: advanceData } = useListAdvances(undefined, { refetchInterval: 30_000, enabled: canSeeSettlement } as any);
   const { data: onDutySessionData } = useOnDutySessionsHR('pending', canSeeGeoAttendance);
   const { data: onDutyPunchData } = useOnDutyPunchVerificationsHR('pending', canSeeGeoAttendance);
-  // Live notification count — polls independently of the Notifications page
+  // Live notification count -polls independently of the Notifications page
   // itself so the sidebar badge updates even while the user is elsewhere.
   const { data: unreadNotifications } = useListNotifications(
     { unreadOnly: true },
@@ -495,7 +495,7 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
     const saved = sidebarScrollTop;
 
     // Nav item visibility depends on data that loads async (permissions,
-    // settings-gated items, badge counts) — the list can grow after mount,
+    // settings-gated items, badge counts) -the list can grow after mount,
     // so a single scrollTop assignment can get clamped to a shorter list.
     // Keep re-applying until it sticks, the user scrolls, or time runs out.
     let restoring = saved > 0;
@@ -589,7 +589,7 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
           const visibleItems = group.items
             // Children can carry their own module key distinct from the
             // parent's (e.g. Departments/Designations/Manage Branch under
-            // Employees) — trim each child individually first...
+            // Employees) -trim each child individually first...
             .map((item) => {
               if (!item.children) return item;
               const visibleChildren = item.children.filter((c) => {
@@ -612,7 +612,7 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
               const moduleKey = moduleForPath(item.path);
               // canViewPage (not canView): a flat single-route item like
               // Settings has no nav children but does have MODULE_TREE
-              // children (its tabs) — reachable if any tab is visible even
+              // children (its tabs) -reachable if any tab is visible even
               // when the bare "settings" key itself is unset. See
               // resolvePermissionOrChildren in permission-modules.ts.
               return moduleKey ? canViewPage(user, moduleKey) : true;

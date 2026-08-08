@@ -3,7 +3,7 @@ import type { SyncDeviceStatus, SyncProgress } from "@/lib/api-client/custom-hoo
 
 // Visual-only pipeline for the biometric sync flow: Start -> one node per
 // configured device -> Completed. Purely reflects the `data` prop (sourced
-// from BiometricSyncContext, which owns the actual polling) — this component
+// from BiometricSyncContext, which owns the actual polling) -this component
 // never drives the sync itself.
 export default function BiometricSyncPipeline({ active, data, onDismiss }: {
   active: boolean;

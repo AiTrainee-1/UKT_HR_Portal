@@ -1,13 +1,13 @@
 """
 Resume Screening ML/scoring pipeline.
 =====================================
-Pure-function engine, independent of Django views — mirrors how
+Pure-function engine, independent of Django views -mirrors how
 document_pdf.py is a standalone engine consumed by company_documents_views.py.
 
 Lightweight-by-design stack (confirmed with the user): pdfplumber/python-docx
 for text extraction, spaCy's small English model for name/city NER, rapidfuzz
 for fuzzy skill matching, and scikit-learn TF-IDF + cosine similarity for a
-lexical-overlap "semantic-ish" signal — deliberately NOT sentence-transformers/
+lexical-overlap "semantic-ish" signal -deliberately NOT sentence-transformers/
 PyTorch, which would add a ~300-700MB install and a runtime model-download
 dependency unsuitable for this on-premise Windows deployment.
 
@@ -87,7 +87,7 @@ def extract_text(file_obj, filename: str) -> str:
     if ext in ("docx",):
         return extract_text_from_docx(file_obj)
     raise ValueError(
-        f"Unsupported resume file type '.{ext}' — only .pdf and .docx are supported."
+        f"Unsupported resume file type '.{ext}' -only .pdf and .docx are supported."
     )
 
 
@@ -188,7 +188,7 @@ def extract_skills(text: str, vocabulary: list[str], score_cutoff: int = 85) -> 
 # ── Experience extraction ───────────────────────────────────────────────────
 #
 # Evidence-only by design: a candidate's experience is reported ONLY when the
-# resume gives an explicit, unambiguous statement of it — either a direct
+# resume gives an explicit, unambiguous statement of it -either a direct
 # "X years of experience" line, or a sum of actual employment date ranges
 # found within a detected Experience/Employment section. A bare "X years"
 # anywhere in the document (a warranty period, a notice period, an unrelated
@@ -244,7 +244,7 @@ def _extract_experience_section(text: str) -> str | None:
 
 
 def extract_experience_years(text: str) -> float | None:
-    # 1. An explicit, self-reported total — the highest-confidence evidence.
+    # 1. An explicit, self-reported total -the highest-confidence evidence.
     explicit: list[float] = []
     for pattern in (_EXPLICIT_EXPERIENCE_RE_A, _EXPLICIT_EXPERIENCE_RE_B):
         for m in pattern.finditer(text):
@@ -258,7 +258,7 @@ def extract_experience_years(text: str) -> float | None:
         return max(explicit)
 
     # 2. Sum of actual employment date ranges, but ONLY within a detected
-    #    Experience/Employment section — never scanned across the whole resume.
+    #    Experience/Employment section -never scanned across the whole resume.
     section = _extract_experience_section(text)
     if section:
         spans = []
@@ -273,7 +273,7 @@ def extract_experience_years(text: str) -> float | None:
             if 0 < total <= 45:
                 return float(total)
 
-    # No confident evidence either way — report unknown rather than guessing.
+    # No confident evidence either way -report unknown rather than guessing.
     return None
 
 

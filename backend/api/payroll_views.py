@@ -1,5 +1,5 @@
 """
-Enterprise Payroll Engine — UKTextiles HRMS
+Enterprise Payroll Engine -UKTextiles HRMS
 ============================================
 Two salary modes:
   • Staff    → monthly, pro-rated by working days (leave-aware, late-tracking)
@@ -12,7 +12,7 @@ so every rupee can be explained to the employee.
 
 class PayrollSkip(Exception):
     """Raised by the payroll engines with a precise, user-facing reason an
-    employee was skipped — so the Generate Payroll result always tells HR
+    employee was skipped -so the Generate Payroll result always tells HR
     exactly what to fix, instead of one generic catch-all message covering
     unrelated conditions (no salary configured vs. no working days vs. a
     real computation error)."""
@@ -140,11 +140,11 @@ def _build_working_days(month: int, year: int, saturday_off: bool, holiday_dates
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Per-day attendance status — sourced entirely from attendance_final's
+#  Per-day attendance status -sourced entirely from attendance_final's
 #  compute_month_records (see _generate_staff_payroll below). This used to
 #  have its own independent classifier here (_classify_day, reading raw
 #  AttendanceLog/Attendance rows directly) for strict-mode staff, running
-#  alongside — and capable of disagreeing with — the engine every other
+#  alongside -and capable of disagreeing with -the engine every other
 #  screen uses. Retired 2026-07-25: one engine, one answer, everywhere.
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -171,6 +171,46 @@ def _mark_repayments_processed(advance_details: list[dict]) -> None:
             adv.save(update_fields=["total_repaid", "outstanding", "status"])
         except AdvanceRepayment.DoesNotExist:
             pass
+
+
+def late_shift_deduction(billable_late: int, settings, slabs_field: str = "late_deduction_slabs") -> Decimal:
+    """
+    Shifts deducted for `billable_late` chargeable occurrences, per an
+    HR-editable slab table (Settings → Late Detection). `slabs_field` picks
+    which PayrollSettings JSON field to read -defaults to the original Late
+    Attendance pool; pass "without_permission_deduction_slabs" for the
+    separate Without Permission pool instead. Same shape/semantics either way.
+
+    Each slab row is {"fromLates": N, "deductionShifts": D} -"once the
+    billable count reaches N, deduct D shifts". Rows are evaluated in
+    ascending order and the HIGHEST matching row wins; the last row's value
+    holds for any count beyond it. An empty table means no deduction at all,
+    which is how HR switches a pool's penalty off entirely.
+
+    The shipped default for the Late Attendance pool (see
+    _default_late_deduction_slabs in models.py) reproduces the formula this
+    replaced -every 3 billable lates costs a quarter shift -so existing
+    payroll math is unchanged. The Without Permission pool ships empty.
+    """
+    rows: list[tuple[int, Decimal]] = []
+    for row in (getattr(settings, slabs_field, None) or []):
+        if not isinstance(row, dict):
+            continue
+        try:
+            rows.append((int(row["fromLates"]), Decimal(str(row["deductionShifts"]))))
+        except (KeyError, TypeError, ValueError, ArithmeticError):
+            continue  # skip malformed rows rather than failing the whole run
+    if not rows:
+        return Decimal("0")
+
+    rows.sort(key=lambda r: r[0])
+    deduction = Decimal("0")
+    for from_lates, shifts in rows:
+        if billable_late >= from_lates:
+            deduction = shifts
+        else:
+            break
+    return deduction
 
 
 def _pending_advance_repayments(emp: Employee, month: int, year: int) -> tuple[Decimal, list[dict]]:
@@ -211,7 +251,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
         raise PayrollSkip("No Salary Amount set on this employee's profile")
 
     # 1. Get shift assignment for middle of month (representative date).
-    #    Shift start and grace come solely from the assigned shift — there is
+    #    Shift start and grace come solely from the assigned shift -there is
     #    no global default. Without an assignment, late detection is disabled
     #    (grace_minutes=None) because there is no basis to judge lateness.
     mid_month = date(year, month, 15)
@@ -257,11 +297,11 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
         )
     )
 
-    # 5. Final attendance records — the ONE engine every screen in the app
+    # 5. Final attendance records -the ONE engine every screen in the app
     #    uses (attendance_final.compute_month_records), for every day and
     #    every attendance mode. Internally this already applies the correct
     #    strict/simple classification, night-shift relaxation, and manual
-    #    HR overrides (source="manual" rows are returned untouched) — payroll
+    #    HR overrides (source="manual" rows are returned untouched) -payroll
     #    no longer needs (or has) its own separate classification path.
     from .models import PayrollSettings as _PS
     from .attendance_final import compute_month_records
@@ -278,6 +318,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
     unpaid_leave_count = 0
     absent_count = 0
     late_count = 0
+    without_permission_count = 0
     half_shift_count = 0
     full_shift_count = 0
     effective_present = Decimal("0")  # accumulates 0.5 or 1.0 per present day
@@ -298,6 +339,8 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
             info = {
                 "status": status,
                 "is_late": fr.is_late,
+                "without_permission": bool(fr.late_in_without_permission or fr.early_out_without_permission),
+                "late_reason": fr.late_reason,
                 "first_in": fr.first_punch.strftime("%H:%M") if fr.first_punch else None,
                 "last_out": fr.last_punch.strftime("%H:%M") if fr.last_punch else None,
                 "leave_type": None,
@@ -306,11 +349,11 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
             forced_half = fr.is_half_shift or fr_status == "half_shift"
         else:
             # A working day beyond what compute_month_records has reached yet
-            # (it only computes up to today) — nothing has happened there,
+            # (it only computes up to today) -nothing has happened there,
             # so simply absent for now; this in-progress-month preview gets
             # recalculated once those days actually elapse.
             status = "absent"
-            info = {"status": "absent", "is_late": False, "first_in": None, "last_out": None, "leave_type": None}
+            info = {"status": "absent", "is_late": False, "without_permission": False, "late_reason": None, "first_in": None, "last_out": None, "leave_type": None}
             forced_shifts = Decimal("0")
             forced_half = False
 
@@ -322,6 +365,8 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
             present_count += 1
             if is_late:
                 late_count += 1
+            if info["without_permission"]:
+                without_permission_count += 1
             day_shifts = forced_shifts if forced_shifts > 0 else Decimal("1.00")
             if forced_half or day_shifts == Decimal("0.50"):
                 is_half = True
@@ -341,6 +386,8 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
             "day": DAY_NAMES[d.weekday()],
             "status": status,
             "isLate": is_late,
+            "withoutPermission": info["without_permission"],
+            "lateReason": info["late_reason"],
             "firstIn": info["first_in"],
             "lastOut": info["last_out"],
             "leaveType": info["leave_type"],
@@ -359,13 +406,13 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
     # configured salary_amount (e.g. 8000/26=307.6923..., rounded to
     # 307.69, x26 = 7999.94 instead of exactly 8000). Round only the final
     # result, once. `daily_rate` (rounded) is kept for display/breakdown
-    # and the late-penalty calc below — those are fine to round, since
+    # and the late-penalty calc below -those are fine to round, since
     # neither one needs to algebraically reconstruct the full salary.
     daily_rate_exact = emp.salary_amount / Decimal(str(total_working_days))
     base_gross = _d2(daily_rate_exact * effective_days)
     daily_rate = _d2(daily_rate_exact)
 
-    # Basic = 50% of full monthly salary (not prorated — this is the component base)
+    # Basic = 50% of full monthly salary (not prorated -this is the component base)
     basic_full = _d2(emp.salary_amount * Decimal("0.50"))
     hra_full = _d2(emp.salary_amount * Decimal("0.20"))
 
@@ -375,7 +422,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
     hra = _d2(hra_full * prorate_factor)
     allowances = _d2(base_gross - basic - hra)
 
-    # PF / ESI — read live from PayrollSettings. The Staff Payroll Rules
+    # PF / ESI -read live from PayrollSettings. The Staff Payroll Rules
     # master toggle (Settings → Payroll) must be ON for any deduction to
     # apply; rates alone are not enough.
     ps = PayrollSettings.get()
@@ -396,14 +443,17 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
         pf_deduction = Decimal("0")
         esi_deduction = Decimal("0")
 
-    # 8. Late shift penalty — 3 free lates/month, every 3 billable = ¼ shift.
+    # 8. Late shift penalty -free allowance and deduction slabs are both
+    #    HR-editable (Settings → Late Detection); the shipped defaults are
+    #    the values this used to hardcode (3 free/month, every 3 billable
+    #    = ¼ shift), so out of the box nothing changes.
     #    late_count comes from the day loop above, itself sourced entirely
-    #    from compute_month_records — one number regardless of attendance
+    #    from compute_month_records -one number regardless of attendance
     #    mode, instead of the old two-formula split (simple: is_late flags /
     #    strict: a separate DailyShiftLog-based MonthlyShiftSummary). All
     #    approved permission requests this month count as late entries too,
     #    merged into the same late-punch pool. ONE shared 3-free allowance
-    #    covers the combined raw total — permissions are NOT pre-filtered by
+    #    covers the combined raw total -permissions are NOT pre-filtered by
     #    their own 3-free before merging, since that would double-discount
     #    the free allowance.
     from .models import EmployeePermission
@@ -412,9 +462,9 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
     ).count()
 
     total_late = late_count + approved_permissions
-    free_permissions = 3
+    free_permissions = max(0, int(getattr(_settings, "late_free_allowance", 3) or 0))
     billable_late = max(0, total_late - free_permissions)
-    shift_deductions = Decimal(str(billable_late // 3)) * Decimal("0.25")
+    shift_deductions = late_shift_deduction(billable_late, _settings)
     late_penalty = _d2(shift_deductions * daily_rate) if shift_deductions > 0 else Decimal("0")
     late_summary_data = {
         "totalLateCount": late_count,
@@ -423,10 +473,31 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
         "shiftDeductions": float(shift_deductions),
     }
 
+    # 8b. Without Permission penalty -a SEPARATE pool from Late Attendance
+    #    above (Settings → Late Detection → Without Permission). Counts
+    #    late-in/early-out occurrences inside the 1-hour permission window
+    #    that had no approved Permission covering them (see
+    #    AttendanceDayRecord.late_in_without_permission/early_out_without_
+    #    permission -sourced from the same day-loop as late_count, so no
+    #    extra query). Ships with an empty slab table by default, so this is
+    #    zero-impact until HR explicitly configures it.
+    wp_free_allowance = max(0, int(getattr(_settings, "without_permission_free_allowance", 0) or 0))
+    billable_without_permission = max(0, without_permission_count - wp_free_allowance)
+    wp_shift_deductions = late_shift_deduction(
+        billable_without_permission, _settings, slabs_field="without_permission_deduction_slabs",
+    )
+    without_permission_penalty = _d2(wp_shift_deductions * daily_rate) if wp_shift_deductions > 0 else Decimal("0")
+    without_permission_summary_data = {
+        "totalCount": without_permission_count,
+        "freeAllowanceUsed": min(without_permission_count, wp_free_allowance),
+        "billableCount": billable_without_permission,
+        "shiftDeductions": float(wp_shift_deductions),
+    }
+
     if not use_simple:
         # Strict mode still gets its DailyShiftLog/MonthlyShiftSummary
         # refreshed here (mirrors what compute_month_records already did to
-        # DailyShiftLog as a side effect of computing each day above) — the
+        # DailyShiftLog as a side effect of computing each day above) -the
         # mobile/web "My Shift" screens read MonthlyShiftSummary directly.
         # Its return value is intentionally NOT used for late_penalty above;
         # that always comes from the single day-loop-derived late_count now.
@@ -436,7 +507,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
     # 9. Advances
     advance_total, advance_details = _pending_advance_repayments(emp, month, year)
 
-    total_deductions = _d2(pf_deduction + esi_deduction + advance_total + late_penalty)
+    total_deductions = _d2(pf_deduction + esi_deduction + advance_total + late_penalty + without_permission_penalty)
     net_salary = _d2(base_gross - total_deductions)
 
     # 9. Build breakdown JSON (full traceability)
@@ -460,6 +531,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
             "unpaidLeaveDays": unpaid_leave_count,
             "absentDays": absent_count,
             "lateDays": late_count,
+            "withoutPermissionDays": without_permission_count,
             "halfShiftDays": half_shift_count,
             "fullShiftDays": full_shift_count,
             "effectivePaidDays": float(effective_days),
@@ -483,6 +555,8 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
             "advanceDetails": advance_details,
             "lateShiftPenalty": float(late_penalty),
             "lateSummary": late_summary_data,
+            "withoutPermissionPenalty": float(without_permission_penalty),
+            "withoutPermissionSummary": without_permission_summary_data,
             "total": float(total_deductions),
         },
         "netSalary": float(net_salary),
@@ -508,7 +582,8 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
             notes=(
                 f"Staff monthly: {present_count} present + {paid_leave_count} paid leave "
                 f"= {float(effective_days)} effective days / {total_working_days} working days. "
-                f"Late: {late_count}. Absent: {absent_count}. Unpaid leave: {unpaid_leave_count}."
+                f"Late: {late_count}. Without Permission: {without_permission_count}. "
+                f"Absent: {absent_count}. Unpaid leave: {unpaid_leave_count}."
             ),
         ),
     )
@@ -530,7 +605,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
             pf_deduction=pf_deduction,
             esi_deduction=esi_deduction,
             advance_deduction=advance_total,
-            other_deductions=late_penalty,
+            other_deductions=_d2(late_penalty + without_permission_penalty),
             total_deductions=total_deductions,
             net_salary=net_salary,
             working_days=total_working_days,
@@ -586,7 +661,7 @@ def _get_biweekly_range(month: int, year: int, week_number: int) -> tuple[date, 
 
 def _generate_production_payroll(emp: Employee, month: int, year: int, week_number: int) -> dict:
     """
-    Shift-based bi-weekly payroll for production employees — completely
+    Shift-based bi-weekly payroll for production employees -completely
     separate from the staff engine. No monthly salary, no proration, no
     leave/permission/CL: pay = total shifts earned x salary_per_shift.
     week_number: 1 (days 1-15) or 2 (days 16-end).
@@ -625,7 +700,7 @@ def _generate_production_payroll(emp: Employee, month: int, year: int, week_numb
     salary_per_shift = emp.salary_per_shift
     gross_amount = _d2(total_shifts * salary_per_shift)
 
-    # PF / EF for production — either salary-range rules (when enabled) or flat rates
+    # PF / EF for production -either salary-range rules (when enabled) or flat rates
     ps = PayrollSettings.get()
     monthly_equiv = _d2(gross_amount * 2)  # biweekly * 2 = monthly estimate
 
@@ -651,7 +726,7 @@ def _generate_production_payroll(emp: Employee, month: int, year: int, week_numb
         applied_ef_rate = Decimal(str(matched_rule.get("efRate", 0) or 0))
     elif ps.prod_payroll_rules_enabled:
         # Flat rates apply only when the Production Payroll Rules master
-        # toggle (Settings → Payroll) is ON — mirrors the staff toggle.
+        # toggle (Settings → Payroll) is ON -mirrors the staff toggle.
         prod_pf_rate  = ps.prod_pf_rate / Decimal("100")
         prod_esi_rate = ps.prod_esi_rate / Decimal("100")
         prod_esi_ceil = ps.prod_esi_applicable_below
@@ -954,13 +1029,13 @@ def attendance_logs(request: Request) -> Response:
 
 # Manual Excel-import of attendance punches now lives in
 # manual_attendance_import_views.py (routed at attendance/manual-import/upload)
-# — it matches by Employee Code rather than internal id, also writes the
+# -it matches by Employee Code rather than internal id, also writes the
 # Attendance presence table, and shares its write path with live biometric
 # sync via biometric_sync._ingest_punches.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Work Sessions — list / edit
+#  Work Sessions -list / edit
 # ─────────────────────────────────────────────────────────────────────────────
 
 @api_view(["GET"])
@@ -1049,11 +1124,11 @@ def payroll_list(request: Request) -> Response:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Skip-check preview (read-only, dry-run — reuses the real engines)
+#  Skip-check preview (read-only, dry-run -reuses the real engines)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class _DryRunAbort(Exception):
-    """Internal-only — used purely to force a rollback of a savepoint we
+    """Internal-only -used purely to force a rollback of a savepoint we
     always intend to discard, never surfaced to a caller."""
 
 
@@ -1061,7 +1136,7 @@ def _dry_run_skip_reason(fn, *args) -> str | None:
     """
     Call a payroll-generation function inside a transaction that is always
     rolled back, to discover whether it would succeed or exactly why it
-    would be skipped — without ever persisting anything. Returns None if it
+    would be skipped -without ever persisting anything. Returns None if it
     would succeed, or the skip/error reason string otherwise.
     """
     try:
@@ -1084,9 +1159,9 @@ def payroll_skip_check(request: Request) -> Response:
     Read-only preview of exactly which active employees Generate Payroll
     would currently skip, and why. Runs the exact same engine functions
     generate_payroll uses, each inside its own savepoint that's always
-    rolled back — so this can be called any time, as often as needed,
+    rolled back -so this can be called any time, as often as needed,
     without ever writing to the database. This is what powers the
-    "Skipped Employees" view on the Payroll page — unlike the transient
+    "Skipped Employees" view on the Payroll page -unlike the transient
     post-generation toast, it works whenever HR wants to check, not only
     immediately after a run.
     """
@@ -1201,7 +1276,7 @@ def generate_payroll(request: Request) -> Response:
 
     from .audit_utils import log_action as _log
     _log(request, "create", "payroll", description=(
-        f"Generated payroll {month}/{year} [{run_type}] — "
+        f"Generated payroll {month}/{year} [{run_type}] -"
         f"{len(generated)} generated, {len(skipped)} skipped"
     ))
     return Response({
@@ -1249,7 +1324,7 @@ def payroll_detail(request: Request, pk: int) -> Response:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Payroll breakdown — full traceability for one employee-month
+#  Payroll breakdown -full traceability for one employee-month
 # ─────────────────────────────────────────────────────────────────────────────
 
 @api_view(["GET"])
@@ -1372,7 +1447,7 @@ def seed_attendance(request: Request) -> Response:
                 created_att += 1
                 continue
 
-            # Present day — create Attendance record
+            # Present day -create Attendance record
             Attendance.objects.create(employee=emp, date=date_str, present=True, hours_worked=Decimal("8.00"))
             created_att += 1
 
@@ -1386,7 +1461,7 @@ def seed_attendance(request: Request) -> Response:
                     in_m -= 60
                 punch_in = time(in_h, in_m)
             else:
-                # On time — arrive 5 min before shift
+                # On time -arrive 5 min before shift
                 in_h = shift_start.hour
                 in_m = max(0, shift_start.minute - 5)
                 punch_in = time(in_h, in_m)
@@ -1416,7 +1491,7 @@ def seed_attendance(request: Request) -> Response:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Payroll Settings (singleton — PF/ESI rates, pay day, production pay type)
+#  Payroll Settings (singleton -PF/ESI rates, pay day, production pay type)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _ps_response(ps) -> dict:
@@ -1456,6 +1531,19 @@ def _ps_response(ps) -> dict:
         "shiftPunctualityWindowMinutes": ps.shift_punctuality_window_minutes,
         "lastPunchPostShiftGraceHours": float(ps.last_punch_post_shift_grace_hours),
         "firstPunchPreShiftBufferHours": float(ps.first_punch_pre_shift_buffer_hours),
+        "halfShiftLateReferenceTime": str(ps.half_shift_late_reference_time)[:5],
+        # Defaults pre-filled into a newly created shift (Manage Shift still
+        # owns the real per-shift times)
+        "defaultShiftGraceMinutes": ps.default_shift_grace_minutes,
+        "defaultShiftFirstHalfEnd": str(ps.default_shift_first_half_end)[:5],
+        "defaultShiftLunchDurationMinutes": ps.default_shift_lunch_duration_minutes,
+        "defaultShiftLunchGraceMinutes": ps.default_shift_lunch_grace_minutes,
+        # Late Detection policy
+        "lateFreeAllowance": ps.late_free_allowance,
+        "lateDeductionSlabs": ps.late_deduction_slabs or [],
+        # Without Permission policy -separate pool, see late_shift_deduction()
+        "withoutPermissionFreeAllowance": ps.without_permission_free_allowance,
+        "withoutPermissionDeductionSlabs": ps.without_permission_deduction_slabs or [],
         # Production attendance windows (1.5-shift day)
         "prodFirstHalfStart": str(ps.prod_first_half_start)[:5],
         "prodFirstHalfEnd": str(ps.prod_first_half_end)[:5],
@@ -1511,6 +1599,18 @@ FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "prodExtraStart": ("settings.attendance",),
     "prodExtraEnd": ("settings.attendance",),
     "nightShiftEnabled": ("settings.attendance",),
+    "halfShiftLateReferenceTime": ("settings.attendance",),
+    "defaultShiftGraceMinutes": ("settings.attendance",),
+    "defaultShiftFirstHalfEnd": ("settings.attendance",),
+    "defaultShiftLunchDurationMinutes": ("settings.attendance",),
+    "defaultShiftLunchGraceMinutes": ("settings.attendance",),
+    # Late Detection is its own Settings tab, so it gets its own permission
+    # group -HR can be given the attendance timings without the power to
+    # change what a late actually costs an employee.
+    "lateFreeAllowance": ("settings.late_detection",),
+    "lateDeductionSlabs": ("settings.late_detection",),
+    "withoutPermissionFreeAllowance": ("settings.late_detection",),
+    "withoutPermissionDeductionSlabs": ("settings.late_detection",),
     "pfRate": ("settings.payroll",),
     "esiRate": ("settings.payroll",),
     "esiApplicableBelow": ("settings.payroll",),
@@ -1541,7 +1641,7 @@ FIELD_GROUPS: dict[str, tuple[str, ...]] = {
 
 def _hr_role_permissions(request) -> tuple[dict, bool]:
     """Returns (role.permissions dict, is_super_admin) for the requesting HR
-    user, resolved fresh from the DB — mirrors the lookup permission_middleware
+    user, resolved fresh from the DB -mirrors the lookup permission_middleware
     already does, needed here because this one endpoint enforces multiple
     settings.* permissions itself rather than a single URL-level module_key."""
     from .models import HRUser
@@ -1625,9 +1725,16 @@ def payroll_settings_view(request: Request) -> Response:
         "prodSecondHalfEnd": ("prod_second_half_end", str),
         "prodExtraStart": ("prod_extra_start", str),
         "prodExtraEnd": ("prod_extra_end", str),
+        "halfShiftLateReferenceTime": ("half_shift_late_reference_time", str),
+        "defaultShiftGraceMinutes": ("default_shift_grace_minutes", int),
+        "defaultShiftFirstHalfEnd": ("default_shift_first_half_end", str),
+        "defaultShiftLunchDurationMinutes": ("default_shift_lunch_duration_minutes", int),
+        "defaultShiftLunchGraceMinutes": ("default_shift_lunch_grace_minutes", int),
+        "lateFreeAllowance": ("late_free_allowance", int),
+        "withoutPermissionFreeAllowance": ("without_permission_free_allowance", int),
     }
     # Image fields may legitimately be set to null (user removed the logo /
-    # signature) — str(None) would store the literal string "None".
+    # signature) -str(None) would store the literal string "None".
     _nullable_text = {"signature_image", "company_logo", "authorized_signature"}
     for key, (attr, cast) in field_map.items():
         if key in data:
@@ -1638,6 +1745,44 @@ def payroll_settings_view(request: Request) -> Response:
                 setattr(ps, attr, Decimal(str(val)) if cast is Decimal else cast(val))
     if "prodPfEfRules" in data and isinstance(data["prodPfEfRules"], list):
         ps.prod_pf_ef_rules = data["prodPfEfRules"]
+    if "lateDeductionSlabs" in data and isinstance(data["lateDeductionSlabs"], list):
+        # Sanitize before storing -these rows drive real salary deductions,
+        # so a malformed row must be rejected at the door rather than silently
+        # skipped every payroll run afterwards. Non-negative values only,
+        # de-duplicated by threshold, stored in ascending order.
+        cleaned: dict[int, float] = {}
+        for row in data["lateDeductionSlabs"]:
+            if not isinstance(row, dict):
+                continue
+            try:
+                from_lates = int(row["fromLates"])
+                shifts = float(row["deductionShifts"])
+            except (KeyError, TypeError, ValueError):
+                return _error("Each late slab needs a numeric fromLates and deductionShifts")
+            if from_lates < 0 or shifts < 0:
+                return _error("Late slab values cannot be negative")
+            cleaned[from_lates] = shifts
+        ps.late_deduction_slabs = [
+            {"fromLates": k, "deductionShifts": cleaned[k]} for k in sorted(cleaned)
+        ]
+    if "withoutPermissionDeductionSlabs" in data and isinstance(data["withoutPermissionDeductionSlabs"], list):
+        # Same sanitize/sort/dedupe rules as lateDeductionSlabs above -this
+        # pool's rows drive real deductions too.
+        cleaned: dict[int, float] = {}
+        for row in data["withoutPermissionDeductionSlabs"]:
+            if not isinstance(row, dict):
+                continue
+            try:
+                from_count = int(row["fromLates"])
+                shifts = float(row["deductionShifts"])
+            except (KeyError, TypeError, ValueError):
+                return _error("Each Without Permission slab needs a numeric fromLates and deductionShifts")
+            if from_count < 0 or shifts < 0:
+                return _error("Without Permission slab values cannot be negative")
+            cleaned[from_count] = shifts
+        ps.without_permission_deduction_slabs = [
+            {"fromLates": k, "deductionShifts": cleaned[k]} for k in sorted(cleaned)
+        ]
     if "prodPfEfEnabled" in data:
         ps.prod_pf_ef_enabled = bool(data["prodPfEfEnabled"])
     if "staffPayrollRulesEnabled" in data:

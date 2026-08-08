@@ -1,14 +1,14 @@
 """
 Employee Document Collection
 =============================
-Per-employee uploaded documents — PAN/Aadhaar/Educational Certificates/
+Per-employee uploaded documents -PAN/Aadhaar/Educational Certificates/
 Voter ID or Birth Certificate/Bank Passbook, plus scanned copies of Offer/
 Experience/Resignation/Staff letters and Production Employee Documents.
 
 Same conventions as the rest of this codebase: plain @api_view + @require_hr
 (or @require_auth for the employee-facing routes) functions, no serializers/
 viewsets, hand-built response dicts. File storage/serving mirrors the Resume
-Screening feature's ScreeningCandidate.resume_file exactly — a plain
+Screening feature's ScreeningCandidate.resume_file exactly -a plain
 FileField, always served through an authenticated view (FileResponse +
 Content-Disposition), never Django's raw MEDIA_URL. PAN/Aadhaar/Bank
 Passbook are far more sensitive than a resume, so access is checked on
@@ -29,7 +29,7 @@ ALLOWED_EXTENSIONS = {"pdf", "jpg", "jpeg", "png"}
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10MB
 VALID_CATEGORIES = {key for key, _ in EmployeeDocument.CATEGORY_CHOICES}
 
-# "Required" documents for completion tracking — the 5 personal-ID categories
+# "Required" documents for completion tracking -the 5 personal-ID categories
 # every employee needs, plus one employment-type-specific letter category.
 # Offer/Experience/Resignation Letter are excluded: those are auto-generated
 # on demand elsewhere, never something HR uploads here.
@@ -71,7 +71,7 @@ def _document_json(doc: EmployeeDocument) -> dict:
 @api_view(["GET"])
 @require_hr
 def employee_documents(request: Request, employee_id: int) -> Response:
-    """GET /api/recruitment/employee-documents/<employee_id> — every document for one employee."""
+    """GET /api/recruitment/employee-documents/<employee_id> -every document for one employee."""
     emp = scope_to_branch(Employee.objects, request).filter(pk=employee_id).first()
     if not emp:
         return _error("Employee not found", 404)
@@ -83,7 +83,7 @@ def employee_documents(request: Request, employee_id: int) -> Response:
 @parser_classes([MultiPartParser, FormParser])
 @require_hr
 def upload_employee_document(request: Request, employee_id: int) -> Response:
-    """POST /api/recruitment/employee-documents/<employee_id>/upload — multipart, keys: file, category."""
+    """POST /api/recruitment/employee-documents/<employee_id>/upload -multipart, keys: file, category."""
     emp = scope_to_branch(Employee.objects, request).filter(pk=employee_id).first()
     if not emp:
         return _error("Employee not found", 404)
@@ -97,9 +97,9 @@ def upload_employee_document(request: Request, employee_id: int) -> Response:
 
     ext = file.name.rsplit(".", 1)[-1].lower() if "." in file.name else ""
     if ext not in ALLOWED_EXTENSIONS:
-        return _error(f"Unsupported file type '.{ext}' — only PDF, JPG, and PNG are accepted.")
+        return _error(f"Unsupported file type '.{ext}' -only PDF, JPG, and PNG are accepted.")
     if file.size > MAX_UPLOAD_BYTES:
-        return _error(f"File is too large ({file.size / 1024 / 1024:.1f}MB) — the limit is 10MB.")
+        return _error(f"File is too large ({file.size / 1024 / 1024:.1f}MB) -the limit is 10MB.")
 
     uploaded_by = request.jwt_user.get("name") or request.jwt_user.get("username")
     doc = EmployeeDocument(employee=emp, category=category, original_filename=file.name, uploaded_by=uploaded_by)
@@ -128,7 +128,7 @@ def employee_document_file(request: Request, pk: int) -> Response:
     """
     GET /api/employee-documents/<pk>/file[?download=1]
     Accessible to: HR (branch-scoped to the document's employee) or the
-    employee the document belongs to. Everyone else gets a 403 — this is
+    employee the document belongs to. Everyone else gets a 403 -this is
     the one check that matters most in this whole feature, given what
     these files usually contain (PAN/Aadhaar/bank details).
     """
@@ -158,7 +158,7 @@ def document_completion_stats(request: Request) -> Response:
     GET /api/recruitment/employee-documents/completion-stats?employmentType=staff|production
     Counts active employees (branch-scoped) as "uploaded" once they have at
     least one file in every required category for their employment type, or
-    "pending" with the list of what's missing — powers the Documents page's
+    "pending" with the list of what's missing -powers the Documents page's
     dashboard cards and the Pending drill-down list.
     """
     employment_type = request.query_params.get("employmentType")
@@ -209,7 +209,7 @@ def document_completion_stats(request: Request) -> Response:
 @api_view(["GET"])
 @require_auth
 def my_documents(request: Request) -> Response:
-    """GET /api/my/documents — the logged-in employee's own uploaded documents."""
+    """GET /api/my/documents -the logged-in employee's own uploaded documents."""
     emp_id = get_token_employee_id(request)
     if not emp_id:
         return _error("Employee access required", 403)

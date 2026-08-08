@@ -3,7 +3,7 @@ import type { PayrollGenerateProgress } from "@/lib/api-client/custom-hooks";
 
 // Visual-only progress bar for payroll generation. Purely reflects the
 // `data` prop (sourced from PayrollGenerationContext, which owns the actual
-// polling) — this component never drives generation itself. Mirrors
+// polling) -this component never drives generation itself. Mirrors
 // BiometricSyncPipeline's role for the sync flow, but payroll iterates over
 // dozens/hundreds of employees rather than a handful of devices, so a
 // determinate count-based bar fits better than discrete per-item nodes.

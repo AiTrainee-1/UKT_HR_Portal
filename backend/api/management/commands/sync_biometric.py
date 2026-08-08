@@ -6,8 +6,8 @@ attendance_logs + attendance tables. Device connection logic lives in
 api.biometric_sync so the HR "Sync Biometric" API uses the exact same path.
 
 Device sources (both fully supported, merged together):
-  • backend/.env  — BIOMETRIC_DEVICE_IP / PORT / PASSWORD (legacy, still works)
-  • Settings → Devices — any number of BiometricDevice rows added from the UI
+  • backend/.env  -BIOMETRIC_DEVICE_IP / PORT / PASSWORD (legacy, still works)
+  • Settings → Devices -any number of BiometricDevice rows added from the UI
 
 Usage:
   python manage.py sync_biometric                    # last 3 days, ALL sources (.env + enabled Settings devices)
@@ -107,12 +107,12 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.WARNING(
                     f"\n  {len(suspicious_days)} suspicious day(s) with 6+ punches "
-                    "(likely two people sharing one Device User ID — check enrollment on the device):"
+                    "(likely two people sharing one Device User ID -check enrollment on the device):"
                 )
             )
             for d in sorted(suspicious_days, key=lambda x: x["date"]):
                 name = names.get(d["employeeId"], f"id={d['employeeId']}")
-                self.stdout.write(f"    - {d['date']}: {name} — {d['punches']} punches")
+                self.stdout.write(f"    - {d['date']}: {name} -{d['punches']} punches")
 
         if failures and total_created == 0 and len(failures) == len(targets):
             raise CommandError("All devices failed: " + "; ".join(failures))

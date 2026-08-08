@@ -1,5 +1,5 @@
 """
-Auto Sync — CRUD for configurable background biometric sync timing rules.
+Auto Sync -CRUD for configurable background biometric sync timing rules.
 See auto_sync.py for the APScheduler wiring; every mutation here calls
 straight into it so a rule change takes effect immediately, no restart.
 """

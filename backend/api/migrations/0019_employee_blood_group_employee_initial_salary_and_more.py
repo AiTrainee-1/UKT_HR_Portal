@@ -19,7 +19,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='employee',
             name='initial_salary',
-            field=models.DecimalField(blank=True, db_column='initial_salary', decimal_places=2, help_text='Salary at time of joining — baseline for increment tracking.', max_digits=10, null=True),
+            field=models.DecimalField(blank=True, db_column='initial_salary', decimal_places=2, help_text='Salary at time of joining -baseline for increment tracking.', max_digits=10, null=True),
         ),
         migrations.AddField(
             model_name='payrollsettings',

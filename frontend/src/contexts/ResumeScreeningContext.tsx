@@ -7,7 +7,7 @@ import {
   type ResumeScreeningProgress,
 } from "@/lib/api-client/custom-hooks";
 
-// Mounted once at the app root (see App.tsx) — outside every routed page — so
+// Mounted once at the app root (see App.tsx) -outside every routed page -so
 // bulk resume screening survives navigation, same pattern as
 // PayrollGenerationContext/BiometricSyncContext. Pages only ever read this
 // context; none of them own the mutation or the polling, so nothing is lost
@@ -66,7 +66,7 @@ export function ResumeScreeningProvider({ children }: { children: ReactNode }) {
       setTimeout(() => setShowPipeline(false), COMPLETION_LINGER_MS);
 
       toast({
-        title: `Screening complete — ${result.shortlisted} shortlisted`,
+        title: `Screening complete -${result.shortlisted} shortlisted`,
         description: [
           `${result.notShortlisted} not shortlisted`,
           result.failed.length > 0 ? `⚠ ${result.failed.length} file(s) failed to process` : null,

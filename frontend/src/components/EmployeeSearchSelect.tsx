@@ -115,7 +115,7 @@ export default function EmployeeSearchSelect({
                   onClick={() => { onChange(String(emp.id)); setOpen(false); setSearch(""); }}
                 >
                   <Check className={cn("h-4 w-4 shrink-0", isSelected ? "opacity-100 text-primary" : "opacity-0")} />
-                  {/* Employee code badge — primary identifier */}
+                  {/* Employee code badge -primary identifier */}
                   <span className="font-mono font-bold text-xs bg-gray-100 text-gray-800 px-1.5 py-0.5 rounded shrink-0">
                     {emp.employeeCode}
                   </span>

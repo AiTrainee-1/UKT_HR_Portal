@@ -4,12 +4,12 @@ Google Drive offsite backup upload
 Optional, additive-only: local storage is always the primary backup copy
 and the only thing Restore ever reads from. This just pushes a copy of an
 already-written local backup file into a Google Drive folder, using a
-Google Workspace service account (no interactive OAuth needed — the HR
+Google Workspace service account (no interactive OAuth needed -the HR
 admin shares a Shared Drive folder with the service account's email once,
 from the Google Drive UI, and pastes the folder ID + JSON key here).
 
 Requires the service account to have Content Manager access on a Shared
-Drive (or a folder inside one) — a personal "My Drive" folder won't work,
+Drive (or a folder inside one) -a personal "My Drive" folder won't work,
 since service accounts have no storage quota of their own outside a
 Shared Drive.
 """
@@ -23,7 +23,7 @@ class DriveError(Exception):
 
 def _clean_google_error(exc: Exception) -> str:
     """googleapiclient's HttpError.__str__ dumps the full request URL plus a
-    raw Python repr of the error-details list — technically complete but
+    raw Python repr of the error-details list -technically complete but
     unreadable in a toast. Pull out just Google's actual human message."""
     content = getattr(exc, "content", None)
     if content:
@@ -57,7 +57,7 @@ def _build_drive_service(service_account_json: str):
     try:
         creds = Credentials.from_service_account_info(
             # The narrower "drive.file" scope only sees files the app itself
-            # created (or that were granted via a Picker consent flow) — a
+            # created (or that were granted via a Picker consent flow) -a
             # folder manually shared with the service account through the
             # Drive UI is invisible to it and returns a "File not found"
             # error even with Editor access. The full "drive" scope is
@@ -93,7 +93,7 @@ def test_drive_connection(folder_id: str, service_account_json: str) -> dict:
     result = {"ok": True, "folderName": folder.get("name")}
     if not folder.get("driveId"):
         # Connection works, but this folder is in someone's personal "My
-        # Drive," not a Shared Drive — uploads will still fail once they
+        # Drive," not a Shared Drive -uploads will still fail once they
         # actually run, since service accounts have no storage quota of
         # their own outside a Shared Drive. Warn now, before that surprise.
         result["warning"] = (

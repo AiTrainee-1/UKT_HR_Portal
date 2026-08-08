@@ -56,7 +56,7 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 
 # Uploaded resume files (Resume Screening). Served only through the
 # authenticated candidate-resume download view, never Django's raw static
-# media serving — MEDIA_URL is just the on-disk path prefix here.
+# media serving -MEDIA_URL is just the on-disk path prefix here.
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
@@ -89,14 +89,14 @@ REST_FRAMEWORK = {
 
 JWT_SECRET = os.environ.get("JWT_SECRET", "fallback-secret")
 
-# The only credential left in .env — bootstraps the one super-admin HRUser row
+# The only credential left in .env -bootstraps the one super-admin HRUser row
 # on first startup (see api/apps.py::_bootstrap_admin_account). Every other
 # HR-portal account (MD, Directors, HR staff, etc.) is created and managed
 # from Account Management in the portal itself, stored in the HRUser table.
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "").strip()
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "").strip()
 
-# Security headers — safe defaults regardless of DEBUG/HTTPS setup.
+# Security headers -safe defaults regardless of DEBUG/HTTPS setup.
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"
 SECURE_REFERRER_POLICY = "same-origin"

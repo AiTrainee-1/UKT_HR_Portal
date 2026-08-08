@@ -1034,7 +1034,7 @@ export const useCreatePermission = () =>
 
 export const useUpdatePermissionStatus = () =>
   useMutation({
-    // approvedBy is never client-sendable — it's always server-derived from
+    // approvedBy is never client-sendable -it's always server-derived from
     // the logged-in HR user (a client-supplied name could be spoofed).
     mutationFn: ({ id, data }: { id: number; data: { status: string; hrComment?: string } }) =>
       customFetch<PermissionItem>(`/api/permissions/${id}`, {
@@ -1227,7 +1227,7 @@ export const useSyncBiometricProgress = (enabled: boolean) =>
     queryFn: () => customFetch<SyncProgress>("/api/attendance/sync-biometric-progress"),
     enabled,
     refetchInterval: enabled ? 600 : false,
-    // The pipeline only cares about the freshest snapshot — never serve a stale one.
+    // The pipeline only cares about the freshest snapshot -never serve a stale one.
     staleTime: 0,
   });
 
@@ -1255,7 +1255,7 @@ const reportLogQueryString = (params: Record<string, string | number | undefined
 export const getReportLogSummaryQueryKey = (params: ReportLogSummaryParams) =>
   ["/api/attendance/report-log", "summary", params] as const;
 
-// Mode A — one row per employee for the month, optionally narrowed by
+// Mode A -one row per employee for the month, optionally narrowed by
 // department and/or an employee code/name search.
 export const useAttendanceReportSummary = (params: ReportLogSummaryParams, enabled = true) =>
   useQuery<ReportLogSummaryResponse>({
@@ -1269,7 +1269,7 @@ export const useAttendanceReportSummary = (params: ReportLogSummaryParams, enabl
 export const getReportLogDetailQueryKey = (params: ReportLogDetailParams) =>
   ["/api/attendance/report-log", "detail", params] as const;
 
-// Mode B — one employee's full day-by-day month.
+// Mode B -one employee's full day-by-day month.
 export const useAttendanceReportDetail = (params: ReportLogDetailParams, enabled = true) =>
   useQuery<ReportLogDetailResponse>({
     queryKey: getReportLogDetailQueryKey(params),
@@ -1445,6 +1445,14 @@ export type PayrollBreakdownDay = {
   // staff-only fields
   status?: "present" | "absent" | "paid_leave" | "unpaid_leave";
   isLate?: boolean;
+  // Set only when isLate/half-shift-late is true — the specific rule and
+  // times that fired it, e.g. "Late morning (Without Permission): arrived
+  // 09:40, deadline 09:15". See AttendanceDayRecord.late_reason.
+  lateReason?: string | null;
+  // True when the day's lateness is specifically a Without Permission
+  // occurrence (see Settings → Late Detection) rather than ordinary Late
+  // Attendance — lateReason explains which.
+  withoutPermission?: boolean;
   isHalfShift?: boolean;
   shiftsCompleted?: number;
   firstIn?: string | null;
@@ -1494,6 +1502,7 @@ export type PayrollBreakdown = {
     unpaidLeaveDays?: number;
     absentDays?: number;
     lateDays?: number;
+    withoutPermissionDays?: number;
     halfShiftDays?: number;
     fullShiftDays?: number;
     effectivePaidDays?: number;
@@ -1530,6 +1539,13 @@ export type PayrollBreakdown = {
       totalLateCount: number;
       permissionsUsed: number;
       billableLateCount: number;
+      shiftDeductions: number;
+    } | null;
+    withoutPermissionPenalty?: number;
+    withoutPermissionSummary?: {
+      totalCount: number;
+      freeAllowanceUsed: number;
+      billableCount: number;
       shiftDeductions: number;
     } | null;
     total: number;
@@ -1659,7 +1675,7 @@ export const useGeneratePayroll = () =>
       }),
   });
 
-// ── Payroll Skip Check (read-only, on-demand — no generation required) ─────
+// ── Payroll Skip Check (read-only, on-demand -no generation required) ─────
 
 export type PayrollSkipReason = {
   employeeId: number;
@@ -1714,7 +1730,7 @@ export const useGeneratePayrollProgress = (enabled: boolean) =>
     queryFn: () => customFetch<PayrollGenerateProgress>("/api/payroll/generate-progress"),
     enabled,
     refetchInterval: enabled ? 600 : false,
-    // The pipeline only cares about the freshest snapshot — never serve a stale one.
+    // The pipeline only cares about the freshest snapshot -never serve a stale one.
     staleTime: 0,
   });
 
@@ -1823,10 +1839,10 @@ export const useDeleteSessionConfig = () =>
       customFetch<void>(`/api/session-configs/${id}`, { method: "DELETE" }),
   });
 
-// ── Payroll Settings (singleton — PF/ESI rates) ───────────────────────────────
+// ── Payroll Settings (singleton -PF/ESI rates) ───────────────────────────────
 
 export type PayrollSettingsItem = {
-  // Company profile — drives branding across the whole portal
+  // Company profile -drives branding across the whole portal
   companyName: string;
   companyTagline: string;
   companyPhone: string;
@@ -1870,6 +1886,24 @@ export type PayrollSettingsItem = {
   prodSecondHalfEnd: string;
   prodExtraStart: string;
   prodExtraEnd: string;
+  // Half Shift late reference (staff) -a Half Shift day is only additionally
+  // flagged Late when the first punch is strictly after this time.
+  halfShiftLateReferenceTime?: string;
+  // Defaults pre-filled into a NEW shift; Manage Shift still owns the real
+  // per-shift times (including start/end), so these never retro-change
+  // existing shifts.
+  defaultShiftGraceMinutes?: number;
+  defaultShiftFirstHalfEnd?: string;
+  defaultShiftLunchDurationMinutes?: number;
+  defaultShiftLunchGraceMinutes?: number;
+  // Late Detection policy -lates and approved permissions share one pool.
+  lateFreeAllowance?: number;
+  lateDeductionSlabs?: { fromLates: number; deductionShifts: number }[];
+  // Without Permission policy -separate pool: late-in/early-out occurrences
+  // inside the 1-hour permission window with no approved Permission covering
+  // them.
+  withoutPermissionFreeAllowance?: number;
+  withoutPermissionDeductionSlabs?: { fromLates: number; deductionShifts: number }[];
   prodPfEfEnabled?: boolean;
   prodPfEfRules: { label: string; minSalary: number; maxSalary: number; pfRate: number; efRate: number }[];
   // Feature toggles (Settings master switches)
@@ -2394,7 +2428,7 @@ export type AttendanceOverrideRequest = {
 };
 
 /**
- * Submitting an override does NOT apply it immediately — it creates a
+ * Submitting an override does NOT apply it immediately -it creates a
  * pending AttendanceOverrideRequest that a Department Head must approve
  * (via the mobile app) before the attendance record is actually changed.
  * reset=true is the only path that applies instantly (reverts to auto).
@@ -2780,11 +2814,11 @@ export const useDeleteCasualLeave = () => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  Missing Punch (two-stage: Department Head, then HR — same status machine
+//  Missing Punch (two-stage: Department Head, then HR -same status machine
 //  as OnDutySession; HR approval writes a real AttendanceLog row)
 // ═══════════════════════════════════════════════════════════════════════════
 
-// Which of the day's 4 punches this request represents — purely descriptive
+// Which of the day's 4 punches this request represents -purely descriptive
 // (maps onto punchType: morning_in/lunch_in -> IN, lunch_out/evening_out ->
 // OUT). Never the source of truth for real P1-P4 identity, which the
 // attendance engine derives from punch time, not a stored label.
@@ -3813,7 +3847,7 @@ export type RestoreValidateResult = {
   guidedScript: string;
 };
 
-/** Raw fetch + FormData, not customFetch — multipart bodies aren't JSON.
+/** Raw fetch + FormData, not customFetch -multipart bodies aren't JSON.
  * Mirrors ManualPunchImport.tsx's handleUpload exactly. */
 export const uploadRestoreFile = async (file: File, token: string | null): Promise<RestoreValidateResult> => {
   const formData = new FormData();
@@ -3862,7 +3896,7 @@ export const useRestoreStatus = (enabled: boolean) =>
     refetchInterval: (query) => (query.state.data?.active ? 2000 : false),
   });
 
-// ── Chat (HR portal — company channel) ────────────────────────────────────────
+// ── Chat (HR portal -company channel) ────────────────────────────────────────
 
 export type ChatChannelItem = {
   id: number;
@@ -3914,7 +3948,7 @@ export const useSendChatMessage = () => {
 //  Geo Attendance (Office Geo Punch + On-Duty two-stage approval + live tracking)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** The destination-request gate — no photos/GPS at this stage, that
+/** The destination-request gate -no photos/GPS at this stage, that
  * verification now happens per-punch (see OnDutyPunchVerificationItem
  * below). Two-stage HOD->HR chain same as before; approval flips status to
  * "active" (started_at stamped), and the session ends in "completed" either
@@ -3968,7 +4002,7 @@ export const useUpdateOnDutySessionHR = () => {
 };
 
 /** One of the day's (up to 4) attendance punches, captured with a selfie +
- * GPS while a session is active — held pending until HR approves it, then
+ * GPS while a session is active -held pending until HR approves it, then
  * written as a real punch. Single-stage (HR only), unlike the session gate. */
 export type OnDutyPunchVerificationItem = {
   id: number;
@@ -4019,7 +4053,7 @@ export const useUpdateOnDutyPunchVerificationHR = () => {
 };
 
 /** Fetches an auth-protected image (geo-punch photos) and returns a blob
- * object URL — img src can't carry an Authorization header, so this mirrors
+ * object URL -img src can't carry an Authorization header, so this mirrors
  * _fetchPdfBlob's fetch-then-objectURL pattern for images instead. Caller
  * owns revoking the URL when done with it. */
 export const fetchAuthedImageObjectUrl = async (url: string, getToken: () => string | null): Promise<string> => {

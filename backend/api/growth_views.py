@@ -2,7 +2,7 @@
 Growth & Final-Attendance API
 =============================
 • Employee monthly attendance search (weeks 1–5 + totals) with final records
-• HR manual overrides (present/absent, late, half-shift) — become authoritative
+• HR manual overrides (present/absent, late, half-shift) -become authoritative
 • Promotions (designation/department history + promote action)
 • Salary increments (percent-based, history, initial-salary tracking)
 • ID card data + public QR verification endpoint
@@ -89,7 +89,7 @@ def employee_monthly_attendance(request: Request) -> Response:
         w = min(5, (r.date.day - 1) // 7 + 1)
         weeks.setdefault(w, []).append(_record_dict(r))
 
-    # Assigned shift for a representative day this month — this, and only
+    # Assigned shift for a representative day this month -this, and only
     # this, is what drives late/half-shift detection for the employee.
     from calendar import monthrange
     rep_day = date_type(year, month, min(15, monthrange(year, month)[1]))
@@ -232,7 +232,7 @@ def attendance_day_override(request: Request) -> Response:
             firstPunch? ("HH:MM"), lastPunch? ("HH:MM"), note?, reset? }
 
     reset=true reverts the day to auto-computed values immediately (removes
-    a prior manual override — restoring the objective computed truth does
+    a prior manual override -restoring the objective computed truth does
     not require approval).
 
     Any other change is NOT applied directly. It creates a pending
@@ -285,7 +285,7 @@ def attendance_day_override(request: Request) -> Response:
         "ok": True,
         "pendingApproval": True,
         "request": _override_request_dict(req),
-        "record": _record_dict(record),  # unchanged — for UI reference
+        "record": _record_dict(record),  # unchanged -for UI reference
     }, status=202)
 
 
@@ -339,7 +339,7 @@ def promotions(request: Request) -> Response:
             qs = qs.filter(employee__employee_code__iexact=code.strip())
         return Response([_promotion_dict(p) for p in qs[:200]])
 
-    # POST — promote: record history AND apply to the employee
+    # POST -promote: record history AND apply to the employee
     data = request.data
     emp = Employee.objects.filter(id=data.get("employeeId")).first()
     if not emp:
@@ -351,7 +351,7 @@ def promotions(request: Request) -> Response:
         if data.get("newDesignationId") else emp.designation
 
     if new_dept == emp.department and new_desig == emp.designation:
-        return Response({"error": "No change — select a new designation or department"}, status=400)
+        return Response({"error": "No change -select a new designation or department"}, status=400)
 
     try:
         eff = date_type.fromisoformat(str(data.get("effectiveDate")))
@@ -621,7 +621,7 @@ def idcard_data(request: Request) -> Response:
 
 @api_view(["GET"])
 def verify_employee(request: Request, code: str) -> Response:
-    """PUBLIC endpoint hit by the QR code — no auth required."""
+    """PUBLIC endpoint hit by the QR code -no auth required."""
     emp = (
         Employee.objects.filter(employee_code__iexact=code.strip())
         .select_related("department", "designation")
@@ -678,7 +678,7 @@ def email_idcard(request: Request) -> Response:
         return Response({"error": "SMTP is not configured in Settings"}, status=400)
 
     msg = MIMEMultipart()
-    msg["Subject"] = f"Your Employee ID Card — {s.slip_company_name}"
+    msg["Subject"] = f"Your Employee ID Card -{s.slip_company_name}"
     msg["From"] = f"{s.smtp_from_name} <{s.smtp_from_email or s.smtp_username}>"
     msg["To"] = to_email
     msg.attach(MIMEText(
@@ -705,7 +705,7 @@ def email_idcard(request: Request) -> Response:
             server.starttls()
             server.login(s.smtp_username, s.smtp_password)
             server.send_message(msg)
-    except Exception as e:  # noqa: BLE001 — report SMTP failure to the UI
+    except Exception as e:  # noqa: BLE001 -report SMTP failure to the UI
         return Response({"error": f"Email failed: {e}"}, status=502)
 
     return Response({"ok": True, "sentTo": to_email})

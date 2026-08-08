@@ -15,7 +15,7 @@ const FEATURES = [
 
 const TAGLINES = ["HR MANAGEMENT SYSTEM", "PAYROLL & ATTENDANCE", "EMPLOYEE LIFECYCLE"];
 
-/** The real UKTextiles mark — the source PNG carries a busy vignette
+/** The real UKTextiles mark -the source PNG carries a busy vignette
  * outside the oval, so it's cropped tight to just the oval via clip-path
  * rather than shown as-is. */
 function UktMark({ className = "h-10 w-auto" }: { className?: string }) {

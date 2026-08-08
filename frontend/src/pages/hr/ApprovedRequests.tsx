@@ -159,7 +159,7 @@ export default function ApprovedRequests() {
               )}
             </h2>
             <p className="text-muted-foreground text-sm mt-0.5">
-              Leave & Permission requests from the Employee App — auto-refreshes every 30 s
+              Leave & Permission requests from the Employee App -auto-refreshes every 30 s
             </p>
           </div>
           <Button variant="outline" size="sm" className="gap-2" onClick={refresh}>

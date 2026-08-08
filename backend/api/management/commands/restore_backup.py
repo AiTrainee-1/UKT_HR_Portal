@@ -2,7 +2,7 @@
 Restore Backup (CLI, spawned by backup_views.py::backup_restore_run)
 ========================================================================
 Runs the actual full-application restore. Deliberately a separate OS
-process from the Django app that triggered it — the web request's own DB
+process from the Django app that triggered it -the web request's own DB
 connection cannot survive the schema drop this performs, and Postgres DDL
 against a schema other connections are actively using is not something
 that's safe to attempt from inside the request/response cycle.

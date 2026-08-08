@@ -1,5 +1,5 @@
 # Biometric Device Integration Guide
-**UKTextiles HR Portal — eSSL e2008 Face Recognition Terminal**
+**UKTextiles HR Portal -eSSL e2008 Face Recognition Terminal**
 
 ---
 
@@ -33,7 +33,7 @@ The eSSL e2008 does **not** send attendance records in real-time over HTTP. Inst
 │  device memory │                              │                          │
 └────────────────┘                              └──────────────────────────┘
 
-Both on the same LAN — no internet, no HTTPS needed.
+Both on the same LAN -no internet, no HTTPS needed.
 ```
 
 This is called the **Pull approach**. Your server asks the device for records every few minutes. The result is near-real-time attendance (15-minute delay at most).
@@ -48,7 +48,7 @@ The eSSL e2008 firmware has a bug where enabling HTTPS causes infinite restart l
 
 - The device and server are on the **same private LAN**
 - Nobody outside your factory can see this traffic
-- The pull protocol (ZK/ICLOCK over port 4370) does not use HTTP at all — it is a direct TCP connection
+- The pull protocol (ZK/ICLOCK over port 4370) does not use HTTP at all -it is a direct TCP connection
 - HTTP is perfectly safe on a private internal network
 
 Simply leave HTTPS disabled and continue.
@@ -57,7 +57,7 @@ Simply leave HTTPS disabled and continue.
 
 ## Real-Time Push vs Scheduled Pull
 
-The eSSL e2008 does support an HTTP push feature (called ADMS or Cloud Server) but it uses a proprietary ICLOCK/ADMS protocol — not a simple JSON POST. Setting it up requires implementing a different server-side protocol.
+The eSSL e2008 does support an HTTP push feature (called ADMS or Cloud Server) but it uses a proprietary ICLOCK/ADMS protocol -not a simple JSON POST. Setting it up requires implementing a different server-side protocol.
 
 The **pull approach using `pyzk`** is much simpler, works immediately, and gives you attendance data with a delay of whatever interval you choose:
 
@@ -74,7 +74,7 @@ The **pull approach using `pyzk`** is much simpler, works immediately, and gives
 
 ## Step-by-Step Setup
 
-### Step 1 — Find the Device's IP Address
+### Step 1 -Find the Device's IP Address
 
 On the eSSL device:
 
@@ -91,7 +91,7 @@ Write down the IP address. Example: `192.168.0.101`
 > - Gateway: `192.168.0.1` (your router's IP)
 > After changing, the device will restart.
 
-### Step 2 — Confirm the Device is Reachable
+### Step 2 -Confirm the Device is Reachable
 
 From the computer running the Django server, open a command prompt and run:
 
@@ -109,7 +109,7 @@ If you get "Request timed out" or "Destination host unreachable":
 - Make sure the device and computer are on the same network switch / router
 - Check that no firewall is blocking the connection (Windows Defender Firewall → Allow port 4370)
 
-### Step 3 — Set the Device IP in Your .env File
+### Step 3 -Set the Device IP in Your .env File
 
 Open `backend/.env` and replace the placeholder with your actual device IP:
 
@@ -122,7 +122,7 @@ BIOMETRIC_DEVICE_PASSWORD=0
 
 `BIOMETRIC_DEVICE_PASSWORD` is the communication password set on the device. The default is `0` (zero). Unless you changed it in COMM. settings, leave it as `0`.
 
-### Step 4 — Install pyzk
+### Step 4 -Install pyzk
 
 `pyzk` is the Python library that speaks the ZKTeco protocol to the eSSL device.
 
@@ -141,7 +141,7 @@ cd backend
 
 It is already added to `requirements.txt` so future installs are automatic.
 
-### Step 5 — Do the First Full Import (All 55,908 Records)
+### Step 5 -Do the First Full Import (All 55,908 Records)
 
 This pulls all attendance records currently stored on the device. Run it once to populate your database with historical data.
 
@@ -157,7 +157,7 @@ Connecting to eSSL e2008 at 192.168.0.101:4370 ...
   Device returned 55908 total records.
 
   ✓ New records created : 55847
-  — Skipped (duplicate or out of range) : 61
+  -Skipped (duplicate or out of range) : 61
 
   ⚠ 3 device User ID(s) had no matching employee:
     - '0'
@@ -168,9 +168,9 @@ Connecting to eSSL e2008 at 192.168.0.101:4370 ...
   employee_code in the HR Portal (e.g. EMP042).
 ```
 
-After the first import, go to **HR Portal → Attendance** — you should see historical attendance data populated.
+After the first import, go to **HR Portal → Attendance** -you should see historical attendance data populated.
 
-### Step 6 — Set Up Scheduled Sync (Every 15 Minutes)
+### Step 6 -Set Up Scheduled Sync (Every 15 Minutes)
 
 After the first full import, switch to incremental syncs (last 3 days only, fast):
 
@@ -192,7 +192,7 @@ python manage.py sync_biometric --days 3
 9. Start in: `C:\path\to\backend\`
 10. Click **Finish**
 
-**Alternatively — run it in a loop while server is running:**
+**Alternatively -run it in a loop while server is running:**
 
 Create `backend/sync_loop.py`:
 ```python
@@ -214,12 +214,12 @@ python sync_loop.py
 
 The link between the device and HR Portal is the **employee code**. The number you enter as "User ID" on the device must match the `employee_code` in the HR Portal exactly.
 
-### Option A — Add Employee in HR Portal First, Then Enroll on Device
+### Option A -Add Employee in HR Portal First, Then Enroll on Device
 
 This is the recommended workflow for new employees:
 
 1. Go to **HR Portal → Employees → Add Employee**
-2. Set the Employee Code (e.g., `EMP042` or `42` — your choice, keep it consistent)
+2. Set the Employee Code (e.g., `EMP042` or `42` -your choice, keep it consistent)
 3. Save the employee
 
 4. On the eSSL device, tap **Main Menu → User Mgt. → New User**
@@ -232,13 +232,13 @@ This is the recommended workflow for new employees:
    ```bash
    python manage.py sync_biometric --today
    ```
-   Check **HR Portal → Attendance → Today** — employee should appear.
+   Check **HR Portal → Attendance → Today** -employee should appear.
 
-### Option B — You Already Have 266 Employees on the Device
+### Option B -You Already Have 266 Employees on the Device
 
 Since you already have 266 enrolled employees, you need to match their device User IDs to the HR Portal employee codes.
 
-**Step 1 — Export users from the device:**
+**Step 1 -Export users from the device:**
 
 On the eSSL device:
 1. Insert a USB flash drive
@@ -247,7 +247,7 @@ On the eSSL device:
 
 This creates a file (usually `USER.CSV` or similar) with columns: `User ID`, `Name`.
 
-**Step 2 — Check what User IDs they have:**
+**Step 2 -Check what User IDs they have:**
 
 Open the CSV. The `User ID` column is what you need to match.
 
@@ -255,7 +255,7 @@ Common patterns:
 - If device has `1, 2, 3, 4...` → These are numeric IDs
 - If device has `EMP001, EMP002...` → These are already employee codes
 
-**Step 3 — Reconcile with HR Portal:**
+**Step 3 -Reconcile with HR Portal:**
 
 Run the first sync with `--all` and read the "no matching employee" warnings:
 ```bash
@@ -272,7 +272,7 @@ After reconciling, run sync again. The warnings should disappear.
 
 ## Database Tables Written by the Sync
 
-### `attendance_logs` — One row per punch
+### `attendance_logs` -One row per punch
 
 | Column | Example | Description |
 |---|---|---|
@@ -282,7 +282,7 @@ After reconciling, run sync again. The warnings should disappear.
 | `punch_type` | `IN` or `OUT` | Check-in or Check-out |
 | `source` | `biometric:essl:192.168.0.101` | Always `biometric:essl:<device_ip>` for device syncs |
 
-### `attendance` — Daily summary (one row per employee per day)
+### `attendance` -Daily summary (one row per employee per day)
 
 | Column | Example | Description |
 |---|---|---|
@@ -301,7 +301,7 @@ python manage.py sync_biometric
 # Pull last N days
 python manage.py sync_biometric --days 7
 
-# Pull today only (fastest — good for frequent runs)
+# Pull today only (fastest -good for frequent runs)
 python manage.py sync_biometric --today
 
 # Pull ALL records from device (first-time full import only)

@@ -111,14 +111,14 @@ function buildReasonNarrative(candidate: ScreeningCandidateItem): string[] {
   const lines: string[] = [];
 
   const fitLabel = b.total >= 75 ? "a strong match" : b.total >= 50 ? "a moderate match" : "a weak match";
-  lines.push(`Overall match score: ${b.total.toFixed(0)}/100 — ${fitLabel} for this rule set.`);
+  lines.push(`Overall match score: ${b.total.toFixed(0)}/100 -${fitLabel} for this rule set.`);
 
   const sk = b.components.skills;
   const totalSkills = sk.matched.length + sk.missing.length;
   if (totalSkills > 0) {
     lines.push(
       sk.missing.length === 0
-        ? `Required skills: matched all ${sk.matched.length} required skill(s) — ${sk.matched.join(", ")}.`
+        ? `Required skills: matched all ${sk.matched.length} required skill(s) -${sk.matched.join(", ")}.`
         : `Required skills: matched ${sk.matched.length} of ${totalSkills} (${sk.matched.join(", ") || "none"}). Missing: ${sk.missing.join(", ")}.`
     );
   }
@@ -137,7 +137,7 @@ function buildReasonNarrative(candidate: ScreeningCandidateItem): string[] {
   if (exp.extracted == null) {
     lines.push(`Experience: could not detect years of experience from the resume${exp.required > 0 ? ` (required: ${exp.required}+ years).` : "."}`);
   } else if (exp.required <= 0) {
-    lines.push(`Experience: candidate has ${exp.extracted} year(s) — no minimum was required for this rule set.`);
+    lines.push(`Experience: candidate has ${exp.extracted} year(s) -no minimum was required for this rule set.`);
   } else if (exp.extracted >= exp.required) {
     lines.push(`Experience: candidate has ${exp.extracted} year(s), meeting or exceeding the required ${exp.required}+ years.`);
   } else {
@@ -171,7 +171,7 @@ function buildReasonNarrative(candidate: ScreeningCandidateItem): string[] {
   } else if (candidate.status === "not_shortlisted") {
     lines.push(
       candidate.rankInBatch != null
-        ? `Not shortlisted: ranked #${candidate.rankInBatch} by match score — outside the requested shortlist size for this batch.`
+        ? `Not shortlisted: ranked #${candidate.rankInBatch} by match score -outside the requested shortlist size for this batch.`
         : "Not shortlisted."
     );
   } else if (candidate.status === "selected") {
@@ -290,7 +290,7 @@ function RuleSetDialog({ ruleSet, onClose }: { ruleSet: HiringRuleSetItem | null
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
             <Label className="text-xs">Rule Set Name</Label>
-            <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Stitching Operator — Unit 1" />
+            <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Stitching Operator -Unit 1" />
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">Department</Label>
@@ -330,7 +330,7 @@ function RuleSetDialog({ ruleSet, onClose }: { ruleSet: HiringRuleSetItem | null
               <Input
                 value={softSkillInput} onChange={e => setSoftSkillInput(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addSoftSkill(); } }}
-                placeholder="e.g. Communication, Teamwork — press Enter"
+                placeholder="e.g. Communication, Teamwork -press Enter"
               />
               <Button type="button" variant="outline" onClick={addSoftSkill}><Plus size={14} /></Button>
             </div>
@@ -397,7 +397,7 @@ function RulesTab() {
     } catch (err) {
       toast({
         title: "Couldn't delete this rule set",
-        description: err instanceof Error ? err.message : "It may already have screened candidates — try deactivating instead.",
+        description: err instanceof Error ? err.message : "It may already have screened candidates -try deactivating instead.",
         variant: "destructive",
       });
     }
@@ -463,7 +463,7 @@ function RulesTab() {
                 onClick={() => toggleActive(rs)}
                 className={`text-[11px] font-semibold ${rs.isActive ? "text-emerald-600" : "text-gray-400"}`}
               >
-                {rs.isActive ? "● Active — click to deactivate" : "○ Inactive — click to reactivate"}
+                {rs.isActive ? "● Active -click to deactivate" : "○ Inactive -click to reactivate"}
               </button>
             </CardContent>
           </Card>
@@ -528,7 +528,7 @@ function UploadResumeTab() {
               <SelectTrigger><SelectValue placeholder="Select rule set" /></SelectTrigger>
               <SelectContent>
                 {(ruleSets ?? []).map(rs => (
-                  <SelectItem key={rs.id} value={String(rs.id)}>{rs.name} — {rs.departmentName}</SelectItem>
+                  <SelectItem key={rs.id} value={String(rs.id)}>{rs.name} -{rs.departmentName}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -585,17 +585,17 @@ function HowItWorksCard() {
     },
     {
       title: "2. The system reads and scores it",
-      description: "Name, email, phone, city, skills, education and experience are extracted automatically, then compared against the rule set's requirements — matched skills, education level, experience years, and location are each scored and combined into one overall match score.",
+      description: "Name, email, phone, city, skills, education and experience are extracted automatically, then compared against the rule set's requirements -matched skills, education level, experience years, and location are each scored and combined into one overall match score.",
       icon: <UserSearch size={16} />,
     },
     {
       title: "3. Review the breakdown",
-      description: "Every score comes with a full breakdown — click \"Reason\" on any candidate at any time to see exactly what matched, what's missing, and why they were shortlisted, selected, or rejected.",
+      description: "Every score comes with a full breakdown -click \"Reason\" on any candidate at any time to see exactly what matched, what's missing, and why they were shortlisted, selected, or rejected.",
       icon: <Info size={16} />,
     },
     {
       title: "4. Add to Shortlist",
-      description: "If the candidate looks like a good fit, add them to the Shortlisted list — from there you can mark them Selected (and send an interview invite) or Rejected (and send a rejection email) in the Candidate Pipeline tab.",
+      description: "If the candidate looks like a good fit, add them to the Shortlisted list -from there you can mark them Selected (and send an interview invite) or Rejected (and send a rejection email) in the Candidate Pipeline tab.",
       icon: <CheckCircle2 size={16} />,
     },
   ];
@@ -617,7 +617,7 @@ function HowItWorksCard() {
           </div>
         ))}
         <p className="text-xs text-muted-foreground pt-2 border-t border-violet-100/70">
-          For screening many resumes at once, use the <strong>Bulk Resume Upload</strong> tab — you'll be able to set how many top candidates to automatically shortlist.
+          For screening many resumes at once, use the <strong>Bulk Resume Upload</strong> tab -you'll be able to set how many top candidates to automatically shortlist.
         </p>
       </CardContent>
     </Card>
@@ -699,7 +699,7 @@ function BulkUploadTab() {
                 <SelectTrigger><SelectValue placeholder="Select rule set" /></SelectTrigger>
                 <SelectContent>
                   {(ruleSets ?? []).map(rs => (
-                    <SelectItem key={rs.id} value={String(rs.id)}>{rs.name} — {rs.departmentName}</SelectItem>
+                    <SelectItem key={rs.id} value={String(rs.id)}>{rs.name} -{rs.departmentName}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -768,7 +768,7 @@ function InterviewInviteDialog({ mode, onClose, onSent }: {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <CalendarClock size={16} className="text-indigo-600" />
-            {mode.type === "single" ? `Schedule Interview — ${mode.candidate.candidateName ?? "Candidate"}` : "Schedule Interviews for All Selected"}
+            {mode.type === "single" ? `Schedule Interview -${mode.candidate.candidateName ?? "Candidate"}` : "Schedule Interviews for All Selected"}
           </DialogTitle>
         </DialogHeader>
         <div className="py-2 space-y-2">
@@ -804,7 +804,7 @@ function CandidateCard({ candidate, actions }: { candidate: ScreeningCandidateIt
         <div className="flex items-start justify-between gap-2">
           <div>
             <p className="font-bold text-sm">{candidate.candidateName ?? candidate.originalFilename}</p>
-            <p className="text-xs text-muted-foreground">{candidate.ruleSetName} — {candidate.departmentName}</p>
+            <p className="text-xs text-muted-foreground">{candidate.ruleSetName} -{candidate.departmentName}</p>
           </div>
           <ScoreBadge score={candidate.matchScore} />
         </div>

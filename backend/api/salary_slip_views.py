@@ -89,7 +89,7 @@ def slip_json(s: SalarySlip, include_settings: bool = False) -> dict:
 def _filtered_slip_qs(request: Request, params=None):
     """
     Shared queryset filter behind both the Salary Slip list endpoint and the
-    bulk download/email endpoints — bulk operations always act on exactly the
+    bulk download/email endpoints -bulk operations always act on exactly the
     same filtered set the HR user sees on the Salary Slip page.
 
     `params` defaults to the GET query string (`request.query_params`); the
@@ -166,7 +166,7 @@ def salary_slip_detail(request: Request, pk: int) -> Response:
 def _send_slip_email(s: SalarySlip, ps: PayrollSettings, to_email: str | None = None) -> tuple[bool, str]:
     """
     Send one salary slip's email. Returns (ok, sentTo) on success or
-    (False, errorMessage) on failure — shared by the single-employee and
+    (False, errorMessage) on failure -shared by the single-employee and
     bulk email endpoints so they never diverge in behavior.
     """
     emp = s.employee
@@ -183,7 +183,7 @@ def _send_slip_email(s: SalarySlip, ps: PayrollSettings, to_email: str | None = 
       <div style="background:#0E4B3A;padding:20px;text-align:center;border-radius:8px 8px 0 0">
         <h1 style="color:white;margin:0;font-size:18px">{company_name.upper()}</h1>
         <p style="color:rgba(255,255,255,0.8);margin:4px 0 0;font-size:12px">
-          Salary Slip — {MONTHS[s.month]} {s.year}
+          Salary Slip -{MONTHS[s.month]} {s.year}
         </p>
       </div>
       <div style="background:#ffffff;padding:30px;border:1px solid #d8e5df;border-top:none">
@@ -291,7 +291,7 @@ def salary_slip_bulk_pdf(request: Request) -> Response:
 def salary_slip_bulk_email(request: Request) -> Response:
     """
     POST /api/salary-slips/bulk-email
-    Body: { month, year, employmentType?, weekNumber? } — same filters as the
+    Body: { month, year, employmentType?, weekNumber? } -same filters as the
     list endpoint. Emails every matching slip to its employee's address.
     """
     from . import salary_slip_bulk_progress as progress

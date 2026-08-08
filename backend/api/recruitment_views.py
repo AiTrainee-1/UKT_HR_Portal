@@ -339,7 +339,7 @@ def resignation_action(request: Request, pk: int) -> Response:
     # HR can only APPROVE if dept head has already approved
     if action == "approve" and r.status != "dept_approved":
         return _error(
-            "Cannot approve yet — the Department Head must review first. HR can only give final approval after the Department Head approves.",
+            "Cannot approve yet -the Department Head must review first. HR can only give final approval after the Department Head approves.",
             400,
         )
 
@@ -400,7 +400,7 @@ def my_resignation(request: Request) -> Response:
             return Response(None)
         return Response(_resignation_json(r))
 
-    # POST — employee submits a new resignation
+    # POST -employee submits a new resignation
     # Block if there is already a pending or dept_approved resignation
     existing = ResignationRequest.objects.filter(
         employee_id=employee_id,

@@ -1,5 +1,5 @@
 """
-System Settings — Biometric Devices & ID Card Template
+System Settings -Biometric Devices & ID Card Template
 ========================================================
 Extensible device configuration (no code changes needed to add a new
 biometric device model) and a customizable employee ID card template,
@@ -53,7 +53,7 @@ def _env_device_dict() -> dict | None:
         "isDefault": False,
         "isEnv": True,
         "lastSyncedAt": None,
-        "notes": "Configured in backend/.env — edit the file to change it.",
+        "notes": "Configured in backend/.env -edit the file to change it.",
         "createdAt": None,
     }
 
@@ -150,7 +150,7 @@ def _idcard_settings_dict(s: IdCardSettings) -> dict:
 def idcard_settings_view(request: Request) -> Response:
     s = IdCardSettings.get()
     if request.method == "GET":
-        # Read-only template info — any authenticated user (mobile employees
+        # Read-only template info -any authenticated user (mobile employees
         # need this to render their own ID card). Editing stays HR-only.
         return Response(_idcard_settings_dict(s))
 

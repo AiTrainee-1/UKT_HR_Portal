@@ -298,7 +298,7 @@ export default function Increment() {
               <Card className="border-2 border-green-100">
                 <CardHeader className="pb-3 pt-4 px-4">
                   <CardTitle className="text-sm font-bold flex items-center gap-2 text-green-700">
-                    <TrendingUp size={14} /> Add Salary Increment — {data.employee.name}
+                    <TrendingUp size={14} /> Add Salary Increment -{data.employee.name}
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="px-4 pb-4 space-y-4">

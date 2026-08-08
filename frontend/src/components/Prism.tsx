@@ -20,7 +20,7 @@ export interface PrismProps {
   timeScale?: number;
 }
 
-/** Animated WebGL prism background (via ogl). Purely decorative — renders
+/** Animated WebGL prism background (via ogl). Purely decorative -renders
  * into its own canvas and cleans itself up on unmount. */
 export default function Prism({
   height = 3.5,

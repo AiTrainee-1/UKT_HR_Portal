@@ -1,5 +1,5 @@
 """
-HR Reports — all endpoints return JSON { count, results }.
+HR Reports -all endpoints return JSON { count, results }.
 Frontend handles table rendering and Excel export via exceljs.
 """
 import calendar

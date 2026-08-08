@@ -132,7 +132,7 @@ function SegmentRow({ segment, onSave, onDelete }: {
       <span className="text-xs text-muted-foreground">–</span>
       <Input className="h-8 text-xs w-28" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
       <Input className="h-8 text-xs w-20" type="number" step="0.25" value={shiftValue} onChange={(e) => setShiftValue(Number(e.target.value))} />
-      <div className="flex items-center gap-1.5 shrink-0" title={segment.isActive ? "Segment is counted in shift calculation — switch off to exclude it" : "Segment is EXCLUDED from shift calculation — switch on to count it"}>
+      <div className="flex items-center gap-1.5 shrink-0" title={segment.isActive ? "Segment is counted in shift calculation -switch off to exclude it" : "Segment is EXCLUDED from shift calculation -switch on to count it"}>
         <Switch checked={segment.isActive} onCheckedChange={(v) => onSave({ isActive: v })} />
         <span className={`text-[10px] font-bold w-11 ${segment.isActive ? "text-green-600" : "text-red-500"}`}>
           {segment.isActive ? "ON" : "OFF"}

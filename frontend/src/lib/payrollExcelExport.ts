@@ -1,13 +1,13 @@
 import ExcelJS from "exceljs";
 import type { PayrollRunItem } from "@/lib/api-client/custom-hooks";
 
-// Shared by both the Payroll page and the Salary page — one implementation,
+// Shared by both the Payroll page and the Salary page -one implementation,
 // so "same Excel format" is a fact of the code, not a rule someone has to
 // remember to keep in sync by hand.
 
 // Bank transfer amounts must never carry stray floating-point noise (e.g. a
 // stored 8000 rupee salary surfacing as 7999.9999999998 after Decimal→float
-// JSON conversion). Round to the nearest paisa — real paise are preserved,
+// JSON conversion). Round to the nearest paisa -real paise are preserved,
 // noise is not.
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
@@ -22,7 +22,7 @@ export async function exportPayrollToExcel(
   wb.creator = "UKTextiles HRMS";
   const ws = wb.addWorksheet(sheetLabel.substring(0, 31));
 
-  // Column definitions — widths match the bank template
+  // Column definitions -widths match the bank template
   ws.columns = [
     { key: "A", width: 18 },  // Txn type
     { key: "B", width: 22 },  // Beneficiary Code
@@ -77,15 +77,15 @@ export async function exportPayrollToExcel(
   // ── Data rows ────────────────────────────────────────────────────────────
   for (const r of runs) {
     const dataRow = ws.addRow([
-      "",                                       // Txn type — blank
-      "",                                       // Beneficiary Code — blank
+      "",                                       // Txn type -blank
+      "",                                       // Beneficiary Code -blank
       (r.bankAccount || "").toUpperCase(),      // Bene A/c No
-      roundMoney(r.finalSalary),                // Amount (numeric, exact — no float noise)
+      roundMoney(r.finalSalary),                // Amount (numeric, exact -no float noise)
       (r.employeeName || "").toUpperCase(),     // Beneficiary Name
       (r.bankIfsc || "").toUpperCase(),         // IFSC code
       (r.bankName || "").toUpperCase(),         // Bene Bank Name
-      "",                                       // Branch Name — blank
-      "",                                       // Email — blank
+      "",                                       // Branch Name -blank
+      "",                                       // Email -blank
     ]);
     dataRow.height = 16;
     dataRow.eachCell({ includeEmpty: true }, cell => styleData(cell));

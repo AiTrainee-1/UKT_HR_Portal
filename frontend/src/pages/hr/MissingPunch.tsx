@@ -21,7 +21,7 @@ const STAGE_LABEL: Record<string, string> = {
   rejected: "Rejected",
 };
 
-// Mirrors the employee-facing apps — purely descriptive, never the source of
+// Mirrors the employee-facing apps -purely descriptive, never the source of
 // truth for real P1-P4 identity (the attendance engine derives that from
 // punch time, not a stored label).
 const PUNCH_SLOT_LABEL: Record<MissingPunchSlot, string> = {
@@ -91,23 +91,23 @@ export default function MissingPunch() {
         {r.hodReviewedBy && (
           <p className="text-[11px] text-gray-400 mt-1.5">
             HOD: {r.status === "rejected" && !r.hrReviewedBy ? "rejected" : "approved"} by {r.hodReviewedBy}
-            {r.hodReviewComment ? ` — "${r.hodReviewComment}"` : ""}
+            {r.hodReviewComment ? ` -"${r.hodReviewComment}"` : ""}
           </p>
         )}
         {r.hrReviewedBy && (
           <p className="text-[11px] text-gray-400">
             HR: {r.status === "rejected" ? "rejected" : "approved"} by {r.hrReviewedBy}
-            {r.hrReviewComment ? ` — "${r.hrReviewComment}"` : ""}
+            {r.hrReviewComment ? ` -"${r.hrReviewComment}"` : ""}
           </p>
         )}
         {r.status === "pending_hod" && (
           <p className="text-[11px] text-amber-600 mt-1">
-            No Department Head has acted yet — HR can only approve once the Department Head approves first.
+            No Department Head has acted yet -HR can only approve once the Department Head approves first.
           </p>
         )}
         {r.status === "approved" && (
           <p className="text-[11px] text-green-600 mt-1">
-            Added to attendance as a real punch (source: Missing Punch) — flows through the normal attendance engine.
+            Added to attendance as a real punch (source: Missing Punch) -flows through the normal attendance engine.
           </p>
         )}
       </div>
@@ -138,7 +138,7 @@ export default function MissingPunch() {
         <div>
           <h2 className="text-2xl font-black text-gray-900">Missing Punch</h2>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Employee-reported forgotten punches — Department Head approves first, then HR gives final approval.
+            Employee-reported forgotten punches -Department Head approves first, then HR gives final approval.
           </p>
         </div>
 
@@ -168,7 +168,7 @@ export default function MissingPunch() {
           <span>
             Requests are submitted from the employee mobile/web app with a date, time and reason.
             The <strong>Department Head</strong> approves first (mobile, when "Can approve missing punch" is
-            enabled in User Management) — only after that can <strong>HR</strong> give final approval here.
+            enabled in User Management) -only after that can <strong>HR</strong> give final approval here.
             Once HR approves, the punch is written to attendance and flows through the normal engine
             (punch-order rules, punctuality window, cross-midnight logic) exactly like a real biometric punch.
           </span>

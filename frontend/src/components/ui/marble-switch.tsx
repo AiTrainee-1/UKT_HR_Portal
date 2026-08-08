@@ -1,4 +1,4 @@
-// Toggle switch supplied by the user (styled-components snippet) — ported to
+// Toggle switch supplied by the user (styled-components snippet) -ported to
 // plain CSS classes in index.css since this codebase has no styled-components
 // dependency (same approach as SpeederLoader.tsx), rescaled for compact
 // inline use, and made controlled (checked/onChange/id) for list contexts

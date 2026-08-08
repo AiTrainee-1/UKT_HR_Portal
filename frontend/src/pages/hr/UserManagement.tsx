@@ -361,7 +361,7 @@ function ManagerDetailDialog({
             <div>
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
                 Individual Employees ({manager.assignedEmployees?.length ?? 0})
-                <span className="font-normal text-gray-400 ml-1">— cross-department assignments</span>
+                <span className="font-normal text-gray-400 ml-1">-cross-department assignments</span>
               </p>
               <div className="space-y-1.5 mb-2">
                 {(manager.assignedEmployees ?? []).length === 0 ? (
@@ -498,7 +498,7 @@ export default function UserManagement() {
           <div>
             <h2 className="text-2xl font-black text-gray-900">User Management</h2>
             <p className="text-muted-foreground text-sm mt-0.5">
-              Assign employees as department approvers — they receive and action leave & permission
+              Assign employees as department approvers -they receive and action leave & permission
               requests from their team via the mobile app
             </p>
           </div>

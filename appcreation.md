@@ -1,4 +1,4 @@
-# UKTextiles — Employee Mobile App Architecture & Integration Plan
+# UKTextiles -Employee Mobile App Architecture & Integration Plan
 
 > **Purpose:** This document provides the complete blueprint for building the UKTextiles Employee Mobile Application that integrates seamlessly with the HR Web Portal.
 > **Target Developer:** Use this document as the sole source of truth when building the mobile app.
@@ -10,7 +10,7 @@
 | Property | Value |
 |---|---|
 | **App Name** | UKTextiles Employee |
-| **Platform** | React Native (Expo) — Android + iOS |
+| **Platform** | React Native (Expo) -Android + iOS |
 | **Target Users** | All employees (production + staff) |
 | **Backend** | Django REST Framework (same HR Portal backend) |
 | **Auth** | JWT Token-based (same JWT system) |
@@ -358,7 +358,7 @@ Write operations (leave applications, requests):
 
 Offline banner:
 - Use @react-native-community/netinfo
-- Show yellow banner when offline: "You're offline — showing cached data"
+- Show yellow banner when offline: "You're offline -showing cached data"
 ```
 
 ---
@@ -375,7 +375,7 @@ Events that trigger push notifications:
 
 Setup:
 - Expo Push Notifications
-- Token stored in Employee model (expo_push_token field — add to backend)
+- Token stored in Employee model (expo_push_token field -add to backend)
 - Backend sends via Expo Push API after status changes
 
 Backend endpoint to save token:
@@ -391,7 +391,7 @@ Body: { token: string }
 1. Token Storage: Always use expo-secure-store (encrypted), never AsyncStorage
 2. Certificate Pinning: Enable for production (prevent MITM)
 3. No sensitive data in logs
-4. Biometric unlock: Optional — use expo-local-authentication
+4. Biometric unlock: Optional -use expo-local-authentication
 5. Auto-logout after 8 hours of inactivity
 6. All API calls over HTTPS in production
 7. Jailbreak/Root detection: expo-device (warn user, don't block)
@@ -424,14 +424,14 @@ Use the following prompt when starting the mobile app development session:
 ---
 
 ```
-Build a React Native (Expo) Employee Self-Service App for UKTextiles — a garments manufacturing company.
+Build a React Native (Expo) Employee Self-Service App for UKTextiles -a garments manufacturing company.
 
 COMPANY: UKTextiles | Website: https://uktextiles.in
 APP NAME: UKTextiles Employee
 PLATFORM: React Native + Expo (SDK 52+), TypeScript, Expo Router
 
 BACKEND: Django REST Framework running at http://[SERVER_IP]:8080/api
-AUTH: JWT Bearer token — stored in expo-secure-store
+AUTH: JWT Bearer token -stored in expo-secure-store
 TOKEN KEY: "uk_textile_token"
 
 LOGIN:
@@ -440,25 +440,25 @@ LOGIN:
 - Response: { token, employeeId, name, role: "employee" }
 
 SCREENS (5 bottom tabs):
-1. Home — welcome card, today attendance, leave balance, last salary, quick actions
-2. Attendance — monthly calendar (color-coded), punch times, working hours
-3. Leave — balance by type, apply leave form, history list
-4. Salary — salary slip history, detail view with earnings/deductions breakdown
-5. Profile — personal info, contact, bank details (masked), shift info
+1. Home -welcome card, today attendance, leave balance, last salary, quick actions
+2. Attendance -monthly calendar (color-coded), punch times, working hours
+3. Leave -balance by type, apply leave form, history list
+4. Salary -salary slip history, detail view with earnings/deductions breakdown
+5. Profile -personal info, contact, bank details (masked), shift info
 
 ADDITIONAL SCREENS:
-- Requests — submit leave/advance/correction/general queries, track status
-- Notifications — HR alerts and announcements
+- Requests -submit leave/advance/correction/general queries, track status
+- Notifications -HR alerts and announcements
 
 KEY APIS:
-- GET /api/employees/{id} — profile
-- GET /api/attendance-logs?employeeId=X&dateFrom=Y&dateTo=Z — punch logs
-- GET /api/leave-types — leave type list
-- GET /api/leave-balances?employeeId=X&year=Y — leave balances
-- POST /api/leave-requests — apply leave
-- GET /api/my/salary-slips — salary slips (token auth)
-- POST /api/employee-requests — submit request
-- GET /api/notifications?employeeId=X — notifications
+- GET /api/employees/{id} -profile
+- GET /api/attendance-logs?employeeId=X&dateFrom=Y&dateTo=Z -punch logs
+- GET /api/leave-types -leave type list
+- GET /api/leave-balances?employeeId=X&year=Y -leave balances
+- POST /api/leave-requests -apply leave
+- GET /api/my/salary-slips -salary slips (token auth)
+- POST /api/employee-requests -submit request
+- GET /api/notifications?employeeId=X -notifications
 
 UI REQUIREMENTS:
 - Clean, modern mobile UI

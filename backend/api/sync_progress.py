@@ -1,7 +1,7 @@
 """
 In-process progress tracker for the biometric sync pipeline UI.
 
-Purely observational — nothing here participates in connecting to devices or
+Purely observational -nothing here participates in connecting to devices or
 pulling attendance (that logic lives untouched in biometric_sync.py). The
 sync view calls the three functions below immediately before/after processing
 each device so the frontend can poll /attendance/sync-progress and render a

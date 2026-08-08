@@ -25,7 +25,7 @@ const HOURS = Array.from({ length: 12 }, (_, i) => String(i + 1));
 const MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0"));
 
 /** 12-hour AM/PM time picker (hour / minute / meridiem selects) that stores
- * and emits a 24-hour "HH:MM" string — the wire format every request
+ * and emits a 24-hour "HH:MM" string -the wire format every request
  * endpoint already expects. Only the picker UI is 12-hour; nothing about
  * what gets sent to the backend changes. */
 export function TimePicker12h({

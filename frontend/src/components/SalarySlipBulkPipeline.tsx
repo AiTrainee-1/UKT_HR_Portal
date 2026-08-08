@@ -2,7 +2,7 @@ import { CheckCircle2, Loader2, X, Mail, FileStack, AlertTriangle } from "lucide
 import type { SalarySlipBulkProgress } from "@/lib/api-client/custom-hooks";
 
 // Visual-only progress bar for Salary Slip bulk download / bulk email,
-// mirroring PayrollGenerationPipeline's role and layout — purely reflects
+// mirroring PayrollGenerationPipeline's role and layout -purely reflects
 // the `data` prop (owned by SalarySlipBulkContext, which owns the actual
 // trigger + polling). Never drives the operation itself.
 export default function SalarySlipBulkPipeline({ active, data, onDismiss }: {

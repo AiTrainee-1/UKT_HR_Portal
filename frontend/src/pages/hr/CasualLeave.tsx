@@ -35,7 +35,7 @@ export default function CasualLeave() {
   const [year, setYear] = useState(now.getFullYear());
   const [tab, setTab] = useState("pending");
 
-  // "Apply on behalf" dialog — carries the eligibility reason so HR sees
+  // "Apply on behalf" dialog -carries the eligibility reason so HR sees
   // immediately why an employee can't get another CL, instead of finding out
   // only after clicking Submit.
   const [applyFor, setApplyFor] = useState<{ employeeId: number; name: string; eligible: boolean; reason?: string | null } | null>(null);
@@ -99,13 +99,13 @@ export default function CasualLeave() {
         </div>
         <p className="text-xs text-gray-500 mt-0.5">
           <strong className="font-mono">{l.date}</strong>
-          {l.reason ? ` — ${l.reason}` : ""}
+          {l.reason ? ` -${l.reason}` : ""}
         </p>
         {l.reviewedBy && (
           <p className="text-[11px] text-gray-400 mt-0.5">
             {l.status === "approved" ? "Approved" : "Rejected"} by {l.reviewedBy}
             {l.reviewerRole === "dept_head" ? " (Dept Head)" : " (HR)"}
-            {l.reviewComment ? ` — ${l.reviewComment}` : ""}
+            {l.reviewComment ? ` -${l.reviewComment}` : ""}
           </p>
         )}
       </div>
@@ -240,7 +240,7 @@ export default function CasualLeave() {
               <CardHeader className="pb-3 pt-4 px-4">
                 <CardTitle className="text-sm font-bold flex items-center gap-2">
                   <ShieldCheck size={14} className="text-blue-500" />
-                  CL Eligibility — {MONTH_NAMES[month - 1]} {year}
+                  CL Eligibility -{MONTH_NAMES[month - 1]} {year}
                 </CardTitle>
                 <p className="text-xs text-muted-foreground">
                   Staff employees only. Eligibility requires {eligibility?.eligibilityMonths ?? 6}+ months of service
@@ -315,7 +315,7 @@ export default function CasualLeave() {
       <Dialog open={!!applyFor} onOpenChange={open => { if (!open) setApplyFor(null); }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>Apply Casual Leave — {applyFor?.name}</DialogTitle>
+            <DialogTitle>Apply Casual Leave -{applyFor?.name}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 pt-1">
             {applyFor && !applyFor.eligible && (
@@ -347,7 +347,7 @@ export default function CasualLeave() {
               </Button>
             </div>
             <p className="text-[10px] text-muted-foreground -mt-1">
-              The request starts as Pending — approve it from the Pending tab (or the Department Head
+              The request starts as Pending -approve it from the Pending tab (or the Department Head
               can approve it on mobile).
             </p>
           </div>

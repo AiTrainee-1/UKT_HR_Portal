@@ -1,5 +1,5 @@
 // Loading animation supplied by the user for the Employee Attendance Search
-// section (Staff/Production Attendance pages) — ported from their
+// section (Staff/Production Attendance pages) -ported from their
 // styled-components snippet to a scoped <style> tag (same reasoning as
 // SpeederLoader: this codebase doesn't depend on styled-components).
 // Customized per the user's request: "UKTextiles" is static, and the

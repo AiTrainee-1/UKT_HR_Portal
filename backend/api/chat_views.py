@@ -9,7 +9,7 @@ department channel: employee.department_id must equal channel.department_id,
 or the request gets 403. This is the one rule that actually keeps one
 department's conversation private from another.
 
-No WebSockets — the mobile app polls GET .../messages every ~4s, which is
+No WebSockets -the mobile app polls GET .../messages every ~4s, which is
 plenty responsive at this company's scale and needs no extra infrastructure.
 """
 

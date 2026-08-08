@@ -26,7 +26,7 @@ class Migration(migrations.Migration):
                 ('started_at', models.DateTimeField(blank=True, db_column='started_at', null=True)),
                 ('completed_at', models.DateTimeField(blank=True, db_column='completed_at', null=True)),
                 ('completed_by', models.TextField(blank=True, db_column='completed_by', null=True)),
-                ('completion_reason', models.TextField(blank=True, choices=[('manual', 'Manual — Employee Marked Done'), ('auto_4th_punch', 'Automatic — 4th Punch Approved')], db_column='completion_reason', null=True)),
+                ('completion_reason', models.TextField(blank=True, choices=[('manual', 'Manual -Employee Marked Done'), ('auto_4th_punch', 'Automatic -4th Punch Approved')], db_column='completion_reason', null=True)),
                 ('created_at', models.DateTimeField(auto_now_add=True, db_column='created_at')),
                 ('branch', models.ForeignKey(blank=True, db_column='branch_id', null=True, on_delete=django.db.models.deletion.SET_NULL, to='api.branch')),
                 ('employee', models.ForeignKey(db_column='employee_id', on_delete=django.db.models.deletion.CASCADE, related_name='on_duty_sessions', to='api.employee')),

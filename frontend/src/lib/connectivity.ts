@@ -1,5 +1,5 @@
 /**
- * Global connectivity state — set by the shared fetch layer (custom-fetch.ts)
+ * Global connectivity state -set by the shared fetch layer (custom-fetch.ts)
  * whenever a request fails at the network level (backend/server/domain
  * unreachable) or the backend reports its database is down. Read anywhere
  * via useConnectivity(); ConnectivityOverlay renders the full-screen takeover

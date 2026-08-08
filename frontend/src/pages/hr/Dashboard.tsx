@@ -193,7 +193,7 @@ export default function HrDashboard() {
   const year  = now.getFullYear();
 
   // Holidays and audit stats are always-readable aggregate data (see backend
-  // permission_middleware.py ALWAYS_READABLE_GET_PREFIXES) — but advances and
+  // permission_middleware.py ALWAYS_READABLE_GET_PREFIXES) -but advances and
   // pending permissions are full sensitive records reused here just for a
   // Dashboard count, so those two are only fetched when the viewer actually
   // has access to Settlement / Requests respectively.
@@ -514,7 +514,7 @@ export default function HrDashboard() {
             <SectionTitle action="View Payroll" onAction={() => navigate("/hr/payroll")}>
               <span className="flex items-center gap-1.5">
                 <TrendingUp size={12} style={{ color: "#006496" }} />
-                Salary Cost — Last 12 Months
+                Salary Cost -Last 12 Months
               </span>
             </SectionTitle>
             {salaryTrend.length > 0 ? (
@@ -556,7 +556,7 @@ export default function HrDashboard() {
             <SectionTitle action="View Attendance" onAction={() => navigate("/hr/attendance")}>
               <span className="flex items-center gap-1.5">
                 <Activity size={12} style={{ color: "#006496" }} />
-                This Month — Daily Trend
+                This Month -Daily Trend
               </span>
             </SectionTitle>
             {trendData.length > 0 ? (
@@ -741,7 +741,7 @@ export default function HrDashboard() {
           <SectionTitle action="Open Geo Attendance" onAction={() => navigate("/hr/geo-attendance")}>
             <span className="flex items-center gap-1.5">
               <Navigation size={12} style={{ color: "#006496" }} />
-              Geo Attendance — Today
+              Geo Attendance -Today
             </span>
           </SectionTitle>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">

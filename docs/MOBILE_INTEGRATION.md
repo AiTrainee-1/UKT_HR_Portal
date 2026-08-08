@@ -1,4 +1,4 @@
-# UKTextiles HRMS — Mobile App Integration Guide
+# UKTextiles HRMS -Mobile App Integration Guide
 _Backend snapshot: 7 July 2026 · Django REST · Base URL: `http://<server>:8000/api`_
 
 ## 1. Authentication
@@ -10,7 +10,7 @@ Token-based. Send `Authorization: Bearer <token>` on every request after login.
 | `/auth/hr-login` | POST | `{ "username", "password" }` | `{ "token", "role": "hr", "name" }` |
 | `/auth/employee-login` | POST | `{ "employeeCode", "password" }` | `{ "token", "role": "employee", "employeeId", "name" }` |
 | `/auth/set-password` | POST | `{ "employeeCode", "password" }` | sets first-time password |
-| `/auth/me` | GET | — | current identity `{ role, employeeId?, name }` |
+| `/auth/me` | GET | -| current identity `{ role, employeeId?, name }` |
 
 Errors are `{ "error": "<message>" }` with 4xx status. `401` ⇒ token invalid/expired → re-login.
 
@@ -24,15 +24,15 @@ Errors are `{ "error": "<message>" }` with 4xx status. `401` ⇒ token invalid/e
   "gender": "male|female|other", "employmentType": "staff|production",
   "departmentId": 1, "departmentName": "…", "designationId": 2,
   "salaryType": "monthly|weekly", "salaryAmount": 18000.0,
-  "salaryPerShift": 450.0,          // production only — pay per shift
+  "salaryPerShift": 450.0,          // production only -pay per shift
   "status": "active|inactive", "biometricDeviceId": "2670",
   "photoUrl": "…", "joinDate": "2024-01-05", …
 }
 ```
 
 **Two employee classes drive everything:**
-- **Staff** — monthly salary, leave/permission/CL apply, Sunday off, 1 shift/day max.
-- **Production** — paid per shift (`salaryPerShift`), max **1.5 shifts/day**, **no** leave/permission/CL, **Sunday is a working day**, bi-weekly pay periods.
+- **Staff** -monthly salary, leave/permission/CL apply, Sunday off, 1 shift/day max.
+- **Production** -paid per shift (`salaryPerShift`), max **1.5 shifts/day**, **no** leave/permission/CL, **Sunday is a working day**, bi-weekly pay periods.
 
 Create/update: `POST /employees`, `PATCH /employees/<id>` (same camelCase keys). For production employees send `salaryPerShift` (not `salaryAmount`).
 
@@ -53,13 +53,13 @@ Excel upload ────────┘          │
 
 ### 3.2 Shift calculation rules
 
-**Staff (strict 4-punch mode, default)** — all times come from the assigned `ShiftTemplate` (+ optional per-employee `customStartTime`/`customEndTime` on the assignment):
+**Staff (strict 4-punch mode, default)** -all times come from the assigned `ShiftTemplate` (+ optional per-employee `customStartTime`/`customEndTime` on the assignment):
 - Late: first punch > `startTime + gracePeriodMinutes`
 - Lunch-return late: punch3 > punch2 + `lunchDurationMinutes`
 - Full shift (1.00): morning punch + lunch-return + evening punch; otherwise 0.50
 - Typical templates: start 09:00; end 20:00 (male) / 19:00 (female)
 
-**Production (segment engine)** — config in `ProductionShiftConfig` + ordered `ProductionShiftSegment` rows:
+**Production (segment engine)** -config in `ProductionShiftConfig` + ordered `ProductionShiftSegment` rows:
 - Reference punches: 08:30 / 12:45 / 13:30 / 20:00, grace in minutes
 - Default segments: 08:30–10:30 (0.25), 10:30–12:45 (0.25), 13:30–15:30 (0.25), 15:30–17:30 (0.25), 17:30–20:00 (0.50)
 - 4 punches → morning span (p1→p2) + afternoon span (p3→p4); each segment fully covered (within grace) is credited
@@ -99,7 +99,7 @@ Excel upload ────────┘          │
 ## 5. Payroll
 
 ### 5.1 Generate
-`POST /payroll/generate` — body:
+`POST /payroll/generate` -body:
 ```json
 { "month": 7, "year": 2026, "runType": "monthly" | "biweekly" | "all", "weekNumber": 1 }
 ```
@@ -135,7 +135,7 @@ Excel upload ────────┘          │
   "netSalary": 3375.0
 }
 ```
-(Staff breakdown has `shift`, working-day lists, leave/late detail instead. Legacy records use `sessionConfigs`/`totalSessions` — detect by presence of `salaryPerShift`.)
+(Staff breakdown has `shift`, working-day lists, leave/late detail instead. Legacy records use `sessionConfigs`/`totalSessions` -detect by presence of `salaryPerShift`.)
 
 ### 5.4 Salary slips
 `GET /salary-slips?month=&year=&employmentType=` · `GET /my/salary-slips` (employee self-service) · `POST /salary-slips/<id>/email`.
@@ -149,11 +149,11 @@ Excel upload ────────┘          │
 - Manager approvals: `/manager/pending-requests`, `/manager/*/<id>/status`
 - Night-shift relaxation (auto-detected late-night workers): `/night-shift/dashboard`, `/night-shift/rules`
 
-**Production employees have none of these** — hide these screens for `employmentType === "production"`.
+**Production employees have none of these** -hide these screens for `employmentType === "production"`.
 
 ## 7. Settings (HR)
 
-`GET/PUT /payroll-settings` — one JSON with: company profile/branding, staff PF/ESI, production PF/ESI, `payDay`, `productionPayType`, **`defaultSalaryPerShift`** (new — prefill for new production employees), attendance mode (`strict|simple`) + simple-mode cutoff/grace, salary-slip header/signature images, SMTP.
+`GET/PUT /payroll-settings` -one JSON with: company profile/branding, staff PF/ESI, production PF/ESI, `payDay`, `productionPayType`, **`defaultSalaryPerShift`** (new -prefill for new production employees), attendance mode (`strict|simple`) + simple-mode cutoff/grace, salary-slip header/signature images, SMTP.
 Also: `/idcard-settings`, `/biometric-devices`, `/production-shift-config`.
 
 ## 8. Other modules
@@ -182,4 +182,4 @@ Also: `/idcard-settings`, `/biometric-devices`, `/production-shift-config`.
 3. All money values are numbers (float) in JSON; render with ₹ and Indian digit grouping client-side.
 4. Timestamps: dates are `YYYY-MM-DD` strings; times are `HH:MM` (or `HH:MM:SS`) strings; no timezones (server local time is factory time).
 5. Write operations use camelCase JSON bodies exactly as shown; unknown keys are ignored.
-6. On 502 from sync-biometric show the returned `error` verbatim — it names the failing device.
+6. On 502 from sync-biometric show the returned `error` verbatim -it names the failing device.

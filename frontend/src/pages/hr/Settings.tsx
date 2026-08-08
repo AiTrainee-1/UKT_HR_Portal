@@ -11,6 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Building2, Clock, Mail, Database, IndianRupee, FileText, Upload, X,
   Fingerprint, CreditCard, Plus, Trash2, Power, Pencil, FileSignature, Award, Eye,
+  AlertTriangle, Info, Briefcase, Factory,
 } from "lucide-react";
 import {
   usePayrollSettings, useUpdatePayrollSettings,
@@ -31,11 +32,12 @@ import { lockMutatingControls } from "@/lib/view-only-lock";
 // Settings tab -> its own permission key. Each Settings tab has a distinct
 // settings.* entry in Account Management (see permission_registry.py) except
 // "idcard", which is deliberately governed by the existing "id_cards"
-// permission — the same one that already gates the ID Cards feature page,
+// permission -the same one that already gates the ID Cards feature page,
 // not a separate Settings concern.
 const SETTINGS_TAB_MODULE: Record<string, string> = {
   company: "settings.company",
   attendance: "settings.attendance",
+  late_detection: "settings.late_detection",
   devices: "settings.devices",
   idcard: "id_cards",
   documents: "settings.documents",
@@ -132,7 +134,7 @@ function DocumentThemeCard({
               />
             </div>
             <div className="space-y-1.5 sm:col-span-2">
-              <Label className="text-xs">Logo Override (optional — defaults to the Company Logo above)</Label>
+              <Label className="text-xs">Logo Override (optional -defaults to the Company Logo above)</Label>
               <div className="flex items-start gap-4">
                 {form.logoOverride ? (
                   <div className="relative">
@@ -373,7 +375,7 @@ function DriveConfigCard() {
   }, [drive, loaded]);
 
   // Whether the key textarea (rather than the "Replace key" button) is what's
-  // actually on screen right now — the only correct signal for "is there a
+  // actually on screen right now -the only correct signal for "is there a
   // freshly-typed/pasted key to send." Deliberately not just `replacingKey`:
   // that flag starts false and only flips once the initial GET resolves, but
   // the textarea already renders before that (whenever no key is saved yet),
@@ -481,7 +483,7 @@ function DriveConfigCard() {
         {showInstructions && (
           <div className="text-xs text-gray-500 space-y-4 p-3 rounded-lg bg-gray-50 border border-gray-100">
             <p>
-              These steps set up a <strong>Service Account</strong> — a bot account that lets this application
+              These steps set up a <strong>Service Account</strong> -a bot account that lets this application
               connect to your Google Drive securely, without needing your personal Google password.
             </p>
 
@@ -506,14 +508,14 @@ function DriveConfigCard() {
 
             <div className="space-y-1.5">
               <p className="font-semibold text-gray-700">3. Create the Service Account and JSON Key</p>
-              <p className="italic">Keep the downloaded JSON file secure — it acts as a password to your Drive files.</p>
+              <p className="italic">Keep the downloaded JSON file secure -it acts as a password to your Drive files.</p>
               <ol className="list-decimal pl-4 space-y-1">
                 <li>Open the left-side navigation menu and go to <strong>IAM &amp; Admin → Service Accounts</strong>.</li>
                 <li>Click <strong>+ Create Service Account</strong> at the top of the page.</li>
                 <li>Give it a name and click <strong>Create and Continue</strong>, then click <strong>Done</strong> (you can skip the optional role assignments).</li>
                 <li>Find your new service account in the list, click the three-dot menu next to it, and select <strong>Manage keys</strong>.</li>
                 <li>Click <strong>Add Key → Create new key</strong>.</li>
-                <li>Choose <strong>JSON</strong> and click <strong>Create</strong> — the file downloads automatically.</li>
+                <li>Choose <strong>JSON</strong> and click <strong>Create</strong> -the file downloads automatically.</li>
               </ol>
             </div>
 
@@ -522,7 +524,7 @@ function DriveConfigCard() {
               <ol className="list-decimal pl-4 space-y-1">
                 <li>Open the downloaded JSON file in any text editor.</li>
                 <li>Find the <code>client_email</code> field and copy the email address next to it (looks like <code>your-app@your-project.iam.gserviceaccount.com</code>).</li>
-                <li>Go to Google Drive and open (or create) a <strong>Shared Drive</strong> — a regular "My Drive" folder won't work, since service accounts have no storage quota outside a Shared Drive.</li>
+                <li>Go to Google Drive and open (or create) a <strong>Shared Drive</strong> -a regular "My Drive" folder won't work, since service accounts have no storage quota outside a Shared Drive.</li>
                 <li>Right-click the Shared Drive (or a folder inside it) and select <strong>Share</strong>.</li>
                 <li>Paste the <code>client_email</code> address into the "Add people and groups" field.</li>
                 <li>Change the role to <strong>Content Manager</strong> (or Editor).</li>
@@ -534,7 +536,7 @@ function DriveConfigCard() {
               <p className="font-semibold text-gray-700">5. Get the Folder ID</p>
               <ol className="list-decimal pl-4 space-y-1">
                 <li>Open that same Shared Drive or folder so you're looking at the files inside it.</li>
-                <li>Look at the URL in your browser's address bar — it looks like <code>https://drive.google.com/drive/folders/1aBcD2eFgH3iJkL4mNoP5qRsT6uVwXyZ</code>.</li>
+                <li>Look at the URL in your browser's address bar -it looks like <code>https://drive.google.com/drive/folders/1aBcD2eFgH3iJkL4mNoP5qRsT6uVwXyZ</code>.</li>
                 <li>The Folder ID is the long string of letters and numbers at the end of the URL.</li>
               </ol>
             </div>
@@ -695,7 +697,7 @@ function RestoreBackupCard() {
                 <p className="text-[11px] text-gray-400">
                   Guided path: run the downloaded script yourself after stopping the application server —
                   always available. Automated path: the app does everything for you and briefly goes offline
-                  while it works — available to super admins only.
+                  while it works -available to super admins only.
                 </p>
               </div>
             )}
@@ -730,7 +732,7 @@ export default function Settings() {
   const isTabViewOnly = tabLevel(settingsTab) === "view";
 
   // Land on the first tab this role can actually see if the default
-  // ("company") — or whichever tab was active before a permission change —
+  // ("company") -or whichever tab was active before a permission change —
   // is hidden for them.
   useEffect(() => {
     if (tabLevel(settingsTab) === "hidden") {
@@ -752,7 +754,7 @@ export default function Settings() {
     return () => observer.disconnect();
   }, [isTabViewOnly, settingsTab]);
 
-  // ── Company profile — persisted to PayrollSettings via the API ─────────
+  // ── Company profile -persisted to PayrollSettings via the API ─────────
   const [company, setCompany] = useState({
     name: "UKTextiles", tagline: "Garments Manufacturing Excellence",
     address: "Chennai, Tamil Nadu, India", phone: "+91 9876543210",
@@ -760,7 +762,7 @@ export default function Settings() {
     gstin: "", pan: "", registration: "",
   });
 
-  // ── Attendance mode + production windows — loaded from DB ─────────────
+  // ── Attendance mode + production windows -loaded from DB ─────────────
   const [attMode, setAttMode] = useState({
     attendanceMode: "strict" as "strict" | "simple",
     simpleHalfShiftCutoff: "13:30",
@@ -773,8 +775,24 @@ export default function Settings() {
     prodSecondHalfEnd: "17:30",
     prodExtraStart: "17:50",
     prodExtraEnd: "20:00",
+    halfShiftLateReferenceTime: "14:30",
+    defaultShiftGraceMinutes: 15,
+    defaultShiftFirstHalfEnd: "13:30",
+    defaultShiftLunchDurationMinutes: 60,
+    defaultShiftLunchGraceMinutes: 10,
   });
-  // ── Payroll — loaded from DB ───────────────────────────────────────────
+  // Attendance tab is split Staff / Production -Strict/Simple mode, the
+  // punctuality window, night relaxation and the half-shift reference are
+  // all staff-only concepts, so they live under Staff.
+  const [attSubTab, setAttSubTab] = useState<"staff" | "production">("staff");
+
+  // ── Late Detection policy -loaded from DB ─────────────────────────────
+  const [lateFreeAllowance, setLateFreeAllowance] = useState(3);
+  const [lateSlabs, setLateSlabs] = useState<{ fromLates: number; deductionShifts: number }[]>([]);
+  // Without Permission -a separate pool from Late Attendance above.
+  const [wpFreeAllowance, setWpFreeAllowance] = useState(0);
+  const [wpSlabs, setWpSlabs] = useState<{ fromLates: number; deductionShifts: number }[]>([]);
+  // ── Payroll -loaded from DB ───────────────────────────────────────────
   const { data: payrollSettingsData, isLoading: psLoading } = usePayrollSettings();
   const updatePayrollSettings = useUpdatePayrollSettings();
 
@@ -784,7 +802,7 @@ export default function Settings() {
     { label: string; minSalary: number; maxSalary: number; pfRate: number; efRate: number }[]
   >([]);
 
-  // Master switches for the flat PF/ESI payroll rules (default OFF — no
+  // Master switches for the flat PF/ESI payroll rules (default OFF -no
   // deduction is applied for that employee class until explicitly enabled)
   const [staffRulesEnabled, setStaffRulesEnabled] = useState(false);
   const [prodRulesEnabled, setProdRulesEnabled] = useState(false);
@@ -870,7 +888,16 @@ export default function Settings() {
         prodSecondHalfEnd: payrollSettingsData.prodSecondHalfEnd || "17:30",
         prodExtraStart: payrollSettingsData.prodExtraStart || "17:50",
         prodExtraEnd: payrollSettingsData.prodExtraEnd || "20:00",
+        halfShiftLateReferenceTime: payrollSettingsData.halfShiftLateReferenceTime || "14:30",
+        defaultShiftGraceMinutes: payrollSettingsData.defaultShiftGraceMinutes ?? 15,
+        defaultShiftFirstHalfEnd: payrollSettingsData.defaultShiftFirstHalfEnd || "13:30",
+        defaultShiftLunchDurationMinutes: payrollSettingsData.defaultShiftLunchDurationMinutes ?? 60,
+        defaultShiftLunchGraceMinutes: payrollSettingsData.defaultShiftLunchGraceMinutes ?? 10,
       });
+      setLateFreeAllowance(payrollSettingsData.lateFreeAllowance ?? 3);
+      setLateSlabs(payrollSettingsData.lateDeductionSlabs ?? []);
+      setWpFreeAllowance(payrollSettingsData.withoutPermissionFreeAllowance ?? 0);
+      setWpSlabs(payrollSettingsData.withoutPermissionDeductionSlabs ?? []);
       setPfEfEnabled(payrollSettingsData.prodPfEfEnabled ?? false);
       setPfEfRules(payrollSettingsData.prodPfEfRules ?? []);
       setStaffRulesEnabled(payrollSettingsData.staffPayrollRulesEnabled ?? false);
@@ -914,7 +941,7 @@ export default function Settings() {
 
   // Company/Attendance/Payroll/Salary Slip/SMTP all persist to one shared
   // PayrollSettings record via one endpoint, but each tab now sends only its
-  // own fields (rather than one bundled payload covering every tab) — the
+  // own fields (rather than one bundled payload covering every tab) -the
   // backend checks edit permission per settings.* field group (see
   // FIELD_GROUPS in payroll_views.py), so a role with edit on only e.g.
   // Payroll must not have its save blocked by SMTP/Salary Slip fields it
@@ -992,7 +1019,7 @@ export default function Settings() {
         companyPan: company.pan,
         companyAddress: company.address,
         companyRegistration: company.registration,
-        // null is meaningful here — it clears a previously saved logo
+        // null is meaningful here -it clears a previously saved logo
         companyLogo: payroll.companyLogo,
       } as never);
       toast({
@@ -1097,6 +1124,11 @@ export default function Settings() {
         prodSecondHalfEnd: attMode.prodSecondHalfEnd,
         prodExtraStart: attMode.prodExtraStart,
         prodExtraEnd: attMode.prodExtraEnd,
+        halfShiftLateReferenceTime: attMode.halfShiftLateReferenceTime,
+        defaultShiftGraceMinutes: attMode.defaultShiftGraceMinutes,
+        defaultShiftFirstHalfEnd: attMode.defaultShiftFirstHalfEnd,
+        defaultShiftLunchDurationMinutes: attMode.defaultShiftLunchDurationMinutes,
+        defaultShiftLunchGraceMinutes: attMode.defaultShiftLunchGraceMinutes,
       } as never);
       toast({
         title: "Attendance settings saved",
@@ -1105,6 +1137,85 @@ export default function Settings() {
     } catch {
       toast({ title: "Failed to save attendance settings", variant: "destructive" });
     }
+  };
+
+  const saveLateDetection = async () => {
+    // Thresholds must be unique and ordered before saving -the backend
+    // re-sorts and de-dupes too, but catching it here gives a clear message
+    // instead of a silently-merged row.
+    const seen = new Set<number>();
+    for (const s of lateSlabs) {
+      if (!Number.isFinite(s.fromLates) || s.fromLates < 0 || !Number.isFinite(s.deductionShifts) || s.deductionShifts < 0) {
+        toast({ title: "Every slab needs a non-negative late count and deduction", variant: "destructive" });
+        return;
+      }
+      if (seen.has(s.fromLates)) {
+        toast({ title: `Duplicate threshold: ${s.fromLates} lates appears more than once`, variant: "destructive" });
+        return;
+      }
+      seen.add(s.fromLates);
+    }
+    try {
+      await updatePayrollSettings.mutateAsync({
+        lateFreeAllowance,
+        lateDeductionSlabs: [...lateSlabs].sort((a, b) => a.fromLates - b.fromLates),
+      } as never);
+      toast({
+        title: "Late Detection policy saved",
+        description: "Applies the next time payroll is generated. Already-generated payroll is untouched.",
+      });
+    } catch {
+      toast({ title: "Failed to save Late Detection policy", variant: "destructive" });
+    }
+  };
+
+  // Mirrors backend late_shift_deduction(): highest matching threshold wins,
+  // last row holds beyond the table.
+  const previewLateDeduction = (billable: number) => {
+    const sorted = [...lateSlabs].sort((a, b) => a.fromLates - b.fromLates);
+    let d = 0;
+    for (const s of sorted) {
+      if (billable >= s.fromLates) d = s.deductionShifts;
+      else break;
+    }
+    return d;
+  };
+
+  const saveWithoutPermission = async () => {
+    const seen = new Set<number>();
+    for (const s of wpSlabs) {
+      if (!Number.isFinite(s.fromLates) || s.fromLates < 0 || !Number.isFinite(s.deductionShifts) || s.deductionShifts < 0) {
+        toast({ title: "Every slab needs a non-negative count and deduction", variant: "destructive" });
+        return;
+      }
+      if (seen.has(s.fromLates)) {
+        toast({ title: `Duplicate threshold: ${s.fromLates} appears more than once`, variant: "destructive" });
+        return;
+      }
+      seen.add(s.fromLates);
+    }
+    try {
+      await updatePayrollSettings.mutateAsync({
+        withoutPermissionFreeAllowance: wpFreeAllowance,
+        withoutPermissionDeductionSlabs: [...wpSlabs].sort((a, b) => a.fromLates - b.fromLates),
+      } as never);
+      toast({
+        title: "Without Permission policy saved",
+        description: "Applies the next time payroll is generated. Already-generated payroll is untouched.",
+      });
+    } catch {
+      toast({ title: "Failed to save Without Permission policy", variant: "destructive" });
+    }
+  };
+
+  const previewWpDeduction = (billable: number) => {
+    const sorted = [...wpSlabs].sort((a, b) => a.fromLates - b.fromLates);
+    let d = 0;
+    for (const s of sorted) {
+      if (billable >= s.fromLates) d = s.deductionShifts;
+      else break;
+    }
+    return d;
   };
 
   return (
@@ -1121,6 +1232,7 @@ export default function Settings() {
             items={[
               { value: "company", label: "Company", icon: <Building2 size={13} /> },
               { value: "attendance", label: "Attendance", icon: <Clock size={13} /> },
+              { value: "late_detection", label: "Late Detection", icon: <AlertTriangle size={13} /> },
               { value: "devices", label: "Devices", icon: <Fingerprint size={13} /> },
               { value: "idcard", label: "ID Card", icon: <CreditCard size={13} /> },
               { value: "documents", label: "Company Documents", icon: <FileSignature size={13} /> },
@@ -1144,7 +1256,7 @@ export default function Settings() {
               }}
             >
               <Eye size={15} strokeWidth={2} />
-              View only — browse and inspect freely, changes can't be saved.
+              View only -browse and inspect freely, changes can't be saved.
             </div>
           )}
 
@@ -1158,7 +1270,7 @@ export default function Settings() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="p-3 rounded-lg bg-blue-50 border border-blue-100 text-xs text-blue-700">
-                  These details are used across the entire portal — the sidebar, salary slips,
+                  These details are used across the entire portal -the sidebar, salary slips,
                   ID cards, and PDFs all pull the name and logo from here automatically.
                 </div>
 
@@ -1261,7 +1373,7 @@ export default function Settings() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <p className="text-xs text-gray-500">
-                  Add and enable/disable additional attendance devices — supports employees working
+                  Add and enable/disable additional attendance devices -supports employees working
                   across multiple units or branches. The <strong>.env</strong>-configured device (blue badge)
                   always keeps working exactly as before; devices added here are extra. When syncing
                   attendance (Attendance page), HR picks which device to pull from, including
@@ -1523,13 +1635,13 @@ export default function Settings() {
               docType="offer_letter"
               title="Offer Letter"
               icon={<FileSignature size={15} className="text-emerald-700" />}
-              description="Generated from an employee's profile — Employees → select employee → Generate Offer Letter."
+              description="Generated from an employee's profile -Employees → select employee → Generate Offer Letter."
             />
             <DocumentThemeCard
               docType="experience_letter"
               title="Experience Letter"
               icon={<Award size={15} className="text-emerald-700" />}
-              description="Generated from an employee's profile — Employees → select employee → Generate Experience Letter."
+              description="Generated from an employee's profile -Employees → select employee → Generate Experience Letter."
             />
             <DocumentThemeCard
               docType="salary_slip"
@@ -1547,6 +1659,71 @@ export default function Settings() {
 
           {/* Attendance */}
           <TabsContent value="attendance" className="mt-4 space-y-4">
+            {/* Staff / Production split -Strict/Simple mode, the punctuality
+                window, night relaxation and the half-shift reference are all
+                staff-only concepts, so they live under Staff. Production has
+                its own segment-based engine with no mode switch. */}
+            <PillTabs
+              items={[
+                { value: "staff", label: "Staff", icon: <Briefcase size={13} /> },
+                { value: "production", label: "Production", icon: <Factory size={13} /> },
+              ]}
+              value={attSubTab}
+              onChange={(v) => setAttSubTab(v as "staff" | "production")}
+              baseColor="#0f172a"
+              pillBg="#f1f5f9"
+            />
+
+            {attSubTab === "staff" && (<>
+            {/* ── How each mode works ── */}
+            <Card className="border-0 shadow-sm bg-slate-50/60">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-bold flex items-center gap-2">
+                  <Info size={15} className="text-slate-500" /> How Staff Attendance Is Decided
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-xs text-slate-600 leading-relaxed">
+                <div className="p-3 rounded-lg bg-white border border-slate-200">
+                  <p className="font-bold text-slate-800 mb-1">Shared by both modes -the Full vs Half Shift decision</p>
+                  <p>
+                    A <strong>Full Shift</strong> needs a first punch <em>and</em> a distinct last punch, and
+                    both must fall within the <strong>Shift Punctuality Window</strong> (below) of the
+                    employee's assigned shift start/end time. Only one punch, or punching outside that
+                    window, caps the day at <strong>Half Shift</strong>. Shift start/end and the small grace
+                    period come from the shift assigned to each employee in <strong>Manage Shift</strong> —
+                    an employee with no assigned shift has no reference, so this never applies to them.
+                  </p>
+                </div>
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <div className="p-3 rounded-lg bg-white border border-amber-200">
+                    <p className="font-bold text-amber-800 mb-1">Strict Mode</p>
+                    <p>
+                      Expects all 4 punches -morning IN, lunch OUT, lunch return, evening OUT. On top of the
+                      shared decision above it <strong>additionally tracks lunch-return lateness</strong>.
+                      Choose this when you need to police the lunch break.
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-white border border-green-200">
+                    <p className="font-bold text-green-800 mb-1">Simple Mode</p>
+                    <p>
+                      Only the first and last punch of the day matter -<strong>no lunch tracking at all</strong>.
+                      Everything else behaves exactly as in Strict Mode. Choose this when the lunch break
+                      isn't punched or isn't policed.
+                    </p>
+                  </div>
+                </div>
+                <div className="p-3 rounded-lg bg-white border border-indigo-200">
+                  <p className="font-bold text-indigo-800 mb-1">Night Shift Relaxation</p>
+                  <p>
+                    Not a timing rule -it's a <strong>feature switch</strong>. When on, the Night Shift page
+                    appears in the sidebar, where you grant relaxation to individual employees who worked late
+                    the previous night so their next-morning arrival isn't penalised. Turning it off only hides
+                    that page; it doesn't change any calculation on its own.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
             {/* ── Calculation Mode ── */}
             <Card className="border-0 shadow-sm">
               <CardHeader className="pb-3">
@@ -1598,13 +1775,13 @@ export default function Settings() {
                   </button>
                 </div>
 
-                {/* Both modes now share the same Full/Half Shift decision — a first
+                {/* Both modes now share the same Full/Half Shift decision -a first
                     AND a distinct last punch, both within the punctuality window
                     below of the employee's assigned shift start/end time. Strict
                     mode additionally tracks lunch-return lateness on top of this. */}
                 <div className="grid sm:grid-cols-2 gap-4 p-3 bg-amber-50/50 border border-amber-100 rounded-lg">
                   <div className="space-y-1.5">
-                    <Label className="text-xs">Shift Punctuality Window — Maximum First Punch Allowed (minutes)</Label>
+                    <Label className="text-xs">Shift Punctuality Window -Maximum First Punch Allowed (minutes)</Label>
                     <p className="text-[11px] text-gray-500 -mt-1">
                       First punch must be within this many minutes of shift start (and last punch within the
                       same window of shift end) to still count as Full Shift
@@ -1620,18 +1797,18 @@ export default function Settings() {
                   </div>
                   <div className="space-y-1.5 sm:col-span-2">
                     <p className="text-[11px] text-gray-500">
-                      Applies to every employee, every day — arriving within this window still counts toward a
+                      Applies to every employee, every day -arriving within this window still counts toward a
                       Full Shift (though it's flagged <strong>Late</strong> once past the shift's own small
                       Grace Period, set per shift in <strong>Manage Shift</strong>). Only arriving <strong>past
                       this window</strong> caps the day at Half Shift. Applies to both calculation modes, staff
                       only. Shift start/end times and grace period always come from the shift assigned to each
-                      employee — an employee with no shift assigned has no reference to check against, so this
+                      employee -an employee with no shift assigned has no reference to check against, so this
                       never applies to them.
                     </p>
                   </div>
                 </div>
 
-                {/* Cross-midnight punch reattribution — a forgotten evening exit
+                {/* Cross-midnight punch reattribution -a forgotten evening exit
                     punch made hours late, after midnight, gets misread as the
                     NEXT day's first punch without this, shifting every one of
                     that day's real punches down a slot. */}
@@ -1639,7 +1816,7 @@ export default function Settings() {
                   <div className="space-y-1.5">
                     <Label className="text-xs">Forgotten Last-Out Grace (hours after shift end)</Label>
                     <p className="text-[11px] text-gray-500 -mt-1">
-                      A punch made this many hours after shift end — even after midnight — is treated as that
+                      A punch made this many hours after shift end -even after midnight -is treated as that
                       day's own last-out instead of tomorrow's first punch. E.g. 9 hours after a 20:00 end
                       covers a punch as late as 05:00. Set to 0 to disable.
                     </p>
@@ -1656,7 +1833,7 @@ export default function Settings() {
                     <Label className="text-xs">Next-Day Early-Arrival Protection (hours before shift start)</Label>
                     <p className="text-[11px] text-gray-500 -mt-1">
                       The grace window above can never reach closer than this many hours before the next day's
-                      own shift start — protects a genuinely early arrival from being stolen and misattributed
+                      own shift start -protects a genuinely early arrival from being stolen and misattributed
                       to yesterday. Set to 0 to remove this cap.
                     </p>
                     <Input
@@ -1671,7 +1848,7 @@ export default function Settings() {
                   <div className="space-y-1.5 sm:col-span-2">
                     <p className="text-[11px] text-gray-500">
                       Only reattributes a punch when the earlier day genuinely looks like it's missing its own
-                      closing punch (nothing recorded at or after that day's shift end) — an already-complete
+                      closing punch (nothing recorded at or after that day's shift end) -an already-complete
                       day never has a stray next-day punch stolen from it. Staff only.
                     </p>
                   </div>
@@ -1682,7 +1859,7 @@ export default function Settings() {
                     <div className="space-y-1.5">
                       <Label className="text-xs text-gray-400">Legacy Half-Shift Cutoff Time</Label>
                       <p className="text-[11px] text-gray-400 -mt-1">
-                        Historical only — no longer used for new calculations since the punctuality
+                        Historical only -no longer used for new calculations since the punctuality
                         window above replaced it. Kept only for reference.
                       </p>
                       <Input
@@ -1695,8 +1872,71 @@ export default function Settings() {
                   </div>
                 )}
 
+                {/* Half Shift late reference -was a hardcoded 14:30 constant
+                    in the engine until it became configurable here. */}
+                <div className="grid sm:grid-cols-2 gap-4 p-3 bg-rose-50/50 border border-rose-100 rounded-lg">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Half Shift -Late Reference Time</Label>
+                    <p className="text-[11px] text-gray-500 -mt-1">
+                      On a day that already resolved to Half Shift, the arrival is flagged
+                      <strong> Late</strong> only if the first punch is strictly after this time. An
+                      afternoon half-shift that starts on time is a half day, not a late day.
+                    </p>
+                    <Input
+                      type="time"
+                      value={attMode.halfShiftLateReferenceTime}
+                      onChange={e => setAttMode(a => ({ ...a, halfShiftLateReferenceTime: e.target.value }))}
+                      className="max-w-[140px]"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <p className="text-[11px] text-gray-500">
+                      Compared to the minute -a punch anywhere inside the reference minute counts as
+                      "on time", only the next minute onward is Late. Full Shift days never use this;
+                      they use the shift's own start time + grace period.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Company-wide defaults for NEW shifts. Office start/end time
+                    is deliberately NOT here -Manage Shift already owns that
+                    per-shift, and duplicating it here just invites drift. */}
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
+                  <div>
+                    <p className="text-xs font-bold text-slate-800">Default Timings for New Shifts</p>
+                    <p className="text-[11px] text-gray-500 mt-0.5">
+                      Pre-filled when someone creates a new shift in <strong>Manage Shift</strong> (which still
+                      owns start/end time per shift). Existing shifts are never changed by editing these.
+                    </p>
+                  </div>
+                  <div className="grid sm:grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Grace Period (minutes)</Label>
+                      <p className="text-[11px] text-gray-500 -mt-1">Arriving within this isn't Late</p>
+                      <Input type="number" min={0} value={attMode.defaultShiftGraceMinutes}
+                        onChange={e => setAttMode(a => ({ ...a, defaultShiftGraceMinutes: Math.max(0, Number(e.target.value) || 0) }))} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">First Half Ends (lunch start)</Label>
+                      <Input type="time" value={attMode.defaultShiftFirstHalfEnd}
+                        onChange={e => setAttMode(a => ({ ...a, defaultShiftFirstHalfEnd: e.target.value }))} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Lunch Duration (minutes)</Label>
+                      <Input type="number" min={0} value={attMode.defaultShiftLunchDurationMinutes}
+                        onChange={e => setAttMode(a => ({ ...a, defaultShiftLunchDurationMinutes: Math.max(0, Number(e.target.value) || 0) }))} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Lunch Grace (minutes)</Label>
+                      <p className="text-[11px] text-gray-500 -mt-1">Strict Mode only</p>
+                      <Input type="number" min={0} value={attMode.defaultShiftLunchGraceMinutes}
+                        onChange={e => setAttMode(a => ({ ...a, defaultShiftLunchGraceMinutes: Math.max(0, Number(e.target.value) || 0) }))} />
+                    </div>
+                  </div>
+                </div>
+
                 <Button size="sm" onClick={saveAttendanceMode} disabled={updatePayrollSettings.isPending}>
-                  {updatePayrollSettings.isPending ? "Saving…" : "Save Attendance Mode"}
+                  {updatePayrollSettings.isPending ? "Saving…" : "Save Attendance Settings"}
                 </Button>
               </CardContent>
             </Card>
@@ -1737,8 +1977,28 @@ export default function Settings() {
                 <p className="text-xs text-gray-500 leading-relaxed">
                   Staff who work late into the night get a grace window to report late the next
                   morning without being marked Late. This switch controls whether the
-                  <strong> Night Shift</strong> page appears in the sidebar — the underlying
+                  <strong> Night Shift</strong> page appears in the sidebar -the underlying
                   detection logic and rules keep working exactly as before either way.
+                </p>
+              </CardContent>
+            </Card>
+
+            </>)}
+
+            {attSubTab === "production" && (<>
+            <Card className="border-0 shadow-sm bg-slate-50/60">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-bold flex items-center gap-2">
+                  <Info size={15} className="text-slate-500" /> How Production Attendance Is Decided
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="text-xs text-slate-600 leading-relaxed">
+                <p>
+                  Production doesn't use Strict/Simple mode at all -it's scored against the
+                  <strong> shift segments</strong> configured below. Each segment the employee covers
+                  (arriving no later than its start + grace, leaving no earlier than its end) earns its
+                  share of a shift, so a day can total more than one shift when extra segments are worked.
+                  Pay is <strong>total shifts earned × salary per shift</strong>.
                 </p>
               </CardContent>
             </Card>
@@ -1747,9 +2007,294 @@ export default function Settings() {
             <ProductionShiftConfigCard />
 
             {/* Production PF/ESI deductions are configured in the Payroll tab
-                (prodPfRate / prodEsiRate / prodEsiApplicableBelow) — the only
+                (prodPfRate / prodEsiRate / prodEsiApplicableBelow) -the only
                 rates the payroll engine actually applies. */}
+            </>)}
 
+          </TabsContent>
+
+          {/* Late Detection -how many lates are free, and what each further
+              late costs. Drives the shift deduction applied during payroll. */}
+          <TabsContent value="late_detection" className="mt-4 space-y-4">
+            <Card className="border-0 shadow-sm bg-slate-50/60">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-bold flex items-center gap-2">
+                  <Info size={15} className="text-slate-500" /> How Late Detection Works
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="text-xs text-slate-600 leading-relaxed space-y-2">
+                <p>
+                  Every month, an employee's <strong>late arrivals</strong> and their{" "}
+                  <strong>approved Permission requests</strong> are added into a single shared pool.
+                  The first few are free (the allowance below). Everything past that is
+                  "billable", and the slab table decides how many shifts get cut.
+                </p>
+                <p className="text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">
+                  Changing these values affects <strong>future</strong> payroll generation only. Payroll
+                  already generated for a past month keeps whatever it was calculated with -regenerate
+                  that month deliberately if you want it repriced.
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card className="border-0 shadow-sm">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-bold flex items-center gap-2">
+                  <AlertTriangle size={15} className="text-orange-500" /> Late Detection Policy
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                <div className="space-y-1.5 max-w-md">
+                  <Label className="text-xs">Free Allowance -lates + permissions allowed per month</Label>
+                  <p className="text-[11px] text-gray-500 -mt-1">
+                    No deduction at all until an employee exceeds this many in a calendar month.
+                    This is also the monthly Permission limit, since both draw on the same pool.
+                  </p>
+                  <Input
+                    type="number" min={0} className="max-w-[140px]"
+                    value={lateFreeAllowance}
+                    onChange={e => setLateFreeAllowance(Math.max(0, Number(e.target.value) || 0))}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div>
+                      <Label className="text-xs">Deduction Slabs</Label>
+                      <p className="text-[11px] text-gray-500">
+                        Once the billable count reaches a threshold, that row's deduction applies. The
+                        highest matching row wins, and the last row holds for anything beyond it.
+                      </p>
+                    </div>
+                    <Button
+                      size="sm" variant="outline" className="gap-1.5"
+                      onClick={() => setLateSlabs(s => [
+                        ...s,
+                        { fromLates: (s.length ? Math.max(...s.map(r => r.fromLates)) : 0) + 3, deductionShifts: 0.25 },
+                      ])}
+                    >
+                      <Plus size={13} /> Add Slab
+                    </Button>
+                  </div>
+
+                  {lateSlabs.length === 0 ? (
+                    <div className="text-xs text-gray-500 border border-dashed rounded-lg p-4 text-center">
+                      No slabs -late arrivals currently cost nothing. Add a slab to start deducting.
+                    </div>
+                  ) : (
+                    <div className="border rounded-lg overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-slate-50 text-left text-xs text-slate-600">
+                            <th className="px-3 py-2 font-semibold">From this many billable lates</th>
+                            <th className="px-3 py-2 font-semibold">Deduct this many shifts</th>
+                            <th className="px-3 py-2 font-semibold text-right">Remove</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                          {lateSlabs.map((slab, i) => (
+                            <tr key={i} className="hover:bg-slate-50/60">
+                              <td className="px-3 py-2">
+                                <Input
+                                  type="number" min={0} className="h-8 max-w-[110px]"
+                                  value={slab.fromLates}
+                                  onChange={e => setLateSlabs(s => s.map((r, j) =>
+                                    j === i ? { ...r, fromLates: Math.max(0, Number(e.target.value) || 0) } : r))}
+                                />
+                              </td>
+                              <td className="px-3 py-2">
+                                <Input
+                                  type="number" min={0} step={0.25} className="h-8 max-w-[110px]"
+                                  value={slab.deductionShifts}
+                                  onChange={e => setLateSlabs(s => s.map((r, j) =>
+                                    j === i ? { ...r, deductionShifts: Math.max(0, Number(e.target.value) || 0) } : r))}
+                                />
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                <Button
+                                  size="icon" variant="ghost" className="h-8 w-8 text-rose-600 hover:text-rose-800"
+                                  onClick={() => setLateSlabs(s => s.filter((_, j) => j !== i))}
+                                >
+                                  <Trash2 size={14} />
+                                </Button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                {/* Worked example so HR can see the policy's real effect before saving */}
+                <div className="p-3 bg-blue-50/60 border border-blue-100 rounded-lg">
+                  <p className="text-xs font-bold text-blue-900 mb-2">Worked example -with the values above</p>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                    {[0, 2, 4, 6, 9, 12, 15, 20].map(total => {
+                      const billable = Math.max(0, total - lateFreeAllowance);
+                      const cut = previewLateDeduction(billable);
+                      return (
+                        <div key={total} className="bg-white rounded border border-blue-100 p-2">
+                          <p className="text-[11px] text-gray-500">{total} lates + permissions</p>
+                          <p className="font-bold text-blue-900">
+                            {cut > 0 ? `−${cut} shift${cut === 1 ? "" : "s"}` : "No deduction"}
+                          </p>
+                          {billable > 0 && (
+                            <p className="text-[10px] text-gray-400">{billable} billable</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <Button size="sm" onClick={saveLateDetection} disabled={updatePayrollSettings.isPending}>
+                  {updatePayrollSettings.isPending ? "Saving…" : "Save Late Detection Policy"}
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* ── Without Permission -a separate pool ── */}
+            <Card className="border-0 shadow-sm bg-slate-50/60">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-bold flex items-center gap-2">
+                  <Info size={15} className="text-slate-500" /> How Without Permission Detection Works
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="text-xs text-slate-600 leading-relaxed space-y-2">
+                <p>
+                  Staff only. Arriving late or leaving early inside a <strong>1-hour window</strong> around
+                  the shift's start/end time (the same window as the Half Shift punctuality cutoff above) is
+                  covered automatically by an approved <strong>Permission</strong> for that day -no detection
+                  at all. Without one, it's marked <strong>Late</strong> and tagged <strong>Without
+                  Permission</strong> here, separately from ordinary Late Attendance above. Arriving/leaving
+                  beyond that 1-hour window is unaffected -that's still handled entirely by the existing
+                  Half Shift rule.
+                </p>
+                <p>
+                  <strong>Morning</strong> (late-in): a Permission requested near the shift's start time
+                  covers it. <strong>Evening</strong> (early-out -new detection, nothing was flagged here
+                  before): a Permission requested near the shift's end time covers it. A Permission with no
+                  time recorded covers whichever side actually happened that day.
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card className="border-0 shadow-sm">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-bold flex items-center gap-2">
+                  <AlertTriangle size={15} className="text-rose-500" /> Without Permission Policy
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                <div className="space-y-1.5 max-w-md">
+                  <Label className="text-xs">Free Allowance -occurrences allowed per month</Label>
+                  <p className="text-[11px] text-gray-500 -mt-1">
+                    No deduction at all until an employee exceeds this many late-in/early-out-without-permission
+                    occurrences in a calendar month. Ships at 0 -every occurrence is billable unless raised here.
+                  </p>
+                  <Input
+                    type="number" min={0} className="max-w-[140px]"
+                    value={wpFreeAllowance}
+                    onChange={e => setWpFreeAllowance(Math.max(0, Number(e.target.value) || 0))}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div>
+                      <Label className="text-xs">Deduction Slabs</Label>
+                      <p className="text-[11px] text-gray-500">
+                        Same rule as Late Attendance's table -highest matching row wins, last row holds
+                        beyond it. Empty by default, so this pool deducts nothing until rows are added here.
+                      </p>
+                    </div>
+                    <Button
+                      size="sm" variant="outline" className="gap-1.5"
+                      onClick={() => setWpSlabs(s => [
+                        ...s,
+                        { fromLates: (s.length ? Math.max(...s.map(r => r.fromLates)) : 0) + 1, deductionShifts: 0.25 },
+                      ])}
+                    >
+                      <Plus size={13} /> Add Slab
+                    </Button>
+                  </div>
+
+                  {wpSlabs.length === 0 ? (
+                    <div className="text-xs text-gray-500 border border-dashed rounded-lg p-4 text-center">
+                      No slabs -Without Permission occurrences currently cost nothing beyond being recorded.
+                    </div>
+                  ) : (
+                    <div className="border rounded-lg overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-slate-50 text-left text-xs text-slate-600">
+                            <th className="px-3 py-2 font-semibold">From this many occurrences</th>
+                            <th className="px-3 py-2 font-semibold">Deduct this many shifts</th>
+                            <th className="px-3 py-2 font-semibold text-right">Remove</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                          {wpSlabs.map((slab, i) => (
+                            <tr key={i} className="hover:bg-slate-50/60">
+                              <td className="px-3 py-2">
+                                <Input
+                                  type="number" min={0} className="h-8 max-w-[110px]"
+                                  value={slab.fromLates}
+                                  onChange={e => setWpSlabs(s => s.map((r, j) =>
+                                    j === i ? { ...r, fromLates: Math.max(0, Number(e.target.value) || 0) } : r))}
+                                />
+                              </td>
+                              <td className="px-3 py-2">
+                                <Input
+                                  type="number" min={0} step={0.25} className="h-8 max-w-[110px]"
+                                  value={slab.deductionShifts}
+                                  onChange={e => setWpSlabs(s => s.map((r, j) =>
+                                    j === i ? { ...r, deductionShifts: Math.max(0, Number(e.target.value) || 0) } : r))}
+                                />
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                <Button
+                                  size="icon" variant="ghost" className="h-8 w-8 text-rose-600 hover:text-rose-800"
+                                  onClick={() => setWpSlabs(s => s.filter((_, j) => j !== i))}
+                                >
+                                  <Trash2 size={14} />
+                                </Button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                <div className="p-3 bg-blue-50/60 border border-blue-100 rounded-lg">
+                  <p className="text-xs font-bold text-blue-900 mb-2">Worked example -with the values above</p>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                    {[0, 1, 2, 3, 4, 6, 8, 10].map(total => {
+                      const billable = Math.max(0, total - wpFreeAllowance);
+                      const cut = previewWpDeduction(billable);
+                      return (
+                        <div key={total} className="bg-white rounded border border-blue-100 p-2">
+                          <p className="text-[11px] text-gray-500">{total} occurrences</p>
+                          <p className="font-bold text-blue-900">
+                            {cut > 0 ? `−${cut} shift${cut === 1 ? "" : "s"}` : "No deduction"}
+                          </p>
+                          {billable > 0 && (
+                            <p className="text-[10px] text-gray-400">{billable} billable</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <Button size="sm" onClick={saveWithoutPermission} disabled={updatePayrollSettings.isPending}>
+                  {updatePayrollSettings.isPending ? "Saving…" : "Save Without Permission Policy"}
+                </Button>
+              </CardContent>
+            </Card>
           </TabsContent>
 
           {/* Payroll */}
@@ -1765,8 +2310,8 @@ export default function Settings() {
                 <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800">
                   <strong>Note:</strong> Payroll rules are <strong>disabled by default</strong>.
                   Use the switch on each column to enable PF/ESI deductions for that employee
-                  class — while a switch is off, no deduction is applied even if rates are set.
-                  Changes apply to all new payroll runs — existing records are not affected.
+                  class -while a switch is off, no deduction is applied even if rates are set.
+                  Changes apply to all new payroll runs -existing records are not affected.
                 </div>
 
                 {psLoading ? (
@@ -2052,7 +2597,7 @@ export default function Settings() {
               <CardContent className="space-y-2 text-xs text-gray-500">
                 <p>
                   <strong>Backup</strong> creates one file containing everything the application needs to
-                  come back exactly as it is right now — the full database (every employee, payroll, and
+                  come back exactly as it is right now -the full database (every employee, payroll, and
                   attendance record) plus every uploaded file (documents, resumes, ID/geo-punch photos). It
                   runs on the schedule you set below, or any time you click "Run Backup Now." Backups are
                   saved to a folder on this server; optionally, a copy of each one is also uploaded to
@@ -2060,7 +2605,7 @@ export default function Settings() {
                 </p>
                 <p>
                   <strong>Restore</strong> replaces the live application with what's inside a chosen backup
-                  file. Upload the file below to validate it first — nothing changes yet at that point.
+                  file. Upload the file below to validate it first -nothing changes yet at that point.
                   From there you can either download a script to run yourself with the server stopped
                   (safest, fully manual), or let the application do it automatically (super admins only,
                   the app briefly goes offline while it works). Either way, a fresh safety backup of the
@@ -2196,7 +2741,7 @@ export default function Settings() {
                   </div>
                 </div>
 
-                {/* Company Logo — used on Resignation Acceptance Letter PDF */}
+                {/* Company Logo -used on Resignation Acceptance Letter PDF */}
                 <div className="space-y-2 pt-2 border-t border-gray-100">
                   <Label className="text-xs">Company Logo</Label>
                   <p className="text-xs text-gray-500">Used on the Resignation Acceptance Letter PDF header.</p>
