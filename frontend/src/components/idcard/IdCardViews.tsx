@@ -180,7 +180,7 @@ export function StaffCardBack({ card, qr }: { card: IdCardData; qr?: string }) {
           ))}
         </div>
 
-        {/* Address — its own centered block with room to breathe, not squeezed
+        {/* Address -its own centered block with room to breathe, not squeezed
             into a right-aligned single line like the rows above. */}
         <div className="shrink-0 pt-2 pb-2 border-b border-dashed border-gray-200 text-center">
           <div className="flex items-center justify-center gap-1 mb-1">
@@ -228,7 +228,7 @@ export function ProductionCardFront({ card }: { card: IdCardData }) {
       <CompanyHeader card={card} compact />
       <div className="text-center py-1" style={{ background: "#eaf6fd" }}>
         <p className="text-[8px] font-black tracking-[0.2em] uppercase" style={{ color: primary }}>
-          Employee Identity Card — Production
+          Employee Identity Card -Production
         </p>
       </div>
       <div className="flex-1 flex items-center gap-3 px-4">
@@ -291,7 +291,7 @@ export function ProductionCardBack({ card, qr }: { card: IdCardData; qr?: string
           <div className="text-[7px] text-gray-500 leading-snug pt-1">
             <p className="font-bold text-gray-600 mb-0.5">INSTRUCTIONS</p>
             <p>• Wear this card visibly inside company premises.</p>
-            <p>• Card is company property — return on exit.</p>
+            <p>• Card is company property -return on exit.</p>
             <p>• If found, return to {card.company.name}.</p>
             {footerText && <p className="italic">{footerText}</p>}
           </div>

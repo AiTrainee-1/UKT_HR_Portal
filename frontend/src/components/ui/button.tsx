@@ -9,19 +9,19 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        // Solid brand-gradient clay button — the app's primary call-to-action look.
+        // Solid brand-gradient clay button -the app's primary call-to-action look.
         default:
           "clay-btn border-0 bg-gradient-to-br from-[#006496] to-[#0080bf] text-white hover:brightness-105",
-        // Pale red clay tint — same tactile weight as default, danger color.
+        // Pale red clay tint -same tactile weight as default, danger color.
         destructive:
           "clay-btn border-0 bg-red-50 text-red-700 hover:bg-red-100",
-        // Pale, bordered clay tint — secondary actions that need a visible edge.
+        // Pale, bordered clay tint -secondary actions that need a visible edge.
         outline:
           "clay-btn border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100",
-        // Pale, borderless clay tint — secondary actions on a plain surface.
+        // Pale, borderless clay tint -secondary actions on a plain surface.
         secondary:
           "clay-btn border-0 bg-slate-100 text-slate-700 hover:bg-slate-200",
-        // Deliberately left plain — used for dense/inline icon actions (table
+        // Deliberately left plain -used for dense/inline icon actions (table
         // rows, toolbars) where a heavy clay shadow would be visual noise.
         ghost: "border border-transparent hover:bg-muted/20 hover-elevate active-elevate-2",
         link: "text-primary underline-offset-4 hover:underline hover:bg-primary/10 hover-elevate active-elevate-2",

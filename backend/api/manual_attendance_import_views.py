@@ -5,19 +5,19 @@ A backup path alongside the live "Sync Biometric" flow: HR can pull the raw
 punch list off a device into an Excel file, visually verify it, then upload
 that file back in to import whatever's missing. Exists because live sync
 occasionally misses punches that genuinely exist on the device, for reasons
-that vary case to case — this gives HR a way to close the gap themselves
+that vary case to case -this gives HR a way to close the gap themselves
 without waiting on a root-cause fix each time.
 
 Both this and live sync write through the exact same `_ingest_punches()` in
 biometric_sync.py, so attendance data always lands identically regardless of
-path — the only difference is the `source` tag and how each row's employee
+path -the only difference is the `source` tag and how each row's employee
 gets resolved (device uid vs. a hand-typed, HR-reviewed Employee Code).
 
 Deliberately does NOT touch AttendanceDayRecord (the payroll source of
-truth) — same as live sync, that table is lazily recomputed from
+truth) -same as live sync, that table is lazily recomputed from
 AttendanceLog on the next payroll/attendance read (see
 attendance_final.py::compute_day_record). Also deliberately bypasses the
-AttendanceOverrideRequest/Department-Head-approval flow — that's for HR-
+AttendanceOverrideRequest/Department-Head-approval flow -that's for HR-
 initiated corrections to an existing day's verdict, not raw punch ingestion,
 and live sync already bypasses it the same way.
 """
@@ -49,7 +49,7 @@ def _error(message: str, code: int = 400) -> Response:
 def export_punch_records(request: Request) -> Response:
     """
     GET /api/attendance/manual-import/export?deviceId=...&mode=day|week|month|all&includeAllEmployees=1
-    Read-only — pulls raw punches off the selected device(s) for HR to review
+    Read-only -pulls raw punches off the selected device(s) for HR to review
     and export to Excel. Never writes to the database. deviceId may repeat
     (?deviceId=1&deviceId=env) for a multi-device selection, matching the
     Sync Biometric checklist's shape; omitted means "all enabled devices".
@@ -58,7 +58,7 @@ def export_punch_records(request: Request) -> Response:
     employee (branch-scoped) who has zero matched punches in this range —
     so the file reflects the full Employees table, not just whoever happened
     to punch. These marker rows carry no Date/Punch Time/Punch Type and are
-    silently skipped on re-upload (see import_punch_excel below) — they're
+    silently skipped on re-upload (see import_punch_excel below) -they're
     for visibility only, never importable as a punch.
     """
     mode = request.query_params.get("mode", "all")
@@ -135,9 +135,9 @@ def export_punch_records(request: Request) -> Response:
 @require_hr
 def import_punch_excel(request: Request) -> Response:
     """
-    POST /api/attendance/manual-import/upload — multipart, key 'file'.
+    POST /api/attendance/manual-import/upload -multipart, key 'file'.
     Must be the file downloaded from the export endpoint above (or an exact
-    copy of its column layout) — HR may hand-edit cells (most usefully:
+    copy of its column layout) -HR may hand-edit cells (most usefully:
     filling in a blank/wrong Employee Code before re-uploading just that row)
     but the header row itself must match exactly, same rule as Bulk Employee
     Upload.
@@ -170,7 +170,7 @@ def import_punch_excel(request: Request) -> Response:
             {
                 "error": "invalid_template",
                 "message": (
-                    "Invalid file — please upload the file exactly as downloaded from "
+                    "Invalid file -please upload the file exactly as downloaded from "
                     "'Download Punching Data', without renaming, reordering, or removing columns."
                 ),
             },
@@ -188,13 +188,13 @@ def import_punch_excel(request: Request) -> Response:
         emp_code = str(row.get("Employee Code") or "").strip()
         if not emp_code:
             errors.append(
-                f"Row {idx}: Employee Code is blank — this punch couldn't be matched to any "
+                f"Row {idx}: Employee Code is blank -this punch couldn't be matched to any "
                 "employee when exported. Fill in the correct Employee Code and re-upload just this row."
             )
             continue
 
         # "No punches found" marker rows (from includeAllEmployees exports) have
-        # an Employee Code but no Date/Punch Time/Punch Type — informational
+        # an Employee Code but no Date/Punch Time/Punch Type -informational
         # only, never a real punch. Skip silently so re-uploading a full-roster
         # file as-is never produces spurious errors.
         has_date = str(row.get("Date") or "").strip() != ""

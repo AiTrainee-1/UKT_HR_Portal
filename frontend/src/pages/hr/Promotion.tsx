@@ -153,7 +153,7 @@ export default function Promotion() {
                       onMouseDown={e => {
                         e.preventDefault();
                         setSelectedEmpId(emp.id);
-                        setInput(`${emp.employeeCode} — ${emp.firstName} ${emp.lastName}`);
+                        setInput(`${emp.employeeCode} -${emp.firstName} ${emp.lastName}`);
                       }}
                     >
                       <div className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center shrink-0">
@@ -223,7 +223,7 @@ export default function Promotion() {
                       onChange={e => setForm(f => ({ ...f, newDesignationId: e.target.value }))}
                       className="w-full h-9 rounded-md border px-3 text-sm bg-background"
                     >
-                      <option value="">— Keep current ({selectedEmp.designationTitle ?? "none"}) —</option>
+                      <option value="">-Keep current ({selectedEmp.designationTitle ?? "none"}) —</option>
                       {(designations ?? []).map(d => (
                         <option key={d.id} value={d.id}>{d.title}{d.departmentName ? ` (${d.departmentName})` : ""}</option>
                       ))}
@@ -236,7 +236,7 @@ export default function Promotion() {
                       onChange={e => setForm(f => ({ ...f, newDepartmentId: e.target.value }))}
                       className="w-full h-9 rounded-md border px-3 text-sm bg-background"
                     >
-                      <option value="">— Keep current ({selectedEmp.departmentName ?? "none"}) —</option>
+                      <option value="">-Keep current ({selectedEmp.departmentName ?? "none"}) —</option>
                       {(departments ?? []).map(d => (
                         <option key={d.id} value={d.id}>{d.name}</option>
                       ))}

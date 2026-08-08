@@ -105,7 +105,7 @@ export default function IdCards() {
       const res = await emailMutation.mutateAsync({ employeeId: card.id });
       toast({ title: `ID card emailed to ${res.sentTo}` });
     } catch (err: any) {
-      toast({ title: err?.message ?? "Email failed — check SMTP settings", variant: "destructive" });
+      toast({ title: err?.message ?? "Email failed -check SMTP settings", variant: "destructive" });
     }
   };
 

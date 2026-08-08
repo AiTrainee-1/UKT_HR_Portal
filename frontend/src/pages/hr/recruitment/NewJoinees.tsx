@@ -71,7 +71,7 @@ export default function NewJoinees() {
             New Joinees
           </h2>
           <p className="text-muted-foreground text-sm mt-0.5">
-            Employees who joined in the last 30 days — view, download, or email their Offer Letter.
+            Employees who joined in the last 30 days -view, download, or email their Offer Letter.
           </p>
         </div>
 

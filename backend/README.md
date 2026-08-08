@@ -1,4 +1,4 @@
-# UK Textile — Backend (Django REST Framework)
+# UK Textile -Backend (Django REST Framework)
 
 > For full project documentation, see the [root README](../README.md).
 
@@ -22,9 +22,9 @@ Health check: `GET http://localhost:8080/api/healthz`
 | Variable | Description |
 |----------|-------------|
 | `DATABASE_URL` | PostgreSQL connection string |
-| `ADMIN_USERNAME` | Super-admin bootstrap username (default `admin`) — every other HR-portal account is created from Account Management, not `.env` |
+| `ADMIN_USERNAME` | Super-admin bootstrap username (default `admin`) -every other HR-portal account is created from Account Management, not `.env` |
 | `ADMIN_PASSWORD` | Super-admin bootstrap password |
-| `JWT_SECRET` | JWT signing secret — never change after first deploy |
+| `JWT_SECRET` | JWT signing secret -never change after first deploy |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated allowed origins (frontend + mobile) |
 | `BIOMETRIC_HOST` | eSSL device local IP address |
 | `BIOMETRIC_PORT` | ZK protocol port (default `4370`) |

@@ -57,7 +57,7 @@ export interface LightRaysProps {
   className?: string;
 }
 
-/** Animated WebGL light-ray sweep (via ogl). Purely decorative — renders
+/** Animated WebGL light-ray sweep (via ogl). Purely decorative -renders
  * into its own canvas and cleans itself up on unmount. */
 export default function LightRays({
   raysOrigin = "top-center",

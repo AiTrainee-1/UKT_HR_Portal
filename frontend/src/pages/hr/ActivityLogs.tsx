@@ -131,7 +131,7 @@ export default function ActivityLogs() {
           <div>
             <h2 className="text-2xl font-black text-gray-900">Activity Logs</h2>
             <p className="text-muted-foreground text-sm mt-0.5">
-              Complete audit trail — every login, create, update, delete and approval
+              Complete audit trail -every login, create, update, delete and approval
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -309,7 +309,7 @@ export default function ActivityLogs() {
               <p className="text-sm font-medium text-gray-500">No activity logs found</p>
               <p className="text-xs mt-1">
                 {total === 0
-                  ? "Logs will appear here as you use the system — login, create employees, generate payroll, etc."
+                  ? "Logs will appear here as you use the system -login, create employees, generate payroll, etc."
                   : "Try adjusting your filters"}
               </p>
             </div>

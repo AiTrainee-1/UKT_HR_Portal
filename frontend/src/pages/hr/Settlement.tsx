@@ -173,7 +173,7 @@ function AdvanceDetailDrawer({
             <SheetHeader className="pb-0">
               <div className="flex items-center justify-between">
                 <SheetTitle className="text-base">
-                  {adv.advanceType === "term" ? "Term Loan" : "General Advance"} — Detail
+                  {adv.advanceType === "term" ? "Term Loan" : "General Advance"} -Detail
                 </SheetTitle>
                 {onDelete && (
                   <button
@@ -305,7 +305,7 @@ function AdvanceDetailDrawer({
             {adv.status === "closed" && (
               <div className="flex items-center justify-center gap-2 py-2 bg-green-50 border border-green-200 rounded-xl">
                 <CheckCheck size={15} className="text-green-600" />
-                <p className="text-sm font-semibold text-green-700">Fully Repaid — Completed</p>
+                <p className="text-sm font-semibold text-green-700">Fully Repaid -Completed</p>
               </div>
             )}
 
@@ -354,7 +354,7 @@ function AdvanceDetailDrawer({
                         <div>
                           <p className="text-sm font-semibold">{MONTH_FULL[r.month - 1]} {r.year}</p>
                           <p className="text-xs text-muted-foreground mt-0.5">
-                            {r.isProcessed ? "Deducted via payroll" : "Scheduled — payroll deduction"}
+                            {r.isProcessed ? "Deducted via payroll" : "Scheduled -payroll deduction"}
                           </p>
                         </div>
                       </div>

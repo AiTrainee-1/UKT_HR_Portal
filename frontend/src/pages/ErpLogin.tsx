@@ -126,7 +126,7 @@ export default function ErpLogin() {
 
           <div className="mt-6 p-3 rounded-lg text-center"
             style={{ background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.15)" }}>
-            <p className="text-xs text-amber-300/80 font-medium">Phase 2 — Under Development</p>
+            <p className="text-xs text-amber-300/80 font-medium">Phase 2 -Under Development</p>
             <p className="text-xs text-white/30 mt-0.5">ERP Portal will be available in the next release</p>
           </div>
         </motion.div>

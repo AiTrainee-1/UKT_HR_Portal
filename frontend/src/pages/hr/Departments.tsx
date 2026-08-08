@@ -359,7 +359,7 @@ export default function Departments() {
           <div>
             <h2 className="text-2xl font-black text-gray-900">Departments</h2>
             <p className="text-muted-foreground text-sm mt-0.5">
-              Manage departments and assign employees — click a card to expand
+              Manage departments and assign employees -click a card to expand
             </p>
           </div>
           <Button onClick={() => setShowDialog(true)} className="gap-2 self-start sm:self-auto">

@@ -2,7 +2,7 @@
 Casual Leave (CL) Module
 ========================
 Paid leave, staff-only, one per calendar month, eligibility after 6 months of
-service. Fully independent of LeaveRequest / permissions — its own table and
+service. Fully independent of LeaveRequest / permissions -its own table and
 its own approval flow (HR directly, or Department Head from the mobile app,
 configurable per-manager in User Management via can_approve_casual_leave).
 
@@ -71,7 +71,7 @@ def check_cl_eligibility(emp: Employee, for_date: date_type) -> tuple[bool, str 
         return False, "Employee is not active"
     months = _service_months(emp)
     if months is None:
-        return False, "Join date not set — contact HR"
+        return False, "Join date not set -contact HR"
     if months < ELIGIBILITY_MONTHS:
         return False, f"Eligible after {ELIGIBILITY_MONTHS} months of service (currently {months})"
     if _cl_used_in_month(emp.id, for_date.year, for_date.month):
@@ -112,13 +112,13 @@ def _write_attendance_for_cl(cl: CasualLeaveRequest, reviewer: str) -> None:
         record.shifts_earned = Decimal("1.00")
         record.is_late = False
         record.is_half_shift = False
-        record.override_note = "Casual Leave (paid) — approved"
+        record.override_note = "Casual Leave (paid) -approved"
     else:  # rejected
         record.status = "on_leave"
         record.shifts_earned = Decimal("0")
         record.is_late = False
         record.is_half_shift = False
-        record.override_note = "Casual Leave rejected — marked as leave"
+        record.override_note = "Casual Leave rejected -marked as leave"
     record.source = "manual"
     record.override_by = reviewer
     record.save()
@@ -169,7 +169,7 @@ def casual_leaves(request: Request) -> Response:
             qs = qs.filter(date__year=year)
         return Response([_cl_dict(r) for r in qs[:300]])
 
-    # POST — submit a CL request (mobile app or HR on behalf)
+    # POST -submit a CL request (mobile app or HR on behalf)
     data = request.data
     emp_id = None
     if code := data.get("employeeCode"):
@@ -290,7 +290,7 @@ def casual_leave_eligibility(request: Request) -> Response:
 
 # ── Self-service eligibility (mobile / web employee apps) ────────────────────
 # casual_leave_eligibility() above is HR-only (@require_hr, lists every staff
-# employee) — an employee token 403s on it. This is the single-employee
+# employee) -an employee token 403s on it. This is the single-employee
 # equivalent, self-scoped, reusing the same check_cl_eligibility() rule so
 # the two never disagree. Also reports the yearly usage/entitlement (12/yr)
 # an employee actually wants to see, which the HR board doesn't compute.

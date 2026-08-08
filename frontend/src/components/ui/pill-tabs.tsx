@@ -6,7 +6,7 @@ export type PillTabItem = {
   label: ReactNode;
   count?: number;
   icon?: ReactNode;
-  /** Overrides baseColor for just this pill's fill — for cases where each
+  /** Overrides baseColor for just this pill's fill -for cases where each
    * option carries its own meaning (e.g. amber=Production, green=Staff). */
   color?: string;
 };
@@ -23,7 +23,7 @@ type Tween = gsap.core.Tween;
  *
  * Unlike the original (where the circle-fill is a hover-only preview and
  * the "current page" gets a small dot indicator), the active item here
- * stays filled permanently — this is a segmented control, not a nav bar,
+ * stays filled permanently -this is a segmented control, not a nav bar,
  * so the selection needs a persistent state, not just a hover echo.
  */
 export function PillTabs({

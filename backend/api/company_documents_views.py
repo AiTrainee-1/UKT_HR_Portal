@@ -1,5 +1,5 @@
 """
-Company Documents — Offer Letter, Experience Letter, Salary Slip
+Company Documents -Offer Letter, Experience Letter, Salary Slip
 ==================================================================
 Backend-rendered (reportlab) PDF generation + per-document Settings, mirroring
 the existing Resignation Letter pattern (recruitment_views.py) and the
@@ -293,7 +293,7 @@ def offer_letter_email(request: Request, employee_id: int) -> Response:
     pdf_bytes = build_offer_letter_pdf(emp, opts)
     pdf_filename = f"offer_letter_{emp.employee_code}.pdf"
 
-    subject = f"Offer of Employment — {desig_title} | {company_name}"
+    subject = f"Offer of Employment -{desig_title} | {company_name}"
     html_body = f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1a3a2e">
       <div style="background:#0E4B3A;padding:20px;text-align:center;border-radius:8px 8px 0 0">
@@ -453,7 +453,7 @@ def build_salary_slip_pdf(s: SalarySlip) -> bytes:
     emp = s.employee
     MONTHS = ["", "January", "February", "March", "April", "May", "June",
               "July", "August", "September", "October", "November", "December"]
-    period_label = f"{MONTHS[s.month]} {s.year}" + (f" — Week {s.week_number}" if s.week_number else "")
+    period_label = f"{MONTHS[s.month]} {s.year}" + (f" -Week {s.week_number}" if s.week_number else "")
 
     other_allowances = float(s.allowances) + float(s.incentives) + float(s.bonuses)
     shifts_worked = s.completed_sessions if s.week_number else float(s.present_days)
@@ -463,7 +463,7 @@ def build_salary_slip_pdf(s: SalarySlip) -> bytes:
     )
 
     buffer = io.BytesIO()
-    decorator = PremiumPageDecorator(ds, ps, footer_note=f"System-generated payslip — {s.slip_number}")
+    decorator = PremiumPageDecorator(ds, ps, footer_note=f"System-generated payslip -{s.slip_number}")
     doc = new_premium_document(buffer, decorator)
 
     story = []
@@ -617,7 +617,7 @@ def build_salary_slip_pdf(s: SalarySlip) -> bytes:
     story.append(lower_row)
     story.append(Spacer(1, 0.45 * cm))
 
-    # Net Amount Paid — highlighted green card
+    # Net Amount Paid -highlighted green card
     words = num_to_words(int(float(s.net_salary)))
     net_card = Table(
         [["NET AMOUNT PAID", rupee(s.net_salary)], [f"Amount in Words: {words} ONLY", ""]],
@@ -680,7 +680,7 @@ def _compact_salary_slip_flowables(s: SalarySlip, ds: CompanyDocumentSettings, p
                                      primary, accent, col_width=13.2 * cm) -> list:
     """
     Full-detail salary-slip layout for the bulk "2 slips per landscape-A4
-    page" combined PDF (see salary_slip_bulk_pdf.py) — same header/info/
+    page" combined PDF (see salary_slip_bulk_pdf.py) -same header/info/
     earnings-deductions/net-amount/footer arrangement as the single-slip PDF
     (build_salary_slip_pdf), scaled to fit one ~13cm-wide column since the
     bulk PDF places one slip in the left half of the (landscape) page and one
@@ -689,7 +689,7 @@ def _compact_salary_slip_flowables(s: SalarySlip, ds: CompanyDocumentSettings, p
     emp = s.employee
     MONTHS = ["", "January", "February", "March", "April", "May", "June",
               "July", "August", "September", "October", "November", "December"]
-    period_label = f"{MONTHS[s.month]} {s.year}" + (f" — Week {s.week_number}" if s.week_number else "")
+    period_label = f"{MONTHS[s.month]} {s.year}" + (f" -Week {s.week_number}" if s.week_number else "")
     other_allowances = float(s.allowances) + float(s.incentives) + float(s.bonuses)
     shifts_worked = s.completed_sessions if s.week_number else float(s.present_days)
     leave_taken = float(s.paid_leave_days) + float(s.unpaid_leave_days)
@@ -714,7 +714,7 @@ def _compact_salary_slip_flowables(s: SalarySlip, ds: CompanyDocumentSettings, p
     header = Table(
         [[
             Paragraph((ps.slip_company_name or ps.company_name or "UK TEXTILES").upper(), company_style),
-            Paragraph(f"SALARY SLIP — {period_label}", title_style),
+            Paragraph(f"SALARY SLIP -{period_label}", title_style),
         ]],
         colWidths=[CW * 0.42, CW * 0.58],
     )
@@ -892,7 +892,7 @@ def salary_slip_pdf(request: Request, pk: int) -> Response:
 # ── Resignation Letter ──────────────────────────────────────────────────
 
 def build_resignation_letter_pdf(r) -> bytes:
-    """r is a ResignationRequest — kept loosely typed to avoid a circular import
+    """r is a ResignationRequest -kept loosely typed to avoid a circular import
     with recruitment_views.py, which owns that model's CRUD."""
     ps = PayrollSettings.get()
     ds = CompanyDocumentSettings.get(CompanyDocumentSettings.DOC_TYPE_RESIGNATION_LETTER)

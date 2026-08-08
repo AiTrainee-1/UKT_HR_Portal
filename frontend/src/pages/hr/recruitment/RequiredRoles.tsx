@@ -308,7 +308,7 @@ export default function RequiredRoles() {
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>
-              Set Required Headcount — {editTarget?.departmentName}
+              Set Required Headcount -{editTarget?.departmentName}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-1">

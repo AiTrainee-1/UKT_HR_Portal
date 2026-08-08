@@ -104,7 +104,7 @@ export default function EmployeeLeave() {
                       <div>
                         <p className="font-semibold text-sm capitalize">{leave.type} Leave</p>
                         <p className="text-xs text-muted-foreground mt-0.5">
-                          {leave.startDate} — {leave.endDate}
+                          {leave.startDate} -{leave.endDate}
                         </p>
                         <p className="text-xs text-foreground/70 mt-1 max-w-xs">{leave.reason}</p>
                         {leave.hrComment && (

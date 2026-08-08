@@ -259,7 +259,7 @@ export default function EmployeeDetail() {
           )}
         </div>
 
-        {/* Documents — Offer Letter / Experience Letter generation */}
+        {/* Documents -Offer Letter / Experience Letter generation */}
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
@@ -297,7 +297,7 @@ export default function EmployeeDetail() {
           </CardContent>
         </Card>
 
-        {/* Uploaded Documents — read-only here; upload/delete happens on the dedicated Documents page */}
+        {/* Uploaded Documents -read-only here; upload/delete happens on the dedicated Documents page */}
         <Card>
           <CardHeader className="pb-3 flex flex-row items-center justify-between">
             <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
@@ -349,7 +349,7 @@ export default function EmployeeDetail() {
           </CardContent>
         </Card>
 
-        {/* Employee ID Card — view only, download is the only action */}
+        {/* Employee ID Card -view only, download is the only action */}
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">

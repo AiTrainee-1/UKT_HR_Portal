@@ -193,7 +193,7 @@ export default function LeaveHoliday() {
           </div>
         </div>
 
-        {/* Summary — changes based on active tab */}
+        {/* Summary -changes based on active tab */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {(activeTab === "permissions" ? [
             { label: "Pending",   value: (permissions ?? []).filter(p => p.status === "pending").length,  color: "text-amber-700 bg-amber-50 border-amber-100" },

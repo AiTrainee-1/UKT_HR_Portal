@@ -1,5 +1,5 @@
 """
-Plain-stdlib distance calculation for geofenced attendance — no geopy
+Plain-stdlib distance calculation for geofenced attendance -no geopy
 dependency, consistent with this codebase's minimal-dependency style.
 """
 import math

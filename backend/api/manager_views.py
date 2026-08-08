@@ -650,11 +650,11 @@ def manager_update_attendance_status(request: Request, pk: int) -> Response:
 @require_auth
 def manager_update_on_duty_status(request: Request, pk: int) -> Response:
     """
-    Department Head — stage 1 of the On-Duty approval chain, deciding on the
+    Department Head -stage 1 of the On-Duty approval chain, deciding on the
     employee's destination request. Approval moves the session to pending_hr
     (HR still has to approve before the session goes active); rejection is
-    terminal. Shares resolve_on_duty_session_hod() with nothing else — it's
-    the only caller of stage 1 — but writes the same session row HR's
+    terminal. Shares resolve_on_duty_session_hod() with nothing else -it's
+    the only caller of stage 1 -but writes the same session row HR's
     endpoints (geo_attendance_views.py) read from.
     """
     from .geo_attendance_views import _on_duty_session_dict, resolve_on_duty_session_hod
@@ -706,10 +706,10 @@ def manager_update_on_duty_status(request: Request, pk: int) -> Response:
 @require_auth
 def manager_update_missing_punch_status(request: Request, pk: int) -> Response:
     """
-    Department Head — stage 1 of the Missing Punch approval chain. Approval
+    Department Head -stage 1 of the Missing Punch approval chain. Approval
     moves the request to pending_hr (HR still has to give the final
     approval before the punch is actually added to attendance); rejection
-    is terminal — HR never sees it.
+    is terminal -HR never sees it.
     """
     from .models import MissingPunchRequest
     from .missing_punch_views import _missing_punch_dict, resolve_missing_punch_hod

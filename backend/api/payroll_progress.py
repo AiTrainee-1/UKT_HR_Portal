@@ -1,7 +1,7 @@
 """
 In-process progress tracker for the payroll generation UI.
 
-Purely observational — nothing here participates in computing payroll (that
+Purely observational -nothing here participates in computing payroll (that
 logic lives untouched in payroll_views.py). The generate_payroll view calls
 start()/step()/finish() as it works through each employee so the frontend can
 poll /payroll/generate-progress and render a live progress indicator, the

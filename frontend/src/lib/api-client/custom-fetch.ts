@@ -56,7 +56,7 @@ function resolveMethod(input: RequestInfo | URL, explicitMethod?: string): strin
   return "GET";
 }
 
-// Use loose check for URL — some runtimes (e.g. React Native) polyfill URL
+// Use loose check for URL -some runtimes (e.g. React Native) polyfill URL
 // differently, so `instanceof URL` can fail.
 function isUrl(input: RequestInfo | URL): input is URL {
   return typeof URL !== "undefined" && input instanceof URL;
@@ -165,7 +165,7 @@ function buildErrorMessage(response: Response, data: unknown): string {
     getStringField(data, "error_description") ??
     getStringField(data, "error");
 
-  if (title && detail) return `${prefix}: ${title} — ${detail}`;
+  if (title && detail) return `${prefix}: ${title} -${detail}`;
   if (detail) return `${prefix}: ${detail}`;
   if (message) return `${prefix}: ${message}`;
   if (title) return `${prefix}: ${title}`;
@@ -372,23 +372,23 @@ export async function customFetch<T = unknown>(
     response = await fetch(input, { ...init, method, headers });
   } catch (cause) {
     // A rejected fetch() (as opposed to a resolved Response with a non-2xx
-    // status) means the request never reached the server at all — DNS
+    // status) means the request never reached the server at all -DNS
     // failure, connection refused, the tunnel/domain being down, etc. An
     // intentionally cancelled request (component unmount, query refetch
-    // superseding an in-flight one) is not a connectivity problem — ignore it.
+    // superseding an in-flight one) is not a connectivity problem -ignore it.
     if (!(cause instanceof DOMException && cause.name === "AbortError")) {
       markOffline("network");
     }
     throw cause;
   }
 
-  // Reaching this point means the server responded at all — the backend,
+  // Reaching this point means the server responded at all -the backend,
   // its domain, and any tunnel in front of it are confirmed reachable.
   if (!response.ok) {
     const errorData = await parseErrorBody(response, method);
     const errorCode = (errorData as { error?: string } | null)?.error;
     if (response.status === 503 && errorCode === "database_unavailable") {
-      // Backend is up but its database isn't — a different, more specific
+      // Backend is up but its database isn't -a different, more specific
       // failure than "can't reach the server at all".
       markOffline("database");
     } else {

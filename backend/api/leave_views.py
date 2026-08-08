@@ -318,7 +318,7 @@ def employee_request_action(request: Request, pk: int) -> Response:
 # ── Employee Permissions ──────────────────────────────────────────────────────
 #
 # There is NO hard cap on how many permission requests an employee can
-# submit — MONTHLY_PERMISSION_LIMIT below is purely informational (shown in
+# submit -MONTHLY_PERMISSION_LIMIT below is purely informational (shown in
 # the UI as "used X of 3 free"). Approved permissions beyond this number are
 # not blocked; they're picked up by the payroll deduction engine instead
 # (see shift_engine.compute_monthly_shift_summary), which treats each
@@ -446,7 +446,7 @@ def employee_permission_detail(request: Request, pk: int) -> Response:
         p.status = data["status"]
     if "hrComment" in data:
         p.hr_comment = data["hrComment"]
-    # approvedBy is always server-derived from the logged-in HR user — never
+    # approvedBy is always server-derived from the logged-in HR user -never
     # trust a client-supplied value here (a caller could spoof any name).
     if p.status != prev_status and p.status in ("approved", "rejected"):
         p.approved_by = get_hr_display_name(request)

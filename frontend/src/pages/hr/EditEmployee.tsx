@@ -57,7 +57,7 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>;
 
-// Pure mapping from the stored record to form field strings — called exactly
+// Pure mapping from the stored record to form field strings -called exactly
 // once, by the parent, only after the employee has actually loaded (see
 // EditEmployeeForm below). There is no async gap for this to race against.
 function employeeToFormData(employee: Employee): FormData {
@@ -127,7 +127,7 @@ export default function EditEmployee() {
   }
 
   // `employee` is guaranteed non-null from here on, so mounting this child
-  // now (never before) means every hook inside it — including useForm — runs
+  // now (never before) means every hook inside it -including useForm -runs
   // for the very first time with the real, already-loaded record. There is
   // no "form exists before its data does" window for any value to be lost in.
   return <EditEmployeeForm key={employee.id} empId={empId} employee={employee} />;
@@ -257,7 +257,7 @@ function EditEmployeeForm({ empId, employee }: { empId: number; employee: Employ
                 <FormField control={form.control} name="phone" render={({ field }) => (
                   <FormItem><FormLabel>Phone *</FormLabel><FormControl><Input data-testid="input-phone" {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
-                {/* Plain native <select> — Department/Designation/Branch below have always
+                {/* Plain native <select> -Department/Designation/Branch below have always
                     used this and have never had a display bug; the Radix-based dropdown
                     component this page used to use here could not. */}
                 <FormField control={form.control} name="gender" render={({ field }) => (
@@ -325,7 +325,7 @@ function EditEmployeeForm({ empId, employee }: { empId: number; employee: Employ
                         className="w-full h-9 rounded-md border px-3 text-sm bg-background"
                         data-testid="input-department"
                       >
-                        <option value="">— Select Department —</option>
+                        <option value="">-Select Department —</option>
                         {(departments ?? []).map((d) => (
                           <option key={d.id} value={String(d.id)}>{d.name}</option>
                         ))}
@@ -343,7 +343,7 @@ function EditEmployeeForm({ empId, employee }: { empId: number; employee: Employ
                         onChange={field.onChange}
                         className="w-full h-9 rounded-md border px-3 text-sm bg-background"
                       >
-                        <option value="">— Select Designation —</option>
+                        <option value="">-Select Designation —</option>
                         {(designations ?? []).map((d) => (
                           <option key={d.id} value={String(d.id)}>{d.title}</option>
                         ))}
@@ -367,7 +367,7 @@ function EditEmployeeForm({ empId, employee }: { empId: number; employee: Employ
                           onChange={field.onChange}
                           className="w-full h-9 rounded-md border px-3 text-sm bg-background"
                         >
-                          <option value="">— Select Branch —</option>
+                          <option value="">-Select Branch —</option>
                           {(branches ?? []).map((b) => (
                             <option key={b.id} value={String(b.id)}>{b.name}{b.isHeadOffice ? " (Head Office)" : ""}</option>
                           ))}
@@ -434,7 +434,7 @@ function EditEmployeeForm({ empId, employee }: { empId: number; employee: Employ
                   <FormItem>
                     <FormLabel>Device Enrollment ID</FormLabel>
                     <FormControl>
-                      <Input placeholder="e.g. 001 or 1570 — the ID used on the eSSL device" {...field} />
+                      <Input placeholder="e.g. 001 or 1570 -the ID used on the eSSL device" {...field} />
                     </FormControl>
                     <p className="text-xs text-muted-foreground mt-1">
                       Enter the exact User ID this employee was enrolled with on the biometric device. Check the device: Main Menu → User Mgt → All Users.

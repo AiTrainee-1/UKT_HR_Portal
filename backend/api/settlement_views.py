@@ -34,7 +34,7 @@ def _auto_create_repayments(adv: Advance) -> None:
         )
         return
 
-    # Term advance — generate monthly EMI schedule
+    # Term advance -generate monthly EMI schedule
     emi = float(adv.emi_amount)
     if emi <= 0:
         return
@@ -141,7 +141,7 @@ def advances(request: Request) -> Response:
     if not is_hr(request):
         return Response({"error": "HR access required"}, status=403)
 
-    # POST — create new advance
+    # POST -create new advance
     data = request.data
     if not data.get("employeeId") or not data.get("amount") or not data.get("advanceType"):
         return Response({"error": "employeeId, amount, advanceType are required"}, status=400)

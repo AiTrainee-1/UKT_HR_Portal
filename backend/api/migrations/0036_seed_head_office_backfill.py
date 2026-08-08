@@ -11,7 +11,7 @@ all have a null branch_id today. This migration:
   2. Backfills every Employee/Department/Holiday with a null branch_id to
      that Head Office branch, so nothing is left unassigned.
 
-HRUser.branch_id is deliberately left untouched (still null) — null means
+HRUser.branch_id is deliberately left untouched (still null) -null means
 "unscoped, sees every branch" (see permission_middleware.py), which is
 exactly how every existing HR/MD/Director login already behaves today. Only
 Employees/Departments/Holidays (physical entities tied to a location) get
@@ -43,7 +43,7 @@ def seed_and_backfill(apps, schema_editor):
 
 
 def noop_reverse(apps, schema_editor):
-    # Deliberately not reversible — un-assigning branch_id back to null would
+    # Deliberately not reversible -un-assigning branch_id back to null would
     # discard real information (which branch an employee was moved into
     # in the meantime) with no way to tell which rows were touched by this
     # migration versus assigned normally afterward.

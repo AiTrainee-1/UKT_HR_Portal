@@ -1,7 +1,7 @@
 """
 In-process progress tracker for the bulk resume screening UI.
 
-Structural mirror of payroll_progress.py — purely observational, nothing here
+Structural mirror of payroll_progress.py -purely observational, nothing here
 participates in the actual screening (that logic lives in resume_screening_ml.py
 and resume_screening_views.py). The bulk-upload view calls start()/step()/finish()
 as it works through each resume so the frontend can poll

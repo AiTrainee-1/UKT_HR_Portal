@@ -13,6 +13,6 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='payrollsettings',
             name='shift_punctuality_window_minutes',
-            field=models.IntegerField(db_column='shift_punctuality_window_minutes', default=60, help_text="Staff only. Even with a first+last punch pair, Full Shift also requires the first punch within this many minutes of the employee's assigned shift start time, and the last punch within the same window of the assigned shift end time — otherwise the day is capped at Half Shift, regardless of any approved Permission. Employees with no assigned shift have no reference to check against, so this never applies to them."),
+            field=models.IntegerField(db_column='shift_punctuality_window_minutes', default=60, help_text="Staff only. Even with a first+last punch pair, Full Shift also requires the first punch within this many minutes of the employee's assigned shift start time, and the last punch within the same window of the assigned shift end time -otherwise the day is capped at Half Shift, regardless of any approved Permission. Employees with no assigned shift have no reference to check against, so this never applies to them."),
         ),
     ]

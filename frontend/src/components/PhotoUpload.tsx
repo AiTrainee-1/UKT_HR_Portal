@@ -2,7 +2,7 @@ import { Upload, X, User } from "lucide-react";
 
 /**
  * Circular profile-photo uploader. Stores the image as a base64 data URL,
- * consistent with how Settings stores the company logo/signature — no file
+ * consistent with how Settings stores the company logo/signature -no file
  * server needed. Used for employee profile photos across the HR portal.
  */
 export default function PhotoUpload({

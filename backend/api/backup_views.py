@@ -7,13 +7,13 @@ actual archive building/validation/restore logic lives in
 backup_service.py so this file stays request-handling only.
 
 Restore is split into two requests on purpose:
-  1. POST backup/restore/validate — upload + validate + stage the file,
+  1. POST backup/restore/validate -upload + validate + stage the file,
      return its manifest and a guided-restore script. Safe, read-only
      w.r.t. the live app. @require_hr.
-  2. POST backup/restore/run — take an already-staged path and actually
+  2. POST backup/restore/run -take an already-staged path and actually
      run it, fully automated. This is the destructive one, so it's gated
      behind @require_super_admin on top of the normal settings.backup
-     permission, and it never runs in-process — it spawns the
+     permission, and it never runs in-process -it spawns the
      `restore_backup` management command as a detached OS process, since
      the request's own DB connection can't survive the schema drop it's
      asking for.
@@ -74,7 +74,7 @@ def backup_status(request: Request) -> Response:
 @api_view(["POST"])
 @require_hr
 def run_backup(request: Request) -> Response:
-    """Body: { "directory"?: str } — falls back to the saved backup_directory."""
+    """Body: { "directory"?: str } -falls back to the saved backup_directory."""
     ps = PayrollSettings.get()
     directory = str(request.data.get("directory") or ps.backup_directory or "").strip()
 
@@ -173,7 +173,7 @@ def backup_drive_view(request: Request) -> Response:
 @api_view(["POST"])
 @require_hr
 def backup_drive_test(request: Request) -> Response:
-    """Body: { "folderId"?: str, "serviceAccountJson"?: str } — falls back to the saved config."""
+    """Body: { "folderId"?: str, "serviceAccountJson"?: str } -falls back to the saved config."""
     drive = BackupDriveConfig.get()
     folder_id = str(request.data.get("folderId") or drive.folder_id or "").strip()
     service_account_json = str(request.data.get("serviceAccountJson") or drive.service_account_json or "")
@@ -193,7 +193,7 @@ def backup_drive_test(request: Request) -> Response:
 @parser_classes([MultiPartParser, FormParser])
 @require_hr
 def backup_restore_validate(request: Request) -> Response:
-    """Upload + validate a backup file. Read-only w.r.t. the live app — stages
+    """Upload + validate a backup file. Read-only w.r.t. the live app -stages
     the file and returns its manifest + a guided-restore script."""
     file = request.FILES.get("file")
     if not file:
@@ -222,7 +222,7 @@ def backup_restore_validate(request: Request) -> Response:
 @require_super_admin
 def backup_restore_run(request: Request) -> Response:
     """
-    Body: { "stagedPath": str } — from a prior restore/validate call.
+    Body: { "stagedPath": str } -from a prior restore/validate call.
     Kicks off the fully-automated restore as a detached process and returns
     immediately. Poll backup/restore/status for progress.
     """
@@ -257,7 +257,7 @@ def backup_restore_run(request: Request) -> Response:
 
 @api_view(["GET"])
 def backup_restore_status(request: Request) -> Response:
-    """Deliberately not @require_hr — during a restore the DB (and therefore
+    """Deliberately not @require_hr -during a restore the DB (and therefore
     the auth check) may be briefly unreachable, and this needs to keep
     working through that window so the UI can show real progress."""
     if not os.path.isfile(_STATUS_FILE):

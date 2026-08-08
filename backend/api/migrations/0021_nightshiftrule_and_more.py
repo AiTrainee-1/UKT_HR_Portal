@@ -57,7 +57,7 @@ class Migration(migrations.Migration):
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('night_date', models.DateField(db_column='night_date', help_text='The day the night shift started.')),
-                ('relaxation_date', models.DateField(db_column='relaxation_date', help_text='Next day — allowance applies here.')),
+                ('relaxation_date', models.DateField(db_column='relaxation_date', help_text='Next day -allowance applies here.')),
                 ('last_punch_out', models.TimeField(db_column='last_punch_out')),
                 ('crossed_midnight', models.BooleanField(db_column='crossed_midnight', default=False)),
                 ('allowed_until', models.TimeField(db_column='allowed_until')),

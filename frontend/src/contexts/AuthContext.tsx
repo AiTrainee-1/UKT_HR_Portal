@@ -38,7 +38,7 @@ export function canEdit(user: UserInfo | null, moduleKey: string): boolean {
 }
 
 // Route-level reachability for a single-page parent module (e.g. "settings",
-// whose tabs share one route with no routes of their own) — true if the
+// whose tabs share one route with no routes of their own) -true if the
 // user can view/edit the module itself OR any of its MODULE_TREE children.
 // See resolvePermissionOrChildren for why this differs from canView.
 export function canViewPage(user: UserInfo | null, moduleKey: string): boolean {
@@ -92,7 +92,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = () => {
-    // Best-effort — revokes the LoginSession row so the device disappears
+    // Best-effort -revokes the LoginSession row so the device disappears
     // from the Login Devices page immediately instead of lingering "active"
     // until the JWT's own 12h expiry. Never blocks local logout on this.
     if (token) {

@@ -356,7 +356,7 @@ export default function RecruitmentDashboard() {
       <Dialog open={modal?.type === "joinees"} onOpenChange={() => setModal(null)}>
         <DialogContent className="max-w-xl">
           <DialogHeader>
-            <DialogTitle>New Joinees — Last 30 Days ({joinees.length})</DialogTitle>
+            <DialogTitle>New Joinees -Last 30 Days ({joinees.length})</DialogTitle>
           </DialogHeader>
           {joinees.length === 0 ? (
             <p className="text-sm text-center text-[#006496]/40 py-6">No new joinees in the last 30 days.</p>
@@ -394,7 +394,7 @@ export default function RecruitmentDashboard() {
       <Dialog open={modal?.type === "leaves"} onOpenChange={() => setModal(null)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Recent Leaves — Last 30 Days ({leaves.length})</DialogTitle>
+            <DialogTitle>Recent Leaves -Last 30 Days ({leaves.length})</DialogTitle>
           </DialogHeader>
           {leaves.length === 0 ? (
             <p className="text-sm text-center text-[#006496]/40 py-6">No leave requests in the last 30 days.</p>

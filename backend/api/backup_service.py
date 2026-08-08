@@ -1,19 +1,19 @@
 """
-Full Application Backup / Restore — shared service module
+Full Application Backup / Restore -shared service module
 ===========================================================
 Builds and restores a full backup archive (database + every uploaded file
 under MEDIA_ROOT). Used by both the HR-facing views (backup_views.py) for
 manual/scheduled backups and the guided-restore script, and the
 `restore_backup` management command for the fully-automated restore path
 (which must run as a separate OS process, never inside the web request that
-triggered it — the request's own DB connection can't survive the drop it's
+triggered it -the request's own DB connection can't survive the drop it's
 asking for).
 
 Archive layout (a plain zip, no external `zip`/`tar` binary required):
     UKTex_Full_backup_<timestamp>.zip
-      ├── db.sql          — pg_dump plain-SQL output
-      ├── manifest.json    — timestamp, DB name, migration state, media file count
-      └── media/           — full recursive copy of MEDIA_ROOT
+      ├── db.sql          -pg_dump plain-SQL output
+      ├── manifest.json    -timestamp, DB name, migration state, media file count
+      └── media/           -full recursive copy of MEDIA_ROOT
 """
 
 import glob
@@ -210,15 +210,15 @@ def validate_backup_zip(path: str) -> dict:
         with zipfile.ZipFile(path, "r") as zf:
             names = zf.namelist()
             if "db.sql" not in names:
-                raise BackupServiceError("This file doesn't look like a UKTextiles backup — no db.sql found inside.")
+                raise BackupServiceError("This file doesn't look like a UKTextiles backup -no db.sql found inside.")
             manifest = {}
             if "manifest.json" in names:
                 manifest = json.loads(zf.read("manifest.json"))
             else:
-                warnings.append("No manifest.json found — this may be an older-format backup.")
+                warnings.append("No manifest.json found -this may be an older-format backup.")
             media_count = sum(1 for n in names if n.startswith("media/") and not n.endswith("/"))
             if media_count == 0:
-                warnings.append("No files under media/ — this backup may be database-only.")
+                warnings.append("No files under media/ -this backup may be database-only.")
     except zipfile.BadZipFile:
         raise BackupServiceError("This file isn't a valid zip archive.")
 
@@ -263,7 +263,7 @@ def build_guided_restore_script(staged_path: str, manifest: dict) -> str:
     media_root = str(dj_settings.MEDIA_ROOT)
     extract_dir = staged_path + "_extracted"
     return f"""@echo off
-REM UKTextiles — Guided Restore Script
+REM UKTextiles -Guided Restore Script
 REM Generated {datetime.now().isoformat()}
 REM Backup file: {staged_path}
 REM
@@ -292,7 +292,7 @@ def restore_from_zip(zip_path: str, status_callback=None) -> dict:
     """
     The actual restore. Must be called from a standalone process (the
     restore_backup management command), never from inside a live web
-    request — dropping the schema the request's own connection depends on
+    request -dropping the schema the request's own connection depends on
     is not safe to do in-process.
 
     Renames the current MEDIA_ROOT aside (never deletes it) before

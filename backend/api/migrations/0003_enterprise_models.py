@@ -9,10 +9,10 @@ New tables:
   roles, hr_users, audit_logs
 
 Modified tables:
-  employees  — added gender, date_of_birth, emergency_contact, photo_url,
+  employees  -added gender, date_of_birth, emergency_contact, photo_url,
                employment_type, designation_id, branch_id, reporting_manager_id,
                probation_end_date, confirmation_date, uan_number
-  departments — added branch_id FK
+  departments -added branch_id FK
 """
 
 from django.db import migrations, models

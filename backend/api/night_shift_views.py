@@ -1,5 +1,5 @@
 """
-Night Shift Relaxation — Dashboard & Rules API
+Night Shift Relaxation -Dashboard & Rules API
 ==============================================
 Read/manage the relaxation records produced by night_shift.py and the
 DB-driven rule table. All HR-only.

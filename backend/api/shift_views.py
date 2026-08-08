@@ -15,7 +15,7 @@ def auto_assign_production_shift(emp: Employee, effective_from: Optional[date] =
     """
     Assign the production shift to a production employee if they don't already
     have an active shift assignment.  Returns True if a new assignment was created.
-    Production shifts are gender-agnostic — every production employee uses the
+    Production shifts are gender-agnostic -every production employee uses the
     same shift configuration regardless of gender.
     """
     if emp.employment_type != "production" or emp.status != "active":
@@ -325,7 +325,7 @@ def bulk_shift_assignments(request: Request) -> Response:
 def sync_production_shifts(request: Request) -> Response:
     """
     Silently assign the production shift to all unassigned active production employees.
-    Uses today as effective_from — no date needed from the caller.
+    Uses today as effective_from -no date needed from the caller.
     """
     today = date.today()
     employees = scope_to_branch(Employee.objects, request).filter(employment_type="production", status="active")

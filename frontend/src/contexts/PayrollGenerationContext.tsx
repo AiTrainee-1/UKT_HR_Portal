@@ -7,7 +7,7 @@ import {
   type PayrollGenerateProgress,
 } from "@/lib/api-client/custom-hooks";
 
-// Mounted once at the app root (see App.tsx) — outside every routed page — so
+// Mounted once at the app root (see App.tsx) -outside every routed page -so
 // payroll generation survives navigation, same pattern as BiometricSyncContext.
 // Pages only ever read this context; none of them own the mutation or the
 // polling, so nothing is lost when a page unmounts mid-generation.
@@ -63,7 +63,7 @@ export function PayrollGenerationProvider({ children }: { children: ReactNode })
 
       const skippedCount = result.skippedDetails?.length ?? 0;
       toast({
-        title: `Payroll generated — ${result.generated} record(s) computed`,
+        title: `Payroll generated -${result.generated} record(s) computed`,
         description: skippedCount > 0
           ? `${skippedCount} employee(s) skipped. Open Generate Payroll again to see reasons.`
           : `${params.month}/${params.year} is ready.`,

@@ -32,9 +32,9 @@ import {
   CheckCircle2, XCircle, Ban, CornerDownRight,
 } from "lucide-react";
 
-// ─── Role Dialog (create/edit — name, description, per-module access) ─────────
+// ─── Role Dialog (create/edit -name, description, per-module access) ─────────
 
-// Only top-level modules get an explicit default — submodules start unset so
+// Only top-level modules get an explicit default -submodules start unset so
 // they visibly inherit their parent's level (see the "inherits from" hint
 // below) until an admin deliberately overrides one.
 function emptyPermissions(): Record<string, PermissionLevel> {
@@ -76,7 +76,7 @@ function ModuleRow({
                 ? "bg-blue-600 border-blue-600"
                 : "bg-white border-gray-300 hover:border-blue-400"
             }`}
-            aria-label={`${label} — ${lvl.label}`}
+            aria-label={`${label} -${lvl.label}`}
           >
             {effective === lvl.value && <CheckCircle2 size={11} className="text-white" />}
           </button>
@@ -134,7 +134,7 @@ function RoleDialog({ role, open, onClose }: { role: Role | null; open: boolean;
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Shield size={16} className="text-blue-600" />
-            {role ? `Edit Role — ${role.name}` : "Create Role"}
+            {role ? `Edit Role -${role.name}` : "Create Role"}
           </DialogTitle>
         </DialogHeader>
 
@@ -153,7 +153,7 @@ function RoleDialog({ role, open, onClose }: { role: Role | null; open: boolean;
           <div className="space-y-2">
             <Label>Module Access</Label>
             <p className="text-xs text-gray-400 -mt-1">
-              A submodule with no explicit setting inherits its parent's level — set the parent, then
+              A submodule with no explicit setting inherits its parent's level -set the parent, then
               override just the submodules that need to differ.
             </p>
             <div className="rounded-xl border overflow-hidden">
@@ -207,7 +207,7 @@ function RoleDialog({ role, open, onClose }: { role: Role | null; open: boolean;
   );
 }
 
-// ─── HR User Dialog (create/edit — username, password, role) ──────────────────
+// ─── HR User Dialog (create/edit -username, password, role) ──────────────────
 
 function HrUserDialog({
   user, roles, open, onClose,
@@ -278,7 +278,7 @@ function HrUserDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <UserCog size={16} className="text-blue-600" />
-            {user ? `Edit Account — ${user.username}` : "Create Account"}
+            {user ? `Edit Account -${user.username}` : "Create Account"}
           </DialogTitle>
         </DialogHeader>
 
@@ -423,7 +423,7 @@ export default function AccountManagement() {
               Account Management
             </h2>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Admin only — create HR-portal logins and control what each one can see and edit.
+              Admin only -create HR-portal logins and control what each one can see and edit.
             </p>
           </div>
         </div>

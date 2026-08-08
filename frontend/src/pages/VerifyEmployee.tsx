@@ -68,7 +68,7 @@ export default function VerifyEmployee() {
                 }`}
               >
                 {verified ? <ShieldCheck size={17} /> : <ShieldX size={17} />}
-                {verified ? "VERIFIED EMPLOYEE" : `EMPLOYEE — ${String(data.status).toUpperCase()}`}
+                {verified ? "VERIFIED EMPLOYEE" : `EMPLOYEE -${String(data.status).toUpperCase()}`}
               </div>
 
               {/* Photo + identity */}

@@ -5,7 +5,7 @@ import { useResumeScreening } from "@/contexts/ResumeScreeningContext";
 // Floating indicator that keeps bulk resume screening progress visible while
 // the user browses other pages. Hidden on the Resume Screening page itself,
 // since it already renders the full inline ResumeScreeningPipeline for the
-// same shared state — mirrors GlobalPayrollBanner's role for payroll runs.
+// same shared state -mirrors GlobalPayrollBanner's role for payroll runs.
 export default function GlobalResumeScreeningBanner() {
   const [pathname] = useLocation();
   const { showPipeline, isScreening, progress, dismiss } = useResumeScreening();
@@ -44,7 +44,7 @@ export default function GlobalResumeScreeningBanner() {
           </div>
           <p className="text-xs text-gray-500">
             {completed} / {total} resumes processed
-            {!isScreening && <span className="text-green-600 font-semibold"> — running in the background is finished</span>}
+            {!isScreening && <span className="text-green-600 font-semibold"> -running in the background is finished</span>}
           </p>
           {isScreening && progress?.currentFile && (
             <p className="text-[11px] text-gray-400 truncate mt-1">Processing: {progress.currentFile}</p>

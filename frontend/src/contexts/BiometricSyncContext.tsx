@@ -7,7 +7,7 @@ import {
   type SyncBiometricMode, type SyncDeviceId, type SyncResult, type SyncProgress,
 } from "@/lib/api-client/custom-hooks";
 
-// Mounted once at the app root (see App.tsx) — outside every routed page — so
+// Mounted once at the app root (see App.tsx) -outside every routed page -so
 // the sync survives navigation. Pages only ever read this context; none of
 // them own the mutation or the polling, so nothing is lost when a page
 // unmounts mid-sync.
@@ -23,7 +23,7 @@ interface BiometricSyncState {
 const BiometricSyncCtx = createContext<BiometricSyncState | null>(null);
 
 // Brief linger after completion so the pipeline can show its final "completed"
-// tick before disappearing — kept short since the actual device work is
+// tick before disappearing -kept short since the actual device work is
 // already done by the time we get here.
 const COMPLETION_LINGER_MS = 1000;
 
@@ -52,7 +52,7 @@ export function BiometricSyncProvider({ children }: { children: ReactNode }) {
         const unmatched: string[] = result.unmatchedDeviceIds ?? [];
         const deviceErrors: string[] = result.deviceErrors ?? [];
         toast({
-          title: `Sync complete — ${result.created ?? 0} new records`,
+          title: `Sync complete -${result.created ?? 0} new records`,
           description: [
             unmatched.length > 0 ? `⚠ ${unmatched.length} device ID(s) had no matching employee: ${unmatched.join(", ")}` : null,
             deviceErrors.length > 0 ? `⚠ ${deviceErrors.join("; ")}` : null,

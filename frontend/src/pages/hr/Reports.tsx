@@ -652,7 +652,7 @@ export default function Reports() {
                   <option value="">All Employees</option>
                   {employees?.map(e => (
                     <option key={e.id} value={e.id}>
-                      {e.employeeCode} — {e.firstName} {e.lastName}
+                      {e.employeeCode} -{e.firstName} {e.lastName}
                     </option>
                   ))}
                 </select>

@@ -174,7 +174,7 @@ function SessionConfigPanel() {
           </Button>
         </div>
         <p className="text-xs text-muted-foreground mt-0.5">
-          Not used by current production payroll — pay is now Total Shifts × Salary Per Shift
+          Not used by current production payroll -pay is now Total Shifts × Salary Per Shift
           (configure shift segments and punch times in Settings → Payroll). This panel only affects
           historical payroll records still shown in the old session format.
         </p>
@@ -187,7 +187,7 @@ function SessionConfigPanel() {
           <div className="flex items-start gap-2 p-3 rounded-lg bg-gray-50 border border-gray-100">
             <AlertCircle size={14} className="text-gray-400 mt-0.5 shrink-0" />
             <p className="text-xs text-gray-500">
-              No legacy sessions configured — nothing to do here. Current production payroll doesn't need this.
+              No legacy sessions configured -nothing to do here. Current production payroll doesn't need this.
             </p>
           </div>
         ) : (
@@ -247,7 +247,7 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <IndianRupee size={18} className="text-green-600" />
-            Salary Breakdown — {data ? `${data.employee.name}` : "Loading…"}
+            Salary Breakdown -{data ? `${data.employee.name}` : "Loading…"}
           </DialogTitle>
           {data && (
             <p className="text-xs text-muted-foreground">
@@ -312,8 +312,8 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
                       Attendance calculated in{" "}
                       <strong className="uppercase">{bd.attendanceMode} mode</strong>
                       {bd.attendanceMode === "simple"
-                        ? " — morning + evening punch model (configured in Settings → Attendance)."
-                        : " — 4-punch engine (configured in Settings → Attendance)."}
+                        ? " -morning + evening punch model (configured in Settings → Attendance)."
+                        : " -4-punch engine (configured in Settings → Attendance)."}
                     </p>
                   )}
                   {(bd.summary.lateDays ?? 0) > 0 && (
@@ -332,8 +332,26 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
                       </strong></p>
                       <p>Days arrived after deadline: <strong>{bd.summary.lateDays}</strong></p>
                       {bd.attendanceMode === "simple" && (
-                        <p className="text-amber-700/80">Simple mode: only the morning punch is checked — lunch-return delays are ignored.</p>
+                        <p className="text-amber-700/80">Simple mode: only the morning punch is checked -lunch-return delays are ignored.</p>
                       )}
+                    </div>
+                  )}
+                  {(bd.summary.withoutPermissionDays ?? 0) > 0 && (
+                    <div className="mt-2 rounded-md bg-rose-50 border border-rose-100 px-3 py-2 text-xs text-rose-800 space-y-0.5">
+                      <p className="font-semibold flex items-center gap-1">
+                        <AlertTriangle size={11} /> Without Permission Detection
+                      </p>
+                      <p>
+                        Arriving late or leaving early inside a 1-hour window around the shift's start/end
+                        time with <strong>no approved Permission</strong> covering it. Each day's exact reason
+                        is shown in the Day-by-Day table below.
+                      </p>
+                      <p>
+                        <strong>{bd.summary.withoutPermissionDays}</strong> day{bd.summary.withoutPermissionDays !== 1 ? "s" : ""} flagged this month
+                        {(bd.deductions.withoutPermissionPenalty ?? 0) === 0 && (
+                          <span> — no deduction yet (Settings → Late Detection → Without Permission has no slabs configured).</span>
+                        )}
+                      </p>
                     </div>
                   )}
                   {(bd.summary.halfShiftDays ?? 0) > 0 && (
@@ -441,6 +459,19 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
                         <span className="font-semibold text-orange-700">- ₹{(bd.deductions.lateShiftPenalty ?? 0).toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
                       </div>
                     )}
+                    {(bd.deductions.withoutPermissionPenalty ?? 0) > 0 && (
+                      <div className="flex justify-between px-3 py-2 bg-rose-50/40">
+                        <span className="text-rose-800 font-medium">
+                          Without Permission Penalty
+                          {bd.deductions.withoutPermissionSummary && (
+                            <span className="ml-1.5 font-normal text-rose-600 text-xs">
+                              ({bd.deductions.withoutPermissionSummary.totalCount} occurrence{bd.deductions.withoutPermissionSummary.totalCount !== 1 ? "s" : ""} · {bd.deductions.withoutPermissionSummary.billableCount} billable · {bd.deductions.withoutPermissionSummary.shiftDeductions} shift{bd.deductions.withoutPermissionSummary.shiftDeductions !== 1 ? "s" : ""} deducted)
+                            </span>
+                          )}
+                        </span>
+                        <span className="font-semibold text-rose-700">- ₹{(bd.deductions.withoutPermissionPenalty ?? 0).toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                      </div>
+                    )}
                     {bd.deductions.total === 0 && (
                       <div className="px-3 py-2 text-muted-foreground text-xs">No deductions</div>
                     )}
@@ -463,7 +494,8 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
                           <th className="text-left px-3 py-2 font-semibold text-gray-600">Status</th>
                           <th className="text-left px-3 py-2 font-semibold text-gray-600">First In</th>
                           <th className="text-left px-3 py-2 font-semibold text-gray-600">Last Out</th>
-                          <th className="text-left px-3 py-2 font-semibold text-gray-600">Late?</th>
+                          <th className="text-left px-3 py-2 font-semibold text-gray-600">Detection</th>
+                          <th className="text-left px-3 py-2 font-semibold text-gray-600">Reason</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y">
@@ -481,7 +513,16 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
                             <td className="px-3 py-1.5 font-mono text-green-700">{d.firstIn ?? "—"}</td>
                             <td className="px-3 py-1.5 font-mono text-blue-700">{d.lastOut ?? "—"}</td>
                             <td className="px-3 py-1.5">
-                              {d.isLate ? <span className="text-amber-600 font-semibold">Late</span> : <span className="text-gray-300">—</span>}
+                              {d.isLate ? (
+                                d.withoutPermission ? (
+                                  <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 font-semibold whitespace-nowrap">Without Permission</span>
+                                ) : (
+                                  <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-semibold whitespace-nowrap">Late</span>
+                                )
+                              ) : <span className="text-gray-300">—</span>}
+                            </td>
+                            <td className="px-3 py-1.5 text-gray-500 max-w-[280px]">
+                              {d.isLate ? (d.lateReason ?? <span className="text-gray-300">—</span>) : null}
                             </td>
                           </tr>
                         ))}
@@ -502,7 +543,7 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
               </>
             )}
 
-            {/* Production breakdown — current shift-based payroll */}
+            {/* Production breakdown -current shift-based payroll */}
             {bd.type === "production" && bd.salaryPerShift != null && (
               <>
                 <div>
@@ -624,7 +665,7 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
               </>
             )}
 
-            {/* Production breakdown — legacy session-based payroll (historical records) */}
+            {/* Production breakdown -legacy session-based payroll (historical records) */}
             {bd.type === "production" && bd.salaryPerShift == null && (
               <>
                 <div>
@@ -773,8 +814,8 @@ function GeneratePayrollDialog({ onClose, onSuccess }: { onClose: () => void; on
       return;
     }
     // Fire-and-forget: the PayrollGenerationContext owns the request and the
-    // progress polling from here, so generation keeps running — and stays
-    // visible via the pipeline/banner — even after this dialog (or the whole
+    // progress polling from here, so generation keeps running -and stays
+    // visible via the pipeline/banner -even after this dialog (or the whole
     // page) unmounts.
     triggerGenerate({
       month, year, runType,
@@ -885,7 +926,7 @@ function GeneratePayrollDialog({ onClose, onSuccess }: { onClose: () => void; on
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Skipped Employees Dialog — on-demand, read-only preview of who Generate
+//  Skipped Employees Dialog -on-demand, read-only preview of who Generate
 //  Payroll would currently skip and why. Unlike the post-generation toast,
 //  this works any time HR wants to check, not just right after a run.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1085,7 +1126,7 @@ export default function PayrollFull() {
   };
   const skipCheckPeriodLabel = filterType === "staff"
     ? `${MONTH_NAMES[filterMonth - 1]} ${filterYear}`
-    : `${MONTH_NAMES[filterMonth - 1]} ${filterYear} — ${prodWeek === "week12" ? "Week 1 & 2" : "Week 3 & 4"}`;
+    : `${MONTH_NAMES[filterMonth - 1]} ${filterYear} -${prodWeek === "week12" ? "Week 1 & 2" : "Week 3 & 4"}`;
 
   return (
     <HrLayout>
@@ -1194,11 +1235,11 @@ export default function PayrollFull() {
               items={[
                 {
                   value: "week12",
-                  label: <>Week 1 &amp; 2 ({week12Runs.length}) <span className="font-normal opacity-70 text-xs">— {MONTH_SHORT[filterMonth - 1]} 1–15</span></>,
+                  label: <>Week 1 &amp; 2 ({week12Runs.length}) <span className="font-normal opacity-70 text-xs">-{MONTH_SHORT[filterMonth - 1]} 1–15</span></>,
                 },
                 {
                   value: "week34",
-                  label: <>Week 3 &amp; 4 ({week34Runs.length}) <span className="font-normal opacity-70 text-xs">— {MONTH_SHORT[filterMonth - 1]} 16–{new Date(filterYear, filterMonth, 0).getDate()}</span></>,
+                  label: <>Week 3 &amp; 4 ({week34Runs.length}) <span className="font-normal opacity-70 text-xs">-{MONTH_SHORT[filterMonth - 1]} 16–{new Date(filterYear, filterMonth, 0).getDate()}</span></>,
                 },
               ]}
               value={prodWeek}
@@ -1299,7 +1340,7 @@ export default function PayrollFull() {
               <AlertCircle size={14} className="text-blue-500 mt-0.5 shrink-0" />
               <div className="text-xs text-gray-500 space-y-0.5">
                 <p><strong>Staff:</strong> Monthly salary, pro-rated by working days (Mon–Sat or Mon–Fri). PF = 12% of basic. ESI = 0.75% of gross (if salary ≤ ₹21,000).</p>
-                <p><strong>Production:</strong> Bi-weekly shift pay. Pay = total shifts earned × salary per shift, computed from punch-time coverage of the configured shift segments. No leave/permission — Sunday is a normal working day.</p>
+                <p><strong>Production:</strong> Bi-weekly shift pay. Pay = total shifts earned × salary per shift, computed from punch-time coverage of the configured shift segments. No leave/permission -Sunday is a normal working day.</p>
                 <p><strong>Advances</strong> are auto-deducted from the monthly repayment schedule configured in the Advances module.</p>
               </div>
             </div>

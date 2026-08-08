@@ -157,7 +157,7 @@ export default function AttendanceSearchSection({
               Employee Attendance Search
             </CardTitle>
             <p className="text-[11px] text-muted-foreground mt-0.5">
-              Search by employee code — view weekly attendance and submit manual edits.
+              Search by employee code -view weekly attendance and submit manual edits.
               Edits require Department Head approval before they become final and reach payroll.
             </p>
           </div>
@@ -273,7 +273,7 @@ export default function AttendanceSearchSection({
                 </div>
               </div>
 
-              {/* Assigned shift + grace period — the sole source of late/half-shift detection */}
+              {/* Assigned shift + grace period -the sole source of late/half-shift detection */}
               {data.assignedShift ? (
                 <div className="flex items-center gap-2 flex-wrap text-xs bg-white border rounded-lg px-3 py-2">
                   <ShieldCheck size={13} className="text-blue-500 shrink-0" />
@@ -287,12 +287,12 @@ export default function AttendanceSearchSection({
                   <span className="text-gray-300">|</span>
                   <span className="text-gray-500">Grace Period:</span>
                   <strong className="text-gray-800">{data.assignedShift.gracePeriodMinutes} min</strong>
-                  <span className="text-gray-400">— all late/half-shift detection below uses only this shift's settings.</span>
+                  <span className="text-gray-400">-all late/half-shift detection below uses only this shift's settings.</span>
                 </div>
               ) : (
                 <div className="flex items-center gap-2 text-xs bg-amber-50 border border-amber-200 text-amber-700 rounded-lg px-3 py-2">
                   <ShieldCheck size={13} className="shrink-0" />
-                  No shift assigned — late detection cannot run for this employee until a shift is assigned in Manage Shift.
+                  No shift assigned -late detection cannot run for this employee until a shift is assigned in Manage Shift.
                 </div>
               )}
             </div>
@@ -542,7 +542,7 @@ export default function AttendanceSearchSection({
                         : "bg-white text-gray-600 hover:bg-gray-50"
                     }`}
                   >
-                    {form.isLate ? "⚠ Marked as Late — click to clear" : "Mark as Late"}
+                    {form.isLate ? "⚠ Marked as Late -click to clear" : "Mark as Late"}
                   </button>
                 </>
               )}
@@ -551,7 +551,7 @@ export default function AttendanceSearchSection({
               <div className="space-y-1.5">
                 <Label className="text-xs">Reason for this change <span className="text-gray-400 font-normal">(shown to the Department Head)</span></Label>
                 <Input
-                  placeholder="e.g. CCTV verified — device missed punch"
+                  placeholder="e.g. CCTV verified -device missed punch"
                   value={form.note}
                   onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
                 />
@@ -572,7 +572,7 @@ export default function AttendanceSearchSection({
               </div>
               <p className="text-[10px] text-muted-foreground -mt-1">
                 This does not change attendance immediately. The employee's Department Head
-                reviews the request on the mobile app — only an approval writes it to the record
+                reviews the request on the mobile app -only an approval writes it to the record
                 used by payroll. Use the ↩ button in the table to instantly revert an already-approved edit.
               </p>
             </div>

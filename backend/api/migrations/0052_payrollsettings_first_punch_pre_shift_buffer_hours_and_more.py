@@ -14,11 +14,11 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='payrollsettings',
             name='first_punch_pre_shift_buffer_hours',
-            field=models.DecimalField(db_column='first_punch_pre_shift_buffer_hours', decimal_places=1, default=Decimal('2.0'), help_text="Staff only. Protects a genuinely early arrival from being stolen by the setting above — the reattribution window above can never reach closer than this many hours before the next day's own shift start time. Set to 0 to remove this cap.", max_digits=4),
+            field=models.DecimalField(db_column='first_punch_pre_shift_buffer_hours', decimal_places=1, default=Decimal('2.0'), help_text="Staff only. Protects a genuinely early arrival from being stolen by the setting above -the reattribution window above can never reach closer than this many hours before the next day's own shift start time. Set to 0 to remove this cap.", max_digits=4),
         ),
         migrations.AddField(
             model_name='payrollsettings',
             name='last_punch_post_shift_grace_hours',
-            field=models.DecimalField(db_column='last_punch_post_shift_grace_hours', decimal_places=1, default=Decimal('9.0'), help_text="Staff only. A punch on the NEXT calendar date, up to this many hours after the shift's end time, is treated as this day's forgotten last-out instead of tomorrow's first punch — e.g. 9 hours after a 20:00 end covers a punch made as late as 05:00. Only applies when this day doesn't already have a punch at or after its own shift end. Set to 0 to disable.", max_digits=4),
+            field=models.DecimalField(db_column='last_punch_post_shift_grace_hours', decimal_places=1, default=Decimal('9.0'), help_text="Staff only. A punch on the NEXT calendar date, up to this many hours after the shift's end time, is treated as this day's forgotten last-out instead of tomorrow's first punch -e.g. 9 hours after a 20:00 end covers a punch made as late as 05:00. Only applies when this day doesn't already have a punch at or after its own shift end. Set to 0 to disable.", max_digits=4),
         ),
     ]

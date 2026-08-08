@@ -4,7 +4,7 @@
 # duplicate Attendance rows (same employee/date, no DB-level uniqueness ever
 # enforced). Any subsequent sync revisiting one of those days crashed with
 # Attendance.MultipleObjectsReturned via update_or_create(), aborting the whole
-# device sync partway through — dedupe + add the missing unique constraint.
+# device sync partway through -dedupe + add the missing unique constraint.
 
 from django.db import migrations
 
@@ -24,7 +24,7 @@ def dedupe_attendance(apps, schema_editor):
 
 
 def noop_reverse(apps, schema_editor):
-    pass  # deleted duplicate rows are not recreated on reverse — nothing to do
+    pass  # deleted duplicate rows are not recreated on reverse -nothing to do
 
 
 class Migration(migrations.Migration):

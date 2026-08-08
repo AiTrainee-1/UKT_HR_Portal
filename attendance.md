@@ -1,4 +1,4 @@
-# Attendance Integration Guide — UKTextiles HRMS
+# Attendance Integration Guide -UKTextiles HRMS
 
 ## Overview
 
@@ -20,12 +20,12 @@ AttendanceLog table (PostgreSQL)
      ↓
 Attendance Summary API
      ↓
-HR Portal (React) — Attendance Page
+HR Portal (React) -Attendance Page
 ```
 
 ---
 
-## 1. Device Setup — AiFace-Mars
+## 1. Device Setup -AiFace-Mars
 
 ### 1.1 Network Configuration
 
@@ -289,7 +289,7 @@ For payroll:
 | Employee not recognized     | Re-enroll employee face; ensure good lighting          |
 | Person ID mismatch          | Verify device Person ID matches `employee_code` in HRMS |
 | Punch shows wrong date/time | Sync device time via NTP: **Menu → System → Date/Time** |
-| Duplicate punches           | Normal — system uses first IN and last OUT of the day  |
+| Duplicate punches           | Normal -system uses first IN and last OUT of the day  |
 | Server not receiving pushes | Check firewall; ensure Django server is running; check `X-Device-Key` header |
 
 ---
@@ -309,9 +309,9 @@ For payroll:
 
 ## **No, you don't always have to depend on the biometric device.** You have three ways to record attendance:
 
-1. **Biometric (automatic)** — AiFace-Mars pushes to `/api/biometric/punch` on each punch, zero manual work
-2. **Manual by HR** — the "Add Attendance" button on the Attendance page, for CCTV-verified cases
-3. **Future: Employee mobile app** — can submit a punch request which HR approves
+1. **Biometric (automatic)** -AiFace-Mars pushes to `/api/biometric/punch` on each punch, zero manual work
+2. **Manual by HR** -the "Add Attendance" button on the Attendance page, for CCTV-verified cases
+3. **Future: Employee mobile app** -can submit a punch request which HR approves
 
 ---
 
@@ -319,19 +319,19 @@ For payroll:
 
 | Table | What it stores |
 |---|---|
-| `AttendanceLog` | Every individual punch event (time, IN/OUT, source) — permanent |
-| `Attendance` | Daily summary record (present/absent, hours) — permanent |
+| `AttendanceLog` | Every individual punch event (time, IN/OUT, source) -permanent |
+| `Attendance` | Daily summary record (present/absent, hours) -permanent |
 
 PostgreSQL persists this forever until you explicitly delete it. There's no expiry or cleanup.
 
 ---
 
-**The only risk:** if your server is down exactly when the device tries to push, that push event is lost — most AiFace-Mars devices retry a few times but don't queue indefinitely.
+**The only risk:** if your server is down exactly when the device tries to push, that push event is lost -most AiFace-Mars devices retry a few times but don't queue indefinitely.
 
 To protect against this, you have two practical options:
 
-1. **Pull instead of push** — run a background job (cron) that polls the device's local log API every few minutes and imports missed punches. eSSL devices expose a local HTTP API for this.
-2. **Keep the server always running** — use a process manager like `supervisord` or run Django behind `gunicorn` as a systemd service so it restarts automatically on crash.
+1. **Pull instead of push** -run a background job (cron) that polls the device's local log API every few minutes and imports missed punches. eSSL devices expose a local HTTP API for this.
+2. **Keep the server always running** -use a process manager like `supervisord` or run Django behind `gunicorn` as a systemd service so it restarts automatically on crash.
 
 For a garments factory with stable on-premise infrastructure, option 2 is usually enough.
 

@@ -137,7 +137,7 @@ class Command(BaseCommand):
         self._seed_audit_logs()
 
         self.stdout.write(self.style.SUCCESS(
-            f"\n✓ Seed complete — {len(staff_emps)} staff + {len(prod_emps)} production employees seeded for June 2026."
+            f"\n✓ Seed complete -{len(staff_emps)} staff + {len(prod_emps)} production employees seeded for June 2026."
         ))
 
     # ── Flush ────────────────────────────────────────────────────────────────
@@ -382,11 +382,11 @@ class Command(BaseCommand):
                         time(20, 0) if emp.employment_type == "production" else time(18, 0)
 
             for d in work_dates:
-                # 92% attendance rate — some absences
+                # 92% attendance rate -some absences
                 if random.random() < 0.08:
                     continue
 
-                # Punch IN — small variation around 9:00
+                # Punch IN -small variation around 9:00
                 in_min = random.randint(-5, 20)  # slightly early or late
                 in_h, in_m = divmod(9 * 60 + in_min, 60)
                 punch_in = time(max(8, in_h), in_m)
@@ -450,7 +450,7 @@ class Command(BaseCommand):
             (employees[4],  "advance",          "Medical Advance Request",       "Need ₹5000 advance for medical emergency.",      "pending"),
             (employees[8],  "shift_correction", "Punch Missing on June 9",       "I was present on June 9 but punch not recorded.", "in_review"),
             (employees[11], "permission",       "Early Leave - June 20",         "Doctor appointment at 4 PM on June 20.",          "approved"),
-            (employees[15], "general",          "Uniform Request",               "Need new uniform — old one is worn out.",          "pending"),
+            (employees[15], "general",          "Uniform Request",               "Need new uniform -old one is worn out.",          "pending"),
             (employees[20], "salary_enquiry",   "PF Deduction Query",            "Why was extra PF deducted in May slip?",          "approved"),
             (employees[24], "advance",          "Festival Advance",              "Requesting ₹3000 advance for Eid celebration.",   "approved"),
             (employees[3],  "shift_correction", "OT not recorded - June 15",     "Worked until 9 PM but OT not shown.",             "pending"),
@@ -512,10 +512,10 @@ class Command(BaseCommand):
     def _seed_payroll_run(self, run_type, employees, week=None):
         if run_type == "monthly":
             code = f"PAY-{YEAR}-{MONTH:02d}-M"
-            label = "Monthly Staff Payroll — June 2026"
+            label = "Monthly Staff Payroll -June 2026"
         else:
             code = f"PAY-{YEAR}-{MONTH:02d}-W{week}"
-            label = f"Production Bi-Weekly W{week} — June 2026"
+            label = f"Production Bi-Weekly W{week} -June 2026"
 
         # Calculate totals
         total_gross = sum(
@@ -670,14 +670,14 @@ class Command(BaseCommand):
     def _seed_audit_logs(self):
         logs = [
             ("hr_admin",     "login",   "auth",      "HR Admin logged in",                          "192.168.1.10"),
-            ("priya.hr",     "create",  "employees", "Created employee PRD001 — Selvam K",          "192.168.1.12"),
-            ("hr_admin",     "approve", "leave",     "Approved leave for STF002 — Priya Sharma",    "192.168.1.10"),
+            ("priya.hr",     "create",  "employees", "Created employee PRD001 -Selvam K",          "192.168.1.12"),
+            ("hr_admin",     "approve", "leave",     "Approved leave for STF002 -Priya Sharma",    "192.168.1.10"),
             ("ravi.payroll", "create",  "payroll",   "Created payroll run PAY-2026-06-M",           "192.168.1.15"),
             ("hr_admin",     "approve", "payroll",   "Approved payroll run PAY-2026-06-M",          "192.168.1.10"),
             ("ravi.payroll", "lock",    "payroll",   "Locked payroll run PAY-2026-06-M",            "192.168.1.15"),
-            ("priya.hr",     "update",  "employees", "Updated salary for PRD014 — Senthil G",       "192.168.1.12"),
-            ("ravi.payroll", "export",  "reports",   "Exported payroll report — June 2026 (CSV)",   "192.168.1.15"),
-            ("hr_admin",     "approve", "advances",  "Approved advance for PRD007 — Sumathi V",     "192.168.1.10"),
+            ("priya.hr",     "update",  "employees", "Updated salary for PRD014 -Senthil G",       "192.168.1.12"),
+            ("ravi.payroll", "export",  "reports",   "Exported payroll report -June 2026 (CSV)",   "192.168.1.15"),
+            ("hr_admin",     "approve", "advances",  "Approved advance for PRD007 -Sumathi V",     "192.168.1.10"),
             ("priya.hr",     "create",  "leave",     "Added holiday: Company Foundation Day",       "192.168.1.12"),
         ]
 

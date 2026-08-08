@@ -3,7 +3,7 @@ One-time cutover: the HR Portal used to authenticate MD/Director accounts
 straight from .env (MD_USERNAME/PASSWORD, DIRECTOR1/2_USERNAME/PASSWORD) —
 see the removed settings.HR_ACCOUNTS. Now that login goes through the HRUser
 table (Account Management), this migration seeds matching HRUser rows from
-those env vars — if they're still present in .env at migrate time — so MD and
+those env vars -if they're still present in .env at migrate time -so MD and
 Directors don't lose access on cutover day. A "Full Access" Role (every
 module = edit) is created to mirror their previous unrestricted access;
 Admin can rename accounts / dial back permissions afterward from the portal.
@@ -41,7 +41,7 @@ def seed_legacy_accounts(apps, schema_editor):
     full_access_role, _ = Role.objects.get_or_create(
         name="Full Access",
         defaults={
-            "description": "Every module editable — mirrors pre-cutover MD/Director access.",
+            "description": "Every module editable -mirrors pre-cutover MD/Director access.",
             "permissions": {},  # filled in below once the module list is known at runtime
             "is_system": True,
         },

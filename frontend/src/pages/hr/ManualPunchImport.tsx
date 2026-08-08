@@ -163,7 +163,7 @@ export default function ManualPunchImport() {
       const unmatched = punchRows.filter((r) => !r.matched).length;
       toast({
         title: `${punchRows.length} punch${punchRows.length === 1 ? "" : "es"} downloaded`,
-        description: unmatched > 0 ? `${unmatched} didn't match an employee — shown highlighted in the file.` : undefined,
+        description: unmatched > 0 ? `${unmatched} didn't match an employee -shown highlighted in the file.` : undefined,
       });
       if (body.deviceErrors?.length) {
         toast({ title: "Some devices could not be reached", description: body.deviceErrors.join("; "), variant: "destructive" });
@@ -233,7 +233,7 @@ export default function ManualPunchImport() {
           <div>
             <h2 className="text-2xl font-black text-gray-900">Manual Punch Import</h2>
             <p className="text-muted-foreground text-sm">
-              Backup path for when Sync Biometric misses punches — download the device's raw punch list,
+              Backup path for when Sync Biometric misses punches -download the device's raw punch list,
               verify it, then import it back in.
             </p>
           </div>
@@ -242,7 +242,7 @@ export default function ManualPunchImport() {
         <div className="rounded-lg border border-blue-100 bg-blue-50/60 p-3 flex items-start gap-2.5">
           <Info size={14} className="text-blue-600 shrink-0 mt-0.5" />
           <p className="text-xs text-blue-800">
-            This is an additional, optional path — it never runs automatically and doesn't change how
+            This is an additional, optional path -it never runs automatically and doesn't change how
             Sync Biometric works. Importing the same file twice is always safe: punches already recorded
             (from either path) are silently skipped, never duplicated.
           </p>
@@ -273,7 +273,7 @@ export default function ManualPunchImport() {
                     </label>
                   ))}
                   {enabledDevices.length === 0 && (
-                    <p className="px-2 py-1.5 text-xs text-amber-600">No enabled devices — add one in Settings.</p>
+                    <p className="px-2 py-1.5 text-xs text-amber-600">No enabled devices -add one in Settings.</p>
                   )}
                 </div>
               </div>
@@ -297,7 +297,7 @@ export default function ManualPunchImport() {
                 <span>
                   <span className="text-gray-700 font-medium">Include every employee</span>
                   <span className="block text-xs text-muted-foreground">
-                    Also list employees with zero punches in this range, so the file reflects your whole Employees table — not just who punched.
+                    Also list employees with zero punches in this range, so the file reflects your whole Employees table -not just who punched.
                   </span>
                 </span>
               </label>
@@ -313,7 +313,7 @@ export default function ManualPunchImport() {
                     return (
                       <div>
                         Downloaded {punchRows.length} punch{punchRows.length === 1 ? "" : "es"}
-                        {" — "}{punchRows.filter((r) => r.matched).length} matched an employee,{" "}
+                        {" -"}{punchRows.filter((r) => r.matched).length} matched an employee,{" "}
                         {punchRows.filter((r) => !r.matched).length} did not (highlighted in the file).
                       </div>
                     );
@@ -321,7 +321,7 @@ export default function ManualPunchImport() {
                   {downloadSummary.totalEmployees != null && (
                     <div>
                       {downloadSummary.totalEmployees} employee{downloadSummary.totalEmployees === 1 ? "" : "s"} checked
-                      {" — "}{downloadSummary.employeesWithoutPunches} had no punches in this range (also included, greyed out).
+                      {" -"}{downloadSummary.employeesWithoutPunches} had no punches in this range (also included, greyed out).
                     </div>
                   )}
                 </div>
@@ -339,8 +339,8 @@ export default function ManualPunchImport() {
             </CardHeader>
             <CardContent className="space-y-4">
               <p className="text-sm text-muted-foreground">
-                After reviewing the downloaded file — and fixing any blank Employee Code cells for
-                unmatched rows — upload it here to import.
+                After reviewing the downloaded file -and fixing any blank Employee Code cells for
+                unmatched rows -upload it here to import.
               </p>
 
               {file ? (
@@ -468,7 +468,7 @@ export default function ManualPunchImport() {
                       </p>
                       {result.suspiciousDays.map((s, i) => (
                         <div key={i} className="rounded-lg bg-amber-50/60 border border-amber-100 px-3 py-2 text-xs text-amber-700">
-                          {s.employeeName} logged {s.punches} punches on {s.date} — likely two people sharing one Device User ID.
+                          {s.employeeName} logged {s.punches} punches on {s.date} -likely two people sharing one Device User ID.
                         </div>
                       ))}
                     </div>
@@ -489,11 +489,11 @@ export default function ManualPunchImport() {
           <CardContent className="space-y-4">
             <ol className="grid sm:grid-cols-2 gap-3 text-sm">
               {[
-                "Pick a device (or All Devices) and a range, then download — this reads the device directly, the same way Sync Biometric does, but doesn't save anything yet.",
-                "Punches are matched by Employee Code only — the code enrolled on the device must be the Employee Code. Amber rows didn't match any active employee; type the correct Employee Code into that cell.",
-                "Check \"Include every employee\" to also see who has zero punches in the range — those rows (grey) are for visibility only and are skipped automatically if you re-upload the file as-is.",
+                "Pick a device (or All Devices) and a range, then download -this reads the device directly, the same way Sync Biometric does, but doesn't save anything yet.",
+                "Punches are matched by Employee Code only -the code enrolled on the device must be the Employee Code. Amber rows didn't match any active employee; type the correct Employee Code into that cell.",
+                "Check \"Include every employee\" to also see who has zero punches in the range -those rows (grey) are for visibility only and are skipped automatically if you re-upload the file as-is.",
                 "Import is always safe to re-run: a punch already on file (from a live sync or an earlier import) is silently skipped, never duplicated.",
-                "This never touches Sync Biometric's own schedule or settings — it's a separate, manual path you use only when you choose to.",
+                "This never touches Sync Biometric's own schedule or settings -it's a separate, manual path you use only when you choose to.",
               ].map((step, i) => (
                 <li key={i} className="flex gap-2.5">
                   <span className="w-5 h-5 rounded-full bg-cyan-50 text-cyan-700 text-[11px] font-black flex items-center justify-center shrink-0 mt-0.5">{i + 1}</span>

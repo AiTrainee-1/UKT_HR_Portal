@@ -1,5 +1,5 @@
 """
-Auto Sync — configurable background biometric sync
+Auto Sync -configurable background biometric sync
 =====================================================
 Replaces the old hardcoded 07:30/20:30 APScheduler bootstrap in apps.py with
 HR-editable AutoSyncRule rows. One CronTrigger job per enabled rule, keyed by
@@ -61,7 +61,7 @@ def _run_rule(rule_id: int) -> None:
     if result.get("ok"):
         rule.last_run_status = "success"
         rule.last_run_summary = f"{result.get('created', 0)} new record(s)"
-        logger.info("Auto Sync rule %s complete — %d new records", rule.id, result.get("created", 0))
+        logger.info("Auto Sync rule %s complete -%d new records", rule.id, result.get("created", 0))
     else:
         rule.last_run_status = "failed"
         rule.last_run_summary = str(result.get("error") or "Unknown error")
@@ -96,11 +96,11 @@ def remove_rule_from_scheduler(rule_id: int) -> None:
     try:
         get_scheduler().remove_job(_job_id(rule_id))
     except Exception:
-        pass  # wasn't scheduled — fine (e.g. rule was already disabled)
+        pass  # wasn't scheduled -fine (e.g. rule was already disabled)
 
 
 def load_all_rules_into_scheduler() -> None:
-    """Called once at process boot — schedules every currently-enabled rule."""
+    """Called once at process boot -schedules every currently-enabled rule."""
     from .models import AutoSyncRule
     for rule in AutoSyncRule.objects.filter(is_enabled=True):
         apply_rule_to_scheduler(rule)

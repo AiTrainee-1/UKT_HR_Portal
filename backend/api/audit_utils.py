@@ -1,4 +1,4 @@
-"""Shared helper for writing audit log entries. Never raises — always safe to call."""
+"""Shared helper for writing audit log entries. Never raises -always safe to call."""
 from __future__ import annotations
 from typing import TYPE_CHECKING
 

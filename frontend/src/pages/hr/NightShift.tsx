@@ -62,7 +62,7 @@ export default function NightShift() {
       const res = await recompute.mutateAsync(
         viewMode === "day" ? { date } : { month, year },
       );
-      toast({ title: `Detection complete — ${res.detected} night worker(s) found` });
+      toast({ title: `Detection complete -${res.detected} night worker(s) found` });
       refetch();
     } catch {
       toast({ title: "Recompute failed", variant: "destructive" });
@@ -139,13 +139,13 @@ export default function NightShift() {
             </>
           )}
           <select value={empFilter} onChange={e => setEmpFilter(e.target.value)} className="h-8 rounded-md border px-2 text-xs bg-background max-w-[190px]">
-            <option value="">— All employees —</option>
+            <option value="">-All employees —</option>
             {(employees ?? []).map(e => (
               <option key={e.id} value={e.id}>{e.firstName} {e.lastName} ({e.employeeCode})</option>
             ))}
           </select>
           <select value={deptFilter} onChange={e => setDeptFilter(e.target.value)} className="h-8 rounded-md border px-2 text-xs bg-background max-w-[170px]">
-            <option value="">— All departments —</option>
+            <option value="">-All departments —</option>
             {(departments ?? []).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
         </div>
@@ -256,7 +256,7 @@ export default function NightShift() {
           <span>
             Detection is automatic from biometric punches (last punch at/after <strong>8:00 PM</strong>, including
             checkouts after midnight). Attendance, late detection, half-shift detection and payroll all consult
-            this table automatically — an employee arriving within their allowed window still earns{" "}
+            this table automatically -an employee arriving within their allowed window still earns{" "}
             <strong>1 full shift</strong> with no late mark.
           </span>
         </div>
@@ -266,7 +266,7 @@ export default function NightShift() {
           <CardHeader className="pb-3 pt-4 px-4">
             <CardTitle className="text-sm font-bold flex items-center gap-2">
               <MoonStar size={14} className="text-indigo-500" />
-              Night Workers {viewMode === "day" ? `— relaxation applies ${date}` : `— ${MONTH_NAMES[month - 1]} ${year}`}
+              Night Workers {viewMode === "day" ? `-relaxation applies ${date}` : `-${MONTH_NAMES[month - 1]} ${year}`}
               {data && <span className="text-xs font-normal text-gray-400">({data.count} records)</span>}
             </CardTitle>
           </CardHeader>

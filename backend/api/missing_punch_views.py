@@ -1,18 +1,18 @@
 """
 Missing Punch Module
 =====================
-Employee self-service "I forgot to punch" request — date + time + reason,
+Employee self-service "I forgot to punch" request -date + time + reason,
 two-stage approval: the Department Head approves first, then HR gives the
 final approval (same two-stage status machine as OnDutySession, the only
-other genuine HOD-then-HR workflow in this codebase — see models.py).
+other genuine HOD-then-HR workflow in this codebase -see models.py).
 
-A HOD rejection is terminal — HR never sees it. HR only ever acts on a
+A HOD rejection is terminal -HR never sees it. HR only ever acts on a
 request already at pending_hr (deliberately stricter than OnDutySession's
 HR-fallback behavior: HR cannot short-circuit past a Department Head here).
 
 On HR approval, resolve_missing_punch_hr() creates one ordinary
 AttendanceLog row (source="missing_punch:approved") instead of overwriting
-the day's AttendanceDayRecord directly — it becomes just another punch that
+the day's AttendanceDayRecord directly -it becomes just another punch that
 day and flows through the normal engine (punch-order combination rule,
 punctuality window, cross-midnight reattribution) exactly like a real
 biometric punch would. Idempotent against double-approval because
@@ -62,10 +62,10 @@ def _missing_punch_dict(r: MissingPunchRequest) -> dict:
 
 def _notify_hod_approvers(req: MissingPunchRequest) -> None:
     """Push a Notification to every active Department Head covering this
-    employee with Missing Punch approval enabled — same submission-time
+    employee with Missing Punch approval enabled -same submission-time
     pattern as OnDutySession's _notify_hod_approvers (geo_attendance_views.py).
     HR always sees the request too via the HR portal's pending queue (no push
-    needed there — HRUser accounts aren't push-token-registered)."""
+    needed there -HRUser accounts aren't push-token-registered)."""
     emp = req.employee
     managers = DepartmentManager.objects.select_related("employee").filter(
         Q(employee_assignments__employee_id=emp.id) | Q(department_assignments__department_id=emp.department_id),
@@ -81,7 +81,7 @@ def _notify_hod_approvers(req: MissingPunchRequest) -> None:
 
 
 def resolve_missing_punch_hod(req: MissingPunchRequest, decision: str, reviewer_name: str, comment: str | None) -> None:
-    """Stage 1 — Department Head decision. Approval moves the request to
+    """Stage 1 -Department Head decision. Approval moves the request to
     pending_hr; rejection is terminal, HR never sees it."""
     req.status = MissingPunchRequest.STATUS_PENDING_HR if decision == "approved" else MissingPunchRequest.STATUS_REJECTED
     req.hod_reviewed_by = reviewer_name
@@ -97,7 +97,7 @@ def resolve_missing_punch_hod(req: MissingPunchRequest, decision: str, reviewer_
 
 
 def resolve_missing_punch_hr(req: MissingPunchRequest, decision: str, reviewer_name: str, comment: str | None) -> None:
-    """Stage 2 — HR's final decision. Only ever called on a request already
+    """Stage 2 -HR's final decision. Only ever called on a request already
     at pending_hr. Approval creates the actual punch; rejection writes
     nothing to attendance."""
     if decision == "approved":
@@ -150,10 +150,10 @@ def missing_punch_requests(request: Request) -> Response:
             qs = qs.filter(date__year=int(year))
         return Response([_missing_punch_dict(r) for r in qs.order_by("-created_at")[:300]])
 
-    # POST — submit a Missing Punch request (mobile/web app only, self-bound).
+    # POST -submit a Missing Punch request (mobile/web app only, self-bound).
     # The mobile app's shared axios client decamelizes every JSON body to
     # snake_case before sending (src/lib/api.ts), so accept both forms for
-    # every multi-word field here — same dual-key pattern every other
+    # every multi-word field here -same dual-key pattern every other
     # mobile-facing endpoint in this file uses (see employee_permissions).
     data = request.data
     emp_id = None
@@ -173,7 +173,7 @@ def missing_punch_requests(request: Request) -> Response:
     if not emp_id or not data.get("date") or not punch_time_raw or not data.get("reason"):
         return Response({"error": "employeeId, date, punchTime and reason are required"}, status=400)
 
-    # punchSlot (which of the day's 4 punches this is — morning check-in,
+    # punchSlot (which of the day's 4 punches this is -morning check-in,
     # lunch check-out, lunch check-in, evening check-out) is the preferred,
     # more precise input from the newer form UI: it's the single source of
     # truth for punch_type when present, so a client can never send a slot

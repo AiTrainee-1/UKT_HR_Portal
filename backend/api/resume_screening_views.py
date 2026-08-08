@@ -147,7 +147,7 @@ def rule_set_detail(request: Request, pk: int) -> Response:
     if request.method == "DELETE":
         if ScreeningCandidate.objects.filter(rule_set=rs).exists():
             return _error(
-                "This rule set has screened candidates attached and can't be deleted — "
+                "This rule set has screened candidates attached and can't be deleted -"
                 "deactivate it instead so it stops appearing in new screening runs.",
                 409,
             )
@@ -221,7 +221,7 @@ def upload_single(request: Request) -> Response:
 @api_view(["POST"])
 @require_hr
 def shortlist_candidate(request: Request, pk: int) -> Response:
-    """Manual promote — used by the single-upload 'Add to Shortlist' button
+    """Manual promote -used by the single-upload 'Add to Shortlist' button
     and the 'move to shortlist' action on a Not Shortlisted bulk candidate."""
     c = ScreeningCandidate.objects.filter(pk=pk).first()
     if not c:
@@ -362,7 +362,7 @@ def candidate_detail(request: Request, pk: int) -> Response:
         if new_status != c.status and (c.status, new_status) not in _ALLOWED_TRANSITIONS:
             return _error(f"Cannot move a candidate from '{c.status}' to '{new_status}'")
         # Once a candidate is rejected, their resume file is removed from
-        # storage automatically — only the resume binary goes; every
+        # storage automatically -only the resume binary goes; every
         # extracted detail (name, phone, email, city, education, skills,
         # score breakdown) stays on the row for HR's records. Selected/
         # shortlisted candidates keep their file untouched.
@@ -442,7 +442,7 @@ def send_rejection_email(candidate: ScreeningCandidate, ps: PayrollSettings) -> 
     """
     _send_mail(
         ps, candidate.email,
-        f"Application Update — {company_name}",
+        f"Application Update -{company_name}",
         _email_shell(ps, "Recruitment Update", body),
     )
 
@@ -467,7 +467,7 @@ def send_interview_invite_email(candidate: ScreeningCandidate, ps: PayrollSettin
     """
     _send_mail(
         ps, candidate.email,
-        f"Interview Invitation — {company_name}",
+        f"Interview Invitation -{company_name}",
         _email_shell(ps, "Interview Invitation", body),
     )
 
@@ -481,7 +481,7 @@ def _require_smtp() -> tuple[PayrollSettings | None, Response | None]:
 
 def _parse_interview_datetime(raw):
     """
-    request.data.get("interviewDateTime") is a plain JSON string — Django
+    request.data.get("interviewDateTime") is a plain JSON string -Django
     does NOT parse a DateTimeField's value into a real datetime until the row
     is saved and reloaded from the DB, so using it immediately afterward
     (e.g. timezone.localtime() in the email body) would fail on the raw

@@ -8,12 +8,12 @@ keep the two in sync when adding a new sidebar section.
 
 Keys are dot-separated for submodules that have their own distinct API
 endpoints (e.g. "employees.departments"). Role.permissions stays a flat
-{key: "hidden"|"view"|"edit"} dict — resolve_permission() below is what gives
+{key: "hidden"|"view"|"edit"} dict -resolve_permission() below is what gives
 it hierarchy: setting "employees"="edit" cascades to every "employees.*"
 child unless that child has its own explicit entry overriding it. This keeps
 the stored JSON simple while still supporting per-submodule overrides.
 
-Not every sidebar group has been split into submodules — only Employees,
+Not every sidebar group has been split into submodules -only Employees,
 Recruitment, and Settings currently have children with genuinely separate
 REST endpoints or (for Settings' Company/Attendance/Payroll/Salary Slip/SMTP
 tabs) a view-level field-group check (see payroll_views.py::FIELD_GROUPS —
@@ -65,6 +65,7 @@ MODULE_TREE: list[dict] = [
     {"key": "settings", "label": "Settings", "children": [
         {"key": "settings.company", "label": "Company"},
         {"key": "settings.attendance", "label": "Attendance"},
+        {"key": "settings.late_detection", "label": "Late Detection"},
         {"key": "settings.devices", "label": "Devices"},
         {"key": "settings.documents", "label": "Company Documents"},
         {"key": "settings.payroll", "label": "Payroll"},
@@ -87,7 +88,7 @@ def all_module_keys() -> list[str]:
 def resolve_permission(permissions: dict, key: str) -> str:
     """
     Walks a dotted key ("employees.departments") from most specific to least
-    specific, returning the first explicit entry found — so a child with no
+    specific, returning the first explicit entry found -so a child with no
     override inherits its parent's level. Defaults to "hidden" if nothing in
     the chain is set (fail closed).
     """
@@ -103,7 +104,7 @@ def resolve_permission(permissions: dict, key: str) -> str:
 # stripped (e.g. "employees/12/status" for GET /api/employees/12/status).
 # Paths not covered here (auth, dashboard summaries, manager/mobile endpoints,
 # roles/hr-users which are super-admin-only regardless of this table) are left
-# ungated — only the modules above are subject to hidden/view/edit.
+# ungated -only the modules above are subject to hidden/view/edit.
 URL_MODULE_MAP: dict[str, str] = {
     "dashboard/": "dashboard",
 
@@ -187,7 +188,7 @@ URL_MODULE_MAP: dict[str, str] = {
     "notifications": "notifications",
 
     # "payroll-settings" (Settings → Company/Attendance/Payroll/Salary Slip/
-    # SMTP tabs) is deliberately absent here — those five tabs write to one
+    # SMTP tabs) is deliberately absent here -those five tabs write to one
     # shared PayrollSettings record via one endpoint, so a single URL-level
     # module_key can't separate them. payroll_settings_view() does its own
     # per-field settings.* permission check instead (see FIELD_GROUPS in
@@ -199,7 +200,7 @@ URL_MODULE_MAP: dict[str, str] = {
     "document-settings": "settings.documents",
     "backup": "settings.backup",
     # idcard-settings (Settings → ID Card tab) intentionally maps to "id_cards"
-    # above, not a settings.* key — it's the same permission that already
+    # above, not a settings.* key -it's the same permission that already
     # governs the ID Cards feature page, not a separate Settings concern.
 }
 

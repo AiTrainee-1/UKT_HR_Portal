@@ -4,12 +4,12 @@ Shared biometric device pull-sync core.
 Connects to a single ZKTeco-protocol device (host/port/password), pulls
 attendance punches, and writes them to AttendanceLog + Attendance. Used by
 both the `sync_biometric` management command (cron/manual CLI) and the
-HR Settings "Sync Biometric" API — so device connection logic lives in
+HR Settings "Sync Biometric" API -so device connection logic lives in
 exactly one place instead of being duplicated per caller.
 
 Two device sources, both supported together:
-  • backend/.env  — BIOMETRIC_DEVICE_IP / PORT / PASSWORD (legacy, always works)
-  • Settings → Devices — any number of BiometricDevice rows added from the UI
+  • backend/.env  -BIOMETRIC_DEVICE_IP / PORT / PASSWORD (legacy, always works)
+  • Settings → Devices -any number of BiometricDevice rows added from the UI
 """
 
 import os
@@ -37,7 +37,7 @@ class BiometricSyncError(Exception):
 def get_env_device() -> dict | None:
     """
     The legacy .env-configured device (BIOMETRIC_DEVICE_IP/PORT/PASSWORD).
-    Always supported — Settings-managed devices are an additional layer on
+    Always supported -Settings-managed devices are an additional layer on
     top, not a replacement. Returns None when the IP is not set.
     """
     host = os.environ.get("BIOMETRIC_DEVICE_IP", "").strip()
@@ -66,7 +66,7 @@ def get_sync_targets(device_id=None) -> list[dict]:
       "env"             → only the .env device.
       <int>             → only that Settings device (must be enabled).
       <list[int]>       → exactly those Settings devices (each must be
-                          enabled) — the HR Portal's multi-select device
+                          enabled) -the HR Portal's multi-select device
                           checklist sends this shape.
     Raises BiometricSyncError when the selection resolves to nothing.
     """
@@ -78,11 +78,11 @@ def get_sync_targets(device_id=None) -> list[dict]:
             password = int(raw_password)
             config_error = None
         except (TypeError, ValueError):
-            # Never let one bad device config crash the whole sync — surface it
+            # Never let one bad device config crash the whole sync -surface it
             # as a per-device error instead (caught by the sync loop).
             password = 0
             config_error = (
-                f"Comm password '{raw_password}' is not valid — it must be numeric "
+                f"Comm password '{raw_password}' is not valid -it must be numeric "
                 f"(the device's Comm Key, usually 0). Edit this device in Settings."
             )
         return {
@@ -99,14 +99,14 @@ def get_sync_targets(device_id=None) -> list[dict]:
         env = get_env_device()
         if not env:
             raise BiometricSyncError(
-                "BIOMETRIC_DEVICE_IP is not set in backend/.env — configure it "
+                "BIOMETRIC_DEVICE_IP is not set in backend/.env -configure it "
                 "or pick a device added in Settings."
             )
         return [env]
 
     if isinstance(device_id, (list, tuple)):
         # The checklist can include the "env" pseudo-device alongside real
-        # numeric Settings device ids — split them apart before resolving.
+        # numeric Settings device ids -split them apart before resolving.
         wants_env = ENV_DEVICE_ID in device_id
         numeric_ids = [x for x in device_id if x != ENV_DEVICE_ID]
         try:
@@ -146,7 +146,7 @@ def get_sync_targets(device_id=None) -> list[dict]:
         targets.insert(0, env)
     if not targets:
         raise BiometricSyncError(
-            "No biometric device configured — set BIOMETRIC_DEVICE_IP in backend/.env "
+            "No biometric device configured -set BIOMETRIC_DEVICE_IP in backend/.env "
             "or add a device in Settings → Devices."
         )
     return targets
@@ -156,7 +156,7 @@ def _connect_and_fetch(host: str, port: int, password: int) -> list:
     """Connect to one device and pull its raw attendance buffer. Raises
     BiometricSyncError on connection failure. Used by both the live-sync
     write path (pull_from_device) and the read-only export path
-    (fetch_records_for_export) — device connection logic lives in exactly
+    (fetch_records_for_export) -device connection logic lives in exactly
     one place."""
     try:
         from zk import ZK
@@ -171,7 +171,7 @@ def _connect_and_fetch(host: str, port: int, password: int) -> list:
         return conn.get_attendance()
     except Exception as exc:
         raise BiometricSyncError(
-            f"Could not connect to device at {host}:{port} — {exc}"
+            f"Could not connect to device at {host}:{port} -{exc}"
         )
     finally:
         if conn:
@@ -187,7 +187,7 @@ def _active_employee_lookup() -> dict:
 
     Employee Code is the ONE AND ONLY identifier ever used to match a device
     punch to an employee. In this company, the code enrolled on the biometric
-    device IS the Employee Code — always, with no exceptions — so no other
+    device IS the Employee Code -always, with no exceptions -so no other
     field (not Biometric Device ID, not name, and NEVER the internal database
     row id) may participate in matching. A device user_id that doesn't equal
     an active Employee Code exactly is reported as "not found" rather than
@@ -195,7 +195,7 @@ def _active_employee_lookup() -> dict:
 
     History note: this used to also consult Employee.biometric_device_id as a
     fallback map, which caused real misattribution when that field held stale
-    or wrong values. That field is now profile information only — it plays no
+    or wrong values. That field is now profile information only -it plays no
     part in attendance matching."""
     active_employees = list(Employee.objects.filter(status="active"))
     return {str(e.employee_code).strip(): e for e in active_employees}
@@ -205,17 +205,17 @@ def _ingest_punches(punches: list[tuple[str, date_type, time_type, str]],
                      date_from: date_type | None, source_tag: str) -> dict:
     """
     Write already-resolved punches to AttendanceLog + Attendance. Each punch
-    is (uid, punch_date, punch_time, punch_type) — punch_type must already be
+    is (uid, punch_date, punch_time, punch_type) -punch_type must already be
     AttendanceLog.PUNCH_IN/PUNCH_OUT. This is the single write path shared by
     live device sync (pull_from_device, status-codes mapped to IN/OUT first)
-    and the manual Excel import (IN/OUT read straight from the sheet) — so
+    and the manual Excel import (IN/OUT read straight from the sheet) -so
     the two can never silently diverge in how a punch gets recorded.
 
-    uid is matched against Employee Code ONLY — see _active_employee_lookup
+    uid is matched against Employee Code ONLY -see _active_employee_lookup
     for why no other identifier is ever consulted.
 
     Returns {"created": int, "skipped": int, "notFound": set[str],
-    "suspiciousDays": list[dict]} — "total" is the caller's responsibility
+    "suspiciousDays": list[dict]} -"total" is the caller's responsibility
     since it means something different for a device pull (raw record count)
     vs an Excel import (uploaded row count).
     """
@@ -254,7 +254,7 @@ def _ingest_punches(punches: list[tuple[str, date_type, time_type, str]],
                     employee=emp, date=str(punch_date), defaults={"present": True},
                 )
             except Attendance.MultipleObjectsReturned:
-                # Same defensive skip as above — a real unique constraint now
+                # Same defensive skip as above -a real unique constraint now
                 # backs this table too, so this should be unreachable.
                 pass
             key = (emp.id, punch_date)
@@ -307,7 +307,7 @@ def pull_from_device(host: str, port: int, password: int, date_from: date_type |
 def fetch_records_for_export(host: str, port: int, password: int,
                               date_from: date_type | None) -> list[dict]:
     """
-    Read-only pull for the manual Excel export — does NOT write to
+    Read-only pull for the manual Excel export -does NOT write to
     AttendanceLog/Attendance, purely for HR to eyeball before deciding
     whether to import. Uses the exact same employee-matching rules as
     pull_from_device, so the "Matched" column reflects precisely what a

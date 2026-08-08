@@ -8,7 +8,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        # Employee — family fields
+        # Employee -family fields
         migrations.AddField(
             model_name="employee",
             name="father_name",
@@ -19,7 +19,7 @@ class Migration(migrations.Migration):
             name="mother_name",
             field=models.TextField(null=True, blank=True, db_column="mother_name"),
         ),
-        # PayrollSettings — slip header + signature
+        # PayrollSettings -slip header + signature
         migrations.AddField(
             model_name="payrollsettings",
             name="slip_company_name",

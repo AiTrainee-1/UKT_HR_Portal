@@ -1,9 +1,9 @@
 """
-Backup Scheduler — configurable background full backups
+Backup Scheduler -configurable background full backups
 ===========================================================
 Mirrors auto_sync.py's structure exactly (one APScheduler CronTrigger job,
 live-applied on schedule save, module-singleton BackgroundScheduler). A
-separate BackgroundScheduler instance from auto_sync.py's — this app is
+separate BackgroundScheduler instance from auto_sync.py's -this app is
 small enough that two lightweight scheduler threads is simpler and safer
 than sharing one across unrelated job types.
 
@@ -60,7 +60,7 @@ def _run_scheduled_backup() -> None:
         result = backup_service.build_full_backup(directory)
         schedule.last_run_status = "success"
         schedule.last_run_summary = f"{result['file']} ({result['sizeBytes']} bytes)"
-        logger.info("Scheduled backup complete — %s", result["file"])
+        logger.info("Scheduled backup complete -%s", result["file"])
 
         if schedule.retention_count:
             backup_service.prune_old_backups(directory, schedule.retention_count)
@@ -115,11 +115,11 @@ def remove_schedule_from_scheduler() -> None:
     try:
         get_scheduler().remove_job(_JOB_ID)
     except Exception:
-        pass  # wasn't scheduled — fine (e.g. already disabled)
+        pass  # wasn't scheduled -fine (e.g. already disabled)
 
 
 def load_schedule_into_scheduler() -> None:
-    """Called once at process boot — schedules the backup job if enabled."""
+    """Called once at process boot -schedules the backup job if enabled."""
     from .models import BackupSchedule
     schedule = BackupSchedule.objects.filter(pk=1).first()
     if schedule:

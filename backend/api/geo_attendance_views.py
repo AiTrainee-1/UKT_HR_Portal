@@ -1,5 +1,5 @@
 """
-Geo Attendance — location-based punching + live location tracking
+Geo Attendance -location-based punching + live location tracking
 ====================================================================
 Independent capabilities, all opt-in and additive to the existing
 biometric-first attendance system (never modifies biometric_sync.py, the
@@ -11,15 +11,15 @@ payroll engine, or AttendanceDayRecord computation):
    the exact same _ingest_punches() path biometric sync and Excel import
    already share, tagged source="geo:auto". Outside the fence, the punch is
    hard-rejected (nothing is recorded). Also blocked outright while the
-   employee has an ACTIVE On-Duty session (see below) — they're expected to
+   employee has an ACTIVE On-Duty session (see below) -they're expected to
    be off-site, so their punches route through the On-Duty verification
    flow instead.
 
 2. On-Duty Attendance: for employees working away from the branch (field
    visits, drivers, offsite work). This reuses the SAME 4-punches-per-day
-   attendance system every other source uses — it does not add a separate
-   on-duty punch count — split into two layers:
-     a. OnDutySession — a lightweight gate. The employee submits just a
+   attendance system every other source uses -it does not add a separate
+   on-duty punch count -split into two layers:
+     a. OnDutySession -a lightweight gate. The employee submits just a
         destination (no photos/GPS at this stage) and it goes through the
         existing two-stage chain:
           - pending_hod -> Department Head approves/rejects
@@ -28,25 +28,25 @@ payroll engine, or AttendanceDayRecord computation):
         A HOD rejection is terminal; HR may also act on a still-pending_hod
         session as a fallback (no Department Head assigned), collapsing
         straight to active/rejected. Approval flips status to "active" and
-        stamps started_at — this is what gates live-location tracking
+        stamps started_at -this is what gates live-location tracking
         (live_location_ping) and routes the employee's regular attendance
         punches through the photo+GPS verification flow below instead of a
         plain punch.
-     b. OnDutyPunchVerification — one of the day's (up to 4) attendance
+     b. OnDutyPunchVerification -one of the day's (up to 4) attendance
         punches, captured with a selfie + GPS + the ORIGINAL time while the
         session is active. Held "pending" until HR approves it (the fraud
         check an unsupervised off-site punch needs, unlike Office/biometric)
-        — only then is it written via the shared _ingest_punches() path,
+        -only then is it written via the shared _ingest_punches() path,
         tagged "on_duty:approved". Approving the day's 4th punch also
         auto-completes the parent session. The employee can also end the
-        session manually at any point via "Mark as Done" — nobody else can
+        session manually at any point via "Mark as Done" -nobody else can
         end it early.
 
 3. Live location tracking: opt-in either by Employee.location_tracking_enabled
    (HR's manual per-employee toggle) OR by having an active OnDutySession —
    the app only sends pings when one of those is true. Pings are append-only
    and self-prune past PING_RETENTION_HOURS on every write (no cron/Celery
-   in this project) — kept long enough (72h) to back both the Live Map's
+   in this project) -kept long enough (72h) to back both the Live Map's
    "current position" and the Route Map's "today/yesterday's travel path".
 
 Same conventions as the rest of this codebase: plain @api_view + @require_hr
@@ -85,7 +85,7 @@ def _error(msg: str, code: int = 400) -> Response:
 
 
 def source_label(source: str) -> str:
-    """Human-facing label for an AttendanceLog.source tag — shared across the
+    """Human-facing label for an AttendanceLog.source tag -shared across the
     attendance report/log, the Attendance Search page, and the dashboard so
     the same source always reads the same way everywhere."""
     if not source:
@@ -107,7 +107,7 @@ def source_label(source: str) -> str:
 
 def _next_punch(emp: Employee, d) -> tuple[int | None, str | None]:
     """(punch number 1-4, IN/OUT) for the next punch this employee can make
-    today, across every source (biometric + geo + on-duty combined) — mirrors
+    today, across every source (biometric + geo + on-duty combined) -mirrors
     the strict 4-punch engine's IN/OUT/IN/OUT pairing. None once 4 recorded."""
     count = AttendanceLog.objects.filter(employee=emp, date=d).count()
     if count >= 4:
@@ -126,7 +126,7 @@ def _employee_from_token(request: Request) -> Employee | None:
 def _get_is_mocked(data) -> bool:
     """The mobile app's axios client auto-decamelizes JSON request bodies
     (isMocked -> is_mocked) before they hit the wire, but doesn't touch
-    multipart/FormData bodies — the web app and HR portal never decamelize
+    multipart/FormData bodies -the web app and HR portal never decamelize
     at all. Reading both spellings keeps this endpoint correct for every
     caller regardless of which convention (or none) it applies."""
     raw = data.get("isMocked")
@@ -139,10 +139,10 @@ def _get_is_mocked(data) -> bool:
 
 def _day_bounds_utc(d: date) -> tuple[datetime, datetime]:
     """UTC-aware [start, end) for the given IST calendar day `d`. This
-    server's clock is IST (the project-wide convention — see punch_date/
+    server's clock is IST (the project-wide convention -see punch_date/
     punch_time everywhere else), but LiveLocationPing.recorded_at is a real,
     correct UTC instant (timezone.now(), unlike the naive date.today()/
-    datetime.now() used for punch dates) — so building the day boundary
+    datetime.now() used for punch dates) -so building the day boundary
     requires the explicit IST offset rather than a naive date comparison."""
     start_naive = datetime.combine(d, time.min)
     start_utc = start_naive - IST_OFFSET
@@ -225,9 +225,9 @@ def _on_duty_punch_verification_dict(v: OnDutyPunchVerification) -> dict:
 
 def resolve_on_duty_session_hod(session: OnDutySession, decision: str, reviewer_name: str, comment: str | None) -> None:
     """
-    Stage 1 — Department Head decision on the destination request. Called
+    Stage 1 -Department Head decision on the destination request. Called
     from manager_views.py::manager_update_on_duty_status. Approval moves the
-    session to pending_hr; rejection is terminal — HR never sees it.
+    session to pending_hr; rejection is terminal -HR never sees it.
     """
     session.status = OnDutySession.STATUS_PENDING_HR if decision == "approved" else OnDutySession.STATUS_REJECTED
     session.hod_reviewed_by = reviewer_name
@@ -244,10 +244,10 @@ def resolve_on_duty_session_hod(session: OnDutySession, decision: str, reviewer_
 
 def resolve_on_duty_session_hr(session: OnDutySession, decision: str, reviewer_name: str, comment: str | None) -> None:
     """
-    Stage 2 — HR's final decision. Called both for a session already at
+    Stage 2 -HR's final decision. Called both for a session already at
     pending_hr (the normal path) and directly on a still-pending_hod session
     (HR's fallback when there's no Department Head to act, or they haven't).
-    Approval starts the session (status=active, started_at=now) — this is
+    Approval starts the session (status=active, started_at=now) -this is
     what live_location_ping and the mobile on-duty punch flow key off of.
     """
     if decision == "approved":
@@ -261,7 +261,7 @@ def resolve_on_duty_session_hr(session: OnDutySession, decision: str, reviewer_n
         session.hr_review_comment = comment
     session.save()
     if decision == "approved":
-        message = f"Your On-Duty request for {session.destination} was approved by HR — you can now begin."
+        message = f"Your On-Duty request for {session.destination} was approved by HR -you can now begin."
     else:
         message = f"Your On-Duty request for {session.destination} was rejected by HR."
     Notification.objects.create(employee=session.employee, type="on_duty", message=message)
@@ -271,9 +271,9 @@ def resolve_on_duty_punch_hr(v: OnDutyPunchVerification, decision: str, reviewer
     """
     HR's single-stage decision on a captured on-duty punch. Approval writes
     the punch via the same shared ingestion path every other source uses, at
-    the ORIGINAL captured time — never the approval time. If this is the
+    the ORIGINAL captured time -never the approval time. If this is the
     day's 4th punch, approving it also auto-completes the parent session (a
-    still-active session only — a manually-completed one is left alone).
+    still-active session only -a manually-completed one is left alone).
     Rejection just leaves the punch slot open for the employee to retry.
     """
     if decision == "approved":
@@ -297,7 +297,7 @@ def resolve_on_duty_punch_hr(v: OnDutyPunchVerification, decision: str, reviewer
         message=f"Your On-Duty {punch_label} (punch {v.punch_number}) was {v.status} by HR.",
     )
 
-    # Live recount, not the frozen `v.punch_number` — that number was assigned
+    # Live recount, not the frozen `v.punch_number` -that number was assigned
     # from whatever was in AttendanceLog at the moment this punch was
     # CAPTURED (see _next_punch), which can go stale if biometric sync
     # backfills an earlier punch for the same day before this one gets
@@ -333,7 +333,7 @@ def _notify_hod_approvers(session: OnDutySession) -> None:
         Notification.objects.create(
             employee=m.employee,
             type="on_duty",
-            message=f"{emp.first_name} {emp.last_name} submitted an On-Duty request — {session.destination[:80]}",
+            message=f"{emp.first_name} {emp.last_name} submitted an On-Duty request -{session.destination[:80]}",
         )
 
 
@@ -344,7 +344,7 @@ def _notify_hod_approvers(session: OnDutySession) -> None:
 def geo_punch_precheck(request: Request) -> Response:
     """
     GET /api/attendance/geo-punch/precheck?latitude=..&longitude=..
-    Read-only status check — no punch is written. Lets the app clearly show
+    Read-only status check -no punch is written. Lets the app clearly show
     "You are inside/outside the allowed company radius" BEFORE the employee
     commits to punching, per the requirement that this must be visible ahead
     of the actual punch action.
@@ -361,7 +361,7 @@ def geo_punch_precheck(request: Request) -> Response:
 
     branch = emp.branch
     if branch is None or branch.geofence_lat is None or branch.geofence_lng is None:
-        return _error("Your branch has no location configured — ask HR to set it up in Manage Branch")
+        return _error("Your branch has no location configured -ask HR to set it up in Manage Branch")
 
     distance = haversine_distance_m(lat, lng, float(branch.geofence_lat), float(branch.geofence_lng))
     radius = branch.geofence_radius_m or DEFAULT_RADIUS_M
@@ -380,11 +380,11 @@ def geo_punch_precheck(request: Request) -> Response:
         "nextPunchType": punch_type,
         "activeOnDutySession": active_session is not None,
         "message": (
-            "You have an active On-Duty session — use the On-Duty page to punch instead of Office Geo Punch."
+            "You have an active On-Duty session -use the On-Duty page to punch instead of Office Geo Punch."
             if active_session else
             f"You are inside the allowed company radius ({round(distance)}m from {branch.name})."
             if inside else
-            f"You are outside the allowed company radius — {round(distance)}m from {branch.name} (allowed: {radius}m)."
+            f"You are outside the allowed company radius -{round(distance)}m from {branch.name} (allowed: {radius}m)."
         ),
     })
 
@@ -393,12 +393,12 @@ def geo_punch_precheck(request: Request) -> Response:
 @require_auth
 def geo_punch(request: Request) -> Response:
     """
-    POST /api/attendance/geo-punch — JSON {latitude, longitude, accuracy?, isMocked?}
+    POST /api/attendance/geo-punch -JSON {latitude, longitude, accuracy?, isMocked?}
     Office Geo Punch: an alternative to biometric punching for staff
     physically on-premises. No photos, no approval step. Inside the branch's
     geofence, the punch is written immediately. Outside it, the punch is
-    hard-rejected — nothing is recorded. Blocked outright while the employee
-    has an active On-Duty session — they should punch from the On-Duty page
+    hard-rejected -nothing is recorded. Blocked outright while the employee
+    has an active On-Duty session -they should punch from the On-Duty page
     instead, where each punch is photo+GPS verified.
     """
     emp = _employee_from_token(request)
@@ -407,7 +407,7 @@ def geo_punch(request: Request) -> Response:
 
     if _active_on_duty_session(emp):
         return _error(
-            "You have an active On-Duty session — use the On-Duty page to record your punches instead of Office Geo Punch.",
+            "You have an active On-Duty session -use the On-Duty page to record your punches instead of Office Geo Punch.",
             409,
         )
 
@@ -431,20 +431,20 @@ def geo_punch(request: Request) -> Response:
 
     branch = emp.branch
     if branch is None or branch.geofence_lat is None or branch.geofence_lng is None:
-        return _error("Your branch has no location configured — ask HR to set it up in Manage Branch")
+        return _error("Your branch has no location configured -ask HR to set it up in Manage Branch")
 
     distance = haversine_distance_m(lat, lng, float(branch.geofence_lat), float(branch.geofence_lng))
     radius = branch.geofence_radius_m or DEFAULT_RADIUS_M
 
     if is_mocked:
-        return _error("This looks like a simulated/mock location — Office Geo Punch requires your real GPS location.", 403)
+        return _error("This looks like a simulated/mock location -Office Geo Punch requires your real GPS location.", 403)
 
     if distance > radius:
         return Response({
             "status": "rejected",
             "distanceM": round(distance), "radiusM": radius,
             "message": (
-                f"You are outside the allowed company radius — {round(distance)}m from {branch.name} "
+                f"You are outside the allowed company radius -{round(distance)}m from {branch.name} "
                 f"(allowed: {radius}m). Move within range to punch, or submit an On-Duty request if you're working off-site."
             ),
         }, status=403)
@@ -464,9 +464,9 @@ def geo_punch(request: Request) -> Response:
 @require_auth
 def on_duty_session_request(request: Request) -> Response:
     """
-    POST /api/on-duty-sessions/request — JSON {destination}
+    POST /api/on-duty-sessions/request -JSON {destination}
     Starts the two-stage approval chain for a day of On-Duty work. No
-    photos/GPS at this stage — that verification happens per-punch once the
+    photos/GPS at this stage -that verification happens per-punch once the
     session is active (see on_duty_punch_request below).
     """
     emp = _employee_from_token(request)
@@ -493,7 +493,7 @@ def on_duty_session_request(request: Request) -> Response:
 @api_view(["POST"])
 @require_auth
 def on_duty_session_complete(request: Request) -> Response:
-    """POST /api/on-duty-sessions/complete — the employee manually marks
+    """POST /api/on-duty-sessions/complete -the employee manually marks
     their own active session as Done. Nobody else can end a session early."""
     emp = _employee_from_token(request)
     if not emp:
@@ -514,7 +514,7 @@ def on_duty_session_complete(request: Request) -> Response:
 @api_view(["GET"])
 @require_auth
 def on_duty_session_status(request: Request) -> Response:
-    """GET /api/on-duty-sessions/status — the employee's current/most recent
+    """GET /api/on-duty-sessions/status -the employee's current/most recent
     On-Duty session (pending/active, or today's completed/rejected one) plus
     its punch verifications, for the dedicated On-Duty page."""
     emp = _employee_from_token(request)
@@ -537,10 +537,10 @@ def on_duty_session_status(request: Request) -> Response:
 @require_auth
 def on_duty_punch_request(request: Request) -> Response:
     """
-    POST /api/on-duty-sessions/punch — multipart:
+    POST /api/on-duty-sessions/punch -multipart:
       latitude, longitude, accuracy?, isMocked?, photo (file)
     Captures one of the day's (up to 4) attendance punches while an On-Duty
-    session is active. Held pending until HR approves it — see
+    session is active. Held pending until HR approves it -see
     resolve_on_duty_punch_hr().
     """
     emp = _employee_from_token(request)
@@ -572,9 +572,9 @@ def on_duty_punch_request(request: Request) -> Response:
         return _error("A selfie photo is required to verify this punch")
     ext = photo.name.rsplit(".", 1)[-1].lower() if "." in photo.name else ""
     if ext not in ALLOWED_PHOTO_EXTENSIONS:
-        return _error(f"Unsupported photo type '.{ext}' — only JPG and PNG are accepted")
+        return _error(f"Unsupported photo type '.{ext}' -only JPG and PNG are accepted")
     if photo.size > MAX_PHOTO_BYTES:
-        return _error(f"Photo is too large ({photo.size / 1024 / 1024:.1f}MB) — the limit is 8MB")
+        return _error(f"Photo is too large ({photo.size / 1024 / 1024:.1f}MB) -the limit is 8MB")
 
     today = date.today()
     now_time = datetime.now().time().replace(microsecond=0)
@@ -602,7 +602,7 @@ def geo_punch_status(request: Request) -> Response:
     """GET /api/attendance/geo-punch/status?date=YYYY-MM-DD (defaults to today)
     Today's recorded punches (any source) + a lightweight snapshot of the
     employee's current On-Duty session (full detail lives at
-    on_duty_session_status) — used by the compact status banners on the
+    on_duty_session_status) -used by the compact status banners on the
     Attendance page and home screen."""
     emp = _employee_from_token(request)
     if not emp:
@@ -641,9 +641,9 @@ def geo_punch_status(request: Request) -> Response:
 @require_auth
 def live_location_ping(request: Request) -> Response:
     """
-    POST /api/live-location/ping — JSON {latitude, longitude, accuracy?, isMocked?}
+    POST /api/live-location/ping -JSON {latitude, longitude, accuracy?, isMocked?}
     Accepted while Employee.location_tracking_enabled is true OR the
-    employee has an active On-Duty session — the app should stop its ping
+    employee has an active On-Duty session -the app should stop its ping
     loop the moment it sees this 403 back.
     """
     emp = _employee_from_token(request)
@@ -682,7 +682,7 @@ def live_location_ping(request: Request) -> Response:
 @require_hr
 def on_duty_sessions_hr(request: Request) -> Response:
     """GET /api/on-duty-sessions?status=pending|pending_hod|pending_hr|active|completed|rejected|all
-    — branch-scoped. "pending" (the default) covers both pending_hod and
+    -branch-scoped. "pending" (the default) covers both pending_hod and
     pending_hr so HR's Pending Approvals tab sees everything awaiting either
     stage in one list."""
     status_filter = request.query_params.get("status", "pending")
@@ -700,7 +700,7 @@ def on_duty_sessions_hr(request: Request) -> Response:
 @require_hr
 def on_duty_session_hr_status(request: Request, pk: int) -> Response:
     """
-    PATCH /api/on-duty-sessions/<pk>/status — HR's decision. Works on a
+    PATCH /api/on-duty-sessions/<pk>/status -HR's decision. Works on a
     session at EITHER stage: if it's still pending_hod (Department Head
     hasn't acted, or there isn't one), HR's decision finalizes it directly
     in one step; if it's pending_hr, this is the normal second-stage
@@ -727,7 +727,7 @@ def on_duty_session_hr_status(request: Request, pk: int) -> Response:
 @api_view(["GET"])
 @require_hr
 def on_duty_punch_verifications_hr(request: Request) -> Response:
-    """GET /api/on-duty-punch-verifications?status=pending|approved|rejected|all — branch-scoped."""
+    """GET /api/on-duty-punch-verifications?status=pending|approved|rejected|all -branch-scoped."""
     status_filter = request.query_params.get("status", "pending")
     qs = OnDutyPunchVerification.objects.select_related("employee__department", "employee__designation", "session")
     qs = scope_to_branch(qs, request, field="employee__branch_id")
@@ -740,8 +740,8 @@ def on_duty_punch_verifications_hr(request: Request) -> Response:
 @api_view(["PATCH"])
 @require_hr
 def on_duty_punch_verification_hr_status(request: Request, pk: int) -> Response:
-    """PATCH /api/on-duty-punch-verifications/<pk>/status — HR approves/rejects
-    one captured on-duty punch. Single-stage (HR only) — see
+    """PATCH /api/on-duty-punch-verifications/<pk>/status -HR approves/rejects
+    one captured on-duty punch. Single-stage (HR only) -see
     resolve_on_duty_punch_hr() for what happens on approval."""
     v = scope_to_branch(
         OnDutyPunchVerification.objects.select_related("employee__department", "employee__designation", "session"),
@@ -764,7 +764,7 @@ def on_duty_punch_verification_hr_status(request: Request, pk: int) -> Response:
 @api_view(["GET"])
 @require_auth
 def on_duty_punch_verification_photo(request: Request, pk: int) -> Response:
-    """GET /api/on-duty-punch-verifications/<pk>/photo — owner, branch-scoped
+    """GET /api/on-duty-punch-verifications/<pk>/photo -owner, branch-scoped
     HR, or a Department Head with this employee in their approval scope."""
     v = OnDutyPunchVerification.objects.select_related("employee").filter(pk=pk).first()
     if not v:
@@ -793,7 +793,7 @@ def on_duty_punch_verification_photo(request: Request, pk: int) -> Response:
 @api_view(["GET"])
 @require_hr
 def live_location_team(request: Request) -> Response:
-    """GET /api/live-location/team — latest ping per tracking-enabled employee, branch-scoped.
+    """GET /api/live-location/team -latest ping per tracking-enabled employee, branch-scoped.
     Also flags whether each employee has an active On-Duty session today, so
     the Live Map can render On-Duty staff in a distinct color."""
     employees = scope_to_branch(
@@ -825,7 +825,7 @@ def live_location_team(request: Request) -> Response:
 @api_view(["GET"])
 @require_hr
 def live_location_trail(request: Request, employee_id: int) -> Response:
-    """GET /api/live-location/team/<employee_id>/trail — today-so-far breadcrumb trail for one employee."""
+    """GET /api/live-location/team/<employee_id>/trail -today-so-far breadcrumb trail for one employee."""
     emp = scope_to_branch(Employee.objects, request).filter(pk=employee_id).first()
     if not emp:
         return _error("Employee not found", 404)
@@ -844,7 +844,7 @@ def live_location_trail(request: Request, employee_id: int) -> Response:
 @require_hr
 def live_location_route(request: Request, employee_id: int) -> Response:
     """GET /api/live-location/team/<employee_id>/route?date=YYYY-MM-DD (defaults today)
-    Full-day breadcrumb trail for the Route Map tab — like trail() above but
+    Full-day breadcrumb trail for the Route Map tab -like trail() above but
     scoped to a specific calendar day within the retention window, ordered
     for drawing a directional path rather than just "latest position"."""
     emp = scope_to_branch(Employee.objects, request).filter(pk=employee_id).first()
@@ -880,7 +880,7 @@ def live_location_route(request: Request, employee_id: int) -> Response:
 @api_view(["GET"])
 @require_hr
 def on_duty_map(request: Request) -> Response:
-    """GET /api/on-duty-map?date=YYYY-MM-DD (defaults today) — branch-scoped.
+    """GET /api/on-duty-map?date=YYYY-MM-DD (defaults today) -branch-scoped.
     Every employee with On-Duty activity on the given day (a session opened
     that day, or one still active), each with their current live position
     (if location tracking is enabled), today's route points, and their
@@ -906,7 +906,7 @@ def on_duty_map(request: Request) -> Response:
     for s in sessions:
         emp = s.employee
         if emp.id in by_employee:
-            continue  # one entry per employee — most recent session for the day (already ordered)
+            continue  # one entry per employee -most recent session for the day (already ordered)
         latest = None
         points = []
         if emp.location_tracking_enabled:

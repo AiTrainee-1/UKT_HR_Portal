@@ -19,12 +19,12 @@ class Branch(models.Model):
     is_head_office = models.BooleanField(default=False, db_column="is_head_office")
     is_active = models.BooleanField(default=True, db_column="is_active")
     # Counter behind the auto-generated per-branch employee "Unit Code"
-    # (HO-1, HO-2, ... / Unit1-1, Unit1-2, ...) — see Employee.unit_code and
+    # (HO-1, HO-2, ... / Unit1-1, Unit1-2, ...) -see Employee.unit_code and
     # views.py::_assign_unit_code. Only ever incremented, never reused, even
     # if an employee with an earlier number is later deleted or moved out.
     next_employee_seq = models.IntegerField(default=0, db_column="next_employee_seq")
     # Geofence center for location-based attendance (Geo Attendance feature).
-    # All three are null until HR sets a location on this branch — geo-punch
+    # All three are null until HR sets a location on this branch -geo-punch
     # is simply unavailable for employees here until then (see
     # geo_attendance_views.py::_branch_geofence).
     geofence_lat = models.DecimalField(
@@ -140,13 +140,13 @@ class Employee(models.Model):
     blood_group = models.TextField(null=True, blank=True, db_column="blood_group")
     initial_salary = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True, db_column="initial_salary",
-        help_text="Salary at time of joining — baseline for increment tracking."
+        help_text="Salary at time of joining -baseline for increment tracking."
     )
     password_hash = models.TextField(null=True, blank=True, db_column="password_hash")
     # Live location tracking (Geo Attendance feature) is opt-in per employee,
-    # toggled by HR — never on by default. The mobile/web app only ever
+    # toggled by HR -never on by default. The mobile/web app only ever
     # starts sending location pings when it sees this true on the employee's
-    # own profile (GET /employees/<id> — see _serialize_employee).
+    # own profile (GET /employees/<id> -see _serialize_employee).
     location_tracking_enabled = models.BooleanField(
         default=False, db_column="location_tracking_enabled"
     )
@@ -553,7 +553,7 @@ class SalarySlip(models.Model):
     unpaid_leave_days = models.DecimalField(max_digits=4, decimal_places=1, default=0, db_column="unpaid_leave_days")
     late_days = models.IntegerField(default=0, db_column="late_days")
     completed_sessions = models.IntegerField(default=0, db_column="completed_sessions")
-    # Full day-by-day breakdown for traceability — stored as JSON
+    # Full day-by-day breakdown for traceability -stored as JSON
     breakdown_details = models.JSONField(null=True, blank=True, db_column="breakdown_details")
     generated_at = models.DateTimeField(auto_now_add=True, db_column="generated_at")
     emailed_at = models.DateTimeField(null=True, blank=True, db_column="emailed_at")
@@ -570,7 +570,7 @@ class SalarySlip(models.Model):
 class Role(models.Model):
     name = models.TextField(unique=True)  # HR Admin, HR Executive, Payroll Officer, etc.
     description = models.TextField(null=True, blank=True)
-    # {module_key: "hidden" | "view" | "edit"} — one entry per sidebar module.
+    # {module_key: "hidden" | "view" | "edit"} -one entry per sidebar module.
     # See api/permission_middleware.py MODULE_REGISTRY for the canonical module_key list
     # and how each is enforced against incoming requests.
     permissions = models.JSONField(default=dict)
@@ -611,7 +611,7 @@ class HRUser(models.Model):
 
 class LoginSession(models.Model):
     """
-    One row per HR-portal login — the JWT itself is stateless (see
+    One row per HR-portal login -the JWT itself is stateless (see
     jwt_utils.py), so this is what makes a login a revocable, listable
     "session": each token carries a `jti` claim matching one row here, and
     require_auth (auth.py) rejects any request whose jti is missing or
@@ -841,7 +841,7 @@ class HiringRuleSet(models.Model):
     """
     Department-scoped hiring criteria used to score uploaded resumes.
     Multiple rule sets can exist per department (e.g. different roles within
-    the same department) — HR picks one explicitly at screening time.
+    the same department) -HR picks one explicitly at screening time.
     """
     name = models.TextField()
     department = models.ForeignKey(
@@ -871,7 +871,7 @@ class ScreeningCandidate(models.Model):
     shortlist -> selected/rejected pipeline.
     """
     # rule_set is PROTECTed: a candidate row must survive rule-set edits or
-    # deactivation for audit purposes — deleting a rule set with candidates
+    # deactivation for audit purposes -deleting a rule set with candidates
     # attached is blocked at the view layer instead.
     rule_set = models.ForeignKey(
         HiringRuleSet, on_delete=models.PROTECT, db_column="rule_set_id",
@@ -931,12 +931,12 @@ class ScreeningCandidate(models.Model):
 
 class EmployeeDocument(models.Model):
     """
-    One uploaded file (image or PDF) attached to an employee — PAN/Aadhaar/
+    One uploaded file (image or PDF) attached to an employee -PAN/Aadhaar/
     educational certs/etc., plus scanned copies of Offer/Experience/
     Resignation/Staff letters. Distinct from the on-demand PDF *generators*
     in company_documents_views.py (those synthesize a letter from Employee
     data; this stores whatever HR actually uploads). Multiple files per
-    category are allowed (e.g. several educational certificates) — no
+    category are allowed (e.g. several educational certificates) -no
     "replace" semantics, HR deletes individually.
     """
     CATEGORY_PAN = "pan_card"
@@ -1151,9 +1151,26 @@ class Payroll(models.Model):
         unique_together = [("employee", "month", "year", "week_number")]
 
 
+def _default_late_deduction_slabs() -> list[dict]:
+    """
+    Seeds the late-deduction table with the formula that was hardcoded in
+    payroll_views.py before this became configurable: every 3 billable
+    lates cost a quarter shift. Expressed as explicit thresholds so HR can
+    edit any individual step without touching code.
+
+    Covers up to 30 billable lates -more than a full month of working
+    days -after which the last row's value holds (see
+    late_shift_deduction() in payroll_views.py).
+    """
+    return [
+        {"fromLates": n, "deductionShifts": round(n / 3 * 0.25, 2)}
+        for n in range(3, 31, 3)
+    ]
+
+
 class PayrollSettings(models.Model):
-    """Singleton — always fetch/update the row with pk=1."""
-    # 0 means "do not deduct" — default off so HR explicitly enables
+    """Singleton -always fetch/update the row with pk=1."""
+    # 0 means "do not deduct" -default off so HR explicitly enables
 
     # ── Company profile (drives branding across the whole portal) ─────────
     company_name = models.TextField(default="UKTextiles", db_column="company_name")
@@ -1231,16 +1248,93 @@ class PayrollSettings(models.Model):
             "Staff only. Even with a first+last punch pair, Full Shift also "
             "requires the first punch within this many minutes of the "
             "employee's assigned shift start time, and the last punch "
-            "within the same window of the assigned shift end time — "
+            "within the same window of the assigned shift end time -"
             "otherwise the day is capped at Half Shift, regardless of any "
             "approved Permission. Employees with no assigned shift have no "
             "reference to check against, so this never applies to them."
         ),
     )
 
+    # ── Half Shift late reference (staff) ─────────────────────────────────
+    # A day capped at Half Shift is only additionally flagged Late when the
+    # first punch is strictly AFTER this time -an afternoon half-shift that
+    # starts on time is not "late", it's just a half day. Was a hardcoded
+    # 14:30 constant in shift_engine.py before this became configurable;
+    # the default preserves that exact behavior.
+    half_shift_late_reference_time = models.TimeField(
+        default="14:30", db_column="half_shift_late_reference_time",
+        help_text=(
+            "Staff only. On a Half Shift day, the first punch is flagged Late "
+            "only if it is strictly after this time. Compared at minute "
+            "granularity (seconds ignored)."
+        ),
+    )
+
+    # ── Late Detection policy (staff payroll) ─────────────────────────────
+    # Lates and approved Permissions share ONE combined monthly pool. The
+    # first `late_free_allowance` of that pool are free; everything beyond
+    # it is "billable" and priced by the slab table below.
+    late_free_allowance = models.IntegerField(
+        default=3, db_column="late_free_allowance",
+        help_text=(
+            "Free lates + permissions allowed per employee per month before "
+            "any shift deduction applies. Lates and approved Permission "
+            "requests draw on this same shared pool."
+        ),
+    )
+    # Ordered threshold table: [{"fromLates": N, "deductionShifts": D}, ...]
+    # The engine picks the highest row whose fromLates <= billable lates and
+    # applies that row's deductionShifts. Rows beyond the last one hold at
+    # the last row's value. The default seeds the old hardcoded formula
+    # (every 3 billable lates = 0.25 shift) across the full range a calendar
+    # month can produce, so behavior is unchanged out of the box.
+    late_deduction_slabs = models.JSONField(
+        default=_default_late_deduction_slabs, blank=True,
+        db_column="late_deduction_slabs",
+        help_text=(
+            "Shift deduction thresholds. Each row: fromLates (billable late "
+            "count reached) -> deductionShifts (shifts cut). Highest matching "
+            "row wins; the last row holds for anything beyond it."
+        ),
+    )
+
+    # ── Without Permission policy (staff payroll) -separate pool ─────────
+    # Counts late-in/early-out occurrences inside the 1-hour permission
+    # window that had NO approved Permission covering them (see
+    # AttendanceDayRecord.late_in_without_permission/early_out_without_
+    # permission). Independent from the Late Attendance pool above -an
+    # occurrence here does not also draw down late_free_allowance, and vice
+    # versa. Ships with an empty slab table (zero deduction) so this new
+    # detection is purely informational until HR deliberately opts in here.
+    without_permission_free_allowance = models.IntegerField(
+        default=0, db_column="without_permission_free_allowance",
+        help_text=(
+            "Free late-in/early-out-without-permission occurrences allowed "
+            "per employee per month before any shift deduction applies."
+        ),
+    )
+    without_permission_deduction_slabs = models.JSONField(
+        default=list, blank=True,
+        db_column="without_permission_deduction_slabs",
+        help_text=(
+            "Same shape/semantics as late_deduction_slabs, applied to the "
+            "Without Permission pool instead. Empty by default -no "
+            "deduction until HR configures rows here."
+        ),
+    )
+
+    # ── Default timings for NEW shifts (Manage Shift inherits these) ───────
+    # Start/end time is deliberately NOT here -Manage Shift owns that
+    # per-shift and always has; duplicating it here would just invite drift
+    # between "the default" and "what Manage Shift actually shows".
+    default_shift_grace_minutes = models.IntegerField(default=15, db_column="default_shift_grace_minutes")
+    default_shift_first_half_end = models.TimeField(default="13:30", db_column="default_shift_first_half_end")
+    default_shift_lunch_duration_minutes = models.IntegerField(default=60, db_column="default_shift_lunch_duration_minutes")
+    default_shift_lunch_grace_minutes = models.IntegerField(default=10, db_column="default_shift_lunch_grace_minutes")
+
     # ── Cross-midnight punch reattribution (staff only) ────────────────────
     # A forgotten evening exit punch is sometimes made hours late, after
-    # midnight — the biometric device stamps it under the NEXT calendar
+    # midnight -the biometric device stamps it under the NEXT calendar
     # date, which (without this) gets misread as tomorrow's first punch,
     # shifting all of tomorrow's real punches down a slot. These two
     # settings jointly define the reattribution window; setting either to
@@ -1255,7 +1349,7 @@ class PayrollSettings(models.Model):
         help_text=(
             "Staff only. A punch on the NEXT calendar date, up to this many "
             "hours after the shift's end time, is treated as this day's "
-            "forgotten last-out instead of tomorrow's first punch — e.g. 9 "
+            "forgotten last-out instead of tomorrow's first punch -e.g. 9 "
             "hours after a 20:00 end covers a punch made as late as 05:00. "
             "Only applies when this day doesn't already have a punch at or "
             "after its own shift end. Set to 0 to disable."
@@ -1266,7 +1360,7 @@ class PayrollSettings(models.Model):
         db_column="first_punch_pre_shift_buffer_hours",
         help_text=(
             "Staff only. Protects a genuinely early arrival from being "
-            "stolen by the setting above — the reattribution window above "
+            "stolen by the setting above -the reattribution window above "
             "can never reach closer than this many hours before the next "
             "day's own shift start time. Set to 0 to remove this cap."
         ),
@@ -1403,7 +1497,7 @@ class AttendanceDayRecord(models.Model):
 
     Auto-computed from punches (using the mode selected in settings), then
     optionally overridden by HR. When source == "manual" the values here are
-    authoritative — payroll and salary always read from this table first.
+    authoritative -payroll and salary always read from this table first.
     """
     STATUS_PRESENT = "present"
     STATUS_ABSENT = "absent"
@@ -1427,6 +1521,23 @@ class AttendanceDayRecord(models.Model):
     is_late = models.BooleanField(default=False, db_column="is_late")
     is_half_shift = models.BooleanField(default=False, db_column="is_half_shift")
     early_leave = models.BooleanField(default=False, db_column="early_leave")
+    # Staff, Full-Shift days only. Set inside the 1-hour permission-eligible
+    # zone between the shift's own grace period and the wider punctuality
+    # window (see shift_engine.py::_punctuality_window_minutes) -an
+    # approved EmployeePermission covering that moment suppresses detection
+    # entirely (these stay False); without one, the employee is Late as
+    # before but tagged here so it can be reported/penalized separately from
+    # ordinary Late Attendance (Settings → Late Detection → Without
+    # Permission). early_out_without_permission is new detection -evening
+    # early departure was never flagged at all before this.
+    late_in_without_permission = models.BooleanField(default=False, db_column="late_in_without_permission")
+    early_out_without_permission = models.BooleanField(default=False, db_column="early_out_without_permission")
+    # Display-only explanation of why is_late/is_half_shift ended up True this
+    # day (e.g. "Late morning (Without Permission): arrived 09:40, deadline
+    # 09:15"). Never read by any calculation — purely so Payroll/Attendance
+    # UI can show HR *why* a detection fired instead of just that it fired.
+    # Null whenever nothing was flagged.
+    late_reason = models.TextField(null=True, blank=True, db_column="late_reason")
     shifts_earned = models.DecimalField(
         max_digits=3, decimal_places=2, default=0, db_column="shifts_earned",
         help_text="0.50 per half. Staff max 1.00, production max 1.50."
@@ -1439,11 +1550,11 @@ class AttendanceDayRecord(models.Model):
     primary_source = models.TextField(
         null=True, blank=True, db_column="primary_source",
         help_text=(
-            "Which punch source this day's attendance actually came from — "
+            "Which punch source this day's attendance actually came from -"
             "'Biometric' / 'On-Duty' / 'Geo Punch' / 'HR Entry', or null if "
             "no punches. Biometric always wins whenever it contributed "
             "anything that day, regardless of what else is present. Purely "
-            "a display field — never used in shift-value calculations."
+            "a display field -never used in shift-value calculations."
         ),
     )
     override_by = models.TextField(null=True, blank=True, db_column="override_by")
@@ -1534,7 +1645,7 @@ class AttendanceOverrideRequest(models.Model):
         related_name="attendance_override_requests",
     )
     date = models.DateField()
-    # Snapshot of the record before the change, and the change requested — both JSON
+    # Snapshot of the record before the change, and the change requested -both JSON
     previous_values = models.JSONField(default=dict, db_column="previous_values")
     requested_values = models.JSONField(default=dict, db_column="requested_values")
     reason = models.TextField(null=True, blank=True)
@@ -1558,13 +1669,13 @@ class OnDutySession(models.Model):
     """
     An employee working away from the branch for a day (field visit, driver,
     offsite work) declares an On-Duty session: just a destination and a
-    reason to go, no photos or GPS at request time — that verification now
+    reason to go, no photos or GPS at request time -that verification now
     happens per-punch (see OnDutyPunchVerification below), not at the gate.
     Same two-stage approval chain as before:
       1. pending_hod -> the employee's Department Head approves/rejects
          (mobile Approvals screen, manager_views.py::manager_update_on_duty_status)
       2. pending_hr  -> HR gives the final approval (HR portal dashboard)
-    A HOD rejection short-circuits straight to "rejected" — HR is never
+    A HOD rejection short-circuits straight to "rejected" -HR is never
     consulted. HR may also act directly on a still-pending_hod session as a
     fallback (e.g. no Department Head assigned), finalizing to
     active/rejected in one step.
@@ -1574,8 +1685,8 @@ class OnDutySession(models.Model):
     live_location_ping) and routes the employee's regular attendance punches
     through the photo+GPS verification flow instead of a plain punch. The
     session ends in "completed", either automatically (their 4th punch of
-    the day gets HR-approved — see OnDutyPunchVerification) or manually (the
-    employee taps "Done" in the mobile app — nobody else can end it early).
+    the day gets HR-approved -see OnDutyPunchVerification) or manually (the
+    employee taps "Done" in the mobile app -nobody else can end it early).
     """
     STATUS_PENDING_HOD = "pending_hod"
     STATUS_PENDING_HR = "pending_hr"
@@ -1593,8 +1704,8 @@ class OnDutySession(models.Model):
     COMPLETION_MANUAL = "manual"
     COMPLETION_AUTO_4TH_PUNCH = "auto_4th_punch"
     COMPLETION_CHOICES = [
-        (COMPLETION_MANUAL, "Manual — Employee Marked Done"),
-        (COMPLETION_AUTO_4TH_PUNCH, "Automatic — 4th Punch Approved"),
+        (COMPLETION_MANUAL, "Manual -Employee Marked Done"),
+        (COMPLETION_AUTO_4TH_PUNCH, "Automatic -4th Punch Approved"),
     ]
 
     employee = models.ForeignKey(
@@ -1604,8 +1715,8 @@ class OnDutySession(models.Model):
     destination = models.TextField()
     # Snapshot of the branch the employee was assigned to at request time,
     # kept even if they're later moved to a different branch. Purely
-    # informational context for the approver — On-Duty has no geofence
-    # check of its own (that's the whole point — they're meant to be offsite).
+    # informational context for the approver -On-Duty has no geofence
+    # check of its own (that's the whole point -they're meant to be offsite).
     branch = models.ForeignKey(
         Branch, on_delete=models.SET_NULL, null=True, blank=True, db_column="branch_id",
     )
@@ -1630,22 +1741,22 @@ class OnDutySession(models.Model):
 class OnDutyPunchVerification(models.Model):
     """
     One of the employee's 4 daily attendance punches, made while an
-    OnDutySession is active — reuses the SAME shared 4-punch-per-day slot
+    OnDutySession is active -reuses the SAME shared 4-punch-per-day slot
     system every other punch source uses (biometric, Office Geo Punch), it
     does not add a separate on-duty punch count. The difference is that an
     on-duty punch is never written straight to AttendanceLog: it's captured
     with a selfie + GPS + the original time, held as "pending", and only
     becomes a real punch (via biometric_sync._ingest_punches(), tagged
     "on_duty:approved", at the ORIGINAL captured punch_time) once HR
-    approves it — this is the fraud check the office/biometric paths don't
+    approves it -this is the fraud check the office/biometric paths don't
     need, since this employee is off-site and unsupervised. Only one
     verification may be pending at a time per employee (see
-    geo_attendance_views.py::on_duty_punch_request) — a rejected one simply
+    geo_attendance_views.py::on_duty_punch_request) -a rejected one simply
     leaves that punch slot open for a fresh submission.
 
     When the punch this verification resolves to is the day's 4th, approving
     it also auto-completes the parent OnDutySession
-    (completion_reason=auto_4th_punch) — see resolve_on_duty_punch_hr().
+    (completion_reason=auto_4th_punch) -see resolve_on_duty_punch_hr().
     """
     STATUS_PENDING = "pending"
     STATUS_APPROVED = "approved"
@@ -1686,7 +1797,7 @@ class OnDutyPunchVerification(models.Model):
 
 class MissingPunchRequest(models.Model):
     """
-    Employee self-service "I forgot to punch" request — date + time + reason,
+    Employee self-service "I forgot to punch" request -date + time + reason,
     approved by the Department Head first, then HR gives the final approval.
     Same two-stage status machine as OnDutySession above (the only other
     genuine HOD-then-HR workflow in this codebase): a HOD rejection is
@@ -1695,7 +1806,7 @@ class MissingPunchRequest(models.Model):
 
     On HR approval, this does NOT overwrite the day's AttendanceDayRecord
     directly (unlike CasualLeaveRequest/AttendanceOverrideRequest, which
-    decide an entire day's outcome) — it creates one ordinary AttendanceLog
+    decide an entire day's outcome) -it creates one ordinary AttendanceLog
     row (source="missing_punch:approved") via resolve_missing_punch_hr() in
     missing_punch_views.py, so it becomes just another punch that day and
     flows through the normal engine (punch-order combination rule,
@@ -1715,12 +1826,12 @@ class MissingPunchRequest(models.Model):
         (STATUS_REJECTED, "Rejected"),
     ]
 
-    # Which of the day's (up to) 4 punches this request represents — purely
+    # Which of the day's (up to) 4 punches this request represents -purely
     # descriptive, shown to the employee/HOD/HR so it's clear which specific
     # punch is missing. Deliberately NOT the source of truth for P1-P4
     # identity: that's derived by shift_engine.compute_daily_shift_log from
     # each punch's actual TIME relative to the shift's lunch window, computed
-    # fresh every time attendance is calculated — never stored anywhere. This
+    # fresh every time attendance is calculated -never stored anywhere. This
     # field only maps onto punch_type (morning_in/lunch_in -> IN,
     # lunch_out/evening_out -> OUT), which is what actually gets written to
     # AttendanceLog on HR approval.
@@ -1770,7 +1881,7 @@ class LiveLocationPing(models.Model):
     """
     One GPS sample from an employee with location_tracking_enabled=True.
     Append-only (not upsert) so the HR map can draw today's breadcrumb trail,
-    not just a single current dot — see geo_attendance_views.py::live_location_ping,
+    not just a single current dot -see geo_attendance_views.py::live_location_ping,
     which also prunes each employee's pings older than 24h on every write so
     this table never grows unbounded (no cron/Celery in this project).
     """
@@ -1823,7 +1934,7 @@ class BiometricDevice(models.Model):
 
 
 class AutoSyncRule(models.Model):
-    """A configurable timing rule for background biometric sync — one
+    """A configurable timing rule for background biometric sync -one
     APScheduler CronTrigger job per enabled rule (see auto_sync.py). Replaces
     the old hardcoded 07:30/20:30 schedule in apps.py with HR-editable rules."""
 
@@ -1859,7 +1970,7 @@ class AutoSyncRule(models.Model):
 # ──────────────────────────────────────────────
 
 class IdCardSettings(models.Model):
-    """Singleton — always fetch/update the row with pk=1."""
+    """Singleton -always fetch/update the row with pk=1."""
 
     primary_color = models.TextField(default="#006496", db_column="primary_color")
     secondary_color = models.TextField(default="#4FB8F0", db_column="secondary_color")
@@ -1886,7 +1997,7 @@ class IdCardSettings(models.Model):
 # ──────────────────────────────────────────────
 
 class CompanyDocumentSettings(models.Model):
-    """One row per document type — fetch/update via `.get(doc_type)`."""
+    """One row per document type -fetch/update via `.get(doc_type)`."""
 
     DOC_TYPE_OFFER_LETTER = "offer_letter"
     DOC_TYPE_EXPERIENCE_LETTER = "experience_letter"
@@ -1905,7 +2016,7 @@ class CompanyDocumentSettings(models.Model):
     heading_style = models.TextField(default="serif", db_column="heading_style")     # serif | sans
     show_watermark = models.BooleanField(default=True, db_column="show_watermark")
     footer_tagline = models.TextField(blank=True, default="Weaving Quality. Building Trust.", db_column="footer_tagline")
-    # Optional override — falls back to PayrollSettings.company_logo when blank.
+    # Optional override -falls back to PayrollSettings.company_logo when blank.
     logo_override = models.TextField(null=True, blank=True, db_column="logo_override")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
@@ -1919,12 +2030,12 @@ class CompanyDocumentSettings(models.Model):
 
 
 # ──────────────────────────────────────────────
-#  Casual Leave (CL) — paid, staff-only, 1/month
+#  Casual Leave (CL) -paid, staff-only, 1/month
 # ──────────────────────────────────────────────
 
 class CasualLeaveRequest(models.Model):
     """
-    Casual Leave — completely independent of LeaveRequest / permissions.
+    Casual Leave -completely independent of LeaveRequest / permissions.
 
     Rules enforced in the views:
       • staff employees only
@@ -1971,7 +2082,7 @@ class NightShiftRule(models.Model):
     morning times as belonging to the previous night), the next morning they
     may punch in as late as `allowed_first_punch` without late/half-shift.
 
-    Rules are matched in ascending `worked_until` order — the first rule whose
+    Rules are matched in ascending `worked_until` order -the first rule whose
     threshold is >= the actual punch-out time wins.
     """
     name = models.TextField()
@@ -2008,7 +2119,7 @@ class NightShiftRelaxation(models.Model):
         related_name="night_relaxations",
     )
     night_date = models.DateField(db_column="night_date", help_text="The day the night shift started.")
-    relaxation_date = models.DateField(db_column="relaxation_date", help_text="Next day — allowance applies here.")
+    relaxation_date = models.DateField(db_column="relaxation_date", help_text="Next day -allowance applies here.")
     last_punch_out = models.TimeField(db_column="last_punch_out")
     crossed_midnight = models.BooleanField(default=False, db_column="crossed_midnight")
     allowed_until = models.TimeField(db_column="allowed_until")
@@ -2034,7 +2145,7 @@ class NightShiftRelaxation(models.Model):
 class ProductionShiftConfig(models.Model):
     """
     Singleton. Reference punch times for the production 4-punch day and the
-    grace window used when checking segment coverage. Gender-agnostic — a
+    grace window used when checking segment coverage. Gender-agnostic -a
     single config applies to every production employee.
     """
     punch1_time = models.TimeField(default=time(8, 30), db_column="punch1_time", help_text="Arrival")
@@ -2073,7 +2184,7 @@ class ProductionShiftSegment(models.Model):
 
 
 # ──────────────────────────────────────────────
-#  Staff Chat (mobile app) — Company + Department channels
+#  Staff Chat (mobile app) -Company + Department channels
 # ──────────────────────────────────────────────
 
 class ChatChannel(models.Model):
@@ -2116,7 +2227,7 @@ class ChatChannel(models.Model):
 class ChatMessage(models.Model):
     channel = models.ForeignKey(ChatChannel, on_delete=models.CASCADE, db_column="channel_id", related_name="messages")
     # Null sender = an HR Portal user (HR/MD/Director), who has no Employee
-    # row — their display name is stored in sender_label instead.
+    # row -their display name is stored in sender_label instead.
     sender = models.ForeignKey(
         Employee, on_delete=models.CASCADE, null=True, blank=True,
         db_column="sender_id", related_name="chat_messages",
@@ -2166,11 +2277,11 @@ class HrLoginAttempt(models.Model):
 
 
 # ──────────────────────────────────────────────
-#  Full application backup — scheduling + optional Google Drive offsite copy
+#  Full application backup -scheduling + optional Google Drive offsite copy
 # ──────────────────────────────────────────────
 
 class BackupSchedule(models.Model):
-    """Singleton — always fetch/update the row with pk=1. Mirrors
+    """Singleton -always fetch/update the row with pk=1. Mirrors
     AutoSyncRule's shape (see auto_sync.py) for the scheduler."""
 
     is_enabled = models.BooleanField(default=False)
@@ -2194,14 +2305,14 @@ class BackupSchedule(models.Model):
 
 
 class BackupDriveConfig(models.Model):
-    """Singleton — optional Google Drive upload destination for backups.
+    """Singleton -optional Google Drive upload destination for backups.
     Local storage is always the primary/default copy; this is purely an
     extra offsite copy of the same backup file, uploaded after it's already
     written locally."""
 
     is_enabled = models.BooleanField(default=False)
     folder_id = models.TextField(blank=True, default="")
-    # Plaintext service-account JSON key — same convention as
+    # Plaintext service-account JSON key -same convention as
     # PayrollSettings.smtp_password already used in this codebase.
     service_account_json = models.TextField(blank=True, default="")
     last_upload_at = models.DateTimeField(null=True, blank=True)

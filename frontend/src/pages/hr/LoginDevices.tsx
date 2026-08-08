@@ -72,7 +72,7 @@ export default function LoginDevices() {
           <div>
             <h2 className="text-2xl font-black text-gray-900">Login Devices</h2>
             <p className="text-muted-foreground text-sm mt-0.5">
-              Every device currently signed in to the HRMS — monitor sessions and log out remotely
+              Every device currently signed in to the HRMS -monitor sessions and log out remotely
             </p>
           </div>
           <Button

@@ -20,7 +20,7 @@ export interface ScrambledTextProps {
 /** Text whose characters scramble into a placeholder charset as the pointer
  * passes near them, then settle back to the real letters (GSAP
  * SplitText + ScrambleTextPlugin). Purely a hover effect on top of static
- * text — screen readers and no-JS fallbacks still see the real content. */
+ * text -screen readers and no-JS fallbacks still see the real content. */
 export default function ScrambledText({
   radius = 100,
   duration = 1.2,

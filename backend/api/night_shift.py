@@ -3,7 +3,7 @@ Night Shift Relaxation Engine
 =============================
 Company policy: employees who work late into the night get NO overtime pay.
 Instead they may report late the next morning without being marked Late or
-Half Shift — and still earn 1 full shift for the day.
+Half Shift -and still earn 1 full shift for the day.
 
 Detection
 ---------
@@ -15,7 +15,7 @@ A night shift is detected from raw AttendanceLog punches:
 The detected punch-out time is matched against DB-driven NightShiftRule rows
 (ascending worked_until; first threshold >= actual out-time wins) to find the
 allowed first-punch time for day D+1. The result is stored in
-NightShiftRelaxation — one row per employee per relaxation day.
+NightShiftRelaxation -one row per employee per relaxation day.
 
 Attendance/payroll integration lives in attendance_final.py / payroll_views.py,
 which call get_relaxation_for() when classifying a day.
@@ -27,7 +27,7 @@ from .models import (
     AttendanceLog, Employee, NightShiftRelaxation, NightShiftRule,
 )
 
-# Fallback only for employees with no shift assignment at all — everyone else
+# Fallback only for employees with no shift assignment at all -everyone else
 # uses their own shift's end time (see _night_start_for below), never a fixed
 # clock time. A hardcoded global here would misclassify perfectly normal
 # checkouts as "worked a night shift" for anyone whose shift simply ends near
@@ -47,7 +47,7 @@ def _t2m(t: time_type) -> int:
 def _night_start_for(emp: Employee, night_date: date_type, assignments=None) -> time_type:
     """
     The time after which this employee is considered to be working into the
-    night, derived from their OWN assigned shift end + a buffer — never a
+    night, derived from their OWN assigned shift end + a buffer -never a
     fixed clock time shared across every employee.
     """
     from .shift_engine import _get_shift_for_date
@@ -91,7 +91,7 @@ def match_rule(out_time: time_type, crossed_midnight: bool, rules=None) -> Night
 
     `rules`, when given, is the pre-fetched active-rule list (a bulk caller's
     one-time query instead of a fresh `NightShiftRule.objects.filter(...)`
-    on every call — this function is invoked once or twice per employee per
+    on every call -this function is invoked once or twice per employee per
     day, so re-querying a small, rarely-changed table that often is what
     made month-wide computation slow).
     """
@@ -120,7 +120,7 @@ def detect_night_for_employee(
     `assignments`/`logs_by_date`/`rules`/`existing_relaxations` let a bulk
     caller (compute_month_records) supply data it already fetched once for
     the whole month instead of this function re-querying per day. Omitted
-    (the default), everything is looked up fresh exactly as before — every
+    (the default), everything is looked up fresh exactly as before -every
     other caller (single-day recompute, casual leave/manager views, etc.)
     is unaffected.
     """
@@ -147,16 +147,16 @@ def detect_night_for_employee(
     crossed = bool(early_punches) and bool(day_punches) and day_punches[-1] >= night_start
 
     # Crossed midnight: checkout is the last early-morning punch on the next day.
-    # (Requires evening presence on the night day so a lone early punch — e.g.
-    # an odd 05:50 arrival — is never misread as a night checkout.)
+    # (Requires evening presence on the night day so a lone early punch -e.g.
+    # an odd 05:50 arrival -is never misread as a night checkout.)
     if crossed:
         last_out, crossed_midnight = early_punches[-1], True
     elif worked_late_same_day:
         last_out, crossed_midnight = day_punches[-1], False
     else:
-        # No night work — remove any stale auto row for this night. When the
+        # No night work -remove any stale auto row for this night. When the
         # caller already knows (via a prefetched map) that no row exists for
-        # this date, skip the DELETE query entirely — it would be a no-op.
+        # this date, skip the DELETE query entirely -it would be a no-op.
         if existing_relaxations is None or next_day in existing_relaxations:
             NightShiftRelaxation.objects.filter(employee=emp, relaxation_date=next_day).delete()
         return None
@@ -197,7 +197,7 @@ def get_relaxation_for(
     assignments=None, logs_by_date=None, rules=None, existing_relaxations=None,
 ) -> NightShiftRelaxation | None:
     """
-    Relaxation applying to day `d` for this employee — always re-derived from
+    Relaxation applying to day `d` for this employee -always re-derived from
     the previous night's actual punches against the employee's CURRENT shift
     assignment. A stored row is never trusted on its own: if it were, a shift
     assigned/changed *after* the row was first computed (e.g. a backdated
@@ -211,7 +211,7 @@ def get_relaxation_for(
 
     Master off-switch (2026-07-25 fix): PayrollSettings.night_shift_enabled
     used to only control whether the Night Shift Relaxation page appears in
-    the sidebar — every call site here still applied relaxation regardless
+    the sidebar -every call site here still applied relaxation regardless
     of the toggle, so a day's Late flag / Half Shift could still be silently
     overridden even with the feature switched off in Settings. Now checked
     at this single choke point every caller already goes through, so

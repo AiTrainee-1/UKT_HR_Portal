@@ -20,10 +20,10 @@ export default function HrLayout({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const [location] = useLocation();
   const moduleKey = moduleForPath(location);
-  // The API (permission_middleware.py) is the authoritative backstop — it
+  // The API (permission_middleware.py) is the authoritative backstop -it
   // 403s any write regardless of UI state. The UI-level lock below only
   // disables buttons that look like a data-modifying action (Add/Edit/
-  // Delete/Import/... — see lib/view-only-lock.ts); tabs, filters, search,
+  // Delete/Import/... -see lib/view-only-lock.ts); tabs, filters, search,
   // pagination and expand/collapse controls are deliberately left alone so
   // View Only is still a full browsing experience, not a frozen page.
   const isViewOnly = moduleKey ? permissionLevel(user, moduleKey) === "view" : false;
@@ -40,7 +40,7 @@ export default function HrLayout({ children }: { children: React.ReactNode }) {
     // <body>, outside this page's DOM subtree. A "View Details" dialog is
     // fine to open (its trigger isn't a mutating word), but if that dialog
     // has its own "Edit"/"Save" button, that only exists in the portaled
-    // content — this is what catches it once it mounts.
+    // content -this is what catches it once it mounts.
     const observer = new MutationObserver(relock);
     observer.observe(document.body, { childList: true, subtree: true });
     return () => observer.disconnect();
@@ -161,7 +161,7 @@ export default function HrLayout({ children }: { children: React.ReactNode }) {
         </header>
 
         {/* `relative` keeps absolutely-positioned descendants (e.g. Radix Select's
-            hidden native <select>) anchored inside this scroll container — without
+            hidden native <select>) anchored inside this scroll container -without
             it they anchor to <html> and stretch the whole document. */}
         <main ref={mainRef} className="relative flex-1 overflow-y-auto p-4 lg:p-6 print:static print:overflow-visible print:h-auto print:p-0">
           {isViewOnly && (
@@ -174,7 +174,7 @@ export default function HrLayout({ children }: { children: React.ReactNode }) {
               }}
             >
               <Eye size={15} strokeWidth={2} />
-              View only — browse and inspect freely, changes can't be saved.
+              View only -browse and inspect freely, changes can't be saved.
             </div>
           )}
           {children}

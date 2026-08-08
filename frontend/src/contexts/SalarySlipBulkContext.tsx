@@ -8,7 +8,7 @@ import {
 } from "@/lib/api-client/custom-hooks";
 
 // Mounted once at the app root (see App.tsx), same pattern as
-// PayrollGenerationContext — so a bulk download/email survives navigation
+// PayrollGenerationContext -so a bulk download/email survives navigation
 // away from the Salary Slip page, and its progress can still be shown via
 // GlobalSalarySlipBulkBanner elsewhere in the app.
 type BulkSlipParams = {
@@ -32,7 +32,7 @@ interface SalarySlipBulkState {
 const SalarySlipBulkCtx = createContext<SalarySlipBulkState | null>(null);
 
 // Brief linger after completion so the pipeline can show its final state
-// before disappearing — same value used by PayrollGenerationContext.
+// before disappearing -same value used by PayrollGenerationContext.
 const COMPLETION_LINGER_MS = 1500;
 
 function buildQuery(params: BulkSlipParams): string {
@@ -62,7 +62,7 @@ export function SalarySlipBulkProvider({ children }: { children: ReactNode }) {
       await downloadDocumentPdf(`/api/salary-slips/bulk-pdf?${buildQuery(params)}`, () => token);
       toast({
         title: "Salary slips downloaded",
-        description: "Combined PDF ready — 2 slips per A4 page, in one file.",
+        description: "Combined PDF ready -2 slips per A4 page, in one file.",
       });
     } catch (err) {
       toast({
@@ -87,7 +87,7 @@ export function SalarySlipBulkProvider({ children }: { children: ReactNode }) {
       });
       setLastEmailResult(result);
       toast({
-        title: `Salary slips emailed — ${result.sent} delivered`,
+        title: `Salary slips emailed -${result.sent} delivered`,
         description: result.failed > 0
           ? `${result.failed} failed to send. See details on the page.`
           : "Every matching employee was emailed successfully.",

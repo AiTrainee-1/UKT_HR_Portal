@@ -1,7 +1,7 @@
 import { MapContainer, TileLayer, Marker, Circle, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 
-// A plain colored dot instead of Leaflet's default marker images — those
+// A plain colored dot instead of Leaflet's default marker images -those
 // break under Vite's asset pipeline unless manually re-pathed, and a dot in
 // the app's own brand color reads better here than the default pin anyway.
 const pinIcon = L.divIcon({
@@ -25,7 +25,7 @@ function ClickHandler({ onPick }: { onPick: (lat: number, lng: number) => void }
 /**
  * Click-to-place geofence center + drag-to-adjust + a radius ring, backed by
  * OpenStreetMap tiles (no API key / billing account needed, unlike Google
- * Maps — appropriate for this on-premise deployment). The parent must give
+ * Maps -appropriate for this on-premise deployment). The parent must give
  * this a stable `key` per branch being edited (see Branches.tsx) since
  * react-leaflet only reads `center`/`zoom` on first mount, not on prop
  * updates.

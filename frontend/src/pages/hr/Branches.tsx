@@ -340,7 +340,7 @@ export default function Branches() {
               <span>
                 <span className="block text-sm font-medium text-gray-900">Head Office</span>
                 <span className="block text-xs text-muted-foreground mt-0.5">
-                  The default branch existing employees and departments belong to. Only one branch can be Head Office — marking this one unmarks any other.
+                  The default branch existing employees and departments belong to. Only one branch can be Head Office -marking this one unmarks any other.
                 </span>
               </span>
             </label>

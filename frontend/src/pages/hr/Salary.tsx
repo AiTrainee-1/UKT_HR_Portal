@@ -47,7 +47,7 @@ export default function Salary() {
   const [yearFilter, setYearFilter] = useState(String(new Date().getFullYear()));
   const [statusFilter, setStatusFilter] = useState("all");
   const [payrollGroup, setPayrollGroup] = useState<"staff" | "production">("staff");
-  // Production is generated bi-weekly (1–15 / 16–end of month) — mirrors the
+  // Production is generated bi-weekly (1–15 / 16–end of month) -mirrors the
   // Week 1&2 / Week 3&4 split already on the Payroll page.
   const [prodWeek, setProdWeek] = useState<"week12" | "week34">("week12");
 
@@ -102,7 +102,7 @@ export default function Salary() {
   useEffect(() => { setPage(1); }, [payrollGroup, prodWeek]);
 
   // Payroll generation lives in a root-level context (PayrollGenerationProvider)
-  // so it keeps running — and stays visible via the pipeline/banner — even if
+  // so it keeps running -and stays visible via the pipeline/banner -even if
   // this page unmounts mid-run, the same pattern Attendance.tsx uses for the
   // biometric sync pipeline.
   const { triggerGenerate, isGenerating, showPipeline, progress, dismiss: dismissPipeline } = usePayrollGeneration();
@@ -125,7 +125,7 @@ export default function Salary() {
       return;
     }
     generatedParamsRef.current = { month: genMonth, year: genYear };
-    // Always send an explicit runType — omitting it falls back to the
+    // Always send an explicit runType -omitting it falls back to the
     // backend's "all" default, which generates staff monthly AND both
     // production bi-weekly periods together in one call. Staff is generated
     // monthly and Production is generated bi-weekly on separate schedules,
@@ -176,7 +176,7 @@ export default function Salary() {
     }
   };
 
-  // Staff vs Production split — staff pay is salaryMode "monthly", production is "session" (legacy) or "shift" (current)
+  // Staff vs Production split -staff pay is salaryMode "monthly", production is "session" (legacy) or "shift" (current)
   const isProductionMode = (mode: string) => mode === "session" || mode === "shift";
   const staffPayrolls = payrolls.filter(p => p.salaryMode === "monthly");
   const productionPayrolls = payrolls.filter(p => isProductionMode(p.salaryMode));
@@ -214,7 +214,7 @@ export default function Salary() {
               Salary
             </h1>
             <p className="text-muted-foreground text-sm mt-1">
-              Computed payroll records — Staff handled monthly, Production handled week-wise.
+              Computed payroll records -Staff handled monthly, Production handled week-wise.
             </p>
           </div>
 
@@ -371,7 +371,7 @@ export default function Salary() {
           pillBg="#f1f5f9"
         />
 
-        {/* Week 1&2 / Week 3&4 toggle — Production only */}
+        {/* Week 1&2 / Week 3&4 toggle -Production only */}
         {payrollGroup === "production" && (
           <PillTabs
             items={[
@@ -505,7 +505,7 @@ export default function Salary() {
         )}
       </div>
 
-      {/* DIALOG: GENERATE PAYROLL — Staff/Production + Week aware, mirrors PayrollFull.tsx's
+      {/* DIALOG: GENERATE PAYROLL -Staff/Production + Week aware, mirrors PayrollFull.tsx's
           Generate dialog so this page can never fall back to generating everything at once. */}
       <Dialog open={runPayrollOpen} onOpenChange={setRunPayrollOpen}>
         <DialogContent className="max-w-md">

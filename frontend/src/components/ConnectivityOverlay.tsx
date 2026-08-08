@@ -19,7 +19,7 @@ const COPY: Record<Exclude<OfflineReason, null>, {
     badge: "Connection Lost",
     title: "Can't Reach the Server",
     description:
-      "We can't connect to the UKTextiles server right now — this usually means the server is offline, the network connection dropped, or the domain is temporarily unreachable. We'll reconnect automatically as soon as it's back.",
+      "We can't connect to the UKTextiles server right now -this usually means the server is offline, the network connection dropped, or the domain is temporarily unreachable. We'll reconnect automatically as soon as it's back.",
     contacts: ["Contact your Server Team", "Contact your Backend Team"],
     statusRows: [
       { label: "Component", value: "Backend / Network" },
@@ -59,7 +59,7 @@ export default function ConnectivityOverlay() {
     setChecking(true);
     try {
       // /api/healthz deliberately bypasses the DB check (so it stays up even
-      // when the database is down — useful for infra monitoring, wrong for
+      // when the database is down -useful for infra monitoring, wrong for
       // us here). To confirm the database is actually back, poll an endpoint
       // that touches it instead; DatabaseHealthMiddleware intercepts that
       // with a 503 for every path except /api/healthz.
@@ -68,7 +68,7 @@ export default function ConnectivityOverlay() {
       // A successful call already triggers markOnline() inside customFetch,
       // which updates `reason` via the subscription above.
     } catch {
-      // Still down — the interceptor already recorded why.
+      // Still down -the interceptor already recorded why.
     } finally {
       setChecking(false);
       setLastCheckedAt(new Date());
@@ -148,7 +148,7 @@ export default function ConnectivityOverlay() {
 
         <div className="flex items-center gap-2 justify-center text-white/30 text-xs mb-6">
           <AlertTriangle size={13} />
-          Checking automatically every few seconds — this page will close itself once reconnected.
+          Checking automatically every few seconds -this page will close itself once reconnected.
         </div>
 
         <div

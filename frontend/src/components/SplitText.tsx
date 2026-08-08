@@ -153,7 +153,7 @@ export default function SplitText({
   const Tag = tag as keyof React.JSX.IntrinsicElements;
 
   return (
-    // @ts-expect-error — Tag is a dynamic intrinsic element, ref typing can't narrow across the union
+    // @ts-expect-error -Tag is a dynamic intrinsic element, ref typing can't narrow across the union
     <Tag ref={ref} style={style} className={classes}>
       {text}
     </Tag>

@@ -1,4 +1,4 @@
-# UK Textile — Frontend (React)
+# UK Textile -Frontend (React)
 
 React + Vite SPA for the UK Textile HR platform. Talks to the Django backend at `/api` (proxied in dev).
 

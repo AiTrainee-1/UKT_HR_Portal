@@ -13,6 +13,6 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='attendancedayrecord',
             name='primary_source',
-            field=models.TextField(blank=True, db_column='primary_source', help_text="Which punch source this day's attendance actually came from — 'Biometric' / 'On-Duty' / 'Geo Punch' / 'HR Entry', or null if no punches. Biometric always wins whenever it contributed anything that day, regardless of what else is present. Purely a display field — never used in shift-value calculations.", null=True),
+            field=models.TextField(blank=True, db_column='primary_source', help_text="Which punch source this day's attendance actually came from -'Biometric' / 'On-Duty' / 'Geo Punch' / 'HR Entry', or null if no punches. Biometric always wins whenever it contributed anything that day, regardless of what else is present. Purely a display field -never used in shift-value calculations.", null=True),
         ),
     ]

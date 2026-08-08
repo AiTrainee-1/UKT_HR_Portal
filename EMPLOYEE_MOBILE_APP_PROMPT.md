@@ -1,11 +1,11 @@
-# UKTextiles Employee Mobile App — Complete Build Prompt
+# UKTextiles Employee Mobile App -Complete Build Prompt
 
 > **Use this document as your full specification when building the React Native mobile application.**
 > The backend Django API is already built and running. You are only building the mobile frontend.
 
 ---
 
-## ⚠️ Architecture — Single Shared Backend
+## ⚠️ Architecture -Single Shared Backend
 
 **The mobile app and the HR Portal share exactly the same backend and the same database.**
 
@@ -20,7 +20,7 @@
          │                                    │
          ▼                                    ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  Django REST API  —  http://192.168.0.5:8000/api                │
+│  Django REST API  - http://192.168.0.5:8000/api                │
 │  Same endpoints. Same authentication. Same responses.           │
 └───────────────────────────────┬─────────────────────────────────┘
                                 │
@@ -54,9 +54,9 @@ Build a **React Native mobile application** (using Expo) for **UKTextiles** empl
 - **Platform:** Android + iOS (Expo managed workflow)
 - **Users:** Employees only (not HR admin)
 - **Language:** TypeScript
-- **Purpose:** Allow employees to view their attendance, salary slips, shifts, leaves, requests, and personal profile — all from their phone.
+- **Purpose:** Allow employees to view their attendance, salary slips, shifts, leaves, requests, and personal profile -all from their phone.
 
-This app connects to an **existing Django REST API** backend. Do not build any backend — only consume the existing API.
+This app connects to an **existing Django REST API** backend. Do not build any backend -only consume the existing API.
 
 ---
 
@@ -84,7 +84,7 @@ Create a `.env` file in the mobile project root:
 ```env
 # Backend API base URL
 # Change this to your server's LAN IP when running on a real device
-# Do NOT use localhost — it will not work on a physical phone
+# Do NOT use localhost -it will not work on a physical phone
 EXPO_PUBLIC_API_URL=http://192.168.0.5:8000/api
 
 # App display name
@@ -155,7 +155,7 @@ Response: { "role": "employee", "employeeId": 1, "name": "Surya M" }
     ├── attendance.tsx         → Attendance history
     ├── leave.tsx              → Leave management
     └── profile.tsx            → Profile screen
-        (nested screens — push navigation)
+        (nested screens -push navigation)
 ├── salary/
 │   ├── index.tsx              → Salary slip list
 │   └── [id].tsx               → Single salary slip detail
@@ -175,7 +175,7 @@ Response: { "role": "employee", "employeeId": 1, "name": "Surya M" }
 
 ---
 
-### Screen 1 — Login
+### Screen 1 -Login
 
 **File:** `(auth)/login.tsx`
 
@@ -195,7 +195,7 @@ Response: { "role": "employee", "employeeId": 1, "name": "Surya M" }
 
 ---
 
-### Screen 2 — Set Password (First Time)
+### Screen 2 -Set Password (First Time)
 
 **File:** `(auth)/set-password.tsx`
 
@@ -214,7 +214,7 @@ Response: { "role": "employee", "employeeId": 1, "name": "Surya M" }
 
 ---
 
-### Screen 3 — Home / Dashboard
+### Screen 3 -Home / Dashboard
 
 **File:** `(tabs)/home.tsx`
 
@@ -237,7 +237,7 @@ Response: { "role": "employee", "employeeId": 1, "name": "Surya M" }
 
 ---
 
-### Screen 4 — Attendance
+### Screen 4 -Attendance
 
 **File:** `(tabs)/attendance.tsx`
 
@@ -264,7 +264,7 @@ Response: { "role": "employee", "employeeId": 1, "name": "Surya M" }
 
 ---
 
-### Screen 5 — Salary Slips
+### Screen 5 -Salary Slips
 
 **File:** `salary/index.tsx`
 
@@ -292,15 +292,15 @@ Response: { "role": "employee", "employeeId": 1, "name": "Surya M" }
 
 ---
 
-### Screen 6 — Leave Management
+### Screen 6 -Leave Management
 
 **File:** `(tabs)/leave.tsx`
 
 **APIs used:**
-- `GET /api/leave-balances?employeeId={id}` — leave balance per type
-- `GET /api/leave-requests?employeeId={id}` — past requests
-- `GET /api/leave-types` — available leave types
-- `POST /api/leave-requests` — submit new request
+- `GET /api/leave-balances?employeeId={id}` -leave balance per type
+- `GET /api/leave-requests?employeeId={id}` -past requests
+- `GET /api/leave-types` -available leave types
+- `POST /api/leave-requests` -submit new request
 
 **UI elements:**
 
@@ -328,7 +328,7 @@ Response: { "role": "employee", "employeeId": 1, "name": "Surya M" }
 
 ---
 
-### Screen 7 — Shift Details
+### Screen 7 -Shift Details
 
 **File:** `shift/index.tsx`
 
@@ -341,18 +341,18 @@ Response: { "role": "employee", "employeeId": 1, "name": "Surya M" }
   - Grace period (minutes)
   - Working days (Mon–Sat / Mon–Fri)
   - Saturday off: Yes / No
-- "Your schedule" — simple weekly timetable showing which days are working days
+- "Your schedule" -simple weekly timetable showing which days are working days
 - Note: This is read-only. Employees cannot change their shift.
 
 ---
 
-### Screen 8 — Permission Requests
+### Screen 8 -Permission Requests
 
 **File:** `requests/index.tsx`
 
 **APIs used:**
-- `GET /api/permissions?employeeId={id}` — list of permission requests
-- `POST /api/permissions` — submit new request
+- `GET /api/permissions?employeeId={id}` -list of permission requests
+- `POST /api/permissions` -submit new request
 
 **What is a "permission"?**
 A short absence during working hours (e.g., leaving early for a doctor's appointment, arriving late due to personal reason). Not the same as a full leave day.
@@ -373,7 +373,7 @@ A short absence during working hours (e.g., leaving early for a doctor's appoint
 
 ---
 
-### Screen 9 — Settlement / Advances
+### Screen 9 -Settlement / Advances
 
 **File:** `settlement/index.tsx`
 
@@ -388,11 +388,11 @@ A short absence during working hours (e.g., leaving early for a doctor's appoint
   - Total repaid so far
   - Remaining balance (highlighted in orange if > 0)
   - Repayment history (expandable)
-- Read-only — employees cannot request advances from the app
+- Read-only -employees cannot request advances from the app
 
 ---
 
-### Screen 10 — Holidays
+### Screen 10 -Holidays
 
 **File:** `holidays/index.tsx`
 
@@ -409,7 +409,7 @@ A short absence during working hours (e.g., leaving early for a doctor's appoint
 
 ---
 
-### Screen 11 — Profile
+### Screen 11 -Profile
 
 **File:** `(tabs)/profile.tsx`
 
@@ -460,7 +460,7 @@ A short absence during working hours (e.g., leaving early for a doctor's appoint
   - Confirm New Password
   - Uses `POST /api/auth/set-password` (re-uses same endpoint)
 
-**Logout button** — clears SecureStore → navigates to login
+**Logout button** -clears SecureStore → navigates to login
 
 ---
 
@@ -487,14 +487,14 @@ api.interceptors.request.use(async (config) => {
   return config;
 });
 
-// Handle 401 — token expired
+// Handle 401 -token expired
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
     if (error.response?.status === 401) {
       await SecureStore.deleteItemAsync('auth_token');
       await SecureStore.deleteItemAsync('employee_id');
-      // Navigate to login — use router.replace('/(auth)/login')
+      // Navigate to login -use router.replace('/(auth)/login')
     }
     return Promise.reject(error);
   }
@@ -818,7 +818,7 @@ npx expo start
 
 3. **Employees can only see their own data.** The backend filters by the `employeeId` embedded in the JWT token for sensitive endpoints. Still, always pass `employeeId` explicitly in query params.
 
-4. **`/my/salary-slips` is a special endpoint** that automatically returns only the logged-in employee's slips based on the JWT token — no `employeeId` param needed.
+4. **`/my/salary-slips` is a special endpoint** that automatically returns only the logged-in employee's slips based on the JWT token -no `employeeId` param needed.
 
 5. **Do not store sensitive data in AsyncStorage.** Always use `expo-secure-store` for the JWT token and employee ID.
 

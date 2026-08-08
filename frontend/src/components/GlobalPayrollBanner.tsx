@@ -5,7 +5,7 @@ import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
 // Floating indicator that keeps payroll generation progress visible while
 // the user browses other pages. Hidden on the payroll/salary pages
 // themselves, since those already render the full inline
-// PayrollGenerationPipeline for the same shared state — mirrors
+// PayrollGenerationPipeline for the same shared state -mirrors
 // GlobalSyncBanner's role for the biometric sync flow.
 export default function GlobalPayrollBanner() {
   const [pathname] = useLocation();
@@ -45,7 +45,7 @@ export default function GlobalPayrollBanner() {
           </div>
           <p className="text-xs text-gray-500">
             {completed} / {total} employees processed
-            {!isGenerating && <span className="text-green-600 font-semibold"> — running in the background is finished</span>}
+            {!isGenerating && <span className="text-green-600 font-semibold"> -running in the background is finished</span>}
           </p>
           {isGenerating && progress?.currentEmployee && (
             <p className="text-[11px] text-gray-400 truncate mt-1">Processing: {progress.currentEmployee}</p>

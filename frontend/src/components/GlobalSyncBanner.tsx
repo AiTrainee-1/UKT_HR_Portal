@@ -5,7 +5,7 @@ import { useBiometricSync } from "@/contexts/BiometricSyncContext";
 // Floating indicator that keeps the biometric sync visible while the user
 // browses other pages. Hidden on the attendance pages themselves, since
 // those already render the full inline BiometricSyncPipeline for the same
-// shared state — this avoids showing the same progress twice.
+// shared state -this avoids showing the same progress twice.
 export default function GlobalSyncBanner() {
   const [pathname] = useLocation();
   const { showPipeline, isSyncing, progress, dismiss } = useBiometricSync();
@@ -44,7 +44,7 @@ export default function GlobalSyncBanner() {
           </div>
           <p className="text-xs text-gray-500">
             {completedCount} / {total} devices done
-            {!isSyncing && <span className="text-green-600 font-semibold"> — running in the background is finished</span>}
+            {!isSyncing && <span className="text-green-600 font-semibold"> -running in the background is finished</span>}
           </p>
           <div className="flex flex-wrap gap-1 mt-2">
             {devices.map(d => (

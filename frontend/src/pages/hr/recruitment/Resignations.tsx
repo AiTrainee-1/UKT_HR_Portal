@@ -426,8 +426,8 @@ export default function Resignations() {
             <Step label="HR Final" state="waiting" last />
           </div>
           <div className="text-xs text-[#006496]/70 leading-relaxed">
-            <p><strong>Pending</strong> — Waiting for Department Head to review.</p>
-            <p><strong>Dept Approved</strong> — Dept Head approved, HR can now give final decision.</p>
+            <p><strong>Pending</strong> -Waiting for Department Head to review.</p>
+            <p><strong>Dept Approved</strong> -Dept Head approved, HR can now give final decision.</p>
             <p><strong>HR can reject at any stage.</strong> HR can only approve after Dept Head approves.</p>
           </div>
         </div>
@@ -532,7 +532,7 @@ export default function Resignations() {
                 <div className={`rounded-xl p-3 ${selected.deptHeadStatus === "approved" ? "bg-blue-50 border border-blue-100" : "bg-red-50 border border-red-100"}`}>
                   <p className="text-[10px] font-bold uppercase tracking-wider mb-1"
                     style={{ color: selected.deptHeadStatus === "approved" ? "#1d4ed8" : "#dc2626" }}>
-                    Department Head — {selected.deptHeadStatus === "approved" ? "Approved" : "Rejected"}
+                    Department Head -{selected.deptHeadStatus === "approved" ? "Approved" : "Rejected"}
                   </p>
                   {selected.deptHeadName && <p className="text-xs text-[#1a3a4a] mb-1">By: {selected.deptHeadName}</p>}
                   {selected.deptHeadComment && <p className="text-sm text-[#1a3a4a]">{selected.deptHeadComment}</p>}

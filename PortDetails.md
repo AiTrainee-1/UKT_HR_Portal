@@ -7,7 +7,7 @@ Your situation has one key fact that decides everything:
 AiFace-Mars (biometric) → same local network → your company PC
 If you use cloud hosting (Render/Railway), the biometric device needs a working internet connection every time someone punches in. If the internet goes down for even 5 minutes during morning entry, punches are lost.
 
-On your own PC, the device talks to a local IP address — internet doesn't matter at all for attendance.
+On your own PC, the device talks to a local IP address -internet doesn't matter at all for attendance.
 
 Your 8 AM – 10 PM Concern
 This is perfectly fine. Think about what actually happens outside working hours:
@@ -18,14 +18,14 @@ Payroll runs during the day → already done
 There is zero requirement for 24/7 uptime in your case.
 
 Recommended Setup
-Database — Local PostgreSQL
+Database -Local PostgreSQL
 Install PostgreSQL directly on the same company PC. It's free, runs as a Windows service, and starts automatically when the PC boots.
 
 PostgreSQL (local) ← Django ← Browser (any PC on the network)
 No cloud DB needed. Your data stays inside the company network.
 
-Django Backend — Windows Auto-Start
-Install Django as a Windows service using NSSM (a free tool) so it starts the moment Windows boots — you don't need to manually start it.
+Django Backend -Windows Auto-Start
+Install Django as a Windows service using NSSM (a free tool) so it starts the moment Windows boots -you don't need to manually start it.
 
 # One-time setup (run as Administrator)
 nssm install UKTextilesHR "python" "manage.py runserver 0.0.0.0:8000"
@@ -53,7 +53,7 @@ Only consider cloud (Render/Railway) if:
 HR needs to access the system from home or outside the office
 You want remote payroll processing after hours
 You have multiple branches that need to share the same system
-For a single-location garments factory used only during working hours — your own PC is simpler, cheaper (free), faster, and more reliable for biometric integration.
+For a single-location garments factory used only during working hours -your own PC is simpler, cheaper (free), faster, and more reliable for biometric integration.
 
 
 
@@ -81,8 +81,8 @@ Employee phone (4G/5G)
    ❌ Can't reach 192.168.1.xx  ← local IP, invisible to internet
 Mobile phones on their own networks can never reach a local IP. You need a public URL that points to your company PC.
 
-Best Solution — Cloudflare Tunnel (Free)
-This is made exactly for your situation. Cloudflare runs a secure tunnel from your PC outward — no port forwarding, no router changes, no static IP needed.
+Best Solution -Cloudflare Tunnel (Free)
+This is made exactly for your situation. Cloudflare runs a secure tunnel from your PC outward -no port forwarding, no router changes, no static IP needed.
 
 Employee Phone (4G/5G)
         ↓
@@ -95,7 +95,7 @@ https://api.uktextiles.com   ← public URL
   Django (localhost:8000)
         ↓
   PostgreSQL (local)
-The tunnel only works when your PC is on. When you shut down at 10 PM, the public URL becomes unreachable — which is exactly what you want.
+The tunnel only works when your PC is on. When you shut down at 10 PM, the public URL becomes unreachable -which is exactly what you want.
 
 Setup (one time, 10 minutes)
 # 1. Download cloudflared and install it
@@ -125,11 +125,11 @@ Requirement	Cost
 Cloudflare account	Free
 Cloudflare Tunnel	Free
 A domain name (e.g. uktextiles.com)	~₹800/year
-The domain is the only cost. If you don't want a domain, Cloudflare also gives you a free random subdomain like uktextiles-abc123.trycloudflare.com — but a proper domain looks more professional for employee-facing apps.
+The domain is the only cost. If you don't want a domain, Cloudflare also gives you a free random subdomain like uktextiles-abc123.trycloudflare.com -but a proper domain looks more professional for employee-facing apps.
 
 Why Not Other Options
 Option	Problem
-Port forwarding on router	Exposes your PC directly to internet — security risk
+Port forwarding on router	Exposes your PC directly to internet -security risk
 Move Django to Render/Railway	Biometric device now needs internet for every punch
 Cloud database only	Doesn't solve mobile access to the API
-Cloudflare Tunnel is the right middle ground — your data and server stay on-premise, but employees can securely reach it from anywhere.
+Cloudflare Tunnel is the right middle ground -your data and server stay on-premise, but employees can securely reach it from anywhere.

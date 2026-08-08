@@ -1,5 +1,5 @@
 """
-Login session helpers — device-label parsing for the Login Devices page.
+Login session helpers -device-label parsing for the Login Devices page.
 
 Deliberately a lightweight regex matcher, not a full UA-parsing library:
 this only needs to produce a friendly "Chrome on Windows" style label for

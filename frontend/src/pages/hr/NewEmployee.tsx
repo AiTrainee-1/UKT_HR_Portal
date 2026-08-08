@@ -248,7 +248,7 @@ export default function NewEmployee() {
                         }}
                         className="w-full h-9 rounded-md border px-3 text-sm bg-background"
                       >
-                        <option value="">— Select Department —</option>
+                        <option value="">-Select Department —</option>
                         {(departments ?? []).map((d) => (
                           <option key={d.id} value={String(d.id)}>{d.name}</option>
                         ))}
@@ -266,7 +266,7 @@ export default function NewEmployee() {
                         onChange={field.onChange}
                         className="w-full h-9 rounded-md border px-3 text-sm bg-background"
                       >
-                        <option value="">— Select Designation —</option>
+                        <option value="">-Select Designation —</option>
                         {(designations ?? []).map((d) => (
                           <option key={d.id} value={String(d.id)}>{d.title}</option>
                         ))}
@@ -290,7 +290,7 @@ export default function NewEmployee() {
                           onChange={field.onChange}
                           className="w-full h-9 rounded-md border px-3 text-sm bg-background"
                         >
-                          <option value="">— Select Branch —</option>
+                          <option value="">-Select Branch —</option>
                           {(branches ?? []).map((b) => (
                             <option key={b.id} value={String(b.id)}>{b.name}{b.isHeadOffice ? " (Head Office)" : ""}</option>
                           ))}
@@ -351,7 +351,7 @@ export default function NewEmployee() {
                   <FormItem>
                     <FormLabel>Device Enrollment ID</FormLabel>
                     <FormControl>
-                      <Input placeholder="e.g. 001 or 1570 — the ID used on the eSSL device" {...field} />
+                      <Input placeholder="e.g. 001 or 1570 -the ID used on the eSSL device" {...field} />
                     </FormControl>
                     <p className="text-xs text-muted-foreground mt-1">
                       Enter the exact User ID this employee was enrolled with on the biometric device. Check the device: Main Menu → User Mgt → All Users.

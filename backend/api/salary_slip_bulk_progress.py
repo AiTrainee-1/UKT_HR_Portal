@@ -1,7 +1,7 @@
 """
 In-process progress tracker for the Salary Slip bulk-download / bulk-email UI.
 
-Purely observational, same pattern as payroll_progress.py — the actual work
+Purely observational, same pattern as payroll_progress.py -the actual work
 (building the combined PDF, sending emails) happens synchronously inside the
 request that's being polled; this module just lets that work report counters
 into shared in-memory state so a concurrent polling request can render a live

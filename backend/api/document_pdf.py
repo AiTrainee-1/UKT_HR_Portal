@@ -1,5 +1,5 @@
 """
-Company Documents — Offer Letter, Experience Letter, Salary Slip
+Company Documents -Offer Letter, Experience Letter, Salary Slip
 ==================================================================
 Premium reportlab-based PDF generation shared by all three document types.
 Mirrors the Resignation Letter's reportlab/Platypus approach in
@@ -8,7 +8,7 @@ border with gold corners, faint watermark, curved emerald footer) driven by
 CompanyDocumentSettings so HR can theme each document from Settings.
 
 Body/heading fonts are the system Arial/Georgia families (registered as
-TrueType so the Indian Rupee glyph "₹" renders correctly — reportlab's
+TrueType so the Indian Rupee glyph "₹" renders correctly -reportlab's
 built-in Helvetica/Times AFM fonts do not contain it). If those font files
 aren't present on the deployment machine (non-Windows), we fall back to the
 built-in Helvetica/Times families and print amounts as "Rs." instead.
@@ -77,7 +77,7 @@ def _decode_b64_image(data_url: str | None):
     """Decodes a base64 data-URL into a validated, resolution-capped PNG buffer.
 
     reportlab's Image flowable embeds whatever bytes it's handed at their
-    native pixel resolution regardless of the display width/height — an
+    native pixel resolution regardless of the display width/height -an
     unvalidated or oversized stored logo/signature can silently balloon a
     single-page PDF to several MB. We verify the data actually decodes as an
     image via PIL and downscale anything larger than a small logo needs to be.
