@@ -470,11 +470,13 @@ export default function AttendancePage() {
   const absentCount   = allRecords.filter(r => r.status === "absent").length;
   const onLeaveCount  = allRecords.filter(r => r.status === "on_leave").length;
 
-  const filteredRecords = allRecords.filter((r) => {
-    if (statusFilter === "all") return true;
-    if (statusFilter === "present") return r.status === "present" || r.status === "manual";
-    return r.status === statusFilter;
-  });
+  const filteredRecords = allRecords
+    .filter((r) => {
+      if (statusFilter === "all") return true;
+      if (statusFilter === "present") return r.status === "present" || r.status === "manual";
+      return r.status === statusFilter;
+    })
+    .sort((a, b) => a.employeeName.localeCompare(b.employeeName));
 
   // Monthly trend data for chart
   const trendData = monthlyTrend ?? [];

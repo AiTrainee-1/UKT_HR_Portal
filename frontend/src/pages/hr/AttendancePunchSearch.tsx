@@ -1,17 +1,16 @@
 import { useEffect, useState } from "react";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { SpeederLoader } from "@/components/ui/SpeederLoader";
 import {
-  useAttendanceSearch, useAttendanceSearchRange, useAttendanceCompanySummary,
+  useAttendanceSearch, useAttendanceSearchRange,
   type AttendanceSearchPunch, type AttendanceSearchDay, type AttendanceSearchResult,
 } from "@/lib/api-client/custom-hooks";
 import {
   Search, UserSearch, Clock, Sun, ArrowRightLeft, CalendarDays, CalendarRange, Users,
-  CheckCircle2, AlertCircle, CalendarOff, AlertTriangle, ShieldCheck, Layers,
+  CheckCircle2, AlertCircle, CalendarOff, AlertTriangle, ShieldCheck,
 } from "lucide-react";
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -198,28 +197,24 @@ export default function AttendancePunchSearch() {
     setSelectedEmployeeId(null);
   }, [query, mode]);
 
-  const { data, isLoading, isFetching } = useAttendanceSearch(query, date);
-
-  // In Week/Month/Range mode the match list only needs to resolve which
-  // employee(s) the query points at -punches for "today" are irrelevant
-  // there, the actual day-by-day data comes from the range endpoint below.
-  const isRangeMode = mode !== "day";
-  const { data: matchData, isLoading: matchLoading, isFetching: matchFetching } = useAttendanceSearch(query, todayStr(), isRangeMode);
+  // The match list resolves which employee(s) the query points at -"today"
+  // is just an arbitrary anchor date for the lookup, it has no bearing on
+  // which date range gets shown once an employee is selected below.
+  const { data: matchData, isLoading: matchLoading, isFetching: matchFetching } = useAttendanceSearch(query, todayStr());
   const matches = matchData?.results ?? [];
 
   useEffect(() => {
-    if (isRangeMode && matches.length === 1 && selectedEmployeeId == null) {
+    if (matches.length === 1 && selectedEmployeeId == null) {
       setSelectedEmployeeId(matches[0].employeeId);
     }
     // selectedEmployeeId must stay a real dependency here: the sibling
     // effect above resets it to null on every mode change (including
-    // switching directly between two range modes, e.g. Month -> Week,
-    // where isRangeMode and matches.length both stay unchanged) -without
-    // this in the deps array, that reset never re-triggers this effect,
-    // leaving selectedEmployeeId stuck null and the whole results section
-    // rendering nothing at all (see the `!selectedEmployeeId ? null` branch
-    // below) until the search query itself changes.
-  }, [isRangeMode, matches.length, selectedEmployeeId]);
+    // switching directly between two modes where matches.length stays
+    // unchanged) -without this in the deps array, that reset never
+    // re-triggers this effect, leaving selectedEmployeeId stuck null and
+    // the whole results section rendering nothing (see the
+    // `!selectedEmployeeId ? null` branch below) until the query changes.
+  }, [matches.length, selectedEmployeeId]);
 
   const [startDate, endDate] =
     mode === "week" ? weekRange(weekAnchor)
@@ -228,10 +223,21 @@ export default function AttendancePunchSearch() {
     : [date, date];
 
   const { data: rangeData, isLoading: rangeLoading, isFetching: rangeFetching } = useAttendanceSearchRange(
-    selectedEmployeeId, startDate, endDate, isRangeMode,
+    selectedEmployeeId, startDate, endDate, true,
   );
 
-  const { data: companySummary, isLoading: companySummaryLoading } = useAttendanceCompanySummary();
+  // Per-employee KPI cards for the currently resolved employee + period —
+  // replaces the old always-on company-wide summary; nothing renders here
+  // until a search actually resolves to one employee's data.
+  const kpi = rangeData ? {
+    totalDays: rangeData.days.length,
+    present: rangeData.days.filter(d => d.status === "present").length,
+    halfShift: rangeData.days.filter(d => d.status === "half_shift").length,
+    absent: rangeData.days.filter(d => d.status === "absent").length,
+    onLeave: rangeData.days.filter(d => d.status === "on_leave").length,
+    late: rangeData.days.filter(d => d.isLate).length,
+    permission: rangeData.days.filter(d => !!d.permission).length,
+  } : null;
 
   return (
     <HrLayout>
@@ -243,21 +249,17 @@ export default function AttendancePunchSearch() {
           </p>
         </div>
 
-        {/* Today's Overview -company-wide, Staff + Production combined, independent of the search below */}
-        {companySummaryLoading ? (
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-            {Array.from({ length: 7 }).map((_, i) => <Skeleton key={i} className="h-16 w-full rounded-xl" />)}
-          </div>
-        ) : companySummary ? (
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+        {/* This employee's attendance for the searched period -only appears once a search resolves to one employee, never a company-wide figure */}
+        {kpi && rangeData && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
             {[
-              { label: "Total Employees", value: companySummary.totalEmployees, color: "text-gray-700", icon: Users, bg: "bg-gray-100" },
-              { label: "Present", value: companySummary.present, color: "text-emerald-700", icon: CheckCircle2, bg: "bg-emerald-50" },
-              { label: "Half Shift", value: companySummary.halfShift, color: "text-amber-700", icon: Clock, bg: "bg-amber-50" },
-              { label: "Absent", value: companySummary.absent, color: "text-red-600", icon: AlertCircle, bg: "bg-red-50" },
-              { label: "Leave", value: companySummary.onLeave, color: "text-blue-700", icon: CalendarOff, bg: "bg-blue-50" },
-              { label: "Late", value: companySummary.late, color: "text-orange-600", icon: AlertTriangle, bg: "bg-orange-50" },
-              { label: "Permission", value: companySummary.permission, color: "text-purple-700", icon: ShieldCheck, bg: "bg-purple-50" },
+              { label: "Total Days", value: kpi.totalDays, color: "text-gray-700", icon: Users, bg: "bg-gray-100" },
+              { label: "Present", value: kpi.present, color: "text-emerald-700", icon: CheckCircle2, bg: "bg-emerald-50" },
+              { label: "Half Shift", value: kpi.halfShift, color: "text-amber-700", icon: Clock, bg: "bg-amber-50" },
+              { label: "Absent", value: kpi.absent, color: "text-red-600", icon: AlertCircle, bg: "bg-red-50" },
+              { label: "Leave", value: kpi.onLeave, color: "text-blue-700", icon: CalendarOff, bg: "bg-blue-50" },
+              { label: "Late", value: kpi.late, color: "text-orange-600", icon: AlertTriangle, bg: "bg-orange-50" },
+              { label: "Permission", value: kpi.permission, color: "text-purple-700", icon: ShieldCheck, bg: "bg-purple-50" },
             ].map(s => (
               <Card key={s.label} className="border-0 shadow-sm">
                 <CardContent className="p-3 flex items-center gap-2.5">
@@ -272,10 +274,10 @@ export default function AttendancePunchSearch() {
               </Card>
             ))}
           </div>
-        ) : null}
-        {!companySummaryLoading && companySummary && (
+        )}
+        {kpi && rangeData && (
           <p className="text-[11px] text-gray-400 -mt-2 flex items-center gap-1.5">
-            <Layers size={11} /> Today ({companySummary.date}) · {companySummary.totalShiftsEarned} total shifts earned across all employees.
+            <Users size={11} /> {rangeData.employeeName} ({rangeData.employeeCode}) · {formatDisplayDate(rangeData.startDate)} – {formatDisplayDate(rangeData.endDate)}
           </p>
         )}
 
@@ -334,50 +336,6 @@ export default function AttendancePunchSearch() {
               <p className="text-sm text-gray-500">Start typing an Employee Code or Name to search.</p>
             </CardContent>
           </Card>
-        ) : mode === "day" ? (
-          isLoading || isFetching ? (
-            <SpeederLoader />
-          ) : (data?.results ?? []).length === 0 ? (
-            <Card className="border-0 shadow-sm">
-              <CardContent className="py-16 text-center">
-                <UserSearch size={36} className="text-gray-200 mx-auto mb-3" />
-                <p className="text-sm text-gray-500">No employees match "{query}".</p>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="grid gap-3">
-              {(data?.results ?? []).map((emp) => (
-                <Card key={emp.employeeId} className="border-0 shadow-sm">
-                  <CardContent className="p-4 flex flex-wrap items-start gap-4">
-                    <div className="flex-1 min-w-[220px]">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="font-bold text-gray-900">{emp.employeeName}</p>
-                        <span className="text-[11px] font-mono text-gray-400">({emp.employeeCode})</span>
-                      </div>
-                      <p className="text-xs text-gray-500 mt-1">{emp.department ?? "—"} · {emp.designation ?? "—"}</p>
-                      {emp.shift && (
-                        <p className="text-xs text-gray-500 mt-1.5 flex items-center gap-1.5">
-                          <Sun size={11} className="text-amber-500" />
-                          {emp.shift.name}
-                          {emp.shift.startTime && emp.shift.endTime && (
-                            <span className="text-gray-400 flex items-center gap-1">
-                              <ArrowRightLeft size={10} /> {emp.shift.startTime}–{emp.shift.endTime}
-                            </span>
-                          )}
-                        </p>
-                      )}
-                      <p className="text-[11px] text-gray-400 mt-1.5 flex items-center gap-1">
-                        <Clock size={10} /> {emp.totalPunches} of 4 punches recorded on {date}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap gap-2 shrink-0">
-                      {emp.punches.map((p, i) => <PunchSlot key={i} slot={p} index={i} />)}
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )
         ) : matchLoading || matchFetching ? (
           <SpeederLoader />
         ) : matches.length === 0 ? (

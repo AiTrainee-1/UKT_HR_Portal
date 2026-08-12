@@ -379,7 +379,15 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
             if fr_status in ("present", "half_shift"):
                 status = "present"
             elif fr_status == "on_leave":
-                status = "paid_leave"
+                # Approved Leave Requests (mobile/web "Leave" feature) are
+                # informational only, not a paid-leave entitlement -the only
+                # paid leave this company has is Casual Leave, which is a
+                # separate system (CasualLeaveRequest) that already marks the
+                # day Present directly and never reaches this branch. So an
+                # on_leave day here counts as Absent for pay while still
+                # displaying as "Unpaid Leave" (not a bare Absent) so HR can
+                # see it was a declared leave.
+                status = "unpaid_leave"
             elif fr_status == "holiday":
                 # A day marked holiday by override shouldn't reduce pay
                 status = "paid_leave"
