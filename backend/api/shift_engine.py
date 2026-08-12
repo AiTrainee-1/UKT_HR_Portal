@@ -82,11 +82,15 @@ NEW_ATTENDANCE_RULE_CUTOVER = date_type(2000, 1, 1)
 HALF_SHIFT_LATE_REFERENCE_DEFAULT = time_type(14, 30)
 
 
-def half_shift_late_reference() -> time_type:
+def half_shift_late_reference(settings=None) -> time_type:
     """Live Half Shift late reference time from Settings (same lazy-read
-    pattern as _punctuality_window_minutes below)."""
-    from .models import PayrollSettings
-    return PayrollSettings.get().half_shift_late_reference_time or HALF_SHIFT_LATE_REFERENCE_DEFAULT
+    pattern as _punctuality_window_minutes below). Pass `settings` when the
+    caller already holds a fetched PayrollSettings object -skips the extra
+    lookup, same idea as _is_after_half_shift_late_reference's `reference`."""
+    if settings is None:
+        from .models import PayrollSettings
+        settings = PayrollSettings.get()
+    return settings.half_shift_late_reference_time or HALF_SHIFT_LATE_REFERENCE_DEFAULT
 
 
 def _is_after_half_shift_late_reference(punch1: time_type, reference: time_type | None = None) -> bool:
@@ -117,7 +121,7 @@ def _s2t(s: int) -> time_type:
     return time_type(s // 3600, (s % 3600) // 60, s % 60)
 
 
-def _punctuality_window_minutes(shift) -> int:
+def _punctuality_window_minutes(shift, settings=None) -> int:
     """
     How many minutes of lateness/early-leave a first/last punch gets before
     it caps the day at Half Shift -see _punctuality_ok.
@@ -134,9 +138,18 @@ def _punctuality_window_minutes(shift) -> int:
     compute_daily_shift_log's late-detection block below) -a punch inside
     this wider window but past that small grace is Late but still a Full
     Shift; only a punch past this window caps the day at Half Shift.
+
+    Pass `settings` when the caller already holds a fetched PayrollSettings
+    object -skips the extra lookup. PayrollSettings has grown very wide
+    across many feature phases, so re-fetching it fresh per call (as every
+    caller did before this parameter existed) is measurably expensive at
+    roster scale -~230 employees during a single request measured at ~200ms
+    each here alone, dominating an otherwise-fast bulk computation.
     """
-    from .models import PayrollSettings
-    return PayrollSettings.get().shift_punctuality_window_minutes or 60
+    if settings is None:
+        from .models import PayrollSettings
+        settings = PayrollSettings.get()
+    return settings.shift_punctuality_window_minutes or 60
 
 
 def _punctuality_ok(punch1, punch4, shift, window_minutes: int) -> bool:
@@ -403,7 +416,7 @@ _UNSET = object()
 
 
 def compute_daily_shift_log(emp, d: date_type, punches: list, assignments=None, relaxation=_UNSET, legacy: bool = False,
-                             has_permission: bool = False, permission_time=None) -> dict:
+                             has_permission: bool = False, permission_time=None, settings=None) -> dict:
     """
     Given a list of AttendanceLog objects for (emp, date), compute the
     4-punch shift result and persist it to DailyShiftLog.
@@ -414,6 +427,11 @@ def compute_daily_shift_log(emp, d: date_type, punches: list, assignments=None, 
     on _get_shift_for_date / night_shift.get_relaxation_for. Any other
     caller (single-day recompute, etc.) can omit them and behavior is
     unchanged: everything is looked up fresh, exactly as before.
+
+    `settings`, similarly, lets a caller that already holds a fetched
+    PayrollSettings object pass it straight through to
+    _punctuality_window_minutes / half_shift_late_reference below instead
+    of each one re-fetching its own -omit it and behavior is identical.
 
     `legacy=True` preserves the pre-2026-07-25 full-shift rule (required
     punch3 AND punch4 for a staff day with a configured lunch window) for
@@ -524,7 +542,7 @@ def compute_daily_shift_log(emp, d: date_type, punches: list, assignments=None, 
     # further, and frozen out entirely under legacy=True so history never
     # changes.
     if not legacy and shifts_completed == Decimal("1.00"):
-        window_minutes = _punctuality_window_minutes(shift)
+        window_minutes = _punctuality_window_minutes(shift, settings=settings)
         if not _punctuality_ok(punch1, punch4, shift, window_minutes):
             shifts_completed = Decimal("0.50")
 
@@ -543,7 +561,7 @@ def compute_daily_shift_log(emp, d: date_type, punches: list, assignments=None, 
             # helper's docstring. A punch at or before the reference is never
             # late; only strictly after it is. Full Shift days never enter here,
             # and this branch is entirely unaffected by Permission -unchanged.
-            half_ref = half_shift_late_reference()
+            half_ref = half_shift_late_reference(settings=settings)
             if _is_after_half_shift_late_reference(punch1, half_ref):
                 late_morning = True
                 late_reasons.append(
@@ -559,7 +577,7 @@ def compute_daily_shift_log(emp, d: date_type, punches: list, assignments=None, 
             shift_start_secs = _t2s(shift.start_time)
             deadline_secs = shift_start_secs + grace_secs
             if _t2s(punch1) > deadline_secs:
-                window_minutes = _punctuality_window_minutes(shift)
+                window_minutes = _punctuality_window_minutes(shift, settings=settings)
                 if has_permission and _permission_covers_late_in(permission_time, shift, window_minutes):
                     late_reasons.append(
                         f"Late-in covered by approved Permission: arrived {punch1.strftime('%H:%M')}"
@@ -581,7 +599,7 @@ def compute_daily_shift_log(emp, d: date_type, punches: list, assignments=None, 
         shift_end_secs = _t2s(shift.end_time)
         early_deadline_secs = shift_end_secs - grace_secs
         if _t2s(punch4) < early_deadline_secs:
-            window_minutes = _punctuality_window_minutes(shift)
+            window_minutes = _punctuality_window_minutes(shift, settings=settings)
             if has_permission and _permission_covers_early_out(permission_time, shift, window_minutes):
                 late_reasons.append(
                     f"Early-out covered by approved Permission: left {punch4.strftime('%H:%M')}"

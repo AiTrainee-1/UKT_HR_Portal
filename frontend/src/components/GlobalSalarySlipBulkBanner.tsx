@@ -3,14 +3,16 @@ import { CheckCircle2, Loader2, X, Mail, FileStack } from "lucide-react";
 import { useSalarySlipBulk } from "@/contexts/SalarySlipBulkContext";
 
 // Floating indicator that keeps a Salary Slip bulk download/email visible
-// while the user browses other pages. Hidden on /hr/salary-slip itself,
-// since that page already renders the full inline SalarySlipBulkPipeline
-// for the same shared state -mirrors GlobalPayrollBanner's role.
+// while the user browses other pages. Hidden on the Staff Payroll page
+// (/hr/payroll, whose Payslip sub-tab now owns this flow) and the
+// Production Payroll page (its Payslip sub-tab too), since those already
+// render the full inline SalarySlipBulkPipeline for the same shared state
+// -mirrors GlobalPayrollBanner's role.
 export default function GlobalSalarySlipBulkBanner() {
   const [pathname] = useLocation();
   const { showPipeline, isRunning, kind, progress, dismiss } = useSalarySlipBulk();
 
-  if (!showPipeline || pathname.startsWith("/hr/salary-slip")) return null;
+  if (!showPipeline || pathname.startsWith("/hr/payroll") || pathname.startsWith("/hr/production-payroll")) return null;
 
   const total = progress?.total ?? 0;
   const completed = progress?.completed ?? 0;

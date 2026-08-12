@@ -154,7 +154,7 @@ def _compute_staff_simple(emp, d, punch_times, settings, shift, legacy_rule: boo
         grace = (shift.grace_period_minutes if shift.grace_period_minutes is not None else 0) * 60
         if _t2s(first) > _t2s(shift.start_time) + grace:
             is_late = True
-            window_minutes = _punctuality_window_minutes(shift)
+            window_minutes = _punctuality_window_minutes(shift, settings=settings)
             deadline_t = _s2t(_t2s(shift.start_time) + grace)
             if has_permission and _permission_covers_late_in(permission_time, shift, window_minutes):
                 is_late = False
@@ -170,7 +170,7 @@ def _compute_staff_simple(emp, d, punch_times, settings, shift, legacy_rule: boo
         if last:
             early_deadline = _t2s(shift.end_time) - grace
             if _t2s(last) < early_deadline:
-                window_minutes = _punctuality_window_minutes(shift)
+                window_minutes = _punctuality_window_minutes(shift, settings=settings)
                 deadline_t = _s2t(early_deadline)
                 if has_permission and _permission_covers_early_out(permission_time, shift, window_minutes):
                     late_reasons.append(f"Early-out covered by approved Permission: left {last.strftime('%H:%M')}")
@@ -244,7 +244,7 @@ def _compute_staff_simple(emp, d, punch_times, settings, shift, legacy_rule: boo
     # is Half Shift here regardless of an otherwise-valid last punch,
     # confirmed against a 14/14 boundary test on 2026-07-25.
     if not legacy_rule:
-        window_minutes = _punctuality_window_minutes(shift)
+        window_minutes = _punctuality_window_minutes(shift, settings=settings)
         if not _punctuality_ok(first, last, shift, window_minutes):
             return {
                 "status": "half_shift", "is_half_shift": True,
@@ -265,13 +265,14 @@ def _compute_staff_simple(emp, d, punch_times, settings, shift, legacy_rule: boo
 # ── Staff: strict mode (reuse 4-punch engine result) ───────────────────────
 
 def _compute_staff_strict(emp, d, punch_logs, punch_times, assignments=None, relaxation=None, legacy_rule: bool = False,
-                           has_permission: bool = False, permission_time=None):
+                           has_permission: bool = False, permission_time=None, settings=None):
     from .shift_engine import compute_daily_shift_log
     if not punch_times:
         return {"status": "absent", "shifts_earned": Decimal("0")}
     log = compute_daily_shift_log(
         emp, d, punch_logs, assignments=assignments, relaxation=relaxation,
         legacy=legacy_rule, has_permission=has_permission, permission_time=permission_time,
+        settings=settings,
     )
     shifts = Decimal(log.shifts_completed or 0)
     is_half = shifts == Decimal("0.50")
@@ -424,6 +425,7 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         logs_by_date=prefetch.get("night_logs_by_date"),
         rules=prefetch.get("night_rules"),
         existing_relaxations=prefetch.get("existing_relaxations"),
+        settings=settings,
     ) if punch_times else None
     if relaxation and relaxation.crossed_midnight:
         day_times = [t for t in punch_times if t > MORNING_CUTOFF]
@@ -502,7 +504,7 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         else:
             computed = _compute_staff_strict(
                 emp, d, punch_logs, day_times, assignments=assignments, relaxation=relaxation, legacy_rule=legacy_rule,
-                has_permission=has_permission, permission_time=permission_time,
+                has_permission=has_permission, permission_time=permission_time, settings=settings,
             )
     elif punch_times and relaxation and relaxation.crossed_midnight:
         # Only last night's checkout punches exist so far today -the employee

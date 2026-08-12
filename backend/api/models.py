@@ -557,10 +557,21 @@ class SalarySlip(models.Model):
     breakdown_details = models.JSONField(null=True, blank=True, db_column="breakdown_details")
     generated_at = models.DateTimeField(auto_now_add=True, db_column="generated_at")
     emailed_at = models.DateTimeField(null=True, blank=True, db_column="emailed_at")
+    # Same convention as Payroll.period_start/period_end -see that field's
+    # docstring. NULL for staff and legacy production slips.
+    period_start = models.DateField(null=True, blank=True, db_column="period_start")
+    period_end = models.DateField(null=True, blank=True, db_column="period_end")
 
     class Meta:
         db_table = "salary_slips"
         unique_together = [("employee", "month", "year", "week_number")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["employee", "period_start", "period_end"],
+                condition=models.Q(period_start__isnull=False),
+                name="uniq_salary_slip_employee_period",
+            ),
+        ]
 
 
 # ──────────────────────────────────────────────
@@ -1143,12 +1154,27 @@ class Payroll(models.Model):
     final_salary = models.DecimalField(max_digits=10, decimal_places=2, db_column="final_salary")
     status = models.TextField(choices=STATUS_CHOICES, default=STATUS_PENDING)
     notes = models.TextField(null=True, blank=True)
+    # Production-only, configurable-period payroll (see production_period.py).
+    # NULL for staff rows and for legacy week_number-based production rows —
+    # period_start IS NOT NULL is the discriminator for "new-style" rows.
+    # week_number stays null on these; month/year are set from period_end
+    # for cross-referencing (advance repayments, reporting) only, not as
+    # the source of truth for the date range.
+    period_start = models.DateField(null=True, blank=True, db_column="period_start")
+    period_end = models.DateField(null=True, blank=True, db_column="period_end")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
     class Meta:
         db_table = "payrolls"
         unique_together = [("employee", "month", "year", "week_number")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["employee", "period_start", "period_end"],
+                condition=models.Q(period_start__isnull=False),
+                name="uniq_payroll_employee_period",
+            ),
+        ]
 
 
 def _default_late_deduction_slabs() -> list[dict]:
@@ -1226,6 +1252,91 @@ class PayrollSettings(models.Model):
         max_digits=8, decimal_places=2, default=0, db_column="default_salary_per_shift",
         help_text="Pre-filled Salary Per Shift for new production employees. 0 = no default.",
     )
+
+    # ── Production payroll period (Settings → Payroll → Production) ────────
+    # Replaces the old hardcoded 1st-15th/16th-end biweekly split. Two
+    # independent axes — see production_period.py::resolve_production_period
+    # for the actual boundary math. `production_pay_type` above predates
+    # this and was never wired into the engine — left in place (harmless)
+    # but fully superseded by the fields below.
+    PERIOD_FREQ_WEEKLY = "weekly"
+    PERIOD_FREQ_2WEEKS = "2weeks"
+    PERIOD_FREQ_3WEEKS = "3weeks"
+    PERIOD_FREQ_MONTHLY = "monthly"
+    PERIOD_FREQ_CHOICES = [
+        (PERIOD_FREQ_WEEKLY, "Weekly"), (PERIOD_FREQ_2WEEKS, "2 Weeks"),
+        (PERIOD_FREQ_3WEEKS, "3 Weeks"), (PERIOD_FREQ_MONTHLY, "Monthly"),
+    ]
+    PERIOD_STYLE_CALENDAR_MONTH = "calendar_month"
+    PERIOD_STYLE_WEEKDAY_ANCHORED = "weekday_anchored"
+    PERIOD_STYLE_CUSTOM_RECURRING = "custom_recurring"
+    PERIOD_STYLE_CHOICES = [
+        (PERIOD_STYLE_CALENDAR_MONTH, "Calendar Month Anchored"),
+        (PERIOD_STYLE_WEEKDAY_ANCHORED, "Weekday Anchored (Rolling)"),
+        (PERIOD_STYLE_CUSTOM_RECURRING, "Custom Recurring"),
+    ]
+    WEEKDAY_ANCHOR_MON_SAT = "mon_sat"
+    WEEKDAY_ANCHOR_SUN_SAT = "sun_sat"
+    WEEKDAY_ANCHOR_CHOICES = [
+        (WEEKDAY_ANCHOR_MON_SAT, "Monday–Saturday"), (WEEKDAY_ANCHOR_SUN_SAT, "Sunday–Saturday"),
+    ]
+    prod_period_frequency = models.TextField(
+        choices=PERIOD_FREQ_CHOICES, default=PERIOD_FREQ_2WEEKS, db_column="prod_period_frequency",
+        help_text="How often production payroll periods repeat.",
+    )
+    prod_period_style = models.TextField(
+        choices=PERIOD_STYLE_CHOICES, default=PERIOD_STYLE_CALENDAR_MONTH, db_column="prod_period_style",
+        help_text="How period boundaries are anchored. Monthly frequency is only valid with calendar_month style.",
+    )
+    prod_period_weekday_anchor = models.TextField(
+        choices=WEEKDAY_ANCHOR_CHOICES, null=True, blank=True, db_column="prod_period_weekday_anchor",
+        help_text="Only used when prod_period_style = weekday_anchored.",
+    )
+    prod_period_anchor_date = models.DateField(
+        null=True, blank=True, db_column="prod_period_anchor_date",
+        help_text="Start date of the first period for weekday_anchored/custom_recurring styles. Ignored for calendar_month.",
+    )
+    prod_period_custom_days = models.IntegerField(
+        null=True, blank=True, db_column="prod_period_custom_days",
+        help_text="Fixed day-length of each period. Only used when prod_period_style = custom_recurring.",
+    )
+
+    # ── Production attendance mode + Late Detection (Settings → Payroll →
+    # Production) ─────────────────────────────────────────────────────────
+    # Entirely independent of the staff attendance_mode/late_* fields above,
+    # and additive to production payroll: shifts_earned/gross pay is still
+    # computed exactly as before (ProductionShiftConfig/ProductionShiftSegment,
+    # untouched) -this only adds an optional late-arrival deduction on top,
+    # keyed off the employee's Manage-Shift-assigned Production ShiftTemplate
+    # (not ProductionShiftConfig), gated entirely behind
+    # prod_late_detection_enabled so it's a no-op until HR opts in.
+    prod_attendance_mode = models.TextField(
+        choices=[("simple", "Simple"), ("strict", "Strict")],
+        default="strict", db_column="prod_attendance_mode",
+        help_text=(
+            "Governs the Production Late Detection check below only -does "
+            "not affect shifts-earned/pay math. Simple: late if the day's "
+            "first punch is after (assigned shift start + grace). Strict: "
+            "also flags leaving before (assigned shift end - grace) as late."
+        ),
+    )
+    prod_late_detection_enabled = models.BooleanField(
+        default=False, db_column="prod_late_detection_enabled",
+        help_text="Off by default -production payroll ignores lateness entirely until enabled.",
+    )
+    prod_late_free_allowance = models.IntegerField(
+        default=3, db_column="prod_late_free_allowance",
+        help_text="Free late occurrences allowed per employee per period before any shift deduction applies.",
+    )
+    prod_late_deduction_slabs = models.JSONField(
+        default=list, blank=True, db_column="prod_late_deduction_slabs",
+        help_text=(
+            "Same shape/semantics as late_deduction_slabs (staff), applied to "
+            "the Production Late pool instead. Empty by default -no "
+            "deduction until HR configures rows here."
+        ),
+    )
+
     slip_company_name = models.TextField(default="UK TEXTILES - H.O", db_column="slip_company_name")
     slip_company_address = models.TextField(default="TIRUPUR", db_column="slip_company_address")
     min_wage_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="min_wage_rate")

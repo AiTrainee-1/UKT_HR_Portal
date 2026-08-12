@@ -51,6 +51,7 @@ MODULE_TREE: list[dict] = [
         {"key": "recruitment.documents", "label": "Documents"},
     ]},
     {"key": "payroll", "label": "Payroll"},
+    {"key": "production_payroll", "label": "Production Payroll"},
     {"key": "salary", "label": "Salary"},
     {"key": "salary_slip", "label": "Salary Slip"},
     {"key": "settlement", "label": "Settlement"},
@@ -69,6 +70,7 @@ MODULE_TREE: list[dict] = [
         {"key": "settings.devices", "label": "Devices"},
         {"key": "settings.documents", "label": "Company Documents"},
         {"key": "settings.payroll", "label": "Payroll"},
+        {"key": "settings.production_payroll", "label": "Production Payroll"},
         {"key": "settings.salary_slip", "label": "Salary Slip"},
         {"key": "settings.smtp", "label": "SMTP / Email"},
         {"key": "settings.backup", "label": "Backup"},
@@ -175,6 +177,7 @@ URL_MODULE_MAP: dict[str, str] = {
     "on-duty-map": "geo_attendance",
     "live-location/team": "geo_attendance",
 
+    "payroll/production": "production_payroll",
     "payroll": "payroll",
 
     "department-managers": "user_management",

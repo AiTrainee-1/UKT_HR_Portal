@@ -194,7 +194,7 @@ def detect_night_for_date(night_date: date_type) -> int:
 
 def get_relaxation_for(
     emp: Employee, d: date_type,
-    assignments=None, logs_by_date=None, rules=None, existing_relaxations=None,
+    assignments=None, logs_by_date=None, rules=None, existing_relaxations=None, settings=None,
 ) -> NightShiftRelaxation | None:
     """
     Relaxation applying to day `d` for this employee -always re-derived from
@@ -208,6 +208,11 @@ def get_relaxation_for(
     on every call.
 
     See detect_night_for_employee() for what the optional prefetch params do.
+    `settings` follows the same convention -pass an already-fetched
+    PayrollSettings object to skip the extra lookup; omit it and behavior is
+    unchanged. This is called once per employee-with-punches per day, so a
+    bulk caller re-fetching PayrollSettings on every call is a real cost at
+    roster scale (see _punctuality_window_minutes for the same fix).
 
     Master off-switch (2026-07-25 fix): PayrollSettings.night_shift_enabled
     used to only control whether the Night Shift Relaxation page appears in
@@ -217,8 +222,10 @@ def get_relaxation_for(
     at this single choke point every caller already goes through, so
     turning it off genuinely disables the whole feature everywhere at once.
     """
-    from .models import PayrollSettings
-    if not PayrollSettings.get().night_shift_enabled:
+    if settings is None:
+        from .models import PayrollSettings
+        settings = PayrollSettings.get()
+    if not settings.night_shift_enabled:
         return None
     return detect_night_for_employee(
         emp, d - timedelta(days=1),

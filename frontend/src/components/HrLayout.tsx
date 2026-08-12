@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { Menu, Eye } from "lucide-react";
 import { HrSidebar } from "@/components/ui/dashboard-sidebar";
 import { usePayrollSettings } from "@/lib/api-client/custom-hooks";
-import { useAuth, permissionLevel } from "@/contexts/AuthContext";
+import { useAuth, isRouteViewOnly } from "@/contexts/AuthContext";
 import { moduleForPath } from "@/lib/permission-modules";
 import { lockMutatingControls } from "@/lib/view-only-lock";
 
@@ -26,7 +26,7 @@ export default function HrLayout({ children }: { children: React.ReactNode }) {
   // Delete/Import/... -see lib/view-only-lock.ts); tabs, filters, search,
   // pagination and expand/collapse controls are deliberately left alone so
   // View Only is still a full browsing experience, not a frozen page.
-  const isViewOnly = moduleKey ? permissionLevel(user, moduleKey) === "view" : false;
+  const isViewOnly = isRouteViewOnly(user, location, moduleKey);
 
   const mainRef = useRef<HTMLElement>(null);
 

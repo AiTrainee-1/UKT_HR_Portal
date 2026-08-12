@@ -910,6 +910,28 @@ export const useAttendanceSummary = (date?: string) =>
     refetchInterval: 60_000,
   });
 
+export interface AttendanceCompanySummary {
+  date: string;
+  totalEmployees: number;
+  present: number;
+  halfShift: number;
+  absent: number;
+  onLeave: number;
+  late: number;
+  permission: number;
+  totalShiftsEarned: number;
+}
+
+export const getAttendanceCompanySummaryQueryKey = () =>
+  ["/api/attendance/company-summary"] as const;
+
+export const useAttendanceCompanySummary = () =>
+  useQuery<AttendanceCompanySummary>({
+    queryKey: getAttendanceCompanySummaryQueryKey(),
+    queryFn: () => customFetch<AttendanceCompanySummary>("/api/attendance/company-summary"),
+    refetchInterval: 60_000,
+  });
+
 export const getAttendanceDailyQueryKey = (date?: string) =>
   ["/api/attendance/daily", date] as const;
 
@@ -1567,6 +1589,8 @@ export type PayrollBreakdownResponse = {
   month: number;
   year: number;
   weekNumber?: number | null;
+  periodStart?: string | null;
+  periodEnd?: string | null;
   salaryMode: string;
   status: string;
   summary: {
@@ -1621,6 +1645,8 @@ export type PayrollRunItem = {
   month: number;
   year: number;
   weekNumber?: number | null;
+  periodStart?: string | null;
+  periodEnd?: string | null;
   totalWorkingDays: number;
   presentDays: number;
   absentDays: number;
@@ -1786,6 +1812,95 @@ export const usePayrollBreakdown = (id: number | null) =>
     enabled: !!id,
   });
 
+// ── Production Payroll (period-driven, fully separate from Staff Payroll) ─────
+// Periods come entirely from Settings → Payroll → Production
+// (PayrollSettingsItem.prodPeriod*); these endpoints never take a
+// month/year/weekNumber input -only an optional explicit periodStart/
+// periodEnd pair for backfilling a past period.
+
+export type ProductionNextPeriod = {
+  periodStart: string;
+  periodEnd: string;
+  periodEnded: boolean;
+  frequency: PayrollSettingsItem["prodPeriodFrequency"];
+  style: PayrollSettingsItem["prodPeriodStyle"];
+};
+
+export const getProductionNextPeriodQueryKey = () => ["/api/payroll/production/next-period"] as const;
+
+export const useProductionNextPeriod = () =>
+  useQuery<ProductionNextPeriod>({
+    queryKey: getProductionNextPeriodQueryKey(),
+    queryFn: () => customFetch<ProductionNextPeriod>("/api/payroll/production/next-period"),
+  });
+
+export const getProductionSkipCheckQueryKey = (params: { periodStart: string; periodEnd: string } | null) =>
+  ["/api/payroll/production/skip-check", params] as const;
+
+export const useProductionSkipCheck = (params: { periodStart: string; periodEnd: string } | null) => {
+  const qs = new URLSearchParams();
+  if (params) {
+    qs.set("periodStart", params.periodStart);
+    qs.set("periodEnd", params.periodEnd);
+  }
+  return useQuery<PayrollSkipCheckResult & { periodStart: string; periodEnd: string }>({
+    queryKey: getProductionSkipCheckQueryKey(params),
+    queryFn: () =>
+      customFetch<PayrollSkipCheckResult & { periodStart: string; periodEnd: string }>(
+        `/api/payroll/production/skip-check?${qs.toString()}`,
+      ),
+    enabled: !!params,
+  });
+};
+
+export const useGenerateProductionPayroll = () =>
+  useMutation({
+    mutationFn: (data?: { periodStart: string; periodEnd: string }) =>
+      customFetch<{
+        message: string;
+        periodStart: string;
+        periodEnd: string;
+        generated: number;
+        skipped: number;
+        skippedDetails: { employeeId: number; name: string; reason: string }[];
+      }>("/api/payroll/production/generate", {
+        method: "POST",
+        body: JSON.stringify(data ?? {}),
+      }),
+  });
+
+export type ProductionPayrollItem = PayrollRunItem & {
+  employeeCode: string;
+  bankAccount: string;
+  bankIfsc: string;
+  bankName: string;
+  email: string;
+  departmentId: number | null;
+  departmentName: string | null;
+};
+
+export const getListProductionPayrollQueryKey = (params?: {
+  employeeId?: number;
+  status?: string;
+  limit?: number;
+}) => ["/api/payroll/production", params] as const;
+
+export const useListProductionPayroll = <TData = ProductionPayrollItem[]>(
+  params?: { employeeId?: number; status?: string; limit?: number },
+  options?: UseQueryOptions<ProductionPayrollItem[], unknown, TData>,
+) => {
+  const qs = new URLSearchParams();
+  if (params?.employeeId) qs.set("employeeId", String(params.employeeId));
+  if (params?.status) qs.set("status", params.status);
+  if (params?.limit) qs.set("limit", String(params.limit));
+  const q = qs.toString();
+  return useQuery<ProductionPayrollItem[], unknown, TData>({
+    queryKey: getListProductionPayrollQueryKey(params),
+    queryFn: () => customFetch<ProductionPayrollItem[]>(`/api/payroll/production${q ? `?${q}` : ""}`),
+    ...options,
+  });
+};
+
 // ── Session Configs ───────────────────────────────────────────────────────────
 
 export type SessionConfigItem = {
@@ -1864,6 +1979,17 @@ export type PayrollSettingsItem = {
   payDay: number;
   productionPayType: string;
   defaultSalaryPerShift?: number;
+  // Production Payroll period configuration (Settings → Payroll → Production)
+  prodPeriodFrequency: "weekly" | "2weeks" | "3weeks" | "monthly";
+  prodPeriodStyle: "calendar_month" | "weekday_anchored" | "custom_recurring";
+  prodPeriodWeekdayAnchor?: "mon_sat" | "sun_sat" | null;
+  prodPeriodAnchorDate?: string | null;
+  prodPeriodCustomDays?: number | null;
+  // Production attendance mode + Late Detection (Settings → Payroll → Production)
+  prodAttendanceMode: "simple" | "strict";
+  prodLateDetectionEnabled?: boolean;
+  prodLateFreeAllowance?: number;
+  prodLateDeductionSlabs?: { fromLates: number; deductionShifts: number }[];
   // Salary slip header & signature
   slipCompanyName: string;
   slipCompanyAddress: string;

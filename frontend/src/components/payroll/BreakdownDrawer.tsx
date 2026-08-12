@@ -1,46 +1,27 @@
 import { useState } from "react";
-import HrLayout from "@/components/HrLayout";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Separator } from "@/components/ui/separator";
-import { PillTabs } from "@/components/ui/pill-tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { useToast } from "@/hooks/use-toast";
-import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
-import PayrollGenerationPipeline from "@/components/PayrollGenerationPipeline";
+import { usePayrollBreakdown, type PayrollRunItem } from "@/lib/api-client";
 import {
-  useListPayrollRuns, useUpdatePayrollRecord, useListDepartments,
-  usePayrollBreakdown, useSessionConfigs, useCreateSessionConfig,
-  useUpdateSessionConfig, useDeleteSessionConfig,
-  getListPayrollRunsQueryKey, getSessionConfigsQueryKey,
-  type PayrollRunItem, type PayrollBreakdown, type SessionConfigItem,
-} from "@/lib/api-client";
-import { usePayrollSkipCheck } from "@/lib/api-client/custom-hooks";
-import { useQueryClient } from "@tanstack/react-query";
-import { exportPayrollToExcel } from "@/lib/payrollExcelExport";
-import {
-  IndianRupee, Play, Lock, CheckCircle2, Clock, Users,
-  TrendingUp, ChevronDown, ChevronUp, AlertCircle, Info,
-  Factory, UserCheck, Settings, Plus, Trash2, Edit, X,
-  CalendarDays, ArrowRight, Download, Search, AlertTriangle, RefreshCcw,
+  IndianRupee, Lock, CheckCircle2, Clock, ChevronDown, ChevronUp,
+  AlertCircle, Info, ArrowRight, AlertTriangle, CalendarDays, X,
 } from "lucide-react";
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Constants
-// ─────────────────────────────────────────────────────────────────────────────
+// Shared across Payroll (Staff) and Production Payroll pages -a payroll
+// record's breakdown/row rendering doesn't care which page it's shown on,
+// only on the record's own salaryMode/type, which /api/payroll/:id/breakdown
+// already branches on server-side (staff monthly vs shift-based production
+// vs legacy session-based production).
 
-const MONTH_NAMES = [
+export const MONTH_NAMES = [
   "January","February","March","April","May","June",
   "July","August","September","October","November","December",
 ];
-const MONTH_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+export const MONTH_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-const STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
+export const STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
   pending:  { label: "Pending",  cls: "bg-yellow-50 text-yellow-700 border-yellow-200" },
   paid:     { label: "Paid",     cls: "bg-green-50 text-green-700 border-green-200" },
   draft:    { label: "Draft",    cls: "bg-gray-50 text-gray-700 border-gray-200" },
@@ -48,184 +29,7 @@ const STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
   locked:   { label: "Locked",   cls: "bg-purple-50 text-purple-700 border-purple-200" },
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Session Config Panel
-// ─────────────────────────────────────────────────────────────────────────────
-
-function SessionConfigPanel() {
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
-  const { data: configs, isLoading } = useSessionConfigs();
-  const createMutation = useCreateSessionConfig();
-  const updateMutation = useUpdateSessionConfig();
-  const deleteMutation = useDeleteSessionConfig();
-
-  const [showAdd, setShowAdd] = useState(false);
-  const [editId, setEditId] = useState<number | null>(null);
-  const [form, setForm] = useState({
-    name: "", startTime: "08:30", endTime: "12:40",
-    minimumCheckoutTime: "12:40", payAmount: "", order: "1",
-  });
-
-  const resetForm = () => setForm({
-    name: "", startTime: "08:30", endTime: "12:40",
-    minimumCheckoutTime: "12:40", payAmount: "", order: "1",
-  });
-
-  const handleSave = async () => {
-    if (!form.name || !form.payAmount) {
-      toast({ title: "Name and pay amount are required", variant: "destructive" }); return;
-    }
-    try {
-      if (editId) {
-        await updateMutation.mutateAsync({ id: editId, data: {
-          name: form.name, startTime: form.startTime, endTime: form.endTime,
-          minimumCheckoutTime: form.minimumCheckoutTime || null,
-          payAmount: Number(form.payAmount), order: Number(form.order),
-        }});
-        setEditId(null);
-      } else {
-        await createMutation.mutateAsync({
-          name: form.name, startTime: form.startTime, endTime: form.endTime,
-          minimumCheckoutTime: form.minimumCheckoutTime || null,
-          payAmount: Number(form.payAmount), order: Number(form.order),
-        });
-        setShowAdd(false);
-      }
-      resetForm();
-      queryClient.invalidateQueries({ queryKey: getSessionConfigsQueryKey() });
-      toast({ title: editId ? "Session updated" : "Session created" });
-    } catch {
-      toast({ title: "Failed to save session config", variant: "destructive" });
-    }
-  };
-
-  const handleEdit = (sc: SessionConfigItem) => {
-    setEditId(sc.id);
-    setShowAdd(false);
-    setForm({
-      name: sc.name,
-      startTime: sc.startTime,
-      endTime: sc.endTime,
-      minimumCheckoutTime: sc.minimumCheckoutTime ?? "",
-      payAmount: String(sc.payAmount),
-      order: String(sc.order),
-    });
-  };
-
-  const handleDelete = async (id: number) => {
-    try {
-      await deleteMutation.mutateAsync(id);
-      queryClient.invalidateQueries({ queryKey: getSessionConfigsQueryKey() });
-      toast({ title: "Session deleted" });
-    } catch {
-      toast({ title: "Failed to delete session config", variant: "destructive" });
-    }
-  };
-
-  const formFields = (
-    <div className="grid sm:grid-cols-2 gap-3 mt-3">
-      <div className="space-y-1">
-        <Label className="text-xs">Session Name</Label>
-        <Input value={form.name} onChange={e => setForm(f => ({...f, name: e.target.value}))} placeholder="e.g. Morning Session" className="h-8 text-sm" />
-      </div>
-      <div className="space-y-1">
-        <Label className="text-xs">Pay Amount (₹)</Label>
-        <Input type="number" value={form.payAmount} onChange={e => setForm(f => ({...f, payAmount: e.target.value}))} placeholder="e.g. 150" className="h-8 text-sm" />
-      </div>
-      <div className="space-y-1">
-        <Label className="text-xs">Start Time</Label>
-        <Input type="time" value={form.startTime} onChange={e => setForm(f => ({...f, startTime: e.target.value}))} className="h-8 text-sm" />
-      </div>
-      <div className="space-y-1">
-        <Label className="text-xs">End Time</Label>
-        <Input type="time" value={form.endTime} onChange={e => setForm(f => ({...f, endTime: e.target.value}))} className="h-8 text-sm" />
-      </div>
-      <div className="space-y-1">
-        <Label className="text-xs">Min. Checkout Time</Label>
-        <Input type="time" value={form.minimumCheckoutTime} onChange={e => setForm(f => ({...f, minimumCheckoutTime: e.target.value}))} className="h-8 text-sm" />
-        <p className="text-xs text-muted-foreground">Session only counts if employee leaves after this time</p>
-      </div>
-      <div className="space-y-1">
-        <Label className="text-xs">Order</Label>
-        <Input type="number" value={form.order} onChange={e => setForm(f => ({...f, order: e.target.value}))} className="h-8 text-sm" min={1} />
-      </div>
-      <div className="sm:col-span-2 flex gap-2">
-        <Button size="sm" onClick={handleSave} disabled={createMutation.isPending || updateMutation.isPending} className="gap-1.5">
-          <CheckCircle2 size={13} />{editId ? "Update Session" : "Add Session"}
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => { setShowAdd(false); setEditId(null); resetForm(); }}>
-          Cancel
-        </Button>
-      </div>
-    </div>
-  );
-
-  return (
-    <Card className="border-0 shadow-sm">
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Settings size={15} className="text-amber-600" />
-            <CardTitle className="text-sm font-bold text-gray-900">Legacy Session Config</CardTitle>
-          </div>
-          <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => { setShowAdd(s => !s); setEditId(null); resetForm(); }}>
-            <Plus size={12} /> Add Session
-          </Button>
-        </div>
-        <p className="text-xs text-muted-foreground mt-0.5">
-          Not used by current production payroll -pay is now Total Shifts × Salary Per Shift
-          (configure shift segments and punch times in Settings → Payroll). This panel only affects
-          historical payroll records still shown in the old session format.
-        </p>
-      </CardHeader>
-      <CardContent className="pt-0 space-y-2">
-        {showAdd && <div className="rounded-lg border border-dashed border-amber-300 bg-amber-50/40 p-3">{formFields}</div>}
-        {isLoading ? (
-          <div className="space-y-2">{[1,2].map(i => <Skeleton key={i} className="h-14 w-full rounded-lg" />)}</div>
-        ) : (configs ?? []).length === 0 ? (
-          <div className="flex items-start gap-2 p-3 rounded-lg bg-gray-50 border border-gray-100">
-            <AlertCircle size={14} className="text-gray-400 mt-0.5 shrink-0" />
-            <p className="text-xs text-gray-500">
-              No legacy sessions configured -nothing to do here. Current production payroll doesn't need this.
-            </p>
-          </div>
-        ) : (
-          (configs ?? []).map(sc => (
-            <div key={sc.id}>
-              {editId === sc.id ? (
-                <div className="rounded-lg border border-dashed border-blue-300 bg-blue-50/40 p-3">{formFields}</div>
-              ) : (
-                <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-amber-50/60 border border-amber-100">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-semibold text-sm text-amber-900">{sc.name}</span>
-                      <Badge className="text-xs bg-amber-100 text-amber-700 border-amber-200">₹{sc.payAmount}/session</Badge>
-                    </div>
-                    <p className="text-xs text-amber-700 mt-0.5">
-                      {sc.startTime} – {sc.endTime}
-                      {sc.minimumCheckoutTime && <> · Min checkout: <strong>{sc.minimumCheckoutTime}</strong></>}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <Button variant="ghost" size="icon" className="h-7 w-7 text-gray-400 hover:text-gray-700" onClick={() => handleEdit(sc)}><Edit size={13} /></Button>
-                    <Button variant="ghost" size="icon" className="h-7 w-7 text-red-400 hover:text-red-600" onClick={() => handleDelete(sc.id)}><Trash2 size={13} /></Button>
-                  </div>
-                </div>
-              )}
-            </div>
-          ))
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Breakdown Drawer
-// ─────────────────────────────────────────────────────────────────────────────
-
-const STATUS_COLORS: Record<string, string> = {
+export const STATUS_COLORS: Record<string, string> = {
   present:      "bg-green-100 text-green-700",
   absent:       "bg-red-100 text-red-700",
   paid_leave:   "bg-blue-100 text-blue-700",
@@ -234,7 +38,7 @@ const STATUS_COLORS: Record<string, string> = {
   holiday:      "bg-gray-100 text-gray-600",
 };
 
-function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: () => void }) {
+export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: () => void }) {
   const { data, isLoading } = usePayrollBreakdown(payrollId);
   const bd = data?.breakdown;
   const [showAllDays, setShowAllDays] = useState(false);
@@ -251,8 +55,9 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
           </DialogTitle>
           {data && (
             <p className="text-xs text-muted-foreground">
-              {MONTH_NAMES[(data.month ?? 1) - 1]} {data.year}
-              {data.weekNumber ? ` · Week ${data.weekNumber}` : ""}
+              {data.periodStart && data.periodEnd
+                ? `${data.periodStart} – ${data.periodEnd}`
+                : `${MONTH_NAMES[(data.month ?? 1) - 1]} ${data.year}${data.weekNumber ? ` · Week ${data.weekNumber}` : ""}`}
               {" · "}{data.employee.code} · {data.employee.department ?? ""}
             </p>
           )}
@@ -564,6 +369,25 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
                   </div>
                 </div>
 
+                {bd.deductions.lateSummary && (
+                  <div className="rounded-md bg-amber-50 border border-amber-100 px-3 py-2 text-xs text-amber-800 space-y-0.5">
+                    <p className="font-semibold flex items-center gap-1">
+                      <Clock size={11} /> Late Detection (Production)
+                    </p>
+                    <p>
+                      Checked against the employee's assigned Production shift (Manage Shift) start/end
+                      time + grace period, per the Attendance Mode configured in Settings → Payroll →
+                      Production.
+                    </p>
+                    <p>
+                      <strong>{bd.deductions.lateSummary.totalLateCount}</strong> late occurrence{bd.deductions.lateSummary.totalLateCount !== 1 ? "s" : ""} this period
+                      {(bd.deductions.lateShiftPenalty ?? 0) === 0 && (
+                        <span> — no deduction yet (within the Free Allowance, or no slabs configured).</span>
+                      )}
+                    </p>
+                  </div>
+                )}
+
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Earnings</p>
                   <div className="rounded-lg border divide-y text-sm">
@@ -582,7 +406,7 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
                   </div>
                 </div>
 
-                {((bd.deductions.pf ?? 0) > 0 || (bd.deductions.esi ?? 0) > 0 || bd.deductions.advances > 0) && (
+                {((bd.deductions.pf ?? 0) > 0 || (bd.deductions.esi ?? 0) > 0 || bd.deductions.advances > 0 || (bd.deductions.lateShiftPenalty ?? 0) > 0) && (
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
                       Deductions
@@ -611,6 +435,19 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
                           <span className="font-semibold text-red-700">- ₹{bd.deductions.advances.toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
                         </div>
                       )}
+                      {(bd.deductions.lateShiftPenalty ?? 0) > 0 && (
+                        <div className="flex justify-between px-3 py-2 bg-orange-50/40">
+                          <span className="text-orange-800 font-medium">
+                            Late Shift Penalty
+                            {bd.deductions.lateSummary && (
+                              <span className="ml-1.5 font-normal text-orange-600 text-xs">
+                                ({bd.deductions.lateSummary.totalLateCount} late · {bd.deductions.lateSummary.billableLateCount} billable · {bd.deductions.lateSummary.shiftDeductions} shift{bd.deductions.lateSummary.shiftDeductions !== 1 ? "s" : ""} deducted)
+                              </span>
+                            )}
+                          </span>
+                          <span className="font-semibold text-orange-700">- ₹{(bd.deductions.lateShiftPenalty ?? 0).toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -628,6 +465,7 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
                           <th className="text-left px-3 py-2 font-semibold text-gray-600">Last Punch</th>
                           <th className="text-left px-3 py-2 font-semibold text-gray-600">Status</th>
                           <th className="text-right px-3 py-2 font-semibold text-gray-600">Shifts</th>
+                          <th className="text-left px-3 py-2 font-semibold text-gray-600">Reason</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y">
@@ -648,6 +486,9 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
                                 ? <Badge className="text-xs bg-green-100 text-green-700 border-green-200">{d.shiftsEarned}</Badge>
                                 : <span className="text-gray-300">0</span>
                               }
+                            </td>
+                            <td className="px-3 py-1.5 text-gray-500 max-w-[240px]">
+                              {d.isLate ? (d.lateReason ?? <span className="text-gray-300">—</span>) : null}
                             </td>
                           </tr>
                         ))}
@@ -796,205 +637,7 @@ function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: (
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Generate Payroll Dialog
-// ─────────────────────────────────────────────────────────────────────────────
-
-function GeneratePayrollDialog({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
-  const { toast } = useToast();
-  const { triggerGenerate, isGenerating } = usePayrollGeneration();
-  const [runType, setRunType] = useState<"monthly" | "biweekly">("monthly");
-  const [weekNumber, setWeekNumber] = useState<1 | 2>(1);
-  const [month, setMonth] = useState(new Date().getMonth() + 1);
-  const [year, setYear] = useState(new Date().getFullYear());
-
-  const handleGenerate = () => {
-    if (isGenerating) {
-      toast({ title: "A payroll run is already in progress", description: "Wait for it to finish before starting another." });
-      return;
-    }
-    // Fire-and-forget: the PayrollGenerationContext owns the request and the
-    // progress polling from here, so generation keeps running -and stays
-    // visible via the pipeline/banner -even after this dialog (or the whole
-    // page) unmounts.
-    triggerGenerate({
-      month, year, runType,
-      weekNumber: runType === "biweekly" ? weekNumber : undefined,
-    });
-    onSuccess();
-    onClose();
-  };
-
-  const lastDay = new Date(year, month, 0).getDate();
-  const weekRange = weekNumber === 1
-    ? `1–15 ${MONTH_SHORT[month - 1]}`
-    : `16–${lastDay} ${MONTH_SHORT[month - 1]}`;
-
-  return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Play size={16} className="text-green-600" /> Generate Payroll
-          </DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4 py-2">
-
-          {/* Run type selector */}
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={() => setRunType("monthly")}
-              className={`p-3 rounded-lg border-2 text-left transition-all ${runType === "monthly" ? "border-green-600 bg-green-50" : "border-gray-200 hover:border-gray-300"}`}
-            >
-              <div className="flex items-center gap-2 mb-1">
-                <UserCheck size={14} className={runType === "monthly" ? "text-green-700" : "text-gray-500"} />
-                <span className={`font-semibold text-sm ${runType === "monthly" ? "text-green-800" : "text-gray-700"}`}>Staff Monthly</span>
-              </div>
-              <p className="text-xs text-muted-foreground">Pro-rated monthly salary for all staff</p>
-            </button>
-            <button
-              onClick={() => setRunType("biweekly")}
-              className={`p-3 rounded-lg border-2 text-left transition-all ${runType === "biweekly" ? "border-amber-500 bg-amber-50" : "border-gray-200 hover:border-gray-300"}`}
-            >
-              <div className="flex items-center gap-2 mb-1">
-                <Factory size={14} className={runType === "biweekly" ? "text-amber-700" : "text-gray-500"} />
-                <span className={`font-semibold text-sm ${runType === "biweekly" ? "text-amber-800" : "text-gray-700"}`}>Production Bi-Weekly</span>
-              </div>
-              <p className="text-xs text-muted-foreground">Shift-based pay for production</p>
-            </button>
-          </div>
-
-          {/* Period selection */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label className="text-xs">Month</Label>
-              <select value={month} onChange={e => setMonth(Number(e.target.value))} className="w-full h-9 rounded-md border px-3 text-sm bg-background">
-                {MONTH_NAMES.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Year</Label>
-              <Input type="number" value={year} onChange={e => setYear(Number(e.target.value))} className="h-9" min={2020} max={2030} />
-            </div>
-          </div>
-
-          {/* Week selector for biweekly */}
-          {runType === "biweekly" && (
-            <div className="space-y-2">
-              <Label className="text-xs">Pay Period</Label>
-              <div className="grid grid-cols-2 gap-2">
-                {([
-                  { wk: 1, label: "Week 1 & 2", range: `1–15 ${MONTH_SHORT[month - 1]}` },
-                  { wk: 2, label: "Week 3 & 4", range: `16–${lastDay} ${MONTH_SHORT[month - 1]}` },
-                ] as const).map(({ wk, label, range }) => (
-                  <button
-                    key={wk}
-                    onClick={() => setWeekNumber(wk)}
-                    className={`p-2.5 rounded-lg border-2 text-center transition-all ${weekNumber === wk ? "border-amber-500 bg-amber-50" : "border-gray-200 hover:border-amber-200"}`}
-                  >
-                    <p className={`font-bold text-sm ${weekNumber === wk ? "text-amber-800" : "text-gray-700"}`}>{label}</p>
-                    <p className="text-xs text-muted-foreground">{range}</p>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Summary box */}
-          <div className={`rounded-lg p-3 flex items-start gap-2 ${runType === "monthly" ? "bg-green-50 border border-green-100" : "bg-amber-50 border border-amber-100"}`}>
-            <Info size={14} className={`${runType === "monthly" ? "text-green-600" : "text-amber-600"} mt-0.5 shrink-0`} />
-            <p className={`text-xs ${runType === "monthly" ? "text-green-800" : "text-amber-800"}`}>
-              {runType === "monthly"
-                ? `Will generate monthly payroll for all active staff employees for ${MONTH_NAMES[month - 1]} ${year}. Calculations are based on attendance logs, approved leave, and advances.`
-                : `Will generate shift-based payroll for all active production employees for ${weekRange} (${weekNumber === 1 ? "Week 1 & 2" : "Week 3 & 4"}). Pay = total shifts earned × salary per shift.`
-              }
-            </p>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleGenerate} disabled={isGenerating}
-            className={runType === "monthly" ? "" : "bg-amber-600 hover:bg-amber-700"}>
-            {isGenerating ? "A run is already in progress…" : (
-              <><Play size={13} className="mr-1.5" />Generate {runType === "monthly" ? "Staff" : "Production"} Payroll</>
-            )}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Skipped Employees Dialog -on-demand, read-only preview of who Generate
-//  Payroll would currently skip and why. Unlike the post-generation toast,
-//  this works any time HR wants to check, not just right after a run.
-// ─────────────────────────────────────────────────────────────────────────────
-
-function SkippedEmployeesDialog({ params, periodLabel, onClose }: {
-  params: { month: number; year: number; runType: "monthly" | "biweekly"; weekNumber?: number };
-  periodLabel: string;
-  onClose: () => void;
-}) {
-  const { data, isLoading, isFetching, refetch } = usePayrollSkipCheck(params);
-
-  return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <AlertTriangle size={16} className="text-amber-600" /> Skipped Employees
-          </DialogTitle>
-          <p className="text-xs text-muted-foreground">
-            {params.runType === "monthly" ? "Staff" : "Production"} · {periodLabel}
-          </p>
-        </DialogHeader>
-
-        {isLoading ? (
-          <div className="space-y-2 py-4">
-            {[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}
-          </div>
-        ) : !data || data.skipped.length === 0 ? (
-          <div className="py-10 text-center text-muted-foreground">
-            <CheckCircle2 size={28} className="mx-auto mb-2 text-green-300" />
-            <p className="text-sm font-semibold text-gray-700">Nobody would be skipped</p>
-            <p className="text-xs mt-0.5">All {data?.totalChecked ?? 0} active employees checked out fine for this period.</p>
-          </div>
-        ) : (
-          <div className="space-y-3 py-2">
-            <p className="text-xs text-gray-500">
-              {data.skippedCount} of {data.totalChecked} active employees would be skipped if you ran Generate Payroll now:
-            </p>
-            <div className="space-y-2 max-h-80 overflow-y-auto">
-              {data.skipped.map(s => (
-                <div key={s.employeeId} className="rounded-lg border border-amber-100 bg-amber-50/60 px-3 py-2">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-semibold text-sm text-amber-900">{s.name}</span>
-                    <span className="text-xs text-amber-600 font-mono">{s.employeeCode}</span>
-                  </div>
-                  <p className="text-xs text-amber-700 mt-0.5">{s.reason}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <DialogFooter>
-          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => refetch()} disabled={isFetching}>
-            <RefreshCcw size={12} className={isFetching ? "animate-spin" : ""} /> Re-check
-          </Button>
-          <Button onClick={onClose}><X size={14} className="mr-1" />Close</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Payroll record row
-// ─────────────────────────────────────────────────────────────────────────────
-
-function PayrollRow({ run, onViewBreakdown, onMarkPaid }: {
+export function PayrollRow({ run, onViewBreakdown, onMarkPaid }: {
   run: PayrollRunItem;
   onViewBreakdown: (id: number) => void;
   onMarkPaid: (run: PayrollRunItem) => void;
@@ -1017,6 +660,9 @@ function PayrollRow({ run, onViewBreakdown, onMarkPaid }: {
             {isProduction ? "Production" : "Staff"}
           </Badge>
           {run.weekNumber && <Badge variant="outline" className="text-xs">Week {run.weekNumber}</Badge>}
+          {run.periodStart && run.periodEnd && (
+            <Badge variant="outline" className="text-xs">{run.periodStart} – {run.periodEnd}</Badge>
+          )}
         </div>
         <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground flex-wrap">
           {isShiftMode ? (
@@ -1054,304 +700,5 @@ function PayrollRow({ run, onViewBreakdown, onMarkPaid }: {
         )}
       </div>
     </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Main Page
-// ─────────────────────────────────────────────────────────────────────────────
-
-export default function PayrollFull() {
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
-  const [showGenerate, setShowGenerate] = useState(false);
-  const [showSessionConfig, setShowSessionConfig] = useState(false);
-  const [showSkipCheck, setShowSkipCheck] = useState(false);
-  const [breakdownId, setBreakdownId] = useState<number | null>(null);
-
-  const [filterMonth, setFilterMonth] = useState<number>(new Date().getMonth() + 1);
-  const [filterYear, setFilterYear] = useState<number>(new Date().getFullYear());
-  const [filterType, setFilterType] = useState<"staff" | "production">("staff");
-  const [prodWeek, setProdWeek]     = useState<"week12" | "week34">("week12");
-  const [search, setSearch]         = useState("");
-  const [deptFilter, setDeptFilter] = useState("all");
-
-  const updateMutation = useUpdatePayrollRecord();
-  const { showPipeline, progress, dismiss: dismissPipeline } = usePayrollGeneration();
-  const { data: departments } = useListDepartments();
-
-  const { data: runs, isLoading } = useListPayrollRuns({ month: filterMonth, year: filterYear });
-
-  const allRuns = runs ?? [];
-  const isProdMode = (mode: string) => mode === "session" || mode === "shift";
-  const staffRuns  = allRuns.filter(r => r.salaryMode === "monthly");
-  const week12Runs = allRuns.filter(r => isProdMode(r.salaryMode) && r.weekNumber === 1);
-  const week34Runs = allRuns.filter(r => isProdMode(r.salaryMode) && r.weekNumber === 2);
-  const prodRuns   = [...week12Runs, ...week34Runs];
-
-  const modeRuns =
-    filterType === "staff" ? staffRuns :
-    prodWeek === "week12"  ? week12Runs : week34Runs;
-
-  const filteredRuns = modeRuns.filter(r => {
-    if (deptFilter !== "all" && String(r.departmentId ?? "") !== deptFilter) return false;
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return (
-      r.employeeName?.toLowerCase().includes(q) ||
-      r.employeeCode?.toLowerCase().includes(q)
-    );
-  });
-
-  const totalGross = filteredRuns.reduce((s, r) => s + r.grossSalary, 0);
-  const totalDeductions = filteredRuns.reduce((s, r) => s + r.deductions, 0);
-  const totalNet = filteredRuns.reduce((s, r) => s + r.finalSalary, 0);
-  const pendingCount = filteredRuns.filter(r => r.status === "pending").length;
-
-  const handleMarkPaid = async (run: PayrollRunItem) => {
-    try {
-      await updateMutation.mutateAsync({ id: run.id, data: { status: "paid" } });
-      toast({ title: `${run.employeeName ?? "Employee"}'s salary marked as paid` });
-      queryClient.invalidateQueries({ queryKey: getListPayrollRunsQueryKey({ month: filterMonth, year: filterYear }) });
-    } catch {
-      toast({ title: "Failed to update status", variant: "destructive" });
-    }
-  };
-
-  const skipCheckParams = {
-    month: filterMonth,
-    year: filterYear,
-    runType: (filterType === "staff" ? "monthly" : "biweekly") as "monthly" | "biweekly",
-    weekNumber: filterType === "production" ? (prodWeek === "week12" ? 1 : 2) : undefined,
-  };
-  const skipCheckPeriodLabel = filterType === "staff"
-    ? `${MONTH_NAMES[filterMonth - 1]} ${filterYear}`
-    : `${MONTH_NAMES[filterMonth - 1]} ${filterYear} -${prodWeek === "week12" ? "Week 1 & 2" : "Week 3 & 4"}`;
-
-  return (
-    <HrLayout>
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <h2 className="text-2xl font-black text-gray-900">Payroll</h2>
-            <p className="text-muted-foreground text-sm mt-0.5">
-              {MONTH_NAMES[filterMonth - 1]} {filterYear} · {filteredRuns.length} records
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline" className="gap-2 h-9 border-amber-200 text-amber-700 hover:bg-amber-50"
-              onClick={() => setShowSkipCheck(true)}
-            >
-              <AlertTriangle size={14} /> Skipped Employees
-            </Button>
-            <Button
-              variant="outline" className="gap-2 h-9"
-              onClick={() => setShowSessionConfig(s => !s)}
-            >
-              <Settings size={14} /> Legacy Session Config
-            </Button>
-            <Button className="gap-2 h-9" onClick={() => setShowGenerate(true)}>
-              <Play size={14} /> Generate Payroll
-            </Button>
-          </div>
-        </div>
-
-        {/* Payroll generation progress */}
-        <PayrollGenerationPipeline active={showPipeline} data={progress} onDismiss={dismissPipeline} />
-
-        {/* Session Config (collapsible) */}
-        {showSessionConfig && <SessionConfigPanel />}
-
-        {/* Generate dialog */}
-        {showGenerate && (
-          <GeneratePayrollDialog
-            onClose={() => setShowGenerate(false)}
-            onSuccess={() => queryClient.invalidateQueries({ queryKey: getListPayrollRunsQueryKey({ month: filterMonth, year: filterYear }) })}
-          />
-        )}
-
-        {/* Skipped employees preview */}
-        {showSkipCheck && (
-          <SkippedEmployeesDialog
-            params={skipCheckParams}
-            periodLabel={skipCheckPeriodLabel}
-            onClose={() => setShowSkipCheck(false)}
-          />
-        )}
-
-        {/* Filters */}
-        <div className="flex items-center gap-3 flex-wrap">
-          <select
-            value={filterMonth}
-            onChange={e => setFilterMonth(Number(e.target.value))}
-            className="h-8 rounded-md border px-3 text-sm bg-background"
-          >
-            {MONTH_NAMES.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
-          </select>
-          <Input
-            type="number" value={filterYear}
-            onChange={e => setFilterYear(Number(e.target.value))}
-            className="h-8 w-20 text-sm" min={2020} max={2030}
-          />
-          <Separator orientation="vertical" className="h-6" />
-          <div className="relative">
-            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              placeholder="Search by employee code or name…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="h-8 pl-8 text-sm w-56"
-            />
-          </div>
-          <Select value={deptFilter} onValueChange={setDeptFilter}>
-            <SelectTrigger className="h-8 w-44 text-sm">
-              <SelectValue placeholder="Department" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Departments</SelectItem>
-              {departments?.map(d => (
-                <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Separator orientation="vertical" className="h-6" />
-          <PillTabs
-            items={[
-              { value: "staff", label: "Staff", count: staffRuns.length },
-              { value: "production", label: "Production", count: prodRuns.length },
-            ]}
-            value={filterType}
-            onChange={(v) => setFilterType(v as "staff" | "production")}
-          />
-        </div>
-
-        {/* Summary Cards + Export */}
-        {/* Production sub-tabs (Week 1&2 / Week 3&4) */}
-        {!isLoading && filterType === "production" && (
-          <div className="flex items-center gap-2 flex-wrap">
-            <PillTabs
-              items={[
-                {
-                  value: "week12",
-                  label: <>Week 1 &amp; 2 ({week12Runs.length}) <span className="font-normal opacity-70 text-xs">-{MONTH_SHORT[filterMonth - 1]} 1–15</span></>,
-                },
-                {
-                  value: "week34",
-                  label: <>Week 3 &amp; 4 ({week34Runs.length}) <span className="font-normal opacity-70 text-xs">-{MONTH_SHORT[filterMonth - 1]} 16–{new Date(filterYear, filterMonth, 0).getDate()}</span></>,
-                },
-              ]}
-              value={prodWeek}
-              onChange={(v) => setProdWeek(v as "week12" | "week34")}
-              baseColor="#d97706"
-            />
-
-            {filteredRuns.length > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-2 h-8 border-green-600 text-green-700 hover:bg-green-50 ml-auto"
-                onClick={() => exportPayrollToExcel(
-                  filteredRuns,
-                  prodWeek === "week12" ? "Week_1_and_2" : "Week_3_and_4",
-                  `${MONTH_NAMES[filterMonth - 1]}_${filterYear}`,
-                )}
-              >
-                <Download size={13} /> Export to Excel
-              </Button>
-            )}
-          </div>
-        )}
-
-        {/* Staff export button */}
-        {!isLoading && filterType === "staff" && filteredRuns.length > 0 && (
-          <div className="flex items-center gap-3">
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-2 h-8 border-green-600 text-green-700 hover:bg-green-50"
-              onClick={() => exportPayrollToExcel(
-                filteredRuns,
-                "Staff",
-                `${MONTH_NAMES[filterMonth - 1]}_${filterYear}`,
-              )}
-            >
-              <Download size={13} /> Export to Excel
-            </Button>
-          </div>
-        )}
-        {!isLoading && filteredRuns.length > 0 && (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {[
-              { label: "Total Gross", value: `₹${(totalGross / 1000).toFixed(1)}K`, color: "text-blue-700", icon: TrendingUp, bg: "bg-blue-50" },
-              { label: "Deductions", value: `₹${(totalDeductions / 1000).toFixed(1)}K`, color: "text-red-600", icon: IndianRupee, bg: "bg-red-50" },
-              { label: "Net Payable", value: `₹${(totalNet / 1000).toFixed(1)}K`, color: "text-green-700", icon: CheckCircle2, bg: "bg-green-50" },
-              { label: "Pending Payment", value: `${pendingCount} employees`, color: "text-amber-700", icon: Clock, bg: "bg-amber-50" },
-            ].map(s => (
-              <Card key={s.label} className="border-0 shadow-sm">
-                <CardContent className="p-4 flex items-center gap-3">
-                  <div className={`w-9 h-9 rounded-lg ${s.bg} flex items-center justify-center shrink-0`}>
-                    <s.icon size={16} className={s.color} />
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">{s.label}</p>
-                    <p className={`text-base font-black ${s.color}`}>{s.value}</p>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        )}
-
-        {/* Payroll Records */}
-        <div className="space-y-2">
-          {isLoading ? (
-            Array.from({ length: 5 }).map((_, i) => (
-              <Skeleton key={i} className="h-16 w-full rounded-xl" />
-            ))
-          ) : filteredRuns.length === 0 ? (
-            <div className="text-center py-16 text-muted-foreground border-2 border-dashed border-gray-200 rounded-xl">
-              <Users size={32} className="mx-auto text-gray-200 mb-3" />
-              <p className="text-sm font-semibold text-gray-600">No payroll records for {MONTH_NAMES[filterMonth - 1]} {filterYear}</p>
-              <p className="text-xs text-gray-400 mt-1">Click "Generate Payroll" to compute payroll from attendance data.</p>
-              <Button className="mt-4 gap-2" onClick={() => setShowGenerate(true)}>
-                <Play size={14} /> Generate Payroll
-              </Button>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {filteredRuns.map(run => (
-                <PayrollRow
-                  key={run.id}
-                  run={run}
-                  onViewBreakdown={setBreakdownId}
-                  onMarkPaid={handleMarkPaid}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Rules reminder */}
-        <Card className="border-0 bg-gray-50">
-          <CardContent className="p-4">
-            <div className="flex items-start gap-2">
-              <AlertCircle size={14} className="text-blue-500 mt-0.5 shrink-0" />
-              <div className="text-xs text-gray-500 space-y-0.5">
-                <p><strong>Staff:</strong> Monthly salary, pro-rated by working days (Mon–Sat or Mon–Fri). PF = 12% of basic. ESI = 0.75% of gross (if salary ≤ ₹21,000).</p>
-                <p><strong>Production:</strong> Bi-weekly shift pay. Pay = total shifts earned × salary per shift, computed from punch-time coverage of the configured shift segments. No leave/permission -Sunday is a normal working day.</p>
-                <p><strong>Advances</strong> are auto-deducted from the monthly repayment schedule configured in the Advances module.</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Breakdown Drawer */}
-      {breakdownId && (
-        <BreakdownDrawer payrollId={breakdownId} onClose={() => setBreakdownId(null)} />
-      )}
-    </HrLayout>
   );
 }

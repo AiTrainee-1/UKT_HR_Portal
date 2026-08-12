@@ -213,6 +213,55 @@ def late_shift_deduction(billable_late: int, settings, slabs_field: str = "late_
     return deduction
 
 
+def _production_late_days(emp: Employee, records, ps) -> tuple[int, dict]:
+    """
+    Per-day late check for Production Late Detection (Settings → Payroll →
+    Production) -entirely independent of AttendanceDayRecord.is_late, which
+    reflects the global ProductionShiftConfig singleton and drives
+    shifts_earned/pay (left completely untouched here). This instead keys
+    off the employee's Manage-Shift-assigned Production ShiftTemplate, per
+    explicit user instruction ("shift calculation and late detection should
+    be based on the Production shift rules configured there").
+
+    Returns (late_count, {date: reason}). A day with no first_punch
+    (absent) or no assigned shift for that date is skipped entirely -no
+    reference to check against, so no penalty is ever applied blindly.
+    """
+    from .shift_engine import _get_shift_for_date, _t2s, _s2t
+
+    late_count = 0
+    reasons: dict = {}
+    for rec in records:
+        if not rec.first_punch:
+            continue
+        shift = _get_shift_for_date(emp, rec.date)
+        if shift is None:
+            continue
+        grace = (shift.grace_period_minutes or 0) * 60
+        deadline_start = _t2s(shift.start_time) + grace
+        is_late = _t2s(rec.first_punch) > deadline_start
+        parts = []
+        if is_late:
+            parts.append(
+                f"First punch {rec.first_punch.strftime('%H:%M')} after {shift.name} "
+                f"start {shift.start_time.strftime('%H:%M')} + {shift.grace_period_minutes} "
+                f"min grace ({_s2t(deadline_start).strftime('%H:%M')})"
+            )
+        if ps.prod_attendance_mode == "strict" and rec.last_punch:
+            deadline_end = _t2s(shift.end_time) - grace
+            if _t2s(rec.last_punch) < deadline_end:
+                is_late = True
+                parts.append(
+                    f"Last punch {rec.last_punch.strftime('%H:%M')} before {shift.name} "
+                    f"end {shift.end_time.strftime('%H:%M')} - {shift.grace_period_minutes} "
+                    f"min grace ({_s2t(deadline_end).strftime('%H:%M')})"
+                )
+        if is_late:
+            late_count += 1
+            reasons[rec.date] = " / ".join(parts)
+    return late_count, reasons
+
+
 def _pending_advance_repayments(emp: Employee, month: int, year: int) -> tuple[Decimal, list[dict]]:
     """
     Find all pending advance repayments due in this month and return
@@ -647,31 +696,25 @@ def _session_completed(first_in: time, last_out: time | None, min_checkout: time
     return in_secs <= cutoff_secs and out_secs >= cutoff_secs
 
 
-def _get_biweekly_range(month: int, year: int, week_number: int) -> tuple[date, date]:
+def _generate_production_payroll(emp: Employee, period_start: date, period_end: date) -> dict:
     """
-    Two pay periods per month:
-      week_number=1 → "Week 1 & 2"  → 1st–15th
-      week_number=2 → "Week 3 & 4"  → 16th–last day
-    """
-    if week_number == 1:
-        return date(year, month, 1), date(year, month, 15)
-    else:
-        return date(year, month, 16), date(year, month, calendar.monthrange(year, month)[1])
+    Shift-based payroll for production employees -completely separate from
+    the staff engine. No monthly salary, no proration, no leave/permission/
+    CL: pay = total shifts earned x salary_per_shift.
 
-
-def _generate_production_payroll(emp: Employee, month: int, year: int, week_number: int) -> dict:
-    """
-    Shift-based bi-weekly payroll for production employees -completely
-    separate from the staff engine. No monthly salary, no proration, no
-    leave/permission/CL: pay = total shifts earned x salary_per_shift.
-    week_number: 1 (days 1-15) or 2 (days 16-end).
+    period_start/period_end (both inclusive) come from
+    production_period.py::resolve_production_period, driven by Settings →
+    Payroll → Production (frequency + period style). Callers are
+    responsible for confirming period_end has already elapsed before
+    calling this.
     """
     if not emp.salary_per_shift or emp.salary_per_shift <= 0:
         raise PayrollSkip("No Salary Per Shift set on this employee's profile")
 
     from .attendance_final import compute_range_records
 
-    date_from, date_to = _get_biweekly_range(month, year, week_number)
+    ps = PayrollSettings.get()
+    date_from, date_to = period_start, period_end
     records = compute_range_records(emp, date_from, date_to)
 
     DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -694,14 +737,40 @@ def _generate_production_payroll(emp: Employee, month: int, year: int, week_numb
             "lastPunch": rec.last_punch.strftime("%H:%M") if rec.last_punch else None,
             "shiftsEarned": float(shifts),
             "status": rec.status,
+            # Overwritten below (with lateReason) when Production Late
+            # Detection is enabled -otherwise this stays the
+            # ProductionShiftConfig-based flag AttendanceDayRecord already
+            # carries, purely informational and never fed into pay either way.
             "isLate": rec.is_late,
+            "lateReason": None,
         })
+
+    # Production Late Detection (Settings → Payroll → Production) -entirely
+    # additive: shifts_earned/gross above is computed exactly as before this
+    # feature existed. Off by default (prod_late_detection_enabled=False),
+    # so this block is a no-op until HR explicitly configures it.
+    late_penalty = Decimal("0")
+    late_summary = None
+    if ps.prod_late_detection_enabled:
+        late_count, late_reasons = _production_late_days(emp, records, ps)
+        billable_late = max(0, late_count - (ps.prod_late_free_allowance or 0))
+        deduction_shifts = late_shift_deduction(billable_late, ps, slabs_field="prod_late_deduction_slabs")
+        if deduction_shifts > 0:
+            late_penalty = _d2(deduction_shifts * emp.salary_per_shift)
+        late_summary = {
+            "totalLateCount": late_count,
+            "billableLateCount": billable_late,
+            "shiftDeductions": float(deduction_shifts),
+        }
+        for day in days_detail:
+            reason = late_reasons.get(date.fromisoformat(day["date"]))
+            day["isLate"] = reason is not None
+            day["lateReason"] = reason
 
     salary_per_shift = emp.salary_per_shift
     gross_amount = _d2(total_shifts * salary_per_shift)
 
     # PF / EF for production -either salary-range rules (when enabled) or flat rates
-    ps = PayrollSettings.get()
     monthly_equiv = _d2(gross_amount * 2)  # biweekly * 2 = monthly estimate
 
     matched_rule = None
@@ -744,16 +813,23 @@ def _generate_production_payroll(emp: Employee, month: int, year: int, week_numb
         applied_pf_rate = Decimal("0")
         applied_ef_rate = Decimal("0")
 
+    # Advance-repayment lookups stay month/year-keyed (that schedule is
+    # itself a monthly concept) -a period is attributed to the month it
+    # ENDS in. If a company's period frequency ever produces two periods
+    # ending in the same month, the second one simply finds nothing left
+    # pending (the first already claimed it via _mark_repayments_processed).
+    month, year = period_end.month, period_end.year
     advance_total, advance_details = _pending_advance_repayments(emp, month, year)
 
-    total_deductions = _d2(pf_deduction + esi_deduction + advance_total)
+    total_deductions = _d2(pf_deduction + esi_deduction + advance_total + late_penalty)
     net_salary = _d2(gross_amount - total_deductions)
 
     total_days = (date_to - date_from).days + 1
 
     breakdown = {
         "type": "production",
-        "weekNumber": week_number,
+        "periodStart": period_start.isoformat(),
+        "periodEnd": period_end.isoformat(),
         "dateFrom": date_from.isoformat(),
         "dateTo": date_to.isoformat(),
         "salaryPerShift": float(salary_per_shift),
@@ -787,15 +863,18 @@ def _generate_production_payroll(emp: Employee, month: int, year: int, week_numb
             ),
             "advances": float(advance_total),
             "advanceDetails": advance_details,
+            "lateShiftPenalty": float(late_penalty) if late_summary is not None else None,
+            "lateSummary": late_summary,
             "total": float(total_deductions),
         },
         "netSalary": float(net_salary),
     }
 
     payroll, _ = Payroll.objects.update_or_create(
-        employee=emp, month=month, year=year, week_number=week_number,
+        employee=emp, period_start=period_start, period_end=period_end,
         defaults=dict(
             salary_mode="shift",
+            month=month, year=year, week_number=None,
             total_working_days=total_days,
             present_days=total_shifts,
             absent_days=Decimal(str(days_absent)),
@@ -809,16 +888,17 @@ def _generate_production_payroll(emp: Employee, month: int, year: int, week_numb
             final_salary=net_salary,
             status="pending",
             notes=(
-                f"Production week {week_number} ({date_from} to {date_to}): "
+                f"Production period ({date_from} to {date_to}): "
                 f"{total_shifts} shifts x Rs{salary_per_shift} = Rs{gross_amount}."
             ),
         ),
     )
 
-    slip_number = f"SS/{emp.employee_code}/{year}/{str(month).zfill(2)}/W{week_number}"
+    slip_number = f"SS/{emp.employee_code}/{period_start.isoformat()}_{period_end.isoformat()}"
     slip, _ = SalarySlip.objects.update_or_create(
-        employee=emp, month=month, year=year, week_number=week_number,
+        employee=emp, period_start=period_start, period_end=period_end,
         defaults=dict(
+            month=month, year=year, week_number=None,
             payroll_run=None,
             slip_number=slip_number,
             basic=gross_amount,
@@ -906,6 +986,8 @@ def _payroll_json(p: Payroll, employee_name: str | None = None) -> dict:
         "month": p.month,
         "year": p.year,
         "weekNumber": p.week_number,
+        "periodStart": p.period_start.isoformat() if p.period_start else None,
+        "periodEnd": p.period_end.isoformat() if p.period_end else None,
         "totalWorkingDays": p.total_working_days,
         "presentDays": float(p.present_days),
         "absentDays": float(p.absent_days),
@@ -1155,20 +1237,21 @@ def _dry_run_skip_reason(fn, *args) -> str | None:
 @require_hr
 def payroll_skip_check(request: Request) -> Response:
     """
-    GET /api/payroll/skip-check?month=&year=&runType=monthly|biweekly&weekNumber=
-    Read-only preview of exactly which active employees Generate Payroll
-    would currently skip, and why. Runs the exact same engine functions
-    generate_payroll uses, each inside its own savepoint that's always
-    rolled back -so this can be called any time, as often as needed,
-    without ever writing to the database. This is what powers the
+    GET /api/payroll/skip-check?month=&year=
+    Read-only preview of exactly which active STAFF employees Generate
+    Payroll would currently skip, and why. Runs the exact same engine
+    function generate_payroll uses, each inside its own savepoint that's
+    always rolled back -so this can be called any time, as often as
+    needed, without ever writing to the database. This is what powers the
     "Skipped Employees" view on the Payroll page -unlike the transient
     post-generation toast, it works whenever HR wants to check, not only
     immediately after a run.
+
+    Staff only -see production_payroll_views.py::production_skip_check
+    for the Production equivalent (period-based, not month/year-based).
     """
     month = request.query_params.get("month")
     year = request.query_params.get("year")
-    run_type = request.query_params.get("runType", "monthly")
-    week_number = request.query_params.get("weekNumber")
 
     if not month or not year:
         return _error("month and year are required")
@@ -1177,24 +1260,16 @@ def payroll_skip_check(request: Request) -> Response:
     except ValueError:
         return _error("month and year must be integers")
 
-    employment_type = (
-        Employee.EMPLOYMENT_TYPE_STAFF if run_type == "monthly"
-        else Employee.EMPLOYMENT_TYPE_PRODUCTION
-    )
     employees = list(
         scope_to_branch(Employee.objects, request)
-        .filter(status="active", employment_type=employment_type)
+        .filter(status="active", employment_type=Employee.EMPLOYMENT_TYPE_STAFF)
         .order_by("first_name", "last_name")
     )
 
     skipped = []
     for emp in employees:
         emp_name = f"{emp.first_name} {emp.last_name}".strip()
-        if run_type == "monthly":
-            reason = _dry_run_skip_reason(_generate_staff_payroll, emp, month, year)
-        else:
-            wk = int(week_number) if week_number else 1
-            reason = _dry_run_skip_reason(_generate_production_payroll, emp, month, year, wk)
+        reason = _dry_run_skip_reason(_generate_staff_payroll, emp, month, year)
         if reason:
             skipped.append({
                 "employeeId": emp.id,
@@ -1218,20 +1293,17 @@ def payroll_skip_check(request: Request) -> Response:
 @require_hr
 def generate_payroll(request: Request) -> Response:
     """
-    Generate payrolls for all active employees.
+    Generate monthly payroll for all active STAFF employees.
 
-    Body:
-      { month, year, runType: "monthly"|"biweekly", weekNumber: 1|2 }
+    Body: { month, year }
 
-    runType="monthly"  → generates staff (monthly) only
-    runType="biweekly" → generates production (session-based) only, for the given weekNumber
-    If runType is omitted, generates BOTH in one call (staff monthly + production week 1 and 2).
+    Staff only -see production_payroll_views.py::production_generate_payroll
+    for Production, which is period-based (Settings → Payroll → Production)
+    rather than month/year-based and lives on its own dedicated page.
     """
     data = request.data
     month = data.get("month")
     year = data.get("year")
-    run_type = data.get("runType", "all")
-    week_number = data.get("weekNumber")
 
     if not month or not year:
         return _error("month and year are required")
@@ -1240,12 +1312,10 @@ def generate_payroll(request: Request) -> Response:
     except ValueError:
         return _error("month and year must be integers")
 
-    if run_type == "biweekly":
-        if not week_number or int(week_number) not in (1, 2):
-            return _error("weekNumber (1 or 2) is required for biweekly run")
-        week_number = int(week_number)
-
-    employees = list(scope_to_branch(Employee.objects, request).filter(status="active"))
+    employees = list(
+        scope_to_branch(Employee.objects, request)
+        .filter(status="active", employment_type=Employee.EMPLOYMENT_TYPE_STAFF)
+    )
     generated = []
     skipped = []
 
@@ -1256,16 +1326,8 @@ def generate_payroll(request: Request) -> Response:
         emp_name = f"{emp.first_name} {emp.last_name}"
         before_count = len(generated)
         try:
-            if emp.employment_type == "staff" and run_type in ("monthly", "all"):
-                result = _generate_staff_payroll(emp, month, year)
-                generated.append(_payroll_json(result["payroll"], emp_name))
-
-            elif emp.employment_type == "production" and run_type in ("biweekly", "all"):
-                wk = week_number if run_type == "biweekly" else None
-                weeks_to_run = [wk] if wk else [1, 2]
-                for wk in weeks_to_run:
-                    result = _generate_production_payroll(emp, month, year, wk)
-                    generated.append(_payroll_json(result["payroll"], emp_name))
+            result = _generate_staff_payroll(emp, month, year)
+            generated.append(_payroll_json(result["payroll"], emp_name))
         except PayrollSkip as e:
             skipped.append({"employeeId": emp.id, "name": emp_name, "reason": str(e)})
         except Exception as e:
@@ -1276,7 +1338,7 @@ def generate_payroll(request: Request) -> Response:
 
     from .audit_utils import log_action as _log
     _log(request, "create", "payroll", description=(
-        f"Generated payroll {month}/{year} [{run_type}] -"
+        f"Generated staff payroll {month}/{year} -"
         f"{len(generated)} generated, {len(skipped)} skipped"
     ))
     return Response({
@@ -1335,9 +1397,16 @@ def payroll_breakdown(request: Request, pk: int) -> Response:
     if not p:
         return _error("Not found", 404)
 
-    slip = SalarySlip.objects.filter(
-        employee=p.employee, month=p.month, year=p.year, week_number=p.week_number
-    ).first()
+    if p.period_start:
+        # New-style, configurable-period production row -period_start/end
+        # is the identity, not month/year/week_number (week_number is null).
+        slip = SalarySlip.objects.filter(
+            employee=p.employee, period_start=p.period_start, period_end=p.period_end
+        ).first()
+    else:
+        slip = SalarySlip.objects.filter(
+            employee=p.employee, month=p.month, year=p.year, week_number=p.week_number
+        ).first()
 
     emp = p.employee
     emp_info = {
@@ -1358,6 +1427,8 @@ def payroll_breakdown(request: Request, pk: int) -> Response:
         "month": p.month,
         "year": p.year,
         "weekNumber": p.week_number,
+        "periodStart": p.period_start.isoformat() if p.period_start else None,
+        "periodEnd": p.period_end.isoformat() if p.period_end else None,
         "salaryMode": p.salary_mode,
         "status": p.status,
         "summary": {
@@ -1518,6 +1589,17 @@ def _ps_response(ps) -> dict:
         "payDay": ps.pay_day,
         "productionPayType": ps.production_pay_type,
         "defaultSalaryPerShift": float(ps.default_salary_per_shift),
+        # Production payroll period (Settings → Payroll → Production)
+        "prodPeriodFrequency": ps.prod_period_frequency,
+        "prodPeriodStyle": ps.prod_period_style,
+        "prodPeriodWeekdayAnchor": ps.prod_period_weekday_anchor,
+        "prodPeriodAnchorDate": ps.prod_period_anchor_date.isoformat() if ps.prod_period_anchor_date else None,
+        "prodPeriodCustomDays": ps.prod_period_custom_days,
+        # Production attendance mode + Late Detection (Settings → Payroll → Production)
+        "prodAttendanceMode": ps.prod_attendance_mode,
+        "prodLateDetectionEnabled": ps.prod_late_detection_enabled,
+        "prodLateFreeAllowance": ps.prod_late_free_allowance,
+        "prodLateDeductionSlabs": ps.prod_late_deduction_slabs or [],
         # Salary slip header & signature
         "slipCompanyName": ps.slip_company_name,
         "slipCompanyAddress": ps.slip_company_address,
@@ -1620,6 +1702,19 @@ FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "payDay": ("settings.payroll",),
     "productionPayType": ("settings.payroll",),
     "defaultSalaryPerShift": ("settings.payroll",),
+    # Production payroll period is its own Settings tab -see the note on
+    # settings.late_detection above for why this gets a separate group:
+    # HR can be given the flat Payroll rates without the power to change
+    # when/how Production payroll periods are cut.
+    "prodPeriodFrequency": ("settings.production_payroll",),
+    "prodPeriodStyle": ("settings.production_payroll",),
+    "prodPeriodWeekdayAnchor": ("settings.production_payroll",),
+    "prodPeriodAnchorDate": ("settings.production_payroll",),
+    "prodPeriodCustomDays": ("settings.production_payroll",),
+    "prodAttendanceMode": ("settings.production_payroll",),
+    "prodLateDetectionEnabled": ("settings.production_payroll",),
+    "prodLateFreeAllowance": ("settings.production_payroll",),
+    "prodLateDeductionSlabs": ("settings.production_payroll",),
     "prodPfEfEnabled": ("settings.payroll",),
     "prodPfEfRules": ("settings.payroll",),
     "staffPayrollRulesEnabled": ("settings.payroll",),
@@ -1702,6 +1797,13 @@ def payroll_settings_view(request: Request) -> Response:
         "payDay": ("pay_day", int),
         "productionPayType": ("production_pay_type", str),
         "defaultSalaryPerShift": ("default_salary_per_shift", Decimal),
+        "prodPeriodFrequency": ("prod_period_frequency", str),
+        "prodPeriodStyle": ("prod_period_style", str),
+        "prodPeriodWeekdayAnchor": ("prod_period_weekday_anchor", str),
+        "prodPeriodAnchorDate": ("prod_period_anchor_date", date.fromisoformat),
+        "prodPeriodCustomDays": ("prod_period_custom_days", int),
+        "prodAttendanceMode": ("prod_attendance_mode", str),
+        "prodLateFreeAllowance": ("prod_late_free_allowance", int),
         "slipCompanyName": ("slip_company_name", str),
         "slipCompanyAddress": ("slip_company_address", str),
         "minWageRate": ("min_wage_rate", Decimal),
@@ -1735,7 +1837,10 @@ def payroll_settings_view(request: Request) -> Response:
     }
     # Image fields may legitimately be set to null (user removed the logo /
     # signature) -str(None) would store the literal string "None".
-    _nullable_text = {"signature_image", "company_logo", "authorized_signature"}
+    _nullable_text = {
+        "signature_image", "company_logo", "authorized_signature",
+        "prod_period_weekday_anchor", "prod_period_anchor_date", "prod_period_custom_days",
+    }
     for key, (attr, cast) in field_map.items():
         if key in data:
             val = data[key]
@@ -1781,6 +1886,26 @@ def payroll_settings_view(request: Request) -> Response:
                 return _error("Without Permission slab values cannot be negative")
             cleaned[from_count] = shifts
         ps.without_permission_deduction_slabs = [
+            {"fromLates": k, "deductionShifts": cleaned[k]} for k in sorted(cleaned)
+        ]
+    if "prodLateDetectionEnabled" in data:
+        ps.prod_late_detection_enabled = bool(data["prodLateDetectionEnabled"])
+    if "prodLateDeductionSlabs" in data and isinstance(data["prodLateDeductionSlabs"], list):
+        # Same sanitize/sort/dedupe rules as lateDeductionSlabs above -this
+        # pool's rows drive real production payroll deductions too.
+        cleaned: dict[int, float] = {}
+        for row in data["prodLateDeductionSlabs"]:
+            if not isinstance(row, dict):
+                continue
+            try:
+                from_lates = int(row["fromLates"])
+                shifts = float(row["deductionShifts"])
+            except (KeyError, TypeError, ValueError):
+                return _error("Each Production Late slab needs a numeric fromLates and deductionShifts")
+            if from_lates < 0 or shifts < 0:
+                return _error("Production Late slab values cannot be negative")
+            cleaned[from_lates] = shifts
+        ps.prod_late_deduction_slabs = [
             {"fromLates": k, "deductionShifts": cleaned[k]} for k in sorted(cleaned)
         ]
     if "prodPfEfEnabled" in data:

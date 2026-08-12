@@ -1,9 +1,9 @@
-import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
+import { Switch, Route, Router as WouterRouter, useLocation, Redirect } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import ConnectivityOverlay from "@/components/ConnectivityOverlay";
-import { AuthProvider, useAuth, canViewPage } from "@/contexts/AuthContext";
+import { AuthProvider, useAuth, canViewRoute } from "@/contexts/AuthContext";
 import { moduleForPath } from "@/lib/permission-modules";
 import { ApiError } from "@/lib/api-client/custom-fetch";
 import { toast } from "@/hooks/use-toast";
@@ -36,7 +36,7 @@ import ManualPunchImport from "@/pages/hr/ManualPunchImport";
 import EmployeeDetail from "@/pages/hr/EmployeeDetail";
 import EditEmployee from "@/pages/hr/EditEmployee";
 import Leave from "@/pages/hr/Leave";
-import Salary from "@/pages/hr/Salary";
+import StaffPayroll from "@/pages/hr/StaffPayroll";
 import HrNotifications from "@/pages/hr/Notifications";
 import Interviews from "@/pages/hr/Interviews";
 import RecruitmentDashboard from "@/pages/hr/recruitment/RecruitmentDashboard";
@@ -53,7 +53,7 @@ import Branches from "@/pages/hr/Branches";
 import ManageShift from "@/pages/hr/ManageShift";
 import LeaveHoliday from "@/pages/hr/LeaveHoliday";
 import ApprovedRequests from "@/pages/hr/ApprovedRequests";
-import PayrollFull from "@/pages/hr/PayrollFull";
+import ProductionPayroll from "@/pages/hr/ProductionPayroll";
 import Settlement from "@/pages/hr/Settlement";
 import Reports from "@/pages/hr/Reports";
 import UserManagement from "@/pages/hr/UserManagement";
@@ -61,7 +61,6 @@ import AccountManagement from "@/pages/hr/AccountManagement";
 import ActivityLogs from "@/pages/hr/ActivityLogs";
 import LoginDevices from "@/pages/hr/LoginDevices";
 import Settings from "@/pages/hr/Settings";
-import SalarySlip from "@/pages/hr/SalarySlip";
 import Promotion from "@/pages/hr/Promotion";
 import Increment from "@/pages/hr/Increment";
 import Bonus from "@/pages/hr/Bonus";
@@ -171,7 +170,7 @@ function ProtectedRoute({
   // this just avoids flashing a broken page if a restricted user hits the
   // URL directly (e.g. from a stale bookmark after their access changed).
   const moduleKey = moduleForPath(location);
-  if (moduleKey && !canViewPage(user, moduleKey)) {
+  if (!canViewRoute(user, location, moduleKey)) {
     navigate("/hr/dashboard");
     return null;
   }
@@ -276,10 +275,13 @@ function Router() {
         {() => <ProtectedRoute component={ApprovedRequests} allowedRoles={["hr"]} />}
       </Route>
       <Route path="/hr/payroll">
-        {() => <ProtectedRoute component={PayrollFull} allowedRoles={["hr"]} />}
+        {() => <ProtectedRoute component={StaffPayroll} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/production-payroll">
+        {() => <ProtectedRoute component={ProductionPayroll} allowedRoles={["hr"]} />}
       </Route>
       <Route path="/hr/salary">
-        {() => <ProtectedRoute component={Salary} allowedRoles={["hr"]} />}
+        {() => <Redirect to="/hr/payroll" />}
       </Route>
       <Route path="/hr/settlement">
         {() => <ProtectedRoute component={Settlement} allowedRoles={["hr"]} />}
@@ -303,7 +305,7 @@ function Router() {
         {() => <ProtectedRoute component={Settings} allowedRoles={["hr"]} />}
       </Route>
       <Route path="/hr/salary-slip">
-        {() => <ProtectedRoute component={SalarySlip} allowedRoles={["hr"]} />}
+        {() => <Redirect to="/hr/payroll" />}
       </Route>
       <Route path="/hr/notifications">
         {() => <ProtectedRoute component={HrNotifications} allowedRoles={["hr"]} />}

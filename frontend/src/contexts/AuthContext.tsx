@@ -3,7 +3,7 @@ import { useGetMe, getGetMeQueryKey } from "@/lib/api-client";
 import { customFetch } from "@/lib/api-client/custom-fetch";
 import { useQueryClient } from "@tanstack/react-query";
 import type { PermissionLevel } from "@/lib/api-client/custom-hooks";
-import { resolvePermission, resolvePermissionOrChildren } from "@/lib/permission-modules";
+import { resolvePermission, resolvePermissionOrChildren, ROUTE_OR_MODULES } from "@/lib/permission-modules";
 
 type Role = "hr" | "employee";
 
@@ -46,6 +46,31 @@ export function canViewPage(user: UserInfo | null, moduleKey: string): boolean {
   if (user.isSuperAdmin) return true;
   const level = resolvePermissionOrChildren(user.permissions, moduleKey);
   return level === "view" || level === "edit";
+}
+
+// Route-level reachability for a page whose sub-tabs each carry their own
+// unrelated flat module key (see ROUTE_OR_MODULES -e.g. Staff Payroll's
+// Payroll/Salary/Payslip tabs, still gated by "payroll"/"salary"/
+// "salary_slip"). Reachable if any of those keys is visible, same spirit as
+// canViewPage but for siblings instead of MODULE_TREE parent+children.
+export function canViewRoute(user: UserInfo | null, path: string, moduleKey: string | null): boolean {
+  const orKeys = ROUTE_OR_MODULES[path];
+  if (orKeys) return orKeys.some((k) => canView(user, k));
+  return moduleKey ? canViewPage(user, moduleKey) : true;
+}
+
+// Like permissionLevel(...) === "view", but for a ROUTE_OR_MODULES page: the
+// page-wide view-only banner/lock should only fire if none of the sub-tab
+// keys grant edit (an editable sub-tab means the page-wide lock would be
+// wrong for that tab -per-tab locking, e.g. StaffPayroll's own tabLevel
+// check, is what actually governs each tab in that case).
+export function isRouteViewOnly(user: UserInfo | null, path: string, moduleKey: string | null): boolean {
+  const orKeys = ROUTE_OR_MODULES[path];
+  if (orKeys) {
+    const levels = orKeys.map((k) => permissionLevel(user, k));
+    return !levels.includes("edit") && levels.includes("view");
+  }
+  return moduleKey ? permissionLevel(user, moduleKey) === "view" : false;
 }
 
 interface AuthContextType {

@@ -15,7 +15,8 @@ from .branch_scope import get_branch_scope, scope_to_branch
 from .geo_attendance_views import source_label
 from .models import (
     Attendance, AttendanceLog, Employee, EmployeePermission, EmployeeShiftAssignment,
-    LeaveRequest, DailyShiftLog, MonthlyShiftSummary,
+    LeaveRequest, DailyShiftLog, MonthlyShiftSummary, Holiday,
+    PayrollSettings, ProductionShiftConfig, ProductionShiftSegment,
 )
 
 logger = logging.getLogger(__name__)
@@ -188,6 +189,138 @@ def attendance_summary(request: Request) -> Response:
             "late": y_late,
             "onLeave": len(y_leave),
         },
+    })
+
+
+# ── Company-wide "Today's Overview" (Attendance Search page) ────────────────
+
+@api_view(["GET"])
+@require_hr
+def attendance_company_summary(request: Request) -> Response:
+    """Today's company-wide attendance breakdown (Staff + Production
+    combined) for the Attendance Search page's overview cards. Present/
+    Half-Shift/Shift-units require the real compute_day_record engine (the
+    cheap raw-punch helpers above have no Half-Shift or shift-unit concept),
+    so this reuses it per active employee -same figures the page's own
+    per-employee search already shows, not a separate approximation.
+
+    Everything compute_day_record() would otherwise look up one employee at
+    a time (punches, shift assignment, night-shift relaxation state,
+    approved permission, existing day record) is bulk-fetched here ONCE
+    across the whole roster and handed down per employee via `prefetch`
+    -the same prefetch-dict shape compute_month_records() already uses for
+    one employee across many days, just sliced the other way (many
+    employees, one day). Calling compute_day_record with no prefetch at all
+    across a ~230-employee roster measured at ~57s per request; this keeps
+    it to a small, fixed number of bulk queries regardless of roster size."""
+    from decimal import Decimal
+    from .attendance_final import compute_day_record
+    from .models import AttendanceDayRecord, EmployeeShiftAssignment, NightShiftRelaxation, NightShiftRule
+    from .night_shift import ensure_default_rules
+
+    d = _today()
+    branch_id = get_branch_scope(request)
+
+    employees_qs = Employee.objects.filter(status="active")
+    if branch_id is not None:
+        employees_qs = employees_qs.filter(branch_id=branch_id)
+    employees = list(employees_qs)
+    emp_ids = [e.id for e in employees]
+
+    ps = PayrollSettings.get()
+    prod_config = ProductionShiftConfig.get()
+    prod_segments = list(ProductionShiftSegment.objects.filter(is_active=True))
+    leave_ids_today = _leave_ids(d)
+    is_holiday_today = Holiday.objects.filter(date=d).exists()
+
+    yesterday = d - timedelta(days=1)
+    logs_by_emp_date: dict[int, dict] = {}
+    for log in AttendanceLog.objects.filter(
+        employee_id__in=emp_ids, date__gte=yesterday, date__lte=d,
+    ).order_by("punch_time"):
+        logs_by_emp_date.setdefault(log.employee_id, {}).setdefault(log.date, []).append(log)
+
+    assignments_by_emp: dict[int, list] = {}
+    for a in (
+        EmployeeShiftAssignment.objects.filter(employee_id__in=emp_ids, effective_from__lte=d)
+        .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=yesterday))
+        .select_related("shift")
+    ):
+        assignments_by_emp.setdefault(a.employee_id, []).append(a)
+
+    existing_records_by_emp: dict[int, dict] = {}
+    for r in AttendanceDayRecord.objects.filter(employee_id__in=emp_ids, date=d):
+        existing_records_by_emp.setdefault(r.employee_id, {})[r.date] = r
+
+    manual_present_by_emp: dict[int, set] = {}
+    for emp_id in Attendance.objects.filter(
+        employee_id__in=emp_ids, date=d.isoformat(), present=True,
+    ).values_list("employee_id", flat=True):
+        manual_present_by_emp.setdefault(emp_id, set()).add(d)
+
+    ensure_default_rules()
+    night_rules = list(NightShiftRule.objects.filter(is_active=True))
+
+    relaxations_by_emp: dict[int, dict] = {}
+    for r in NightShiftRelaxation.objects.filter(employee_id__in=emp_ids, relaxation_date=d):
+        relaxations_by_emp.setdefault(r.employee_id, {})[r.relaxation_date] = r
+
+    permissions_by_emp: dict[int, dict] = {}
+    for p in EmployeePermission.objects.filter(
+        employee_id__in=emp_ids, date=d, status="approved",
+    ).order_by("updated_at"):
+        permissions_by_emp.setdefault(p.employee_id, {})[p.date] = p
+
+    present = half_shift = absent = on_leave = late = 0
+    total_shifts_earned = Decimal("0")
+    for emp in employees:
+        is_production = emp.employment_type == "production"
+        emp_logs_by_date = logs_by_emp_date.get(emp.id, {})
+        prefetch = {
+            "assignments": assignments_by_emp.get(emp.id, []),
+            "existing_day_records": existing_records_by_emp.get(emp.id, {}),
+            "manual_attendance_dates": manual_present_by_emp.get(emp.id, set()),
+            "night_logs_by_date": emp_logs_by_date,
+            "night_rules": night_rules,
+            "existing_relaxations": relaxations_by_emp.get(emp.id, {}),
+            "approved_permissions_by_date": permissions_by_emp.get(emp.id, {}),
+        }
+        rec = compute_day_record(
+            emp, d,
+            punch_logs=emp_logs_by_date.get(d, []),
+            settings=ps,
+            leave_dates={d} if emp.id in leave_ids_today else set(),
+            holiday_dates={d} if is_holiday_today else set(),
+            prod_config=prod_config if is_production else None,
+            prod_segments=prod_segments if is_production else None,
+            prefetch=prefetch,
+        )
+        if rec.status == "present":
+            present += 1
+        elif rec.status == "half_shift":
+            half_shift += 1
+        elif rec.status == "on_leave":
+            on_leave += 1
+        elif rec.status == "absent":
+            absent += 1
+        if rec.is_late:
+            late += 1
+        total_shifts_earned += rec.shifts_earned or Decimal("0")
+
+    permission_today = EmployeePermission.objects.filter(
+        date=d, status="approved", employee_id__in=emp_ids
+    ).count()
+
+    return Response({
+        "date": str(d),
+        "totalEmployees": len(employees),
+        "present": present,
+        "halfShift": half_shift,
+        "absent": absent,
+        "onLeave": on_leave,
+        "late": late,
+        "permission": permission_today,
+        "totalShiftsEarned": float(total_shifts_earned),
     })
 
 

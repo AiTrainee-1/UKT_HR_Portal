@@ -3,15 +3,16 @@ import { CheckCircle2, Loader2, X } from "lucide-react";
 import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
 
 // Floating indicator that keeps payroll generation progress visible while
-// the user browses other pages. Hidden on the payroll/salary pages
-// themselves, since those already render the full inline
+// the user browses other pages. Hidden on the Staff Payroll page
+// (/hr/payroll, its Payroll/Salary/Payslip sub-tabs) and the Production
+// Payroll page, since those already render the full inline
 // PayrollGenerationPipeline for the same shared state -mirrors
 // GlobalSyncBanner's role for the biometric sync flow.
 export default function GlobalPayrollBanner() {
   const [pathname] = useLocation();
   const { showPipeline, isGenerating, progress, dismiss } = usePayrollGeneration();
 
-  if (!showPipeline || pathname.startsWith("/hr/payroll") || pathname.startsWith("/hr/salary")) return null;
+  if (!showPipeline || pathname.startsWith("/hr/payroll") || pathname.startsWith("/hr/production-payroll")) return null;
 
   const total = progress?.total ?? 0;
   const completed = progress?.completed ?? 0;

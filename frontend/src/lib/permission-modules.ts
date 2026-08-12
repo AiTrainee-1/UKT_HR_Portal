@@ -38,6 +38,7 @@ export const MODULE_TREE: ModuleNode[] = [
     ],
   },
   { key: "payroll", label: "Payroll" },
+  { key: "production_payroll", label: "Production Payroll" },
   { key: "salary", label: "Salary" },
   { key: "salary_slip", label: "Salary Slip" },
   { key: "settlement", label: "Settlement" },
@@ -57,6 +58,7 @@ export const MODULE_TREE: ModuleNode[] = [
       { key: "settings.devices", label: "Devices" },
       { key: "settings.documents", label: "Company Documents" },
       { key: "settings.payroll", label: "Payroll" },
+      { key: "settings.production_payroll", label: "Production Payroll" },
       { key: "settings.salary_slip", label: "Salary Slip" },
       { key: "settings.smtp", label: "SMTP / Email" },
       { key: "settings.backup", label: "Backup" },
@@ -144,6 +146,7 @@ export const ROUTE_MODULE_MAP: Record<string, string> = {
   "/hr/interviews": "recruitment.interviews",
   "/hr/recruitment": "recruitment",
   "/hr/payroll": "payroll",
+  "/hr/production-payroll": "production_payroll",
   "/hr/salary": "salary",
   "/hr/salary-slip": "salary_slip",
   "/hr/settlement": "settlement",
@@ -156,6 +159,18 @@ export const ROUTE_MODULE_MAP: Record<string, string> = {
   "/hr/night-shift": "night_shift",
   "/hr/geo-attendance": "geo_attendance",
   "/hr/settings": "settings",
+};
+
+// Routes where several independently-permissioned flat module keys share one
+// page (e.g. Staff Payroll's Payroll/Salary/Payslip sub-tabs, still gated by
+// their original "payroll"/"salary"/"salary_slip" keys). Page-level
+// reachability and the view-only banner should be the most permissive level
+// across all of them, not just moduleForPath's single best-prefix match.
+// Unlike resolvePermissionOrChildren (parent+MODULE_TREE-children, e.g.
+// Settings), these are unrelated sibling top-level keys with no tree
+// relationship, so they need their own OR-list here instead.
+export const ROUTE_OR_MODULES: Record<string, string[]> = {
+  "/hr/payroll": ["payroll", "salary", "salary_slip"],
 };
 
 export function moduleForPath(path: string): string | null {

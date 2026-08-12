@@ -83,6 +83,7 @@ from .attendance_views import (
     attendance_search, attendance_search_range,
     attendance_late_summary, employee_shift_monthly_stats, attendance_sync_status,
     mobile_home_summary, attendance_live_feed,
+    attendance_company_summary,
 )
 from .growth_views import (
     employee_monthly_attendance, attendance_day_override, attendance_override_requests,
@@ -104,6 +105,10 @@ from .auto_sync_views import auto_sync_rules, auto_sync_rule_detail
 from .night_shift_views import (
     night_shift_dashboard, night_shift_recompute,
     night_shift_rules, night_shift_rule_detail,
+)
+from .production_payroll_views import (
+    production_next_period, production_generate_payroll,
+    production_skip_check, production_payroll_list,
 )
 from .payroll_views import (
     session_configs, session_config_detail,
@@ -249,6 +254,7 @@ urlpatterns = [
     # ── Attendance ──────────────────────────────────────────────────────────
     path("attendance", views.attendance),
     path("attendance/summary", attendance_summary),
+    path("attendance/company-summary", attendance_company_summary),
     path("attendance/daily", attendance_daily),
     path("dashboard/mobile-home-summary", mobile_home_summary),
     path("attendance/live-feed", attendance_live_feed),
@@ -347,6 +353,10 @@ urlpatterns = [
     path("payroll/skip-check", payroll_skip_check),
     path("payroll/generate", generate_payroll),
     path("payroll/generate-progress", generate_payroll_progress),
+    path("payroll/production", production_payroll_list),
+    path("payroll/production/next-period", production_next_period),
+    path("payroll/production/generate", production_generate_payroll),
+    path("payroll/production/skip-check", production_skip_check),
     path("payroll/<int:pk>/breakdown", payroll_breakdown),
     path("payroll/<int:pk>", payroll_detail),
 

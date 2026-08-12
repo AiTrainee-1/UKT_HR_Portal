@@ -1,14 +1,18 @@
 import { useEffect, useState } from "react";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { SpeederLoader } from "@/components/ui/SpeederLoader";
 import {
-  useAttendanceSearch, useAttendanceSearchRange,
+  useAttendanceSearch, useAttendanceSearchRange, useAttendanceCompanySummary,
   type AttendanceSearchPunch, type AttendanceSearchDay, type AttendanceSearchResult,
 } from "@/lib/api-client/custom-hooks";
-import { Search, UserSearch, Clock, Sun, ArrowRightLeft, CalendarDays, CalendarRange, Users } from "lucide-react";
+import {
+  Search, UserSearch, Clock, Sun, ArrowRightLeft, CalendarDays, CalendarRange, Users,
+  CheckCircle2, AlertCircle, CalendarOff, AlertTriangle, ShieldCheck, Layers,
+} from "lucide-react";
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
@@ -227,6 +231,8 @@ export default function AttendancePunchSearch() {
     selectedEmployeeId, startDate, endDate, isRangeMode,
   );
 
+  const { data: companySummary, isLoading: companySummaryLoading } = useAttendanceCompanySummary();
+
   return (
     <HrLayout>
       <div className="space-y-5">
@@ -236,6 +242,42 @@ export default function AttendancePunchSearch() {
             Look up any employee by Employee Code or Name to see their shift, punch timings, late marks, leave and permission records -for a day, week, month, or custom date range.
           </p>
         </div>
+
+        {/* Today's Overview -company-wide, Staff + Production combined, independent of the search below */}
+        {companySummaryLoading ? (
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+            {Array.from({ length: 7 }).map((_, i) => <Skeleton key={i} className="h-16 w-full rounded-xl" />)}
+          </div>
+        ) : companySummary ? (
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+            {[
+              { label: "Total Employees", value: companySummary.totalEmployees, color: "text-gray-700", icon: Users, bg: "bg-gray-100" },
+              { label: "Present", value: companySummary.present, color: "text-emerald-700", icon: CheckCircle2, bg: "bg-emerald-50" },
+              { label: "Half Shift", value: companySummary.halfShift, color: "text-amber-700", icon: Clock, bg: "bg-amber-50" },
+              { label: "Absent", value: companySummary.absent, color: "text-red-600", icon: AlertCircle, bg: "bg-red-50" },
+              { label: "Leave", value: companySummary.onLeave, color: "text-blue-700", icon: CalendarOff, bg: "bg-blue-50" },
+              { label: "Late", value: companySummary.late, color: "text-orange-600", icon: AlertTriangle, bg: "bg-orange-50" },
+              { label: "Permission", value: companySummary.permission, color: "text-purple-700", icon: ShieldCheck, bg: "bg-purple-50" },
+            ].map(s => (
+              <Card key={s.label} className="border-0 shadow-sm">
+                <CardContent className="p-3 flex items-center gap-2.5">
+                  <div className={`w-8 h-8 rounded-lg ${s.bg} flex items-center justify-center shrink-0`}>
+                    <s.icon size={15} className={s.color} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[10px] text-muted-foreground truncate">{s.label}</p>
+                    <p className={`text-sm font-black ${s.color}`}>{s.value}</p>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        ) : null}
+        {!companySummaryLoading && companySummary && (
+          <p className="text-[11px] text-gray-400 -mt-2 flex items-center gap-1.5">
+            <Layers size={11} /> Today ({companySummary.date}) · {companySummary.totalShiftsEarned} total shifts earned across all employees.
+          </p>
+        )}
 
         <Card className="border-0 shadow-sm">
           <CardContent className="p-4 flex flex-col gap-3">

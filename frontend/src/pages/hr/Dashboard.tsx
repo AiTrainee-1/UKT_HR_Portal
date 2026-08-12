@@ -31,7 +31,7 @@ import {
   ChevronRight, Clock, Building2, Gift, Activity,
   CheckCircle2, ClipboardList, Wallet, ArrowUp, ArrowDown, RefreshCw,
   MapPinned, Navigation, Radar, ShieldCheck, Camera,
-  Briefcase, UserPlus, FileCheck, ScanSearch, UserMinus,
+  Briefcase, UserPlus, FileCheck, ScanSearch, UserMinus, Factory,
 } from "lucide-react";
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -276,6 +276,7 @@ export default function HrDashboard() {
   const employeesOnDutyToday   = (summary as any)?.employeesOnDutyToday ?? 0;
   const pendingPunchVerifications = (summary as any)?.pendingPunchVerifications ?? 0;
   const liveTrackingEnabled    = (summary as any)?.liveTrackingEnabledCount ?? 0;
+  const productionPayrollPending = (summary as any)?.productionPayrollPending ?? 0;
 
   const headerDate = now.toLocaleDateString("en-IN", {
     weekday: "long", day: "numeric", month: "long", year: "numeric",
@@ -663,6 +664,7 @@ export default function HrDashboard() {
                   { label: "Missing Punch",        value: missingPunchPending, color: "#0ea5e9", icon: UserMinus,  path: "/hr/missing-punch" },
                   { label: "Casual Leave Requests", value: casualLeavePending, color: "#16a34a", icon: Calendar,   path: "/hr/casual-leave" },
                   { label: "On-Duty Approvals",    value: onDutyPending,    color: "#d97706", icon: MapPinned,     path: "/hr/geo-attendance" },
+                  { label: "Production Payroll Pending", value: productionPayrollPending, color: "#b45309", icon: Factory, path: "/hr/production-payroll" },
                   { label: "Open Advances",        value: openAdvances,     color: "#ef4444", icon: CreditCard,    path: "/hr/settlement" },
                   { label: "Notifications",        value: (summary as any)?.unreadNotifications ?? 0, color: "#006496", icon: AlertCircle, path: "/hr/notifications" },
                 ].map(({ label, value, color, icon: Icon, path }) => (

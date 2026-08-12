@@ -25,12 +25,20 @@ type GeneratePayrollResult = {
   skippedDetails: { employeeId: number; name: string; reason: string }[];
 };
 
+type GenerateProductionPayrollParams = { periodStart: string; periodEnd: string } | undefined;
+
+type GenerateProductionPayrollResult = GeneratePayrollResult & {
+  periodStart: string;
+  periodEnd: string;
+};
+
 interface PayrollGenerationState {
   isGenerating: boolean;
   showPipeline: boolean;
   progress: PayrollGenerateProgress | undefined;
   lastResult: GeneratePayrollResult | null;
   triggerGenerate: (params: GeneratePayrollParams) => Promise<GeneratePayrollResult | null>;
+  triggerGenerateProduction: (params?: GenerateProductionPayrollParams) => Promise<GenerateProductionPayrollResult | null>;
   dismiss: () => void;
 }
 
@@ -87,10 +95,46 @@ export function PayrollGenerationProvider({ children }: { children: ReactNode })
     }
   }, [toast, queryClient]);
 
+  const triggerGenerateProduction = useCallback(async (params?: GenerateProductionPayrollParams) => {
+    setIsGenerating(true);
+    setShowPipeline(true);
+    try {
+      const result = await customFetch<GenerateProductionPayrollResult>("/api/payroll/production/generate", {
+        method: "POST",
+        body: JSON.stringify(params ?? {}),
+      });
+      setIsGenerating(false);
+      setLastResult(result);
+      setTimeout(() => setShowPipeline(false), COMPLETION_LINGER_MS);
+
+      const skippedCount = result.skippedDetails?.length ?? 0;
+      toast({
+        title: `Production payroll generated -${result.generated} record(s) computed`,
+        description: skippedCount > 0
+          ? `${skippedCount} employee(s) skipped. Open Generate again to see reasons.`
+          : `${result.periodStart} – ${result.periodEnd} is ready.`,
+        variant: skippedCount > 0 ? "destructive" : "default",
+      });
+      queryClient.invalidateQueries({
+        predicate: (q) => typeof q.queryKey[0] === "string" && q.queryKey[0].startsWith("/api/payroll"),
+      });
+      return result;
+    } catch (err) {
+      setIsGenerating(false);
+      setTimeout(() => setShowPipeline(false), COMPLETION_LINGER_MS);
+      toast({
+        title: "Production payroll generation failed",
+        description: err instanceof Error ? err.message : "Could not reach the server",
+        variant: "destructive",
+      });
+      return null;
+    }
+  }, [toast, queryClient]);
+
   const dismiss = useCallback(() => setShowPipeline(false), []);
 
   return (
-    <PayrollGenerationCtx.Provider value={{ isGenerating, showPipeline, progress, lastResult, triggerGenerate, dismiss }}>
+    <PayrollGenerationCtx.Provider value={{ isGenerating, showPipeline, progress, lastResult, triggerGenerate, triggerGenerateProduction, dismiss }}>
       {children}
     </PayrollGenerationCtx.Provider>
   );

@@ -1721,6 +1721,9 @@ def hr_dashboard_summary(request: Request) -> Response:
         OnDutyPunchVerification.objects, request, field="employee__branch_id"
     ).filter(status=OnDutyPunchVerification.STATUS_PENDING).count()
     live_tracking_enabled = scoped_employees.filter(location_tracking_enabled=True, status="active").count()
+    production_payroll_pending = scope_to_branch(
+        Payroll.objects, request, field="employee__branch_id"
+    ).filter(salary_mode="shift", status="pending").count()
 
     return Response(
         {
@@ -1744,6 +1747,7 @@ def hr_dashboard_summary(request: Request) -> Response:
             "employeesOnDutyToday": employees_on_duty_today,
             "pendingPunchVerifications": pending_punch_verifications,
             "liveTrackingEnabledCount": live_tracking_enabled,
+            "productionPayrollPending": production_payroll_pending,
         }
     )
 

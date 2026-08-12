@@ -1,13 +1,13 @@
 import React, { useLayoutEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'wouter';
-import { useAuth, canView, canViewPage } from '@/contexts/AuthContext';
+import { useAuth, canView, canViewRoute } from '@/contexts/AuthContext';
 import { moduleForPath } from '@/lib/permission-modules';
 import { useListLeaveRequests, useListPermissions, useListResignations, useListAdvances, useListNotifications } from '@/lib/api-client';
 import { usePayrollSettings, useOnDutySessionsHR, useOnDutyPunchVerificationsHR } from '@/lib/api-client/custom-hooks';
 import {
-  LayoutDashboard, Users, Clock, Calendar, CheckCircle2, IndianRupee,
+  LayoutDashboard, Users, Clock, Calendar, CheckCircle2, IndianRupee, Factory,
   Wallet, BarChart3, Shield, Activity, Settings, FileText, LogOut,
-  ChevronRight, Search, X, Command, UserCheck, UserMinus, Banknote,
+  ChevronRight, Search, X, Command, UserCheck, UserMinus,
   CalendarCheck, Bell, Award, TrendingUp, Gift, CreditCard,
   CalendarHeart, MoonStar, MessageCircle, UserCog, FolderOpen, MonitorSmartphone,
 } from 'lucide-react';
@@ -82,9 +82,8 @@ const navGroups: NavGroupData[] = [
 {
     heading: 'Payroll',
     items: [
-      { path: '/hr/payroll', label: 'Payroll', icon: IndianRupee },
-      { path: '/hr/salary', label: 'Salary', icon: Banknote },
-      { path: '/hr/salary-slip', label: 'Salary Slip', icon: FileText },
+      { path: '/hr/payroll', label: 'Staff Payroll', icon: IndianRupee },
+      { path: '/hr/production-payroll', label: 'Production Payroll', icon: Factory },
       { path: '/hr/settlement', label: 'Settlement', icon: Wallet },
       { path: '/hr/reports', label: 'Reports', icon: BarChart3 },
     ],
@@ -610,12 +609,14 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
               if (item.path === '/hr/account-management') return !!user?.isSuperAdmin;
               if (item.children) return item.children.length > 0;
               const moduleKey = moduleForPath(item.path);
-              // canViewPage (not canView): a flat single-route item like
+              // canViewRoute (not canView): a flat single-route item like
               // Settings has no nav children but does have MODULE_TREE
               // children (its tabs) -reachable if any tab is visible even
-              // when the bare "settings" key itself is unset. See
-              // resolvePermissionOrChildren in permission-modules.ts.
-              return moduleKey ? canViewPage(user, moduleKey) : true;
+              // when the bare "settings" key itself is unset (see
+              // resolvePermissionOrChildren). Payroll is the same idea for
+              // unrelated sibling keys instead of tree children (see
+              // ROUTE_OR_MODULES) -reachable if Payroll/Salary/Payslip is.
+              return canViewRoute(user, item.path, moduleKey);
             });
 
           if (visibleItems.length === 0) return null;
