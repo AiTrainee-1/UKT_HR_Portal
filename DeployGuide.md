@@ -374,13 +374,13 @@ cd ..
 
 ## What went wrong in your session, and the rules that avoid it
 
-1. **Never use `Stop-Process` / kill python manually.** That's what created your confusion: killing the process out from under NSSM makes NSSM auto-restart it, so you end up with PIDs that don't match what you expect, and sometimes an orphan holding port 8000. Always use `.\nssm.exe restart UKTextilesDjango` (or `Restart-Service`) -nothing else.
+1. **Never use `Stop-Process` / kill python manually.** That's what created your confusion: killing the process out from under NSSM makes NSSM auto-restart it, so you end up with PIDs that don't match what you expect, and sometimes an orphan holding port 8000. Always use `.\nssm.exe restart UKTextilesDjango` (or `Restart-Service`) — nothing else.
 
-2. **You don't need to restart Nginx or the Tunnel** after a code deploy. Nginx only serves files and proxies -restart it only if you changed `nginx.conf`. The tunnel never needs restarting for deploys. Restarting everything each time just adds more moving parts to go wrong.
+2. **You don't need to restart Nginx or the Tunnel** after a code deploy. Nginx only serves files and proxies — restart it only if you changed `nginx.conf`. The tunnel never needs restarting for deploys. Restarting everything each time just adds more moving parts to go wrong.
 
-3. **Migrations are the step people forget.** If you pull code that expects a new column and never run `migrate`, the backend starts fine but errors on specific pages -which often gets misdiagnosed as a "deployment issue" and leads to the restart-everything spiral.
+3. **Migrations are the step people forget.** If you pull code that expects a new column and never run `migrate`, the backend starts fine but errors on specific pages — which often gets misdiagnosed as a "deployment issue" and leads to the restart-everything spiral.
 
-4. **The frontend must be rebuilt** (`npm run build`) after every pull that touches `frontend/` -Nginx serves the built files, not the source, so without a rebuild the browser keeps showing old UI against a new backend.
+4. **The frontend must be rebuilt** (`npm run build`) after every pull that touches `frontend/` — Nginx serves the built files, not the source, so without a rebuild the browser keeps showing old UI against a new backend.
 
 That's the whole process: `git pull` → pip install → migrate → npm build → nssm restart Django. If a page still misbehaves after that, check the service log (`.\nssm.exe` writes stdout/stderr wherever `AppStdout`/`AppStderr` point) instead of touching processes.
 
@@ -389,7 +389,7 @@ That's the whole process: `git pull` → pip install → migrate → npm build �
 
 
 
-Your script is right -the problem is that the restart at step 5 isn't actually replacing the process serving port 8000. Remember your earlier session: you killed python processes manually while NSSM was managing the service. That very likely left an **orphan python process that NSSM doesn't own** holding port 8000. When NSSM restarts "its" service, its new process can't bind port 8000 (already taken) and dies -while the old orphan, started from the old code, keeps answering requests. So you restart all day and nothing changes.
+Your script is right — the problem is that the restart at step 5 isn't actually replacing the process serving port 8000. Remember your earlier session: you killed python processes manually while NSSM was managing the service. That very likely left an **orphan python process that NSSM doesn't own** holding port 8000. When NSSM restarts "its" service, its new process can't bind port 8000 (already taken) and dies — while the old orphan, started from the old code, keeps answering requests. So you restart all day and nothing changes.
 
 Prove it with this on the company system:
 
