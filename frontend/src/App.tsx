@@ -13,6 +13,8 @@ import { PayrollGenerationProvider } from "@/contexts/PayrollGenerationContext";
 import GlobalPayrollBanner from "@/components/GlobalPayrollBanner";
 import { SalarySlipBulkProvider } from "@/contexts/SalarySlipBulkContext";
 import GlobalSalarySlipBulkBanner from "@/components/GlobalSalarySlipBulkBanner";
+import { WhatsAppBulkProvider } from "@/contexts/WhatsAppBulkContext";
+import GlobalWhatsAppBulkBanner from "@/components/GlobalWhatsAppBulkBanner";
 import { ResumeScreeningProvider } from "@/contexts/ResumeScreeningContext";
 import GlobalResumeScreeningBanner from "@/components/GlobalResumeScreeningBanner";
 import NotFound from "@/pages/not-found";
@@ -384,15 +386,18 @@ function App() {
           <BiometricSyncProvider>
             <PayrollGenerationProvider>
               <SalarySlipBulkProvider>
-                <ResumeScreeningProvider>
-                  <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-                    <Router />
-                  </WouterRouter>
-                  <GlobalSyncBanner />
-                  <GlobalPayrollBanner />
-                  <GlobalSalarySlipBulkBanner />
-                  <GlobalResumeScreeningBanner />
-                </ResumeScreeningProvider>
+                <WhatsAppBulkProvider>
+                  <ResumeScreeningProvider>
+                    <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+                      <Router />
+                    </WouterRouter>
+                    <GlobalSyncBanner />
+                    <GlobalPayrollBanner />
+                    <GlobalSalarySlipBulkBanner />
+                    <GlobalWhatsAppBulkBanner />
+                    <GlobalResumeScreeningBanner />
+                  </ResumeScreeningProvider>
+                </WhatsAppBulkProvider>
               </SalarySlipBulkProvider>
             </PayrollGenerationProvider>
           </BiometricSyncProvider>

@@ -61,6 +61,7 @@ export const MODULE_TREE: ModuleNode[] = [
       { key: "settings.production_payroll", label: "Production Payroll" },
       { key: "settings.salary_slip", label: "Salary Slip" },
       { key: "settings.smtp", label: "SMTP / Email" },
+      { key: "settings.whatsapp", label: "WhatsApp" },
       { key: "settings.backup", label: "Backup" },
     ],
   },

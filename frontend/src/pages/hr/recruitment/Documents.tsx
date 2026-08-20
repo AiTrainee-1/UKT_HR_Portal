@@ -16,13 +16,14 @@ import { useListEmployees } from "@/lib/api-client";
 import {
   useEmployeeDocuments, useUploadEmployeeDocument, useDeleteEmployeeDocument,
   useListResignations, useDocumentCompletionStats, previewDocumentPdf, downloadDocumentPdf,
+  useWhatsAppExperienceLetter, useWhatsAppEmployeeDocument,
   EMPLOYEE_DOCUMENT_CATEGORIES,
   type EmployeeDocumentCategory, type EmployeeDocumentItem,
 } from "@/lib/api-client/custom-hooks";
 import {
   FolderOpen, Search, Users, ChevronLeft, ChevronRight, Upload, Eye, Download, Trash2, Loader2,
   CreditCard, Fingerprint, GraduationCap, Vote, Wallet, FileSignature, FileClock,
-  FileMinus, FileBadge, Factory, CheckCircle2, AlertTriangle, X, type LucideIcon,
+  FileMinus, FileBadge, Factory, CheckCircle2, AlertTriangle, X, MessageCircle, type LucideIcon,
 } from "lucide-react";
 
 const CATEGORY_ICONS: Record<EmployeeDocumentCategory, LucideIcon> = {
@@ -418,6 +419,8 @@ function LettersTab({
   const [offerBusy, setOfferBusy] = useState<"preview" | "download" | null>(null);
   const [experienceBusy, setExperienceBusy] = useState<"preview" | "download" | null>(null);
   const [resignationBusy, setResignationBusy] = useState<"preview" | "download" | null>(null);
+  const [experienceWhatsAppBusy, setExperienceWhatsAppBusy] = useState(false);
+  const whatsappExperienceMutation = useWhatsAppExperienceLetter();
 
   const { data: approvedResignations } = useListResignations("approved");
   const resignation = (approvedResignations ?? []).find(r => r.employeeId === employeeId) ?? null;
@@ -445,6 +448,18 @@ function LettersTab({
       toast({ title: "Failed to generate Experience Letter", variant: "destructive" });
     } finally {
       setExperienceBusy(null);
+    }
+  };
+
+  const handleExperienceLetterWhatsApp = async () => {
+    setExperienceWhatsAppBusy(true);
+    try {
+      const result = await whatsappExperienceMutation.mutateAsync({ employeeId, lastWorkingDate: lastWorkingDay });
+      toast({ title: "Experience letter sent", description: `Delivered to ${result.sentTo} via WhatsApp.` });
+    } catch (err: any) {
+      toast({ title: "Failed to send via WhatsApp", description: err?.response?.data?.error || err?.message, variant: "destructive" });
+    } finally {
+      setExperienceWhatsAppBusy(false);
     }
   };
 
@@ -496,12 +511,18 @@ function LettersTab({
               <Input type="date" className="h-8" value={lastWorkingDay} onChange={(e) => setLastWorkingDay(e.target.value)} />
             </div>
           </div>
-          <div className="flex items-center gap-2 mt-auto pt-1">
+          <div className="flex items-center gap-2 mt-auto pt-1 flex-wrap">
             <Button size="sm" variant="outline" className="gap-1.5" onClick={() => handleExperienceLetter("preview")} disabled={experienceBusy !== null}>
               <Eye size={14} />{experienceBusy === "preview" ? "Generating…" : "Preview"}
             </Button>
             <Button size="sm" className="gap-1.5" onClick={() => handleExperienceLetter("download")} disabled={experienceBusy !== null}>
               <Download size={14} />{experienceBusy === "download" ? "Generating…" : "Download"}
+            </Button>
+            <Button
+              size="sm" variant="outline" className="gap-1.5 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+              onClick={handleExperienceLetterWhatsApp} disabled={experienceWhatsAppBusy}
+            >
+              <MessageCircle size={14} />{experienceWhatsAppBusy ? "Sending…" : "WhatsApp"}
             </Button>
           </div>
         </CardContent>
@@ -547,8 +568,10 @@ function CategoryDialog({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [whatsappBusyId, setWhatsappBusyId] = useState<number | null>(null);
   const uploadMutation = useUploadEmployeeDocument();
   const deleteMutation = useDeleteEmployeeDocument();
+  const whatsappMutation = useWhatsAppEmployeeDocument();
   const label = EMPLOYEE_DOCUMENT_CATEGORIES.find(c => c.value === category)?.label ?? category;
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -583,6 +606,19 @@ function CategoryDialog({
     }
   }
 
+  async function handleWhatsApp(doc: EmployeeDocumentItem) {
+    setWhatsappBusyId(doc.id);
+    try {
+      const result = await whatsappMutation.mutateAsync(doc.id);
+      toast({ title: "Sent via WhatsApp", description: `Delivered to ${result.sentTo}` });
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.message || "Unknown error";
+      toast({ title: "Failed to send via WhatsApp", description: msg, variant: "destructive" });
+    } finally {
+      setWhatsappBusyId(null);
+    }
+  }
+
   async function handleDelete(doc: EmployeeDocumentItem) {
     setBusyId(doc.id);
     try {
@@ -614,6 +650,14 @@ function CategoryDialog({
                 </button>
                 <button onClick={() => handleDownload(doc)} className="p-1.5 rounded-md text-gray-500 hover:bg-gray-100" title="Download">
                   <Download size={14} />
+                </button>
+                <button
+                  onClick={() => handleWhatsApp(doc)}
+                  disabled={whatsappBusyId === doc.id}
+                  className="p-1.5 rounded-md text-emerald-600 hover:bg-emerald-50 disabled:opacity-40"
+                  title="Send via WhatsApp"
+                >
+                  {whatsappBusyId === doc.id ? <Loader2 size={14} className="animate-spin" /> : <MessageCircle size={14} />}
                 </button>
                 <button
                   onClick={() => handleDelete(doc)}

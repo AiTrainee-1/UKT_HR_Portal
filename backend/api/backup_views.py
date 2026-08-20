@@ -214,6 +214,7 @@ def backup_restore_validate(request: Request) -> Response:
         "mediaFileCount": info["mediaFileCount"],
         "sizeBytes": info["sizeBytes"],
         "warnings": info["warnings"],
+        "staleness": info["staleness"],
         "guidedScript": script,
     })
 

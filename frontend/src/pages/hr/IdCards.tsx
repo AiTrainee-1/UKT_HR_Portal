@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import html2canvas from "html2canvas";
+import html2canvas from "html2canvas-pro";
 import JSZip from "jszip";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent } from "@/components/ui/card";
@@ -10,14 +10,14 @@ import { PillTabs } from "@/components/ui/pill-tabs";
 import { useToast } from "@/hooks/use-toast";
 import { useListEmployees } from "@/lib/api-client";
 import {
-  useIdCards, useEmailIdCard, type IdCardData,
+  useIdCards, useEmailIdCard, useWhatsAppIdCard, type IdCardData,
 } from "@/lib/api-client/custom-hooks";
 import {
   useQrCodes, StaffCardFront, StaffCardBack, ProductionCardFront, ProductionCardBack,
 } from "@/components/idcard/IdCardViews";
 import {
   CreditCard, Search, Printer, Mail, CheckSquare, Square,
-  Briefcase, Factory, Download,
+  Briefcase, Factory, Download, MessageCircle,
 } from "lucide-react";
 
 // ── Page ───────────────────────────────────────────────────────────────────
@@ -31,6 +31,7 @@ export default function IdCards() {
   const { data: employees } = useListEmployees({ status: "active" });
   const { data: cards, isLoading: cardsLoading } = useIdCards(selectedIds);
   const emailMutation = useEmailIdCard();
+  const whatsappMutation = useWhatsAppIdCard();
   const cardRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const [downloading, setDownloading] = useState(false);
 
@@ -66,6 +67,10 @@ export default function IdCards() {
       toast({ title: "Select at least one employee first", variant: "destructive" });
       return;
     }
+    if (!list.every(c => !!qrs[c.code])) {
+      toast({ title: "Still preparing QR codes -try again in a moment", variant: "destructive" });
+      return;
+    }
     setDownloading(true);
     try {
       const zip = new JSZip();
@@ -93,8 +98,13 @@ export default function IdCards() {
       link.click();
       URL.revokeObjectURL(url);
       toast({ title: `${captured} ID card${captured === 1 ? "" : "s"} downloaded` });
-    } catch {
-      toast({ title: "Failed to download ID cards", variant: "destructive" });
+    } catch (err) {
+      console.error("ID card download failed:", err);
+      toast({
+        title: "Failed to download ID cards",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
     } finally {
       setDownloading(false);
     }
@@ -106,6 +116,15 @@ export default function IdCards() {
       toast({ title: `ID card emailed to ${res.sentTo}` });
     } catch (err: any) {
       toast({ title: err?.message ?? "Email failed -check SMTP settings", variant: "destructive" });
+    }
+  };
+
+  const handleWhatsApp = async (card: IdCardData) => {
+    try {
+      const res = await whatsappMutation.mutateAsync(card.id);
+      toast({ title: `ID card sent to ${res.sentTo}` });
+    } catch (err: any) {
+      toast({ title: err?.message ?? "WhatsApp send failed", variant: "destructive" });
     }
   };
 
@@ -239,6 +258,14 @@ export default function IdCards() {
                         disabled={emailMutation.isPending}
                       >
                         <Mail size={11} /> Email to employee
+                      </Button>
+                      <Button
+                        size="sm" variant="outline"
+                        className="h-7 gap-1.5 text-xs border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                        onClick={() => handleWhatsApp(card)}
+                        disabled={whatsappMutation.isPending}
+                      >
+                        <MessageCircle size={11} /> Send via WhatsApp
                       </Button>
                     </div>
                     <div

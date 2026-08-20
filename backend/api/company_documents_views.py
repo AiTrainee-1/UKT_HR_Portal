@@ -344,6 +344,41 @@ def offer_letter_email(request: Request, employee_id: int) -> Response:
     return Response({"ok": True, "sentTo": to_email, "pdfAttached": True})
 
 
+@api_view(["POST"])
+@require_hr
+def offer_letter_whatsapp(request: Request, employee_id: int) -> Response:
+    from . import whatsapp_service
+
+    if not whatsapp_service.is_configured():
+        return Response({"error": "WhatsApp is not configured on this server (missing credentials in .env)."}, status=400)
+
+    emp = (
+        Employee.objects
+        .select_related("department", "designation", "reporting_manager", "reporting_manager__designation")
+        .filter(pk=employee_id).first()
+    )
+    if not emp:
+        return Response({"error": "Employee not found"}, status=404)
+
+    opts = {
+        "joiningDate": request.data.get("joiningDate"),
+        "probationMonths": request.data.get("probationMonths"),
+        "workingHours": request.data.get("workingHours"),
+        "ctcNote": request.data.get("ctcNote"),
+    }
+    pdf_bytes = build_offer_letter_pdf(emp, opts)
+    desig_title = emp.designation.title if emp.designation_id and emp.designation else ""
+
+    log = whatsapp_service.send_document(
+        emp, "offer_letter", pdf_bytes, f"offer_letter_{emp.employee_code}.pdf",
+        body_params=[full_name(emp), desig_title],
+        document_ref_id=emp.id, sent_by_id=request.jwt_user.get("hrUserId"),
+    )
+    if log.status != "sent":
+        return Response({"error": log.error_message}, status=400)
+    return Response({"ok": True, "sentTo": log.phone_number})
+
+
 # ── Experience Letter ───────────────────────────────────────────────────
 
 def build_experience_letter_pdf(emp: Employee, opts: dict) -> bytes:
@@ -425,6 +460,36 @@ def experience_letter_pdf(request: Request, employee_id: int) -> Response:
     response = HttpResponse(pdf_bytes, content_type="application/pdf")
     response["Content-Disposition"] = f'{disposition}; filename="{filename}"'
     return response
+
+
+@api_view(["POST"])
+@require_hr
+def experience_letter_whatsapp(request: Request, employee_id: int) -> Response:
+    from . import whatsapp_service
+
+    if not whatsapp_service.is_configured():
+        return Response({"error": "WhatsApp is not configured on this server (missing credentials in .env)."}, status=400)
+
+    emp = Employee.objects.select_related("department", "designation").filter(pk=employee_id).first()
+    if not emp:
+        return Response({"error": "Employee not found"}, status=404)
+
+    opts = {
+        "lastWorkingDate": request.data.get("lastWorkingDate"),
+        "certificateNumber": request.data.get("certificateNumber"),
+        "natureOfWork": request.data.get("natureOfWork"),
+        "performanceNote": request.data.get("performanceNote"),
+    }
+    pdf_bytes = build_experience_letter_pdf(emp, opts)
+
+    log = whatsapp_service.send_document(
+        emp, "experience_letter", pdf_bytes, f"experience_letter_{emp.employee_code}.pdf",
+        body_params=[full_name(emp)],
+        document_ref_id=emp.id, sent_by_id=request.jwt_user.get("hrUserId"),
+    )
+    if log.status != "sent":
+        return Response({"error": log.error_message}, status=400)
+    return Response({"ok": True, "sentTo": log.phone_number})
 
 
 # ── Salary Slip ──────────────────────────────────────────────────────────

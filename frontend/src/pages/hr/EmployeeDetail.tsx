@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useParams, useLocation } from "wouter";
-import html2canvas from "html2canvas";
+import html2canvas from "html2canvas-pro";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -99,8 +99,13 @@ export default function EmployeeDetail() {
       link.href = canvas.toDataURL("image/png");
       link.click();
       toast({ title: "ID card downloaded" });
-    } catch {
-      toast({ title: "Failed to download ID card", variant: "destructive" });
+    } catch (err) {
+      console.error("ID card download failed:", err);
+      toast({
+        title: "Failed to download ID card",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
     } finally {
       setDownloading(false);
     }

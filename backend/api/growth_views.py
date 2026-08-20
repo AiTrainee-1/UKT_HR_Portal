@@ -654,19 +654,30 @@ def verify_employee(request: Request, code: str) -> Response:
     })
 
 
+def _public_base_url(request: Request) -> str:
+    """Best-effort public origin for the QR verification link -this app's
+    frontend and backend are deployed same-origin (Nginx serves the built
+    frontend and reverse-proxies /api to Django, per DeployGuide.md), so the
+    request's own host is the right one to embed."""
+    return request.build_absolute_uri("/").rstrip("/")
+
+
 @api_view(["POST"])
 @require_hr
 def email_idcard(request: Request) -> Response:
-    """Send an employee's ID card by email. Body: { employeeId, image? (dataURL) }"""
-    import base64
-    import re
+    """Send an employee's ID card by email, with a real backend-rendered
+    image attached (idcard_render.py) -previously this only attached
+    anything if the frontend passed a client-rendered `image`, which it
+    never actually did, so ID card emails silently had no attachment."""
     import smtplib
     from email.mime.image import MIMEImage
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
 
+    from .idcard_render import render_idcard_png
+
     data = request.data
-    emp = Employee.objects.filter(id=data.get("employeeId")).first()
+    emp = Employee.objects.filter(id=data.get("employeeId")).select_related("department", "designation", "branch").first()
     if not emp:
         return Response({"error": "Employee not found"}, status=404)
     to_email = data.get("toEmail") or emp.email
@@ -688,17 +699,12 @@ def email_idcard(request: Request) -> Response:
         "html",
     ))
 
-    image = data.get("image")
-    if image:
-        m = re.match(r"data:image/(png|jpe?g);base64,(.+)", image)
-        if m:
-            img_bytes = base64.b64decode(m.group(2))
-            part = MIMEImage(img_bytes, _subtype=m.group(1))
-            part.add_header(
-                "Content-Disposition", "attachment",
-                filename=f"idcard-{emp.employee_code}.{m.group(1)}",
-            )
-            msg.attach(part)
+    idcard = _idcard_dict(emp, s)
+    verify_url = f"{_public_base_url(request)}/verify/{emp.employee_code}"
+    png_bytes = render_idcard_png(idcard, verify_url)
+    part = MIMEImage(png_bytes, _subtype="png")
+    part.add_header("Content-Disposition", "attachment", filename=f"idcard-{emp.employee_code}.png")
+    msg.attach(part)
 
     try:
         with smtplib.SMTP(s.smtp_host, s.smtp_port, timeout=20) as server:
@@ -709,3 +715,32 @@ def email_idcard(request: Request) -> Response:
         return Response({"error": f"Email failed: {e}"}, status=502)
 
     return Response({"ok": True, "sentTo": to_email})
+
+
+@api_view(["POST"])
+@require_hr
+def idcard_whatsapp(request: Request) -> Response:
+    """Send an employee's ID card via WhatsApp. Body: { employeeId }"""
+    from . import whatsapp_service
+    from .idcard_render import render_idcard_png
+
+    if not whatsapp_service.is_configured():
+        return Response({"error": "WhatsApp is not configured on this server (missing credentials in .env)."}, status=400)
+
+    emp = Employee.objects.filter(id=request.data.get("employeeId")).select_related("department", "designation", "branch").first()
+    if not emp:
+        return Response({"error": "Employee not found"}, status=404)
+
+    s = PayrollSettings.get()
+    idcard = _idcard_dict(emp, s)
+    verify_url = f"{_public_base_url(request)}/verify/{emp.employee_code}"
+    png_bytes = render_idcard_png(idcard, verify_url)
+
+    log = whatsapp_service.send_document(
+        emp, "id_card", png_bytes, f"idcard-{emp.employee_code}.png",
+        body_params=[idcard["name"]], mime_type="image/png",
+        document_ref_id=emp.id, sent_by_id=request.jwt_user.get("hrUserId"),
+    )
+    if log.status != "sent":
+        return Response({"error": log.error_message}, status=400)
+    return Response({"ok": True, "sentTo": log.phone_number})

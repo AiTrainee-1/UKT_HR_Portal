@@ -61,6 +61,19 @@ def _db_config() -> dict:
     return dj_settings.DATABASES["default"]
 
 
+def _pg_env(db: dict) -> dict:
+    """Env for pg_dump/psql subprocess calls. PGSSLMODE defaults to "prefer"
+    -uses SSL when the server offers it (satisfies managed/cloud Postgres
+    providers that require SSL) and degrades gracefully for a local
+    Postgres with no SSL configured at all. Override via DB_SSLMODE in
+    .env if a specific mode (e.g. "require", "verify-full") is needed."""
+    return {
+        **os.environ,
+        "PGPASSWORD": db["PASSWORD"],
+        "PGSSLMODE": os.environ.get("DB_SSLMODE", "prefer"),
+    }
+
+
 def _dump_database(out_sql_path: str) -> None:
     pg_dump = find_pg_dump()
     if not pg_dump:
@@ -69,7 +82,7 @@ def _dump_database(out_sql_path: str) -> None:
             "tools or add PostgreSQL's bin folder to PATH."
         )
     db = _db_config()
-    env = {**os.environ, "PGPASSWORD": db["PASSWORD"]}
+    env = _pg_env(db)
     cmd = [
         pg_dump,
         "-h", db["HOST"] or "localhost",
@@ -80,9 +93,9 @@ def _dump_database(out_sql_path: str) -> None:
         "-f", out_sql_path,
     ]
     try:
-        result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=600)
+        result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=1800)
     except subprocess.TimeoutExpired:
-        raise BackupServiceError("Database dump timed out after 10 minutes.")
+        raise BackupServiceError("Database dump timed out after 30 minutes.")
     except OSError as exc:
         raise BackupServiceError(f"Could not run pg_dump: {exc}")
     if result.returncode != 0:
@@ -103,6 +116,23 @@ def _build_manifest() -> dict:
     except Exception:
         applied = None
 
+    # A few headline row counts, captured at backup time -lets a later
+    # restore's validation step warn "this backup has fewer employees/
+    # payroll records than what's live right now" without needing to parse
+    # db.sql itself. Wrapped defensively so a models-import hiccup never
+    # breaks the backup itself; older backups simply won't have this key,
+    # and staleness comparison degrades gracefully for those (see
+    # compute_staleness()).
+    try:
+        from .models import Employee, Payroll, SalarySlip
+        row_counts = {
+            "employees": Employee.objects.count(),
+            "payrollRecords": Payroll.objects.count(),
+            "salarySlips": SalarySlip.objects.count(),
+        }
+    except Exception:
+        row_counts = None
+
     import django
     return {
         "createdAt": datetime.now().isoformat(),
@@ -110,6 +140,45 @@ def _build_manifest() -> dict:
         "djangoVersion": ".".join(str(p) for p in django.VERSION[:3]),
         "appliedMigrations": applied,
         "mediaFileCount": media_file_count,
+        "rowCounts": row_counts,
+    }
+
+
+def compute_staleness(manifest: dict) -> dict | None:
+    """
+    Compares a candidate restore backup's manifest against the *live*
+    database right now, so the UI can warn before a full-replace restore
+    silently discards anything created after the backup was taken -see
+    restore_from_zip()'s docstring: restore is a full DROP SCHEMA + reload,
+    never a merge, so this is the safety net instead of attempting one.
+
+    Returns None if the manifest predates rowCounts (older-format backup)
+    -staleness simply can't be computed for those, the UI falls back to a
+    generic "can't compare, review carefully" note rather than a wrong one.
+    """
+    backup_counts = (manifest or {}).get("rowCounts")
+    if not backup_counts:
+        return None
+
+    try:
+        from .models import Employee, Payroll, SalarySlip
+        current_counts = {
+            "employees": Employee.objects.count(),
+            "payrollRecords": Payroll.objects.count(),
+            "salarySlips": SalarySlip.objects.count(),
+        }
+    except Exception:
+        return None
+
+    is_older = any(
+        current_counts[key] > backup_counts.get(key, 0)
+        for key in current_counts
+    )
+    return {
+        "backupCreatedAt": manifest.get("createdAt"),
+        "backupCounts": backup_counts,
+        "currentCounts": current_counts,
+        "isOlderThanCurrentData": is_older,
     }
 
 
@@ -219,6 +288,21 @@ def validate_backup_zip(path: str) -> dict:
             media_count = sum(1 for n in names if n.startswith("media/") and not n.endswith("/"))
             if media_count == 0:
                 warnings.append("No files under media/ -this backup may be database-only.")
+            # namelist()/read("manifest.json") above only prove the central
+            # directory parses -they don't touch db.sql's actual compressed
+            # bytes, so a zip with an intact file list but a corrupted
+            # db.sql entry (bit rot from a manual copy/download, an
+            # interrupted write, etc.) would otherwise pass validation and
+            # only fail later, mid-restore, after the schema has already
+            # been dropped. testzip() decompresses and CRC-checks every
+            # entry, so corruption is caught here instead.
+            bad_entry = zf.testzip()
+            if bad_entry is not None:
+                raise BackupServiceError(
+                    f"This backup file is corrupted (entry '{bad_entry}' failed integrity check) -it cannot be "
+                    "safely restored. Get a fresh copy of this backup (re-download it if it came from Google "
+                    "Drive or another external copy) and try again."
+                )
     except zipfile.BadZipFile:
         raise BackupServiceError("This file isn't a valid zip archive.")
 
@@ -228,6 +312,7 @@ def validate_backup_zip(path: str) -> dict:
         "mediaFileCount": media_count,
         "sizeBytes": os.stat(path).st_size,
         "warnings": warnings,
+        "staleness": compute_staleness(manifest),
     }
 
 
@@ -275,6 +360,7 @@ powershell -Command "Expand-Archive -LiteralPath '{staged_path}' -DestinationPat
 
 echo Restoring database (this will DROP and recreate the public schema)...
 set PGPASSWORD={db["PASSWORD"]}
+set PGSSLMODE={os.environ.get("DB_SSLMODE", "prefer")}
 "{psql}" -h {db["HOST"] or "localhost"} -p {db["PORT"] or "5432"} -U {db["USER"]} -d {db["NAME"]} -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 "{psql}" -h {db["HOST"] or "localhost"} -p {db["PORT"] or "5432"} -U {db["USER"]} -d {db["NAME"]} -f "{extract_dir}\\db.sql"
 
@@ -330,22 +416,35 @@ def restore_from_zip(zip_path: str, status_callback=None) -> dict:
 
         report("database", "Restoring database (this will drop and recreate the schema)")
         db = _db_config()
-        env = {**os.environ, "PGPASSWORD": db["PASSWORD"]}
+        env = _pg_env(db)
         base_cmd = [
             psql, "-h", db["HOST"] or "localhost", "-p", str(db["PORT"] or "5432"),
             "-U", db["USER"], "-d", db["NAME"], "--no-password",
         ]
-        drop_result = subprocess.run(
-            base_cmd + ["-c", "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"],
-            env=env, capture_output=True, text=True, timeout=120,
-        )
+        try:
+            drop_result = subprocess.run(
+                base_cmd + ["-c", "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"],
+                env=env, capture_output=True, text=True, timeout=300,
+            )
+        except subprocess.TimeoutExpired:
+            raise BackupServiceError("Resetting the database schema timed out after 5 minutes.")
         if drop_result.returncode != 0:
-            raise BackupServiceError(f"Failed to reset schema: {drop_result.stderr.strip()}")
+            stderr = drop_result.stderr.strip()
+            if "permission denied" in stderr.lower() or "must be owner" in stderr.lower():
+                raise BackupServiceError(
+                    "Failed to reset schema: the database user doesn't have owner privileges on the "
+                    "'public' schema. This is a one-time grant your Postgres provider's console/support "
+                    f"can make (needed for any managed/cloud Postgres, not just this one). Raw error: {stderr}"
+                )
+            raise BackupServiceError(f"Failed to reset schema: {stderr}")
 
-        load_result = subprocess.run(
-            base_cmd + ["-f", sql_path],
-            env=env, capture_output=True, text=True, timeout=1800,
-        )
+        try:
+            load_result = subprocess.run(
+                base_cmd + ["-f", sql_path],
+                env=env, capture_output=True, text=True, timeout=3600,
+            )
+        except subprocess.TimeoutExpired:
+            raise BackupServiceError("Loading the database dump timed out after 1 hour.")
         if load_result.returncode != 0:
             raise BackupServiceError(f"Failed to load database dump: {load_result.stderr.strip()}")
 

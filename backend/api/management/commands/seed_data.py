@@ -95,12 +95,28 @@ def working_dates_in_june():
 
 
 class Command(BaseCommand):
-    help = "Seed database with 1 month of realistic HR data (10 staff + 25 production)"
+    help = (
+        "DEV/DEMO ONLY -seeds the database with fake HR users, employees, "
+        "attendance, and payroll data. Never run this against a real "
+        "environment; it is not wired into migrate/deploy/setup anywhere and "
+        "must be invoked by hand with --confirm."
+    )
 
     def add_arguments(self, parser):
         parser.add_argument("--flush", action="store_true", help="Clear existing data before seeding")
+        parser.add_argument(
+            "--confirm", action="store_true",
+            help="Required. Confirms you intend to insert demo data (fake HR users, employees, payroll) into this database.",
+        )
 
     def handle(self, *args, **options):
+        if not options["confirm"]:
+            self.stderr.write(self.style.ERROR(
+                "Refusing to run: this command inserts fake demo HR users, employees, and payroll "
+                "data. Re-run with --confirm if this is really a throwaway dev database, not a real one."
+            ))
+            return
+
         if options["flush"]:
             self.stdout.write("Flushing existing data…")
             self._flush()

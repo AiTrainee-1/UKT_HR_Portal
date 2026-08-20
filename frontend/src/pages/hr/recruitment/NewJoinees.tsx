@@ -9,19 +9,20 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import {
-  useListNewJoinees, useSendOfferLetterEmail,
+  useListNewJoinees, useSendOfferLetterEmail, useWhatsAppOfferLetter,
   previewDocumentPdf, downloadDocumentPdf, type NewJoineeItem,
 } from "@/lib/api-client/custom-hooks";
 import EmployeeAvatar from "@/components/EmployeeAvatar";
-import { UserPlus, Eye, Download, Mail, Loader2 } from "lucide-react";
+import { UserPlus, Eye, Download, Mail, Loader2, MessageCircle } from "lucide-react";
 
 export default function NewJoinees() {
   const { toast } = useToast();
   const { token } = useAuth();
   const { data: joinees, isLoading } = useListNewJoinees(30);
   const sendEmail = useSendOfferLetterEmail();
+  const sendWhatsApp = useWhatsAppOfferLetter();
 
-  const [busy, setBusy] = useState<{ id: number; action: "preview" | "download" | "email" } | null>(null);
+  const [busy, setBusy] = useState<{ id: number; action: "preview" | "download" | "email" | "whatsapp" } | null>(null);
 
   const handlePreview = async (j: NewJoineeItem) => {
     setBusy({ id: j.id, action: "preview" });
@@ -57,6 +58,19 @@ export default function NewJoinees() {
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.message || "Unknown error";
       toast({ title: "Failed to send offer letter", description: msg, variant: "destructive" });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleWhatsApp = async (j: NewJoineeItem) => {
+    setBusy({ id: j.id, action: "whatsapp" });
+    try {
+      const result = await sendWhatsApp.mutateAsync(j.id);
+      toast({ title: `Offer letter sent to ${j.name}`, description: `Delivered to ${result.sentTo} via WhatsApp.` });
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.message || "Unknown error";
+      toast({ title: "Failed to send via WhatsApp", description: msg, variant: "destructive" });
     } finally {
       setBusy(null);
     }
@@ -143,6 +157,13 @@ export default function NewJoinees() {
                             disabled={busy !== null}
                             color="purple"
                           />
+                          <RowActionBtn
+                            icon={busy?.id === j.id && busy.action === "whatsapp" ? <Loader2 size={13} className="animate-spin" /> : <MessageCircle size={13} />}
+                            label="WhatsApp"
+                            onClick={() => handleWhatsApp(j)}
+                            disabled={busy !== null}
+                            color="emerald"
+                          />
                         </div>
                       </TableCell>
                     </TableRow>
@@ -171,12 +192,13 @@ function RowActionBtn({
   label: string;
   onClick: () => void;
   disabled?: boolean;
-  color: "gray" | "green" | "purple";
+  color: "gray" | "green" | "purple" | "emerald";
 }) {
   const colors = {
-    gray:   "border-gray-200 text-gray-600 hover:bg-gray-50",
-    green:  "border-green-200 text-green-700 hover:bg-green-50",
-    purple: "border-purple-200 text-purple-700 hover:bg-purple-50",
+    gray:    "border-gray-200 text-gray-600 hover:bg-gray-50",
+    green:   "border-green-200 text-green-700 hover:bg-green-50",
+    purple:  "border-purple-200 text-purple-700 hover:bg-purple-50",
+    emerald: "border-emerald-200 text-emerald-700 hover:bg-emerald-50",
   };
   return (
     <button

@@ -25,11 +25,14 @@ from .hr_user_views import (
 from .salary_slip_views import (
     salary_slips, salary_slip_detail, email_salary_slip, employee_salary_slips,
     salary_slip_bulk_pdf, salary_slip_bulk_email, salary_slip_bulk_progress_view,
+    whatsapp_salary_slip, salary_slip_bulk_whatsapp, salary_slip_bulk_whatsapp_progress,
 )
 from .company_documents_views import (
     document_settings_view, document_settings_list, document_settings_preview,
     offer_letter_pdf, offer_letter_email, experience_letter_pdf, salary_slip_pdf,
+    offer_letter_whatsapp, experience_letter_whatsapp,
 )
+from .whatsapp_views import whatsapp_status, whatsapp_templates, whatsapp_template_update
 from .org_views import (
     branches, branch_detail,
     designations, designation_detail,
@@ -38,7 +41,7 @@ from .recruitment_views import (
     recruitment_dashboard, new_joinees,
     resignations, my_resignation, resignation_action, resignation_delete,
     manager_resignation_action, manager_pending_resignations,
-    resignation_pdf, resignation_email,
+    resignation_pdf, resignation_email, resignation_whatsapp,
     department_headcount, department_headcount_detail,
 )
 from .resume_screening_views import (
@@ -51,7 +54,7 @@ from .resume_screening_views import (
 from .employee_documents_views import (
     employee_documents, upload_employee_document,
     delete_employee_document, employee_document_file, my_documents,
-    document_completion_stats,
+    document_completion_stats, whatsapp_employee_document,
 )
 from .manager_views import (
     department_managers, department_manager_detail,
@@ -89,7 +92,7 @@ from .growth_views import (
     employee_monthly_attendance, attendance_day_override, attendance_override_requests,
     promotions, promotion_detail,
     increment_summary, add_increment, increment_dashboard,
-    idcard_data, verify_employee, email_idcard,
+    idcard_data, verify_employee, email_idcard, idcard_whatsapp,
 )
 from .system_settings_views import (
     biometric_devices, biometric_device_detail, idcard_settings_view,
@@ -196,8 +199,11 @@ urlpatterns = [
     path("salary-slips/bulk-pdf", salary_slip_bulk_pdf),
     path("salary-slips/bulk-email", salary_slip_bulk_email),
     path("salary-slips/bulk-progress", salary_slip_bulk_progress_view),
+    path("salary-slips/bulk-whatsapp", salary_slip_bulk_whatsapp),
+    path("salary-slips/bulk-whatsapp-progress", salary_slip_bulk_whatsapp_progress),
     path("salary-slips/<int:pk>", salary_slip_detail),
     path("salary-slips/<int:pk>/email", email_salary_slip),
+    path("salary-slips/<int:pk>/whatsapp", whatsapp_salary_slip),
     path("salary-slips/<int:pk>/pdf", salary_slip_pdf),
     path("my/salary-slips", employee_salary_slips),
     path("my/documents", my_documents),
@@ -208,7 +214,9 @@ urlpatterns = [
     path("document-settings/<str:doc_type>/preview", document_settings_preview),
     path("employees/<int:employee_id>/offer-letter/pdf", offer_letter_pdf),
     path("employees/<int:employee_id>/offer-letter/email", offer_letter_email),
+    path("employees/<int:employee_id>/offer-letter/whatsapp", offer_letter_whatsapp),
     path("employees/<int:employee_id>/experience-letter/pdf", experience_letter_pdf),
+    path("employees/<int:employee_id>/experience-letter/whatsapp", experience_letter_whatsapp),
 
     # ── Notifications ───────────────────────────────────────────────────────
     path("notifications", views.notifications),
@@ -228,6 +236,7 @@ urlpatterns = [
     path("recruitment/resignations/<int:pk>/delete", resignation_delete),
     path("recruitment/resignations/<int:pk>/pdf", resignation_pdf),
     path("recruitment/resignations/<int:pk>/email", resignation_email),
+    path("recruitment/resignations/<int:pk>/whatsapp", resignation_whatsapp),
     path("recruitment/department-headcount", department_headcount),
     path("recruitment/department-headcount/<int:pk>", department_headcount_detail),
     path("recruitment/resume-screening/rule-sets", rule_sets),
@@ -247,6 +256,7 @@ urlpatterns = [
     path("recruitment/employee-documents/<int:employee_id>/upload", upload_employee_document),
     path("employee-documents/<int:pk>", delete_employee_document),
     path("employee-documents/<int:pk>/file", employee_document_file),
+    path("employee-documents/<int:pk>/whatsapp", whatsapp_employee_document),
     path("my/resignation", my_resignation),
     path("manager/resignations", manager_pending_resignations),
     path("manager/resignations/<int:pk>/action", manager_resignation_action),
@@ -322,7 +332,13 @@ urlpatterns = [
     path("increments", add_increment),
     path("idcard", idcard_data),
     path("idcard/email", email_idcard),
+    path("idcard/whatsapp", idcard_whatsapp),
     path("idcard-settings", idcard_settings_view),
+
+    # ── WhatsApp (Settings → WhatsApp) ──────────────────────────────────────
+    path("whatsapp/status", whatsapp_status),
+    path("whatsapp/templates", whatsapp_templates),
+    path("whatsapp/templates/<str:document_type>", whatsapp_template_update),
     path("verify-employee/<str:code>", verify_employee),
 
     # ── Biometric Device Management ─────────────────────────────────────────

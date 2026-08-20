@@ -122,6 +122,40 @@ def delete_employee_document(request: Request, pk: int) -> Response:
     return Response({"ok": True})
 
 
+_EXT_MIME = {"pdf": "application/pdf", "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png"}
+
+
+@api_view(["POST"])
+@require_hr
+def whatsapp_employee_document(request: Request, pk: int) -> Response:
+    """POST /api/employee-documents/<pk>/whatsapp -sends the already-
+    uploaded file as-is (no generation step, unlike Offer/Experience/
+    Resignation/Salary Slip/ID Card, which are all synthesized on demand)."""
+    from . import whatsapp_service
+
+    if not whatsapp_service.is_configured():
+        return _error("WhatsApp is not configured on this server (missing credentials in .env).", 400)
+
+    doc = EmployeeDocument.objects.select_related("employee").filter(pk=pk).first()
+    if not doc or not doc.file:
+        return _error("Document not found", 404)
+    if not scope_to_branch(Employee.objects, request).filter(pk=doc.employee_id).exists():
+        return _error("Document not found", 404)
+
+    ext = (doc.original_filename or "").rsplit(".", 1)[-1].lower()
+    mime_type = _EXT_MIME.get(ext, "application/pdf")
+    file_bytes = doc.file.read()
+
+    log = whatsapp_service.send_document(
+        doc.employee, "other", file_bytes, doc.original_filename or f"document-{doc.id}",
+        body_params=[f"{doc.employee.first_name} {doc.employee.last_name}".strip(), doc.get_category_display()],
+        mime_type=mime_type, document_ref_id=doc.id, sent_by_id=request.jwt_user.get("hrUserId"),
+    )
+    if log.status != "sent":
+        return _error(log.error_message, 400)
+    return Response({"ok": True, "sentTo": log.phone_number})
+
+
 @api_view(["GET"])
 @require_auth
 def employee_document_file(request: Request, pk: int) -> Response:

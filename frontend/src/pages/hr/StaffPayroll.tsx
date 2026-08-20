@@ -18,8 +18,10 @@ import { useAuth, permissionLevel } from "@/contexts/AuthContext";
 import { lockMutatingControls } from "@/lib/view-only-lock";
 import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
 import { useSalarySlipBulk } from "@/contexts/SalarySlipBulkContext";
+import { useWhatsAppBulk } from "@/contexts/WhatsAppBulkContext";
 import PayrollGenerationPipeline from "@/components/PayrollGenerationPipeline";
 import SalarySlipBulkPipeline from "@/components/SalarySlipBulkPipeline";
+import WhatsAppBulkPipeline from "@/components/WhatsAppBulkPipeline";
 import {
   useListPayrollRuns, useUpdatePayrollRecord, useListDepartments,
   useSessionConfigs, useCreateSessionConfig,
@@ -28,7 +30,7 @@ import {
   useListEmployees, useListSalarySlips, useEmailSalarySlip,
   type PayrollRunItem, type SessionConfigItem, type SalarySlipItem,
 } from "@/lib/api-client";
-import { usePayrollSkipCheck, previewDocumentPdf, downloadDocumentPdf } from "@/lib/api-client/custom-hooks";
+import { usePayrollSkipCheck, previewDocumentPdf, downloadDocumentPdf, useWhatsAppSalarySlip } from "@/lib/api-client/custom-hooks";
 import { useQueryClient } from "@tanstack/react-query";
 import { exportPayrollToExcel } from "@/lib/payrollExcelExport";
 import { MONTH_NAMES, BreakdownDrawer, PayrollRow } from "@/components/payroll/BreakdownDrawer";
@@ -42,7 +44,7 @@ import {
   TrendingUp, AlertCircle, Info,
   Settings, Plus, Trash2, Edit, X,
   Download, Search, AlertTriangle, RefreshCcw,
-  CreditCard, Layers, FileText, FileSearch, Mail, Loader2, Eye,
+  CreditCard, Layers, FileText, FileSearch, Mail, Loader2, Eye, MessageCircle,
 } from "lucide-react";
 
 // Staff Payroll's 3 sub-tabs map to 3 independently-permissioned module keys
@@ -420,6 +422,13 @@ function PayrollSubTab() {
     runType: "monthly" as const,
   };
   const skipCheckPeriodLabel = `${MONTH_NAMES[filterMonth - 1]} ${filterYear}`;
+  // Auto-runs on mount/month-change (not gated behind the dialog opening) so
+  // the new "Skipped" KPI card below always shows a live count -this is a
+  // per-employee dry-run simulation but acceptable as a one-time page-load
+  // cost for an internal HR tool. SkippedEmployeesDialog calls the exact
+  // same hook+params, so React Query serves it from cache when opened -no
+  // duplicate network request.
+  const { data: skipData, isLoading: skipLoading } = usePayrollSkipCheck(skipCheckParams);
 
   return (
     <div className="space-y-6">
@@ -527,14 +536,22 @@ function PayrollSubTab() {
         </div>
       )}
       {!isLoading && filteredRuns.length > 0 && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
           {[
             { label: "Total Gross", value: `₹${(totalGross / 1000).toFixed(1)}K`, color: "text-blue-700", icon: TrendingUp, bg: "bg-blue-50" },
             { label: "Deductions", value: `₹${(totalDeductions / 1000).toFixed(1)}K`, color: "text-red-600", icon: IndianRupee, bg: "bg-red-50" },
             { label: "Net Payable", value: `₹${(totalNet / 1000).toFixed(1)}K`, color: "text-green-700", icon: CheckCircle2, bg: "bg-green-50" },
             { label: "Pending Payment", value: `${pendingCount} employees`, color: "text-amber-700", icon: Clock, bg: "bg-amber-50" },
+            {
+              label: "Skipped", value: skipLoading ? "…" : `${skipData?.skippedCount ?? 0} employees`,
+              color: "text-orange-700", icon: AlertTriangle, bg: "bg-orange-50", onClick: () => setShowSkipCheck(true),
+            },
           ].map(s => (
-            <Card key={s.label} className="border-0 shadow-sm">
+            <Card
+              key={s.label}
+              className={`border-0 shadow-sm ${s.onClick ? "cursor-pointer hover:shadow-md transition-shadow" : ""}`}
+              onClick={s.onClick}
+            >
               <CardContent className="p-4 flex items-center gap-3">
                 <div className={`w-9 h-9 rounded-lg ${s.bg} flex items-center justify-center shrink-0`}>
                   <s.icon size={16} className={s.color} />
@@ -1126,13 +1143,16 @@ function PayslipSubTab() {
   const { toast } = useToast();
   const { token } = useAuth();
   const emailMutation = useEmailSalarySlip();
+  const whatsappMutation = useWhatsAppSalarySlip();
   const today = new Date();
   const [month, setMonth]         = useState(today.getMonth() + 1);
   const [year, setYear]           = useState(today.getFullYear());
   const [search, setSearch]       = useState("");
   const [emailing, setEmailing]   = useState<number | null>(null);
+  const [whatsapping, setWhatsapping] = useState<number | null>(null);
   const [pdfBusy, setPdfBusy]     = useState<{ id: number; mode: "preview" | "download" } | null>(null);
   const { isRunning: bulkRunning, showPipeline, progress, dismiss: dismissBulkPipeline, triggerBulkDownload, triggerBulkEmail } = useSalarySlipBulk();
+  const { isRunning: whatsappBulkRunning, showPipeline: showWhatsappPipeline, progress: whatsappProgress, dismiss: dismissWhatsappPipeline, triggerBulkWhatsApp } = useWhatsAppBulk();
 
   const { data: slips = [], isLoading } = useListSalarySlips({ month, year, employmentType: "staff" });
 
@@ -1173,6 +1193,10 @@ function PayslipSubTab() {
     triggerBulkEmail({ month, year, employmentType: "staff" });
   }
 
+  function doBulkWhatsApp() {
+    triggerBulkWhatsApp({ month, year, employmentType: "staff" });
+  }
+
   async function doEmail(slip: SalarySlipItem) {
     setEmailing(slip.id);
     try {
@@ -1186,6 +1210,22 @@ function PayslipSubTab() {
       toast({ title: "Failed to send email", description: msg, variant: "destructive" });
     } finally {
       setEmailing(null);
+    }
+  }
+
+  async function doWhatsApp(slip: SalarySlipItem) {
+    setWhatsapping(slip.id);
+    try {
+      const result = await whatsappMutation.mutateAsync(slip.id);
+      toast({
+        title: `WhatsApp sent to ${slip.employeeName}`,
+        description: `Salary slip delivered to ${result.sentTo}`,
+      });
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.message || "Unknown error";
+      toast({ title: "Failed to send via WhatsApp", description: msg, variant: "destructive" });
+    } finally {
+      setWhatsapping(null);
     }
   }
 
@@ -1208,6 +1248,14 @@ function PayslipSubTab() {
             Bulk Send ({slips.length})
           </button>
           <button
+            onClick={doBulkWhatsApp}
+            disabled={whatsappBulkRunning || slips.length === 0}
+            className="flex items-center gap-2 px-4 py-2 text-sm bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 transition-colors disabled:opacity-50"
+          >
+            {whatsappBulkRunning ? <Loader2 size={15} className="animate-spin" /> : <MessageCircle size={15} />}
+            Bulk WhatsApp ({slips.length})
+          </button>
+          <button
             onClick={doBulkDownload}
             disabled={bulkRunning || slips.length === 0}
             className="flex items-center gap-2 px-4 py-2 text-sm bg-slate-800 text-white rounded-xl hover:bg-slate-900 transition-colors disabled:opacity-50"
@@ -1218,8 +1266,9 @@ function PayslipSubTab() {
         </div>
       </div>
 
-      {/* ── Bulk download/email progress ───────────────────────────── */}
+      {/* ── Bulk download/email/WhatsApp progress ───────────────────── */}
       <SalarySlipBulkPipeline active={showPipeline} data={progress} onDismiss={dismissBulkPipeline} />
+      <WhatsAppBulkPipeline active={showWhatsappPipeline} data={whatsappProgress} onDismiss={dismissWhatsappPipeline} />
 
       {/* ── Month Overview ──────────────────────────────────────── */}
       {!isLoading && slips.length > 0 && (
@@ -1347,6 +1396,13 @@ function PayslipSubTab() {
                     disabled={emailing !== null}
                     color="purple"
                   />
+                  <ActionBtn
+                    icon={whatsapping === slip.id ? <Loader2 size={13} className="animate-spin" /> : <MessageCircle size={13} />}
+                    label="WhatsApp"
+                    onClick={() => doWhatsApp(slip)}
+                    disabled={whatsapping !== null}
+                    color="emerald"
+                  />
                 </div>
               </div>
             ))
@@ -1372,13 +1428,14 @@ function ActionBtn({
   label: string;
   onClick: () => void;
   disabled?: boolean;
-  color: "gray" | "blue" | "green" | "purple";
+  color: "gray" | "blue" | "green" | "purple" | "emerald";
 }) {
   const colors = {
-    gray:   "border-gray-200 text-gray-600 hover:bg-gray-50",
-    blue:   "border-blue-200 text-blue-700 hover:bg-blue-50",
-    green:  "border-green-200 text-green-700 hover:bg-green-50",
-    purple: "border-purple-200 text-purple-700 hover:bg-purple-50",
+    gray:    "border-gray-200 text-gray-600 hover:bg-gray-50",
+    blue:    "border-blue-200 text-blue-700 hover:bg-blue-50",
+    green:   "border-green-200 text-green-700 hover:bg-green-50",
+    purple:  "border-purple-200 text-purple-700 hover:bg-purple-50",
+    emerald: "border-emerald-200 text-emerald-700 hover:bg-emerald-50",
   };
   return (
     <button

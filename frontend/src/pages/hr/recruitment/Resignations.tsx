@@ -18,7 +18,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
-  useListResignations, useResignationAction, useResignationEmail,
+  useListResignations, useResignationAction, useResignationEmail, useWhatsAppResignation,
   useDeleteResignation, downloadResignationPdf,
   getListResignationsQueryKey, type ResignationRequest,
 } from "@/lib/api-client";
@@ -27,7 +27,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import {
   Clock, CheckCircle2, XCircle, Eye, FileDown, Mail,
-  CheckCircle, AlertTriangle, Trash2,
+  CheckCircle, AlertTriangle, Trash2, MessageCircle,
 } from "lucide-react";
 
 // ── Survey Questions ─────────────────────────────────────────────────────────
@@ -146,8 +146,8 @@ function statusBadge(status: string) {
 
 function ResignationTable({
   rows, isLoading, emptyLabel, showApproveReject,
-  onView, onApprove, onReject, onPdf, onEmail, onDelete,
-  pdfLoading, emailLoading,
+  onView, onApprove, onReject, onPdf, onEmail, onWhatsApp, onDelete,
+  pdfLoading, emailLoading, whatsappLoading,
 }: {
   rows: ResignationRequest[];
   isLoading: boolean;
@@ -158,9 +158,11 @@ function ResignationTable({
   onReject: (r: ResignationRequest) => void;
   onPdf: (r: ResignationRequest) => void;
   onEmail: (r: ResignationRequest) => void;
+  onWhatsApp: (r: ResignationRequest) => void;
   onDelete: (r: ResignationRequest) => void;
   pdfLoading: number | null;
   emailLoading: number | null;
+  whatsappLoading: number | null;
 }) {
   if (isLoading)
     return (
@@ -225,6 +227,16 @@ function ResignationTable({
                   </Button>
                 )}
 
+                {r.status === "approved" && (
+                  <Button
+                    size="sm" variant="outline"
+                    className="h-7 px-2 text-xs border-teal-200 text-teal-700 hover:bg-teal-50"
+                    onClick={() => onWhatsApp(r)} disabled={whatsappLoading === r.id}
+                  >
+                    <MessageCircle className="w-3 h-3 mr-1" />{whatsappLoading === r.id ? "…" : "WhatsApp"}
+                  </Button>
+                )}
+
                 {showApproveReject && r.status === "dept_approved" && (
                   <Button
                     size="sm"
@@ -265,6 +277,7 @@ export default function Resignations() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ResignationRequest | null>(null);
   const [emailLoading, setEmailLoading] = useState<number | null>(null);
+  const [whatsappLoading, setWhatsappLoading] = useState<number | null>(null);
   const [pdfLoading, setPdfLoading] = useState<number | null>(null);
   const [resignTab, setResignTab] = useState("active");
 
@@ -275,6 +288,7 @@ export default function Resignations() {
   const { data: allData, isLoading } = useListResignations(undefined);
   const actionMutation = useResignationAction();
   const emailMutation = useResignationEmail();
+  const whatsappMutation = useWhatsAppResignation();
   const deleteMutation = useDeleteResignation();
 
   const refresh = () => {
@@ -364,6 +378,21 @@ export default function Resignations() {
     );
   };
 
+  const handleWhatsApp = (r: ResignationRequest) => {
+    if (whatsappLoading) return;
+    setWhatsappLoading(r.id);
+    whatsappMutation.mutate(r.id, {
+      onSuccess: (data) => {
+        toast({ title: "Sent via WhatsApp", description: `Sent to ${data.sentTo}` });
+        setWhatsappLoading(null);
+      },
+      onError: (err: any) => {
+        toast({ title: "WhatsApp send failed", description: err?.message, variant: "destructive" });
+        setWhatsappLoading(null);
+      },
+    });
+  };
+
   const tableProps = {
     isLoading,
     onView: setSelected,
@@ -371,9 +400,11 @@ export default function Resignations() {
     onReject:  (r: ResignationRequest) => { setSelected(r); setActionType("reject");  setConfirmOpen(true); },
     onPdf: handlePdf,
     onEmail: handleEmail,
+    onWhatsApp: handleWhatsApp,
     onDelete: setDeleteTarget,
     pdfLoading,
     emailLoading,
+    whatsappLoading,
   };
 
   return (
@@ -590,6 +621,13 @@ export default function Resignations() {
                   >
                     <Mail className="w-4 h-4 mr-1.5" />
                     {emailLoading === selected.id ? "Sending…" : "Send Email"}
+                  </Button>
+                  <Button
+                    variant="outline" className="flex-1 border-teal-200 text-teal-700 hover:bg-teal-50"
+                    onClick={() => handleWhatsApp(selected)} disabled={whatsappLoading === selected.id}
+                  >
+                    <MessageCircle className="w-4 h-4 mr-1.5" />
+                    {whatsappLoading === selected.id ? "Sending…" : "Send via WhatsApp"}
                   </Button>
                 </div>
               )}

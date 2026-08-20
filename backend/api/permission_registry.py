@@ -73,6 +73,7 @@ MODULE_TREE: list[dict] = [
         {"key": "settings.production_payroll", "label": "Production Payroll"},
         {"key": "settings.salary_slip", "label": "Salary Slip"},
         {"key": "settings.smtp", "label": "SMTP / Email"},
+        {"key": "settings.whatsapp", "label": "WhatsApp"},
         {"key": "settings.backup", "label": "Backup"},
     ]},
 ]
@@ -202,6 +203,7 @@ URL_MODULE_MAP: dict[str, str] = {
     "production-shift-segments": "settings.attendance",
     "document-settings": "settings.documents",
     "backup": "settings.backup",
+    "whatsapp": "settings.whatsapp",
     # idcard-settings (Settings → ID Card tab) intentionally maps to "id_cards"
     # above, not a settings.* key -it's the same permission that already
     # governs the ID Cards feature page, not a separate Settings concern.

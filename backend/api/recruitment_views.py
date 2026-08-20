@@ -704,6 +704,41 @@ def resignation_email(request: Request, pk: int) -> Response:
     return Response({"ok": True, "sentTo": to_email, "pdfAttached": pdf_bytes is not None})
 
 
+@api_view(["POST"])
+@require_hr
+def resignation_whatsapp(request: Request, pk: int) -> Response:
+    from . import whatsapp_service
+
+    if not whatsapp_service.is_configured():
+        return _error("WhatsApp is not configured on this server (missing credentials in .env).", 400)
+
+    r = (
+        ResignationRequest.objects.select_related(
+            "employee", "employee__department", "employee__designation", "dept_head"
+        )
+        .filter(pk=pk)
+        .first()
+    )
+    if not r:
+        return _error("Not found", 404)
+    if r.status != "approved":
+        return _error("WhatsApp send is only available for approved resignations", 400)
+
+    emp = r.employee
+    pdf_bytes = build_resignation_letter_pdf(r)
+    emp_name = f"{emp.first_name} {emp.last_name}".strip()
+    last_working = r.last_working_date.strftime("%d %B %Y") if r.last_working_date else "as mutually agreed"
+
+    log = whatsapp_service.send_document(
+        emp, "resignation_letter", pdf_bytes, f"resignation_acceptance_{emp.employee_code}_{r.id}.pdf",
+        body_params=[emp_name, last_working],
+        document_ref_id=r.id, sent_by_id=request.jwt_user.get("hrUserId"),
+    )
+    if log.status != "sent":
+        return _error(log.error_message, 400)
+    return Response({"ok": True, "sentTo": log.phone_number})
+
+
 # ── Department Headcount / Required Roles ─────────────────────────────────────
 
 @api_view(["GET", "POST"])

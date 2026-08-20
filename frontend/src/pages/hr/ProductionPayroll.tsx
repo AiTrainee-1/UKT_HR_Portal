@@ -16,14 +16,16 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
 import { useSalarySlipBulk } from "@/contexts/SalarySlipBulkContext";
+import { useWhatsAppBulk } from "@/contexts/WhatsAppBulkContext";
 import PayrollGenerationPipeline from "@/components/PayrollGenerationPipeline";
 import SalarySlipBulkPipeline from "@/components/SalarySlipBulkPipeline";
+import WhatsAppBulkPipeline from "@/components/WhatsAppBulkPipeline";
 import { MONTH_NAMES, STATUS_CONFIG, BreakdownDrawer, PayrollRow } from "@/components/payroll/BreakdownDrawer";
 import {
   useListDepartments, useUpdatePayrollRecord, useListSalarySlips,
   useEmailSalarySlip, type SalarySlipItem,
 } from "@/lib/api-client";
-import { previewDocumentPdf, downloadDocumentPdf } from "@/lib/api-client/custom-hooks";
+import { previewDocumentPdf, downloadDocumentPdf, useWhatsAppSalarySlip } from "@/lib/api-client/custom-hooks";
 import {
   useProductionNextPeriod, useProductionSkipCheck, useListProductionPayroll,
   usePayrollSettings, type ProductionPayrollItem,
@@ -36,17 +38,33 @@ import { z } from "zod";
 import {
   Factory, Play, Users, TrendingUp, IndianRupee, CheckCircle2, Clock,
   AlertCircle, Info, AlertTriangle, RefreshCcw, X, Search, Download,
-  CalendarClock, Mail, FileSearch, Layers, Loader2, Edit, SlidersHorizontal,
+  CalendarClock, Mail, FileSearch, Layers, Loader2, Edit, SlidersHorizontal, MessageCircle,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Skipped Employees preview (production-scoped)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ProductionSkippedDialog({ periodStart, periodEnd, onClose }: {
-  periodStart: string; periodEnd: string; onClose: () => void;
+function ProductionSkippedDialog({ defaultPeriodStart, defaultPeriodEnd, otherPendingPeriods, onClose }: {
+  defaultPeriodStart: string;
+  defaultPeriodEnd: string;
+  otherPendingPeriods: { periodStart: string; periodEnd: string; count: number }[];
+  onClose: () => void;
 }) {
+  const [periodStart, setPeriodStart] = useState(defaultPeriodStart);
+  const [periodEnd, setPeriodEnd] = useState(defaultPeriodEnd);
   const { data, isLoading, isFetching, refetch } = useProductionSkipCheck({ periodStart, periodEnd });
+
+  // Every period with an outstanding pending balance right now, plus the
+  // upcoming next period (which may have nothing pending yet if it hasn't
+  // been generated) -lets HR see why an employee is missing from ANY of the
+  // periods contributing to the Pending Payment total, not just the next one.
+  const periodOptions = [
+    { periodStart: defaultPeriodStart, periodEnd: defaultPeriodEnd, label: "Next period (upcoming)" },
+    ...otherPendingPeriods
+      .filter(p => !(p.periodStart === defaultPeriodStart && p.periodEnd === defaultPeriodEnd))
+      .map(p => ({ periodStart: p.periodStart, periodEnd: p.periodEnd, label: `${p.periodStart} – ${p.periodEnd} (${p.count} pending)` })),
+  ];
 
   return (
     <Dialog open onOpenChange={onClose}>
@@ -57,6 +75,22 @@ function ProductionSkippedDialog({ periodStart, periodEnd, onClose }: {
           </DialogTitle>
           <p className="text-xs text-muted-foreground">Production · {periodStart} – {periodEnd}</p>
         </DialogHeader>
+
+        {periodOptions.length > 1 && (
+          <select
+            value={`${periodStart}|${periodEnd}`}
+            onChange={e => {
+              const [s, en] = e.target.value.split("|");
+              setPeriodStart(s);
+              setPeriodEnd(en);
+            }}
+            className="h-8 rounded-md border px-2 text-xs bg-background w-full"
+          >
+            {periodOptions.map(p => (
+              <option key={`${p.periodStart}|${p.periodEnd}`} value={`${p.periodStart}|${p.periodEnd}`}>{p.label}</option>
+            ))}
+          </select>
+        )}
 
         {isLoading ? (
           <div className="space-y-2 py-4">
@@ -245,6 +279,14 @@ function PayrollSubTab() {
   const { data: departments } = useListDepartments();
   const { data: nextPeriod } = useProductionNextPeriod();
   const { data: runs, isLoading } = useListProductionPayroll({ limit: 500 });
+  // NOT auto-run, unlike Staff's equivalent -measured directly against this
+  // backend, the production skip-check takes ~84s for 114 employees (vs
+  // Staff's ~14s for 119), since the production payroll engine's per-
+  // employee work (period-based attendance across the full period, segment-
+  // based shift logic) is inherently heavier. Auto-firing this on every
+  // page load would mean an 84s background wait on every single visit, so
+  // it stays click-triggered -both the KPI card and the existing button
+  // open the same dialog, which does the actual fetch on demand.
 
   const allRuns = runs ?? [];
   const filteredRuns = allRuns.filter(r => {
@@ -257,7 +299,26 @@ function PayrollSubTab() {
   const totalGross = filteredRuns.reduce((s, r) => s + r.grossSalary, 0);
   const totalDeductions = filteredRuns.reduce((s, r) => s + r.deductions, 0);
   const totalNet = filteredRuns.reduce((s, r) => s + r.finalSalary, 0);
-  const pendingCount = filteredRuns.filter(r => r.status === "pending").length;
+  // Was `filteredRuns.filter(pending).length` -that counts raw Payroll rows,
+  // not employees. Production runs on pay periods (~2/month by default), so
+  // one employee legitimately has several still-unpaid period-rows at once;
+  // counting rows inflated this to ~2x the real employee count. Distinct
+  // employee IDs is the correct "how many people are owed money" figure.
+  const pendingRuns = filteredRuns.filter(r => r.status === "pending");
+  const pendingCount = new Set(pendingRuns.map(r => r.employeeId)).size;
+
+  // Groups pending rows by pay period so the multi-period reality is shown
+  // explicitly (as its own card) instead of silently folded into "Pending
+  // Payment" the way it used to be.
+  const pendingByPeriod = new Map<string, { periodStart: string; periodEnd: string; count: number }>();
+  for (const r of pendingRuns) {
+    if (!r.periodStart || !r.periodEnd) continue;
+    const key = `${r.periodStart}|${r.periodEnd}`;
+    const existing = pendingByPeriod.get(key);
+    if (existing) existing.count += 1;
+    else pendingByPeriod.set(key, { periodStart: r.periodStart, periodEnd: r.periodEnd, count: 1 });
+  }
+  const pendingPeriods = Array.from(pendingByPeriod.values()).sort((a, b) => a.periodStart.localeCompare(b.periodStart));
 
   const handleMarkPaid = async (run: { id: number; employeeName?: string | null }) => {
     try {
@@ -302,8 +363,9 @@ function PayrollSubTab() {
       )}
       {showSkipCheck && nextPeriod && (
         <ProductionSkippedDialog
-          periodStart={nextPeriod.periodStart}
-          periodEnd={nextPeriod.periodEnd}
+          defaultPeriodStart={nextPeriod.periodStart}
+          defaultPeriodEnd={nextPeriod.periodEnd}
+          otherPendingPeriods={pendingPeriods}
           onClose={() => setShowSkipCheck(false)}
         />
       )}
@@ -335,21 +397,37 @@ function PayrollSubTab() {
       </div>
 
       {!isLoading && filteredRuns.length > 0 && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           {[
             { label: "Total Gross", value: `₹${(totalGross / 1000).toFixed(1)}K`, color: "text-blue-700", icon: TrendingUp, bg: "bg-blue-50" },
             { label: "Deductions", value: `₹${(totalDeductions / 1000).toFixed(1)}K`, color: "text-red-600", icon: IndianRupee, bg: "bg-red-50" },
             { label: "Net Payable", value: `₹${(totalNet / 1000).toFixed(1)}K`, color: "text-green-700", icon: CheckCircle2, bg: "bg-green-50" },
             { label: "Pending Payment", value: `${pendingCount} employees`, color: "text-amber-700", icon: Clock, bg: "bg-amber-50" },
+            {
+              label: "Pending Periods",
+              value: `${pendingPeriods.length} period${pendingPeriods.length === 1 ? "" : "s"}`,
+              sub: `${pendingRuns.length} records across periods`,
+              color: "text-purple-700", icon: Layers, bg: "bg-purple-50",
+            },
+            {
+              label: "Skipped", value: "Click to check",
+              sub: "for next period", color: "text-orange-700", icon: AlertTriangle, bg: "bg-orange-50",
+              onClick: () => setShowSkipCheck(true),
+            },
           ].map(s => (
-            <Card key={s.label} className="border-0 shadow-sm">
+            <Card
+              key={s.label}
+              className={`border-0 shadow-sm ${s.onClick ? "cursor-pointer hover:shadow-md transition-shadow" : ""}`}
+              onClick={s.onClick}
+            >
               <CardContent className="p-4 flex items-center gap-3">
                 <div className={`w-9 h-9 rounded-lg ${s.bg} flex items-center justify-center shrink-0`}>
                   <s.icon size={16} className={s.color} />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <p className="text-xs text-muted-foreground">{s.label}</p>
                   <p className={`text-base font-black ${s.color}`}>{s.value}</p>
+                  {s.sub && <p className="text-[10px] text-muted-foreground truncate">{s.sub}</p>}
                 </div>
               </CardContent>
             </Card>
@@ -640,13 +718,16 @@ function PayslipSubTab() {
   const { toast } = useToast();
   const { token } = useAuth();
   const emailMutation = useEmailSalarySlip();
+  const whatsappMutation = useWhatsAppSalarySlip();
   const today = new Date();
   const [month, setMonth] = useState(today.getMonth() + 1);
   const [year, setYear] = useState(today.getFullYear());
   const [search, setSearch] = useState("");
   const [emailing, setEmailing] = useState<number | null>(null);
+  const [whatsapping, setWhatsapping] = useState<number | null>(null);
   const [pdfBusy, setPdfBusy] = useState<{ id: number; mode: "preview" | "download" } | null>(null);
   const { isRunning: bulkRunning, showPipeline, progress, dismiss: dismissBulkPipeline, triggerBulkDownload, triggerBulkEmail } = useSalarySlipBulk();
+  const { isRunning: whatsappBulkRunning, showPipeline: showWhatsappPipeline, progress: whatsappProgress, dismiss: dismissWhatsappPipeline, triggerBulkWhatsApp } = useWhatsAppBulk();
 
   const { data: slips = [], isLoading } = useListSalarySlips({ month, year, employmentType: "production" });
 
@@ -688,6 +769,18 @@ function PayslipSubTab() {
     }
   }
 
+  async function doWhatsApp(slip: SalarySlipItem) {
+    setWhatsapping(slip.id);
+    try {
+      const result = await whatsappMutation.mutateAsync(slip.id);
+      toast({ title: `WhatsApp sent to ${slip.employeeName}`, description: `Salary slip delivered to ${result.sentTo}` });
+    } catch (err: any) {
+      toast({ title: "Failed to send via WhatsApp", description: err?.message ?? "Unknown error", variant: "destructive" });
+    } finally {
+      setWhatsapping(null);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -711,6 +804,14 @@ function PayslipSubTab() {
             Bulk Send ({slips.length})
           </Button>
           <Button
+            variant="outline" size="sm" className="gap-2 h-8 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+            disabled={whatsappBulkRunning || slips.length === 0}
+            onClick={() => triggerBulkWhatsApp({ month, year, employmentType: "production" })}
+          >
+            {whatsappBulkRunning ? <Loader2 size={13} className="animate-spin" /> : <MessageCircle size={13} />}
+            Bulk WhatsApp ({slips.length})
+          </Button>
+          <Button
             variant="outline" size="sm" className="gap-2 h-8"
             disabled={bulkRunning || slips.length === 0}
             onClick={() => triggerBulkDownload({ month, year, employmentType: "production" })}
@@ -722,6 +823,7 @@ function PayslipSubTab() {
       </div>
 
       <SalarySlipBulkPipeline active={showPipeline} data={progress} onDismiss={dismissBulkPipeline} />
+      <WhatsAppBulkPipeline active={showWhatsappPipeline} data={whatsappProgress} onDismiss={dismissWhatsappPipeline} />
 
       {!isLoading && slips.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -779,6 +881,9 @@ function PayslipSubTab() {
                     </Button>
                     <Button size="icon" variant="ghost" className="h-7 w-7" disabled={emailing === s.id} onClick={() => doEmail(s)}>
                       <Mail size={13} />
+                    </Button>
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-emerald-600 hover:text-emerald-700" disabled={whatsapping === s.id} onClick={() => doWhatsApp(s)}>
+                      <MessageCircle size={13} />
                     </Button>
                   </div>
                 </td>

@@ -114,8 +114,31 @@ def _filtered_slip_qs(request: Request, params=None):
     if emp_id:   qs = qs.filter(employee_id=emp_id)
     if month:    qs = qs.filter(month=int(month))
     if year:     qs = qs.filter(year=int(year))
-    if emp_type == "staff":      qs = qs.filter(week_number__isnull=True)
-    elif emp_type == "production": qs = qs.filter(week_number__isnull=False)
+    # Was `week_number__isnull=True/False` -that split predates period-based
+    # production payroll. Weekly production slips do set week_number, but
+    # period-based production slips (period_start/period_end, the current
+    # production engine) leave week_number NULL too -identical to a plain
+    # staff slip -so the old check silently misclassified every period-based
+    # production slip as "staff" (and, since one production employee gets
+    # several period slips a month, wildly inflated the Staff tab's employee/
+    # slip counts). employee__employment_type is the one unambiguous source
+    # of truth for this split, already used everywhere else in the app.
+    if emp_type == "staff":
+        qs = qs.filter(employee__employment_type="staff")
+    elif emp_type == "production":
+        qs = qs.filter(employee__employment_type="production")
+        # Excludes stale legacy week_number-based slips left over from before
+        # production payroll moved to period-based generation -those rows
+        # never got cleaned up, so without this filter an employee shows up
+        # multiple times under the same month/year label: once for each
+        # current pay period that label happens to cover, PLUS once more for
+        # the old leftover weekly slip, which reads as duplication/corruption
+        # even though nothing is actually wrong with the underlying data.
+        # Matches the exact same scoping production_payroll_views.py already
+        # applies to the Payroll list (`salary_mode="shift", period_start__
+        # isnull=False`) -this just applies the equivalent rule to SalarySlip.
+        if not week_num:
+            qs = qs.filter(period_start__isnull=False)
     if week_num: qs = qs.filter(week_number=int(week_num))
     return qs
 
@@ -256,6 +279,93 @@ def email_salary_slip(request: Request, pk: int) -> Response:
         status = 400 if result.startswith("Employee has no email") else 502
         return Response({"error": result}, status=status)
     return Response({"ok": True, "sentTo": result})
+
+
+def _send_slip_whatsapp(s: SalarySlip, sent_by_id: int | None = None):
+    """Shared by the single-send and bulk-send endpoints -mirrors
+    _send_slip_email's role but for WhatsApp. Always returns a
+    WhatsAppMessageLog row (see whatsapp_service.send_document)."""
+    from . import whatsapp_service
+    from .company_documents_views import build_salary_slip_pdf
+
+    emp = s.employee
+    pdf_bytes = build_salary_slip_pdf(s)
+    emp_name = f"{emp.first_name} {emp.last_name}".strip()
+    return whatsapp_service.send_document(
+        emp, "salary_slip", pdf_bytes, f"salary_slip_{s.slip_number}.pdf",
+        body_params=[emp_name, f"{MONTHS[s.month]} {s.year}"],
+        document_ref_id=s.id, sent_by_id=sent_by_id,
+    )
+
+
+@api_view(["POST"])
+@require_hr
+def whatsapp_salary_slip(request: Request, pk: int) -> Response:
+    """Send a salary slip via WhatsApp using the configured Meta template."""
+    from . import whatsapp_service
+
+    if not whatsapp_service.is_configured():
+        return Response({"error": "WhatsApp is not configured on this server (missing credentials in .env)."}, status=400)
+
+    try:
+        s = (
+            SalarySlip.objects
+            .select_related("employee", "employee__department", "employee__designation")
+            .get(pk=pk)
+        )
+    except SalarySlip.DoesNotExist:
+        return Response({"error": "Slip not found"}, status=404)
+
+    log = _send_slip_whatsapp(s, sent_by_id=request.jwt_user.get("hrUserId"))
+    if log.status != "sent":
+        return Response({"error": log.error_message}, status=400)
+    return Response({"ok": True, "sentTo": log.phone_number})
+
+
+@api_view(["POST"])
+@require_hr
+def salary_slip_bulk_whatsapp(request: Request) -> Response:
+    """
+    POST /api/salary-slips/bulk-whatsapp
+    Body: { month, year, employmentType?, weekNumber? } -same filters as the
+    list endpoint and salary_slip_bulk_email. Sends every matching slip via
+    WhatsApp to its employee's phone number.
+    """
+    from . import whatsapp_bulk_progress as progress
+    from . import whatsapp_service
+
+    slips = list(_filtered_slip_qs(request, params=request.data))
+    if not slips:
+        return Response({"error": "No salary slips match the selected filters"}, status=404)
+
+    # Fail fast, before generating a single PDF, rather than burning time
+    # building one per slip (up to several hundred) only to have every one
+    # of them fail the same "not configured" check inside send_document.
+    if not whatsapp_service.is_configured():
+        return Response({"error": "WhatsApp is not configured on this server (missing credentials in .env)."}, status=400)
+
+    sent_by_id = request.jwt_user.get("hrUserId")
+    progress.start(len(slips), "salary_slip")
+    sent, failed = 0, 0
+    for s in slips:
+        emp_name = f"{s.employee.first_name} {s.employee.last_name}".strip()
+        log = _send_slip_whatsapp(s, sent_by_id=sent_by_id)
+        ok = log.status == "sent"
+        if ok:
+            sent += 1
+        else:
+            failed += 1
+        progress.step(emp_name, s.employee.employee_code, ok, log.error_message)
+    progress.finish()
+
+    return Response({"ok": True, "sent": sent, "failed": failed, "failures": progress.snapshot()["failures"]})
+
+
+@api_view(["GET"])
+@require_hr
+def salary_slip_bulk_whatsapp_progress(request: Request) -> Response:
+    from . import whatsapp_bulk_progress as progress
+    return Response(progress.snapshot())
 
 
 @api_view(["GET"])

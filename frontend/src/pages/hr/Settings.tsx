@@ -12,7 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Building2, Clock, Mail, Database, IndianRupee, FileText, Upload, X,
   Fingerprint, CreditCard, Plus, Trash2, Power, Pencil, FileSignature, Award, Eye,
-  AlertTriangle, Info, Briefcase, Factory, UserCheck,
+  AlertTriangle, Info, Briefcase, Factory, UserCheck, MessageCircle, CheckCircle2,
 } from "lucide-react";
 import {
   usePayrollSettings, useUpdatePayrollSettings,
@@ -25,6 +25,8 @@ import {
   useDocumentSettings, useUpdateDocumentSettings, previewDocumentPdf,
   type DocumentType,
   useProductionNextPeriod, useListShifts,
+  useWhatsAppStatus, useWhatsAppTemplates, useUpdateWhatsAppTemplate,
+  type WhatsAppDocumentType,
 } from "@/lib/api-client/custom-hooks";
 import { TimePicker12h } from "@/components/ui/time-picker-12h";
 import { useAuth, permissionLevel } from "@/contexts/AuthContext";
@@ -47,6 +49,7 @@ const SETTINGS_TAB_MODULE: Record<string, string> = {
   production_payroll: "settings.production_payroll",
   "salary-slip": "settings.salary_slip",
   smtp: "settings.smtp",
+  whatsapp: "settings.whatsapp",
   backup: "settings.backup",
 };
 
@@ -555,6 +558,141 @@ function DriveConfigCard() {
   );
 }
 
+const WHATSAPP_DOCUMENT_TYPES: { value: WhatsAppDocumentType; label: string }[] = [
+  { value: "salary_slip", label: "Salary Slip" },
+  { value: "id_card", label: "ID Card" },
+  { value: "offer_letter", label: "Offer Letter" },
+  { value: "experience_letter", label: "Experience Letter" },
+  { value: "resignation_letter", label: "Resignation Letter" },
+  { value: "other", label: "Other Employee Documents" },
+];
+
+function WhatsAppTemplateRow({ documentType, label }: { documentType: WhatsAppDocumentType; label: string }) {
+  const { toast } = useToast();
+  const { data: templates } = useWhatsAppTemplates();
+  const updateTemplate = useUpdateWhatsAppTemplate();
+  const existing = templates?.find(t => t.documentType === documentType);
+
+  const [templateName, setTemplateName] = useState("");
+  const [languageCode, setLanguageCode] = useState("en");
+  const [variableNote, setVariableNote] = useState("");
+  const [isEnabled, setIsEnabled] = useState(false);
+
+  useEffect(() => {
+    if (existing) {
+      setTemplateName(existing.metaTemplateName);
+      setLanguageCode(existing.metaLanguageCode);
+      setVariableNote(existing.variableNote);
+      setIsEnabled(existing.isEnabled);
+    }
+  }, [existing?.metaTemplateName, existing?.metaLanguageCode, existing?.variableNote, existing?.isEnabled]);
+
+  const save = async () => {
+    try {
+      await updateTemplate.mutateAsync({
+        documentType,
+        data: { metaTemplateName: templateName, metaLanguageCode: languageCode, variableNote, isEnabled },
+      });
+      toast({ title: `${label} WhatsApp template saved` });
+    } catch {
+      toast({ title: "Failed to save", variant: "destructive" });
+    }
+  };
+
+  return (
+    <div className="p-3 rounded-lg border border-gray-200 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-semibold text-gray-800">{label}</p>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-400">{isEnabled ? "Enabled" : "Disabled"}</span>
+          <Switch checked={isEnabled} onCheckedChange={setIsEnabled} />
+        </div>
+      </div>
+      <div className="grid sm:grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label className="text-xs">Meta Template Name</Label>
+          <Input value={templateName} onChange={e => setTemplateName(e.target.value)} placeholder="e.g. salary_slip_ready" />
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs">Language Code</Label>
+          <Input value={languageCode} onChange={e => setLanguageCode(e.target.value)} placeholder="en" />
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        <Label className="text-xs">Variable Note (for your reference only)</Label>
+        <Input value={variableNote} onChange={e => setVariableNote(e.target.value)} placeholder="{{1}}=employee name, {{2}}=month/year" />
+      </div>
+      <Button size="sm" variant="outline" onClick={save} disabled={updateTemplate.isPending}>
+        {updateTemplate.isPending ? "Saving…" : "Save Template"}
+      </Button>
+    </div>
+  );
+}
+
+function WhatsAppSettingsCard() {
+  const { data: status, isLoading: statusLoading } = useWhatsAppStatus();
+
+  return (
+    <div className="space-y-4">
+      <Card className="border-0 shadow-sm">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-bold flex items-center gap-2">
+            <MessageCircle size={15} className="text-emerald-500" /> WhatsApp Cloud API
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="p-3 rounded-lg bg-amber-50 border border-amber-100 text-xs text-amber-700">
+            Credentials (access token, phone number ID) are configured directly in the server's{" "}
+            <code>.env</code> file, never stored in the database or entered here -this keeps them out of
+            reach of anything that reads Settings data, including database backups.
+          </div>
+          {statusLoading ? (
+            <div className="h-10 w-full rounded-lg bg-gray-100 animate-pulse" />
+          ) : status?.configured ? (
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-green-50 border border-green-100 text-xs text-green-700">
+              <CheckCircle2 size={14} />
+              <span>
+                Configured -phone number ending in <strong>…{status.phoneNumberId}</strong>, API {status.apiVersion}.
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 border border-red-100 text-xs text-red-700">
+              <AlertTriangle size={14} />
+              <span>
+                Not configured -set <code>WHATSAPP_ACCESS_TOKEN</code>, <code>WHATSAPP_PHONE_NUMBER_ID</code>, and{" "}
+                <code>WHATSAPP_BUSINESS_ACCOUNT_ID</code> in <code>.env</code> and restart the server.
+              </span>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="border-0 shadow-sm">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-bold flex items-center gap-2">
+            <MessageCircle size={15} className="text-emerald-500" /> Message Templates
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="p-3 rounded-lg bg-blue-50 border border-blue-100 text-xs text-blue-700">
+            Meta requires every WhatsApp message a business sends first (rather than replying to the
+            customer) to use a pre-approved template -its wording can't be freely edited here, only which
+            approved template gets used per document type. Create and get templates approved in{" "}
+            <strong>Meta Business Manager → WhatsApp → Message Templates</strong> first, then enter the
+            exact template name below. A document type stays disabled (send attempts fail with a clear
+            error) until a template name is set and the toggle is turned on.
+          </div>
+          <div className="grid gap-3">
+            {WHATSAPP_DOCUMENT_TYPES.map(({ value, label }) => (
+              <WhatsAppTemplateRow key={value} documentType={value} label={label} />
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function RestoreBackupCard() {
   const { toast } = useToast();
   const { user, token } = useAuth();
@@ -566,6 +704,18 @@ function RestoreBackupCard() {
   const [confirmText, setConfirmText] = useState("");
   const [restoring, setRestoring] = useState(false);
   const { data: restoreStatus } = useRestoreStatus(restoring);
+
+  // Fires once when a restore transitions from active -> finished (ok
+  // becomes true/false), so the outcome is impossible to miss even if HR
+  // isn't staring at the inline status box the whole time.
+  useEffect(() => {
+    if (!restoring || !restoreStatus || restoreStatus.active) return;
+    if (restoreStatus.ok) {
+      toast({ title: "Backup restored successfully", description: restoreStatus.detail });
+    } else {
+      toast({ title: "Restore failed", description: restoreStatus.detail, variant: "destructive" });
+    }
+  }, [restoring, restoreStatus?.active, restoreStatus?.ok]);
 
   const pickFile = (f: File | null) => {
     setFile(f);
@@ -686,6 +836,32 @@ function RestoreBackupCard() {
                   <p>Backup date: {validated.manifest.createdAt ? new Date(validated.manifest.createdAt).toLocaleString("en-IN") : "unknown"}</p>
                   <p>Size: {formatBackupFileSize(validated.sizeBytes)} · Files: {validated.mediaFileCount}</p>
                 </div>
+
+                {validated.staleness?.isOlderThanCurrentData && (
+                  <div className="p-3 rounded-lg bg-amber-50 border-2 border-amber-300 text-xs text-amber-800 space-y-1.5">
+                    <p className="font-bold flex items-center gap-1.5">
+                      <AlertTriangle size={13} /> This backup is older than what's currently live
+                    </p>
+                    <p>
+                      Restoring will discard everything created since{" "}
+                      {validated.staleness.backupCreatedAt ? new Date(validated.staleness.backupCreatedAt).toLocaleString("en-IN") : "this backup"}.
+                    </p>
+                    <p className="tabular-nums">
+                      Current: <strong>{validated.staleness.currentCounts.employees}</strong> employees, {" "}
+                      <strong>{validated.staleness.currentCounts.payrollRecords}</strong> payroll records, {" "}
+                      <strong>{validated.staleness.currentCounts.salarySlips}</strong> salary slips
+                      {" -"}This backup: <strong>{validated.staleness.backupCounts.employees}</strong> employees, {" "}
+                      <strong>{validated.staleness.backupCounts.payrollRecords}</strong> payroll records, {" "}
+                      <strong>{validated.staleness.backupCounts.salarySlips}</strong> salary slips
+                    </p>
+                    <p>A safety backup of the current state is taken automatically before restoring, so this is always undoable.</p>
+                  </div>
+                )}
+                {validated.staleness === null && (
+                  <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 text-xs text-gray-500">
+                    This is an older-format backup with no row counts recorded, so staleness can't be compared automatically -review the backup date above carefully before restoring.
+                  </div>
+                )}
 
                 <div className="flex flex-wrap items-center gap-2">
                   <Button size="sm" variant="outline" onClick={downloadScript}>
@@ -1341,6 +1517,7 @@ export default function Settings() {
               { value: "production_payroll", label: "Production Payroll", icon: <Factory size={13} /> },
               { value: "salary-slip", label: "Salary Slip", icon: <FileText size={13} /> },
               { value: "smtp", label: "SMTP / Email", icon: <Mail size={13} /> },
+              { value: "whatsapp", label: "WhatsApp", icon: <MessageCircle size={13} /> },
               { value: "backup", label: "Backup", icon: <Database size={13} /> },
             ].filter((t) => tabLevel(t.value) !== "hidden")}
             value={settingsTab}
@@ -3059,6 +3236,11 @@ export default function Settings() {
                 </div>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          {/* WhatsApp */}
+          <TabsContent value="whatsapp" className="mt-4">
+            <WhatsAppSettingsCard />
           </TabsContent>
 
           {/* Backup */}

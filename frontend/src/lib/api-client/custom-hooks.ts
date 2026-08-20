@@ -1790,6 +1790,116 @@ export type SalarySlipBulkEmailResult = {
   failures: { employeeName: string; employeeCode: string; error: string }[];
 };
 
+// ── WhatsApp (Settings, single-send mutations, bulk-send progress) ─────────
+
+export type WhatsAppDocumentType =
+  | "salary_slip" | "id_card" | "offer_letter" | "experience_letter" | "resignation_letter" | "other";
+
+export type WhatsAppStatus = { configured: boolean; phoneNumberId: string | null; apiVersion: string };
+
+export const useWhatsAppStatus = () =>
+  useQuery<WhatsAppStatus>({
+    queryKey: ["/api/whatsapp/status"],
+    queryFn: () => customFetch<WhatsAppStatus>("/api/whatsapp/status"),
+  });
+
+export type WhatsAppTemplate = {
+  documentType: WhatsAppDocumentType;
+  metaTemplateName: string;
+  metaLanguageCode: string;
+  variableNote: string;
+  isEnabled: boolean;
+};
+
+export const useWhatsAppTemplates = () =>
+  useQuery<WhatsAppTemplate[]>({
+    queryKey: ["/api/whatsapp/templates"],
+    queryFn: () => customFetch<WhatsAppTemplate[]>("/api/whatsapp/templates"),
+  });
+
+export const useUpdateWhatsAppTemplate = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ documentType, data }: { documentType: WhatsAppDocumentType; data: Partial<WhatsAppTemplate> }) =>
+      customFetch<WhatsAppTemplate>(`/api/whatsapp/templates/${documentType}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/templates"] }),
+  });
+};
+
+// Single-document sends -one mutation per document type, same {ok, sentTo}
+// shape as the equivalent email mutations above.
+export const useWhatsAppSalarySlip = () =>
+  useMutation({
+    mutationFn: (id: number) =>
+      customFetch<{ ok: boolean; sentTo: string }>(`/api/salary-slips/${id}/whatsapp`, { method: "POST" }),
+  });
+
+export const useWhatsAppIdCard = () =>
+  useMutation({
+    mutationFn: (employeeId: number) =>
+      customFetch<{ ok: boolean; sentTo: string }>("/api/idcard/whatsapp", {
+        method: "POST",
+        body: JSON.stringify({ employeeId }),
+      }),
+  });
+
+export const useWhatsAppOfferLetter = () =>
+  useMutation({
+    mutationFn: (employeeId: number) =>
+      customFetch<{ ok: boolean; sentTo: string }>(`/api/employees/${employeeId}/offer-letter/whatsapp`, { method: "POST" }),
+  });
+
+export const useWhatsAppExperienceLetter = () =>
+  useMutation({
+    mutationFn: ({ employeeId, lastWorkingDate }: { employeeId: number; lastWorkingDate?: string }) =>
+      customFetch<{ ok: boolean; sentTo: string }>(`/api/employees/${employeeId}/experience-letter/whatsapp`, {
+        method: "POST",
+        body: JSON.stringify({ lastWorkingDate }),
+      }),
+  });
+
+export const useWhatsAppResignation = () =>
+  useMutation({
+    mutationFn: (id: number) =>
+      customFetch<{ ok: boolean; sentTo: string }>(`/api/recruitment/resignations/${id}/whatsapp`, { method: "POST" }),
+  });
+
+export const useWhatsAppEmployeeDocument = () =>
+  useMutation({
+    mutationFn: (id: number) =>
+      customFetch<{ ok: boolean; sentTo: string }>(`/api/employee-documents/${id}/whatsapp`, { method: "POST" }),
+  });
+
+// Bulk WhatsApp send (Salary Slip only, mirroring salary_slip_bulk_email 1:1)
+export type WhatsAppBulkFailure = { employeeName: string; employeeCode: string; error: string };
+
+export type WhatsAppBulkProgress = {
+  stage: "idle" | "running" | "completed";
+  documentType: WhatsAppDocumentType | null;
+  total: number;
+  completed: number;
+  succeeded: number;
+  failed: number;
+  currentEmployee: string | null;
+  failures: WhatsAppBulkFailure[];
+  startedAt: string | null;
+  finishedAt: string | null;
+};
+
+export const useWhatsAppBulkProgress = (enabled: boolean) =>
+  useQuery<WhatsAppBulkProgress>({
+    queryKey: ["/api/salary-slips/bulk-whatsapp-progress"],
+    queryFn: () => customFetch<WhatsAppBulkProgress>("/api/salary-slips/bulk-whatsapp-progress"),
+    enabled,
+    refetchInterval: enabled ? 600 : false,
+    staleTime: 0,
+  });
+
+export type WhatsAppBulkResult = { ok: boolean; sent: number; failed: number; failures: WhatsAppBulkFailure[] };
+
 export const useUpdatePayrollRecord = () =>
   useMutation({
     mutationFn: ({ id, data }: {
@@ -3963,6 +4073,13 @@ export const useTestDriveConnection = () =>
       }),
   });
 
+export type RestoreStaleness = {
+  backupCreatedAt?: string;
+  backupCounts: { employees: number; payrollRecords: number; salarySlips: number };
+  currentCounts: { employees: number; payrollRecords: number; salarySlips: number };
+  isOlderThanCurrentData: boolean;
+} | null;
+
 export type RestoreValidateResult = {
   ok: boolean;
   stagedPath: string;
@@ -3970,6 +4087,7 @@ export type RestoreValidateResult = {
   mediaFileCount: number;
   sizeBytes: number;
   warnings: string[];
+  staleness: RestoreStaleness;
   guidedScript: string;
 };
 

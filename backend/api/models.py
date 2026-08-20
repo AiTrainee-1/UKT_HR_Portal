@@ -2396,7 +2396,13 @@ class BackupSchedule(models.Model):
     AutoSyncRule's shape (see auto_sync.py) for the scheduler."""
 
     is_enabled = models.BooleanField(default=False)
-    time = models.TimeField(default="02:00", help_text="Time of day (Asia/Kolkata) this fires")
+    # A real time object, not the string "02:00" -on the very first
+    # get_or_create() for this singleton (e.g. right after a fresh migrate or
+    # a `manage.py flush`), Django assigns the field default to the in-memory
+    # instance without a DB round-trip, so a string default would stay a
+    # string on that first call, crashing the first backup_status request
+    # with "'str' object has no attribute 'strftime'".
+    time = models.TimeField(default=time(2, 0), help_text="Time of day (Asia/Kolkata) this fires")
     # Cron-compatible day-of-week string, e.g. "*" (every day) or "mon,tue,wed,thu,fri".
     days_of_week = models.TextField(default="*")
     # Oldest local backups beyond this count are pruned after a successful run.
@@ -2439,3 +2445,73 @@ class BackupDriveConfig(models.Model):
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
         ordering = ["-created_at"]
+
+
+class WhatsAppMessageLog(models.Model):
+    """
+    One row per WhatsApp document send attempt (single or bulk), success or
+    failure -shared across every document type instead of adding a parallel
+    whatsapp_sent_at column to SalarySlip/Employee/etc., mirroring how
+    emailed_at is shown per-document today but centralized so any list view
+    can look up "was this ever sent via WhatsApp" with one join, and bulk
+    sends can report exactly who failed and why.
+    """
+    DOCUMENT_TYPES = (
+        ("salary_slip", "Salary Slip"),
+        ("id_card", "ID Card"),
+        ("offer_letter", "Offer Letter"),
+        ("experience_letter", "Experience Letter"),
+        ("resignation_letter", "Resignation Letter"),
+        ("other", "Other Document"),
+    )
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id",
+        related_name="whatsapp_messages",
+    )
+    document_type = models.TextField(choices=DOCUMENT_TYPES, db_column="document_type")
+    # e.g. SalarySlip.id / EmployeeDocument.id, when the document is a
+    # specific existing record rather than generated fresh (ID Card).
+    document_ref_id = models.IntegerField(null=True, blank=True, db_column="document_ref_id")
+    phone_number = models.TextField(db_column="phone_number")
+    status = models.TextField(default="sent", db_column="status")  # "sent" | "failed"
+    meta_message_id = models.TextField(blank=True, default="", db_column="meta_message_id")
+    error_message = models.TextField(blank=True, default="", db_column="error_message")
+    sent_by = models.ForeignKey(
+        HRUser, null=True, blank=True, on_delete=models.SET_NULL,
+        db_column="sent_by_id", related_name="whatsapp_messages_sent",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "whatsapp_message_log"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["employee", "document_type"]),
+        ]
+
+
+class WhatsAppMessageTemplate(models.Model):
+    """
+    Per-document-type Meta message template configuration, editable from
+    Settings -> WhatsApp. This is business configuration, not a secret (the
+    actual API credentials stay .env-only, see settings.WHATSAPP_*) -it just
+    records which pre-approved Meta template name/language to use for each
+    document type, since Meta requires every business-initiated WhatsApp
+    message to use a template it has already reviewed and approved; the
+    template's wording itself can't be freely edited here, only which
+    approved template gets used and a human-readable note on what its
+    {{n}} variables mean, for HR's reference.
+    """
+    document_type = models.TextField(unique=True, db_column="document_type")
+    meta_template_name = models.TextField(blank=True, default="", db_column="meta_template_name")
+    meta_language_code = models.TextField(default="en", db_column="meta_language_code")
+    variable_note = models.TextField(
+        blank=True, default="", db_column="variable_note",
+        help_text="Human-readable note on what each {{n}} in the template maps to, e.g. '{{1}}=employee name, {{2}}=month/year'.",
+    )
+    is_enabled = models.BooleanField(default=False, db_column="is_enabled")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "whatsapp_message_template"
