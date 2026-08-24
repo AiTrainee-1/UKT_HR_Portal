@@ -179,6 +179,10 @@ def employee_login(request: Request) -> Response:
         return _error("No password set. Please set your password first.", 401)
     if not bcrypt.checkpw(password.encode(), employee.password_hash.encode()):
         return _error("Invalid password", 401)
+    # Feeds the HR portal's Mobile App Login page ("who has actually signed
+    # in, and when"). Written on every successful login, not just the first.
+    employee.last_mobile_login_at = timezone.now()
+    employee.save(update_fields=["last_mobile_login_at", "updated_at"])
     name = employee_full_name(employee)
     token = sign_token({"role": "employee", "employeeId": employee.id, "name": name})
     return Response(
@@ -1762,45 +1766,29 @@ def employee_dashboard_summary(request: Request) -> Response:
 
     today = date.today()
     month, year = today.month, today.year
-    prefix = f"{year}-{str(month).zfill(2)}"
 
-    # Present days -from biometric logs + manual attendance
-    present_dates: set = set()
-    for d in AttendanceLog.objects.filter(
-        employee_id=employee_id, date__year=year, date__month=month,
-    ).values_list("date", flat=True).distinct():
-        present_dates.add(d)
-    for d_str in Attendance.objects.filter(
-        employee_id=employee_id, date__startswith=prefix, present=True,
-    ).values_list("date", flat=True):
-        try:
-            present_dates.add(date.fromisoformat(d_str))
-        except Exception:
-            pass
-    present_days = len(present_dates)
+    emp = Employee.objects.filter(pk=employee_id).first()
+    if not emp:
+        return _error("Employee not found", 404)
 
-    # Working days so far this month (Mon–Sat, up to today)
-    working_days_so_far = sum(
-        1 for d in range(1, today.day + 1)
-        if date(year, month, d).weekday() != 6
-    )
+    # Present / half-shift / absent / leave / working days all come from the
+    # same day-by-day engine payroll, the HR portal and the mobile Attendance
+    # tab use (attendance_final.compute_month_records). This view previously
+    # ran its own inline count that hardcoded "Sunday off", ignored holidays
+    # entirely, counted any punch at all as a full present day, and derived
+    # absent purely by subtraction -so the app's Home card could disagree
+    # with its own Attendance tab (and with HRMS) for the very same month.
+    from .attendance_final import compute_month_records, month_summary_from_records
 
-    # Approved leave days this month
-    leave_days_this_month = 0
+    summary = month_summary_from_records(compute_month_records(emp, year, month))
+    working_days_so_far   = summary["workingDays"]
+    present_days          = summary["present"]
+    half_shift_days       = summary["halfShift"]
+    absent_days           = summary["absent"]
+    leave_days_this_month = summary["onLeave"]
+    late_days             = summary["late"]
+
     approved_leaves = LeaveRequest.objects.filter(employee_id=employee_id, status="approved")
-    for lv in approved_leaves:
-        try:
-            start = date.fromisoformat(str(lv.start_date))
-            end   = date.fromisoformat(str(lv.end_date))
-            cur   = start
-            while cur <= end:
-                if cur.year == year and cur.month == month and cur <= today:
-                    leave_days_this_month += 1
-                cur += timedelta(days=1)
-        except Exception:
-            pass
-
-    absent_days = max(0, working_days_so_far - present_days - leave_days_this_month)
 
     # Leave balance (sum of remaining across all leave types this year)
     leave_balance = LeaveBalance.objects.filter(
@@ -1847,7 +1835,10 @@ def employee_dashboard_summary(request: Request) -> Response:
 
     return Response({
         "employeeId":     employee_id,
+        "workingDays":    working_days_so_far,
         "presentDays":    present_days,
+        "halfShiftDays":  half_shift_days,
+        "lateDays":       late_days,
         "absentDays":     absent_days,
         "leaveDays":      leave_days_this_month,
         "leaveBalance":   float(leave_balance),

@@ -13,7 +13,9 @@ import {
   Building2, Clock, Mail, Database, IndianRupee, FileText, Upload, X,
   Fingerprint, CreditCard, Plus, Trash2, Power, Pencil, FileSignature, Award, Eye,
   AlertTriangle, Info, Briefcase, Factory, UserCheck, MessageCircle, CheckCircle2,
+  Palette,
 } from "lucide-react";
+import { ThemesPanel } from "@/components/ThemesPanel";
 import {
   usePayrollSettings, useUpdatePayrollSettings,
   useListBiometricDevices, useCreateBiometricDevice, useUpdateBiometricDevice, useDeleteBiometricDevice,
@@ -51,6 +53,7 @@ const SETTINGS_TAB_MODULE: Record<string, string> = {
   smtp: "settings.smtp",
   whatsapp: "settings.whatsapp",
   backup: "settings.backup",
+  themes: "settings.themes",
 };
 
 function DocumentThemeCard({
@@ -1519,6 +1522,7 @@ export default function Settings() {
               { value: "smtp", label: "SMTP / Email", icon: <Mail size={13} /> },
               { value: "whatsapp", label: "WhatsApp", icon: <MessageCircle size={13} /> },
               { value: "backup", label: "Backup", icon: <Database size={13} /> },
+              { value: "themes", label: "Themes", icon: <Palette size={13} /> },
             ].filter((t) => tabLevel(t.value) !== "hidden")}
             value={settingsTab}
             onChange={setSettingsTab}
@@ -3491,6 +3495,10 @@ export default function Settings() {
                 </Button>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="themes" className="mt-4">
+            <ThemesPanel readOnly={isTabViewOnly} />
           </TabsContent>
 
         </Tabs>

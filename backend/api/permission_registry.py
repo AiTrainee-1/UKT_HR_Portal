@@ -59,6 +59,7 @@ MODULE_TREE: list[dict] = [
     {"key": "user_management", "label": "User Management"},
     {"key": "activity_logs", "label": "Activity Logs"},
     {"key": "login_devices", "label": "Login Devices"},
+    {"key": "mobile_app_login", "label": "Mobile App Login"},
     {"key": "chat", "label": "Chat"},
     {"key": "notifications", "label": "Notifications"},
     {"key": "night_shift", "label": "Night Shift"},
@@ -75,6 +76,7 @@ MODULE_TREE: list[dict] = [
         {"key": "settings.smtp", "label": "SMTP / Email"},
         {"key": "settings.whatsapp", "label": "WhatsApp"},
         {"key": "settings.backup", "label": "Backup"},
+        {"key": "settings.themes", "label": "Themes"},
     ]},
 ]
 
@@ -186,6 +188,8 @@ URL_MODULE_MAP: dict[str, str] = {
     "audit-logs": "activity_logs",
 
     "login-sessions": "login_devices",
+
+    "mobile-app-logins": "mobile_app_login",
 
     "chat": "chat",
 

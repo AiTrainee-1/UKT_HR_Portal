@@ -663,6 +663,11 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
         "month": month,
         "year":  year,
         "summary": {
+            # workingDays = elapsed days this month minus holidays (see
+            # month_summary_from_records) -the denominator the employee
+            # apps show alongside Present/Absent/Leave so the figures are
+            # readable as "X of Y" rather than bare counts.
+            "workingDays": summary["workingDays"],
             "present":   summary["present"],
             "halfShift": summary["halfShift"],
             "absent":    summary["absent"],

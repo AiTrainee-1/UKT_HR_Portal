@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
 
 from dotenv import load_dotenv
 
@@ -35,8 +36,50 @@ MIDDLEWARE = [
 ROOT_URLCONF = "config.urls"
 WSGI_APPLICATION = "config.wsgi.application"
 
+# ── Database ──────────────────────────────────────────────────────────────
+# Cloud platforms (Railway, Render, Heroku, Fly) inject the connection as a
+# single DATABASE_URL rather than discrete fields, so that takes precedence
+# when present. Local/on-premise development is untouched: with no
+# DATABASE_URL set it falls back to the individual DB_* vars from .env
+# exactly as before.
+#
+# Parsed with urllib instead of pulling in dj-database-url -the only shape
+# this app needs is a postgres:// URL, and keeping the dependency list short
+# matters for cloud build times.
+
+
+def _database_from_url(url: str) -> dict | None:
+    """Turn postgres://user:pass@host:port/dbname into Django's DATABASES dict.
+
+    Returns None for anything that isn't a Postgres URL so the caller can
+    fall back to the discrete vars rather than starting with a broken config.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("postgres", "postgresql"):
+        return None
+    try:
+        port = parsed.port
+    except ValueError:  # non-numeric port in the URL
+        return None
+    # urlparse leaves credentials percent-encoded, and generated passwords
+    # routinely contain characters that get escaped (@ : / ?), so unquoting
+    # is required -not cosmetic.
+    return {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": unquote(parsed.path.lstrip("/")),
+        "USER": unquote(parsed.username or ""),
+        "PASSWORD": unquote(parsed.password or ""),
+        "HOST": parsed.hostname or "",
+        "PORT": str(port or ""),
+    }
+
+
+_DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+_db_from_url = _database_from_url(_DATABASE_URL) if _DATABASE_URL else None
+
 DATABASES = {
-    "default": {
+    "default": _db_from_url
+    or {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": os.environ.get("DB_NAME", "UKTex_DB"),
         "USER": os.environ.get("DB_USER", "postgres"),
@@ -45,6 +88,17 @@ DATABASES = {
         "PORT": os.environ.get("DB_PORT", "5432"),
     }
 }
+
+# Managed Postgres generally requires TLS, while a local install usually has
+# none configured -so this is only applied when explicitly asked for, via
+# DB_SSLMODE or an ?sslmode= parameter on DATABASE_URL. Set
+# DB_SSLMODE=require on Railway. (backup_service.py passes the same value to
+# pg_dump/psql through PGSSLMODE, so backups and the ORM agree.)
+_sslmode = os.environ.get("DB_SSLMODE", "").strip()
+if not _sslmode and _DATABASE_URL:
+    _sslmode = (parse_qs(urlparse(_DATABASE_URL).query).get("sslmode") or [""])[0].strip()
+if _sslmode:
+    DATABASES["default"].setdefault("OPTIONS", {})["sslmode"] = _sslmode
 
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"

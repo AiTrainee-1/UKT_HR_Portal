@@ -10,6 +10,7 @@ import {
   ChevronRight, Search, X, Command, UserCheck, UserMinus,
   CalendarCheck, Bell, Award, TrendingUp, Gift, CreditCard,
   CalendarHeart, MoonStar, MessageCircle, UserCog, FolderOpen, MonitorSmartphone,
+  Smartphone,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -122,6 +123,7 @@ const navGroups: NavGroupData[] = [
       // toggle (Settings → Attendance) is off. Staff-only feature.
       { path: '/hr/night-shift', label: 'Night Shift', icon: MoonStar },
       { path: '/hr/login-devices', label: 'Login Devices', icon: MonitorSmartphone },
+      { path: '/hr/mobile-app-login', label: 'Mobile App Login', icon: Smartphone },
       { path: '/hr/settings', label: 'Settings', icon: Settings },
     ],
   },

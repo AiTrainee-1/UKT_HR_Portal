@@ -46,9 +46,9 @@ Everything below assumes option 1 or 2 has been decided on -this guide covers mo
 
 In the Railway dashboard: **New Project → Deploy from GitHub repo**, pointing at this repository (or a fork/mirror of it). Then **+ New → Database → PostgreSQL** in the same project -Railway provisions it and automatically injects a `DATABASE_URL` env var into every service in the project.
 
-This codebase reads discrete `DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USER`/`DB_PASSWORD` fields (`backend/config/settings.py`), not a single `DATABASE_URL` string -either:
-- Parse Railway's `DATABASE_URL` into the discrete vars in a small startup shim, or
-- Set the five discrete vars manually in the Django service's Variables tab using the values shown on the Postgres service's **Connect** tab (host, port, database, user, password) -simplest for a first deployment, no code change needed.
+**`DATABASE_URL` works out of the box** -`backend/config/settings.py` parses it (scheme, credentials, host, port, database, and an optional `?sslmode=`) and only falls back to the discrete `DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USER`/`DB_PASSWORD` vars when it isn't set. So Railway's auto-injected variable needs no configuration at all, and local development keeps using `.env` unchanged.
+
+Percent-encoded characters in the password are decoded correctly, which matters because generated passwords routinely contain `@`, `:` or `/`. A `DATABASE_URL` that isn't a Postgres URL, or has a non-numeric port, is ignored rather than half-applied -the app falls back to the discrete vars instead of booting with a broken connection.
 
 ### 2. Configure the Django service
 
@@ -58,7 +58,7 @@ This codebase reads discrete `DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USER`/`DB_PASSWOR
 ```
 gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
 ```
-(Add `gunicorn` to `requirements.txt` if not already present -this project's existing production server is `waitress`, which also works fine as an alternative: `waitress-serve --host=0.0.0.0 --port=$PORT config.wsgi:application`, no code change either way.)
+`gunicorn` is already in `requirements.txt`. The on-premise deployment keeps using `waitress` (gunicorn needs `fcntl` and cannot run on Windows) -both are listed, so neither deployment target has to edit the file.
 
 **Environment variables** (Railway → Variables tab), matching `backend.md` Section 3:
 ```
@@ -67,7 +67,9 @@ DJANGO_SECRET_KEY=<new random secret>
 JWT_SECRET=<new random secret>
 ALLOWED_HOSTS=<your-railway-domain>.up.railway.app,your-custom-domain.com
 CORS_ALLOWED_ORIGINS=https://<your-vercel-domain>.vercel.app,https://your-custom-domain.com
-DB_HOST=... DB_PORT=... DB_NAME=... DB_USER=... DB_PASSWORD=...
+# DATABASE_URL is injected by Railway automatically -do not set it by hand.
+# The discrete DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD vars are only
+# needed if you are NOT using DATABASE_URL (e.g. an external database).
 DB_SSLMODE=require
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=<strong password>
@@ -76,7 +78,7 @@ WHATSAPP_ACCESS_TOKEN=...               # only if using WhatsApp -see backend.md
 WHATSAPP_PHONE_NUMBER_ID=...
 WHATSAPP_BUSINESS_ACCOUNT_ID=...
 ```
-`DB_SSLMODE=require` -managed Postgres providers including Railway's expect SSL; this app already supports it (added specifically for this scenario, see `backend.md` Section 3).
+`DB_SSLMODE=require` -managed Postgres providers including Railway's expect TLS. This now applies in two places at once: Django's own connection (as `OPTIONS.sslmode`) and the `pg_dump`/`psql` subprocesses the backup system shells out to (as `PGSSLMODE`), so backups and the ORM can't end up disagreeing about TLS. Alternatively append `?sslmode=require` to `DATABASE_URL` -settings.py reads it from either place, with the explicit env var winning.
 
 **Database privileges for Backup/Restore:** if using the in-app Backup/Restore feature (Settings → Backup) against Railway Postgres, the `DB_USER` needs owner privileges on the `public` schema for Restore's schema-reset step -Railway's default database user has this by default (unlike some other managed providers that lock it down), but confirm on the Postgres service's connection details before relying on Restore in production.
 

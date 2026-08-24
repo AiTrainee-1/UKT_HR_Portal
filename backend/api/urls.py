@@ -17,6 +17,10 @@ from .settlement_views import (
     advances, advance_detail, advance_repayments,
 )
 from .login_sessions_views import login_sessions, revoke_login_session
+from .mobile_login_views import (
+    mobile_app_logins, mobile_app_logins_export, mobile_app_reset_password,
+)
+from .theme_views import theme_settings, update_theme_settings
 from .hr_user_views import (
     roles, role_detail,
     hr_users, hr_user_detail,
@@ -418,6 +422,11 @@ urlpatterns = [
     path("audit-logs/stats", audit_logs_stats),
     path("login-sessions", login_sessions),
     path("login-sessions/<int:session_id>/revoke", revoke_login_session),
+    path("mobile-app-logins", mobile_app_logins),
+    path("mobile-app-logins/export", mobile_app_logins_export),
+    path("mobile-app-logins/<int:employee_id>/reset-password", mobile_app_reset_password),
+    path("theme-settings", theme_settings),
+    path("theme-settings/update", update_theme_settings),
 
     # ── Reports ──────────────────────────────────────────────────────────────
     path("reports/attendance-log",      attendance_report),

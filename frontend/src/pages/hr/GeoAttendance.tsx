@@ -620,12 +620,155 @@ function PhotoDialog({ verificationId, onClose }: { verificationId: number | nul
   );
 }
 
+// ── Punch location dialog ────────────────────────────────────────────────
+// Reviewing a punch needs more than the raw lat/lng printed on the card:
+// *where* it actually is, and how the employee got there. Shows the punch
+// pin (red when the device reported a mocked/spoofed fix), its GPS accuracy
+// radius, and that day's recorded route with direction arrows -reusing the
+// same route source and arrow helpers as the On-Duty Map tab so the two
+// always draw the same path. Links out to Google Maps for satellite view or
+// turn-by-turn navigation, since Leaflet's tiles alone can't do either.
+function PunchLocationDialog({
+  verification,
+  onClose,
+}: {
+  verification: OnDutyPunchVerificationItem | null;
+  onClose: () => void;
+}) {
+  const { data: route, isLoading: routeLoading } = useLiveLocationRoute(
+    verification?.employeeId ?? null,
+    verification?.punchDate ?? "",
+  );
+
+  const points = useMemo(
+    () => (route?.points ?? []).map((p) => [p.latitude, p.longitude] as [number, number]),
+    [route],
+  );
+
+  const arrowSamples = useMemo(() => {
+    if (points.length < 2) return [];
+    const step = Math.max(1, Math.floor(points.length / 8));
+    const out: { pos: [number, number]; rot: number }[] = [];
+    for (let i = step; i < points.length - 1; i += step) {
+      out.push({ pos: points[i], rot: bearingDeg(points[i - 1], points[i + 1] ?? points[i]) });
+    }
+    return out;
+  }, [points]);
+
+  // Unmount entirely when closed rather than toggling `open` -a Leaflet map
+  // built inside a hidden container renders at zero size and stays blank.
+  if (!verification) return null;
+
+  const pos: [number, number] = [verification.latitude, verification.longitude];
+  const query = `${verification.latitude},${verification.longitude}`;
+  const punchColor = verification.isMocked ? COLOR_MOCKED : COLOR_ON_DUTY;
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <MapPinned size={16} /> Punch #{verification.punchNumber} ·{" "}
+            {verification.punchType === "IN" ? "Check-In" : "Check-Out"} location
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="flex items-center gap-3 flex-wrap text-xs text-gray-500">
+          <span className="font-bold text-gray-900">{verification.employeeName}</span>
+          <span className="flex items-center gap-1">
+            <Clock size={11} /> {verification.punchTime.slice(0, 5)} on {verification.punchDate}
+          </span>
+          <span className="font-mono">{query}</span>
+          {verification.accuracyM != null && (
+            <span>±{Math.round(verification.accuracyM)}m accuracy</span>
+          )}
+          {verification.isMocked && (
+            <span className="flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-50 text-red-600">
+              <AlertTriangle size={10} /> Simulated location
+            </span>
+          )}
+        </div>
+
+        <div className="h-80 rounded-lg overflow-hidden border">
+          <MapContainer center={pos} zoom={16} className="h-full w-full" scrollWheelZoom>
+            <TileLayer
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+            />
+
+            {/* That day's travel path, drawn behind the punch pin */}
+            {points.length > 1 && (
+              <>
+                <Polyline positions={points} pathOptions={{ color: COLOR_NORMAL, weight: 3, opacity: 0.7 }} />
+                {arrowSamples.map((a, i) => (
+                  <Marker key={i} position={a.pos} icon={arrowIcon(COLOR_NORMAL, a.rot)} />
+                ))}
+                <Marker position={points[0]} icon={pinIcon(COLOR_START, "flag", 24)}>
+                  <Popup>Route start</Popup>
+                </Marker>
+              </>
+            )}
+
+            {/* GPS accuracy radius -how much slack the fix actually had */}
+            {verification.accuracyM != null && verification.accuracyM > 0 && (
+              <Circle
+                center={pos}
+                radius={verification.accuracyM}
+                pathOptions={{ color: punchColor, fillColor: punchColor, fillOpacity: 0.12, weight: 1 }}
+              />
+            )}
+
+            <Marker position={pos} icon={pinIcon(punchColor, "person", 34)}>
+              <Popup>
+                {verification.punchType === "IN" ? "Check-In" : "Check-Out"} #{verification.punchNumber}
+                <br />
+                {verification.punchTime.slice(0, 5)} on {verification.punchDate}
+              </Popup>
+            </Marker>
+          </MapContainer>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <p className="text-[11px] text-gray-400">
+            {routeLoading
+              ? "Loading route…"
+              : points.length > 1
+              ? `Route shown from ${points.length} recorded points on ${verification.punchDate}.`
+              : "No route recorded for this day — showing the punch location only."}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" className="gap-1.5 h-8 text-xs" asChild>
+              <a
+                href={`https://www.google.com/maps/search/?api=1&query=${query}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <MapPinned size={12} /> Open in Google Maps
+              </a>
+            </Button>
+            <Button size="sm" variant="outline" className="gap-1.5 h-8 text-xs" asChild>
+              <a
+                href={`https://www.google.com/maps/dir/?api=1&destination=${query}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <Navigation size={12} /> Directions
+              </a>
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function PunchVerificationsTab() {
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<"pending" | "approved" | "rejected">("pending");
   const { data: verifications, isLoading } = useOnDutyPunchVerificationsHR(statusFilter);
   const updateMutation = useUpdateOnDutyPunchVerificationHR();
   const [photoId, setPhotoId] = useState<number | null>(null);
+  const [mapPunch, setMapPunch] = useState<OnDutyPunchVerificationItem | null>(null);
 
   const handleDecision = async (v: OnDutyPunchVerificationItem, status: "approved" | "rejected") => {
     try {
@@ -687,6 +830,13 @@ function PunchVerificationsTab() {
                   <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
                     <span className="flex items-center gap-1"><Clock size={11} /> {v.punchTime.slice(0, 5)} on {v.punchDate}</span>
                     <span className="flex items-center gap-1"><MapPinned size={11} /> {v.latitude.toFixed(5)}, {v.longitude.toFixed(5)}</span>
+                    <button
+                      type="button"
+                      onClick={() => setMapPunch(v)}
+                      className="flex items-center gap-1 font-semibold text-[#006496] hover:underline"
+                    >
+                      <Navigation size={11} /> View on map
+                    </button>
                   </div>
                   {v.hrReviewedBy && (
                     <p className="text-[11px] text-gray-400 mt-1.5">
@@ -725,6 +875,7 @@ function PunchVerificationsTab() {
       )}
 
       <PhotoDialog verificationId={photoId} onClose={() => setPhotoId(null)} />
+      <PunchLocationDialog verification={mapPunch} onClose={() => setMapPunch(null)} />
     </div>
   );
 }

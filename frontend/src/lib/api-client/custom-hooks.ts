@@ -620,6 +620,112 @@ export const useRevokeLoginSession = () => {
   });
 };
 
+// ── Mobile App Login ──────────────────────────────────────────────────────────
+
+export type MobileAppLoginEntry = {
+  id: number;
+  employeeCode: string;
+  name: string;
+  department: string | null;
+  designation: string | null;
+  phone: string | null;
+  email: string | null;
+  status: string;
+  employmentType: string;
+  /** Has completed Set Password — i.e. an account exists they can log in with. */
+  hasPassword: boolean;
+  /** Only populated for sign-ins recorded since login tracking was added. */
+  lastMobileLoginAt: string | null;
+  deviceCount: number;
+};
+
+export type MobileAppLoginsResponse = {
+  summary: {
+    total: number;
+    hasAccess: number;
+    noAccess: number;
+    signedIn: number;
+    activeNoAccess: number;
+  };
+  results: MobileAppLoginEntry[];
+};
+
+export type MobileAppLoginFilters = {
+  access?: "all" | "has_access" | "no_access" | "signed_in" | "never_signed_in";
+  status?: "all" | "active" | "inactive";
+  search?: string;
+};
+
+export const getMobileAppLoginsQueryKey = (f: MobileAppLoginFilters) =>
+  ["/api/mobile-app-logins", f.access ?? "all", f.status ?? "all", f.search ?? ""] as const;
+
+export const useMobileAppLogins = (filters: MobileAppLoginFilters) =>
+  useQuery<MobileAppLoginsResponse>({
+    queryKey: getMobileAppLoginsQueryKey(filters),
+    queryFn: () => {
+      const qs = new URLSearchParams();
+      if (filters.access) qs.set("access", filters.access);
+      if (filters.status) qs.set("status", filters.status);
+      if (filters.search) qs.set("search", filters.search);
+      return customFetch<MobileAppLoginsResponse>(`/api/mobile-app-logins?${qs}`);
+    },
+  });
+
+/**
+ * Downloads the currently-filtered staff list as .xlsx. Sends the same
+ * filters the list is showing, so the file matches what's on screen.
+ * Uses a raw fetch rather than customFetch because the response is a binary
+ * attachment, not JSON.
+ */
+export async function downloadMobileAppLoginsExcel(filters: MobileAppLoginFilters): Promise<void> {
+  const qs = new URLSearchParams();
+  if (filters.access) qs.set("access", filters.access);
+  if (filters.status) qs.set("status", filters.status);
+  if (filters.search) qs.set("search", filters.search);
+
+  const token = typeof localStorage !== "undefined"
+    ? localStorage.getItem("uk_textile_token")
+    : null;
+
+  const response = await fetch(`/api/mobile-app-logins/export?${qs}`, {
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  });
+  if (!response.ok) throw new Error(`Export failed: ${response.statusText}`);
+
+  // Prefer the filename the server chose so the date/filter is baked in.
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const match = disposition.match(/filename="?([^"';]+)"?/i);
+  const filename = match?.[1] ?? "mobile-app-login.xlsx";
+
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objectUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(objectUrl);
+}
+
+/**
+ * Sets a new mobile-app password, or clears it so the employee runs Set
+ * Password again. There is deliberately no "read password" counterpart —
+ * the stored value is a bcrypt hash and cannot be reversed.
+ */
+export const useResetMobileAppPassword = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ employeeId, password, clear }: { employeeId: number; password?: string; clear?: boolean }) =>
+      customFetch<{ message: string; hasPassword: boolean }>(
+        `/api/mobile-app-logins/${employeeId}/reset-password`,
+        { method: "POST", body: JSON.stringify(clear ? { clear: true } : { password }) },
+      ),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["/api/mobile-app-logins"] }),
+  });
+};
+
 // ── Employee Search & Assignment ─────────────────────────────────────────────
 
 export const useSearchEmployees = (search: string, enabled = true) =>

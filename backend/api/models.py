@@ -142,7 +142,20 @@ class Employee(models.Model):
         max_digits=10, decimal_places=2, null=True, blank=True, db_column="initial_salary",
         help_text="Salary at time of joining -baseline for increment tracking."
     )
+    # bcrypt hash of the employee's mobile/self-service password. One-way by
+    # design -it can be replaced but never read back, which is why the HR
+    # portal's Mobile App Login page offers "reset" rather than "view".
+    # NULL/empty means the employee has never completed Set Password, so they
+    # have no way into the mobile app yet.
     password_hash = models.TextField(null=True, blank=True, db_column="password_hash")
+    # Stamped by employee_login() on every successful mobile/self-service
+    # sign-in. NULL means "no sign-in recorded" -note that for employees who
+    # set their password before this field existed it stays NULL until their
+    # next login, so the Mobile App Login page treats password_hash as the
+    # historical "has access" signal and this as "last seen".
+    last_mobile_login_at = models.DateTimeField(
+        null=True, blank=True, db_column="last_mobile_login_at"
+    )
     # Live location tracking (Geo Attendance feature) is opt-in per employee,
     # toggled by HR -never on by default. The mobile/web app only ever
     # starts sending location pings when it sees this true on the employee's
@@ -1512,6 +1525,16 @@ class PayrollSettings(models.Model):
     smtp_password = models.TextField(blank=True, default="", db_column="smtp_password")
     smtp_from_email = models.TextField(blank=True, default="", db_column="smtp_from_email")
     smtp_from_name = models.TextField(default="UKTextiles HR", db_column="smtp_from_name")
+
+    # ── Appearance / Theme ────────────────────────────────────────────────
+    # Org-wide, not per-user: whichever theme is active here is what every HR
+    # portal user sees. Key must match one of the ids in the frontend's
+    # src/lib/themes.ts (which also owns the actual colour values -only the
+    # selection and any per-token overrides live in the database).
+    theme_name = models.TextField(default="default", db_column="theme_name")
+    # Optional per-token overrides applied on top of the selected theme, as
+    # {"--primary": "201 100% 29%", ...}. Empty = use the theme unmodified.
+    theme_custom = models.JSONField(default=dict, blank=True, db_column="theme_custom")
 
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 

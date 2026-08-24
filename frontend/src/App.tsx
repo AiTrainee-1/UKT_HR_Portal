@@ -7,6 +7,7 @@ import { AuthProvider, useAuth, canViewRoute } from "@/contexts/AuthContext";
 import { moduleForPath } from "@/lib/permission-modules";
 import { ApiError } from "@/lib/api-client/custom-fetch";
 import { toast } from "@/hooks/use-toast";
+import { ThemeProvider } from "@/contexts/ThemeContext";
 import { BiometricSyncProvider } from "@/contexts/BiometricSyncContext";
 import GlobalSyncBanner from "@/components/GlobalSyncBanner";
 import { PayrollGenerationProvider } from "@/contexts/PayrollGenerationContext";
@@ -62,6 +63,7 @@ import UserManagement from "@/pages/hr/UserManagement";
 import AccountManagement from "@/pages/hr/AccountManagement";
 import ActivityLogs from "@/pages/hr/ActivityLogs";
 import LoginDevices from "@/pages/hr/LoginDevices";
+import MobileAppLogin from "@/pages/hr/MobileAppLogin";
 import Settings from "@/pages/hr/Settings";
 import Promotion from "@/pages/hr/Promotion";
 import Increment from "@/pages/hr/Increment";
@@ -303,6 +305,9 @@ function Router() {
       <Route path="/hr/login-devices">
         {() => <ProtectedRoute component={LoginDevices} allowedRoles={["hr"]} />}
       </Route>
+      <Route path="/hr/mobile-app-login">
+        {() => <ProtectedRoute component={MobileAppLogin} allowedRoles={["hr"]} />}
+      </Route>
       <Route path="/hr/settings">
         {() => <ProtectedRoute component={Settings} allowedRoles={["hr"]} />}
       </Route>
@@ -383,6 +388,9 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <AuthProvider>
+          {/* Inside AuthProvider so its /api/theme-settings fetch is
+              authenticated; the cached theme still paints immediately. */}
+          <ThemeProvider>
           <BiometricSyncProvider>
             <PayrollGenerationProvider>
               <SalarySlipBulkProvider>
@@ -401,6 +409,7 @@ function App() {
               </SalarySlipBulkProvider>
             </PayrollGenerationProvider>
           </BiometricSyncProvider>
+          </ThemeProvider>
         </AuthProvider>
         <Toaster />
         <ConnectivityOverlay />

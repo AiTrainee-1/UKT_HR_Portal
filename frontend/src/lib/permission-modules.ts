@@ -46,6 +46,7 @@ export const MODULE_TREE: ModuleNode[] = [
   { key: "user_management", label: "User Management" },
   { key: "activity_logs", label: "Activity Logs" },
   { key: "login_devices", label: "Login Devices" },
+  { key: "mobile_app_login", label: "Mobile App Login" },
   { key: "chat", label: "Chat" },
   { key: "notifications", label: "Notifications" },
   { key: "night_shift", label: "Night Shift" },
@@ -63,6 +64,7 @@ export const MODULE_TREE: ModuleNode[] = [
       { key: "settings.smtp", label: "SMTP / Email" },
       { key: "settings.whatsapp", label: "WhatsApp" },
       { key: "settings.backup", label: "Backup" },
+      { key: "settings.themes", label: "Themes" },
     ],
   },
 ];
@@ -155,6 +157,7 @@ export const ROUTE_MODULE_MAP: Record<string, string> = {
   "/hr/user-management": "user_management",
   "/hr/activity-logs": "activity_logs",
   "/hr/login-devices": "login_devices",
+  "/hr/mobile-app-login": "mobile_app_login",
   "/hr/chat": "chat",
   "/hr/notifications": "notifications",
   "/hr/night-shift": "night_shift",
