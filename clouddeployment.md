@@ -114,8 +114,10 @@ In the Vercel dashboard: **Add New → Project**, import the same GitHub repo. S
 
 This project's API base URL is controlled by `VITE_API_URL` (`frontend/README.md`, `frontend.md` Section 1). Since Django now lives on a different origin (Railway) than the frontend (Vercel), set it explicitly -unlike the on-premise setup where `/api` is same-origin via Nginx's reverse proxy:
 ```
-VITE_API_URL=https://<your-railway-domain>.up.railway.app/api
+VITE_API_URL=https://<your-railway-domain>.up.railway.app
 ```
+**No trailing `/api`** -every generated API call already starts with `/api/...` (see `frontend/src/lib/api-client/generated/api.ts`, e.g. `/api/auth/hr-login`), and `setBaseUrl()`/`applyBaseUrl()` (`custom-fetch.ts`) just concatenates this value in front of that path with no separator logic. Adding `/api` here produces `.../api/api/auth/hr-login` -a second 404 that looks identical to the first from the browser's Network tab, so it's an easy one to reintroduce by "fixing" this value the intuitive way.
+
 Set this in Vercel → Project Settings → Environment Variables. Vite only exposes variables prefixed `VITE_` to client code (already the convention this project uses), and Vercel's build step picks up whatever's set there automatically -no code change needed.
 
 ### 3. Deploy

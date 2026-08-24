@@ -1,0 +1,15 @@
+# Railway builds this backend with Nixpacks. Its default Python build phase
+# doesn't include the Postgres CLI tools (pg_dump/psql), so the in-app
+# Backup & Restore feature (Settings → Backup) fails with "pg_dump was not
+# found on this server" on a stock Railway deploy -adding the "postgresql"
+# Nix package puts pg_dump/psql/pg_restore on PATH, which
+# backend/api/backup_service.py finds via a plain PATH lookup
+# (shutil.which), same as it does for a local install.
+#
+# Deliberately does NOT pin a Python version here -Railway/Nixpacks already
+# auto-detects Python from this repo (no runtime.txt/Procfile needed for
+# that part), and specifying a second one alongside it risks the app
+# ending up in a different interpreter than the one Nixpacks builds the
+# venv against.
+[phases.setup]
+nixPkgs = ["postgresql"]
