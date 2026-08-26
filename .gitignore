@@ -42,7 +42,12 @@ backend/db.sqlite3
 backend/staticfiles/
 backend/media/
 
-# Server runtime -environment-specific, not version-controlled
-nginx/
-cloudflared/
-www/
+# Backup/restore runtime artifacts -real DB dumps and employee documents
+# pass through these; never belongs in git. backup_staging/ is where
+# uploaded restore files land (backup_service.py); backups/ is the default
+# scheduled/manual backup output dir; media_pre_restore_*/ is the automatic
+# safety snapshot backup_views.py takes before every restore.
+backend/backup_staging/
+backend/backups/
+backend/media_pre_restore_*/
+

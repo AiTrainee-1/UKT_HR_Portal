@@ -1,0 +1,10 @@
+"$schema" = "https://openapi.vercel.sh/vercel.json"
+
+# Without this, any client-side route (wouter -/hr, /verify/:code, etc.)
+# 404s on direct load or refresh: Vercel's static host has no file at that
+# path, since only React (loaded via index.html) knows those routes exist.
+# This sends every request Vercel doesn't already have a real file for to
+# index.html instead, letting the client-side router take over from there.
+[[rewrites]]
+source = "/(.*)"
+destination = "/index.html"

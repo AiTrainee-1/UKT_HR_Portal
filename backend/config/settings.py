@@ -9,6 +9,15 @@ load_dotenv(BASE_DIR / ".env")
 
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-only-change-me")
 BIOMETRIC_API_KEY = os.environ.get("BIOMETRIC_API_KEY", "")
+# The frontend's own public origin -needed because the backend can no longer
+# assume it shares a hostname with the frontend (see growth_views.py's
+# _public_base_url, which used to build public QR-verification links from
+# the backend's own request host; that only worked because on-premise Nginx
+# served both under one domain. On Railway+Vercel they're different origins,
+# so the backend has no way to derive this on its own -it must be told.
+# Left empty for on-premise/local dev, where request-host-based building is
+# still correct and this var isn't needed.
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "").rstrip("/")
 DEBUG = os.environ.get("DEBUG", "true").lower() in ("1", "true", "yes")
 ALLOWED_HOSTS = [
     h.strip()
@@ -99,6 +108,17 @@ if not _sslmode and _DATABASE_URL:
     _sslmode = (parse_qs(urlparse(_DATABASE_URL).query).get("sslmode") or [""])[0].strip()
 if _sslmode:
     DATABASES["default"].setdefault("OPTIONS", {})["sslmode"] = _sslmode
+
+# Reuses one DB connection across requests within a worker for up to 60s
+# instead of opening a fresh TCP+TLS handshake on every single request -the
+# default (0) is fine talking to "localhost", but is pure added latency
+# against a networked Postgres (Railway private network or otherwise).
+# 60s, not "forever" (None), so a connection Postgres has quietly dropped
+# gets recycled instead of every following request failing against a dead
+# socket. CONN_HEALTH_CHECKS pings the connection before reuse and
+# transparently reconnects if it's gone stale within that window.
+DATABASES["default"]["CONN_MAX_AGE"] = int(os.environ.get("DB_CONN_MAX_AGE", "60"))
+DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
 
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"

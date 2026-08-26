@@ -11,6 +11,7 @@ Growth & Final-Attendance API
 from datetime import date as date_type, datetime
 from decimal import Decimal, InvalidOperation
 
+from django.conf import settings as django_settings
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -655,10 +656,22 @@ def verify_employee(request: Request, code: str) -> Response:
 
 
 def _public_base_url(request: Request) -> str:
-    """Best-effort public origin for the QR verification link -this app's
-    frontend and backend are deployed same-origin (Nginx serves the built
-    frontend and reverse-proxies /api to Django, per DeployGuide.md), so the
-    request's own host is the right one to embed."""
+    """Public origin for the QR verification link -this has to be the
+    FRONTEND's origin, since /verify/:code (App.tsx) is a frontend route,
+    not a Django one.
+
+    On a cloud deployment (Railway backend + Vercel frontend) those are two
+    different domains, so settings.FRONTEND_URL is used when set. On-premise,
+    where Nginx serves both frontend and /api under one hostname, FRONTEND_URL
+    is left unset and the request's own host is correct, exactly as before.
+    Without this fallback, a cloud deploy would silently bake a QR code that
+    points at the API server with a path Django doesn't serve, 404-ing on
+    every card printed since the domains were split -not on every scan
+    failing loudly, since nothing here raises; it just silently encodes the
+    wrong URL onto every card.
+    """
+    if django_settings.FRONTEND_URL:
+        return django_settings.FRONTEND_URL
     return request.build_absolute_uri("/").rstrip("/")
 
 

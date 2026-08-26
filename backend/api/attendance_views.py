@@ -715,6 +715,12 @@ def biometric_punch(request: Request) -> Response:
     device_sn = data.get("devSN") or data.get("deviceId", "")
 
     if not person_id or not punch_time_raw:
+        # This endpoint has never actually received a push from real device
+        # firmware -the payload shape below is from documentation, not a
+        # verified sample. Logging the raw body here means the first real
+        # mismatch tells us exactly what to fix instead of a bare 400 with
+        # no forensic trail (the device itself won't show this anywhere).
+        logger.warning("biometric_punch: missing personId/time -raw body: %r", request.data)
         return Response({"error": "personId and time are required"}, status=400)
 
     # Employee Code ONLY -the code enrolled on the device IS the Employee
@@ -733,6 +739,7 @@ def biometric_punch(request: Request) -> Response:
         else:
             dt = datetime.fromisoformat(str(punch_time_raw).replace("Z", "+00:00"))
     except (ValueError, TypeError):
+        logger.warning("biometric_punch: unparsable time %r -raw body: %r", punch_time_raw, request.data)
         return Response({"error": "Invalid time format. Use ISO-8601 or Unix timestamp."}, status=400)
 
     punch_date = dt.date()

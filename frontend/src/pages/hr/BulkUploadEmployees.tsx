@@ -200,6 +200,13 @@ async function downloadCurrentEmployees(
   wb.creator = "UKTextiles HRMS";
   const ws = wb.addWorksheet("Employees");
   ws.columns = EMPLOYEE_TEMPLATE_HEADERS.map((h) => ({ key: h, width: Math.max(16, h.length + 4) }));
+  // Employee Code is written as text (employeeToRow) so a code like "007"
+  // never loses its leading zero -but a plain-text cell that's all digits is
+  // exactly what Excel's own heuristic flags with the green "Number Stored
+  // as Text" warning triangle on open. Declaring the column format as Text
+  // tells Excel the digits-only content is deliberate, so it stops flagging
+  // it -same fix already used for the Amount column in payrollExcelExport.ts.
+  ws.getColumn(1).numFmt = "@";
   styleHeaderRow(ws.getRow(1));
   rows.forEach((emp) => ws.addRow(employeeToRow(emp)));
   ws.views = [{ state: "frozen", ySplit: 1 }];
