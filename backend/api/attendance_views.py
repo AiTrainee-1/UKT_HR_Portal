@@ -982,22 +982,16 @@ def run_biometric_sync(mode: str = "day", device_id=None) -> dict:
     }
 
 
-@api_view(["POST"])
-@require_hr
-def sync_biometric_api(request: Request) -> Response:
-    mode = request.data.get("mode", "day")       # "day" | "week" | "month" | "all"
-    device_id = request.data.get("deviceId")     # int | "env" | "all" | list[int] | None
-    result = run_biometric_sync(mode, device_id)
-    status_code = 200 if result["ok"] else 502
-    return Response(result, status=status_code)
-
-
-@api_view(["GET"])
-@require_hr
-def sync_biometric_progress(request: Request) -> Response:
-    """Poll target for the live Start → Device → Completed sync pipeline UI."""
-    from . import sync_progress
-    return Response(sync_progress.snapshot())
+# The direct "Sync Biometric" button/endpoint (Django-reaches-out-to-device
+# on demand) was removed once the backend moved fully to Railway -a cloud
+# host can never reach a device on a private factory LAN, so every call
+# here failed with a 502 regardless of anything else being configured
+# correctly. run_biometric_sync() itself stays -Auto Sync Rules
+# (auto_sync.py) still calls it directly, and the on-premise/LAN-adjacent
+# `python manage.py sync_biometric` management command (biometric_sync.py)
+# covers the same job from somewhere that can actually reach the devices.
+# Only the API surface that let the browser trigger this straight from
+# Railway is gone; the underlying sync logic is not.
 
 
 # ── Report Log ────────────────────────────────────────────────────────────────
