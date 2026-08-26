@@ -20,6 +20,7 @@ import {
   useDocumentCompletionStats,
   useListScreeningCandidates,
 } from "@/lib/api-client/custom-hooks";
+import { useBiometricSync } from "@/contexts/BiometricSyncContext";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   CartesianGrid, PieChart, Pie, Cell, Legend,
@@ -182,6 +183,10 @@ function daysUntil(iso: string) {
 export default function HrDashboard() {
   const [, navigate] = useLocation();
   const { user } = useAuth();
+  // Sync lives in a root-level context so it survives navigating away from
+  // the Dashboard, and is shared with the Attendance page's sync button.
+  const { isSyncing, lastSyncedAt, triggerSync } = useBiometricSync();
+  const handleSync = () => void triggerSync("day", "all");
 
   const now = new Date();
   const month = now.getMonth() + 1;
@@ -319,6 +324,22 @@ export default function HrDashboard() {
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
               Live
             </span>
+            <button
+              onClick={handleSync}
+              disabled={isSyncing}
+              className="flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1 rounded-full transition-all disabled:opacity-60"
+              style={{
+                color: "#006496",
+                background: "rgba(0,100,150,0.07)",
+                boxShadow: "3px 3px 8px rgba(0,100,150,0.1), -2px -2px 6px rgba(255,255,255,0.8)",
+              }}
+            >
+              <RefreshCw size={11} className={isSyncing ? "animate-spin" : ""} />
+              {isSyncing ? "Syncing…" : "Auto Sync"}
+              {lastSyncedAt && !isSyncing && (
+                <span style={{ color: "rgba(0,100,150,0.45)", fontWeight: 400 }}>· {lastSyncedAt}</span>
+              )}
+            </button>
             <button
               onClick={() => navigate("/hr/payroll")}
               className="text-[11px] font-semibold px-3 py-1 rounded-full transition-all"

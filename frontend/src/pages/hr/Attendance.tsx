@@ -28,9 +28,11 @@ import {
   useListAutoSyncRules, useCreateAutoSyncRule, useUpdateAutoSyncRule, useDeleteAutoSyncRule,
   type AutoSyncRuleItem, type AutoSyncRuleInput,
 } from "@/lib/api-client/custom-hooks";
+import { useBiometricSync } from "@/contexts/BiometricSyncContext";
 import { TimePicker12h } from "@/components/ui/time-picker-12h";
 import { MarbleSwitch } from "@/components/ui/marble-switch";
 import EmployeeSearchSelect from "@/components/EmployeeSearchSelect";
+import BiometricSyncPipeline from "@/components/BiometricSyncPipeline";
 import AttendanceSearchSection from "./AttendanceSearch";
 import {
   Users, UserCheck, UserX, CalendarDays, Plus,
@@ -316,26 +318,46 @@ export default function AttendancePage() {
 
   const [statusFilter, setStatusFilter] = useState<"all" | "present" | "absent" | "on_leave">("all");
   const [detailEmpId, setDetailEmpId] = useState<number | null>(null);
+  const [syncMode, setSyncMode] = useState<SyncBiometricMode>("day");
+  // Multi-select checklist: which specific devices to sync. Empty selection
+  // means "use the default" (every enabled device), same as before.
+  const [selectedDeviceIds, setSelectedDeviceIds] = useState<(number | "env")[]>([]);
+  const [showSyncMenu, setShowSyncMenu] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
+  const syncMenuRef = useRef<HTMLDivElement>(null);
 
   const { data: employees } = useListEmployees({ status: "active" });
   const { data: devices } = useListBiometricDevices();
   const enabledDevices = (devices ?? []).filter(d => d.isActive);
 
-  // SYNC_MODES stays -Auto Sync Rules' editor below still uses it. The
-  // on-demand "Sync Biometric" button that used to sit next to it is gone:
-  // it always failed once the backend moved to Railway (a cloud host can't
-  // reach a device on a private factory LAN, regardless of anything else
-  // being configured correctly). The working replacement is `python
-  // manage.py sync_biometric` run from a machine that's actually on that
-  // LAN -see DEPLOYMENT notes -either by hand or on a schedule; Auto Sync
-  // Rules below cover the "on a schedule" half of that same job.
+  // Sync lives in a root-level context (BiometricSyncProvider) so it keeps
+  // running -and stays visible -even if the user navigates away mid-sync.
+  const { isSyncing, showPipeline, progress, lastSyncedAt, triggerSync, dismiss } = useBiometricSync();
+
   const SYNC_MODES: { key: SyncBiometricMode; label: string }[] = [
     { key: "day",   label: "Today" },
     { key: "week",  label: "Last One Week" },
     { key: "month", label: "Last One Month" },
     { key: "all",   label: "All Records" },
   ];
+
+  const syncModeLabel = SYNC_MODES.find(m => m.key === syncMode)?.label ?? "Last Day";
+  const allDevicesSelected = enabledDevices.length > 0 && selectedDeviceIds.length === enabledDevices.length;
+
+  const toggleDevice = (id: number | "env") => {
+    setSelectedDeviceIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+  const toggleSelectAllDevices = () => {
+    setSelectedDeviceIds(prev => prev.length === enabledDevices.length ? [] : enabledDevices.map(d => d.id));
+  };
+
+  const handleSync = (modeOverride?: SyncBiometricMode) => {
+    const mode = modeOverride ?? syncMode;
+    setShowSyncMenu(false);
+    // No specific devices checked -> same default as before (every enabled device).
+    const deviceId: SyncDeviceId = selectedDeviceIds.length > 0 ? selectedDeviceIds : "all";
+    void triggerSync(mode, deviceId);
+  };
 
   // ── Auto Sync (configurable background biometric sync rules) ───────────────
   const DAYS_OF_WEEK: { key: string; label: string }[] = [
@@ -420,6 +442,17 @@ export default function AttendancePage() {
       createAutoSyncRule.mutate(ruleForm, { onSuccess, onError });
     }
   };
+
+  // The context invalidates "/api/attendance" queries broadly on completion;
+  // this page just needs to also refresh the one-employee history dialog key
+  // (not covered by that prefix) when a sync finishes while it's open.
+  const prevIsSyncing = useRef(isSyncing);
+  useEffect(() => {
+    if (prevIsSyncing.current && !isSyncing && detailEmpId) {
+      queryClient.invalidateQueries({ queryKey: ["attendance-employee", detailEmpId] });
+    }
+    prevIsSyncing.current = isSyncing;
+  }, [isSyncing, detailEmpId, queryClient]);
 
   // Summary + trend are filtered server-side by the selected sub-section
   const { data: summary, isLoading: summaryLoading } = useAttendanceSummaryTyped(selectedDate, view);
@@ -509,6 +542,80 @@ export default function AttendancePage() {
               <FileSpreadsheet size={14} />
               <span className="text-[13px] font-semibold">Manual Import</span>
             </Button>
+            {/* Sync split-button */}
+            <div ref={syncMenuRef} className="relative flex items-center shrink-0">
+              <Button
+                variant="outline"
+                onClick={() => handleSync()}
+                disabled={isSyncing}
+                className="clay-btn gap-1.5 h-9 pl-3 pr-2.5 rounded-l-xl rounded-r-none border-0 bg-cyan-50 text-cyan-700 hover:bg-cyan-100"
+              >
+                <RefreshCw size={14} className={isSyncing ? "animate-spin" : ""} />
+                <span className="flex flex-col items-start leading-none">
+                  <span className="text-[13px] font-semibold">{isSyncing ? "Syncing…" : "Sync Biometric"}</span>
+                  {lastSyncedAt && !isSyncing && (
+                    <span className="text-[10px] text-cyan-500 font-normal mt-0.5">Last {lastSyncedAt}</span>
+                  )}
+                </span>
+              </Button>
+              <button
+                onClick={() => setShowSyncMenu(v => !v)}
+                className="h-9 px-2 rounded-r-xl text-cyan-700 bg-cyan-50 hover:bg-cyan-100 flex items-center border-l border-cyan-200/70 transition-colors"
+                title={syncModeLabel}
+              >
+                <ChevronDown size={13} />
+              </button>
+              {showSyncMenu && (
+                <div className="absolute top-full right-0 mt-1.5 z-50 bg-white border rounded-xl shadow-lg overflow-hidden min-w-[220px]">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400 px-3 pt-2.5 pb-1">Device</p>
+                  <label className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-cyan-50 cursor-pointer transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={allDevicesSelected}
+                      onChange={toggleSelectAllDevices}
+                      className="accent-cyan-600"
+                    />
+                    <span className={allDevicesSelected ? "text-cyan-700 font-semibold" : "text-gray-700"}>
+                      Select All Devices
+                    </span>
+                  </label>
+                  {enabledDevices.map(d => (
+                    <label
+                      key={d.id}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-cyan-50 cursor-pointer transition-colors"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedDeviceIds.includes(d.id)}
+                        onChange={() => toggleDevice(d.id)}
+                        className="accent-cyan-600"
+                      />
+                      <span className={selectedDeviceIds.includes(d.id) ? "text-cyan-700 font-semibold" : "text-gray-700"}>
+                        {d.name}
+                      </span>
+                    </label>
+                  ))}
+                  {enabledDevices.length === 0 && (
+                    <p className="px-3 py-1.5 text-xs text-amber-600">No enabled devices -add one in Settings.</p>
+                  )}
+
+                  <div className="border-t mt-1" />
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400 px-3 pt-2.5 pb-1">Sync range</p>
+                  {SYNC_MODES.map(m => (
+                    <button
+                      key={m.key}
+                      onClick={() => { setSyncMode(m.key); handleSync(m.key); }}
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-cyan-50 transition-colors ${
+                        syncMode === m.key ? "text-cyan-700 font-semibold bg-cyan-50" : "text-gray-700"
+                      }`}
+                    >
+                      {m.label}
+                      {m.key === "all" && <span className="block text-[10px] text-amber-500">⚠ May take a long time</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             {/* Auto Sync -configurable background sync rules */}
             <div ref={autoSyncMenuRef} className="relative flex items-center shrink-0">
               <Button
@@ -600,6 +707,9 @@ export default function AttendancePage() {
             </Button>
           </div>
         </div>
+
+        {/* ── Biometric Sync Pipeline (visible only while/just after syncing) ── */}
+        <BiometricSyncPipeline active={showPipeline} data={progress} onDismiss={dismiss} />
 
         {/* ── Summary Cards ── */}
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">

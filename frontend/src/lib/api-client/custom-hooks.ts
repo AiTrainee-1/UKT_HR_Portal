@@ -1183,6 +1183,18 @@ export const useDeleteLeaveRequest = () =>
       customFetch<void>(`/api/leave-requests/${id}`, { method: "DELETE" }),
   });
 
+// ── Biometric Sync ────────────────────────────────────────────────────────────
+
+export type SyncResult = {
+  ok: boolean;
+  created?: number;
+  output?: string;
+  syncedAt?: string;
+  error?: string;
+  unmatchedDeviceIds?: string[];
+  deviceErrors?: string[];
+};
+
 // ── Report Log types ──────────────────────────────────────────────────────────
 
 export type ShiftLogEntry = {
@@ -1312,12 +1324,40 @@ export type LateSummaryResponse = {
   employees: LateSummaryEmployee[];
 };
 
-// Kept for Auto Sync Rules (the rule editor's own mode/device pickers) -the
-// on-demand trigger these were originally added for (useSyncBiometric,
-// useSyncBiometricProgress, and the pipeline progress types) is gone; see
-// Attendance.tsx for why.
 export type SyncBiometricMode = "day" | "week" | "month" | "all";
 export type SyncDeviceId = number | "all" | "env" | (number | "env")[];
+
+export const useSyncBiometric = () =>
+  useMutation({
+    mutationFn: (params: { mode?: SyncBiometricMode; deviceId?: SyncDeviceId } | SyncBiometricMode = "day") => {
+      const { mode = "day", deviceId } = typeof params === "string" ? { mode: params } : params;
+      return customFetch<SyncResult>("/api/attendance/sync-biometric", {
+        method: "POST",
+        body: JSON.stringify({ mode, deviceId }),
+      });
+    },
+  });
+
+// ── Biometric Sync Pipeline Progress ──────────────────────────────────────────
+
+export type SyncDeviceStatus = "pending" | "syncing" | "completed" | "failed";
+export type SyncProgressDevice = { id: number | string; label: string; status: SyncDeviceStatus };
+export type SyncProgress = {
+  stage: "idle" | "running" | "completed";
+  devices: SyncProgressDevice[];
+  startedAt: string | null;
+  finishedAt: string | null;
+};
+
+export const useSyncBiometricProgress = (enabled: boolean) =>
+  useQuery<SyncProgress>({
+    queryKey: ["/api/attendance/sync-biometric-progress"],
+    queryFn: () => customFetch<SyncProgress>("/api/attendance/sync-biometric-progress"),
+    enabled,
+    refetchInterval: enabled ? 600 : false,
+    // The pipeline only cares about the freshest snapshot -never serve a stale one.
+    staleTime: 0,
+  });
 
 export type ReportLogSummaryParams = {
   month: number;

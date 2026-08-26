@@ -8,6 +8,8 @@ import { moduleForPath } from "@/lib/permission-modules";
 import { ApiError } from "@/lib/api-client/custom-fetch";
 import { toast } from "@/hooks/use-toast";
 import { ThemeProvider } from "@/contexts/ThemeContext";
+import { BiometricSyncProvider } from "@/contexts/BiometricSyncContext";
+import GlobalSyncBanner from "@/components/GlobalSyncBanner";
 import { PayrollGenerationProvider } from "@/contexts/PayrollGenerationContext";
 import GlobalPayrollBanner from "@/components/GlobalPayrollBanner";
 import { SalarySlipBulkProvider } from "@/contexts/SalarySlipBulkContext";
@@ -389,13 +391,15 @@ function App() {
           {/* Inside AuthProvider so its /api/theme-settings fetch is
               authenticated; the cached theme still paints immediately. */}
           <ThemeProvider>
-          <PayrollGenerationProvider>
+          <BiometricSyncProvider>
+            <PayrollGenerationProvider>
               <SalarySlipBulkProvider>
                 <WhatsAppBulkProvider>
                   <ResumeScreeningProvider>
                     <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
                       <Router />
                     </WouterRouter>
+                    <GlobalSyncBanner />
                     <GlobalPayrollBanner />
                     <GlobalSalarySlipBulkBanner />
                     <GlobalWhatsAppBulkBanner />
@@ -403,7 +407,8 @@ function App() {
                   </ResumeScreeningProvider>
                 </WhatsAppBulkProvider>
               </SalarySlipBulkProvider>
-          </PayrollGenerationProvider>
+            </PayrollGenerationProvider>
+          </BiometricSyncProvider>
           </ThemeProvider>
         </AuthProvider>
         <Toaster />
