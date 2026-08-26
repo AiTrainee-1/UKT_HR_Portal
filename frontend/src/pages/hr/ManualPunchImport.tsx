@@ -8,6 +8,7 @@ import { PillTabs } from "@/components/ui/pill-tabs";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { useListBiometricDevices, type SyncBiometricMode } from "@/lib/api-client/custom-hooks";
+import { getApiOrigin } from "@/lib/api-client/custom-fetch";
 import {
   ArrowLeft, Download, UploadCloud, FileSpreadsheet, CheckCircle2,
   XCircle, AlertTriangle, ListChecks, Info, X, Fingerprint,
@@ -150,7 +151,7 @@ export default function ManualPunchImport() {
       const params = new URLSearchParams({ mode: rangeMode });
       selectedDeviceIds.forEach((id) => params.append("deviceId", String(id)));
       if (includeAllEmployees) params.set("includeAllEmployees", "1");
-      const response = await fetch(`${window.location.origin}/api/attendance/manual-import/export?${params}`, {
+      const response = await fetch(`${getApiOrigin()}/api/attendance/manual-import/export?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const body = await response.json();
@@ -196,7 +197,7 @@ export default function ManualPunchImport() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const response = await fetch(`${window.location.origin}/api/attendance/manual-import/upload`, {
+      const response = await fetch(`${getApiOrigin()}/api/attendance/manual-import/upload`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: formData,

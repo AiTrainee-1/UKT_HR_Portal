@@ -8,6 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { useListEmployees, getListEmployeesQueryKey, type Employee } from "@/lib/api-client";
 import { useAuth } from "@/contexts/AuthContext";
+import { getApiOrigin } from "@/lib/api-client/custom-fetch";
 import {
   ArrowLeft, Download, UploadCloud, FileSpreadsheet, CheckCircle2,
   XCircle, AlertTriangle, ListChecks, Info, Table2, X,
@@ -270,7 +271,7 @@ export default function BulkUploadEmployees() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const response = await fetch(`${window.location.origin}/api/employees/bulk-upload`, {
+      const response = await fetch(`${getApiOrigin()}/api/employees/bulk-upload`, {
         method: "POST",
         headers: { Authorization: `Bearer ${localStorage.getItem("uk_textile_token")}` },
         body: formData,
@@ -306,7 +307,7 @@ export default function BulkUploadEmployees() {
     try {
       const formData = new FormData();
       formData.append("file", updateFile);
-      const response = await fetch(`${window.location.origin}/api/employees/bulk-update`, {
+      const response = await fetch(`${getApiOrigin()}/api/employees/bulk-update`, {
         method: "POST",
         headers: { Authorization: `Bearer ${localStorage.getItem("uk_textile_token")}` },
         body: formData,

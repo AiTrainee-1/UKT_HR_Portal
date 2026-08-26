@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UseQueryOptions } from "@tanstack/react-query";
-import { customFetch } from "./custom-fetch";
+import { customFetch, getApiOrigin } from "./custom-fetch";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -687,7 +687,7 @@ export async function downloadMobileAppLoginsExcel(filters: MobileAppLoginFilter
     ? localStorage.getItem("uk_textile_token")
     : null;
 
-  const response = await fetch(`/api/mobile-app-logins/export?${qs}`, {
+  const response = await fetch(`${getApiOrigin()}/api/mobile-app-logins/export?${qs}`, {
     headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
   });
   if (!response.ok) throw new Error(`Export failed: ${response.statusText}`);
@@ -2576,7 +2576,12 @@ export const useUpdateDocumentSettings = (docType: DocumentType) => {
 
 const _fetchPdfBlob = async (url: string, getToken: () => string | null): Promise<{ blob: Blob; filename: string }> => {
   const token = getToken();
-  const response = await fetch(url, {
+  // Every caller (PDF preview/download across Employee Detail, Payroll,
+  // Recruitment Documents, New Joinees, Settings, Salary Slip bulk) passes a
+  // relative /api/... path, same as customFetch's own calls -this needs the
+  // same origin prefix customFetch applies automatically, since a raw
+  // fetch() here has no base-URL handling of its own.
+  const response = await fetch(`${getApiOrigin()}${url}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!response.ok) {
@@ -3517,7 +3522,7 @@ export async function downloadReportCsv(
   if (!endpoint) throw new Error("Unsupported report type");
 
   const qs = new URLSearchParams({ ...params, format: "csv" });
-  const url = `${endpoint}?${qs.toString()}`;
+  const url = `${getApiOrigin()}${endpoint}?${qs.toString()}`;
 
   const token = typeof localStorage !== "undefined"
     ? localStorage.getItem("uk_textile_token")
@@ -4066,7 +4071,7 @@ export const useDeleteResignation = () =>
 
 export const downloadResignationPdf = async (id: number, getToken: () => string | null) => {
   const token = getToken();
-  const response = await fetch(`/api/recruitment/resignations/${id}/pdf`, {
+  const response = await fetch(`${getApiOrigin()}/api/recruitment/resignations/${id}/pdf`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!response.ok) {
@@ -4202,7 +4207,7 @@ export type RestoreValidateResult = {
 export const uploadRestoreFile = async (file: File, token: string | null): Promise<RestoreValidateResult> => {
   const formData = new FormData();
   formData.append("file", file);
-  const response = await fetch(`${window.location.origin}/api/backup/restore/validate`, {
+  const response = await fetch(`${getApiOrigin()}/api/backup/restore/validate`, {
     method: "POST",
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: formData,
@@ -4215,7 +4220,7 @@ export const uploadRestoreFile = async (file: File, token: string | null): Promi
 };
 
 export const runAutomatedRestore = async (stagedPath: string, token: string | null): Promise<{ ok: boolean; message: string }> => {
-  const response = await fetch(`${window.location.origin}/api/backup/restore/run`, {
+  const response = await fetch(`${getApiOrigin()}/api/backup/restore/run`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -4408,7 +4413,8 @@ export const useUpdateOnDutyPunchVerificationHR = () => {
  * owns revoking the URL when done with it. */
 export const fetchAuthedImageObjectUrl = async (url: string, getToken: () => string | null): Promise<string> => {
   const token = getToken();
-  const response = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  // Same as _fetchPdfBlob above -callers pass a relative /api/... path.
+  const response = await fetch(`${getApiOrigin()}${url}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
   if (!response.ok) throw new Error("Failed to load photo");
   const blob = await response.blob();
   return URL.createObjectURL(blob);

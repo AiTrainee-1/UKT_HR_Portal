@@ -32,6 +32,27 @@ export function setBaseUrl(url: string | null): void {
 }
 
 /**
+ * The origin to prepend when building a URL by hand, for the handful of call
+ * sites that need a raw fetch() (file up/downloads needing direct Response
+ * access, not customFetch's parsed JSON) instead of going through
+ * customFetch's own applyBaseUrl.
+ *
+ * Returns "" when no base URL is configured, so `${getApiOrigin()}/api/...`
+ * still resolves correctly as a same-origin relative path (local dev via the
+ * Vite proxy, or an on-premise deploy where frontend and backend share one
+ * origin). Never hardcode window.location.origin for this -on a split
+ * frontend/backend deployment (Vercel + Railway) that's the frontend's own
+ * origin, not the API's, and every call site that did that (bulk employee
+ * upload/update, manual punch import/export, mobile-app-logins export,
+ * resignation PDF, backup restore) silently broke the same way the same day
+ * the domains split -hitting the frontend's own SPA rewrite instead of the
+ * API, and getting back index.html where an API response was expected.
+ */
+export function getApiOrigin(): string {
+  return _baseUrl ?? "";
+}
+
+/**
  * Register a getter that supplies a bearer auth token.  Before every fetch
  * the getter is invoked; when it returns a non-null string, an
  * `Authorization: Bearer <token>` header is attached to the request.
