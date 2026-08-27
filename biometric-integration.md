@@ -151,6 +151,106 @@ On the device: `Menu → Communication → HTTP Push Settings`
 
 ---
 
+## Firewall setup -letting the cloud backend reach a device (Sophos XGS)
+
+Needed only for the **Pull** path (Sync Biometric, Manual Import, Auto Sync
+Rules). Push/ADMS does not need any of this -the device dials out, and an
+outbound rule covers it.
+
+The problem this solves: device IPs like `192.168.0.61` exist only inside the
+factory LAN. The backend runs on Railway, in a datacentre, so it has no route
+to them. A DNAT (port-forward) rule gives it one.
+
+**Two directions, two separate rules -don't confuse them:**
+
+```
+OUTBOUND (device → internet)     needed for ADMS push
+  192.168.0.61  →  WAN  →  api.uktextiles.in:443
+
+INBOUND (internet → device)      needed for Pull / the three buttons
+  Railway  →  WAN:<external port>  →  192.168.0.61:4370
+```
+
+Building the outbound rule does nothing for the inbound direction, and vice
+versa.
+
+### The one rule that makes multi-device work: unique external ports
+
+**Every device listens on internal port 4370.** They cannot share an external
+port, so each device needs its own. Pick a scheme and stick to it -e.g.
+`14371, 14372, 14373 …` mapping in device order:
+
+| Device | Internal (LAN) | External port | Portal Host/IP | Portal Port |
+|---|---|---|---|---|
+| HO | `192.168.0.61:4370` | 14371 | *your public IP/DDNS* | 14371 |
+| Unit1 - 1 | `192.168.0.62:4370` | 14372 | *same public IP* | 14372 |
+| Unit1 - 2 | `192.168.0.63:4370` | 14373 | *same public IP* | 14373 |
+| Unit1 - 3 | `192.168.0.105:4370` | 14374 | *same public IP* | 14374 |
+| Unit1 - 4 | `192.168.0.118:4370` | 14375 | *same public IP* | 14375 |
+
+Only the **external** port changes per device; the internal port is always
+4370.
+
+### Procedure -repeat per device
+
+**1. Create the device IP host**
+`Hosts and services → IP host → Add`
+Name `FaceMars_<name>`, IPv4, Host type IP, address = the device's LAN IP.
+
+**2. Create the service for its external port**
+`Hosts and services → Services → Add`
+Type TCP, destination port = that device's **external** port (e.g. 14371).
+
+**3. Restrict who may connect (do this before the rule, not after)**
+`Hosts and services → IP host → Add` -one entry per Railway egress address,
+grouped into an IP host group (e.g. `Railway_Egress`).
+
+This step is not optional. The ZKTeco protocol on 4370 has no encryption and
+only a weak numeric comm password; left open to `Any`, the device is exposed
+to internet-wide scanners.
+
+**4. Create the DNAT rule**
+`Rules and policies → NAT rules → Add NAT rule → Server access assistant (DNAT)`
+- Internal server: the IP host from step 1
+- Internal port: **4370** (always)
+- External port: this device's unique port from step 2
+- External source networks: **`Railway_Egress`** -never `Any`
+The assistant creates the matching firewall rule automatically.
+
+**5. Point the portal at it**
+HR Portal → **Settings → Devices** → edit the device:
+- **Host/IP** → the public IP / DDNS name (not the `192.168.x.x` address)
+- **Port** → that device's external port
+
+Easy to miss: a **blank Port field defaults to 4370** (`biometric_sync.py`
+line 97, `d.port or 4370`), so leaving it empty silently dials the wrong port.
+`HO` currently has no port set, so it must be filled in explicitly when its
+host is switched to the public address.
+
+**6. Verify**
+Click **Sync Biometric**. Success looks like the pipeline completing with a
+record count. Failure now reports the real reason rather than hanging -see
+the troubleshooting table under Path 1.
+
+### Adding a new device later -short version
+
+1. Note its LAN IP; keep its internal port at 4370.
+2. Pick the next unused external port in your scheme.
+3. Repeat steps 1, 2, 4 above (step 3's `Railway_Egress` group is reused).
+4. Add the device in Settings → Devices with the **public** host and its new
+   external port.
+
+### Ongoing caveat -Railway egress IPs
+
+Railway does not guarantee stable outbound IPs on all plans. If they rotate,
+the step-3 allowlist silently stops matching and every Pull fails with
+"could not reach device" while nothing on the firewall looks wrong. If a
+static-egress option is available on the plan, it's worth having; otherwise
+treat this allowlist as something to re-check when sync breaks for no
+apparent reason.
+
+---
+
 ## Manual entry (always available, either path)
 
 For a device outage or a punch the device missed (verified via CCTV, say):

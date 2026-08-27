@@ -36,6 +36,7 @@ import Employees from "@/pages/hr/Employees";
 import NewEmployee from "@/pages/hr/NewEmployee";
 import BulkUploadEmployees from "@/pages/hr/BulkUploadEmployees";
 import ManualPunchImport from "@/pages/hr/ManualPunchImport";
+import PunchView from "@/pages/hr/PunchView";
 import EmployeeDetail from "@/pages/hr/EmployeeDetail";
 import EditEmployee from "@/pages/hr/EditEmployee";
 import Leave from "@/pages/hr/Leave";
@@ -230,8 +231,13 @@ function Router() {
       <Route path="/hr/attendance/search">
         {() => <ProtectedRoute component={AttendancePunchSearch} allowedRoles={["hr"]} />}
       </Route>
+      {/* Route kept so the old page is reachable if inbound device access is
+          ever set up -its header button is hidden, not removed. */}
       <Route path="/hr/attendance/manual-import">
         {() => <ProtectedRoute component={ManualPunchImport} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/attendance/punch-view">
+        {() => <ProtectedRoute component={PunchView} allowedRoles={["hr"]} />}
       </Route>
       <Route path="/hr/attendance/staff">
         {() => <ProtectedRoute component={Attendance} allowedRoles={["hr"]} />}

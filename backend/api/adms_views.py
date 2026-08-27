@@ -33,6 +33,7 @@ from datetime import datetime
 from django.http import HttpRequest, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 
+from .device_health import record_device_push, record_unmatched_punch
 from .models import Attendance, AttendanceLog, Employee
 
 logger = logging.getLogger(__name__)
@@ -136,7 +137,15 @@ def _handle_attlog(request: HttpRequest, sn: str) -> HttpResponse:
         emp = Employee.objects.filter(employee_code=parsed["user_id"]).first()
         if not emp:
             skipped_no_employee += 1
-            logger.warning("ADMS ATTLOG: no employee with code %r (SN=%s)", parsed["user_id"], sn)
+            # Recorded, not just logged: a log line is invisible in the portal,
+            # so real people were punching daily and having it silently
+            # discarded with no way for HR to notice. Surfaces on the
+            # Attendance page's "Skipped" view.
+            record_unmatched_punch(
+                device_user_id=parsed["user_id"],
+                device_serial=sn,
+                punch_dt=parsed["dt"],
+            )
             continue
 
         punch_type = _STATUS_MAP.get(parsed["status"], AttendanceLog.PUNCH_IN)
@@ -181,6 +190,10 @@ def adms_cdata(request: HttpRequest) -> HttpResponse:
     rather than betting on one.
     """
     sn = request.GET.get("SN", "")
+    # Any contact at all counts as a heartbeat -handshake, options, OPERLOG,
+    # BIODATA, not just attendance. A device with nobody punching is quiet but
+    # healthy, and the Sync indicator must not call that a failure.
+    record_device_push(sn)
 
     if request.method == "GET":
         return _handle_handshake(request)

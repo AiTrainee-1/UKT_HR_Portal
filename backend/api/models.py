@@ -2062,9 +2062,54 @@ class BiometricDevice(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
+    # Serial number the device reports when it pushes over ADMS (the `SN`
+    # query param, e.g. "CQIK222560204"). Pull-based sync identifies a device
+    # by host/IP, but a push arrives with no IP we can trust -only this -so
+    # without it there's no way to tell WHICH configured device a push came
+    # from, and therefore no way to say which one has gone quiet.
+    # Auto-filled on first push when blank; see adms_views.record_push.
+    serial_number = models.TextField(blank=True, default="", db_column="serial_number")
+    # Last time this device pushed anything over ADMS. Distinct from
+    # last_synced_at, which records the opposite direction (us pulling from
+    # it) -a device can be perfectly healthy on one and silent on the other.
+    last_push_at = models.DateTimeField(null=True, blank=True, db_column="last_push_at")
+
     class Meta:
         db_table = "biometric_devices"
         ordering = ["-is_default", "name"]
+
+
+class UnmatchedPunch(models.Model):
+    """A punch whose device user ID matches no Employee -i.e. someone is
+    clocking in but their attendance is being discarded.
+
+    Previously this was only ever written to the server log, so it was
+    invisible in the portal and effectively undiscoverable: real people were
+    punching every day and simply not being recorded. This table makes it a
+    reviewable list instead.
+
+    Aggregated per (device user ID, device) rather than one row per punch —
+    HR needs "this ID has been punching for two weeks with no employee
+    record", not thousands of individual rows saying the same thing.
+    """
+    device_user_id = models.TextField(db_index=True, db_column="device_user_id")
+    device_label = models.TextField(blank=True, default="", db_column="device_label")
+    device_serial = models.TextField(blank=True, default="", db_column="device_serial")
+    punch_count = models.IntegerField(default=0, db_column="punch_count")
+    first_seen_at = models.DateTimeField(auto_now_add=True, db_column="first_seen_at")
+    last_seen_at = models.DateTimeField(auto_now=True, db_column="last_seen_at")
+    last_punch_date = models.DateField(null=True, blank=True, db_column="last_punch_date")
+    last_punch_time = models.TimeField(null=True, blank=True, db_column="last_punch_time")
+    # Set once HR has dealt with it (created the employee, fixed the code, or
+    # decided it's a device/test account that should be ignored). Kept rather
+    # than deleted so a resolved ID that starts punching again is obvious.
+    resolved = models.BooleanField(default=False, db_column="resolved")
+    resolved_note = models.TextField(blank=True, default="", db_column="resolved_note")
+
+    class Meta:
+        db_table = "unmatched_punches"
+        ordering = ["-last_seen_at"]
+        unique_together = [("device_user_id", "device_serial")]
 
 
 class AutoSyncRule(models.Model):

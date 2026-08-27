@@ -126,6 +126,10 @@ from .payroll_views import (
     seed_attendance, payroll_settings_view,
 )
 from .manual_attendance_import_views import export_punch_records, import_punch_excel
+from .punch_views import (
+    skipped_punches, resolve_skipped_punch,
+    punch_list, punch_export, punch_import, sync_status,
+)
 from .chat_views import (
     chat_channels, chat_messages, chat_message_reactions,
 )
@@ -282,6 +286,17 @@ urlpatterns = [
     path("auto-sync-rules/<int:pk>", auto_sync_rule_detail),
     path("attendance/manual-import/export", export_punch_records),
     path("attendance/manual-import/upload", import_punch_excel),
+
+    # ── Attendance page: Skipped / Punch View / Sync / Errors ────────────
+    # Database-only replacements for the device-dependent features. None of
+    # these contact a biometric device, so they work from a cloud-hosted
+    # backend -see api/punch_views.py.
+    path("attendance/skipped-punches", skipped_punches),
+    path("attendance/skipped-punches/<int:pk>/resolve", resolve_skipped_punch),
+    path("attendance/punches", punch_list),
+    path("attendance/punches/export", punch_export),
+    path("attendance/punches/import", punch_import),
+    path("attendance/sync-status-live", sync_status),
     path("attendance/report-log", attendance_report_log),
     path("attendance/search", attendance_search),
     path("attendance/search/range", attendance_search_range),

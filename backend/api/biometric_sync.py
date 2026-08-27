@@ -281,6 +281,18 @@ def _ingest_punches(punches: list[tuple[str, date_type, time_type, str]],
         if not emp:
             not_found.add(uid)
             skipped += 1
+            # Persist alongside the in-memory set, so the Attendance page's
+            # "Skipped" view shows the same unmatched IDs whether a punch
+            # arrived by pull or by ADMS push. The set below only survives
+            # the current request; this outlives it.
+            from datetime import datetime as _dt
+
+            from .device_health import record_unmatched_punch
+            record_unmatched_punch(
+                device_user_id=uid,
+                device_serial="",
+                punch_dt=_dt.combine(punch_date, punch_time),
+            )
             continue
 
         try:

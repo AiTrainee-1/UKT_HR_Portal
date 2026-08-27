@@ -1363,6 +1363,189 @@ export const useSyncBiometricProgress = (enabled: boolean) =>
     staleTime: 0,
   });
 
+// ── Attendance: Skipped / Punch View / Sync status ────────────────────────
+// All database-only -none of these contact a biometric device, so unlike the
+// old Sync Biometric / Manual Import they work from a cloud-hosted backend.
+
+export type SkippedPunch = {
+  id: number;
+  deviceUserId: string;
+  deviceLabel: string | null;
+  deviceSerial: string | null;
+  punchCount: number;
+  firstSeenAt: string | null;
+  lastSeenAt: string | null;
+  lastPunchDate: string | null;
+  lastPunchTime: string | null;
+  resolved: boolean;
+  resolvedNote: string | null;
+};
+
+export type SkippedPunchesResponse = {
+  results: SkippedPunch[];
+  unresolvedCount: number;
+  /** Total punches being discarded -conveys the cost of leaving these unresolved. */
+  discardedPunches: number;
+};
+
+export const useSkippedPunches = (includeResolved = false) =>
+  useQuery<SkippedPunchesResponse>({
+    queryKey: ["/api/attendance/skipped-punches", includeResolved],
+    queryFn: () =>
+      customFetch<SkippedPunchesResponse>(
+        `/api/attendance/skipped-punches${includeResolved ? "?includeResolved=1" : ""}`,
+      ),
+  });
+
+export const useResolveSkippedPunch = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, note }: { id: number; note?: string }) =>
+      customFetch<{ ok: boolean }>(`/api/attendance/skipped-punches/${id}/resolve`, {
+        method: "POST",
+        body: JSON.stringify({ note }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance/skipped-punches"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance/sync-status-live"] });
+    },
+  });
+};
+
+export type PunchRow = {
+  id: number;
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department: string | null;
+  employmentType: string;
+  date: string;
+  punchTime: string;
+  punchType: "IN" | "OUT";
+  source: string;
+};
+
+export type PunchListResponse = {
+  total: number;
+  limit: number;
+  offset: number;
+  results: PunchRow[];
+};
+
+export type PunchFilters = {
+  dateFrom?: string;
+  dateTo?: string;
+  employmentType?: "staff" | "production" | "";
+  punchType?: "IN" | "OUT" | "";
+  source?: string;
+  search?: string;
+  limit?: number;
+  offset?: number;
+};
+
+function punchQuery(f: PunchFilters): string {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(f)) {
+    if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
+  }
+  return qs.toString();
+}
+
+export const usePunchList = (filters: PunchFilters) =>
+  useQuery<PunchListResponse>({
+    queryKey: ["/api/attendance/punches", punchQuery(filters)],
+    queryFn: () => customFetch<PunchListResponse>(`/api/attendance/punches?${punchQuery(filters)}`),
+  });
+
+/** Downloads the full filtered set as .xlsx -not just the visible page. */
+export async function downloadPunchesExcel(filters: PunchFilters): Promise<void> {
+  const { limit: _l, offset: _o, ...rest } = filters;
+  const token = typeof localStorage !== "undefined" ? localStorage.getItem("uk_textile_token") : null;
+  const response = await fetch(`${getApiOrigin()}/api/attendance/punches/export?${punchQuery(rest)}`, {
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  });
+  if (!response.ok) throw new Error(`Export failed: ${response.statusText}`);
+
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const filename = disposition.match(/filename="?([^"';]+)"?/i)?.[1] ?? "punches.xlsx";
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+export type PunchImportResult = {
+  ok: boolean;
+  updated: number;
+  created: number;
+  unchanged: number;
+  errors: string[];
+  errorCount: number;
+};
+
+export const useImportPunches = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (file: File) => {
+      const form = new FormData();
+      form.append("file", file);
+      const token = typeof localStorage !== "undefined" ? localStorage.getItem("uk_textile_token") : null;
+      const response = await fetch(`${getApiOrigin()}/api/attendance/punches/import`, {
+        method: "POST",
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: form,
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? "Import failed");
+      return body as PunchImportResult;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance/punches"] });
+      queryClient.invalidateQueries({
+        predicate: (q) => typeof q.queryKey[0] === "string" && q.queryKey[0].startsWith("/api/attendance"),
+      });
+    },
+  });
+};
+
+export type DeviceHealthRow = {
+  id: number;
+  name: string;
+  host: string;
+  serialNumber: string | null;
+  isActive: boolean;
+  status: "live" | "silent" | "never" | "disabled";
+  lastPushAt: string | null;
+  lastSyncedAt: string | null;
+};
+
+export type SyncStatusLive = {
+  devices: DeviceHealthRow[];
+  liveCount: number;
+  problemCount: number;
+  isLive: boolean;
+  silentAfterHours: number;
+  checkedAt: string;
+  punchesToday: number;
+  lastPunchAt: string | null;
+  unresolvedSkipped: number;
+};
+
+/** Polled while the Attendance page is open so the live dot reflects reality
+ *  without the user refreshing. 30s is plenty -device silence is measured in
+ *  hours, so anything faster is just load for no extra signal. */
+export const useSyncStatusLive = () =>
+  useQuery<SyncStatusLive>({
+    queryKey: ["/api/attendance/sync-status-live"],
+    queryFn: () => customFetch<SyncStatusLive>("/api/attendance/sync-status-live"),
+    refetchInterval: 30_000,
+  });
+
 export type ReportLogSummaryParams = {
   month: number;
   year: number;

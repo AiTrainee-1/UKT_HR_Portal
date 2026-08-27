@@ -33,6 +33,8 @@ import { TimePicker12h } from "@/components/ui/time-picker-12h";
 import { MarbleSwitch } from "@/components/ui/marble-switch";
 import EmployeeSearchSelect from "@/components/EmployeeSearchSelect";
 import BiometricSyncPipeline from "@/components/BiometricSyncPipeline";
+import { SkippedPunchesButton } from "@/components/SkippedPunchesButton";
+import { SyncStatusIndicator } from "@/components/SyncStatusIndicator";
 import AttendanceSearchSection from "./AttendanceSearch";
 import {
   Users, UserCheck, UserX, CalendarDays, Plus,
@@ -322,6 +324,12 @@ export default function AttendancePage() {
   // Multi-select checklist: which specific devices to sync. Empty selection
   // means "use the default" (every enabled device), same as before.
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<(number | "env")[]>([]);
+  // NOTE: showSyncMenu / syncMenuRef / handleSync, and the Auto Sync state
+  // further down, are intentionally retained while their buttons are hidden
+  // (see the header). They are the working implementations of Sync Biometric
+  // and Auto Sync -kept so those features can be switched back on by
+  // restoring the header block alone, rather than rewritten from scratch, if
+  // inbound access to the devices is ever configured.
   const [showSyncMenu, setShowSyncMenu] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
   const syncMenuRef = useRef<HTMLDivElement>(null);
@@ -533,165 +541,25 @@ export default function AttendancePage() {
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
-            {/* Manual punch import -backup path alongside Sync Biometric, never touches its state/flow */}
+            {/* Manual Import, Sync Biometric and Auto Sync are hidden, not
+                deleted: all three worked by having the backend open a direct
+                connection to a device on the factory LAN, which is impossible
+                now that the backend runs in the cloud. Their code and routes
+                are intact -re-enable this block if inbound access to the
+                devices is ever set up (see biometric-integration.md). The
+                buttons below replace them with equivalents that read the
+                database instead, so they work regardless of where the backend
+                runs. */}
+            <SkippedPunchesButton />
             <Button
               variant="outline"
-              onClick={() => navigate("/hr/attendance/manual-import")}
+              onClick={() => navigate("/hr/attendance/punch-view")}
               className="clay-btn gap-1.5 h-9 px-3 rounded-xl border-0 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-700 shrink-0"
             >
-              <FileSpreadsheet size={14} />
-              <span className="text-[13px] font-semibold">Manual Import</span>
+              <Fingerprint size={14} />
+              <span className="text-[13px] font-semibold">Punch View</span>
             </Button>
-            {/* Sync split-button */}
-            <div ref={syncMenuRef} className="relative flex items-center shrink-0">
-              <Button
-                variant="outline"
-                onClick={() => handleSync()}
-                disabled={isSyncing}
-                className="clay-btn gap-1.5 h-9 pl-3 pr-2.5 rounded-l-xl rounded-r-none border-0 bg-cyan-50 text-cyan-700 hover:bg-cyan-100"
-              >
-                <RefreshCw size={14} className={isSyncing ? "animate-spin" : ""} />
-                <span className="flex flex-col items-start leading-none">
-                  <span className="text-[13px] font-semibold">{isSyncing ? "Syncing…" : "Sync Biometric"}</span>
-                  {lastSyncedAt && !isSyncing && (
-                    <span className="text-[10px] text-cyan-500 font-normal mt-0.5">Last {lastSyncedAt}</span>
-                  )}
-                </span>
-              </Button>
-              <button
-                onClick={() => setShowSyncMenu(v => !v)}
-                className="h-9 px-2 rounded-r-xl text-cyan-700 bg-cyan-50 hover:bg-cyan-100 flex items-center border-l border-cyan-200/70 transition-colors"
-                title={syncModeLabel}
-              >
-                <ChevronDown size={13} />
-              </button>
-              {showSyncMenu && (
-                <div className="absolute top-full right-0 mt-1.5 z-50 bg-white border rounded-xl shadow-lg overflow-hidden min-w-[220px]">
-                  <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400 px-3 pt-2.5 pb-1">Device</p>
-                  <label className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-cyan-50 cursor-pointer transition-colors">
-                    <input
-                      type="checkbox"
-                      checked={allDevicesSelected}
-                      onChange={toggleSelectAllDevices}
-                      className="accent-cyan-600"
-                    />
-                    <span className={allDevicesSelected ? "text-cyan-700 font-semibold" : "text-gray-700"}>
-                      Select All Devices
-                    </span>
-                  </label>
-                  {enabledDevices.map(d => (
-                    <label
-                      key={d.id}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-cyan-50 cursor-pointer transition-colors"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedDeviceIds.includes(d.id)}
-                        onChange={() => toggleDevice(d.id)}
-                        className="accent-cyan-600"
-                      />
-                      <span className={selectedDeviceIds.includes(d.id) ? "text-cyan-700 font-semibold" : "text-gray-700"}>
-                        {d.name}
-                      </span>
-                    </label>
-                  ))}
-                  {enabledDevices.length === 0 && (
-                    <p className="px-3 py-1.5 text-xs text-amber-600">No enabled devices -add one in Settings.</p>
-                  )}
-
-                  <div className="border-t mt-1" />
-                  <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400 px-3 pt-2.5 pb-1">Sync range</p>
-                  {SYNC_MODES.map(m => (
-                    <button
-                      key={m.key}
-                      onClick={() => { setSyncMode(m.key); handleSync(m.key); }}
-                      className={`w-full text-left px-3 py-2 text-sm hover:bg-cyan-50 transition-colors ${
-                        syncMode === m.key ? "text-cyan-700 font-semibold bg-cyan-50" : "text-gray-700"
-                      }`}
-                    >
-                      {m.label}
-                      {m.key === "all" && <span className="block text-[10px] text-amber-500">⚠ May take a long time</span>}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            {/* Auto Sync -configurable background sync rules */}
-            <div ref={autoSyncMenuRef} className="relative flex items-center shrink-0">
-              <Button
-                variant="outline"
-                onClick={() => setShowAutoSyncMenu(v => !v)}
-                className={`clay-btn gap-1.5 h-9 pl-3 pr-2 rounded-xl border-0 ${
-                  activeRuleCount > 0 ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100" : "bg-slate-50 text-slate-600 hover:bg-slate-100"
-                }`}
-              >
-                <CalendarClock size={14} />
-                <span className="flex flex-col items-start leading-none">
-                  <span className="flex items-center gap-1 text-[13px] font-semibold">
-                    Auto Sync
-                    {activeRuleCount > 0 && (
-                      <span className="inline-flex items-center justify-center min-w-[15px] h-[15px] px-1 rounded-full text-[9px] font-bold bg-emerald-500 text-white">
-                        {activeRuleCount}
-                      </span>
-                    )}
-                  </span>
-                  <span className={`text-[10px] font-normal mt-0.5 ${activeRuleCount > 0 ? "text-emerald-500" : "text-slate-400"}`}>
-                    {lastAutoSyncLabel ? `Last ${lastAutoSyncLabel}` : "Never synced"}
-                  </span>
-                </span>
-                <ChevronDown size={13} className="ml-0.5" />
-              </Button>
-              {showAutoSyncMenu && (
-                <div className="absolute top-full right-0 mt-1.5 z-50 bg-white border rounded-xl shadow-lg overflow-hidden min-w-[300px]">
-                  <div className="px-3 pt-2.5 pb-1.5 flex items-center justify-between">
-                    <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400">Timing Rules</p>
-                    {lastAutoSyncAt && (
-                      <p className="text-[10px] text-gray-400">Last sync · {new Date(lastAutoSyncAt).toLocaleString()}</p>
-                    )}
-                  </div>
-                  <div className="max-h-[280px] overflow-y-auto">
-                    {(autoSyncRules ?? []).length === 0 && (
-                      <p className="px-3 py-3 text-xs text-gray-400">No rules yet -add one to sync automatically in the background.</p>
-                    )}
-                    {(autoSyncRules ?? []).map(rule => (
-                      <div key={rule.id} className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-emerald-50/60 transition-colors border-t first:border-t-0">
-                        <MarbleSwitch
-                          id={`auto-sync-rule-${rule.id}`}
-                          checked={rule.isEnabled}
-                          onChange={() => toggleRuleEnabled(rule)}
-                          title={rule.isEnabled ? "Enabled -click to disable" : "Disabled -click to enable"}
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p className={`font-semibold truncate ${rule.isEnabled ? "text-gray-800" : "text-gray-400"}`}>
-                            {new Date(`2000-01-01T${rule.time}`).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
-                            {rule.name && <span className="font-normal text-gray-400"> · {rule.name}</span>}
-                          </p>
-                          <p className="text-[11px] text-gray-400 truncate">
-                            {rule.daysOfWeek === "*" ? "Every day" : rule.daysOfWeek.split(",").map(d => d[0].toUpperCase() + d.slice(1)).join(", ")}
-                            {" · "}{SYNC_MODES.find(m => m.key === rule.mode)?.label}
-                            {rule.lastRunStatus === "failed" && <span className="text-red-500"> · last run failed</span>}
-                          </p>
-                        </div>
-                        <button onClick={() => openEditRule(rule)} className="p-1 text-gray-400 hover:text-cyan-600 shrink-0">
-                          <PenLine size={13} />
-                        </button>
-                        <button onClick={() => removeRule(rule)} className="p-1 text-gray-400 hover:text-red-500 shrink-0">
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="border-t">
-                    <button
-                      onClick={openAddRule}
-                      className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 text-sm font-semibold text-cyan-700 hover:bg-cyan-50 transition-colors"
-                    >
-                      <Plus size={14} /> Add Rule
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
+            <SyncStatusIndicator />
             <Input
               type="date"
               value={selectedDate}
