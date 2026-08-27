@@ -53,15 +53,38 @@ def _ok() -> HttpResponse:
 
 
 def _handle_handshake(request: HttpRequest) -> HttpResponse:
-    """GET /iclock/cdata -device registration/handshake, sent on boot and
-    periodically. Params seen across reference implementations: SN, options,
-    language, pushver, DeviceType, PushOptionsFlag. Logged in full since the
-    exact response this specific firmware expects (beyond a bare 200) isn't
-    confirmed -if the device doesn't consider itself successfully
-    registered, that will show up here as repeated handshakes with no
-    subsequent ATTLOG POSTs ever arriving."""
-    logger.warning("ADMS handshake (GET): SN=%s full_query=%r", request.GET.get("SN"), request.GET.urlencode())
-    return _ok()
+    """GET /iclock/cdata[.aspx] -device registration/handshake, sent on boot
+    and periodically.
+
+    A bare "OK" is NOT enough here: the device expects a config block back and
+    uses it to decide how (and whether) to push data afterwards. The key line
+    is TransFlag, which enables the record types it will send -without it a
+    device can handshake happily and then never send a single ATTLOG.
+
+    Realtime=1 asks the device to push each punch as it happens rather than
+    batching, which is what makes attendance appear in the portal live.
+    """
+    sn = request.GET.get("SN", "")
+    logger.warning("ADMS handshake (GET): SN=%s full_query=%r", sn, request.GET.urlencode())
+
+    # TimeZone is advisory only for this app: punches arrive as local wall
+    # time ("2026-08-27 09:15:00") and AttendanceLog stores date and time as
+    # separate naive fields, exactly as the pull-based sync does -so no
+    # timezone conversion happens on either path.
+    config = "\n".join([
+        f"GET OPTION FROM: {sn}",
+        "Stamp=9999",
+        "OpStamp=9999",
+        "ErrorDelay=30",
+        "Delay=10",
+        "TransTimes=00:00;14:05",
+        "TransInterval=1",
+        "TransFlag=1111000000",
+        "TimeZone=5.5",
+        "Realtime=1",
+        "Encrypt=0",
+    ])
+    return HttpResponse(config + "\n", content_type="text/plain")
 
 
 def _parse_attlog_line(line: str) -> dict | None:
@@ -145,7 +168,13 @@ def adms_cdata(request: HttpRequest) -> HttpResponse:
     method and the `table` query param. Plain Django view, not DRF -ADMS
     devices don't send JSON or DRF-recognised content types, and don't carry
     any auth this app's existing require_auth/require_hr decorators could
-    check against; see module docstring for what that means for exposure."""
+    check against; see module docstring for what that means for exposure.
+
+    Registered under both /iclock/cdata and /iclock/cdata.aspx: the firmware
+    on this site's AiFace-Mars ("iClock Proxy/1.09") calls the .aspx form,
+    while other ZKTeco firmware calls it without -so both are accepted
+    rather than betting on one.
+    """
     sn = request.GET.get("SN", "")
 
     if request.method == "GET":
@@ -155,14 +184,36 @@ def adms_cdata(request: HttpRequest) -> HttpResponse:
         table = request.GET.get("table", "")
         if table == "ATTLOG":
             return _handle_attlog(request, sn)
-        # OPERLOG (enrollment/admin events) and anything else this device
-        # sends -not attendance data, out of scope to parse, but still
-        # logged and acknowledged so the device doesn't spin retrying
-        # something that was never going to be processed.
+        # Everything else the device pushes: "options" (its own capability
+        # list, sent right after handshake), OPERLOG (enrollment/admin
+        # events), and any other table. None are attendance data, so they're
+        # logged and acknowledged rather than parsed -an unacknowledged push
+        # makes the device retry the same payload indefinitely.
         logger.warning(
-            "ADMS POST (table=%r, not handled): SN=%s body=%r",
+            "ADMS POST (table=%r, acknowledged without parsing): SN=%s body=%r",
             table, sn, request.body.decode("utf-8", errors="replace")[:2000],
         )
         return _ok()
 
     return HttpResponse(status=405)
+
+
+@csrf_exempt
+def adms_getrequest(request: HttpRequest) -> HttpResponse:
+    """GET /iclock/getrequest[.aspx] -the device polling for server-issued
+    commands (remote door open, user sync, reboot, ...). This app never issues
+    any, so a bare "OK" correctly means "nothing queued for you". Must still
+    exist: a 404 here makes the device treat the whole server as unreachable
+    and it can stop pushing attendance entirely."""
+    logger.info("ADMS getrequest: SN=%s", request.GET.get("SN", ""))
+    return _ok()
+
+
+@csrf_exempt
+def adms_devicecmd(request: HttpRequest) -> HttpResponse:
+    """POST /iclock/devicecmd[.aspx] -device reporting the result of a command
+    it was given. Nothing issues commands here, but acknowledging keeps the
+    device from retrying if it ever posts one."""
+    logger.info("ADMS devicecmd: SN=%s body=%r", request.GET.get("SN", ""),
+                request.body.decode("utf-8", errors="replace")[:500])
+    return _ok()
