@@ -87,7 +87,11 @@ def export_punch_records(request: Request) -> Response:
             device_errors.append(f"{t['label']}: {exc}")
 
     if succeeded == 0:
-        return _error("; ".join(device_errors) or "No device could be reached.", 502)
+        # 400, not 502 -see sync_biometric_api for why: a 5xx here is
+        # swallowed by the platform edge and replaced with a CORS-header-less
+        # error page, so the user sees "blocked by CORS policy" instead of the
+        # real reason the device couldn't be reached.
+        return _error("; ".join(device_errors) or "No device could be reached.", 400)
 
     for r in rows:
         r["kind"] = "punch"

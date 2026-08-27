@@ -988,7 +988,15 @@ def sync_biometric_api(request: Request) -> Response:
     mode = request.data.get("mode", "day")       # "day" | "week" | "month" | "all"
     device_id = request.data.get("deviceId")     # int | "env" | "all" | list[int] | None
     result = run_biometric_sync(mode, device_id)
-    status_code = 200 if result["ok"] else 502
+    # 400, not 502, on failure. "Couldn't reach the biometric device" is an
+    # application-level outcome, not a gateway fault -and returning 5xx here
+    # actively hid it: the platform edge (Railway) intercepts 5xx and
+    # substitutes its own error page, which carries no CORS headers, so the
+    # browser reported a misleading "blocked by CORS policy" instead of
+    # showing this response's actual error text. Confirmed by contrast with
+    # /sync-biometric-progress, which returns 200 from the same origin under
+    # the same CORS config and is never blocked.
+    status_code = 200 if result["ok"] else 400
     return Response(result, status=status_code)
 
 
