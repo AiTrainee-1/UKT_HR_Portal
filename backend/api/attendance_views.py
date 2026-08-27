@@ -1,5 +1,6 @@
 import calendar
 import logging
+import threading
 from collections import defaultdict
 from datetime import date as date_type, datetime, time as time_type, timedelta
 from decimal import Decimal
@@ -920,6 +921,9 @@ def run_biometric_sync(mode: str = "day", device_id=None) -> dict:
         return {"ok": False, "error": str(exc)}
 
     # Progress-tracking only (UI pipeline) -does not affect the sync itself.
+    # Uses start() rather than try_begin(): the HTTP path already claimed the
+    # slot before spawning its thread, and the management command / Auto Sync
+    # rules run standalone where there's nothing to contend with.
     sync_progress.start(targets)
 
     total_created = 0
@@ -987,17 +991,48 @@ def run_biometric_sync(mode: str = "day", device_id=None) -> dict:
 def sync_biometric_api(request: Request) -> Response:
     mode = request.data.get("mode", "day")       # "day" | "week" | "month" | "all"
     device_id = request.data.get("deviceId")     # int | "env" | "all" | list[int] | None
-    result = run_biometric_sync(mode, device_id)
-    # 400, not 502, on failure. "Couldn't reach the biometric device" is an
-    # application-level outcome, not a gateway fault -and returning 5xx here
-    # actively hid it: the platform edge (Railway) intercepts 5xx and
-    # substitutes its own error page, which carries no CORS headers, so the
-    # browser reported a misleading "blocked by CORS policy" instead of
-    # showing this response's actual error text. Confirmed by contrast with
-    # /sync-biometric-progress, which returns 200 from the same origin under
-    # the same CORS config and is never blocked.
-    status_code = 200 if result["ok"] else 400
-    return Response(result, status=status_code)
+    from . import sync_progress
+
+    # The sync runs on a background thread and this request returns
+    # immediately, rather than holding the connection open for the duration.
+    #
+    # This is not an optimisation -it's required for the app to stay up. A
+    # full pull is genuinely slow (measured at ~290s for ~73k records), while
+    # Gunicorn kills any request still running at its timeout (30s by
+    # default). Run inline, the worker is killed mid-sync and restarted,
+    # which presents as the whole backend freezing or dropping requests after
+    # one button click. Off the request thread, neither the sync's duration
+    # nor an unreachable device can take a worker down with it.
+    #
+    # The frontend polls /attendance/sync-biometric-progress for the live
+    # pipeline and reads the final outcome from that snapshot's "result",
+    # since this response can no longer carry it.
+    # Claimed here, in the request thread, so two rapid clicks can't both
+    # start a sync -see sync_progress.try_claim.
+    if not sync_progress.try_claim():
+        return Response(
+            {"ok": True, "started": False, "message": "A sync is already running."},
+            status=202,
+        )
+
+    def _run() -> None:
+        from django.db import connection
+        try:
+            result = run_biometric_sync(mode, device_id)
+            sync_progress.finish(result)
+        except Exception as exc:  # noqa: BLE001 -a thread dying silently is worse
+            logger.exception("Background biometric sync crashed")
+            sync_progress.finish({"ok": False, "error": str(exc)})
+        finally:
+            # Threads get their own DB connection; without this they leak one
+            # per sync until the pool is exhausted.
+            connection.close()
+
+    threading.Thread(target=_run, name="biometric-sync", daemon=True).start()
+    return Response(
+        {"ok": True, "started": True, "message": "Sync started."},
+        status=202,
+    )
 
 
 @api_view(["GET"])

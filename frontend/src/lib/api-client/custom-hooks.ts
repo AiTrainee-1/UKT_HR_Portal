@@ -1347,6 +1347,10 @@ export type SyncProgress = {
   devices: SyncProgressDevice[];
   startedAt: string | null;
   finishedAt: string | null;
+  /** The finished run's outcome. Null while running. Carries what the POST
+   *  used to return, now that the sync runs in the background and the
+   *  request answers 202 straight away. */
+  result: SyncResult | null;
 };
 
 export const useSyncBiometricProgress = (enabled: boolean) =>
