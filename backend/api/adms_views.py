@@ -37,12 +37,17 @@ from .models import Attendance, AttendanceLog, Employee
 
 logger = logging.getLogger(__name__)
 
-# ZKTeco's standard attendance status codes (ATTLOG table). 0/1 map cleanly
-# onto this app's IN/OUT; the rest (break/overtime) have no slot in the
-# simple two-value AttendanceLog.punch_type this app uses everywhere else,
-# so they're folded onto the same even=IN/odd=OUT pattern rather than
-# dropped -logged distinctly so real distribution is visible once live.
-_OUT_STATUS_CODES = {1, 3, 5}
+# Status-code → IN/OUT mapping is imported from biometric_sync rather than
+# redefined here, so the ADMS push path and the pull path can never disagree
+# about what a given punch means. They briefly did: a locally-defined table
+# here mapped status 3 to OUT while the pull path's _STATUS_MAP falls through
+# to IN for it, meaning the same physical punch would have been recorded
+# differently depending purely on which path happened to ingest it.
+#
+# Real devices on this site send status 255 ("undefined"), which both paths
+# treat as IN via the same shared default -confirmed against live ATTLOG
+# pushes, where every record carried status=255.
+from .biometric_sync import _STATUS_MAP  # noqa: E402  (kept beside its explanation)
 
 
 def _ok() -> HttpResponse:
@@ -134,7 +139,7 @@ def _handle_attlog(request: HttpRequest, sn: str) -> HttpResponse:
             logger.warning("ADMS ATTLOG: no employee with code %r (SN=%s)", parsed["user_id"], sn)
             continue
 
-        punch_type = AttendanceLog.PUNCH_OUT if parsed["status"] in _OUT_STATUS_CODES else AttendanceLog.PUNCH_IN
+        punch_type = _STATUS_MAP.get(parsed["status"], AttendanceLog.PUNCH_IN)
         _log, created = AttendanceLog.objects.get_or_create(
             employee=emp,
             date=parsed["dt"].date(),

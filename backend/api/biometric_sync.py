@@ -13,9 +13,15 @@ Two device sources, both supported together:
 """
 
 import os
+import socket
 from datetime import date as date_type, time as time_type
 
 from .models import Attendance, AttendanceLog, Employee
+
+# Seconds to wait on a plain TCP probe before giving up on a device. Kept
+# short on purpose -see _precheck_reachable for why this matters far more
+# than it looks.
+_PRECHECK_TIMEOUT = 3
 
 
 # Status codes sent by eSSL/ZKTeco devices
@@ -152,6 +158,44 @@ def get_sync_targets(device_id=None) -> list[dict]:
     return targets
 
 
+def _precheck_reachable(host: str, port: int) -> None:
+    """Fast TCP reachability probe, run before the much slower ZK handshake.
+
+    This exists for stability, not speed. The pull-sync path runs inside the
+    HTTP request handler ("Sync Biometric" / "Download Punching Data"), so a
+    device that never answers blocks a Gunicorn worker for the full ZK
+    timeout. With a small default worker pool that stalls every other request
+    in the app, and if the block outlasts Gunicorn's own request timeout the
+    worker is killed and restarted -which presents to the user as the entire
+    backend freezing or restarting after one button click.
+
+    That is now the normal case rather than an edge case: the backend runs on
+    Railway while the devices sit on a private factory LAN, so there is no
+    route to them at all and every attempt hangs until it times out.
+
+    A bare socket connect resolves that in milliseconds when there's no route
+    (and is equally quick on a healthy LAN, where it succeeds immediately),
+    so the request returns a clear error instead of taking the app down with
+    it. Raises the same BiometricSyncError the caller already handles, so no
+    call site needs to change.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(_PRECHECK_TIMEOUT)
+    try:
+        sock.connect((host, port))
+    except OSError as exc:
+        raise BiometricSyncError(
+            f"Could not reach device at {host}:{port} -{exc}. "
+            "Devices on the factory LAN aren't reachable from the cloud-hosted "
+            "backend; their attendance arrives via the device's own push instead."
+        )
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+
 def _connect_and_fetch(host: str, port: int, password: int) -> list:
     """Connect to one device and pull its raw attendance buffer. Raises
     BiometricSyncError on connection failure. Used by both the live-sync
@@ -162,6 +206,8 @@ def _connect_and_fetch(host: str, port: int, password: int) -> list:
         from zk import ZK
     except ImportError:
         raise BiometricSyncError("pyzk is not installed. Run: pip install pyzk")
+
+    _precheck_reachable(host, port)
 
     zk = ZK(host, port=port, timeout=10, password=password, force_udp=False)
     conn = None
