@@ -25,6 +25,25 @@ ALLOWED_HOSTS = [
     if h.strip()
 ]
 
+if DEBUG:
+    # Local development only: also accept this machine's own LAN addresses,
+    # so a phone or tablet on the same Wi-Fi can reach the dev server by IP
+    # (http://192.168.x.x:8000) to test the employee mobile app against it.
+    # Auto-detected rather than listed in .env because the address is issued
+    # by DHCP -pinning it there means a silent DisallowedHost every time the
+    # router hands out a different one. Adds no new deployment target: this
+    # branch never runs in production, where DEBUG is false.
+    import socket
+
+    _lan_hosts = {"0.0.0.0", "[::1]"}
+    try:
+        _hostname = socket.gethostname()
+        _lan_hosts.add(_hostname)
+        _lan_hosts.update(info[4][0] for info in socket.getaddrinfo(_hostname, None))
+    except OSError:
+        pass  # no network / DNS -localhost entries above still work
+    ALLOWED_HOSTS = sorted({*ALLOWED_HOSTS, *_lan_hosts})
+
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.staticfiles",

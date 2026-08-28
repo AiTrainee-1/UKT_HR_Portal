@@ -24,7 +24,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useListEmployees, useListBranches, type Employee } from "@/lib/api-client";
 import {
   useOnDutySessionsHR, useUpdateOnDutySessionHR,
-  useOnDutyPunchVerificationsHR, useUpdateOnDutyPunchVerificationHR,
+  useOnDutyPunchVerificationsHR, useUpdateOnDutyPunchVerificationHR, useUpdateOnDutySessionPunchesHR,
   useLiveLocationTeam, useLiveLocationTrail, useLiveLocationRoute, useOnDutyMap,
   useUpdateEmployeeLocationTracking, useBulkUpdateLocationTracking,
   fetchAuthedImageObjectUrl, type OnDutySessionItem, type OnDutyPunchVerificationItem, type LiveLocationTeamMember,
@@ -552,6 +552,25 @@ function ApprovalsTab() {
                   {session.status === "pending_hod" && (
                     <p className="text-[11px] text-amber-600 mt-1">No Department Head has acted yet -approving here finalizes it directly.</p>
                   )}
+                  {/* The employee is already out working under this request —
+                      HR is deciding after the fact, so the stakes of the
+                      decision have to be on screen before they click. */}
+                  {session.isProvisional && (
+                    <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50/70 p-2.5 flex items-start gap-2">
+                      <Clock size={13} className="text-amber-600 shrink-0 mt-0.5" />
+                      <p className="text-[11px] text-amber-800 leading-relaxed">
+                        {session.employeeEndedAt
+                          ? <>The employee <b>worked this session and marked it done</b> at{" "}
+                             {new Date(session.employeeEndedAt).toLocaleString()}, without waiting for approval.</>
+                          : <>The employee is <b>already working under this request</b> -they did not wait for approval.</>}
+                        {session.pendingPunchCount > 0
+                          ? <> They have recorded <b>{session.pendingPunchCount} punch{session.pendingPunchCount === 1 ? "" : "es"}</b>,
+                              held and not yet counted as attendance. Approving makes {session.pendingPunchCount === 1 ? "it" : "them"} eligible
+                              for your punch review; rejecting voids {session.pendingPunchCount === 1 ? "it" : "them all"} permanently.</>
+                          : <> No punches recorded under it yet.</>}
+                      </p>
+                    </div>
+                  )}
                 </div>
                 {(session.status === "pending_hod" || session.status === "pending_hr") && (
                   <div className="flex items-center gap-2 shrink-0">
@@ -767,8 +786,29 @@ function PunchVerificationsTab() {
   const [statusFilter, setStatusFilter] = useState<"pending" | "approved" | "rejected">("pending");
   const { data: verifications, isLoading } = useOnDutyPunchVerificationsHR(statusFilter);
   const updateMutation = useUpdateOnDutyPunchVerificationHR();
+  const bulkMutation = useUpdateOnDutySessionPunchesHR();
   const [photoId, setPhotoId] = useState<number | null>(null);
   const [mapPunch, setMapPunch] = useState<OnDutyPunchVerificationItem | null>(null);
+
+  // One card per On-Duty request, not per punch. An employee now punches up
+  // to four times a day without waiting for review, so the per-punch card
+  // list this replaced turned a single day of one person's work into four
+  // separate decisions with no visible connection between them.
+  const groups = useMemo(() => {
+    const bySession = new Map<number, OnDutyPunchVerificationItem[]>();
+    for (const v of verifications ?? []) {
+      const list = bySession.get(v.sessionId);
+      if (list) list.push(v);
+      else bySession.set(v.sessionId, [v]);
+    }
+    return [...bySession.values()]
+      .map((punches) => ({
+        head: punches[0],
+        punches: [...punches].sort((a, b) => a.punchNumber - b.punchNumber),
+        pendingCount: punches.filter((p) => p.status === "pending").length,
+      }))
+      .sort((a, b) => ((a.head.createdAt ?? "") < (b.head.createdAt ?? "") ? 1 : -1));
+  }, [verifications]);
 
   const handleDecision = async (v: OnDutyPunchVerificationItem, status: "approved" | "rejected") => {
     try {
@@ -778,6 +818,20 @@ function PunchVerificationsTab() {
       toast({ title: "Failed to update punch", description: err?.message, variant: "destructive" });
     }
   };
+
+  const handleBulk = async (head: OnDutyPunchVerificationItem, status: "approved" | "rejected") => {
+    try {
+      const res = await bulkMutation.mutateAsync({ sessionId: head.sessionId, status });
+      toast({
+        title: `${res.updated} punch${res.updated === 1 ? "" : "es"} ${status}`,
+        description: `${head.employeeName} -On-Duty to "${head.sessionDestination}".`,
+      });
+    } catch (err: any) {
+      toast({ title: "Failed to update punches", description: err?.message, variant: "destructive" });
+    }
+  };
+
+  const busy = updateMutation.isPending || bulkMutation.isPending;
 
   return (
     <div className="space-y-3">
@@ -794,7 +848,7 @@ function PunchVerificationsTab() {
 
       {isLoading ? (
         <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}</div>
-      ) : (verifications ?? []).length === 0 ? (
+      ) : groups.length === 0 ? (
         <Card className="border-0 shadow-sm">
           <CardContent className="py-14 text-center">
             <Camera size={32} className="text-gray-200 mx-auto mb-3" />
@@ -803,71 +857,124 @@ function PunchVerificationsTab() {
         </Card>
       ) : (
         <div className="grid gap-3">
-          {(verifications ?? []).map((v) => (
-            <Card key={v.id} className="border-0 shadow-sm">
-              <CardContent className="p-4 flex items-start gap-4 flex-wrap">
+          {groups.map(({ head, punches, pendingCount }) => (
+            <Card key={head.sessionId} className="border-0 shadow-sm overflow-hidden">
+              {/* Request header -who, where, and the one decision covering
+                  every punch listed underneath. */}
+              <div className="px-4 py-3 bg-slate-50 border-b flex items-start gap-3 flex-wrap">
                 <div className="flex-1 min-w-[240px]">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-bold text-gray-900">{v.employeeName}</p>
-                    <span className="text-[11px] font-mono text-gray-400">({v.employeeCode})</span>
-                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${v.punchType === "IN" ? "bg-green-50 text-green-700" : "bg-orange-50 text-orange-700"}`}>
-                      #{v.punchNumber} {v.punchType === "IN" ? "CHECK-IN" : "CHECK-OUT"}
+                    <p className="font-bold text-gray-900">{head.employeeName}</p>
+                    <span className="text-[11px] font-mono text-gray-400">({head.employeeCode})</span>
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-200 text-slate-700">
+                      {punches.length} punch{punches.length === 1 ? "" : "es"}
                     </span>
                     <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                      v.status === "approved" ? "bg-green-50 text-green-700"
-                      : v.status === "rejected" ? "bg-red-50 text-red-600"
-                      : "bg-amber-50 text-amber-700"
+                      head.sessionApproved ? "bg-teal-50 text-teal-700" : "bg-amber-50 text-amber-700"
                     }`}>
-                      {PUNCH_STATUS_LABEL[v.status]}
+                      {head.sessionApproved ? "Request approved" : STAGE_LABEL[head.sessionStatus]}
                     </span>
-                    {v.isMocked && (
-                      <span className="flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-50 text-red-600">
-                        <AlertTriangle size={10} /> Simulated location
-                      </span>
-                    )}
                   </div>
-                  <p className="text-xs text-gray-500 mt-1">{v.department ?? "—"}</p>
-                  <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
-                    <span className="flex items-center gap-1"><Clock size={11} /> {v.punchTime.slice(0, 5)} on {v.punchDate}</span>
-                    <span className="flex items-center gap-1"><MapPinned size={11} /> {v.latitude.toFixed(5)}, {v.longitude.toFixed(5)}</span>
-                    <button
-                      type="button"
-                      onClick={() => setMapPunch(v)}
-                      className="flex items-center gap-1 font-semibold text-[#006496] hover:underline"
-                    >
-                      <Navigation size={11} /> View on map
-                    </button>
-                  </div>
-                  {v.hrReviewedBy && (
-                    <p className="text-[11px] text-gray-400 mt-1.5">
-                      {v.status === "rejected" ? "Rejected" : "Approved"} by {v.hrReviewedBy}
-                      {v.hrReviewComment ? ` -"${v.hrReviewComment}"` : ""}
+                  <p className="text-xs text-gray-700 mt-1 italic">On-Duty to "{head.sessionDestination}"</p>
+                  <p className="text-xs text-gray-500 mt-0.5">{head.department ?? "—"} · {head.punchDate}</p>
+                  {!head.sessionApproved && pendingCount > 0 && (
+                    <p className="text-[11px] text-amber-700 bg-amber-50 rounded px-2 py-1 mt-1.5 inline-flex items-center gap-1">
+                      <AlertTriangle size={11} className="shrink-0" />
+                      Approve the On-Duty request on the Approvals tab -that accepts all {pendingCount} punch{pendingCount === 1 ? "" : "es"} with it.
                     </p>
                   )}
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <Button size="sm" variant="outline" className="gap-1.5 h-8 text-xs" onClick={() => setPhotoId(v.id)}>
-                    <ImageIcon size={12} /> View Photo
-                  </Button>
-                  {v.status === "pending" && (
-                    <>
-                      <Button
-                        size="sm" className="h-8 gap-1.5 text-xs bg-green-600 hover:bg-green-700"
-                        disabled={updateMutation.isPending}
-                        onClick={() => handleDecision(v, "approved")}
-                      >
-                        <CheckCircle2 size={12} /> Approve
+                {pendingCount > 0 && (
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Button
+                      size="sm" className="h-8 gap-1.5 text-xs bg-green-600 hover:bg-green-700"
+                      disabled={busy || !head.sessionApproved}
+                      title={head.sessionApproved ? undefined : "The On-Duty request these punches belong to is still awaiting approval."}
+                      onClick={() => handleBulk(head, "approved")}
+                    >
+                      <CheckCircle2 size={12} /> Approve all {pendingCount}
+                    </Button>
+                    <Button
+                      size="sm" variant="destructive" className="h-8 gap-1.5 text-xs"
+                      disabled={busy}
+                      onClick={() => handleBulk(head, "rejected")}
+                    >
+                      <XCircle size={12} /> Reject all
+                    </Button>
+                  </div>
+                )}
+              </div>
+
+              <CardContent className="p-0 divide-y">
+                {punches.map((v) => (
+                  <div key={v.id} className="p-3 flex items-start gap-3 flex-wrap">
+                    <div className="flex-1 min-w-[220px]">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${v.punchType === "IN" ? "bg-green-50 text-green-700" : "bg-orange-50 text-orange-700"}`}>
+                          #{v.punchNumber} {v.punchType === "IN" ? "CHECK-IN" : "CHECK-OUT"}
+                        </span>
+                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                          v.status === "approved" ? "bg-green-50 text-green-700"
+                          : v.status === "rejected" ? "bg-red-50 text-red-600"
+                          : "bg-amber-50 text-amber-700"
+                        }`}>
+                          {PUNCH_STATUS_LABEL[v.status]}
+                        </span>
+                        {v.isMocked && (
+                          <span className="flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-50 text-red-600">
+                            <AlertTriangle size={10} /> Simulated location
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-500 flex-wrap">
+                        <span className="flex items-center gap-1"><Clock size={11} /> {v.punchTime.slice(0, 5)}</span>
+                        <span className="flex items-center gap-1"><MapPinned size={11} /> {v.latitude.toFixed(5)}, {v.longitude.toFixed(5)}</span>
+                        <button
+                          type="button"
+                          onClick={() => setMapPunch(v)}
+                          className="flex items-center gap-1 font-semibold text-[#006496] hover:underline"
+                        >
+                          <Navigation size={11} /> View on map
+                        </button>
+                      </div>
+                      {v.hrReviewedBy && (
+                        <p className="text-[11px] text-gray-400 mt-1.5">
+                          {v.status === "rejected" ? "Rejected" : "Approved"} by {v.hrReviewedBy}
+                          {v.hrReviewComment ? ` -"${v.hrReviewComment}"` : ""}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Button size="sm" variant="outline" className="gap-1.5 h-8 text-xs" onClick={() => setPhotoId(v.id)}>
+                        <ImageIcon size={12} /> Photo
                       </Button>
-                      <Button
-                        size="sm" variant="destructive" className="h-8 gap-1.5 text-xs"
-                        disabled={updateMutation.isPending}
-                        onClick={() => handleDecision(v, "rejected")}
-                      >
-                        <XCircle size={12} /> Reject
-                      </Button>
-                    </>
-                  )}
-                </div>
+                      {/* Per-punch actions stay for the exception case -one bad
+                          punch in an otherwise good day. The bulk buttons in
+                          the header are the normal path. */}
+                      {v.status === "pending" && (
+                        <>
+                          <Button
+                            size="sm" variant="outline"
+                            className="h-8 gap-1.5 text-xs text-green-700 hover:text-green-800"
+                            disabled={busy || !v.sessionApproved}
+                            title={v.sessionApproved ? undefined : "The On-Duty request this punch belongs to is still awaiting approval."}
+                            onClick={() => handleDecision(v, "approved")}
+                          >
+                            <CheckCircle2 size={12} /> Approve
+                          </Button>
+                          <Button
+                            size="sm" variant="outline"
+                            className="h-8 gap-1.5 text-xs text-red-600 hover:text-red-700"
+                            disabled={busy}
+                            onClick={() => handleDecision(v, "rejected")}
+                          >
+                            <XCircle size={12} /> Reject
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </CardContent>
             </Card>
           ))}

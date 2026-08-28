@@ -103,10 +103,24 @@ def resolve_skipped_punch(request: Request, pk: int) -> Response:
 def _filtered_punches(request: Request):
     """Shared filter for the list and the Excel export, so a download can
     never disagree with what's on screen."""
+    # Person-wise, not time-wise: all of one employee's punches stay together,
+    # in the order they happened, before the next employee begins. A purely
+    # chronological feed interleaves everybody, so checking whether one
+    # person's day looks right means hunting their rows out of hundreds.
+    #
+    # Name → date → time, all ascending. Ascending time matters: within a day
+    # the rows then read as the actual sequence of the shift (first IN, last
+    # OUT), which is how you spot a missing punch.
+    #
+    # The Excel export shares this function, so a download always matches the
+    # on-screen order rather than quietly re-sorting.
     qs = (
         AttendanceLog.objects
         .select_related("employee", "employee__department")
-        .order_by("-date", "-punch_time")
+        .order_by(
+            "employee__first_name", "employee__last_name", "employee_id",
+            "date", "punch_time",
+        )
     )
     qs = scope_to_branch(qs, request, field="employee__branch_id")
 

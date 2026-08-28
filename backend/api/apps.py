@@ -70,7 +70,7 @@ class ApiConfig(AppConfig):
         if watcher_process:
             return
 
-        from . import auto_sync, backup_scheduler, screening_cleanup_scheduler
+        from . import auto_sync, backup_scheduler, screening_cleanup_scheduler, on_duty_day_end_scheduler
 
         if not auto_sync.is_available():
             logger.warning("APScheduler not installed -Auto Sync disabled. Run: pip install apscheduler")
@@ -94,3 +94,8 @@ class ApiConfig(AppConfig):
             screening_cleanup_scheduler.start_scheduler_if_needed()
         except Exception as e:
             logger.warning("Screening document retention scheduler bootstrap skipped: %s", e)
+
+        try:
+            on_duty_day_end_scheduler.start_scheduler_if_needed()
+        except Exception as e:
+            logger.warning("On-Duty day-end scheduler bootstrap skipped: %s", e)

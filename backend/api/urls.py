@@ -72,7 +72,7 @@ from .geo_attendance_views import (
     geo_punch, geo_punch_precheck, geo_punch_status, live_location_ping,
     on_duty_session_request, on_duty_session_complete, on_duty_session_status,
     on_duty_punch_request,
-    on_duty_sessions_hr, on_duty_session_hr_status,
+    on_duty_sessions_hr, on_duty_session_hr_status, on_duty_session_punches_hr_status,
     on_duty_punch_verifications_hr, on_duty_punch_verification_hr_status, on_duty_punch_verification_photo,
     live_location_team, live_location_trail, live_location_route, on_duty_map,
 )
@@ -318,6 +318,7 @@ urlpatterns = [
     path("on-duty-sessions/punch", on_duty_punch_request),
     path("on-duty-sessions", on_duty_sessions_hr),
     path("on-duty-sessions/<int:pk>/status", on_duty_session_hr_status),
+    path("on-duty-sessions/<int:pk>/punches", on_duty_session_punches_hr_status),
     path("on-duty-punch-verifications", on_duty_punch_verifications_hr),
     path("on-duty-punch-verifications/<int:pk>/status", on_duty_punch_verification_hr_status),
     path("on-duty-punch-verifications/<int:pk>/photo", on_duty_punch_verification_photo),

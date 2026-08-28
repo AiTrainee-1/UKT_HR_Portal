@@ -4505,6 +4505,17 @@ export type OnDutySessionItem = {
   branchId: number | null;
   branchName: string | null;
   status: "pending_hod" | "pending_hr" | "active" | "completed" | "rejected";
+  /** True DB status. Identical to `status` on HR endpoints; differs only on
+   *  employee-facing ones, where a provisional session is presented as
+   *  active so the app lets the employee start work immediately. */
+  approvalStatus: "pending_hod" | "pending_hr" | "active" | "completed" | "rejected";
+  /** Submitted and already being worked, but not yet HR-approved. */
+  isProvisional: boolean;
+  /** Punches captured under this request that are still awaiting review —
+   *  all voided if the request is rejected. */
+  pendingPunchCount: number;
+  /** When the employee tapped "Done"; may be set while still pending. */
+  employeeEndedAt: string | null;
   hodReviewedBy: string | null;
   hodReviewComment: string | null;
   hodReviewedAt: string | null;
@@ -4549,6 +4560,11 @@ export const useUpdateOnDutySessionHR = () => {
 export type OnDutyPunchVerificationItem = {
   id: number;
   sessionId: number;
+  sessionStatus: "pending_hod" | "pending_hr" | "active" | "completed" | "rejected";
+  /** False while the parent request is still awaiting approval — this punch
+   *  cannot be approved into attendance until that request is approved. */
+  sessionApproved: boolean;
+  sessionDestination: string;
   employeeId: number;
   employeeCode: string;
   employeeName: string;
@@ -4590,6 +4606,24 @@ export const useUpdateOnDutyPunchVerificationHR = () => {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/on-duty-punch-verifications"] });
+    },
+  });
+};
+
+/** One decision for every punch still pending under an On-Duty request.
+ *  Covers punches that arrive after the request itself was approved -the
+ *  approval already accepted everything captured up to that point. */
+export const useUpdateOnDutySessionPunchesHR = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ sessionId, status, comment }: { sessionId: number; status: "approved" | "rejected"; comment?: string }) =>
+      customFetch<{ updated: number; session: OnDutySessionItem }>(`/api/on-duty-sessions/${sessionId}/punches`, {
+        method: "PATCH",
+        body: JSON.stringify({ status, comment }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/on-duty-punch-verifications"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/on-duty-sessions"] });
     },
   });
 };

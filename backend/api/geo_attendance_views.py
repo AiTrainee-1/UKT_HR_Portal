@@ -108,12 +108,97 @@ def source_label(source: str) -> str:
 def _next_punch(emp: Employee, d) -> tuple[int | None, str | None]:
     """(punch number 1-4, IN/OUT) for the next punch this employee can make
     today, across every source (biometric + geo + on-duty combined) -mirrors
-    the strict 4-punch engine's IN/OUT/IN/OUT pairing. None once 4 recorded."""
-    count = AttendanceLog.objects.filter(employee=emp, date=d).count()
+    the strict 4-punch engine's IN/OUT/IN/OUT pairing. None once 4 are taken.
+
+    Counts on-duty punches still awaiting approval as well as recorded ones.
+    They have not reached AttendanceLog yet, but they have taken their slot
+    in the day -without them an employee punching several times before HR
+    reviews any of it would get #1/IN back every single time."""
+    count = (
+        AttendanceLog.objects.filter(employee=emp, date=d).count()
+        + OnDutyPunchVerification.objects.filter(
+            employee=emp, punch_date=d, status=OnDutyPunchVerification.STATUS_PENDING,
+        ).count()
+    )
     if count >= 4:
         return None, None
     punch_type = AttendanceLog.PUNCH_IN if count % 2 == 0 else AttendanceLog.PUNCH_OUT
     return count + 1, punch_type
+
+
+ON_DUTY_SLOTS = (1, 2, 3, 4)
+
+
+def _slot_punch_type(slot: int) -> str:
+    """Slot parity fixes the type: IN/OUT/IN/OUT, same pairing the strict
+    4-punch engine expects. Slot 3 is an IN whether or not slots 1-2 were
+    ever filled, so a missed punch never inverts the rest of the day."""
+    return AttendanceLog.PUNCH_IN if slot % 2 == 1 else AttendanceLog.PUNCH_OUT
+
+
+def _taken_slots(emp: Employee, d) -> dict[int, str]:
+    """{slot number: what holds it} for one employee-day.
+
+    On-duty punches carry an explicit punch_number, so they hold exactly the
+    slot the employee chose -including out of order. Punches from any other
+    source (biometric, Office Geo Punch) have no slot of their own, so they
+    fill the lowest free slots in time order."""
+    taken: dict[int, str] = {}
+    for v in OnDutyPunchVerification.objects.filter(
+        employee=emp, punch_date=d,
+        status__in=[OnDutyPunchVerification.STATUS_PENDING, OnDutyPunchVerification.STATUS_APPROVED],
+    ):
+        if v.punch_number in ON_DUTY_SLOTS:
+            taken[v.punch_number] = v.status  # "pending" | "approved"
+
+    others = (
+        AttendanceLog.objects
+        .filter(employee=emp, date=d)
+        .exclude(source="on_duty:approved")  # already counted above, via its verification
+        .order_by("punch_time")
+    )
+    for _ in others:
+        for n in ON_DUTY_SLOTS:
+            if n not in taken:
+                taken[n] = "recorded"
+                break
+    return taken
+
+
+def _slot_dicts(emp: Employee, d) -> list[dict]:
+    """All 4 slots with their state, for the app to render one row each —
+    a filled slot shows its status, a free one offers "add my punch"."""
+    taken = _taken_slots(emp, d)
+    return [
+        {
+            "punchNumber": n,
+            "punchType": _slot_punch_type(n),
+            "status": taken.get(n, "available"),
+            "available": n not in taken,
+        }
+        for n in ON_DUTY_SLOTS
+    ]
+
+
+def _end_on_duty_session(session: OnDutySession, reason: str) -> bool:
+    """Close a session for the day. Returns True if it changed anything.
+
+    A session still awaiting approval is closed by stamping
+    employee_ended_at only -it stops being punchable but stays in HR's
+    queue, because ending the day is not the same as deciding the request."""
+    if session.employee_ended_at or session.status not in PUNCHABLE_STATUSES:
+        return False
+    now = timezone.now()
+    session.employee_ended_at = now
+    if _is_provisional(session):
+        session.save(update_fields=["employee_ended_at"])
+    else:
+        session.status = OnDutySession.STATUS_COMPLETED
+        session.completed_at = now
+        session.completed_by = "system"
+        session.completion_reason = reason
+        session.save()
+    return True
 
 
 def _employee_from_token(request: Request) -> Employee | None:
@@ -150,8 +235,79 @@ def _day_bounds_utc(d: date) -> tuple[datetime, datetime]:
     return timezone.make_aware(start_utc, dt_timezone.utc), timezone.make_aware(end_utc, dt_timezone.utc)
 
 
+# The three states in which the employee is out doing on-duty work, whether
+# or not HR has blessed it yet. Approval is a payroll-side decision; it is
+# NOT a gate the employee waits behind.
+PUNCHABLE_STATUSES = [
+    OnDutySession.STATUS_PENDING_HOD,
+    OnDutySession.STATUS_PENDING_HR,
+    OnDutySession.STATUS_ACTIVE,
+]
+
+
 def _active_on_duty_session(emp: Employee) -> OnDutySession | None:
     return OnDutySession.objects.filter(employee=emp, status=OnDutySession.STATUS_ACTIVE).order_by("-started_at").first()
+
+
+def _punchable_on_duty_session(emp: Employee) -> OnDutySession | None:
+    """The session the employee is currently working under -pending ones
+    included. This is the gate for punching, live tracking, and the
+    Office-Geo-Punch lockout, all of which must engage the instant the
+    request is submitted rather than when HR gets around to it.
+
+    Deliberately excludes a session the employee has already marked Done
+    (employee_ended_at set) even while its status is still pending: their
+    day is over, so no further punches belong to it."""
+    return (
+        OnDutySession.objects
+        .filter(employee=emp, status__in=PUNCHABLE_STATUSES, employee_ended_at__isnull=True)
+        .order_by("-created_at")
+        .first()
+    )
+
+
+def _is_provisional(session: OnDutySession) -> bool:
+    """Submitted and being worked, but not yet HR-approved."""
+    return session.status in (OnDutySession.STATUS_PENDING_HOD, OnDutySession.STATUS_PENDING_HR)
+
+
+def _approve_session_punches(session: OnDutySession, reviewer_name: str) -> int:
+    """Approve every still-pending punch this session captured, in capture
+    order, writing each into AttendanceLog at its ORIGINAL time.
+
+    This is what makes the On-Duty request the single unit of approval: HR
+    decides once on the request, and the whole day's punches follow. Ordered
+    by punch_number so the IN/OUT sequence lands the way it was recorded."""
+    pending = list(
+        session.punch_verifications
+        .filter(status=OnDutyPunchVerification.STATUS_PENDING)
+        .order_by("punch_number", "punch_time")
+    )
+    for v in pending:
+        resolve_on_duty_punch_hr(v, "approved", reviewer_name, None, notify=False)
+    return len(pending)
+
+
+def _void_session_punches(session: OnDutySession, reviewer_name: str, stage: str) -> int:
+    """Reject every still-pending punch this session captured. Called on any
+    rejection, at either approval stage.
+
+    Safe by construction: a pending verification has never been written to
+    AttendanceLog (resolve_on_duty_punch_hr is the only path there, and
+    on_duty_punch_verification_hr_status refuses to run it while the session
+    is provisional). So voiding here invalidates the day's punches without
+    ever having to delete real attendance rows."""
+    pending = list(session.punch_verifications.filter(status=OnDutyPunchVerification.STATUS_PENDING))
+    if not pending:
+        return 0
+    now = timezone.now()
+    for v in pending:
+        v.status = OnDutyPunchVerification.STATUS_REJECTED
+        v.hr_reviewed_by = reviewer_name
+        v.hr_reviewed_at = now
+        v.hr_review_comment = f"Voided automatically -the On-Duty request was rejected by {stage}."
+        v.save(update_fields=["status", "hr_reviewed_by", "hr_reviewed_at", "hr_review_comment"])
+    return len(pending)
 
 
 def _current_on_duty_session(emp: Employee) -> OnDutySession | None:
@@ -171,8 +327,20 @@ def _current_on_duty_session(emp: Employee) -> OnDutySession | None:
     ).order_by("-created_at").first()
 
 
-def _on_duty_session_dict(session: OnDutySession) -> dict:
+def _on_duty_session_dict(session: OnDutySession, *, for_employee: bool = False) -> dict:
+    """HR/HOD callers get the literal database status. Employee-facing
+    callers (for_employee=True) get a provisional session presented as
+    "active", because the employee is cleared to work the moment they
+    submit -the pending state is an HRMS-side concern they neither wait for
+    nor need to see. The real value is always available alongside it as
+    `approvalStatus`, so nothing is hidden, only re-framed for the audience."""
     emp = session.employee
+    provisional = _is_provisional(session)
+    display_status = (
+        OnDutySession.STATUS_ACTIVE if (for_employee and provisional and not session.employee_ended_at)
+        else OnDutySession.STATUS_COMPLETED if (for_employee and provisional and session.employee_ended_at)
+        else session.status
+    )
     return {
         "id": session.id,
         "employeeId": emp.id,
@@ -182,7 +350,19 @@ def _on_duty_session_dict(session: OnDutySession) -> dict:
         "destination": session.destination,
         "branchId": session.branch_id,
         "branchName": session.branch.name if session.branch_id and session.branch else None,
-        "status": session.status,
+        "status": display_status,
+        # Always the true database status, for both audiences. HR reads this
+        # for the decision queue; the app can use it to show a quiet
+        # "awaiting approval" note without gating anything on it.
+        "approvalStatus": session.status,
+        "isProvisional": provisional,
+        # What HR is actually deciding about: punches already captured under
+        # a request nobody has approved yet, every one of which is voided if
+        # they reject.
+        "pendingPunchCount": session.punch_verifications.filter(
+            status=OnDutyPunchVerification.STATUS_PENDING
+        ).count(),
+        "employeeEndedAt": session.employee_ended_at.isoformat() if session.employee_ended_at else None,
         "hodReviewedBy": session.hod_reviewed_by,
         "hodReviewComment": session.hod_review_comment,
         "hodReviewedAt": session.hod_reviewed_at.isoformat() if session.hod_reviewed_at else None,
@@ -202,6 +382,13 @@ def _on_duty_punch_verification_dict(v: OnDutyPunchVerification) -> dict:
     return {
         "id": v.id,
         "sessionId": v.session_id,
+        # Whether this punch is even approvable yet. A punch captured under a
+        # still-pending request can't become attendance until that request is
+        # approved, so the UI needs to know rather than discovering it from a
+        # rejected save.
+        "sessionStatus": v.session.status,
+        "sessionApproved": not _is_provisional(v.session),
+        "sessionDestination": v.session.destination,
         "employeeId": emp.id,
         "employeeCode": emp.employee_code,
         "employeeName": f"{emp.first_name} {emp.last_name}",
@@ -238,7 +425,13 @@ def resolve_on_duty_session_hod(session: OnDutySession, decision: str, reviewer_
     if decision == "approved":
         message = f"Your On-Duty request for {session.destination} was approved by your Department Head and is now awaiting HR approval."
     else:
+        # Terminal rejection -the employee may already have worked and
+        # punched all day under this request. Those punches never reached
+        # AttendanceLog, and now never will.
+        voided = _void_session_punches(session, reviewer_name, "your Department Head")
         message = f"Your On-Duty request for {session.destination} was rejected by your Department Head."
+        if voided:
+            message += f" The {voided} punch(es) you recorded under it are not valid and have not been counted."
     Notification.objects.create(employee=session.employee, type="on_duty", message=message)
 
 
@@ -251,8 +444,17 @@ def resolve_on_duty_session_hr(session: OnDutySession, decision: str, reviewer_n
     what live_location_ping and the mobile on-duty punch flow key off of.
     """
     if decision == "approved":
-        session.status = OnDutySession.STATUS_ACTIVE
-        session.started_at = timezone.now()
+        session.started_at = session.started_at or session.created_at
+        if session.employee_ended_at:
+            # The employee already worked and closed out the day while this
+            # sat in the queue -approving it retroactively should land on
+            # "completed", not re-open a finished session as active.
+            session.status = OnDutySession.STATUS_COMPLETED
+            session.completed_at = session.employee_ended_at
+            session.completed_by = "employee"
+            session.completion_reason = OnDutySession.COMPLETION_MANUAL
+        else:
+            session.status = OnDutySession.STATUS_ACTIVE
     else:
         session.status = OnDutySession.STATUS_REJECTED
     session.hr_reviewed_by = reviewer_name
@@ -261,17 +463,33 @@ def resolve_on_duty_session_hr(session: OnDutySession, decision: str, reviewer_n
         session.hr_review_comment = comment
     session.save()
     if decision == "approved":
-        message = f"Your On-Duty request for {session.destination} was approved by HR -you can now begin."
+        # One decision, one card: approving the request accepts every punch
+        # captured under it as real attendance.
+        approved = _approve_session_punches(session, reviewer_name)
+        message = f"Your On-Duty request for {session.destination} was approved by HR."
+        message += (
+            f" Your {approved} recorded punch(es) have been accepted as attendance."
+            if approved else " You can now begin."
+        )
     else:
+        voided = _void_session_punches(session, reviewer_name, "HR")
         message = f"Your On-Duty request for {session.destination} was rejected by HR."
+        if voided:
+            message += f" The {voided} punch(es) you recorded under it are not valid and have not been counted."
     Notification.objects.create(employee=session.employee, type="on_duty", message=message)
 
 
-def resolve_on_duty_punch_hr(v: OnDutyPunchVerification, decision: str, reviewer_name: str, comment: str | None) -> None:
+def resolve_on_duty_punch_hr(
+    v: OnDutyPunchVerification, decision: str, reviewer_name: str, comment: str | None,
+    notify: bool = True,
+) -> None:
     """
     HR's single-stage decision on a captured on-duty punch. Approval writes
     the punch via the same shared ingestion path every other source uses, at
-    the ORIGINAL captured time -never the approval time. If this is the
+    the ORIGINAL captured time -never the approval time. Callers must not
+    approve while the parent session is still provisional (see
+    on_duty_punch_verification_hr_status) -that guard is what guarantees a
+    rejected On-Duty request can never leave real attendance behind. If this is the
     day's 4th punch, approving it also auto-completes the parent session (a
     still-active session only -a manually-completed one is left alone).
     Rejection just leaves the punch slot open for the employee to retry.
@@ -291,11 +509,14 @@ def resolve_on_duty_punch_hr(v: OnDutyPunchVerification, decision: str, reviewer
         v.hr_review_comment = comment
     v.save()
 
-    punch_label = "Check-In" if v.punch_type == AttendanceLog.PUNCH_IN else "Check-Out"
-    Notification.objects.create(
-        employee=v.employee, type="on_duty",
-        message=f"Your On-Duty {punch_label} (punch {v.punch_number}) was {v.status} by HR.",
-    )
+    if notify:
+        # Suppressed for bulk runs -the caller sends one summary notification
+        # for the whole request instead of four near-identical pings.
+        punch_label = "Check-In" if v.punch_type == AttendanceLog.PUNCH_IN else "Check-Out"
+        Notification.objects.create(
+            employee=v.employee, type="on_duty",
+            message=f"Your On-Duty {punch_label} (punch {v.punch_number}) was {v.status} by HR.",
+        )
 
     # Live recount, not the frozen `v.punch_number` -that number was assigned
     # from whatever was in AttendanceLog at the moment this punch was
@@ -369,7 +590,7 @@ def geo_punch_precheck(request: Request) -> Response:
 
     today = date.today()
     punch_num, punch_type = _next_punch(emp, today)
-    active_session = _active_on_duty_session(emp)
+    active_session = _punchable_on_duty_session(emp)
 
     return Response({
         "insideRadius": inside,
@@ -405,7 +626,7 @@ def geo_punch(request: Request) -> Response:
     if not emp:
         return _error("Employee authentication required", 403)
 
-    if _active_on_duty_session(emp):
+    if _punchable_on_duty_session(emp):
         return _error(
             "You have an active On-Duty session -use the On-Duty page to record your punches instead of Office Geo Punch.",
             409,
@@ -466,19 +687,26 @@ def on_duty_session_request(request: Request) -> Response:
     """
     POST /api/on-duty-sessions/request -JSON {destination}
     Starts the two-stage approval chain for a day of On-Duty work. No
-    photos/GPS at this stage -that verification happens per-punch once the
-    session is active (see on_duty_punch_request below).
+    photos/GPS at this stage -that verification happens per-punch (see
+    on_duty_punch_request below).
+
+    The employee does not wait for that chain: the session is punchable and
+    trackable the moment it is created, and this response says "active" so
+    the app moves straight on. HR's queue still shows it as pending, and
+    nothing it captures counts as attendance until HR approves.
     """
     emp = _employee_from_token(request)
     if not emp:
         return _error("Employee authentication required", 403)
 
-    existing = OnDutySession.objects.filter(
-        employee=emp,
-        status__in=[OnDutySession.STATUS_PENDING_HOD, OnDutySession.STATUS_PENDING_HR, OnDutySession.STATUS_ACTIVE],
-    ).first()
+    # Only a session they're still working blocks a new one. A finished
+    # session that HR simply hasn't reviewed yet must NOT block tomorrow's
+    # request -under provisional start, "pending" can now mean "worked,
+    # done, and waiting on paperwork", which could otherwise lock the
+    # employee out for as long as HR takes to act.
+    existing = _punchable_on_duty_session(emp)
     if existing:
-        return _error(f"You already have an On-Duty session that is {existing.status.replace('_', ' ')}", 409)
+        return _error("You already have an On-Duty session in progress", 409)
 
     destination = (request.data.get("destination") or "").strip()
     if not destination:
@@ -487,7 +715,19 @@ def on_duty_session_request(request: Request) -> Response:
     session = OnDutySession.objects.create(employee=emp, destination=destination, branch=emp.branch)
     _notify_hod_approvers(session)
 
-    return Response({"status": "pending_hod_approval", "sessionId": session.id}, status=201)
+    # "active", not "pending_hod_approval" -the employee is cleared to start
+    # working and punching right now. The database still says pending_hod
+    # and HR's queue still shows it as pending; only this response is
+    # framed for the person standing there waiting to get on with their day.
+    return Response({
+        "status": "active",
+        "approvalStatus": session.status,
+        "isProvisional": True,
+        "canPunch": True,
+        "sessionId": session.id,
+        "session": _on_duty_session_dict(session, for_employee=True),
+        "message": "Your On-Duty session has started -you can begin punching. HR approval will follow.",
+    }, status=201)
 
 
 @api_view(["POST"])
@@ -499,16 +739,25 @@ def on_duty_session_complete(request: Request) -> Response:
     if not emp:
         return _error("Employee authentication required", 403)
 
-    session = _active_on_duty_session(emp)
+    session = _punchable_on_duty_session(emp)
     if not session:
         return _error("You don't have an active On-Duty session", 404)
 
-    session.status = OnDutySession.STATUS_COMPLETED
-    session.completed_at = timezone.now()
-    session.completed_by = "employee"
-    session.completion_reason = OnDutySession.COMPLETION_MANUAL
-    session.save()
-    return Response(_on_duty_session_dict(session))
+    now = timezone.now()
+    session.employee_ended_at = now
+    if _is_provisional(session):
+        # Their day is over, but HR still hasn't decided -leave `status`
+        # alone so the request stays in the approval queue. Marking it
+        # completed here would quietly remove HR's chance to reject it and
+        # strand the captured punches as pending forever.
+        session.save(update_fields=["employee_ended_at"])
+    else:
+        session.status = OnDutySession.STATUS_COMPLETED
+        session.completed_at = now
+        session.completed_by = "employee"
+        session.completion_reason = OnDutySession.COMPLETION_MANUAL
+        session.save()
+    return Response(_on_duty_session_dict(session, for_employee=True))
 
 
 @api_view(["GET"])
@@ -525,10 +774,14 @@ def on_duty_session_status(request: Request) -> Response:
     if not session:
         return Response({"session": None, "punchVerifications": []})
 
-    verifications = session.punch_verifications.order_by("punch_number", "created_at")
+    verifications = session.punch_verifications.select_related("session").order_by("punch_number", "created_at")
     return Response({
-        "session": _on_duty_session_dict(session),
+        "session": _on_duty_session_dict(session, for_employee=True),
         "punchVerifications": [_on_duty_punch_verification_dict(v) for v in verifications],
+        # All four slots, each either filled or offering "add my punch" —
+        # the app renders one row per slot rather than a single next-punch
+        # button, so a missed punch never blocks the ones after it.
+        "punchSlots": _slot_dicts(emp, date.today()),
     })
 
 
@@ -540,19 +793,18 @@ def on_duty_punch_request(request: Request) -> Response:
     POST /api/on-duty-sessions/punch -multipart:
       latitude, longitude, accuracy?, isMocked?, photo (file)
     Captures one of the day's (up to 4) attendance punches while an On-Duty
-    session is active. Held pending until HR approves it -see
-    resolve_on_duty_punch_hr().
+    session is in progress -including one still awaiting approval. Held
+    pending until HR approves BOTH the session and this punch; if the
+    session is rejected instead, this row is voided by
+    _void_session_punches() and never becomes attendance.
     """
     emp = _employee_from_token(request)
     if not emp:
         return _error("Employee authentication required", 403)
 
-    session = _active_on_duty_session(emp)
+    session = _punchable_on_duty_session(emp)
     if not session:
         return _error("You don't have an active On-Duty session", 404)
-
-    if OnDutyPunchVerification.objects.filter(employee=emp, status=OnDutyPunchVerification.STATUS_PENDING).exists():
-        return _error("You already have a punch awaiting HR approval", 409)
 
     data = request.data
     try:
@@ -578,9 +830,34 @@ def on_duty_punch_request(request: Request) -> Response:
 
     today = date.today()
     now_time = datetime.now().time().replace(microsecond=0)
-    punch_num, punch_type = _next_punch(emp, today)
-    if punch_type is None:
+
+    taken = _taken_slots(emp, today)
+    available = [n for n in ON_DUTY_SLOTS if n not in taken]
+    if not available:
         return _error("All 4 punches have already been recorded for today")
+
+    # The employee chooses which of the day's four punches this is. Omitting
+    # it keeps the old behaviour (next free slot), so an app that hasn't been
+    # updated still works unchanged.
+    requested = data.get("punchNumber", data.get("punch_number"))
+    if requested in (None, ""):
+        punch_num = available[0]
+    else:
+        try:
+            punch_num = int(requested)
+        except (TypeError, ValueError):
+            return _error("punchNumber must be a whole number from 1 to 4")
+        if punch_num not in ON_DUTY_SLOTS:
+            return _error("punchNumber must be a whole number from 1 to 4")
+        if punch_num in taken:
+            already = taken[punch_num]
+            return _error(
+                f"Punch {punch_num} has already been "
+                + ("recorded" if already == "recorded" else f"submitted and is {already}")
+                + " today.",
+                409,
+            )
+    punch_type = _slot_punch_type(punch_num)
 
     v = OnDutyPunchVerification(
         session=session, employee=emp, punch_date=today, punch_time=now_time,
@@ -590,9 +867,22 @@ def on_duty_punch_request(request: Request) -> Response:
     v.photo.save(photo.name, ContentFile(photo.read()), save=False)
     v.save()
 
+    # Four punches is a full day -close the session now, at capture, rather
+    # than waiting for HR to approve the fourth. The employee is done.
+    session_ended = False
+    if len(available) == 1:
+        session_ended = _end_on_duty_session(session, OnDutySession.COMPLETION_AUTO_4TH_PUNCH)
+        if session_ended:
+            Notification.objects.create(
+                employee=emp, type="on_duty",
+                message="Your On-Duty session ended automatically -all 4 punches for the day are in.",
+            )
+
     return Response({
         "status": "pending_hr_approval", "verificationId": v.id,
         "punchNumber": punch_num, "punchType": punch_type,
+        "sessionEnded": session_ended,
+        "punchSlots": _slot_dicts(emp, today),
     }, status=201)
 
 
@@ -631,9 +921,10 @@ def geo_punch_status(request: Request) -> Response:
             }
             for log in logs
         ],
-        "onDutySession": _on_duty_session_dict(session) if session else None,
+        "onDutySession": _on_duty_session_dict(session, for_employee=True) if session else None,
         "nextPunchNumber": punch_num,
         "nextPunchType": next_type,
+        "punchSlots": _slot_dicts(emp, d),
     })
 
 
@@ -649,7 +940,9 @@ def live_location_ping(request: Request) -> Response:
     emp = _employee_from_token(request)
     if not emp:
         return _error("Employee authentication required", 403)
-    if not emp.location_tracking_enabled and not _active_on_duty_session(emp):
+    # Tracking starts with the request, not with the approval -the trail it
+    # builds is a large part of what HR judges the request on.
+    if not emp.location_tracking_enabled and not _punchable_on_duty_session(emp):
         return Response(
             {"error": "Location tracking is not enabled for your account", "code": "TRACKING_DISABLED"},
             status=403,
@@ -756,9 +1049,71 @@ def on_duty_punch_verification_hr_status(request: Request, pk: int) -> Response:
     if status_val not in ("approved", "rejected"):
         return _error("status must be 'approved' or 'rejected'")
 
+    # The invariant that makes provisional on-duty safe: a punch cannot
+    # become real attendance before its session is approved. Without this,
+    # HR could approve a punch and then reject the session under it, leaving
+    # an AttendanceLog row behind that the rejection has no way to take back.
+    # Rejecting early is always allowed -it never writes anything.
+    if status_val == "approved" and _is_provisional(v.session):
+        return _error(
+            "Approve the On-Duty request itself first -this punch was recorded under a request "
+            "that is still awaiting approval, so it can't be counted as attendance yet.",
+            409,
+        )
+
     reviewer_name = request.jwt_user.get("name") or "HR"
     resolve_on_duty_punch_hr(v, status_val, reviewer_name, request.data.get("comment"))
     return Response(_on_duty_punch_verification_dict(v))
+
+
+@api_view(["PATCH"])
+@require_hr
+def on_duty_session_punches_hr_status(request: Request, pk: int) -> Response:
+    """
+    PATCH /api/on-duty-sessions/<pk>/punches -one decision for every punch
+    still pending under this On-Duty request.
+
+    Covers the punches that arrive AFTER the request itself was approved
+    (the employee keeps punching through the day). The request's own
+    approval already accepted everything captured up to that moment, so this
+    is the same one-card decision applied to the rest, rather than making HR
+    click through each punch individually.
+    """
+    session = scope_to_branch(
+        OnDutySession.objects.select_related("employee__department", "employee__designation", "branch"),
+        request,
+    ).filter(pk=pk).first()
+    if not session:
+        return _error("On-Duty session not found", 404)
+
+    status_val = request.data.get("status")
+    if status_val not in ("approved", "rejected"):
+        return _error("status must be 'approved' or 'rejected'")
+
+    # Same invariant as the single-punch endpoint: nothing becomes attendance
+    # while the request it belongs to is unapproved. Decide the request first
+    # -that path approves these punches anyway.
+    if status_val == "approved" and _is_provisional(session):
+        return _error(
+            "Approve the On-Duty request itself first -that accepts these punches with it.",
+            409,
+        )
+
+    reviewer_name = request.jwt_user.get("name") or "HR"
+    if status_val == "approved":
+        count = _approve_session_punches(session, reviewer_name)
+    else:
+        count = _void_session_punches(session, reviewer_name, "HR")
+    if count:
+        Notification.objects.create(
+            employee=session.employee, type="on_duty",
+            message=(
+                f"{count} of your On-Duty punch(es) for {session.destination} were {status_val} by HR."
+                + ("" if status_val == "approved" else " They do not count as attendance.")
+            ),
+        )
+    session.refresh_from_db()
+    return Response({"updated": count, "session": _on_duty_session_dict(session)})
 
 
 @api_view(["GET"])
@@ -802,7 +1157,9 @@ def live_location_team(request: Request) -> Response:
 
     cutoff = timezone.now() - timedelta(hours=PING_RETENTION_HOURS)
     on_duty_emp_ids = set(
-        OnDutySession.objects.filter(status=OnDutySession.STATUS_ACTIVE).values_list("employee_id", flat=True)
+        OnDutySession.objects.filter(
+            status__in=PUNCHABLE_STATUSES, employee_ended_at__isnull=True,
+        ).values_list("employee_id", flat=True)
     )
     out = []
     for emp in employees:

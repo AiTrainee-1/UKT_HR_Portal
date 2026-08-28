@@ -1814,6 +1814,16 @@ class OnDutySession(models.Model):
     fallback (e.g. no Department Head assigned), finalizing to
     active/rejected in one step.
 
+    IMPORTANT -the employee does NOT wait for either stage. From the moment
+    the request is submitted the session is "provisionally active": the app
+    presents it as approved and the employee may punch and be tracked
+    immediately (see _punchable_on_duty_session). Only the HRMS-side truth
+    stays pending. Nothing a provisional session captures can reach
+    AttendanceLog -OnDutyPunchVerification rows are held, and HR is blocked
+    from approving any of them, until this session itself reaches "active".
+    A rejection at either stage voids every punch the session captured, so a
+    rejected day can never leave real attendance behind.
+
     Once HR approves, status becomes "active" and started_at is stamped —
     this is what gates live-location tracking (geo_attendance_views.py::
     live_location_ping) and routes the employee's regular attendance punches
@@ -1837,9 +1847,11 @@ class OnDutySession(models.Model):
 
     COMPLETION_MANUAL = "manual"
     COMPLETION_AUTO_4TH_PUNCH = "auto_4th_punch"
+    COMPLETION_AUTO_DAY_END = "auto_day_end"
     COMPLETION_CHOICES = [
         (COMPLETION_MANUAL, "Manual -Employee Marked Done"),
-        (COMPLETION_AUTO_4TH_PUNCH, "Automatic -4th Punch Approved"),
+        (COMPLETION_AUTO_4TH_PUNCH, "Automatic -All 4 Punches Recorded"),
+        (COMPLETION_AUTO_DAY_END, "Automatic -Day Ended (11 PM)"),
     ]
 
     employee = models.ForeignKey(
@@ -1862,6 +1874,13 @@ class OnDutySession(models.Model):
     hr_review_comment = models.TextField(null=True, blank=True, db_column="hr_review_comment")
     hr_reviewed_at = models.DateTimeField(null=True, blank=True, db_column="hr_reviewed_at")
     started_at = models.DateTimeField(null=True, blank=True, db_column="started_at")
+    # When the employee tapped "Done" in the app. Separate from completed_at
+    # because an employee may start AND finish a whole day of provisional
+    # on-duty work before HR ever looks at the request -recording that on
+    # `status` would drop the session out of HR's pending queue and strand
+    # its captured punches forever. So the employee's own end-of-day marker
+    # lives here, and `status` stays pending until HR actually decides.
+    employee_ended_at = models.DateTimeField(null=True, blank=True, db_column="employee_ended_at")
     completed_at = models.DateTimeField(null=True, blank=True, db_column="completed_at")
     completed_by = models.TextField(null=True, blank=True, db_column="completed_by")
     completion_reason = models.TextField(choices=COMPLETION_CHOICES, null=True, blank=True, db_column="completion_reason")
