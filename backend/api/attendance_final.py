@@ -302,7 +302,8 @@ def _compute_staff_strict(emp, d, punch_logs, punch_times, assignments=None, rel
 # (within the configured grace). With 4 punches the day splits into a morning
 # span and an afternoon span; with any other punch count a single first→last
 # span is used instead, so a bare arrival+departure without a lunch punch
-# still earns credit for every segment it fully covers.
+# still earns credit for every segment it fully covers. Punches beyond the
+# fourth extend the afternoon span rather than adding a third one.
 
 def _as_time(v):
     """TimeField defaults may still be raw strings on a freshly-created row
@@ -313,8 +314,13 @@ def _as_time(v):
 
 
 def _production_spans(punch_times):
+    # punch_times[-1] rather than [3] for the afternoon close: with exactly
+    # four punches these are the same value, but Office Geo Punch no longer
+    # caps the day at four, and a 6-punch day scored to index 3 would end the
+    # afternoon span at a mid-shift break and silently drop segment credit
+    # the employee actually earned. Last punch = end of day, at any count.
     if len(punch_times) >= 4:
-        return [(punch_times[0], punch_times[1]), (punch_times[2], punch_times[3])]
+        return [(punch_times[0], punch_times[1]), (punch_times[2], punch_times[-1])]
     if len(punch_times) >= 2:
         return [(punch_times[0], punch_times[-1])]
     return []

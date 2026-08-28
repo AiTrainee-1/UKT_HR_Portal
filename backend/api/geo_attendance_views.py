@@ -105,6 +105,29 @@ def source_label(source: str) -> str:
 
 # ── Shared helpers ──────────────────────────────────────────────────────────
 
+def _extra_punch(emp: Employee, d) -> tuple[int, str]:
+    """(sequence number, IN/OUT) for an UNCAPPED punch -used by Office Geo
+    Punch, which records every punch an employee makes rather than stopping
+    at four.
+
+    The 4-punch model still governs pay: shift_engine derives punch1-4
+    semantically (first punch of the day, the midday one, the next after it,
+    the last of the day), so punches in between are captured as evidence and
+    simply not selected. This function only numbers them; it never widens
+    what payroll counts.
+
+    Type keeps alternating IN/OUT off the running count, so punch 5 is an IN,
+    6 an OUT, and so on -the same rhythm the first four follow."""
+    count = (
+        AttendanceLog.objects.filter(employee=emp, date=d).count()
+        + OnDutyPunchVerification.objects.filter(
+            employee=emp, punch_date=d, status=OnDutyPunchVerification.STATUS_PENDING,
+        ).count()
+    )
+    punch_type = AttendanceLog.PUNCH_IN if count % 2 == 0 else AttendanceLog.PUNCH_OUT
+    return count + 1, punch_type
+
+
 def _next_punch(emp: Employee, d) -> tuple[int | None, str | None]:
     """(punch number 1-4, IN/OUT) for the next punch this employee can make
     today, across every source (biometric + geo + on-duty combined) -mirrors
@@ -589,7 +612,7 @@ def geo_punch_precheck(request: Request) -> Response:
     inside = distance <= radius
 
     today = date.today()
-    punch_num, punch_type = _next_punch(emp, today)
+    punch_num, punch_type = _extra_punch(emp, today)
     active_session = _punchable_on_duty_session(emp)
 
     return Response({
@@ -616,9 +639,10 @@ def geo_punch(request: Request) -> Response:
     """
     POST /api/attendance/geo-punch -JSON {latitude, longitude, accuracy?, isMocked?}
     Office Geo Punch: an alternative to biometric punching for staff
-    physically on-premises. No photos, no approval step. Inside the branch's
-    geofence, the punch is written immediately. Outside it, the punch is
-    hard-rejected -nothing is recorded. Blocked outright while the employee
+    physically on-premises. No photos, no approval step, and no daily cap —
+    every punch is recorded. Inside the branch's geofence, the punch is
+    written immediately. Outside it, the punch is hard-rejected -nothing is
+    recorded. Location is the only gate here. Blocked outright while the employee
     has an active On-Duty session -they should punch from the On-Duty page
     instead, where each punch is photo+GPS verified.
     """
@@ -646,9 +670,12 @@ def geo_punch(request: Request) -> Response:
     # relies on the SERVER MACHINE's OS clock already being set to IST.
     today = date.today()
     now_time = datetime.now().time().replace(microsecond=0)
-    punch_num, punch_type = _next_punch(emp, today)
-    if punch_type is None:
-        return _error("All 4 punches have already been recorded for today")
+    # Uncapped on purpose: every punch an employee makes on-premises is worth
+    # keeping, even past the fourth. The geofence below is what this endpoint
+    # actually enforces -a punch is refused for being in the wrong PLACE,
+    # never for being the fifth of the day. Payroll still reads only the 4
+    # logical punches (see _extra_punch).
+    punch_num, punch_type = _extra_punch(emp, today)
 
     branch = emp.branch
     if branch is None or branch.geofence_lat is None or branch.geofence_lng is None:
@@ -909,7 +936,9 @@ def geo_punch_status(request: Request) -> Response:
     logs = AttendanceLog.objects.filter(employee=emp, date=d).order_by("punch_time")
     session = _current_on_duty_session(emp)
 
-    punch_num, next_type = _next_punch(emp, d)
+    # Uncapped, matching geo_punch itself -this is the number the NEXT punch
+    # would get, not a countdown to a limit that no longer exists.
+    punch_num, next_type = _extra_punch(emp, d)
     return Response({
         "date": str(d),
         "punches": [
