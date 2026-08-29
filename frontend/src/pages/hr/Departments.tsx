@@ -29,6 +29,7 @@ import {
   UserPlus, X, UserMinus,
 } from "lucide-react";
 import type { Department, Employee } from "@/lib/api-client";
+import { DataPagination } from "@/components/ui/DataPagination";
 
 // ── Employee search dialog used for assigning an employee to a department ──
 function AssignEmployeeDialog({
@@ -319,6 +320,14 @@ export default function Departments() {
     (d.description ?? "").toLowerCase().includes(search.toLowerCase()),
   );
 
+  // Pagination. `safePage` clamps rather than resetting on every render, so a
+  // search that shrinks the list can't strand the user on an empty page.
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pagedDepts = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
+
   async function handleCreate() {
     if (!form.name.trim()) {
       toast({ title: "Department name is required", variant: "destructive" });
@@ -428,11 +437,20 @@ export default function Departments() {
               </CardContent>
             </Card>
           ) : (
-            filtered.map((dept) => (
+            pagedDepts.map((dept) => (
               <DeptCard key={dept.id} dept={dept} onDelete={handleDelete} />
             ))
           )}
         </div>
+
+        <DataPagination
+          page={safePage}
+          totalPages={totalPages}
+          totalItems={filtered.length}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+        />
       </div>
 
       {/* Create Dialog */}

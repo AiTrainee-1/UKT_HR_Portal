@@ -36,6 +36,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { ShieldLoader } from "@/components/ui/ShieldLoader";
+import { DataPagination } from "@/components/ui/DataPagination";
 import {
   Factory, Play, Users, TrendingUp, IndianRupee, CheckCircle2, Clock,
   AlertCircle, Info, AlertTriangle, RefreshCcw, X, Search, Download,
@@ -650,20 +651,14 @@ function SalarySubTab() {
         </table>
       </div>
 
-      {filtered.length > SALARY_PAGE_SIZE && (
-        <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between border-t bg-card rounded-lg shadow-sm">
-          <p className="text-sm text-muted-foreground font-medium">
-            Showing {paginated.length} of {filtered.length} entries
-          </p>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}>Previous</Button>
-            <span className="text-xs font-semibold text-slate-700 bg-slate-100 px-3 py-1.5 rounded-md font-mono">
-              Page {currentPage} of {totalPages}
-            </span>
-            <Button variant="outline" size="sm" disabled={currentPage === totalPages} onClick={() => setPage(currentPage + 1)}>Next</Button>
-          </div>
-        </div>
-      )}
+      <DataPagination
+        page={currentPage}
+        totalPages={totalPages}
+        totalItems={filtered.length}
+        pageSize={SALARY_PAGE_SIZE}
+        onPageChange={setPage}
+        className="px-4 border-t bg-card rounded-lg shadow-sm"
+      />
 
       {/* Adjust Payroll dialog -bonus/deductions/notes, mirrors Staff Salary page */}
       <Dialog open={adjustOpen} onOpenChange={setAdjustOpen}>

@@ -37,6 +37,7 @@ import BiometricSyncPipeline from "@/components/BiometricSyncPipeline";
 import { SkippedPunchesButton } from "@/components/SkippedPunchesButton";
 import { SyncStatusIndicator } from "@/components/SyncStatusIndicator";
 import AttendanceSearchSection from "./AttendanceSearch";
+import { DataPagination } from "@/components/ui/DataPagination";
 import {
   Users, UserCheck, UserX, CalendarDays, Plus,
   Factory, Briefcase, Fingerprint, PenLine, ChevronRight, RefreshCw,
@@ -58,6 +59,8 @@ const HISTORY_STATUS_META: Record<string, { label: string; cls: string }> = {
 };
 
 
+/** Thin wrapper over the shared pagination bar, kept so this page's existing
+ *  call sites and prop names don't have to change. */
 function Pagination({
   page,
   totalPages,
@@ -69,60 +72,15 @@ function Pagination({
   total: number;
   onPage: (p: number) => void;
 }) {
-  if (totalPages <= 1) return null;
-  const start = (page - 1) * PAGE_SIZE + 1;
-  const end   = Math.min(page * PAGE_SIZE, total);
-
-  const pages: (number | "…")[] = [];
-  if (totalPages <= 7) {
-    for (let i = 1; i <= totalPages; i++) pages.push(i);
-  } else {
-    pages.push(1);
-    if (page > 3) pages.push("…");
-    for (let i = Math.max(2, page - 1); i <= Math.min(totalPages - 1, page + 1); i++) pages.push(i);
-    if (page < totalPages - 2) pages.push("…");
-    pages.push(totalPages);
-  }
-
   return (
-    <div className="flex items-center justify-between px-4 py-3 border-t bg-gray-50/60 text-xs text-gray-500">
-      <span>
-        Showing <strong className="text-gray-700">{start}–{end}</strong> of <strong className="text-gray-700">{total}</strong>
-      </span>
-      <div className="flex items-center gap-1">
-        <button
-          onClick={() => onPage(page - 1)}
-          disabled={page === 1}
-          className="h-7 w-7 flex items-center justify-center rounded-md border bg-white hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-        >
-          <ChevronLeft size={13} />
-        </button>
-        {pages.map((p, i) =>
-          p === "…" ? (
-            <span key={`ellipsis-${i}`} className="px-1 text-gray-400">…</span>
-          ) : (
-            <button
-              key={p}
-              onClick={() => onPage(p as number)}
-              className={`h-7 min-w-[28px] px-1.5 rounded-md border text-xs font-semibold transition-colors ${
-                p === page
-                  ? "bg-gray-900 text-white border-gray-900"
-                  : "bg-white hover:bg-gray-100 text-gray-700"
-              }`}
-            >
-              {p}
-            </button>
-          )
-        )}
-        <button
-          onClick={() => onPage(page + 1)}
-          disabled={page === totalPages}
-          className="h-7 w-7 flex items-center justify-center rounded-md border bg-white hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-        >
-          <ChevronRight size={13} />
-        </button>
-      </div>
-    </div>
+    <DataPagination
+      page={page}
+      totalPages={totalPages}
+      totalItems={total}
+      pageSize={PAGE_SIZE}
+      onPageChange={onPage}
+      className="px-4 border-t bg-gray-50/60"
+    />
   );
 }
 

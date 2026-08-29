@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useListAuditLogs, useAuditLogStats } from "@/lib/api-client";
 import { CircleLoader } from "@/components/ui/CircleLoader";
+import { DataPagination } from "@/components/ui/DataPagination";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -346,22 +347,13 @@ export default function ActivityLogs() {
         </div>
 
         {/* ── Pagination ─────────────────────────────────────────────────── */}
-        {total > PAGE_SIZE && (
-          <div className="flex items-center justify-between text-sm text-muted-foreground">
-            <span>
-              Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total.toLocaleString()}
-            </span>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage((p) => p - 1)}>
-                Previous
-              </Button>
-              <span className="text-xs px-2">{page} / {totalPages}</span>
-              <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
-                Next
-              </Button>
-            </div>
-          </div>
-        )}
+        <DataPagination
+          page={page}
+          totalPages={totalPages}
+          totalItems={total}
+          pageSize={PAGE_SIZE}
+          onPageChange={setPage}
+        />
       </div>
     </HrLayout>
   );

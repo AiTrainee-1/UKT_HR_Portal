@@ -1,13 +1,5 @@
 import { useState, useEffect } from "react";
 import HrLayout from "@/components/HrLayout";
-import {
-  Pagination,
-  PaginationContent,
-  PaginationItem,
-  PaginationLink,
-  PaginationNext,
-  PaginationPrevious,
-} from "@/components/ui/pagination";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,6 +9,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { Bell, CheckCheck, MessageSquare, IndianRupee, Calendar } from "lucide-react";
 import { CircleLoader } from "@/components/ui/CircleLoader";
+import { DataPagination } from "@/components/ui/DataPagination";
 
 function typeIcon(type: string) {
   if (type === "salary_complaint") return <IndianRupee size={15} className="text-orange-500" />;
@@ -169,54 +162,14 @@ export default function Notifications() {
         )}
       </div>
 
-      {notifications && notifications.length > PAGE_SIZE && (
-        <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between border-t bg-card rounded-lg shadow-sm shrink-0">
-          <p className="text-sm text-muted-foreground">
-            Showing {paginatedNotifications.length} of {notifications.length} records
-          </p>
-          <Pagination className="mt-2 sm:mt-0">
-            <PaginationPrevious
-              href="#"
-              className={page === 1 ? "pointer-events-none opacity-50" : undefined}
-              onClick={(event) => {
-                event.preventDefault();
-                if (page > 1) {
-                  setPage(page - 1);
-                }
-              }}
-            />
-            <PaginationContent>
-              {Array.from({ length: totalPages }, (_, index) => {
-                const pageNumber = index + 1;
-                return (
-                  <PaginationItem key={pageNumber}>
-                    <PaginationLink
-                      href="#"
-                      isActive={pageNumber === page}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        setPage(pageNumber);
-                      }}
-                    >
-                      {pageNumber}
-                    </PaginationLink>
-                  </PaginationItem>
-                );
-              })}
-            </PaginationContent>
-            <PaginationNext
-              href="#"
-              className={page === totalPages ? "pointer-events-none opacity-50" : undefined}
-              onClick={(event) => {
-                event.preventDefault();
-                if (page < totalPages) {
-                  setPage(page + 1);
-                }
-              }}
-            />
-          </Pagination>
-        </div>
-      )}
+      <DataPagination
+        page={page}
+        totalPages={totalPages}
+        totalItems={totalNotifications}
+        pageSize={PAGE_SIZE}
+        onPageChange={setPage}
+        className="px-4 border-t bg-card rounded-lg shadow-sm shrink-0"
+      />
     </div>
     </HrLayout>
   );

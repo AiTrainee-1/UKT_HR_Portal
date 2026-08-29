@@ -1,14 +1,6 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import HrLayout from "@/components/HrLayout";
-import {
-  Pagination,
-  PaginationContent,
-  PaginationItem,
-  PaginationLink,
-  PaginationNext,
-  PaginationPrevious,
-} from "@/components/ui/pagination";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,6 +22,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Search, UserCheck, UserX, Trash2, Eye, Pencil, UploadCloud } from "lucide-react";
+import { DataPagination } from "@/components/ui/DataPagination";
 
 export default function Employees() {
   const [, navigate] = useLocation();
@@ -71,10 +64,11 @@ export default function Employees() {
   const statusMutation = useUpdateEmployeeStatus();
 
   const [page, setPage] = useState(1);
-  const PAGE_SIZE = 10;
+  // State, not a constant -the pagination bar lets the user change it.
+  const [pageSize, setPageSize] = useState(10);
   const totalEmployees = employees?.length ?? 0;
-  const totalPages = Math.max(1, Math.ceil(totalEmployees / PAGE_SIZE));
-  const paginatedEmployees = employees ? employees.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE) : [];
+  const totalPages = Math.max(1, Math.ceil(totalEmployees / pageSize));
+  const paginatedEmployees = employees ? employees.slice((page - 1) * pageSize, page * pageSize) : [];
 
   useEffect(() => {
     setPage(1);
@@ -335,54 +329,16 @@ export default function Employees() {
         </Card>
       </div>
 
-      {employees && employees.length > PAGE_SIZE && (
-        <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between border-t bg-card rounded-lg shadow-sm shrink-0">
-          <p className="text-sm text-muted-foreground">
-            Showing {paginatedEmployees.length} of {employees.length} records
-          </p>
-          <Pagination className="mt-2 sm:mt-0">
-            <PaginationPrevious
-              href="#"
-              className={page === 1 ? "pointer-events-none opacity-50" : undefined}
-              onClick={(event) => {
-                event.preventDefault();
-                if (page > 1) {
-                  setPage(page - 1);
-                }
-              }}
-            />
-            <PaginationContent>
-              {Array.from({ length: totalPages }, (_, index) => {
-                const pageNumber = index + 1;
-                return (
-                  <PaginationItem key={pageNumber}>
-                    <PaginationLink
-                      href="#"
-                      isActive={pageNumber === page}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        setPage(pageNumber);
-                      }}
-                    >
-                      {pageNumber}
-                    </PaginationLink>
-                  </PaginationItem>
-                );
-              })}
-            </PaginationContent>
-            <PaginationNext
-              href="#"
-              className={page === totalPages ? "pointer-events-none opacity-50" : undefined}
-              onClick={(event) => {
-                event.preventDefault();
-                if (page < totalPages) {
-                  setPage(page + 1);
-                }
-              }}
-            />
-          </Pagination>
-        </div>
-      )}
+      <DataPagination
+        page={page}
+        totalPages={totalPages}
+        onPageChange={setPage}
+        pageSize={pageSize}
+        onPageSizeChange={setPageSize}
+        totalItems={totalEmployees}
+        className="px-4 border-t bg-card rounded-lg shadow-sm shrink-0"
+      />
+
     </div>
     </HrLayout>
   );
