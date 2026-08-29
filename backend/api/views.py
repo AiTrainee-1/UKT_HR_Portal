@@ -6,8 +6,8 @@ from decimal import Decimal
 
 import bcrypt
 from django.conf import settings
-from django.db.models import Count, DecimalField, Q, Sum, Value
-from django.db.models.functions import Coalesce
+from django.db.models import Count, DecimalField, Q, Sum, TextField, Value
+from django.db.models.functions import Coalesce, Concat
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, parser_classes, throttle_classes
@@ -341,7 +341,23 @@ def _employees_list(request: Request) -> Response:
     if salary_type:
         qs = qs.filter(salary_type=salary_type)
     if search:
-        qs = qs.filter(Q(employee_code__icontains=search) | Q(phone__icontains=search))
+        # Name was missing here, so "search by name or employee code" -which is
+        # what every caller's placeholder promises -returned nothing for a
+        # name. full_name is annotated rather than OR-ing first/last, so
+        # "john smith" matches across the space; searching either part alone
+        # still works via the individual fields.
+        qs = qs.annotate(
+            # output_field is required: first_name is a CharField and
+            # last_name a TextField, and Concat refuses to guess across
+            # mixed types (FieldError at query time, not import time).
+            full_name=Concat("first_name", Value(" "), "last_name", output_field=TextField())
+        ).filter(
+            Q(employee_code__icontains=search)
+            | Q(phone__icontains=search)
+            | Q(first_name__icontains=search)
+            | Q(last_name__icontains=search)
+            | Q(full_name__icontains=search)
+        )
     return Response([_serialize_employee(e) for e in qs])
 
 

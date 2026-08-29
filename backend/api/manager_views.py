@@ -40,6 +40,11 @@ def _manager_json(m, include_assignments=False):
         "createdAt": m.created_at.isoformat() if m.created_at else None,
         "departmentCount": len(dept_assignments),
         "employeeCount": len(emp_assignments),
+        # The IDs, not just the count: the User Management page needs to work
+        # out which employees are under NO manager, which it can only do by
+        # subtracting the union of every manager's assignments. The rows are
+        # already prefetched above, so this adds no queries.
+        "assignedEmployeeIds": [ea.employee_id for ea in emp_assignments],
     }
     if include_assignments:
         data["assignedDepartments"] = [

@@ -61,6 +61,7 @@ import ProductionPayroll from "@/pages/hr/ProductionPayroll";
 import Settlement from "@/pages/hr/Settlement";
 import Reports from "@/pages/hr/Reports";
 import UserManagement from "@/pages/hr/UserManagement";
+import ManagerDetail from "@/pages/hr/ManagerDetail";
 import AccountManagement from "@/pages/hr/AccountManagement";
 import ActivityLogs from "@/pages/hr/ActivityLogs";
 import LoginDevices from "@/pages/hr/LoginDevices";
@@ -292,6 +293,9 @@ function Router() {
       </Route>
       <Route path="/hr/user-management">
         {() => <ProtectedRoute component={UserManagement} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/user-management/:id">
+        {() => <ProtectedRoute component={ManagerDetail} allowedRoles={["hr"]} />}
       </Route>
       <Route path="/hr/account-management">
         {() => <ProtectedRoute component={AccountManagement} allowedRoles={["hr"]} />}

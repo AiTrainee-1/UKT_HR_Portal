@@ -3542,6 +3542,9 @@ export type DepartmentManagerItem = {
   createdAt?: string | null;
   departmentCount: number;
   employeeCount: number;
+  /** IDs of the employees reporting to this manager. Used by User Management
+   *  to work out which staff report to nobody. */
+  assignedEmployeeIds?: number[];
   assignedDepartments?: AssignedDepartment[];
   assignedEmployees?: AssignedEmployee[];
   // mobile-only fields

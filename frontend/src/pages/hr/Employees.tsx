@@ -29,7 +29,11 @@ export default function Employees() {
   const [search, setSearch] = useState("");
   const [deptFilter, setDeptFilter] = useState("all");
   const [branchFilter, setBranchFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState("all");
+  // Active by default: the main table is the working roster, and leavers
+  // sitting in it inflate every count and every search. Inactive employees
+  // are still reachable -see the Inactive toggle in the header.
+  const [statusFilter, setStatusFilter] = useState("active");
+  const viewingInactive = statusFilter === "inactive";
   const [typeFilter, setTypeFilter] = useState<"staff" | "production">("staff");
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -41,6 +45,13 @@ export default function Employees() {
     branchId: !isBranchScoped && branchFilter !== "all" ? Number(branchFilter) : undefined,
     status: statusFilter !== "all" ? statusFilter : undefined,
   });
+
+  const { data: inactiveEmployees } = useListEmployees({
+    departmentId: deptFilter !== "all" ? Number(deptFilter) : undefined,
+    branchId: !isBranchScoped && branchFilter !== "all" ? Number(branchFilter) : undefined,
+    status: "inactive",
+  });
+  const inactiveCount = inactiveEmployees?.length ?? 0;
 
   const staffCount = rawEmployees?.filter((e) => e.employmentType !== "production").length ?? 0;
   const productionCount = rawEmployees?.filter((e) => e.employmentType === "production").length ?? 0;
@@ -118,6 +129,23 @@ export default function Employees() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {/* Drives the same `statusFilter` the Select below does, rather
+                than adding a second source of truth -so the two controls can
+                never disagree about what the table is showing. */}
+            <Button
+              variant={viewingInactive ? "default" : "outline"}
+              onClick={() => setStatusFilter(viewingInactive ? "active" : "inactive")}
+              data-testid="button-toggle-inactive"
+              title={viewingInactive ? "Back to active employees" : "Show inactive employees only"}
+            >
+              <UserX size={16} className="mr-2" />
+              {viewingInactive ? "Viewing Inactive" : "Inactive"}
+              {!viewingInactive && inactiveCount > 0 && (
+                <span className="ml-2 rounded-full bg-gray-200 px-1.5 py-0.5 text-[10px] font-bold text-gray-700">
+                  {inactiveCount}
+                </span>
+              )}
+            </Button>
             <Button variant="outline" onClick={() => navigate("/hr/employees/bulk-upload")} data-testid="button-bulk-upload">
               <UploadCloud size={16} className="mr-2" /> Bulk Upload
             </Button>
@@ -179,6 +207,15 @@ export default function Employees() {
 
         {/* Table */}
         <Card>
+          {viewingInactive && (
+            <div className="flex items-center gap-2 border-b bg-amber-50/70 px-4 py-2.5">
+              <UserX size={14} className="shrink-0 text-amber-600" />
+              <p className="text-xs text-amber-800">
+                Showing <b>inactive employees only</b>. These are excluded from the main
+                roster, counts and searches.
+              </p>
+            </div>
+          )}
           <CardContent className="p-0">
             <Table>
               <TableHeader>

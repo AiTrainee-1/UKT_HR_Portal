@@ -29,6 +29,7 @@ import {
 import type { Employee } from "@/lib/api-client";
 import type { Designation } from "@/lib/api-client/custom-hooks";
 import { DataPagination } from "@/components/ui/DataPagination";
+import { EmployeeAssignmentLookup } from "@/components/EmployeeAssignmentLookup";
 
 // ── Employee search dialog for assigning to a designation ────────────────────
 function AssignEmployeeDialog({
@@ -378,16 +379,14 @@ export default function Designations() {
           </Button>
         </div>
 
-        {/* Search */}
-        <div className="relative max-w-sm">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search designations…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
-          />
-        </div>
+        {/* Answers "which designation does this person hold?" directly,
+            instead of requiring you to guess it and open its Assign dialog. */}
+        <EmployeeAssignmentLookup
+          kind="designation"
+          options={(designations ?? []).map((d) => ({ id: d.id, label: d.title }))}
+          listSearch={search}
+          onListSearchChange={setSearch}
+        />
 
         {/* Summary */}
         <div className="grid grid-cols-2 gap-3 max-w-xs">
