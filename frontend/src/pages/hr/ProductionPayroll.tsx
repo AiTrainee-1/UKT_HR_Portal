@@ -35,6 +35,7 @@ import { exportPayrollToExcel } from "@/lib/payrollExcelExport";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { ShieldLoader } from "@/components/ui/ShieldLoader";
 import {
   Factory, Play, Users, TrendingUp, IndianRupee, CheckCircle2, Clock,
   AlertCircle, Info, AlertTriangle, RefreshCcw, X, Search, Download,
@@ -437,7 +438,7 @@ function PayrollSubTab() {
 
       <div className="space-y-2">
         {isLoading ? (
-          Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-16 w-full rounded-xl" />)
+          <ShieldLoader />
         ) : filteredRuns.length === 0 ? (
           <div className="text-center py-16 text-muted-foreground border-2 border-dashed border-gray-200 rounded-xl">
             <Users size={32} className="mx-auto text-gray-200 mb-3" />

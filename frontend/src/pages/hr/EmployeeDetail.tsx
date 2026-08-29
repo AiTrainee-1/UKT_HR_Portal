@@ -28,7 +28,7 @@ import {
   ShieldAlert, Cake, Download, CalendarCheck, CalendarX, CalendarDays, Briefcase, User,
   FileSignature, Award, Eye, FolderOpen, ExternalLink,
 } from "lucide-react";
-import Loader from "@/components/Loader";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 import EmployeeAvatar from "@/components/EmployeeAvatar";
 
 export default function EmployeeDetail() {
@@ -115,7 +115,7 @@ export default function EmployeeDetail() {
     return (
       <HrLayout>
         <div className="flex items-center justify-center min-h-[calc(100vh-140px)]">
-          <Loader />
+          <CircleLoader texts={["UK Textiles", "Employee Details", "Loading"]} />
         </div>
       </HrLayout>
     );

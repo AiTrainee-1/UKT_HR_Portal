@@ -31,6 +31,7 @@ import {
 import { useEmployeeShiftMonthlyStats } from "@/lib/api-client/custom-hooks";
 import ProductionShiftConfigCard from "@/components/ProductionShiftConfigCard";
 import { useQueryClient } from "@tanstack/react-query";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 import {
   Clock, Plus, Edit, Trash2, Users, Factory, AlertCircle,
   User, UserPlus, Building2, Briefcase, Search, CheckCircle2, Zap,
@@ -174,7 +175,7 @@ function EmployeeShiftStatsDialog({ employeeId, employeeName, onClose }: {
         </DialogHeader>
 
         {isLoading ? (
-          <div className="py-12 text-center text-sm text-muted-foreground">Loading…</div>
+          <CircleLoader texts={["UK Textiles", "Shift", "Loading"]} />
         ) : isError ? (
           <div className="py-12 text-center text-sm text-red-500">Could not load data. Restart the Django server and try again.</div>
         ) : !data ? (

@@ -47,7 +47,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Plus, Briefcase, Users, CheckSquare, XSquare, Share2, Trash2, Eye } from "lucide-react";
-import Loader from "@/components/Loader";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 
 const jobSchema = z.object({
   title: z.string().min(1, "Title required"),
@@ -167,7 +167,7 @@ export default function Interviews() {
     return (
       <HrLayout>
         <div className="flex items-center justify-center min-h-[calc(100vh-140px)]">
-          <Loader />
+          <CircleLoader texts={["UK Textiles", "Interviews", "Loading"]} />
         </div>
       </HrLayout>
     );
@@ -214,7 +214,7 @@ export default function Interviews() {
             <div className="space-y-3 flex-1">
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Job Postings</p>
               {jobsLoading ? (
-                Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-24 w-full" />)
+                <CircleLoader texts={["UK Textiles", "Interviews", "Loading"]} />
               ) : jobs && jobs.length > 0 ? (
                 <>
                   {paginatedJobs.map((job) => (

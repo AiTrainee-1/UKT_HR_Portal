@@ -14,6 +14,7 @@ import {
 } from "@/lib/api-client/custom-hooks";
 import EmployeeAvatar from "@/components/EmployeeAvatar";
 import { UserPlus, Eye, Download, Mail, Loader2, MessageCircle } from "lucide-react";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 
 export default function NewJoinees() {
   const { toast } = useToast();
@@ -93,7 +94,7 @@ export default function NewJoinees() {
           <CardContent className="p-0">
             {isLoading ? (
               <div className="p-5 space-y-3">
-                {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-14 rounded-xl" />)}
+                <CircleLoader texts={["UK Textiles", "New Joinees", "Loading"]} />
               </div>
             ) : !joinees || joinees.length === 0 ? (
               <div className="text-center py-16">

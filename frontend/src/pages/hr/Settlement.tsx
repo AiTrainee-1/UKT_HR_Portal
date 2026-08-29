@@ -20,6 +20,7 @@ import {
 } from "@/lib/api-client";
 import { useListEmployees } from "@/lib/api-client";
 import { useQueryClient } from "@tanstack/react-query";
+import { ShieldLoader } from "@/components/ui/ShieldLoader";
 import {
   Plus, IndianRupee, CheckCircle2, XCircle,
   User, Phone, Mail, Building2, Clock,
@@ -687,13 +688,11 @@ export default function Settlement() {
     }
   };
 
+  // One loader for the list, not one card per placeholder -the list is a
+  // single thing loading.
   const SkeletonCards = () => (
     <>
-      {Array.from({ length: 2 }).map((_, i) => (
-        <Card key={i}><CardContent className="p-4">
-          <Skeleton className="h-5 w-40 mb-2" /><Skeleton className="h-4 w-64" />
-        </CardContent></Card>
-      ))}
+      <ShieldLoader />
     </>
   );
 

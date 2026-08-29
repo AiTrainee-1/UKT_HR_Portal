@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { KpiRunningBorder } from "@/components/ui/KpiLoader";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChartContainer } from "@/components/ui/chart";
@@ -149,6 +150,7 @@ function StatCard({
   value,
   sub,
   colorCls,
+  accent,
   isLoading,
 }: {
   icon: React.ComponentType<{ size?: number; className?: string }>;
@@ -156,21 +158,15 @@ function StatCard({
   value: number | string;
   sub?: React.ReactNode;
   colorCls: string;
+  /** Real colour value for the loading tracer. `colorCls` is a Tailwind
+   *  class, which cannot be fed to a CSS custom property -so the hex is
+   *  passed separately, exactly as the Dashboard's KpiCard does. */
+  accent?: string;
   isLoading?: boolean;
 }) {
-  if (isLoading) {
-    return (
-      <Card className="border">
-        <CardContent className="p-5">
-          <Skeleton className="h-3 w-20 mb-3" />
-          <Skeleton className="h-8 w-14 mb-2" />
-          <Skeleton className="h-3 w-28" />
-        </CardContent>
-      </Card>
-    );
-  }
   return (
-    <Card className="border">
+    <Card className="relative border">
+      {isLoading && <KpiRunningBorder accent={accent} radius={12} />}
       <CardContent className="p-5">
         <div className="flex items-center justify-between mb-3">
           <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">{label}</p>
@@ -178,8 +174,10 @@ function StatCard({
             <Icon size={14} className="text-white" />
           </div>
         </div>
-        <p className="text-3xl font-black text-gray-900 leading-none mb-2">{value}</p>
-        {sub && <div className="text-xs text-gray-500">{sub}</div>}
+        <p className="mb-2 flex h-9 items-center text-3xl font-black text-gray-900 leading-none">
+          {isLoading ? "" : value}
+        </p>
+        {sub && !isLoading && <div className="text-xs text-gray-500">{sub}</div>}
       </CardContent>
     </Card>
   );
@@ -585,7 +583,7 @@ export default function AttendancePage() {
             icon={Users}
             label={view === "staff" ? "Total Staff" : "Total Production"}
             value={summary?.totalEmployees ?? "—"}
-            colorCls="bg-gray-700"
+            colorCls="bg-gray-700" accent="#374151"
             sub={
               <span className="flex gap-3">
                 <span><strong className="text-gray-700">{summary?.staffTotal ?? "—"}</strong> Staff</span>
@@ -598,7 +596,7 @@ export default function AttendancePage() {
             icon={UserCheck}
             label="Present Today"
             value={summary?.presentToday ?? "—"}
-            colorCls="bg-green-600"
+            colorCls="bg-green-600" accent="#16a34a"
             sub={
               <span className="flex gap-3">
                 <span><strong className="text-gray-700">{summary?.biometricPresent ?? "—"}</strong> Biometric</span>
@@ -611,7 +609,7 @@ export default function AttendancePage() {
             icon={UserX}
             label="Not Punched"
             value={summary?.notPunched ?? "—"}
-            colorCls="bg-red-500"
+            colorCls="bg-red-500" accent="#ef4444"
             sub={
               <span className="flex gap-3">
                 <span><strong className="text-gray-700">{summary?.productionNotPunched ?? "—"}</strong> Production</span>
@@ -624,7 +622,7 @@ export default function AttendancePage() {
             icon={CalendarDays}
             label="On Leave Today"
             value={onLeaveCount}
-            colorCls="bg-purple-500"
+            colorCls="bg-purple-500" accent="#a855f7"
             sub={<span>from today's records</span>}
             isLoading={dailyLoading}
           />

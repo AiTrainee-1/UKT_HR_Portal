@@ -30,6 +30,7 @@ import {
 } from "@/lib/api-client";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 import {
   Building2,
   AlertTriangle,
@@ -206,7 +207,7 @@ export default function RequiredRoles() {
 
           {isLoading ? (
             <div className="p-4 space-y-2">
-              {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-12 rounded-xl" />)}
+              <CircleLoader texts={["UK Textiles", "Required Roles", "Loading"]} />
             </div>
           ) : all.length === 0 ? (
             <div className="py-16 text-center text-[#006496]/40 text-sm">

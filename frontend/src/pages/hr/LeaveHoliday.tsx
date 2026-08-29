@@ -26,6 +26,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Calendar, Plus, Trash2, CheckCircle, XCircle, Gift, Clock, User, Building2, Briefcase, FileText } from "lucide-react";
 import EmployeeSearchSelect from "@/components/EmployeeSearchSelect";
 import { Separator } from "@/components/ui/separator";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 
 const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
   pending:  { label: "Pending",  className: "bg-amber-50 text-amber-700 border-amber-200" },
@@ -244,14 +245,7 @@ export default function LeaveHoliday() {
 
             <div className="space-y-3">
               {leavesLoading ? (
-                Array.from({ length: 3 }).map((_, i) => (
-                  <Card key={i} className="border-0 shadow-sm">
-                    <CardContent className="p-4">
-                      <Skeleton className="h-5 w-40 mb-2" />
-                      <Skeleton className="h-4 w-64" />
-                    </CardContent>
-                  </Card>
-                ))
+                <CircleLoader texts={["UK Textiles", "Leave", "Loading"]} />
               ) : filteredLeaves.length === 0 ? (
                 <div className="text-center py-12 text-muted-foreground text-sm">No leave requests found.</div>
               ) : (

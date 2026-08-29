@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useListEmployees } from "@/lib/api-client";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 import {
   useIncrementSummary, useAddIncrement, useIncrementDashboard,
 } from "@/lib/api-client/custom-hooks";
@@ -260,9 +261,7 @@ export default function Increment() {
         </Card>
 
         {searchCode && (isLoading ? (
-          <div className="grid lg:grid-cols-3 gap-4">
-            {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-28 rounded-xl" />)}
-          </div>
+          <CircleLoader texts={["UK Textiles", "Increment", "Loading"]} />
         ) : isError || !data ? (
           <Card className="border">
             <CardContent className="py-10 text-center text-sm text-red-500">

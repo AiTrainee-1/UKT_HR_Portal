@@ -7,6 +7,7 @@ import {
 } from "../../lib/api-client";
 import { customFetch } from "../../lib/api-client/custom-fetch";
 import HrLayout from "@/components/HrLayout";
+import { ShieldLoader } from "@/components/ui/ShieldLoader";
 import {
   FileText,
   BarChart2,
@@ -766,10 +767,7 @@ export default function Reports() {
           )}
 
           {reportQuery.isFetching && (
-            <div className="flex items-center justify-center h-64">
-              <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
-              <span className="ml-3 text-slate-500">Generating report…</span>
-            </div>
+            <ShieldLoader />
           )}
 
           {reportQuery.isError && !reportQuery.isFetching && (

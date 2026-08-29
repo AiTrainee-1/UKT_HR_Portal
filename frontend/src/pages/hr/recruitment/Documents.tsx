@@ -13,6 +13,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { useListEmployees } from "@/lib/api-client";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 import {
   useEmployeeDocuments, useUploadEmployeeDocument, useDeleteEmployeeDocument,
   useListResignations, useDocumentCompletionStats, previewDocumentPdf, downloadDocumentPdf,
@@ -296,9 +297,7 @@ export default function Documents() {
               <Card className="border-0 shadow-sm">
                 <CardContent className="p-0">
                   {employeesLoading ? (
-                    <div className="flex items-center justify-center py-16 text-gray-400">
-                      <Loader2 size={20} className="animate-spin mr-2" /> Loading employees…
-                    </div>
+                    <CircleLoader texts={["UK Textiles", "Documents", "Loading"]} />
                   ) : !search.trim() ? (
                     <div className="flex flex-col items-center justify-center py-16 text-gray-400">
                       <Users size={32} className="opacity-30 mb-2" />

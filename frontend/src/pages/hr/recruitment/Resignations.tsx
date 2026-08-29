@@ -25,6 +25,7 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 import {
   Clock, CheckCircle2, XCircle, Eye, FileDown, Mail,
   CheckCircle, AlertTriangle, Trash2, MessageCircle,
@@ -167,7 +168,7 @@ function ResignationTable({
   if (isLoading)
     return (
       <div className="p-4 space-y-2">
-        {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-14 rounded-xl" />)}
+        <CircleLoader texts={["UK Textiles", "Resignations", "Loading"]} />
       </div>
     );
 

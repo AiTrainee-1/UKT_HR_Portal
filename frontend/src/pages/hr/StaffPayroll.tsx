@@ -39,6 +39,7 @@ import EmployeeSearchSelect from "@/components/EmployeeSearchSelect";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { ShieldLoader } from "@/components/ui/ShieldLoader";
 import {
   IndianRupee, Play, CheckCircle2, CheckCircle, Clock, Users,
   TrendingUp, AlertCircle, Info,
@@ -191,7 +192,7 @@ function SessionConfigPanel() {
       <CardContent className="pt-0 space-y-2">
         {showAdd && <div className="rounded-lg border border-dashed border-amber-300 bg-amber-50/40 p-3">{formFields}</div>}
         {isLoading ? (
-          <div className="space-y-2">{[1,2].map(i => <Skeleton key={i} className="h-14 w-full rounded-lg" />)}</div>
+          <ShieldLoader />
         ) : (configs ?? []).length === 0 ? (
           <div className="flex items-start gap-2 p-3 rounded-lg bg-gray-50 border border-gray-100">
             <AlertCircle size={14} className="text-gray-400 mt-0.5 shrink-0" />
@@ -569,9 +570,7 @@ function PayrollSubTab() {
       {/* Payroll Records */}
       <div className="space-y-2">
         {isLoading ? (
-          Array.from({ length: 5 }).map((_, i) => (
-            <Skeleton key={i} className="h-16 w-full rounded-xl" />
-          ))
+          <ShieldLoader />
         ) : filteredRuns.length === 0 ? (
           <div className="text-center py-16 text-muted-foreground border-2 border-dashed border-gray-200 rounded-xl">
             <Users size={32} className="mx-auto text-gray-200 mb-3" />
@@ -935,13 +934,11 @@ function SalarySubTab() {
               </TableHeader>
               <TableBody>
                 {loading && paginated.length === 0 ? (
-                  Array.from({ length: 5 }).map((_, i) => (
-                    <TableRow key={i}>
-                      {Array.from({ length: 10 }).map((_, j) => (
-                        <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>
-                      ))}
-                    </TableRow>
-                  ))
+                  <TableRow>
+                    <TableCell colSpan={10} className="py-8">
+                      <ShieldLoader />
+                    </TableCell>
+                  </TableRow>
                 ) : paginated.length > 0 ? (
                   paginated.map((rec) => (
                     <TableRow key={rec.id} className="hover:bg-slate-50/50">
@@ -1332,10 +1329,7 @@ function PayslipSubTab() {
       <div className="clay-card rounded-2xl overflow-hidden">
         <div className="divide-y divide-gray-50">
           {isLoading ? (
-            <div className="flex items-center justify-center py-20 text-gray-400">
-              <Loader2 size={24} className="animate-spin mr-3" />
-              <span className="text-sm">Loading salary slips…</span>
-            </div>
+            <ShieldLoader />
           ) : filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 text-gray-400">
               <FileText size={40} className="opacity-20 mb-3" />

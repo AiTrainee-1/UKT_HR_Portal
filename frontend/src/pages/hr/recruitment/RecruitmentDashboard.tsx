@@ -3,6 +3,7 @@ import HrLayout from "@/components/HrLayout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 import {
   Dialog,
   DialogContent,
@@ -108,11 +109,7 @@ function StatCard({
 
 function LoadingCards() {
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-      {Array.from({ length: 7 }).map((_, i) => (
-        <Skeleton key={i} className="h-24 rounded-2xl" />
-      ))}
-    </div>
+    <CircleLoader texts={["UK Textiles", "Recruitment", "Loading"]} />
   );
 }
 

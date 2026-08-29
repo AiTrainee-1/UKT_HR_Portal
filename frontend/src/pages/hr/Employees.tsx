@@ -16,7 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import Loader from "@/components/Loader";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 import EmployeeAvatar from "@/components/EmployeeAvatar";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { ActionTooltip } from "@/components/ui/action-tooltip";
@@ -204,7 +204,7 @@ export default function Employees() {
                 {isLoading ? (
                   <TableRow>
                     <TableCell colSpan={9} className="py-16">
-                      <Loader />
+                      <CircleLoader />
                     </TableCell>
                   </TableRow>
                 ) : employees && employees.length > 0 ? (

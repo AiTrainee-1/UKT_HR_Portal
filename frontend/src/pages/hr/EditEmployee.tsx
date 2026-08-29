@@ -21,7 +21,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { ArrowLeft } from "lucide-react";
-import Loader from "@/components/Loader";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 
 const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
 
@@ -109,7 +109,7 @@ export default function EditEmployee() {
     return (
       <HrLayout>
         <div className="flex items-center justify-center min-h-[calc(100vh-140px)]">
-          <Loader />
+          <CircleLoader texts={["UK Textiles", "Employee Details", "Loading"]} />
         </div>
       </HrLayout>
     );

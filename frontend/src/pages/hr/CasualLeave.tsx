@@ -10,6 +10,7 @@ import { PillTabs } from "@/components/ui/pill-tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 import {
   useListCasualLeaves, useCasualLeaveEligibility, useCreateCasualLeave,
   useDecideCasualLeave, useDeleteCasualLeave,
@@ -221,7 +222,7 @@ export default function CasualLeave() {
           {(["pending", "approved", "rejected"] as const).map(t => (
             <TabsContent key={t} value={t} className="mt-4 space-y-2">
               {isLoading ? (
-                Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-16 rounded-xl" />)
+                <CircleLoader texts={["UK Textiles", "Casual Leave", "Loading"]} />
               ) : (t === "pending" ? pending : t === "approved" ? approved : rejected).length === 0 ? (
                 <div className="text-center py-12 text-muted-foreground text-sm">
                   No {t} casual leave requests for {MONTH_NAMES[month - 1]} {year}.

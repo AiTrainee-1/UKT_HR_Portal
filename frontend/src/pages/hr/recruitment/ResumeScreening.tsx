@@ -14,6 +14,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { customFetch } from "@/lib/api-client/custom-fetch";
 import { useResumeScreening } from "@/contexts/ResumeScreeningContext";
 import ResumeScreeningPipeline from "@/components/ResumeScreeningPipeline";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 import {
   useListDepartments,
   useListHiringRuleSets, useCreateHiringRuleSet, useUpdateHiringRuleSet, useDeleteHiringRuleSet,
@@ -419,7 +420,7 @@ function RulesTab() {
         </Button>
       </div>
 
-      {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {isLoading && <CircleLoader texts={["UK Textiles", "Resume Screening", "Loading"]} />}
       {!isLoading && (ruleSets ?? []).length === 0 && (
         <Card><CardContent className="p-8 text-center text-sm text-muted-foreground">
           No hiring rule sets yet. Create one to start screening resumes.
@@ -905,7 +906,7 @@ function CandidatePipelinePanel() {
           </div>
         )}
 
-        {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+        {isLoading && <CircleLoader texts={["UK Textiles", "Resume Screening", "Loading"]} />}
         {!isLoading && (candidates ?? []).length === 0 && (
           <p className="text-sm text-muted-foreground text-center py-6">No candidates here yet.</p>
         )}

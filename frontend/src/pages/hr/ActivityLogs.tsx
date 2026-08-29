@@ -11,6 +11,7 @@ import {
   TrendingUp, AlertTriangle,
 } from "lucide-react";
 import { useListAuditLogs, useAuditLogStats } from "@/lib/api-client";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -291,18 +292,7 @@ export default function ActivityLogs() {
           </div>
 
           {isLoading ? (
-            <div className="divide-y divide-gray-50">
-              {Array.from({ length: 8 }).map((_, i) => (
-                <div key={i} className="flex items-center gap-4 px-5 py-3.5">
-                  <Skeleton className="w-8 h-8 rounded-lg shrink-0" />
-                  <div className="flex-1 space-y-1.5">
-                    <Skeleton className="h-3.5 w-48" />
-                    <Skeleton className="h-3 w-72" />
-                  </div>
-                  <Skeleton className="h-3 w-28" />
-                </div>
-              ))}
-            </div>
+            <CircleLoader texts={["UK Textiles", "Activity Logs", "Loading"]} />
           ) : logs.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 text-gray-400">
               <Activity size={40} className="opacity-20 mb-3" />

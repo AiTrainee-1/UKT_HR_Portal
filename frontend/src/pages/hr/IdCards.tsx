@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { useToast } from "@/hooks/use-toast";
 import { useListEmployees } from "@/lib/api-client";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 import {
   useIdCards, useEmailIdCard, useWhatsAppIdCard, type IdCardData,
 } from "@/lib/api-client/custom-hooks";
@@ -240,9 +241,7 @@ export default function IdCards() {
                 </CardContent>
               </Card>
             ) : cardsLoading ? (
-              <div className="flex gap-4 flex-wrap">
-                {Array.from({ length: 2 }).map((_, i) => <Skeleton key={i} className="w-[240px] h-[380px] rounded-2xl" />)}
-              </div>
+              <CircleLoader texts={["UK Textiles", "ID Cards", "Loading"]} className="w-full" />
             ) : (
               <div className="space-y-6">
                 {(cards ?? []).map(card => (

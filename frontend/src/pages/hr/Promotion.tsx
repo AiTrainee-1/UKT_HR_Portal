@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useListEmployees, useListDepartments } from "@/lib/api-client";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 import {
   useListDesignations, useListPromotions, useCreatePromotion, useDeletePromotion,
   type PromotionItem,
@@ -288,7 +289,7 @@ export default function Promotion() {
           <CardContent className="px-4 pb-4">
             {promosLoading ? (
               <div className="space-y-2">
-                {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-14 w-full rounded-xl" />)}
+                <CircleLoader texts={["UK Textiles", "Promotion", "Loading"]} />
               </div>
             ) : (allPromotions ?? []).length === 0 ? (
               <p className="text-sm text-center text-muted-foreground py-8">No promotions recorded yet.</p>

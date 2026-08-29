@@ -3,6 +3,7 @@ import { useLocation } from "wouter";
 import HrLayout from "@/components/HrLayout";
 import { useAuth, canView } from "@/contexts/AuthContext";
 import { Skeleton } from "@/components/ui/skeleton";
+import { KpiRunningBorder } from "@/components/ui/KpiLoader";
 import {
   useGetHrDashboardSummary,
   useGetSalaryTrends,
@@ -91,17 +92,22 @@ function SectionTitle({ children, action, onAction }: {
 // ── KPI Card ──────────────────────────────────────────────────────────────────
 
 function KpiCard({
-  label, value, sub, icon: Icon, accent, onClick, trend, trendUp,
+  label, value, sub, icon: Icon, accent, onClick, trend, trendUp, loading,
 }: {
   label: string; value: string | number; sub?: string;
   icon: React.ComponentType<{ size?: number; className?: string }>;
   accent: string; onClick?: () => void; trend?: string; trendUp?: boolean;
+  /** Show the loader in place of the value while this card's own data is in
+   *  flight. The card keeps its icon, label and size, so nothing shifts when
+   *  the number lands. */
+  loading?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
-      className="group w-full text-left rounded-2xl p-4 clay-card hover:scale-[1.02] transition-all duration-200"
+      className="group relative w-full text-left rounded-2xl p-4 clay-card hover:scale-[1.02] transition-all duration-200"
     >
+      {loading && <KpiRunningBorder accent={accent} radius={16} />}
       <div className="flex items-start justify-between gap-2 mb-2">
         <div
           className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
@@ -120,9 +126,11 @@ function KpiCard({
           </span>
         )}
       </div>
-      <p className="text-2xl font-black leading-none" style={{ color: "#1a3a4a" }}>{value}</p>
+      <p className="flex h-8 items-center text-2xl font-black leading-none" style={{ color: "#1a3a4a" }}>
+        {loading ? "" : value}
+      </p>
       <p className="text-[11px] font-semibold mt-1 truncate" style={{ color: "#1e5a7a" }}>{label}</p>
-      {sub && <p className="text-[10px] mt-0.5 truncate" style={{ color: "rgba(0,60,100,0.55)" }}>{sub}</p>}
+      {sub && !loading && <p className="text-[10px] mt-0.5 truncate" style={{ color: "rgba(0,60,100,0.55)" }}>{sub}</p>}
     </button>
   );
 }
@@ -362,22 +370,15 @@ export default function HrDashboard() {
         </div>
 
         {/* ── KPI Row ─────────────────────────────────────────────────────── */}
-        {sumLoading ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <Skeleton key={i} className="h-24 rounded-2xl" />
-            ))}
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <KpiCard
-              label="Total Employees" value={summary?.totalEmployees ?? 0}
+              label="Total Employees" loading={!summary} value={summary?.totalEmployees ?? 0}
               sub={`${summary?.activeEmployees ?? 0} active`}
               icon={Users} accent="#006496"
               onClick={() => navigate("/hr/employees")}
             />
             <KpiCard
-              label="Present Today" value={attn?.presentToday ?? 0}
+              label="Present Today" loading={!attn} value={attn?.presentToday ?? 0}
               sub={attn ? `of ${attn.totalEmployees} workforce` : undefined}
               icon={UserCheck} accent="#0096c7"
               trend={presentDelta !== null ? `${Math.abs(presentDelta)} vs yesterday` : undefined}
@@ -385,37 +386,37 @@ export default function HrDashboard() {
               onClick={() => navigate("/hr/attendance")}
             />
             <KpiCard
-              label="Pending Leaves" value={pendingLeaves}
+              label="Pending Leaves" loading={!summary} value={pendingLeaves}
               sub="awaiting approval"
               icon={Calendar} accent="#f59e0b"
               onClick={() => navigate("/hr/leave")}
             />
             <KpiCard
-              label="Pending Permissions" value={pendingPermCount}
+              label="Pending Permissions" loading={!pendingPerms} value={pendingPermCount}
               sub="this month"
               icon={ClipboardList} accent="#8b5cf6"
               onClick={() => navigate("/hr/requests")}
             />
             <KpiCard
-              label="Monthly Payroll" value={fmt(monthlyPayroll)}
+              label="Monthly Payroll" loading={!summary} value={fmt(monthlyPayroll)}
               sub="current month estimate"
               icon={CreditCard} accent="#0080bf"
               onClick={() => navigate("/hr/payroll")}
             />
             <KpiCard
-              label="Open Advances" value={openAdvances}
+              label="Open Advances" loading={!advances} value={openAdvances}
               sub={totalOutstanding > 0 ? `${fmt(totalOutstanding)} outstanding` : "No outstanding"}
               icon={Wallet} accent="#ef4444"
               onClick={() => navigate("/hr/settlement")}
             />
-          </div>
-        )}
+        </div>
 
         {/* ── Attendance Hero ──────────────────────────────────────────────── */}
         <div
-          className="rounded-2xl overflow-hidden cursor-pointer group clay-card"
+          className="relative rounded-2xl overflow-hidden cursor-pointer group clay-card"
           onClick={() => navigate("/hr/attendance")}
         >
+          {!attn && <KpiRunningBorder accent="#006496" radius={16} />}
           {/* Header bar */}
           <div
             className="px-5 py-3 flex items-center justify-between"
@@ -509,9 +510,10 @@ export default function HrDashboard() {
 
           {/* Salary Cost Trend */}
           <div
-            className="lg:col-span-2 rounded-2xl p-5 cursor-pointer clay-card"
+            className="relative lg:col-span-2 rounded-2xl p-5 cursor-pointer clay-card"
             onClick={() => navigate("/hr/payroll")}
           >
+            {!trends && <KpiRunningBorder accent="#0080bf" radius={16} />}
             <SectionTitle action="View Payroll" onAction={() => navigate("/hr/payroll")}>
               <span className="flex items-center gap-1.5">
                 <TrendingUp size={12} style={{ color: "#006496" }} />
@@ -551,9 +553,10 @@ export default function HrDashboard() {
 
           {/* Attendance Trend This Month */}
           <div
-            className="rounded-2xl p-5 cursor-pointer clay-card"
+            className="relative rounded-2xl p-5 cursor-pointer clay-card"
             onClick={() => navigate("/hr/attendance")}
           >
+            {!attnTrend && <KpiRunningBorder accent="#0096c7" radius={16} />}
             <SectionTitle action="View Attendance" onAction={() => navigate("/hr/attendance")}>
               <span className="flex items-center gap-1.5">
                 <Activity size={12} style={{ color: "#006496" }} />
@@ -583,7 +586,8 @@ export default function HrDashboard() {
         <div className="grid lg:grid-cols-3 gap-4">
 
           {/* Department Headcount */}
-          <div className="rounded-2xl p-5 clay-card">
+          <div className="relative rounded-2xl p-5 clay-card">
+          {!depts && <KpiRunningBorder accent="#006496" radius={16} />}
             <SectionTitle action="Manage Departments" onAction={() => navigate("/hr/departments")}>
               <span className="flex items-center gap-1.5">
                 <Building2 size={12} style={{ color: "#006496" }} />
@@ -608,7 +612,8 @@ export default function HrDashboard() {
           </div>
 
           {/* Gender Distribution */}
-          <div className="rounded-2xl p-5 clay-card">
+          <div className="relative rounded-2xl p-5 clay-card">
+          {!depts && <KpiRunningBorder accent="#8b5cf6" radius={16} />}
             <SectionTitle action="View Employees" onAction={() => navigate("/hr/employees")}>
               <span className="flex items-center gap-1.5">
                 <Users size={12} style={{ color: "#006496" }} />
@@ -650,7 +655,8 @@ export default function HrDashboard() {
           <div className="space-y-4">
 
             {/* Pending Actions */}
-            <div className="rounded-2xl p-5 clay-card">
+            <div className="relative rounded-2xl p-5 clay-card">
+            {!summary && <KpiRunningBorder accent="#ef4444" radius={16} />}
               <SectionTitle>
                 <span className="flex items-center gap-1.5">
                   <AlertCircle size={12} style={{ color: "#f59e0b" }} />
@@ -702,7 +708,8 @@ export default function HrDashboard() {
             </div>
 
             {/* Upcoming Holidays */}
-            <div className="rounded-2xl p-5 clay-card">
+            <div className="relative rounded-2xl p-5 clay-card">
+            {!holidays && <KpiRunningBorder accent="#f59e0b" radius={16} />}
               <SectionTitle action="Manage" onAction={() => navigate("/hr/leave")}>
                 <span className="flex items-center gap-1.5">
                   <Gift size={12} className="text-rose-500" />
@@ -739,7 +746,8 @@ export default function HrDashboard() {
         </div>
 
         {/* ── Geo Attendance Snapshot ─────────────────────────────────────── */}
-        <div className="rounded-2xl p-5 clay-card">
+        <div className="relative rounded-2xl p-5 clay-card">
+        {!attn && <KpiRunningBorder accent="#0d9488" radius={16} />}
           <SectionTitle action="Open Geo Attendance" onAction={() => navigate("/hr/geo-attendance")}>
             <span className="flex items-center gap-1.5">
               <Navigation size={12} style={{ color: "#006496" }} />
@@ -775,7 +783,8 @@ export default function HrDashboard() {
         </div>
 
         {/* ── Recruitment & Documents Snapshot ─────────────────────────────── */}
-        <div className="rounded-2xl p-5 clay-card">
+        <div className="relative rounded-2xl p-5 clay-card">
+        {!auditStats && <KpiRunningBorder accent="#0891b2" radius={16} />}
           <SectionTitle action="View Recruitment" onAction={() => navigate("/hr/recruitment")}>
             <span className="flex items-center gap-1.5">
               <Briefcase size={12} style={{ color: "#006496" }} />

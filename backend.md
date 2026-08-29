@@ -11,7 +11,7 @@ Django REST API for the HR Portal. This is the single backend for three frontend
 ```bash
 cd backend
 python -m venv .venv
-.venv\Scripts\activate          # Windows
+              # Windows
 pip install -r requirements.txt
 copy .env.example .env          # then fill in real values -see Section 3
 python manage.py migrate

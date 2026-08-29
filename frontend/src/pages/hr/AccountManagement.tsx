@@ -27,6 +27,7 @@ import {
   type Role, type HrUserItem, type PermissionLevel,
 } from "@/lib/api-client/custom-hooks";
 import { MODULE_TREE, MODULE_LABELS, resolvePermission } from "@/lib/permission-modules";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 import {
   UserCog, Plus, Shield, Users, Trash2, Edit2, Eye, EyeOff,
   CheckCircle2, XCircle, Ban, CornerDownRight,
@@ -448,10 +449,7 @@ export default function AccountManagement() {
             <Card className="rounded-2xl overflow-hidden">
               <CardContent className="p-0">
                 {usersLoading ? (
-                  <div className="p-4 space-y-2">
-                    <Skeleton className="h-10 w-full" />
-                    <Skeleton className="h-10 w-full" />
-                  </div>
+                  <CircleLoader texts={["UK Textiles", "Account Management", "Loading"]} />
                 ) : (
                   <Table>
                     <TableHeader>
@@ -529,10 +527,7 @@ export default function AccountManagement() {
             <Card className="rounded-2xl overflow-hidden">
               <CardContent className="p-0">
                 {rolesLoading ? (
-                  <div className="p-4 space-y-2">
-                    <Skeleton className="h-10 w-full" />
-                    <Skeleton className="h-10 w-full" />
-                  </div>
+                  <CircleLoader texts={["UK Textiles", "Account Management", "Loading"]} />
                 ) : (
                   <Table>
                     <TableHeader>

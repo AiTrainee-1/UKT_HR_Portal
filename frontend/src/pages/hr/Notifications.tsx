@@ -16,7 +16,7 @@ import { useListNotifications, useMarkNotificationRead, getListNotificationsQuer
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { Bell, CheckCheck, MessageSquare, IndianRupee, Calendar } from "lucide-react";
-import Loader from "@/components/Loader";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 
 function typeIcon(type: string) {
   if (type === "salary_complaint") return <IndianRupee size={15} className="text-orange-500" />;
@@ -70,7 +70,7 @@ export default function Notifications() {
     return (
       <HrLayout>
         <div className="flex items-center justify-center min-h-[calc(100vh-140px)]">
-          <Loader />
+          <CircleLoader texts={["UK Textiles", "Notifications", "Loading"]} />
         </div>
       </HrLayout>
     );

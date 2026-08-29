@@ -24,6 +24,7 @@ import {
   type DepartmentManagerItem,
 } from "@/lib/api-client/custom-hooks";
 import { useListDepartments, useListEmployees } from "@/lib/api-client";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 import {
   Users, Plus, Trash2, Shield, ChevronRight, Building2,
   UserCheck, CheckCircle, XCircle, Edit2, AlertTriangle,
@@ -549,13 +550,7 @@ export default function UserManagement() {
           </p>
 
           {isLoading ? (
-            <div className="space-y-3">
-              {Array.from({ length: 3 }).map((_, i) => (
-                <Card key={i} className="border-0 shadow-sm">
-                  <CardContent className="p-4"><Skeleton className="h-14 w-full" /></CardContent>
-                </Card>
-              ))}
-            </div>
+            <CircleLoader texts={["UK Textiles", "User Management", "Loading"]} />
           ) : managers.length === 0 ? (
             <div className="text-center py-16 border-2 border-dashed border-gray-200 rounded-2xl">
               <UserCheck size={36} className="mx-auto text-gray-200 mb-3" />

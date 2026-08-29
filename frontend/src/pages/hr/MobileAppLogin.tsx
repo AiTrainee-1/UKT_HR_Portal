@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { PillTabs } from "@/components/ui/pill-tabs";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -316,7 +317,7 @@ export default function MobileAppLogin() {
         {/* ── List ───────────────────────────────────────────────────────── */}
         {isLoading ? (
           <div className="space-y-2">
-            {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-16 rounded-xl" />)}
+            <CircleLoader texts={["UK Textiles", "Mobile App Login", "Loading"]} />
           </div>
         ) : rows.length === 0 ? (
           <Card className="border-0 shadow-sm">

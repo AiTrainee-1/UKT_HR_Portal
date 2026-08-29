@@ -919,3 +919,246 @@
     inset: -1px;
   }
 }
+
+/* ─── KPI card loading border (Dashboard + Attendance only) ──────────────
+   The supplied loader's running "car", traced around the KPI card itself.
+
+   pathLength="100" is what makes it size-independent: the dash pattern is
+   expressed against a normalised perimeter, so `25 75` is always "a quarter
+   lit" whatever the card measures. One keyframe, every card size.
+
+   `--kpi-accent` recolours it per card.                                    */
+
+.ukt-kpi-run {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  --kpi-accent: var(--brand-blue, #006496);
+  --kpi-radius: 16px;
+}
+
+.ukt-kpi-run-svg {
+  display: block;
+  overflow: visible;
+}
+
+/* Geometry in CSS so the rect follows the card's real size. Inset 1px each
+   side so the stroke isn't sliced in half by the card's edge. */
+.ukt-kpi-run-track,
+.ukt-kpi-run-car {
+  x: 1px;
+  y: 1px;
+  width: calc(100% - 2px);
+  height: calc(100% - 2px);
+  rx: var(--kpi-radius);
+  ry: var(--kpi-radius);
+  fill: none;
+  stroke-width: 2.5;
+}
+
+.ukt-kpi-run-track {
+  stroke: color-mix(in oklab, var(--kpi-accent) 18%, transparent);
+}
+
+.ukt-kpi-run-car {
+  stroke: var(--kpi-accent);
+  stroke-linecap: round;
+  stroke-dasharray: 25 75;
+  animation: ukt-kpi-run 2s linear infinite;
+}
+
+@keyframes ukt-kpi-run {
+  from { stroke-dashoffset: 100; }
+  to   { stroke-dashoffset: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ukt-kpi-run-car {
+    animation: none;
+    stroke-dasharray: none;
+    opacity: 0.45;
+  }
+}
+
+/* ─── Circle loader (Employees page) ──────────────────────────────────────
+   Ported from a styled-components snippet; sizes, delays, gradients,
+   shadows and keyframes are unchanged -only the host changed, because this
+   project has no styled-components.                                       */
+
+.ukt-circle-wrap {
+  position: relative;
+  width: 100%;
+  height: 200px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.ukt-circle-row {
+  display: flex;
+  gap: 15px;
+}
+
+.ukt-circle {
+  width: 45px;
+  height: 45px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #f5f5f5, #d5d5d5);
+  position: relative;
+  box-shadow:
+    6px 6px 12px rgba(0, 0, 0, 0.15),
+    -6px -6px 12px rgba(255, 255, 255, 0.8),
+    inset 2px 2px 4px rgba(0, 0, 0, 0.1),
+    inset -2px -2px 4px rgba(255, 255, 255, 0.9);
+  animation: ukt-circle-rotate 2s ease-in-out infinite;
+}
+
+.ukt-circle:nth-child(1) { animation-delay: 0s; }
+.ukt-circle:nth-child(2) { animation-delay: 0.2s; }
+.ukt-circle:nth-child(3) { animation-delay: 0.3s; }
+.ukt-circle:nth-child(4) { animation-delay: 0.4s; }
+.ukt-circle:nth-child(5) { animation-delay: 0.5s; }
+.ukt-circle:nth-child(6) { animation-delay: 0.6s; }
+
+.ukt-circle::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 15px;
+  height: 15px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.8), transparent);
+  border-radius: 50%;
+}
+
+@keyframes ukt-circle-rotate {
+  0% {
+    transform: scale(1) rotateZ(0deg);
+    box-shadow:
+      6px 6px 12px rgba(0, 0, 0, 0.15),
+      -6px -6px 12px rgba(255, 255, 255, 0.8),
+      inset 2px 2px 4px rgba(0, 0, 0, 0.1),
+      inset -2px -2px 4px rgba(255, 255, 255, 0.9);
+  }
+  50% {
+    transform: scale(1.2) rotateZ(180deg);
+    box-shadow:
+      8px 8px 16px rgba(0, 0, 0, 0.2),
+      -8px -8px 16px rgba(255, 255, 255, 0.9),
+      inset 3px 3px 6px rgba(0, 0, 0, 0.15),
+      inset -3px -3px 6px rgba(255, 255, 255, 1);
+  }
+  100% {
+    transform: scale(1) rotateZ(360deg);
+    box-shadow:
+      6px 6px 12px rgba(0, 0, 0, 0.15),
+      -6px -6px 12px rgba(255, 255, 255, 0.8),
+      inset 2px 2px 4px rgba(0, 0, 0, 0.1),
+      inset -2px -2px 4px rgba(255, 255, 255, 0.9);
+  }
+}
+
+.ukt-circle-text {
+  position: absolute;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 24px;
+  font-weight: 300;
+  color: #444;
+  letter-spacing: 1px;
+  white-space: nowrap;
+  animation: ukt-circle-blink 1.5s infinite;
+}
+
+@keyframes ukt-circle-blink {
+  0%, 100% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+  50% {
+    opacity: 0.4;
+    transform: translateX(-50%) translateY(-3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ukt-circle,
+  .ukt-circle-text { animation: none; }
+}
+
+/* ─── Shield loader (Payroll / Production Payroll / Settlement / Reports) ──
+   Ported from a styled-components snippet; geometry, dasharrays, timings and
+   keyframes unchanged -only the host moved, because this project has no
+   styled-components.                                                       */
+
+.ukt-shield-svg { overflow: visible; }
+
+.ukt-shield-track {
+  fill: none;
+  stroke: #d0d0d0;
+  stroke-width: 2.5;
+}
+
+.ukt-shield {
+  fill: none;
+  stroke: #4f8cff;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-dasharray: 30 70;
+  animation: ukt-shield-move 2s linear infinite;
+}
+
+/* The coin keeps the lock's pulse -same rhythm, different subject. */
+.ukt-coin {
+  fill: #4f8cff;
+  animation: ukt-lock-pulse 1.5s ease-in-out infinite;
+  transform-origin: 32px 31px;
+}
+
+.ukt-rupee {
+  fill: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  /* An explicit stack: the rupee sign is missing from a few older faces, and
+     a fallback box in the middle of the loader would be very visible. */
+  font-family: "Hanken Grotesk", Inter, "Segoe UI", system-ui, sans-serif;
+  animation: ukt-key-pulse 1.5s ease-in-out infinite;
+}
+
+.ukt-scan {
+  stroke: #4f8cff;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  opacity: 0;
+  animation: ukt-scan 1.8s ease-in-out infinite;
+}
+
+@keyframes ukt-shield-move {
+  from { stroke-dashoffset: 100; }
+  to   { stroke-dashoffset: 0; }
+}
+
+@keyframes ukt-lock-pulse {
+  0%, 100% { opacity: 0.65; transform: scale(1); }
+  50%      { opacity: 1;    transform: scale(1.08); }
+}
+
+@keyframes ukt-key-pulse {
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 1; }
+}
+
+@keyframes ukt-scan {
+  0%   { opacity: 0; transform: translateY(-5px); }
+  20%  { opacity: 1; }
+  80%  { opacity: 1; }
+  100% { opacity: 0; transform: translateY(35px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ukt-shield, .ukt-coin, .ukt-rupee, .ukt-scan { animation: none; }
+  .ukt-shield { stroke-dasharray: none; opacity: 0.5; }
+  .ukt-scan { opacity: 0; }
+}

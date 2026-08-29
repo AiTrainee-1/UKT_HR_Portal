@@ -15,6 +15,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Calendar, Clock, CheckCircle, XCircle, RefreshCw, Bell } from "lucide-react";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 
 type Period = "today" | "week" | "all";
 
@@ -196,14 +197,7 @@ export default function ApprovedRequests() {
         {/* List */}
         <div className="space-y-3">
           {isLoading ? (
-            Array.from({ length: 4 }).map((_, i) => (
-              <Card key={i} className="border-0 shadow-sm">
-                <CardContent className="p-4">
-                  <Skeleton className="h-5 w-40 mb-2" />
-                  <Skeleton className="h-4 w-64" />
-                </CardContent>
-              </Card>
-            ))
+            <CircleLoader texts={["UK Textiles", "Requests", "Loading"]} />
           ) : unified.length === 0 ? (
             <div className="text-center py-16">
               <Bell size={36} className="mx-auto text-gray-200 mb-3" />
