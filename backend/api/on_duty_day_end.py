@@ -33,9 +33,10 @@ def end_stale_on_duty_sessions(for_date: date | None = None) -> dict:
     (default: today). Safe to run repeatedly -_end_on_duty_session is a
     no-op on a session that is already closed."""
     from .geo_attendance_views import PUNCHABLE_STATUSES, _end_on_duty_session
+    from .clock import ist_today
     from .models import Notification, OnDutySession
 
-    d = for_date or date.today()
+    d = for_date or ist_today()
     open_sessions = OnDutySession.objects.select_related("employee").filter(
         status__in=PUNCHABLE_STATUSES,
         employee_ended_at__isnull=True,

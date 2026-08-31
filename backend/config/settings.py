@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -138,6 +139,24 @@ if _sslmode:
 # transparently reconnects if it's gone stale within that window.
 DATABASES["default"]["CONN_MAX_AGE"] = int(os.environ.get("DB_CONN_MAX_AGE", "60"))
 DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
+
+# ── Process clock ────────────────────────────────────────────────────────
+# This codebase records attendance with naive `datetime.now()` / `date.today()`
+# in ~52 places, which read the OPERATING SYSTEM clock. On the old on-premise
+# Windows box that clock was IST, so it was correct by accident. Railway's
+# containers run on UTC, so every geo punch, On-Duty punch, day-end job and
+# payroll period silently shifted 5h30m earlier -a 10:24 punch stored as 04:54.
+#
+# Setting TZ for the process fixes all of them at once, and keeps the naive
+# local-time convention the whole codebase is written against. Editing 52 call
+# sites would leave the next `datetime.now()` anyone adds broken again.
+#
+# Django's own TIME_ZONE stays UTC below: with USE_TZ=True, aware datetimes are
+# still stored and compared in UTC. Only the naive "what time is it here"
+# calls change, which is exactly the set that was wrong.
+os.environ.setdefault("TZ", os.environ.get("SERVER_TIMEZONE", "Asia/Kolkata"))
+if hasattr(time, "tzset"):          # Unix only; Windows has no tzset
+    time.tzset()
 
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"

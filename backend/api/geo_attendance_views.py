@@ -68,6 +68,7 @@ from .auth import get_token_employee_id, is_hr, require_auth, require_hr
 from .biometric_sync import _ingest_punches
 from .branch_scope import get_branch_scope, scope_to_branch
 from .geo_utils import haversine_distance_m
+from .clock import ist_time, ist_today
 from .models import (
     AttendanceLog, DepartmentManager, Employee, LiveLocationPing, Notification,
     OnDutyPunchVerification, OnDutySession,
@@ -249,7 +250,7 @@ def _day_bounds_utc(d: date) -> tuple[datetime, datetime]:
     """UTC-aware [start, end) for the given IST calendar day `d`. This
     server's clock is IST (the project-wide convention -see punch_date/
     punch_time everywhere else), but LiveLocationPing.recorded_at is a real,
-    correct UTC instant (timezone.now(), unlike the naive date.today()/
+    correct UTC instant (timezone.now(), unlike the naive ist_today()/
     datetime.now() used for punch dates) -so building the day boundary
     requires the explicit IST offset rather than a naive date comparison."""
     start_naive = datetime.combine(d, time.min)
@@ -343,7 +344,7 @@ def _current_on_duty_session(emp: Employee) -> OnDutySession | None:
     ).order_by("-created_at").first()
     if live:
         return live
-    today = date.today()
+    today = ist_today()
     return OnDutySession.objects.filter(
         employee=emp, status__in=[OnDutySession.STATUS_COMPLETED, OnDutySession.STATUS_REJECTED],
         created_at__date=today,
@@ -611,7 +612,7 @@ def geo_punch_precheck(request: Request) -> Response:
     radius = branch.geofence_radius_m or DEFAULT_RADIUS_M
     inside = distance <= radius
 
-    today = date.today()
+    today = ist_today()
     punch_num, punch_type = _extra_punch(emp, today)
     active_session = _punchable_on_duty_session(emp)
 
@@ -664,12 +665,11 @@ def geo_punch(request: Request) -> Response:
         return _error("latitude and longitude are required")
     is_mocked = _get_is_mocked(data)
 
-    # Plain stdlib date/datetime, NOT timezone.localdate()/localtime() —
-    # this project runs with settings.TIME_ZONE="UTC" (Django never converts
-    # "local" to anything but UTC), while every other punch-ingestion path
-    # relies on the SERVER MACHINE's OS clock already being set to IST.
-    today = date.today()
-    now_time = datetime.now().time().replace(microsecond=0)
+    # ist_* rather than date.today()/datetime.now(): those read the OS
+    # clock, which is IST on the old on-premise box but UTC on Railway —
+    # storing a 10:24 punch as 04:54. See api/clock.py.
+    today = ist_today()
+    now_time = ist_time()
     # Uncapped on purpose: every punch an employee makes on-premises is worth
     # keeping, even past the fourth. The geofence below is what this endpoint
     # actually enforces -a punch is refused for being in the wrong PLACE,
@@ -808,7 +808,7 @@ def on_duty_session_status(request: Request) -> Response:
         # All four slots, each either filled or offering "add my punch" —
         # the app renders one row per slot rather than a single next-punch
         # button, so a missed punch never blocks the ones after it.
-        "punchSlots": _slot_dicts(emp, date.today()),
+        "punchSlots": _slot_dicts(emp, ist_today()),
     })
 
 
@@ -855,8 +855,8 @@ def on_duty_punch_request(request: Request) -> Response:
     if photo.size > MAX_PHOTO_BYTES:
         return _error(f"Photo is too large ({photo.size / 1024 / 1024:.1f}MB) -the limit is 8MB")
 
-    today = date.today()
-    now_time = datetime.now().time().replace(microsecond=0)
+    today = ist_today()
+    now_time = ist_time()
 
     taken = _taken_slots(emp, today)
     available = [n for n in ON_DUTY_SLOTS if n not in taken]
@@ -926,7 +926,7 @@ def geo_punch_status(request: Request) -> Response:
         return _error("Employee authentication required", 403)
 
     date_str = request.query_params.get("date")
-    d = date.today()
+    d = ist_today()
     if date_str:
         try:
             d = datetime.fromisoformat(date_str).date()
@@ -1238,7 +1238,7 @@ def live_location_route(request: Request, employee_id: int) -> Response:
         return _error("Employee not found", 404)
 
     date_str = request.query_params.get("date")
-    d = date.today()
+    d = ist_today()
     if date_str:
         try:
             d = datetime.fromisoformat(date_str).date()
@@ -1272,7 +1272,7 @@ def on_duty_map(request: Request) -> Response:
     (if location tracking is enabled), today's route points, and their
     session + punch-verification status, for the dedicated On-Duty Map tab."""
     date_str = request.query_params.get("date")
-    d = date.today()
+    d = ist_today()
     if date_str:
         try:
             d = datetime.fromisoformat(date_str).date()
