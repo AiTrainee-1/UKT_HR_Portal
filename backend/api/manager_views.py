@@ -5,6 +5,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import require_hr, require_auth, get_token_employee_id
+from .branch_scope import scope_to_branch
 from .models import (
     Employee, Department,
     DepartmentManager, ManagerDepartmentAssignment, ManagerEmployeeAssignment,
@@ -85,12 +86,15 @@ def department_managers(request: Request) -> Response:
         qs = DepartmentManager.objects.select_related(
             "employee__department", "employee__designation"
         ).prefetch_related("department_assignments", "employee_assignments").order_by("-created_at")
+        # An HOD is an employee, so they belong to that employee's branch.
+        # Each branch runs its own heads and its own approval chain.
+        qs = scope_to_branch(qs, request, field="employee__branch_id")
         return Response([_manager_json(m) for m in qs])
 
     data = request.data
     emp_id = None
     if code := data.get("employeeCode") or data.get("employee_code"):
-        found = Employee.objects.filter(employee_code=code).first()
+        found = scope_to_branch(Employee.objects, request).filter(employee_code=code).first()
         if not found:
             return Response({"error": f"Employee with code '{code}' not found"}, status=404)
         emp_id = found.id
@@ -100,7 +104,11 @@ def department_managers(request: Request) -> Response:
         return Response({"error": "employeeCode or employeeId is required"}, status=400)
 
     try:
-        emp = Employee.objects.select_related("department", "designation").get(pk=emp_id)
+        # Scoped: a branch admin cannot promote another branch's employee
+        # into an HOD they would then be unable to see or manage.
+        emp = scope_to_branch(
+            Employee.objects.select_related("department", "designation"), request
+        ).get(pk=emp_id)
     except Employee.DoesNotExist:
         return Response({"error": "Employee not found"}, status=404)
 
@@ -125,7 +133,9 @@ def department_managers(request: Request) -> Response:
 @require_hr
 def department_manager_detail(request: Request, pk: int) -> Response:
     try:
-        m = DepartmentManager.objects.select_related(
+        m = scope_to_branch(
+            DepartmentManager.objects, request, field="employee__branch_id"
+        ).select_related(
             "employee__department", "employee__designation"
         ).prefetch_related(
             "department_assignments__department",
@@ -182,7 +192,9 @@ def department_manager_detail(request: Request, pk: int) -> Response:
 @require_hr
 def manager_department_assignments(request: Request, pk: int) -> Response:
     try:
-        m = DepartmentManager.objects.get(pk=pk)
+        m = scope_to_branch(
+            DepartmentManager.objects, request, field="employee__branch_id"
+        ).get(pk=pk)
     except DepartmentManager.DoesNotExist:
         return Response({"error": "Manager not found"}, status=404)
 
@@ -191,7 +203,7 @@ def manager_department_assignments(request: Request, pk: int) -> Response:
         if not dept_id:
             return Response({"error": "departmentId is required"}, status=400)
         try:
-            dept = Department.objects.get(pk=dept_id)
+            dept = scope_to_branch(Department.objects, request).get(pk=dept_id)
         except Department.DoesNotExist:
             return Response({"error": "Department not found"}, status=404)
         _, created = ManagerDepartmentAssignment.objects.get_or_create(manager=m, department=dept)
@@ -214,21 +226,23 @@ def manager_department_assignments(request: Request, pk: int) -> Response:
 @require_hr
 def manager_employee_assignments(request: Request, pk: int) -> Response:
     try:
-        m = DepartmentManager.objects.get(pk=pk)
+        m = scope_to_branch(
+            DepartmentManager.objects, request, field="employee__branch_id"
+        ).get(pk=pk)
     except DepartmentManager.DoesNotExist:
         return Response({"error": "Manager not found"}, status=404)
 
     if request.method == "POST":
         emp_id = None
         if code := request.data.get("employeeCode") or request.data.get("employee_code"):
-            found = Employee.objects.filter(employee_code=code).first()
+            found = scope_to_branch(Employee.objects, request).filter(employee_code=code).first()
             emp_id = found.id if found else None
         if not emp_id:
             emp_id = request.data.get("employeeId") or request.data.get("employee_id")
         if not emp_id:
             return Response({"error": "employeeCode or employeeId is required"}, status=400)
         try:
-            emp = Employee.objects.get(pk=emp_id)
+            emp = scope_to_branch(Employee.objects, request).get(pk=emp_id)
         except Employee.DoesNotExist:
             return Response({"error": "Employee not found"}, status=404)
         _, created = ManagerEmployeeAssignment.objects.get_or_create(manager=m, employee=emp)
@@ -256,7 +270,9 @@ def manager_me(request: Request) -> Response:
         return Response({"error": "Employee authentication required"}, status=403)
 
     try:
-        m = DepartmentManager.objects.select_related(
+        m = scope_to_branch(
+            DepartmentManager.objects, request, field="employee__branch_id"
+        ).select_related(
             "employee__department", "employee__designation"
         ).prefetch_related(
             "department_assignments__department",

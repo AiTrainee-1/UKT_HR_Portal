@@ -8,7 +8,8 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from .auth import require_hr, require_super_admin
+from .auth import is_master_admin, require_hr, require_master_admin, require_super_admin
+from .branch_scope import scope_to_branch
 from .models import HRUser, Role, AuditLog
 from .audit_utils import log_action
 
@@ -38,6 +39,8 @@ def hr_user_json(u):
         "branchName": u.branch.name if u.branch else None,
         "isActive": u.is_active,
         "isSuperAdmin": u.is_super_admin,
+        "isHidden": u.is_hidden,
+        "masterFeatures": u.master_features or {},
         "lastLogin": u.last_login.isoformat() if u.last_login else None,
         "createdAt": u.created_at.isoformat() if u.created_at else None,
     }
@@ -121,6 +124,21 @@ def role_detail(request: Request, pk: int) -> Response:
 def hr_users(request: Request) -> Response:
     if request.method == "GET":
         qs = HRUser.objects.select_related("role", "department", "branch").order_by("username")
+
+        # Hidden accounts are withheld from the normal Account Management
+        # list. includeHidden is honoured ONLY for the master admin -a plain
+        # super admin passing the flag by hand still gets the filtered list,
+        # otherwise hiding would be trivially bypassable from the URL bar.
+        wants_hidden = request.query_params.get("includeHidden") == "1"
+        requester = HRUser.objects.filter(id=request.jwt_user.get("hrUserId")).first()
+        if not (wants_hidden and is_master_admin(requester)):
+            qs = qs.filter(is_hidden=False)
+
+        # HRUser carries its own branch, so scope on it directly. A branch
+        # admin manages their branch's logins; accounts with no branch are
+        # unscoped admins and stay visible only to other unscoped admins.
+        qs = scope_to_branch(qs, request, field="branch_id")
+
         return Response([hr_user_json(u) for u in qs])
 
     data = request.data
@@ -178,6 +196,80 @@ def hr_user_detail(request: Request, pk: int) -> Response:
 
 # ── Audit Logs ────────────────────────────────────────────────────────────────
 
+#: Capability keys the master page may grant. Declared explicitly so a typo
+#: in the request body is a 400 rather than a junk key nobody ever reads
+#: again. "co" is reserved now and carries no behaviour yet -nothing in the
+#: app checks it, so toggling it is safe and inert until a feature claims it.
+MASTER_FEATURE_KEYS = {"co"}
+
+
+@api_view(["GET"])
+@require_master_admin
+def master_hr_users(request: Request) -> Response:
+    """Every account, hidden ones included -the master page's list.
+
+    A separate endpoint from `hr_users` purely so the stricter guard is
+    structural rather than a query parameter someone can forget to check.
+    """
+    qs = HRUser.objects.select_related("role", "department", "branch").order_by("username")
+    return Response([hr_user_json(u) for u in qs])
+
+
+@api_view(["PATCH"])
+@require_master_admin
+def master_hr_user_flags(request: Request, pk: int) -> Response:
+    """Body: { isHidden?: bool, features?: { co?: bool } }
+
+    The ONLY writer of is_hidden / master_features. Deliberately cannot touch
+    is_active, role, branch or password -those stay on the normal Account
+    Management page, so this route can never become a second way to
+    administer users.
+    """
+    user = HRUser.objects.select_related("role", "department", "branch").filter(pk=pk).first()
+    if not user:
+        return Response({"error": "User not found"}, status=404)
+
+    changes = []
+    fields = []
+
+    if "isHidden" in request.data:
+        # Self-hiding is allowed on purpose: hiding the admin account from
+        # the list other super admins see is a real use for this page, and
+        # it is always recoverable -the master list shows hidden accounts.
+        user.is_hidden = bool(request.data["isHidden"])
+        fields.append("is_hidden")
+        changes.append("hidden" if user.is_hidden else "visible")
+
+    features = request.data.get("features")
+    if features is not None:
+        if not isinstance(features, dict):
+            return Response({"error": "features must be an object"}, status=400)
+        unknown = set(features) - MASTER_FEATURE_KEYS
+        if unknown:
+            return Response(
+                {"error": f"Unknown feature key(s): {', '.join(sorted(unknown))}"}, status=400
+            )
+        merged = dict(user.master_features or {})
+        for key, value in features.items():
+            merged[key] = bool(value)
+            changes.append(f"{key.upper()}={'on' if merged[key] else 'off'}")
+        user.master_features = merged
+        fields.append("master_features")
+
+    if not fields:
+        return Response({"error": "Nothing to update"}, status=400)
+
+    user.save(update_fields=fields + ["updated_at"])
+
+    # Logged like any other account change -a hidden account must stay just
+    # as traceable as a visible one, or this page becomes a blind spot.
+    log_action(
+        request, "update", "user_management", record_id=user.id,
+        description=f"Master: {user.username} -> {', '.join(changes)}",
+    )
+    return Response(hr_user_json(user))
+
+
 @api_view(["GET"])
 @require_hr
 def audit_logs(request: Request) -> Response:
@@ -189,7 +281,10 @@ def audit_logs(request: Request) -> Response:
     page = int(request.query_params.get("page", 1))
     page_size = int(request.query_params.get("pageSize", 50))
 
-    qs = AuditLog.objects.order_by("-created_at")
+    # Rows written before AuditLog gained a branch are null and stay
+    # admin-only -see the model. Everything written from now on carries the
+    # acting user's branch, so a branch admin sees their own unit's trail.
+    qs = scope_to_branch(AuditLog.objects, request, field="branch_id").order_by("-created_at")
     if module:
         qs = qs.filter(module=module)
     if action:
@@ -219,7 +314,9 @@ def audit_logs_stats(request: Request) -> Response:
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=now.weekday())
 
-    all_logs = AuditLog.objects.all()
+    # Same scope as the log list itself -otherwise the KPI cards above
+    # the table would count rows the table below cannot show.
+    all_logs = scope_to_branch(AuditLog.objects, request, field="branch_id")
     today_count = all_logs.filter(created_at__gte=today_start).count()
     week_count = all_logs.filter(created_at__gte=week_start).count()
     total_count = all_logs.count()

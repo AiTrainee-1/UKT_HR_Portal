@@ -124,6 +124,11 @@ export type HrUserItem = {
   branchName?: string | null;
   isActive: boolean;
   isSuperAdmin: boolean;
+  /** Hidden from the Account Management list. Purely presentational -a
+   *  hidden account still logs in and keeps every permission. */
+  isHidden?: boolean;
+  /** Per-account capability grants, e.g. { co: true }. */
+  masterFeatures?: Record<string, boolean>;
   lastLogin?: string | null;
   createdAt?: string | null;
 };
@@ -162,6 +167,7 @@ export const getListAdvancesQueryKey = (params?: Record<string, string>) =>
   ["/api/advances", params] as const;
 export const getListRolesQueryKey = () => ["/api/roles"] as const;
 export const getListHrUsersQueryKey = () => ["/api/hr-users"] as const;
+export const getMasterHrUsersQueryKey = () => ["/api/hr-users/master"] as const;
 export const getListAuditLogsQueryKey = (params?: Record<string, string | number>) =>
   ["/api/audit-logs", params] as const;
 export const getSearchEmployeesQueryKey = (search: string) =>
@@ -526,6 +532,36 @@ export const useDeleteHrUser = () =>
   useMutation({
     mutationFn: (id: number) =>
       customFetch<void>(`/api/hr-users/${id}`, { method: "DELETE" }),
+  });
+
+// ── Account Management → Master ───────────────────────────────────────────────
+// Restricted to the single ADMIN_USERNAME account; the backend returns 403 for
+// anyone else, including other super admins.
+
+export const useMasterHrUsers = <TData = HrUserItem[]>(
+  options?: Omit<UseQueryOptions<HrUserItem[], unknown, TData>, "queryKey" | "queryFn">,
+) =>
+  useQuery<HrUserItem[], unknown, TData>({
+    queryKey: getMasterHrUsersQueryKey(),
+    queryFn: () => customFetch<HrUserItem[]>("/api/hr-users/master"),
+    ...options,
+  });
+
+/** Toggles is_hidden / master_features only -never role, branch or password. */
+export const useUpdateMasterFlags = () =>
+  useMutation({
+    mutationFn: ({
+      id,
+      ...data
+    }: {
+      id: number;
+      isHidden?: boolean;
+      features?: Record<string, boolean>;
+    }) =>
+      customFetch<HrUserItem>(`/api/hr-users/${id}/master-flags`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
   });
 
 // ── Audit Logs ────────────────────────────────────────────────────────────────

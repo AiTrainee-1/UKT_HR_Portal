@@ -12,6 +12,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import require_hr, require_auth, get_token_employee_id
+from .user_settings import settings_for
 from .branch_scope import get_branch_scope, scope_to_branch
 from .geo_attendance_views import source_label
 from .models import (
@@ -228,7 +229,7 @@ def attendance_company_summary(request: Request) -> Response:
     employees = list(employees_qs)
     emp_ids = [e.id for e in employees]
 
-    ps = PayrollSettings.get()
+    ps = settings_for(request)
     prod_config = ProductionShiftConfig.get()
     prod_segments = list(ProductionShiftSegment.objects.filter(is_active=True))
     leave_ids_today = _leave_ids(d)
@@ -797,7 +798,9 @@ def manual_attendance(request: Request) -> Response:
         return Response({"error": "employeeId and date are required"}, status=400)
 
     try:
-        emp = Employee.objects.get(pk=emp_id)
+        # Scoped: this writes attendance, which feeds payroll. Unscoped, a
+        # branch user could post a day for another branch's employee.
+        emp = scope_to_branch(Employee.objects, request).get(pk=emp_id)
     except Employee.DoesNotExist:
         return Response({"error": "Employee not found"}, status=404)
 
@@ -1169,7 +1172,7 @@ def attendance_report_log(request: Request) -> Response:
     from .attendance_final import compute_month_records, month_summary_from_records
     from .shift_engine import _get_shift_for_date
 
-    settings = PayrollSettings.get()
+    settings = settings_for(request)
     month_param = request.query_params.get("month")
     year_param = request.query_params.get("year")
     emp_id_param = request.query_params.get("employeeId")
@@ -1546,13 +1549,17 @@ def compute_shift_logs(request: Request) -> Response:
         days_in_month = cal.monthrange(y, m)[1]
         today_d = _today()
 
-        emp_qs = Employee.objects.filter(status="active", employment_type="staff")
+        # Scoped: this recomputes and persists shift logs, so an unscoped
+        # queryset let a branch user rewrite every other branch's records.
+        emp_qs = scope_to_branch(Employee.objects, request).filter(
+            status="active", employment_type="staff"
+        )
         if emp_id_param:
             emp_qs = emp_qs.filter(pk=emp_id_param)
 
         emps = list(emp_qs)
         total_computed = 0
-        payroll_settings = PayrollSettings.get()
+        payroll_settings = settings_for(request)
 
         # One query for the whole month (+1 day padding each side, for
         # cross-midnight punch reattribution's neighbor-day lookups) instead

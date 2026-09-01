@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from .auth import require_hr, require_auth, get_token_employee_id, is_hr
-from .branch_scope import scope_to_branch
+from .branch_scope import get_branch_scope, scope_to_branch
 from .models import ShiftTemplate, EmployeeShiftAssignment, Employee, Department
 
 
@@ -23,12 +23,18 @@ def auto_assign_production_shift(emp: Employee, effective_from: Optional[date] =
     if EmployeeShiftAssignment.objects.filter(employee=emp, effective_to__isnull=True).exists():
         return False
 
+    # Now that templates carry a branch, pick from the employee's OWN branch
+    # first -otherwise a new Unit1 joiner could silently inherit Head
+    # Office's timings, and their attendance would be graded against the
+    # wrong shift. Unbranched templates are the fallback so employees added
+    # before any per-branch shift exists still get one.
+    base = ShiftTemplate.objects.filter(shift_type="production", is_active=True)
     shift = (
-        ShiftTemplate.objects
-        .filter(shift_type="production", is_active=True)
-        .order_by("-is_default", "id")
-        .first()
+        base.filter(branch_id=emp.branch_id).order_by("-is_default", "id").first()
+        if emp.branch_id else None
     )
+    if shift is None:
+        shift = base.filter(branch__isnull=True).order_by("-is_default", "id").first()
     if not shift:
         return False
 
@@ -114,7 +120,11 @@ def shift_templates(request: Request) -> Response:
     if request.method == "GET":
         shift_type = request.query_params.get("shiftType")
         dept_id = request.query_params.get("departmentId")
-        qs = ShiftTemplate.objects.select_related("department").order_by("shift_type", "name")
+        # Shifts are per branch now. A branch admin manages only their
+        # own; templates predating the branch column are admin-only.
+        qs = scope_to_branch(
+            ShiftTemplate.objects, request, field="branch_id"
+        ).select_related("department").order_by("shift_type", "name")
         if shift_type:
             qs = qs.filter(shift_type=shift_type)
         if dept_id:
@@ -128,7 +138,10 @@ def shift_templates(request: Request) -> Response:
             return Response({"error": f"{field} is required"}, status=400)
 
     first_half_end_raw = data.get("firstHalfEnd")
+    # Stamped from the creator, so a branch admin's new shift is theirs and
+    # an unscoped admin creates a template no branch owns until assigned.
     shift = ShiftTemplate.objects.create(
+        branch_id=get_branch_scope(request),
         name=data["name"],
         shift_type=data["shiftType"],
         start_time=data["startTime"],
@@ -150,7 +163,9 @@ def shift_templates(request: Request) -> Response:
 @require_hr
 def shift_template_detail(request: Request, pk: int) -> Response:
     try:
-        shift = ShiftTemplate.objects.select_related("department").get(pk=pk)
+        shift = scope_to_branch(
+            ShiftTemplate.objects, request, field="branch_id"
+        ).select_related("department").get(pk=pk)
     except ShiftTemplate.DoesNotExist:
         return Response({"error": "Shift not found"}, status=404)
 
@@ -219,7 +234,9 @@ def shift_assignments(request: Request) -> Response:
 
     try:
         emp = scope_to_branch(Employee.objects, request).get(pk=data["employeeId"])
-        shift = ShiftTemplate.objects.get(pk=data["shiftId"])
+        shift = scope_to_branch(
+            ShiftTemplate.objects, request, field="branch_id"
+        ).get(pk=data["shiftId"])
     except (Employee.DoesNotExist, ShiftTemplate.DoesNotExist) as e:
         return Response({"error": str(e)}, status=404)
 
@@ -263,7 +280,9 @@ def bulk_shift_assignments(request: Request) -> Response:
         return Response({"error": "shiftId and effectiveFrom are required"}, status=400)
 
     try:
-        shift = ShiftTemplate.objects.get(pk=shift_id)
+        shift = scope_to_branch(
+            ShiftTemplate.objects, request, field="branch_id"
+        ).get(pk=shift_id)
     except ShiftTemplate.DoesNotExist:
         return Response({"error": "Shift not found"}, status=404)
 

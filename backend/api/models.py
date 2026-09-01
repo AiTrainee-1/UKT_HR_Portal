@@ -43,7 +43,12 @@ class Branch(models.Model):
 
 
 class Department(models.Model):
-    name = models.TextField(unique=True)
+    # Unique per BRANCH, not globally: two branches each legitimately run
+    # their own ADMIN / CUTTING / PRODUCTION department, and under branch
+    # isolation they are separate rows with separate staff. A global unique
+    # name would force one branch to rename its department to something
+    # nobody calls it.
+    name = models.TextField()
     description = models.TextField(null=True, blank=True)
     branch = models.ForeignKey(
         Branch, on_delete=models.SET_NULL, null=True, blank=True,
@@ -53,6 +58,11 @@ class Department(models.Model):
 
     class Meta:
         db_table = "departments"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["name", "branch"], name="uniq_department_name_per_branch",
+            ),
+        ]
 
 
 class Designation(models.Model):
@@ -188,6 +198,14 @@ class ShiftTemplate(models.Model):
     ]
 
     name = models.TextField()
+    # Each branch runs its own shifts -timings differ by unit, so a shared
+    # template list meant one branch's edit silently changed another's
+    # attendance. Nullable: templates that predate this column belong to no
+    # branch and are visible to unscoped admins only.
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="branch_id", related_name="shift_templates",
+    )
     shift_type = models.TextField(choices=SHIFT_TYPES, default=SHIFT_TYPE_STAFF, db_column="shift_type")
     start_time = models.TimeField(db_column="start_time")
     end_time = models.TimeField(db_column="end_time")
@@ -625,6 +643,24 @@ class HRUser(models.Model):
     )
     is_active = models.BooleanField(default=True, db_column="is_active")
     is_super_admin = models.BooleanField(default=False, db_column="is_super_admin")
+
+    # ── Master-page controls (Account Management → Master) ────────────────
+    # Presentation only. NOTHING in authentication, permissions or branch
+    # scoping may ever read these -a hidden account logs in, carries its
+    # role, and is audited exactly like a visible one. Hiding removes an
+    # account from the Account Management list, nothing more.
+    is_hidden = models.BooleanField(
+        default=False, db_column="is_hidden",
+        help_text="Hide from the Account Management list. Does NOT disable the account.",
+    )
+    #: Per-account capability grants, {feature_key: bool} -e.g. {"co": true}.
+    #: Grant-only by design: these may ADD a capability the user's Role does
+    #: not give, never remove one it does, so Role.permissions stays the
+    #: single place that explains why something is unavailable.
+    master_features = models.JSONField(
+        default=dict, blank=True, db_column="master_features",
+    )
+
     last_login = models.DateTimeField(null=True, blank=True, db_column="last_login")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
@@ -677,6 +713,15 @@ class AuditLog(models.Model):
 
     user_type = models.TextField(default="hr", db_column="user_type")  # hr/employee/erp
     user_id = models.IntegerField(null=True, blank=True, db_column="user_id")
+    # Stamped from the acting user's branch at write time. AuditLog has no
+    # other foreign key -user_id is a bare integer -so there is no way to
+    # derive the branch later. Rows written before this column stay null and
+    # are visible to unscoped admins only; they cannot be attributed
+    # honestly after the fact, and guessing would corrupt an audit trail.
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="branch_id", related_name="audit_logs",
+    )
     user_name = models.TextField(db_column="user_name")
     action = models.TextField(choices=ACTION_CHOICES)
     module = models.TextField()  # employees, payroll, leave, etc.
@@ -1547,6 +1592,46 @@ class PayrollSettings(models.Model):
         return obj
 
 
+class BranchSettingsOverride(models.Model):
+    """One BRANCH's Settings, layered over the universal row.
+
+    Keyed on Branch rather than on the login, because a branch can have
+    several credentials -different people, or just different ways in -and
+    they must all see and compute with the same numbers. Two logins on one
+    unit disagreeing about the PF rate would mean the same employee's salary
+    depended on who pressed Generate.
+
+    Admins edit PayrollSettings (pk=1) itself, so their saves are universal
+    and become every branch's default. A branch stores only the fields it has
+    actually changed, so anything it leaves alone keeps tracking the
+    universal value and picks up the Admin's later edits automatically.
+
+    Stored as a JSON field name -> value map rather than ~90 nullable mirror
+    columns, so adding a setting to PayrollSettings needs no migration here.
+
+    Resolution differs by purpose, and the distinction matters:
+      * the Settings PAGE resolves from the logged-in user's branch;
+      * payroll and attendance resolve from the EMPLOYEE's branch, so a run
+        started from the Admin page produces exactly what the branch login
+        would have produced.
+    Engine and background paths (attendance_final, shift_engine, night_shift,
+    backup_scheduler) have neither, and read the universal row.
+    """
+    branch = models.OneToOneField(
+        "Branch", on_delete=models.CASCADE,
+        db_column="branch_id", related_name="settings_override",
+    )
+    #: {model_field_name: value} -only the fields this branch has changed.
+    overrides = models.JSONField(default=dict, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "branch_settings_overrides"
+
+    def __str__(self):
+        return f"Settings override for branch {self.branch_id} ({len(self.overrides or {})} fields)"
+
+
 class SalaryRecord(models.Model):
     employee = models.ForeignKey(
         Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="salary_records"
@@ -2400,6 +2485,14 @@ class ChatChannel(models.Model):
         Department, on_delete=models.CASCADE, null=True, blank=True,
         db_column="department_id", related_name="chat_channels",
     )
+    # A department channel could reach a branch through its department, but a
+    # COMPANY channel has no department at all -so the branch lives here, on
+    # the channel, and one column answers it for both kinds. Each branch gets
+    # its own company-wide channel; staff in one unit do not read another's.
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, null=True, blank=True,
+        db_column="branch_id", related_name="chat_channels",
+    )
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
 
     class Meta:
@@ -2409,16 +2502,49 @@ class ChatChannel(models.Model):
                 fields=["department"], condition=Q(channel_type="department"),
                 name="unique_department_chat_channel",
             ),
+            # One company channel PER BRANCH. Postgres treats NULLs as
+            # distinct in a unique index, so the pre-branch channel
+            # (branch=None) is covered by the second constraint below.
+            models.UniqueConstraint(
+                fields=["branch"], condition=Q(channel_type="company"),
+                name="unique_company_chat_channel_per_branch",
+            ),
+            models.UniqueConstraint(
+                fields=["channel_type"],
+                condition=Q(channel_type="company", branch__isnull=True),
+                name="unique_legacy_company_chat_channel",
+            ),
         ]
 
     @classmethod
-    def get_company_channel(cls) -> "ChatChannel":
-        obj, _ = cls.objects.get_or_create(channel_type=cls.CHANNEL_COMPANY, department=None)
+    def get_company_channel(cls, branch_id=None) -> "ChatChannel":
+        """The company-wide channel for one branch.
+
+        branch_id=None returns the pre-branch channel, which is what an
+        unscoped admin sees and where every message written before branch
+        isolation still lives.
+        """
+        obj, _ = cls.objects.get_or_create(
+            channel_type=cls.CHANNEL_COMPANY, department=None, branch_id=branch_id,
+        )
         return obj
 
     @classmethod
     def get_department_channel(cls, department: "Department") -> "ChatChannel":
-        obj, _ = cls.objects.get_or_create(channel_type=cls.CHANNEL_DEPARTMENT, department=department)
+        """A department's channel, stamped with that department's branch.
+
+        The branch is derived rather than passed: a department belongs to
+        exactly one branch, so its channel cannot belong to another. Kept in
+        sync on every call so a department moved between branches takes its
+        channel with it.
+        """
+        obj, created = cls.objects.get_or_create(
+            channel_type=cls.CHANNEL_DEPARTMENT, department=department,
+            defaults={"branch_id": department.branch_id},
+        )
+        if not created and obj.branch_id != department.branch_id:
+            obj.branch_id = department.branch_id
+            obj.save(update_fields=["branch"])
         return obj
 
 

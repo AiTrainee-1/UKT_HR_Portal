@@ -10,6 +10,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import require_hr, require_auth, get_token_employee_id
+from .user_settings import settings_for
 from .branch_scope import get_branch_scope, scope_to_branch
 from .models import SalarySlip, PayrollSettings, LeaveBalance
 
@@ -148,7 +149,7 @@ def _filtered_slip_qs(request: Request, params=None):
 def salary_slips(request: Request) -> Response:
     qs = _filtered_slip_qs(request)
 
-    ps = PayrollSettings.get()
+    ps = settings_for(request)
     settings_data = {
         "slipCompanyName":    ps.slip_company_name,
         "slipCompanyAddress": ps.slip_company_address,
@@ -270,7 +271,7 @@ def email_salary_slip(request: Request, pk: int) -> Response:
     except SalarySlip.DoesNotExist:
         return Response({"error": "Slip not found"}, status=404)
 
-    ps = PayrollSettings.get()
+    ps = settings_for(request)
     if not ps.smtp_host or not ps.smtp_username or not ps.smtp_password:
         return Response({"error": "SMTP settings not configured. Please save SMTP settings first."}, status=400)
 
@@ -410,7 +411,7 @@ def salary_slip_bulk_email(request: Request) -> Response:
     if not slips:
         return Response({"error": "No salary slips match the selected filters"}, status=404)
 
-    ps = PayrollSettings.get()
+    ps = settings_for(request)
     if not ps.smtp_host or not ps.smtp_username or not ps.smtp_password:
         return Response({"error": "SMTP settings not configured. Please save SMTP settings first."}, status=400)
 

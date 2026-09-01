@@ -60,6 +60,56 @@ def require_hr(view_func):
     return wrapper
 
 
+def is_master_admin(hr_user) -> bool:
+    """Is this the ONE designated admin account?
+
+    Deliberately narrower than `is_super_admin`: several people can be super
+    admins, but only the account named by ADMIN_USERNAME in .env -the same
+    account apps.py bootstraps -may reach Account Management → Master. That
+    page can hide accounts from every other admin, so "any super admin" would
+    make hiding purely cosmetic between them.
+
+    Fails CLOSED when ADMIN_USERNAME is unset: no master admin exists rather
+    than silently widening to all super admins. The 403 says so explicitly.
+
+    Matched case-insensitively to agree with the bootstrap in apps.py, which
+    looks the account up with username__iexact.
+    """
+    from django.conf import settings
+
+    admin_username = (getattr(settings, "ADMIN_USERNAME", "") or "").strip()
+    if not admin_username or hr_user is None:
+        return False
+    return (
+        hr_user.is_active
+        and hr_user.is_super_admin
+        and hr_user.username.strip().lower() == admin_username.lower()
+    )
+
+
+def require_master_admin(view_func):
+    """Restrict a view to the single ADMIN_USERNAME account -see is_master_admin."""
+
+    @wraps(view_func)
+    @require_hr
+    def wrapper(request: Request, *args, **kwargs):
+        from django.conf import settings
+
+        from .models import HRUser
+
+        hr_user = HRUser.objects.filter(id=request.jwt_user.get("hrUserId")).first()
+        if not is_master_admin(hr_user):
+            if not (getattr(settings, "ADMIN_USERNAME", "") or "").strip():
+                return Response(
+                    {"error": "No master admin is configured -set ADMIN_USERNAME in .env"},
+                    status=403,
+                )
+            return Response({"error": "Master administrator access required"}, status=403)
+        return view_func(request, *args, **kwargs)
+
+    return wrapper
+
+
 def require_super_admin(view_func):
     """
     Gates the Account Management endpoints (roles, hr-users) -the control

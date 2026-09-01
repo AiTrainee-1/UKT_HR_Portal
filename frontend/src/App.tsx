@@ -63,6 +63,7 @@ import Reports from "@/pages/hr/Reports";
 import UserManagement from "@/pages/hr/UserManagement";
 import ManagerDetail from "@/pages/hr/ManagerDetail";
 import AccountManagement from "@/pages/hr/AccountManagement";
+import AccountManagementMaster from "@/pages/hr/AccountManagementMaster";
 import ActivityLogs from "@/pages/hr/ActivityLogs";
 import LoginDevices from "@/pages/hr/LoginDevices";
 import MobileAppLogin from "@/pages/hr/MobileAppLogin";
@@ -160,6 +161,15 @@ function ProtectedRoute({
   // Account Management is admin-only, independent of Role.permissions.
   if (location.startsWith("/hr/account-management") && !user.isSuperAdmin) {
     navigate("/hr/dashboard");
+    return null;
+  }
+
+  // ...and its Master page is narrower still: the single ADMIN_USERNAME
+  // account, not every super admin. Hiding an account would be pointless if
+  // any other admin could come here and unhide it. The API enforces the same
+  // rule (auth.require_master_admin) -this only avoids a dead page.
+  if (location.startsWith("/hr/account-management/master") && !user.isMasterAdmin) {
+    navigate("/hr/account-management");
     return null;
   }
 
@@ -296,6 +306,9 @@ function Router() {
       </Route>
       <Route path="/hr/user-management/:id">
         {() => <ProtectedRoute component={ManagerDetail} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/account-management/master">
+        {() => <ProtectedRoute component={AccountManagementMaster} allowedRoles={["hr"]} />}
       </Route>
       <Route path="/hr/account-management">
         {() => <ProtectedRoute component={AccountManagement} allowedRoles={["hr"]} />}

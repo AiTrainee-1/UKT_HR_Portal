@@ -4,6 +4,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import require_hr
+from .branch_scope import get_branch_scope, scope_to_branch
 from .models import Branch, Designation, Department
 
 
@@ -113,6 +114,11 @@ def designations(request: Request) -> Response:
         qs = Designation.objects.select_related("department").annotate(
             employee_count=Count("employees", filter=Q(employees__status="active"))
         ).order_by("title")
+        # Designation has no branch of its own -it inherits one from its
+        # department. A designation with no department therefore belongs to
+        # no branch and is admin-only, which is the strict-isolation rule
+        # applied consistently rather than a special case for this page.
+        qs = scope_to_branch(qs, request, field="department__branch_id")
         if dept_id:
             qs = qs.filter(department_id=dept_id)
         return Response([designation_json(d, d.employee_count) for d in qs])
@@ -121,9 +127,22 @@ def designations(request: Request) -> Response:
     if not data.get("title"):
         return Response({"error": "title is required"}, status=400)
 
+    # A branch user may only file a designation under one of their own
+    # departments -otherwise they could plant a row in another branch that
+    # they then cannot see, and that branch never asked for.
+    dept_id = data.get("departmentId")
+    if get_branch_scope(request) is not None:
+        if not dept_id:
+            return Response(
+                {"error": "Select a department -a designation must belong to one"},
+                status=400,
+            )
+        if not scope_to_branch(Department.objects, request).filter(pk=dept_id).exists():
+            return Response({"error": "Department not found"}, status=404)
+
     d = Designation.objects.create(
         title=data["title"],
-        department_id=data.get("departmentId"),
+        department_id=dept_id,
         level=data.get("level", "staff"),
     )
     return Response(designation_json(d), status=201)
@@ -133,8 +152,13 @@ def designations(request: Request) -> Response:
 @require_hr
 def designation_detail(request: Request, pk: int) -> Response:
     try:
-        d = Designation.objects.select_related("department").get(pk=pk)
+        d = scope_to_branch(
+            Designation.objects.select_related("department"),
+            request, field="department__branch_id",
+        ).get(pk=pk)
     except Designation.DoesNotExist:
+        # Scoped out and genuinely missing are the same 404 on purpose -a
+        # different message would confirm the row exists in another branch.
         return Response({"error": "Designation not found"}, status=404)
 
     if request.method == "GET":

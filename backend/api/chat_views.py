@@ -18,6 +18,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import require_auth, get_token_employee_id, is_hr
+from .branch_scope import get_branch_scope
 from .models import ChatChannel, ChatMessage, ChatReaction, Employee
 
 
@@ -93,10 +94,17 @@ def chat_channels(request: Request) -> Response:
     emp = _current_employee(request)
     if not emp:
         if is_hr(request):
-            return Response([_channel_json(ChatChannel.get_company_channel())])
+            # An HR user's company channel is their branch's. An unscoped
+            # admin gets the original unbranched channel, which is where
+            # every pre-branch message still lives.
+            return Response([
+                _channel_json(ChatChannel.get_company_channel(get_branch_scope(request)))
+            ])
         return Response({"error": "Employee access required"}, status=403)
 
-    channels = [ChatChannel.get_company_channel()]
+    # For an employee the branch comes from their own record, not the
+    # request -employees are never branch-scoped by middleware.
+    channels = [ChatChannel.get_company_channel(emp.branch_id)]
     if emp.department_id:
         channels.append(ChatChannel.get_department_channel(emp.department))
     return Response([_channel_json(c) for c in channels])
@@ -112,6 +120,15 @@ def chat_messages(request: Request, pk: int) -> Response:
 
     channel = ChatChannel.objects.select_related("department").filter(pk=pk).first()
     if not channel:
+        return Response({"error": "Channel not found"}, status=404)
+
+    # Reading a channel by id must respect the same branch boundary the
+    # channel list does, or the isolation is only skin-deep: guessing an id
+    # would expose another unit's conversation. An unscoped admin (viewer
+    # branch None) is limited to unbranched channels, which is what they see
+    # in the list too.
+    viewer_branch = emp.branch_id if emp else get_branch_scope(request)
+    if channel.branch_id != viewer_branch:
         return Response({"error": "Channel not found"}, status=404)
     if hr_user:
         # HR Portal users participate in the company-wide channel only —

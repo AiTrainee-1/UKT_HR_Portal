@@ -20,6 +20,7 @@ from rest_framework.response import Response
 
 from .auth import require_hr
 from .branch_scope import scope_to_branch
+from .user_settings import settings_for
 from .models import Employee, Payroll, PayrollSettings
 from .payroll_views import (
     PayrollSkip, _DryRunAbort, _error, _generate_production_payroll, _payroll_json,
@@ -47,7 +48,7 @@ def production_next_period(request: Request) -> Response:
     """GET /api/payroll/production/next-period
     The period that would be generated next if Generate were clicked now,
     computed live from current Settings -does not write anything."""
-    ps = PayrollSettings.get()
+    ps = settings_for(request)
     try:
         period_start, period_end = get_next_production_period(ps)
     except InvalidPeriodConfig as e:
@@ -68,7 +69,7 @@ def production_skip_check(request: Request) -> Response:
     Read-only dry run -mirrors payroll_views.py::payroll_skip_check's
     savepoint-and-rollback pattern. Defaults to the next due period when no
     explicit period is given."""
-    ps = PayrollSettings.get()
+    ps = settings_for(request)
     try:
         explicit = _parse_period(request.query_params)
     except ValueError as e:
@@ -119,7 +120,7 @@ def production_generate_payroll(request: Request) -> Response:
     Omit both to generate the next due period automatically. Rejects a
     period that hasn't ended yet -attendance for days still in progress
     isn't final."""
-    ps = PayrollSettings.get()
+    ps = settings_for(request)
     try:
         explicit = _parse_period(request.data)
     except ValueError as e:

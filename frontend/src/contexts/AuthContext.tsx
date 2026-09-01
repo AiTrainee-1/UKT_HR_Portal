@@ -12,6 +12,9 @@ interface UserInfo {
   employeeId: number | null;
   name?: string;
   isSuperAdmin?: boolean;
+  /** The single ADMIN_USERNAME account -narrower than isSuperAdmin.
+   *  Gates Account Management → Master. */
+  isMasterAdmin?: boolean;
   permissions?: Record<string, PermissionLevel>;
   branchId?: number | null;
   branchName?: string | null;
@@ -133,6 +136,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     employeeId: me.employeeId || null,
     name: me.name,
     isSuperAdmin: (me as { isSuperAdmin?: boolean }).isSuperAdmin,
+    isMasterAdmin: (me as { isMasterAdmin?: boolean }).isMasterAdmin,
     permissions: (me as { permissions?: Record<string, PermissionLevel> }).permissions,
     branchId: (me as { branchId?: number | null }).branchId ?? null,
     branchName: (me as { branchName?: string | null }).branchName ?? null,

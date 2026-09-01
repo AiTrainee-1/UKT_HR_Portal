@@ -33,6 +33,7 @@ from rest_framework.response import Response
 
 from . import backup_service
 from .auth import require_hr, require_super_admin
+from .user_settings import settings_for
 from .audit_utils import log_action
 from .backup_scheduler import apply_schedule_to_scheduler
 from .google_drive import test_drive_connection
@@ -51,7 +52,7 @@ def _error(message: str, code: int = 400) -> Response:
 @api_view(["GET"])
 @require_hr
 def backup_status(request: Request) -> Response:
-    ps = PayrollSettings.get()
+    ps = settings_for(request)
     schedule = BackupSchedule.get()
     drive = BackupDriveConfig.get()
     return Response({
@@ -75,7 +76,7 @@ def backup_status(request: Request) -> Response:
 @require_hr
 def run_backup(request: Request) -> Response:
     """Body: { "directory"?: str } -falls back to the saved backup_directory."""
-    ps = PayrollSettings.get()
+    ps = settings_for(request)
     directory = str(request.data.get("directory") or ps.backup_directory or "").strip()
 
     try:
@@ -233,7 +234,7 @@ def backup_restore_run(request: Request) -> Response:
 
     # Safety net: back up the current state before touching anything, so a
     # bad restore is itself always undoable from local backups.
-    ps = PayrollSettings.get()
+    ps = settings_for(request)
     try:
         backup_service.build_full_backup(ps.backup_directory or os.path.join(str(dj_settings.BASE_DIR), "backups"))
     except backup_service.BackupServiceError as exc:

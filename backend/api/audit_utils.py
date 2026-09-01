@@ -29,9 +29,27 @@ def log_action(
             old_values=old_values,
             new_values=new_values,
             ip_address=_get_ip(request),
+            # Stamped now because it cannot be recovered later -AuditLog has
+            # no foreign key to the actor. None for unscoped admins, which is
+            # accurate: the action was not taken on behalf of one branch.
+            branch_id=_get_branch(request),
         )
     except Exception:
         pass
+
+
+def _get_branch(request) -> int | None:
+    """The acting user's branch, or None for unscoped admins.
+
+    Reads the same request attribute HrPermissionMiddleware sets for every
+    scoped query, so an audit row is stamped with exactly the branch whose
+    data the action was allowed to touch.
+    """
+    try:
+        from .branch_scope import get_branch_scope
+        return get_branch_scope(request)
+    except Exception:
+        return None
 
 
 def _get_ip(request) -> str | None:

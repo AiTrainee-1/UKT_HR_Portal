@@ -29,6 +29,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import get_token_employee_id, is_hr, require_auth, require_hr
+from .user_settings import settings_for
 from .branch_scope import get_branch_scope
 from .document_pdf import (
     FONT_BODY, FONT_BODY_BOLD, _decode_b64_image, _hex, company_header,
@@ -272,7 +273,7 @@ def offer_letter_email(request: Request, employee_id: int) -> Response:
     if not emp:
         return Response({"error": "Employee not found"}, status=404)
 
-    ps = PayrollSettings.get()
+    ps = settings_for(request)
     if not ps.smtp_host or not ps.smtp_username or not ps.smtp_password:
         return Response({"error": "SMTP settings not configured. Please save SMTP settings in Settings first."}, status=400)
 

@@ -11,6 +11,8 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import get_token_employee_id, require_auth, require_hr
+from .user_settings import settings_for
+from .branch_scope import scope_to_branch
 from .company_documents_views import build_resignation_letter_pdf
 from .models import (
     Department,
@@ -123,35 +125,42 @@ def _notify_dept_heads(resignation: ResignationRequest) -> None:
 
 @api_view(["GET"])
 @require_hr
-def recruitment_dashboard(_request: Request) -> Response:
+def recruitment_dashboard(request: Request) -> Response:
     today = date.today()
     thirty_days_ago = today - timedelta(days=30)
     thirty_days_ago_str = thirty_days_ago.isoformat()
 
-    total_staff = Employee.objects.filter(employment_type="staff", status="active").count()
-    total_depts = Department.objects.count()
+    emp_qs = scope_to_branch(Employee.objects, request)
+    dept_qs = scope_to_branch(Department.objects, request)
+    total_staff = emp_qs.filter(employment_type="staff", status="active").count()
+    total_depts = dept_qs.count()
 
-    recent_leaves = LeaveRequest.objects.filter(
+    recent_leaves = scope_to_branch(
+        LeaveRequest.objects, request, field="employee__branch_id"
+    ).filter(
         created_at__date__gte=thirty_days_ago,
         employee__employment_type="staff",
     ).count()
 
-    new_joinees = Employee.objects.filter(
+    new_joinees = emp_qs.filter(
         employment_type="staff",
         status="active",
         join_date__gte=thirty_days_ago_str,
     ).count()
 
-    open_roles = Job.objects.filter(status="open").count()
-    pending_resignations = ResignationRequest.objects.filter(status="pending").count()
-    dept_approved_resignations = ResignationRequest.objects.filter(status="dept_approved").count()
+    open_roles = scope_to_branch(
+        Job.objects, request, field="department__branch_id"
+    ).filter(status="open").count()
+    resig_qs = scope_to_branch(ResignationRequest.objects, request, field="employee__branch_id")
+    pending_resignations = resig_qs.filter(status="pending").count()
+    dept_approved_resignations = resig_qs.filter(status="dept_approved").count()
 
-    departments = list(Department.objects.prefetch_related("headcount").all())
+    departments = list(dept_qs.prefetch_related("headcount").all())
     dept_analysis = []
     total_vacancies = 0
 
     for dept in departments:
-        current = Employee.objects.filter(
+        current = emp_qs.filter(
             department=dept, employment_type="staff", status="active"
         ).count()
         try:
@@ -170,7 +179,7 @@ def recruitment_dashboard(_request: Request) -> Response:
         })
 
     recent_joinee_qs = (
-        Employee.objects.filter(
+        emp_qs.filter(
             employment_type="staff", status="active", join_date__gte=thirty_days_ago_str,
         )
         .select_related("department", "designation")
@@ -232,7 +241,8 @@ def new_joinees(request: Request) -> Response:
     since = (date.today() - timedelta(days=days)).isoformat()
 
     qs = (
-        Employee.objects.filter(status="active", join_date__gte=since)
+        scope_to_branch(Employee.objects, request)
+        .filter(status="active", join_date__gte=since)
         .select_related("department", "designation", "branch")
         .order_by("-join_date")
     )
@@ -266,7 +276,9 @@ def resignations(request: Request) -> Response:
 
 def _resignations_list(request: Request) -> Response:
     status_filter = request.query_params.get("status")
-    qs = ResignationRequest.objects.select_related(
+    qs = scope_to_branch(
+        ResignationRequest.objects, request, field="employee__branch_id"
+    ).select_related(
         "employee", "employee__department", "dept_head",
     ).order_by("-created_at")
     if status_filter:
@@ -373,7 +385,9 @@ def resignation_action(request: Request, pk: int) -> Response:
 @api_view(["DELETE"])
 @require_hr
 def resignation_delete(request: Request, pk: int) -> Response:
-    r = ResignationRequest.objects.filter(pk=pk).first()
+    r = scope_to_branch(
+        ResignationRequest.objects, request, field="employee__branch_id"
+    ).filter(pk=pk).first()
     if not r:
         return _error("Not found", 404)
     r.delete()
@@ -604,7 +618,7 @@ def resignation_email(request: Request, pk: int) -> Response:
     if r.status != "approved":
         return _error("Email is only available for approved resignations", 400)
 
-    ps = PayrollSettings.get()
+    ps = settings_for(request)
     if not ps.smtp_host or not ps.smtp_username or not ps.smtp_password:
         return _error("SMTP settings not configured. Please save SMTP settings in Settings first.", 400)
 
@@ -745,10 +759,13 @@ def resignation_whatsapp(request: Request, pk: int) -> Response:
 @require_hr
 def department_headcount(request: Request) -> Response:
     if request.method == "GET":
-        departments = list(Department.objects.prefetch_related("headcount").all())
+        departments = list(
+            scope_to_branch(Department.objects, request).prefetch_related("headcount").all()
+        )
+        emp_qs = scope_to_branch(Employee.objects, request)
         result = []
         for dept in departments:
-            current = Employee.objects.filter(
+            current = emp_qs.filter(
                 department=dept, employment_type="staff", status="active"
             ).count()
             try:
@@ -779,7 +796,9 @@ def department_headcount(request: Request) -> Response:
 @api_view(["PATCH"])
 @require_hr
 def department_headcount_detail(request: Request, pk: int) -> Response:
-    hc = DepartmentHeadcount.objects.select_related("department").filter(pk=pk).first()
+    hc = scope_to_branch(
+        DepartmentHeadcount.objects, request, field="department__branch_id"
+    ).select_related("department").filter(pk=pk).first()
     if not hc:
         return _error("Not found", 404)
 
@@ -789,7 +808,7 @@ def department_headcount_detail(request: Request, pk: int) -> Response:
         hc.notes = request.data["notes"]
     hc.save()
 
-    current = Employee.objects.filter(
+    current = scope_to_branch(Employee.objects, request).filter(
         department=hc.department, employment_type="staff", status="active"
     ).count()
     return Response(_dept_headcount_json(hc.department, hc, current))

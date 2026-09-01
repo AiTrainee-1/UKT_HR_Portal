@@ -26,6 +26,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import require_hr
+from .branch_scope import scope_to_branch
 from .models import Department, HiringRuleSet, PayrollSettings, ScreeningCandidate
 from . import resume_screening_progress
 
@@ -223,7 +224,9 @@ def upload_single(request: Request) -> Response:
 def shortlist_candidate(request: Request, pk: int) -> Response:
     """Manual promote -used by the single-upload 'Add to Shortlist' button
     and the 'move to shortlist' action on a Not Shortlisted bulk candidate."""
-    c = ScreeningCandidate.objects.filter(pk=pk).first()
+    c = scope_to_branch(
+        ScreeningCandidate.objects, request, field="department__branch_id"
+    ).filter(pk=pk).first()
     if not c:
         return _error("Candidate not found", 404)
     if c.status not in ("uploaded", "screened", "not_shortlisted"):
@@ -326,7 +329,14 @@ _ALLOWED_TRANSITIONS = {
 @api_view(["GET"])
 @require_hr
 def candidates(request: Request) -> Response:
-    qs = ScreeningCandidate.objects.select_related("rule_set", "department").order_by("-match_score", "-created_at")
+    # A candidate reaches a branch through the department they were
+    # screened for. One with no department belongs to no branch and is
+    # admin-only -the same rule designations follow.
+    qs = scope_to_branch(
+        ScreeningCandidate.objects, request, field="department__branch_id"
+    ).select_related(
+        "rule_set", "department"
+    ).order_by("-match_score", "-created_at")
     status_param = request.query_params.get("status")
     if status_param:
         qs = qs.filter(status=status_param)
@@ -347,7 +357,9 @@ def candidates(request: Request) -> Response:
 @api_view(["PATCH", "DELETE"])
 @require_hr
 def candidate_detail(request: Request, pk: int) -> Response:
-    c = ScreeningCandidate.objects.select_related("rule_set", "department").filter(pk=pk).first()
+    c = scope_to_branch(
+        ScreeningCandidate.objects, request, field="department__branch_id"
+    ).select_related("rule_set", "department").filter(pk=pk).first()
     if not c:
         return _error("Candidate not found", 404)
 
@@ -378,7 +390,9 @@ def candidate_detail(request: Request, pk: int) -> Response:
 @api_view(["GET"])
 @require_hr
 def candidate_resume(request: Request, pk: int) -> Response:
-    c = ScreeningCandidate.objects.filter(pk=pk).first()
+    c = scope_to_branch(
+        ScreeningCandidate.objects, request, field="department__branch_id"
+    ).filter(pk=pk).first()
     if not c or not c.resume_file:
         return _error("Resume not found", 404)
     disposition = "attachment" if request.query_params.get("download") else "inline"

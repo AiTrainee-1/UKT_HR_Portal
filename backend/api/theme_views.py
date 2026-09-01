@@ -20,6 +20,7 @@ from rest_framework.response import Response
 
 from .audit_utils import log_action
 from .auth import require_auth, require_hr
+from .user_settings import settings_for
 from .models import PayrollSettings
 
 # CSS custom property name: "--primary", "--sidebar-accent-foreground", ...
@@ -42,13 +43,13 @@ def _payload(settings: PayrollSettings) -> dict:
 @api_view(["GET"])
 @require_auth
 def theme_settings(request: Request) -> Response:
-    return Response(_payload(PayrollSettings.get()))
+    return Response(_payload(settings_for(request)))
 
 
 @api_view(["PUT"])
 @require_hr
 def update_theme_settings(request: Request) -> Response:
-    settings = PayrollSettings.get()
+    settings = settings_for(request)
 
     name = request.data.get("themeName")
     if name is not None:

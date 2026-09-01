@@ -31,6 +31,10 @@ from rest_framework.response import Response
 
 from .auth import require_hr
 from .branch_scope import scope_to_branch
+from .audit_utils import log_action
+from .user_settings import (
+    _SettingsOverlay, persist_overlay, settings_for, settings_for_employee,
+)
 from .geo_attendance_views import source_label
 from .permission_registry import resolve_permission
 from .models import (
@@ -289,7 +293,7 @@ def _pending_advance_repayments(emp: Employee, month: int, year: int) -> tuple[D
 #  STAFF payroll engine
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
+def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None) -> dict:
     """
     Pro-rated monthly payroll for a staff employee.
     Returns a dict with 'payroll' and 'slip' keys (model instances).
@@ -482,7 +486,11 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int) -> dict:
     # PF / ESI -read live from PayrollSettings. The Staff Payroll Rules
     # master toggle (Settings → Payroll) must be ON for any deduction to
     # apply; rates alone are not enough.
-    ps = PayrollSettings.get()
+    # Resolved from the EMPLOYEE's branch, not from whoever is logged in.
+    # That is what makes an Admin regeneration reproduce exactly what the
+    # branch login would have produced, and lets one Admin run spanning
+    # several branches apply each branch's own rates.
+    ps = settings if settings is not None else settings_for_employee(emp)
     if ps.staff_payroll_rules_enabled:
         pf_rate     = ps.pf_rate / Decimal("100")          # e.g. 12 -> 0.12
         esi_rate    = ps.esi_rate / Decimal("100")          # e.g. 0.75 -> 0.0075
@@ -704,7 +712,7 @@ def _session_completed(first_in: time, last_out: time | None, min_checkout: time
     return in_secs <= cutoff_secs and out_secs >= cutoff_secs
 
 
-def _generate_production_payroll(emp: Employee, period_start: date, period_end: date) -> dict:
+def _generate_production_payroll(emp: Employee, period_start: date, period_end: date, settings=None) -> dict:
     """
     Shift-based payroll for production employees -completely separate from
     the staff engine. No monthly salary, no proration, no leave/permission/
@@ -721,7 +729,7 @@ def _generate_production_payroll(emp: Employee, period_start: date, period_end: 
 
     from .attendance_final import compute_range_records
 
-    ps = PayrollSettings.get()
+    ps = settings if settings is not None else settings_for_employee(emp)
     date_from, date_to = period_start, period_end
     records = compute_range_records(emp, date_from, date_to)
 
@@ -1762,7 +1770,10 @@ def _hr_role_permissions(request) -> tuple[dict, bool]:
 @api_view(["GET", "PUT"])
 @require_hr
 def payroll_settings_view(request: Request) -> Response:
-    ps = PayrollSettings.get()
+    # Admins get the universal row itself, so their edits are company-wide.
+    # Every other login gets a private overlay: they see the universal values
+    # until they change something, and keep tracking Admin for the rest.
+    ps = settings_for(request)
 
     if request.method == "GET":
         return Response(_ps_response(ps))
@@ -1926,7 +1937,19 @@ def payroll_settings_view(request: Request) -> Response:
         ps.night_shift_enabled = bool(data["nightShiftEnabled"])
     if "backupDirectory" in data:
         ps.backup_directory = str(data["backupDirectory"] or "")
-    ps.save()
+
+    # Same assignments above ran against either a real row or an overlay;
+    # only the write differs. The overlay refuses .save() on purpose, so a
+    # non-admin's edit can never fall through to the shared row.
+    if isinstance(ps, _SettingsOverlay):
+        kept = persist_overlay(ps)
+        log_action(
+            request, "update", "settings",
+            description=f"Personal settings updated ({len(kept)} field(s) overridden)",
+        )
+    else:
+        ps.save()
+        log_action(request, "update", "settings", description="Universal settings updated")
 
     return Response(_ps_response(ps))
 

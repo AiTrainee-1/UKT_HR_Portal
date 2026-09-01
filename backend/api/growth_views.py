@@ -17,6 +17,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name
+from .user_settings import settings_for
 from .branch_scope import scope_to_branch
 from .models import (
     AttendanceDayRecord, AttendanceOverrideRequest, Department, Designation, Employee,
@@ -81,7 +82,7 @@ def employee_monthly_attendance(request: Request) -> Response:
     month = int(request.query_params.get("month", today.month))
     year = int(request.query_params.get("year", today.year))
 
-    settings = PayrollSettings.get()
+    settings = settings_for(request)
     records = compute_month_records(emp, year, month, settings)
 
     # Weeks: 1–7 → W1, 8–14 → W2, 15–21 → W3, 22–28 → W4, 29+ → W5
@@ -242,7 +243,7 @@ def attendance_day_override(request: Request) -> Response:
     unilaterally editing attendance data used by payroll.
     """
     data = request.data
-    emp = Employee.objects.filter(id=data.get("employeeId")).first()
+    emp = scope_to_branch(Employee.objects, request).filter(id=data.get("employeeId")).first()
     if not emp:
         return Response({"error": "Employee not found"}, status=404)
     try:
@@ -342,7 +343,7 @@ def promotions(request: Request) -> Response:
 
     # POST -promote: record history AND apply to the employee
     data = request.data
-    emp = Employee.objects.filter(id=data.get("employeeId")).first()
+    emp = scope_to_branch(Employee.objects, request).filter(id=data.get("employeeId")).first()
     if not emp:
         return Response({"error": "Employee not found"}, status=404)
 
@@ -440,7 +441,7 @@ def increment_summary(request: Request) -> Response:
 def add_increment(request: Request) -> Response:
     """Body: { employeeId, percent? , amount?, effectiveDate?, notes? }"""
     data = request.data
-    emp = Employee.objects.filter(id=data.get("employeeId")).first()
+    emp = scope_to_branch(Employee.objects, request).filter(id=data.get("employeeId")).first()
     if not emp:
         return Response({"error": "Employee not found"}, status=404)
 
@@ -595,7 +596,7 @@ def idcard_data(request: Request) -> Response:
     An employee token only ever gets their own card, regardless of query params —
     bulk (?ids=) and lookup-by-other-employee are HR only.
     """
-    settings = PayrollSettings.get()
+    settings = settings_for(request)
     token_emp_id = get_token_employee_id(request)
     if token_emp_id:
         emp = Employee.objects.filter(id=token_emp_id).select_related("department", "designation", "branch").first()
@@ -628,7 +629,7 @@ def verify_employee(request: Request, code: str) -> Response:
         .select_related("department", "designation")
         .first()
     )
-    settings = PayrollSettings.get()
+    settings = settings_for(request)
     if not emp:
         return Response({
             "verified": False,
@@ -690,14 +691,16 @@ def email_idcard(request: Request) -> Response:
     from .idcard_render import render_idcard_png
 
     data = request.data
-    emp = Employee.objects.filter(id=data.get("employeeId")).select_related("department", "designation", "branch").first()
+    emp = scope_to_branch(Employee.objects, request).filter(
+        id=data.get("employeeId")
+    ).select_related("department", "designation", "branch").first()
     if not emp:
         return Response({"error": "Employee not found"}, status=404)
     to_email = data.get("toEmail") or emp.email
     if not to_email:
         return Response({"error": "Employee has no email address"}, status=400)
 
-    s = PayrollSettings.get()
+    s = settings_for(request)
     if not (s.smtp_username and s.smtp_password):
         return Response({"error": "SMTP is not configured in Settings"}, status=400)
 
@@ -740,11 +743,13 @@ def idcard_whatsapp(request: Request) -> Response:
     if not whatsapp_service.is_configured():
         return Response({"error": "WhatsApp is not configured on this server (missing credentials in .env)."}, status=400)
 
-    emp = Employee.objects.filter(id=request.data.get("employeeId")).select_related("department", "designation", "branch").first()
+    emp = scope_to_branch(Employee.objects, request).filter(
+        id=request.data.get("employeeId")
+    ).select_related("department", "designation", "branch").first()
     if not emp:
         return Response({"error": "Employee not found"}, status=404)
 
-    s = PayrollSettings.get()
+    s = settings_for(request)
     idcard = _idcard_dict(emp, s)
     verify_url = f"{_public_base_url(request)}/verify/{emp.employee_code}"
     png_bytes = render_idcard_png(idcard, verify_url)

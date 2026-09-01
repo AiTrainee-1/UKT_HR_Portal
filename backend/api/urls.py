@@ -24,6 +24,7 @@ from .theme_views import theme_settings, update_theme_settings
 from .hr_user_views import (
     roles, role_detail,
     hr_users, hr_user_detail,
+    master_hr_users, master_hr_user_flags,
     audit_logs, audit_logs_stats,
 )
 from .salary_slip_views import (
@@ -415,6 +416,10 @@ urlpatterns = [
     path("roles", roles),
     path("roles/<int:pk>", role_detail),
     path("hr-users", hr_users),
+    # Master page -stricter guard (ADMIN_USERNAME only), declared before
+    # the <int:pk> route so "master" is never parsed as a user id.
+    path("hr-users/master", master_hr_users),
+    path("hr-users/<int:pk>/master-flags", master_hr_user_flags),
     path("hr-users/<int:pk>", hr_user_detail),
 
     # ── Department Managers ──────────────────────────────────────────────────

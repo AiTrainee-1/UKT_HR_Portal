@@ -235,6 +235,11 @@ def auth_me(request: Request) -> Response:
         is_super_admin = bool(hr_user and hr_user.is_super_admin)
         permissions = (hr_user.role.permissions if hr_user and hr_user.role else {}) or {}
         payload["isSuperAdmin"] = is_super_admin
+        # Narrower than isSuperAdmin -only the ADMIN_USERNAME account. Gates
+        # Account Management → Master in the UI; the API guard is what
+        # actually enforces it (see auth.require_master_admin).
+        from .auth import is_master_admin
+        payload["isMasterAdmin"] = is_master_admin(hr_user)
         payload["permissions"] = permissions
         payload["branchId"] = hr_user.branch_id if hr_user else None
         payload["branchName"] = hr_user.branch.name if hr_user and hr_user.branch else None
@@ -1426,11 +1431,15 @@ def _notif_with_name(record: Notification) -> dict:
 def notifications(request: Request) -> Response:
     if request.method == "GET":
         qs = Notification.objects.select_related("employee")
-        # An employee token only ever sees their own notifications -HR sees
-        # everything (used for admin/debug, not a normal HR-portal screen).
+        # An employee token only ever sees their own notifications.
         employee_id = get_token_employee_id(request)
         if employee_id:
             qs = qs.filter(employee_id=employee_id)
+        else:
+            # HR used to see every branch's notifications here. A notification
+            # is about one employee, so it belongs to that employee's branch;
+            # an unscoped admin still sees all of them.
+            qs = scope_to_branch(qs, request, field="employee__branch_id")
         if request.query_params.get("unreadOnly") in ("true", "1", True):
             qs = qs.filter(is_read=False)
         rows = [_notif_with_name(r) for r in qs]
