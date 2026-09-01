@@ -6,6 +6,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import require_hr, require_auth, get_token_employee_id, is_hr
+from .clock import ist_now, ist_today
 from .models import Advance, AdvanceRepayment, Employee
 
 
@@ -20,8 +21,8 @@ def _auto_create_repayments(adv: Advance) -> None:
     # Remove any unprocessed scheduled repayments before regenerating
     adv.repayments.filter(is_processed=False).delete()
 
-    start_month = adv.repayment_start_month or date.today().month
-    start_year = adv.repayment_start_year or date.today().year
+    start_month = adv.repayment_start_month or ist_today().month
+    start_year = adv.repayment_start_year or ist_today().year
 
     if adv.advance_type == "general":
         # Single full-amount deduction in the start month

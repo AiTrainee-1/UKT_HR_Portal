@@ -44,7 +44,8 @@ export const MODULE_TREE: ModuleNode[] = [
   { key: "settlement", label: "Settlement" },
   { key: "reports", label: "Reports" },
   { key: "user_management", label: "User Management" },
-  { key: "activity_logs", label: "Activity Logs" },
+  // Activity Logs is admin-only and has no per-role grant -see the
+  // isSuperAdmin guard in App.tsx and @require_super_admin on the API.
   { key: "login_devices", label: "Login Devices" },
   { key: "mobile_app_login", label: "Mobile App Login" },
   { key: "chat", label: "Chat" },

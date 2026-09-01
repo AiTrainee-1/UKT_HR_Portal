@@ -8,6 +8,7 @@ from rest_framework import status
 
 from .auth import require_hr, require_auth, get_token_employee_id, is_hr
 from .branch_scope import get_branch_scope, scope_to_branch
+from .clock import ist_now, ist_today
 from .models import ShiftTemplate, EmployeeShiftAssignment, Employee, Department
 
 
@@ -41,7 +42,7 @@ def auto_assign_production_shift(emp: Employee, effective_from: Optional[date] =
     EmployeeShiftAssignment.objects.create(
         employee=emp,
         shift=shift,
-        effective_from=effective_from or date.today(),
+        effective_from=effective_from or ist_today(),
         assigned_by="System (Auto)",
         notes="Auto-assigned production shift",
     )
@@ -346,7 +347,7 @@ def sync_production_shifts(request: Request) -> Response:
     Silently assign the production shift to all unassigned active production employees.
     Uses today as effective_from -no date needed from the caller.
     """
-    today = date.today()
+    today = ist_today()
     employees = scope_to_branch(Employee.objects, request).filter(employment_type="production", status="active")
     synced = 0
     skipped = 0

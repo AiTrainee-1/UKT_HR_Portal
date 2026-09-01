@@ -14,6 +14,7 @@ from .auth import get_token_employee_id, require_auth, require_hr
 from .user_settings import settings_for
 from .branch_scope import scope_to_branch
 from .company_documents_views import build_resignation_letter_pdf
+from .clock import ist_now, ist_today
 from .models import (
     Department,
     DepartmentHeadcount,
@@ -126,7 +127,7 @@ def _notify_dept_heads(resignation: ResignationRequest) -> None:
 @api_view(["GET"])
 @require_hr
 def recruitment_dashboard(request: Request) -> Response:
-    today = date.today()
+    today = ist_today()
     thirty_days_ago = today - timedelta(days=30)
     thirty_days_ago_str = thirty_days_ago.isoformat()
 
@@ -238,7 +239,7 @@ def recruitment_dashboard(request: Request) -> Response:
 @require_hr
 def new_joinees(request: Request) -> Response:
     days = int(request.query_params.get("days") or 30)
-    since = (date.today() - timedelta(days=days)).isoformat()
+    since = (ist_today() - timedelta(days=days)).isoformat()
 
     qs = (
         scope_to_branch(Employee.objects, request)

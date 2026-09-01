@@ -609,6 +609,8 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
               if (item.path === '/hr/night-shift' && settings?.nightShiftEnabled === false) return false;
               // Account Management is admin-only, independent of Role.permissions.
               if (item.path === '/hr/account-management') return !!user?.isSuperAdmin;
+              // Admin-only, same as Account Management -no per-role grant.
+              if (item.path === '/hr/activity-logs') return !!user?.isSuperAdmin;
               if (item.children) return item.children.length > 0;
               const moduleKey = moduleForPath(item.path);
               // canViewRoute (not canView): a flat single-route item like

@@ -15,6 +15,7 @@ from .auth import require_hr, require_auth, get_token_employee_id
 from .user_settings import settings_for
 from .branch_scope import get_branch_scope, scope_to_branch
 from .geo_attendance_views import source_label
+from .clock import ist_now, ist_today
 from .models import (
     Attendance, AttendanceLog, Employee, EmployeePermission, EmployeeShiftAssignment,
     LeaveRequest, DailyShiftLog, MonthlyShiftSummary, Holiday,
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 def _today() -> date_type:
-    return date_type.today()
+    return ist_today()
 
 
 def _parse_date(s) -> date_type:
@@ -562,7 +563,7 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
 
     from .attendance_final import compute_month_records, month_summary_from_records
 
-    today = date_type.today()
+    today = ist_today()
     month = int(request.query_params.get("month") or today.month)
     year  = int(request.query_params.get("year")  or today.year)
     _, days_in_month = calendar.monthrange(year, month)
@@ -894,7 +895,7 @@ def attendance_sync_status(request: Request) -> Response:
 def _date_from_for_mode(mode: str):
     """mode: 'day' | 'week' | 'month' | 'all' -the only 4 sync ranges HR needs."""
     from datetime import date as _date
-    today = _date.today()
+    today = ist_today()
     if mode == "day":
         return today
     if mode == "week":
@@ -1316,7 +1317,7 @@ def attendance_search(request: Request) -> Response:
         return Response({"error": "query is required"}, status=400)
 
     date_str = request.query_params.get("date")
-    d = date_type.today()
+    d = ist_today()
     if date_str:
         try:
             d = datetime.fromisoformat(date_str).date()

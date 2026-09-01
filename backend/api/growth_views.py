@@ -19,6 +19,7 @@ from rest_framework.response import Response
 from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name
 from .user_settings import settings_for
 from .branch_scope import scope_to_branch
+from .clock import ist_now, ist_today
 from .models import (
     AttendanceDayRecord, AttendanceOverrideRequest, Department, Designation, Employee,
     PayrollSettings, Promotion, SalaryIncrement,
@@ -78,7 +79,7 @@ def employee_monthly_attendance(request: Request) -> Response:
     if not emp:
         return Response({"error": "Employee not found"}, status=404)
 
-    today = date_type.today()
+    today = ist_today()
     month = int(request.query_params.get("month", today.month))
     year = int(request.query_params.get("year", today.year))
 
@@ -358,7 +359,7 @@ def promotions(request: Request) -> Response:
     try:
         eff = date_type.fromisoformat(str(data.get("effectiveDate")))
     except (ValueError, TypeError):
-        eff = date_type.today()
+        eff = ist_today()
 
     promo = Promotion.objects.create(
         employee=emp,
@@ -468,7 +469,7 @@ def add_increment(request: Request) -> Response:
     try:
         eff = date_type.fromisoformat(str(data.get("effectiveDate")))
     except (ValueError, TypeError):
-        eff = date_type.today()
+        eff = ist_today()
 
     # Preserve the baseline the first time an increment is added
     if emp.initial_salary is None:

@@ -43,6 +43,7 @@ from decimal import Decimal
 
 from django.db.models import Q
 
+from .clock import ist_now, ist_today
 from .models import (
     AttendanceDayRecord, AttendanceLog, Attendance, Employee, Holiday,
     LeaveRequest, PayrollSettings, ProductionShiftConfig, ProductionShiftSegment,
@@ -594,7 +595,7 @@ def compute_month_records(emp, year: int, month: int, settings=None):
         settings = PayrollSettings.get()
 
     days_in_month = calendar.monthrange(year, month)[1]
-    today = date_type.today()
+    today = ist_today()
     month_start = date_type(year, month, 1)
     month_end = date_type(year, month, days_in_month)
 
@@ -685,7 +686,7 @@ def compute_range_records(emp, date_from: date_type, date_to: date_type, setting
     if settings is None:
         settings = PayrollSettings.get()
 
-    today = date_type.today()
+    today = ist_today()
     # One day of padding on each side -night-shift detection for the
     # first day and cross-midnight punch reattribution (resolve_day_punch_logs)
     # for the last day both need a neighboring day's punches to check.

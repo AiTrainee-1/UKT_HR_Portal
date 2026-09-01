@@ -57,7 +57,10 @@ MODULE_TREE: list[dict] = [
     {"key": "settlement", "label": "Settlement"},
     {"key": "reports", "label": "Reports"},
     {"key": "user_management", "label": "User Management"},
-    {"key": "activity_logs", "label": "Activity Logs"},
+    # Activity Logs is intentionally NOT here: it is admin-only and
+    # enforced by @require_super_admin on the view, not by a per-role
+    # grant. Listing it would show a checkbox that cannot grant access.
+    # The URL_MODULE_MAP entry below stays as a second gate.
     {"key": "login_devices", "label": "Login Devices"},
     {"key": "mobile_app_login", "label": "Mobile App Login"},
     {"key": "chat", "label": "Chat"},

@@ -37,6 +37,7 @@ from .user_settings import (
 )
 from .geo_attendance_views import source_label
 from .permission_registry import resolve_permission
+from .clock import ist_now, ist_today
 from .models import (
     Advance,
     AdvanceRepayment,
@@ -73,8 +74,8 @@ def _time_to_str(t: time | None) -> str | None:
 
 
 def _compute_hours(check_in: time, check_out: time) -> Decimal:
-    dt_in = datetime.combine(date.today(), check_in)
-    dt_out = datetime.combine(date.today(), check_out)
+    dt_in = datetime.combine(ist_today(), check_in)
+    dt_out = datetime.combine(ist_today(), check_out)
     if dt_out <= dt_in:
         dt_out += timedelta(days=1)
     return _d2((dt_out - dt_in).total_seconds() / 3600)
@@ -1474,8 +1475,8 @@ def seed_attendance(request: Request) -> Response:
     so the payroll engine can detect presence AND late arrivals.
     """
     data = request.data
-    month = int(data.get("month", date.today().month))
-    year = int(data.get("year", date.today().year))
+    month = int(data.get("month", ist_today().month))
+    year = int(data.get("year", ist_today().year))
     target_days = int(data.get("days", 10))
     late_day_count = int(data.get("includeLateDays", 1))
     absent_day_count = int(data.get("includeAbsentDays", 1))
@@ -1490,7 +1491,7 @@ def seed_attendance(request: Request) -> Response:
     last_day = date(year, month, calendar.monthrange(year, month)[1])
     all_working = []
     cur = first_day
-    while cur <= last_day and cur <= date.today():
+    while cur <= last_day and cur <= ist_today():
         if cur.weekday() < 6 and cur not in holiday_dates:
             all_working.append(cur)
         cur += timedelta(days=1)

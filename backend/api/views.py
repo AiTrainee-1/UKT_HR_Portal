@@ -20,6 +20,7 @@ import uuid
 
 from .auth import require_auth, require_hr, get_token_employee_id, get_hr_display_name
 from .branch_scope import get_branch_scope, scope_to_branch
+from .clock import ist_now, ist_today
 from .jwt_utils import sign_token
 from .audit_utils import log_action, _get_ip
 from .session_utils import parse_user_agent
@@ -283,6 +284,13 @@ def _departments_create(request: Request) -> Response:
         branch_id = scoped_branch_id
     else:
         branch_id = request.data.get("branchId")
+    # A branch-less department is invisible to every branch login, and it
+    # then hides its designations and any employee filed under it.
+    if branch_id is None:
+        return Response(
+            {"error": "Select a branch -a department with no branch is hidden from every branch login"},
+            status=400,
+        )
     dept = Department.objects.create(
         name=request.data.get("name"),
         description=request.data.get("description"),
@@ -403,28 +411,9 @@ def _resolve_employee_relations(data: dict, request: Request) -> tuple[dict, lis
 
     warnings: list[str] = []
 
-    dept = None
-    if data.get("departmentId"):
-        dept = Department.objects.filter(pk=int(data["departmentId"])).first()
-    elif str(data.get("department") or "").strip():
-        dept_name = str(data["department"]).strip()
-        dept = Department.objects.filter(name__iexact=dept_name).first()
-        if dept is None:
-            dept, _created = Department.objects.get_or_create(name=dept_name)
-
-    desig = None
-    if data.get("designationId"):
-        desig = _Desig.objects.filter(pk=int(data["designationId"])).first()
-    elif str(data.get("designation") or "").strip():
-        desig_title = str(data["designation"]).strip()
-        desig_qs = _Desig.objects.filter(title__iexact=desig_title)
-        desig = (desig_qs.filter(department=dept).first() if dept else None) or desig_qs.first()
-        if desig is None:
-            warnings.append(f"Designation '{desig_title}' not found -left blank")
-
-    # A branch-scoped HR user can only ever create employees in their own
-    # branch, regardless of what the client/row sends. Unscoped users (super
-    # admin, MD/Directors, branch-less HR) pick one explicitly, by id or name.
+    # Branch is resolved FIRST because the department lookup depends on it:
+    # department names are unique per branch, not globally, so "CUTTING"
+    # means a different row in each unit.
     scoped_branch_id = get_branch_scope(request)
     if scoped_branch_id is not None:
         branch_id = scoped_branch_id
@@ -439,6 +428,39 @@ def _resolve_employee_relations(data: dict, request: Request) -> tuple[dict, lis
     else:
         branch_id = None
 
+    dept = None
+    if data.get("departmentId"):
+        dept = Department.objects.filter(pk=int(data["departmentId"])).first()
+    elif str(data.get("department") or "").strip():
+        dept_name = str(data["department"]).strip()
+        # Prefer the department in THIS employee's branch. Falling back to a
+        # name match in any branch keeps older single-branch imports working.
+        dept = (
+            Department.objects.filter(name__iexact=dept_name, branch_id=branch_id).first()
+            if branch_id else None
+        ) or Department.objects.filter(name__iexact=dept_name).first()
+        if dept is None:
+            # Created IN the employee's branch. Creating it branch-less
+            # would hide the department, its designations and this employee
+            # from every branch login.
+            dept = Department.objects.create(name=dept_name, branch_id=branch_id)
+
+    # A row that named no branch can still inherit one from the department
+    # it landed in -that is a fact about the data, not a guess.
+    if branch_id is None and dept is not None and dept.branch_id is not None:
+        branch_id = dept.branch_id
+
+    desig = None
+    if data.get("designationId"):
+        desig = _Desig.objects.filter(pk=int(data["designationId"])).first()
+    elif str(data.get("designation") or "").strip():
+        desig_title = str(data["designation"]).strip()
+        desig_qs = _Desig.objects.filter(title__iexact=desig_title)
+        desig = (desig_qs.filter(department=dept).first() if dept else None) or desig_qs.first()
+        if desig is None:
+            warnings.append(f"Designation '{desig_title}' not found -left blank")
+
+    # branch_id was resolved above, before the department lookup.
     return {"department": dept, "designation": desig, "branch_id": branch_id}, warnings
 
 
@@ -473,6 +495,16 @@ def _create_employee_from_data(
         return None, f"Employee code '{employee_code}' already exists", []
 
     relations, warnings = _resolve_employee_relations(data, request)
+
+    # An employee with no branch is invisible to EVERY branch login, and so
+    # is every biometric punch they generate -it looks exactly like the
+    # device has stopped syncing. A branch-scoped user always gets their own
+    # branch here, so this only ever fires for an unscoped admin who left
+    # the dropdown empty. Refusing is far kinder than the silent
+    # disappearance it prevents.
+    if relations["branch_id"] is None:
+        return None, "Select a branch -an employee with no branch is hidden from every branch login", []
+
     unit_code = _assign_unit_code(relations["branch_id"])
 
     emp = Employee.objects.create(
@@ -569,6 +601,10 @@ def _employee_update(request: Request, pk: int) -> Response:
     elif "branchId" in request.data:
         raw = request.data.get("branchId")
         emp.branch_id = int(raw) if raw else None
+    if emp.branch_id is None:
+        # Same reasoning as create -clearing a branch would hide the
+        # employee and their punches from the unit that works with them.
+        return _error("Select a branch -an employee with no branch is hidden from every branch login")
 
     if emp.branch_id != original_branch_id:
         # Moved to a different branch (or removed from one) -the old Unit
@@ -1385,7 +1421,7 @@ def update_leave_status(request: Request, pk: int) -> Response:
         try:
             year = int(record.start_date[:4])
         except Exception:
-            year = date.today().year
+            year = ist_today().year
         qs = LeaveBalance.objects.filter(employee_id=record.employee_id, year=year)
         if record.leave_type_ref_id:
             qs = qs.filter(leave_type_id=record.leave_type_ref_id)
@@ -1731,7 +1767,7 @@ def hr_dashboard_summary(request: Request) -> Response:
         other=Count("id", filter=~Q(gender__in=["male", "female"])),
     )
 
-    today = date.today()
+    today = ist_today()
     geo_punches_today = scope_to_branch(
         AttendanceLog.objects, request, field="employee__branch_id"
     ).filter(date=today, source="geo:auto").count()
@@ -1789,7 +1825,7 @@ def employee_dashboard_summary(request: Request) -> Response:
         return _error("employeeId required", 400)
     employee_id = int(employee_id)
 
-    today = date.today()
+    today = ist_today()
     month, year = today.month, today.year
 
     emp = Employee.objects.filter(pk=employee_id).first()

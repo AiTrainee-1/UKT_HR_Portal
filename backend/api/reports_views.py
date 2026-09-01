@@ -13,6 +13,7 @@ from rest_framework.response import Response
 from .auth import require_hr
 from .branch_scope import scope_to_branch
 from .geo_attendance_views import source_label
+from .clock import ist_now, ist_today
 from .models import (
     Employee, Attendance, AttendanceLog, LeaveRequest, LeaveBalance, LeaveType,
     Department, Branch, Advance, AdvanceRepayment, SalarySlip,
@@ -51,8 +52,8 @@ def _parse_date(s):
 @api_view(["GET"])
 @require_hr
 def attendance_summary_report(request: Request):
-    month     = int(request.query_params.get("month", date.today().month))
-    year      = int(request.query_params.get("year",  date.today().year))
+    month     = int(request.query_params.get("month", ist_today().month))
+    year      = int(request.query_params.get("year",  ist_today().year))
     dept_id   = request.query_params.get("departmentId")
     emp_id    = request.query_params.get("employeeId")
     emp_type  = request.query_params.get("employmentType")
@@ -176,7 +177,7 @@ def attendance_report(request: Request):
 @api_view(["GET"])
 @require_hr
 def leave_report(request: Request):
-    year    = request.query_params.get("year",  str(date.today().year))
+    year    = request.query_params.get("year",  str(ist_today().year))
     month   = request.query_params.get("month", "")
     dept_id = request.query_params.get("departmentId")
     emp_id  = request.query_params.get("employeeId")
@@ -225,7 +226,7 @@ def leave_report(request: Request):
 @api_view(["GET"])
 @require_hr
 def leave_balance_report(request: Request):
-    year    = int(request.query_params.get("year",  date.today().year))
+    year    = int(request.query_params.get("year",  ist_today().year))
     dept_id = request.query_params.get("departmentId")
     emp_id  = request.query_params.get("employeeId")
 
@@ -264,8 +265,8 @@ def leave_balance_report(request: Request):
 @api_view(["GET"])
 @require_hr
 def payroll_report(request: Request):
-    month    = request.query_params.get("month",  date.today().month)
-    year     = request.query_params.get("year",   date.today().year)
+    month    = request.query_params.get("month",  ist_today().month)
+    year     = request.query_params.get("year",   ist_today().year)
     dept_id  = request.query_params.get("departmentId")
     emp_id   = request.query_params.get("employeeId")
     emp_type = request.query_params.get("employmentType")  # staff / production
@@ -336,8 +337,8 @@ def payroll_report(request: Request):
 @api_view(["GET"])
 @require_hr
 def pf_esi_report(request: Request):
-    month   = int(request.query_params.get("month", date.today().month))
-    year    = int(request.query_params.get("year",  date.today().year))
+    month   = int(request.query_params.get("month", ist_today().month))
+    year    = int(request.query_params.get("year",  ist_today().year))
     dept_id = request.query_params.get("departmentId")
     emp_id  = request.query_params.get("employeeId")
 
@@ -463,7 +464,7 @@ def headcount_report(request: Request):
     by_type: dict    = defaultdict(int)
     by_gender: dict  = defaultdict(int)
     new_this_month   = []
-    today            = date.today()
+    today            = ist_today()
     month_start      = f"{today.year}-{today.month:02d}"
 
     for e in employees:
@@ -525,7 +526,7 @@ def settlement_report(request: Request):
     if emp_id:
         qs = qs.filter(employee_id=emp_id)
 
-    today = date.today()
+    today = ist_today()
     results = []
     for a in qs:
         # Overdue check: count months from start with no repayment
@@ -575,8 +576,8 @@ def settlement_report(request: Request):
 @api_view(["GET"])
 @require_hr
 def new_joinings_report(request: Request):
-    month   = int(request.query_params.get("month", date.today().month))
-    year    = int(request.query_params.get("year",  date.today().year))
+    month   = int(request.query_params.get("month", ist_today().month))
+    year    = int(request.query_params.get("year",  ist_today().year))
     dept_id = request.query_params.get("departmentId")
     emp_type = request.query_params.get("employmentType")
 

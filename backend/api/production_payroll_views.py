@@ -21,6 +21,7 @@ from rest_framework.response import Response
 from .auth import require_hr
 from .branch_scope import scope_to_branch
 from .user_settings import settings_for
+from .clock import ist_now, ist_today
 from .models import Employee, Payroll, PayrollSettings
 from .payroll_views import (
     PayrollSkip, _DryRunAbort, _error, _generate_production_payroll, _payroll_json,
@@ -56,7 +57,7 @@ def production_next_period(request: Request) -> Response:
     return Response({
         "periodStart": period_start.isoformat(),
         "periodEnd": period_end.isoformat(),
-        "periodEnded": period_end <= date.today(),
+        "periodEnded": period_end <= ist_today(),
         "frequency": ps.prod_period_frequency,
         "style": ps.prod_period_style,
     })
@@ -130,7 +131,7 @@ def production_generate_payroll(request: Request) -> Response:
     except InvalidPeriodConfig as e:
         return _error(str(e))
 
-    if period_end > date.today():
+    if period_end > ist_today():
         return _error(f"Period {period_start.isoformat()}–{period_end.isoformat()} has not ended yet.")
 
     employees = list(

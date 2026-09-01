@@ -271,8 +271,13 @@ def master_hr_user_flags(request: Request, pk: int) -> Response:
 
 
 @api_view(["GET"])
-@require_hr
+@require_super_admin
 def audit_logs(request: Request) -> Response:
+    """Admin-only. Deliberately NOT branch-scoped for branch users, because
+    branch users cannot reach this at all -the audit trail is an oversight
+    tool for whoever runs the company, not something each unit reviews for
+    itself. Rows still carry a branch (see AuditLog.branch) so an admin can
+    tell which unit an action came from."""
     module = request.query_params.get("module")
     action = request.query_params.get("action")
     user_name = request.query_params.get("userName")
@@ -308,7 +313,7 @@ def audit_logs(request: Request) -> Response:
 
 
 @api_view(["GET"])
-@require_hr
+@require_super_admin
 def audit_logs_stats(request: Request) -> Response:
     now = timezone.now()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)

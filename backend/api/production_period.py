@@ -35,6 +35,7 @@ Note on the 2-week calendar-anchored case: this generalized slicer produces
 uniform across Weekly/2-Weeks/3-Weeks rather than special-casing 14 days.
 """
 
+from .clock import ist_today
 import calendar
 from datetime import date as date_type, timedelta
 
@@ -140,5 +141,5 @@ def get_next_production_period(ps) -> tuple[date_type, date_type]:
     years ago instead of the current one.
     """
     last_end = get_last_generated_period_end()
-    candidate_ref = last_end + timedelta(days=1) if last_end is not None else date_type.today()
+    candidate_ref = last_end + timedelta(days=1) if last_end is not None else ist_today()
     return resolve_production_period(candidate_ref, ps)

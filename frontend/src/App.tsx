@@ -164,6 +164,14 @@ function ProtectedRoute({
     return null;
   }
 
+  // Activity Logs is the company-wide audit trail -admin-only, like
+  // Account Management, and independent of Role.permissions. Branch users
+  // do not review their own audit trail; that is an oversight tool.
+  if (location.startsWith("/hr/activity-logs") && !user.isSuperAdmin) {
+    navigate("/hr/dashboard");
+    return null;
+  }
+
   // ...and its Master page is narrower still: the single ADMIN_USERNAME
   // account, not every super admin. Hiding an account would be pointless if
   // any other admin could come here and unhide it. The API enforces the same

@@ -22,6 +22,7 @@ from rest_framework.response import Response
 
 from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name
 from .branch_scope import scope_to_branch
+from .clock import ist_now, ist_today
 from .models import AttendanceDayRecord, CasualLeaveRequest, Employee, Notification
 
 ELIGIBILITY_MONTHS = 6
@@ -43,7 +44,7 @@ def _parse_join_date(raw) -> date_type | None:
 
 def _service_months(emp: Employee, today: date_type | None = None) -> int | None:
     """Completed months of service, or None when join date is unknown."""
-    today = today or date_type.today()
+    today = today or ist_today()
     joined = _parse_join_date(emp.join_date)
     if joined is None:
         return None
@@ -239,7 +240,7 @@ def casual_leave_detail(request: Request, pk: int) -> Response:
 @require_hr
 def casual_leave_eligibility(request: Request) -> Response:
     """All staff employees with their CL eligibility status for a month."""
-    today = date_type.today()
+    today = ist_today()
     month = int(request.query_params.get("month", today.month))
     year = int(request.query_params.get("year", today.year))
     check_date = date_type(year, month, 15)  # representative day of the month
@@ -308,7 +309,7 @@ def my_casual_leave_eligibility(request: Request) -> Response:
     if not emp:
         return Response({"error": "Employee not found"}, status=404)
 
-    today = date_type.today()
+    today = ist_today()
     eligible, reason = check_cl_eligibility(emp, today)
 
     year = int(request.query_params.get("year") or today.year)

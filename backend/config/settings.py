@@ -154,9 +154,18 @@ DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
 # Django's own TIME_ZONE stays UTC below: with USE_TZ=True, aware datetimes are
 # still stored and compared in UTC. Only the naive "what time is it here"
 # calls change, which is exactly the set that was wrong.
-os.environ.setdefault("TZ", os.environ.get("SERVER_TIMEZONE", "Asia/Kolkata"))
+# setdefault() was the bug: it only applies when TZ is UNSET, so any host
+# that already exports TZ (a base image, a platform default, a Windows dev
+# box) silently kept its own zone and every naive call stayed wrong. Set it
+# outright -SERVER_TIMEZONE is still the intended override.
+os.environ["TZ"] = os.environ.get("SERVER_TIMEZONE", "Asia/Kolkata")
 if hasattr(time, "tzset"):          # Unix only; Windows has no tzset
     time.tzset()
+# NOTE: on Windows there is no tzset(), so the line above cannot take effect
+# and naive date.today()/datetime.now() keep returning the OS zone. That is
+# why api/clock.py exists: ist_now()/ist_today()/ist_time() name the zone
+# explicitly and are correct on every host regardless of TZ. Date-sensitive
+# code should use those, not the process clock.
 
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"

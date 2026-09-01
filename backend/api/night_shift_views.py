@@ -12,6 +12,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import require_hr
+from .clock import ist_now, ist_today
 from .models import AttendanceLog, NightShiftRelaxation, NightShiftRule
 from .night_shift import (
     MORNING_CUTOFF, detect_night_for_date, ensure_default_rules, record_report,
@@ -27,8 +28,8 @@ def _parse_time(v):
 
 def _relax_dict(r: NightShiftRelaxation, now: datetime | None = None) -> dict:
     emp = r.employee
-    today = date_type.today()
-    now = now or datetime.now()
+    today = ist_today()
+    now = now or ist_now()
 
     # Status semantics for the dashboard
     if r.reported_at:
@@ -107,7 +108,7 @@ def night_shift_dashboard(request: Request) -> Response:
         try:
             d = date_type.fromisoformat(request.query_params.get("date", ""))
         except (ValueError, TypeError):
-            d = date_type.today()
+            d = ist_today()
         # Detect from last night's punches so the dashboard is always current
         detected = detect_night_for_date(d - timedelta(days=1))
         qs = qs.filter(relaxation_date=d)
@@ -152,7 +153,7 @@ def night_shift_recompute(request: Request) -> Response:
     if data.get("month") and data.get("year"):
         import calendar as cal
         m, y = int(data["month"]), int(data["year"])
-        today = date_type.today()
+        today = ist_today()
         total = 0
         for day in range(1, cal.monthrange(y, m)[1] + 1):
             d = date_type(y, m, day)
