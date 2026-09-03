@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CircleLoader } from "@/components/ui/CircleLoader";
 import EmployeeAvatar from "@/components/EmployeeAvatar";
@@ -19,7 +20,7 @@ import {
 } from "@/lib/api-client";
 import {
   useListBranches, getListBranchesQueryKey,
-  useListEmployeesPaginated, useEmployeeCount,
+  useListEmployeesPaginated, useEmployeeCount, useUpdateEmployeeCoEmp,
 } from "@/lib/api-client/custom-hooks";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
@@ -37,7 +38,11 @@ export default function Employees() {
   // are still reachable -see the Inactive toggle in the header.
   const [statusFilter, setStatusFilter] = useState("active");
   const viewingInactive = statusFilter === "inactive";
-  const [typeFilter, setTypeFilter] = useState<"staff" | "production">("staff");
+  const [typeFilter, setTypeFilter] = useState<"staff" | "production" | "coemp">("staff");
+  // "Co Emp" is a cross-cutting view (every employee, regardless of staff vs.
+  // production), not a real employmentType -so it's excluded from the filter
+  // sent to the server rather than treated as a third employmentType value.
+  const viewingCoEmp = typeFilter === "coemp";
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { user } = useAuth();
@@ -62,7 +67,7 @@ export default function Employees() {
     departmentId: deptFilter !== "all" ? Number(deptFilter) : undefined,
     branchId: !isBranchScoped && branchFilter !== "all" ? Number(branchFilter) : undefined,
     status: statusFilter !== "all" ? statusFilter : undefined,
-    employmentType: typeFilter,
+    employmentType: viewingCoEmp ? undefined : typeFilter,
     search: debouncedSearch || undefined,
   };
 
@@ -86,6 +91,7 @@ export default function Employees() {
   const { data: branches } = useListBranches({ enabled: !isBranchScoped, queryKey: getListBranchesQueryKey() });
   const deleteMutation = useDeleteEmployee();
   const statusMutation = useUpdateEmployeeStatus();
+  const coEmpMutation = useUpdateEmployeeCoEmp();
 
   const totalPages = Math.max(1, Math.ceil(totalEmployees / pageSize));
 
@@ -125,6 +131,13 @@ export default function Employees() {
     });
   };
 
+  const handleToggleCoEmp = (employeeId: number, current: boolean) => {
+    coEmpMutation.mutate({ employeeId, enabled: !current }, {
+      onSuccess: () => { toast({ title: !current ? "Enabled for Co Emp" : "Disabled for Co Emp" }); refresh(); },
+      onError: () => toast({ title: "Update failed", variant: "destructive" }),
+    });
+  };
+
   return (
     <HrLayout>
       <div className="min-h-[calc(100vh-140px)] flex flex-col justify-between gap-6">
@@ -139,9 +152,10 @@ export default function Employees() {
                 items={[
                   { value: "staff", label: "Staff", count: staffCount },
                   { value: "production", label: "Production", count: productionCount },
+                  { value: "coemp", label: "Co Emp" },
                 ]}
                 value={typeFilter}
-                onChange={(v) => setTypeFilter(v as "staff" | "production")}
+                onChange={(v) => setTypeFilter(v as "staff" | "production" | "coemp")}
               />
             </div>
           </div>
@@ -245,6 +259,7 @@ export default function Employees() {
                   <TableHead className="hidden lg:table-cell">Phone</TableHead>
                   <TableHead className="hidden lg:table-cell">Salary</TableHead>
                   <TableHead>Status</TableHead>
+                  {viewingCoEmp && <TableHead>Co Emp</TableHead>}
                   <TableHead className="pr-4 text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -257,7 +272,7 @@ export default function Employees() {
               >
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={9} className="py-16">
+                    <TableCell colSpan={viewingCoEmp ? 10 : 9} className="py-16">
                       <CircleLoader />
                     </TableCell>
                   </TableRow>
@@ -311,6 +326,16 @@ export default function Employees() {
                           {emp.status}
                         </Badge>
                       </TableCell>
+                      {viewingCoEmp && (
+                        <TableCell>
+                          <Switch
+                            checked={emp.coEmpEnabled ?? false}
+                            onCheckedChange={() => handleToggleCoEmp(emp.id, emp.coEmpEnabled ?? false)}
+                            aria-label={`Toggle Co Emp for ${emp.firstName} ${emp.lastName}`}
+                            data-testid={`switch-coemp-${emp.id}`}
+                          />
+                        </TableCell>
+                      )}
                       <TableCell className="pr-4 text-right">
                         <div className="flex items-center gap-1 justify-end">
                           <ActionTooltip label="View profile" color="blue">
@@ -380,7 +405,7 @@ export default function Employees() {
                   ))
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">No employees found</TableCell>
+                    <TableCell colSpan={viewingCoEmp ? 10 : 9} className="text-center py-12 text-muted-foreground">No employees found</TableCell>
                   </TableRow>
                 )}
               </TableBody>

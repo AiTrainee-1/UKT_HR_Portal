@@ -4801,6 +4801,24 @@ export const useUpdateEmployeeLocationTracking = () => {
   });
 };
 
+// "Co Emp" toggle (Employees -> Co Emp tab): marks an employee as visible to
+// an external application consuming this HRMS's API. Off by default; this
+// only flips the flag itself, nothing inside this app changes behavior when
+// it's on. Same shape as useUpdateEmployeeLocationTracking above.
+export const useUpdateEmployeeCoEmp = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ employeeId, enabled }: { employeeId: number; enabled: boolean }) =>
+      customFetch(`/api/employees/${employeeId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ coEmpEnabled: enabled }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/employees"] });
+    },
+  });
+};
+
 // ── Employees: real server-side pagination ──────────────────────────────────
 // Separate from the generated useListEmployees (which still fetches every
 // matching employee in one call, unpaginated -that hook's callers elsewhere

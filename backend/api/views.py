@@ -780,6 +780,7 @@ def _employee_update(request: Request, pk: int) -> Response:
         "bloodGroup": "blood_group",
         "emergencyContact": "emergency_contact",
         "locationTrackingEnabled": "location_tracking_enabled",
+        "coEmpEnabled": "co_emp_enabled",
     }
     if "employmentType" in request.data:
         emp_type = request.data.get("employmentType")

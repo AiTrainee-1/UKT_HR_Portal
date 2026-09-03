@@ -153,6 +153,10 @@ export interface Employee {
   /** @nullable */
   joinDate?: string | null;
   hasPassword?: boolean;
+  /** @nullable */
+  locationTrackingEnabled?: boolean | null;
+  /** @nullable */
+  coEmpEnabled?: boolean | null;
   createdAt: string;
 }
 

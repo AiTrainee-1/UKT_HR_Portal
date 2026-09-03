@@ -173,6 +173,14 @@ class Employee(models.Model):
     location_tracking_enabled = models.BooleanField(
         default=False, db_column="location_tracking_enabled"
     )
+    # "Co Emp" toggle (HR portal: Employees -> Co Emp tab). Marks an employee
+    # as visible to an external application consuming this HRMS's API -off
+    # by default, so nothing is exposed externally until HR explicitly opts
+    # an employee in. Purely a visibility flag; it has no effect on anything
+    # inside this application.
+    co_emp_enabled = models.BooleanField(
+        default=False, db_column="co_emp_enabled"
+    )
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
