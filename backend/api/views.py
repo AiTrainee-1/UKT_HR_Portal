@@ -251,6 +251,7 @@ def auth_me(request: Request) -> Response:
 
 
 @api_view(["GET", "POST"])
+@require_hr
 def departments(request: Request) -> Response:
     if request.method == "GET":
         rows = (
@@ -330,7 +331,13 @@ def _serialize_employee(emp: Employee) -> dict:
 @api_view(["GET", "POST"])
 def employees(request: Request) -> Response:
     if request.method == "GET":
-        return require_auth(_employees_list)(request)
+        # HR only. This returns the full staff directory -43 fields per
+        # person including salaryAmount, bankAccount, pfNumber and phone -so
+        # require_auth was far too weak: ANY signed-in employee could pull
+        # every colleague's pay and bank details from the mobile app. No
+        # employee-facing client calls this endpoint; they use
+        # /api/employees/<id> for their own record instead.
+        return require_hr(_employees_list)(request)
     return require_hr(_employees_create)(request)
 
 
@@ -565,6 +572,18 @@ def employee_detail(request: Request, pk: int) -> Response:
 
 
 def _employee_get(request: Request, pk: int) -> Response:
+    # An employee token may read ONE record: its own. The mobile app fetches
+    # /api/employees/<own id> for the profile screen, which is the only
+    # employee-facing use of this endpoint. Without this check any employee
+    # could walk the id range and collect every colleague's salary, phone and
+    # bank details one row at a time -the list endpoint being locked down
+    # would have achieved nothing on its own.
+    token_emp_id = get_token_employee_id(request)
+    if token_emp_id is not None and token_emp_id != pk:
+        # Same 404 as a genuinely missing row, so this cannot be used to
+        # probe which employee ids exist.
+        return _error("Employee not found", 404)
+
     emp = scope_to_branch(_employee_queryset(), request).filter(pk=pk).first()
     if not emp:
         return _error("Employee not found", 404)

@@ -73,10 +73,24 @@ def _handle_handshake(request: HttpRequest) -> HttpResponse:
     sn = request.GET.get("SN", "")
     logger.warning("ADMS handshake (GET): SN=%s full_query=%r", sn, request.GET.urlencode())
 
-    # TimeZone is advisory only for this app: punches arrive as local wall
-    # time ("2026-08-27 09:15:00") and AttendanceLog stores date and time as
-    # separate naive fields, exactly as the pull-based sync does -so no
-    # timezone conversion happens on either path.
+    # NO "TimeZone=" field here -this used to send "TimeZone=5.5", guessing
+    # the ADMS option meant a decimal UTC offset. It doesn't need to be sent
+    # at all: punches arrive as local wall-clock strings
+    # ("2026-08-27 09:15:00") and AttendanceLog stores date and time as
+    # separate naive fields verbatim, on this path and the pull-sync path
+    # alike -no timezone conversion happens anywhere in this app, so this
+    # field served no purpose for us.
+    #
+    # It very likely caused a real fault on live hardware: the device's own
+    # clock started reporting UTC+5:00 instead of +5:30, but ONLY once Cloud
+    # Server / HTTPS (ADMS mode) was switched on -which is exactly when this
+    # handshake starts firing. The ADMS "TimeZone" option is not
+    # vendor-documented and firmware across ZKTeco generations disagrees on
+    # its format; on hardware still carrying a legacy Windows-CE timezone
+    # index table, a parser reading "5.5" with a plain integer scan reads
+    # "5" and lands on a UTC+05:00 entry, not India's +05:30 entry elsewhere
+    # in that table -exactly the symptom reported. Since we never needed the
+    # device to know its timezone, the fix is to stop telling it one.
     config = "\n".join([
         f"GET OPTION FROM: {sn}",
         "Stamp=9999",
@@ -86,7 +100,6 @@ def _handle_handshake(request: HttpRequest) -> HttpResponse:
         "TransTimes=00:00;14:05",
         "TransInterval=1",
         "TransFlag=1111000000",
-        "TimeZone=5.5",
         "Realtime=1",
         "Encrypt=0",
     ])
