@@ -21,6 +21,7 @@ export default function EmployeeAvatar({
       <img
         src={photoUrl}
         alt={name ?? "Employee"}
+        loading="lazy"
         className={`rounded-full object-cover shrink-0 ${className}`}
         style={{ width: size, height: size }}
       />

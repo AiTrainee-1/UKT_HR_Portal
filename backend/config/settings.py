@@ -181,6 +181,24 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+# All FileField uploads (geo-punch selfies, resumes, employee documents) go
+# through HybridFileStorage: NEW files are written to Postgres (the
+# FileBlob table), so they survive a Railway redeploy instead of vanishing
+# with the container's local disk; files that already existed on disk before
+# this shipped keep being read from MEDIA_ROOT above, unchanged. See
+# api/db_file_storage.py for why a fallback, not a straight cutover.
+#
+# "staticfiles" is left on Django's default (local disk, collected at
+# deploy time by collectstatic) -only user uploads move to the database.
+STORAGES = {
+    "default": {
+        "BACKEND": "api.db_file_storage.HybridFileStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")

@@ -102,6 +102,29 @@ def run_backup(request: Request) -> Response:
     })
 
 
+@api_view(["GET"])
+@require_hr
+def download_backup(request: Request, filename: str) -> Response:
+    """GET /api/backup/download/<filename> -fetched from the database at
+    click time, not read off whatever happens to still be on local disk.
+
+    This is the endpoint that didn't exist before: Settings → Backup could
+    list backups and push them to Google Drive, but had no direct download
+    at all. backup_service.get_backup_bytes checks Postgres first and only
+    falls back to local disk for a backup made before this shipped.
+    """
+    try:
+        data = backup_service.get_backup_bytes(filename)
+    except backup_service.BackupServiceError as exc:
+        return _error(str(exc), 404)
+
+    from django.http import HttpResponse
+
+    response = HttpResponse(data, content_type="application/zip")
+    response["Content-Disposition"] = f'attachment; filename="{os.path.basename(filename)}"'
+    return response
+
+
 # ── Schedule ─────────────────────────────────────────────────────────────────
 
 @api_view(["GET", "PUT"])

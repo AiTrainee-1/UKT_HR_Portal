@@ -229,25 +229,131 @@ def build_full_backup(directory: str) -> dict:
             raise
 
     size = os.stat(out_path).st_size
+
+    # Persisted into Postgres so "Download" can fetch this backup regardless
+    # of whether the container's local disk (where out_path physically sits)
+    # survives to the next request -Railway's filesystem is ephemeral and a
+    # redeploy can wipe it. The zip stays on local disk too, unchanged from
+    # before; the database copy is what makes download reliable, not a
+    # replacement for the on-disk one. Best-effort: a backup that succeeded
+    # on disk must not be reported as failed just because the DB copy
+    # couldn't be made -recorded in the manifest instead of raised.
+    try:
+        _persist_backup_to_db(filename, out_path)
+        manifest["persistedToDatabase"] = True
+    except Exception as exc:
+        manifest["persistedToDatabase"] = False
+        manifest["persistError"] = str(exc)
+
     return {"ok": True, "file": filename, "path": out_path, "sizeBytes": size, "manifest": manifest}
 
 
+def _backup_blob_name(filename: str) -> str:
+    return f"backups/{filename}"
+
+
+def _persist_backup_to_db(filename: str, out_path: str) -> None:
+    """Copies one backup zip's bytes into the file_blobs table.
+
+    Deliberately not routed through FileField/HybridFileStorage: a backup
+    isn't an upload attached to a model row the way a resume or photo is,
+    it's an independent named artifact, so this writes directly to FileBlob.
+    """
+    from .models import FileBlob
+
+    with open(out_path, "rb") as f:
+        data = f.read()
+    FileBlob.objects.update_or_create(
+        name=_backup_blob_name(filename),
+        defaults={"content": data, "content_type": "application/zip", "size": len(data)},
+    )
+
+
+def get_backup_bytes(filename: str) -> bytes:
+    """A backup's zip bytes, from the database if present, else local disk.
+
+    The fallback exists for the same reason HybridFileStorage has one:
+    backups created before this shipped were never copied into Postgres, and
+    "the file still exists on this container's disk right now" -true only
+    until the next redeploy- must not stop working just because it hasn't
+    been superseded by a fresh backup yet.
+    """
+    from .models import FileBlob
+
+    row = FileBlob.objects.filter(name=_backup_blob_name(filename)).only("content").first()
+    if row is not None:
+        return bytes(row.content)
+
+    # basename() strips any path components a caller might pass -filename
+    # ultimately comes from a URL path segment, so this is the one place a
+    # directory-traversal attempt ("../../etc/passwd") gets neutralized
+    # before it ever reaches the filesystem.
+    safe_name = os.path.basename(filename)
+    directory = get_backup_directory()
+    candidate = os.path.join(directory, safe_name) if directory else None
+    if candidate and os.path.isfile(candidate):
+        with open(candidate, "rb") as f:
+            return f.read()
+
+    raise BackupServiceError(
+        "This backup no longer exists -it isn't in the database and isn't on local "
+        "disk either. It may predate database backups and have been lost when the "
+        "server last restarted."
+    )
+
+
+def get_backup_directory() -> str | None:
+    """The configured backup directory, without importing PayrollSettings at
+    module load time (avoids a circular import with models.py)."""
+    from .models import PayrollSettings
+
+    ps = PayrollSettings.get()
+    return (ps.backup_directory or "").strip() or None
+
+
 def list_backups(directory: str) -> list[dict]:
-    if not directory or not os.path.isdir(directory):
-        return []
-    entries = []
-    for path in glob.glob(os.path.join(directory, f"{_BACKUP_PREFIX}*.zip")):
-        try:
-            stat = os.stat(path)
-            entries.append({
-                "file": os.path.basename(path),
-                "sizeBytes": stat.st_size,
-                "createdAt": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-            })
-        except OSError:
-            continue
-    entries.sort(key=lambda e: e["createdAt"], reverse=True)
-    return entries[:20]
+    """Every backup that can still be downloaded, local disk and database
+    both. Deliberately does NOT bail out just because `directory` doesn't
+    exist right now (a redeploy leaves an empty disk with an unmodified
+    backup_directory setting) -database-only entries must still show up in
+    that case, or "Download" would have nothing to offer after every
+    restart even though the backups themselves are safe in Postgres.
+    """
+    entries: dict[str, dict] = {}
+
+    if directory and os.path.isdir(directory):
+        for path in glob.glob(os.path.join(directory, f"{_BACKUP_PREFIX}*.zip")):
+            try:
+                stat = os.stat(path)
+                name = os.path.basename(path)
+                entries[name] = {
+                    "file": name,
+                    "sizeBytes": stat.st_size,
+                    "createdAt": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    "inDatabase": False,
+                }
+            except OSError:
+                continue
+
+    from .models import FileBlob
+
+    prefix = _backup_blob_name("")
+    for row in FileBlob.objects.filter(name__startswith=prefix).only(
+        "name", "size", "created_at"
+    ):
+        name = row.name[len(prefix):]
+        if name in entries:
+            entries[name]["inDatabase"] = True
+        else:
+            entries[name] = {
+                "file": name,
+                "sizeBytes": row.size,
+                "createdAt": row.created_at.isoformat(),
+                "inDatabase": True,
+            }
+
+    ordered = sorted(entries.values(), key=lambda e: e["createdAt"], reverse=True)
+    return ordered[:20]
 
 
 def prune_old_backups(directory: str, retention_count: int) -> int:

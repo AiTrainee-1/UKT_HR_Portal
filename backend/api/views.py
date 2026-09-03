@@ -18,7 +18,7 @@ from rest_framework.throttling import ScopedRateThrottle
 
 import uuid
 
-from .auth import require_auth, require_hr, get_token_employee_id, get_hr_display_name
+from .auth import require_auth, require_hr, get_token_employee_id, get_hr_display_name, is_hr
 from .branch_scope import get_branch_scope, scope_to_branch
 from .clock import ist_now, ist_today
 from .jwt_utils import sign_token
@@ -328,6 +328,78 @@ def _serialize_employee(emp: Employee) -> dict:
     return employee_json(emp, dept_name)
 
 
+def _serialize_employee_for_list(emp: Employee) -> dict:
+    """Same as _serialize_employee, except a photo stored as an embedded
+    base64 data: URI is replaced with a lightweight link to /photo.
+
+    This is the actual fix for "opening Employees fetches every photo at
+    once": one employee's photo alone was ~43KB of base64 sitting inline in
+    every single row of the list response, downloaded whether or not that
+    row was ever scrolled into view. A normal external URL (the common case
+    -most employees have none, and this field also accepts a plain link) is
+    left untouched, since it's already a cheap string with nothing to fetch
+    eagerly.
+
+    Deliberately NOT applied to _serialize_employee / the single-employee
+    detail endpoint: EditEmployee.tsx loads a record via that endpoint,
+    keeps whatever `photoUrl` it received in form state, and resubmits it
+    unchanged on save if the user doesn't touch the photo. Substituting the
+    value there would mean an unrelated edit silently overwriting the stored
+    photo with an API link instead of the original picture.
+    """
+    row = _serialize_employee(emp)
+    photo = row.get("photoUrl")
+    if isinstance(photo, str) and photo.startswith("data:"):
+        row["photoUrl"] = f"/api/employees/{emp.id}/photo"
+    return row
+
+
+@api_view(["GET"])
+@require_auth
+def employee_photo(request: Request, pk: int) -> Response:
+    """GET /api/employees/<id>/photo -the lazy-loaded counterpart to the
+    data: URI _serialize_employee_for_list replaces in list responses.
+
+    @require_auth (not @require_hr) because an employee token must reach
+    this too, to view their own photo -it only rejects requests with no
+    valid token at all, and populates request.jwt_user so the manual checks
+    below (which _employee_get uses the same way) have something to read.
+
+    Same access rule as _employee_get: an employee token may fetch only its
+    own photo; HR must be branch-scoped to the employee. Only ever has
+    something to serve when photo_url is a data: URI -a plain external URL
+    employee record has nothing here to stream, since the browser already
+    loads it directly from wherever it actually lives.
+    """
+    token_emp_id = get_token_employee_id(request)
+    if token_emp_id is not None and token_emp_id != pk:
+        return _error("Not found", 404)
+    if token_emp_id is None and not is_hr(request):
+        return _error("Authentication required", 401)
+
+    emp = scope_to_branch(Employee.objects, request).filter(pk=pk).first()
+    if not emp or not emp.photo_url or not emp.photo_url.startswith("data:"):
+        return _error("Not found", 404)
+
+    import base64
+
+    try:
+        header, encoded = emp.photo_url.split(",", 1)
+        # "data:image/jpeg;base64" -> "image/jpeg"
+        content_type = header.split(":", 1)[1].split(";", 1)[0] or "application/octet-stream"
+        raw = base64.b64decode(encoded)
+    except Exception:
+        return _error("Stored photo is corrupted", 500)
+
+    from django.http import HttpResponse
+
+    response = HttpResponse(raw, content_type=content_type)
+    # Employee photos change rarely; this only shaves repeat page-loads for
+    # the same browser session, it never affects what a fresh fetch sees.
+    response["Cache-Control"] = "private, max-age=3600"
+    return response
+
+
 @api_view(["GET", "POST"])
 def employees(request: Request) -> Response:
     if request.method == "GET":
@@ -349,6 +421,7 @@ def _employees_list(request: Request) -> Response:
     branch_id = request.query_params.get("branchId")
     emp_status = request.query_params.get("status")
     salary_type = request.query_params.get("salaryType")
+    employment_type = request.query_params.get("employmentType")
     search = request.query_params.get("search", "").strip()
     if dept_id:
         qs = qs.filter(department_id=int(dept_id))
@@ -360,6 +433,8 @@ def _employees_list(request: Request) -> Response:
         qs = qs.filter(status=emp_status)
     if salary_type:
         qs = qs.filter(salary_type=salary_type)
+    if employment_type:
+        qs = qs.filter(employment_type=employment_type)
     if search:
         # Name was missing here, so "search by name or employee code" -which is
         # what every caller's placeholder promises -returned nothing for a
@@ -378,7 +453,45 @@ def _employees_list(request: Request) -> Response:
             | Q(last_name__icontains=search)
             | Q(full_name__icontains=search)
         )
-    return Response([_serialize_employee(e) for e in qs])
+
+    # countOnly=1 -just a number (e.g. the "Inactive" badge), never the rows.
+    # The old behavior fetched every inactive employee's full record,
+    # photo included, purely to read `.length` off the result -this replaces
+    # that with a single COUNT query.
+    if request.query_params.get("countOnly") in ("1", "true"):
+        return Response({"count": qs.count()})
+
+    page = request.query_params.get("page")
+    if page is None:
+        # No `page` param: identical to every response this endpoint has
+        # ever returned -a bare array. Existing callers that don't yet know
+        # about pagination are completely unaffected.
+        return Response([_serialize_employee(e) for e in qs])
+
+    try:
+        page_num = max(1, int(page))
+        page_size = max(1, min(200, int(request.query_params.get("pageSize", 20))))
+    except (TypeError, ValueError):
+        return _error("page and pageSize must be numbers")
+
+    # Aggregate counts describe the FULL filtered set (before pagination
+    # slices it), so the staff/production tally badges stay accurate however
+    # many pages exist -matching what the client-side .filter() used to
+    # compute over the whole fetched array.
+    total = qs.count()
+    staff_count = qs.filter(employment_type="staff").count()
+    production_count = qs.filter(employment_type="production").count()
+
+    start = (page_num - 1) * page_size
+    page_qs = qs.order_by("id")[start:start + page_size]
+    return Response({
+        "results": [_serialize_employee_for_list(e) for e in page_qs],
+        "count": total,
+        "staffCount": staff_count,
+        "productionCount": production_count,
+        "page": page_num,
+        "pageSize": page_size,
+    })
 
 
 def _assign_unit_code(branch_id: int | None) -> str | None:

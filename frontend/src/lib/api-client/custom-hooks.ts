@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UseQueryOptions } from "@tanstack/react-query";
 import { customFetch, getApiOrigin } from "./custom-fetch";
+import type { Employee } from "./generated/api.schemas";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -4319,7 +4320,12 @@ export const downloadResignationPdf = async (id: number, getToken: () => string 
 
 // ── Database Backup (Settings → Backup) ───────────────────────────────────────
 
-export type BackupFileItem = { file: string; sizeBytes: number; createdAt: string };
+export type BackupFileItem = {
+  file: string; sizeBytes: number; createdAt: string;
+  /** True once this backup is in the database and safe from a redeploy
+   *  wiping local disk -see the download helper below. */
+  inDatabase?: boolean;
+};
 
 export type BackupScheduleInfo = {
   isEnabled: boolean;
@@ -4680,6 +4686,38 @@ export const fetchAuthedImageObjectUrl = async (url: string, getToken: () => str
   return URL.createObjectURL(blob);
 };
 
+/** Fetches an auth-protected file and triggers a real browser "Save As",
+ * with the actual filename -unlike an <a href> to the API, which can't
+ * attach a Bearer header, and unlike fetchAuthedImageObjectUrl above, which
+ * hands back a blob URL for an <img> rather than saving anything. Used for
+ * "Download" buttons on files a page doesn't otherwise render (backup
+ * zips, resumes, documents). The object URL is revoked right after the
+ * click -this fetches fresh from the server every time (the "cloud, at
+ * that moment" behavior), never a locally cached copy. */
+export const downloadAuthedFile = async (
+  url: string,
+  filename: string,
+  getToken: () => string | null,
+): Promise<void> => {
+  const token = getToken();
+  const response = await fetch(`${getApiOrigin()}${url}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error(body?.error || `Download failed (${response.status})`);
+  }
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objectUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(objectUrl);
+};
+
 export type LiveLocationTeamMember = {
   employeeId: number;
   employeeCode: string;
@@ -4762,6 +4800,77 @@ export const useUpdateEmployeeLocationTracking = () => {
     },
   });
 };
+
+// ── Employees: real server-side pagination ──────────────────────────────────
+// Separate from the generated useListEmployees (which still fetches every
+// matching employee in one call, unpaginated -that hook's callers elsewhere
+// are untouched) because /api/employees only returns the new paginated
+// envelope when a `page` param is present; without one it replies with the
+// exact same bare array it always has. This hook is what actually asks for
+// a page, so only the employees the visible page needs -- their photos
+// included -are ever fetched.
+
+export type PaginatedEmployeesParams = {
+  page: number;
+  pageSize: number;
+  employmentType?: "staff" | "production";
+  status?: string;
+  departmentId?: number;
+  designationId?: number;
+  branchId?: number;
+  search?: string;
+};
+
+export type PaginatedEmployeesResult = {
+  results: Employee[];
+  count: number;
+  staffCount: number;
+  productionCount: number;
+  page: number;
+  pageSize: number;
+};
+
+function employeesQueryString(params: Record<string, unknown>): string {
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== "") {
+      qs.set(key, String(value));
+    }
+  }
+  return qs.toString();
+}
+
+export const getListEmployeesPaginatedQueryKey = (params: PaginatedEmployeesParams) =>
+  ["/api/employees", "paginated", params] as const;
+
+export const useListEmployeesPaginated = (params: PaginatedEmployeesParams) =>
+  useQuery<PaginatedEmployeesResult>({
+    queryKey: getListEmployeesPaginatedQueryKey(params),
+    queryFn: () =>
+      customFetch<PaginatedEmployeesResult>(`/api/employees?${employeesQueryString(params)}`),
+    // Keeps the previous page's rows on screen while the next page loads,
+    // instead of the table flashing empty on every click -DataPagination's
+    // Next/Previous should feel instant even though it now genuinely
+    // triggers a network request.
+    placeholderData: (prev) => prev,
+  });
+
+/** A bare count, for badges like "Inactive (12)" -avoids fetching every
+ * inactive employee's full record (photo included) just to read `.length`. */
+export const useEmployeeCount = (
+  params: Omit<PaginatedEmployeesParams, "page" | "pageSize">,
+  options?: { enabled?: boolean },
+) =>
+  useQuery<number>({
+    queryKey: ["/api/employees", "countOnly", params] as const,
+    queryFn: async () => {
+      const body = await customFetch<{ count: number }>(
+        `/api/employees?${employeesQueryString({ ...params, countOnly: 1 })}`,
+      );
+      return body.count;
+    },
+    enabled: options?.enabled ?? true,
+  });
 
 export const useBulkUpdateLocationTracking = () => {
   const queryClient = useQueryClient();

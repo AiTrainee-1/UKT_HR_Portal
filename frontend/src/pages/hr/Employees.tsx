@@ -14,10 +14,13 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { ActionTooltip } from "@/components/ui/action-tooltip";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import {
-  useListEmployees, useListDepartments, useDeleteEmployee, useUpdateEmployeeStatus,
+  useListDepartments, useDeleteEmployee, useUpdateEmployeeStatus,
   getListEmployeesQueryKey
 } from "@/lib/api-client";
-import { useListBranches, getListBranchesQueryKey } from "@/lib/api-client/custom-hooks";
+import {
+  useListBranches, getListBranchesQueryKey,
+  useListEmployeesPaginated, useEmployeeCount,
+} from "@/lib/api-client/custom-hooks";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -40,50 +43,64 @@ export default function Employees() {
   const { user } = useAuth();
   const isBranchScoped = !!user?.branchId;
 
-  const { data: rawEmployees, isLoading } = useListEmployees({
+  const [page, setPage] = useState(1);
+  // State, not a constant -the pagination bar lets the user change it.
+  const [pageSize, setPageSize] = useState(10);
+
+  // Debounced: searching used to filter an already-fully-downloaded array in
+  // the browser, instantly, on every keystroke. Now that the server does the
+  // filtering (so it can filter before paginating, on data it hasn't sent
+  // yet), every change is a network request -debouncing keeps that from
+  // firing once per keystroke while still feeling immediate once you pause.
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const filterParams = {
     departmentId: deptFilter !== "all" ? Number(deptFilter) : undefined,
     branchId: !isBranchScoped && branchFilter !== "all" ? Number(branchFilter) : undefined,
     status: statusFilter !== "all" ? statusFilter : undefined,
-  });
+    employmentType: typeFilter,
+    search: debouncedSearch || undefined,
+  };
 
-  const { data: inactiveEmployees } = useListEmployees({
-    departmentId: deptFilter !== "all" ? Number(deptFilter) : undefined,
-    branchId: !isBranchScoped && branchFilter !== "all" ? Number(branchFilter) : undefined,
+  const { data: pageData, isLoading, isPlaceholderData } = useListEmployeesPaginated({
+    ...filterParams, page, pageSize,
+  });
+  const paginatedEmployees = pageData?.results ?? [];
+  const totalEmployees = pageData?.count ?? 0;
+  const staffCount = pageData?.staffCount ?? 0;
+  const productionCount = pageData?.productionCount ?? 0;
+
+  // Only a number -never fetches the inactive employees themselves (photos
+  // included) purely to show this badge, which is what happened before.
+  const { data: inactiveCount = 0 } = useEmployeeCount({
+    departmentId: filterParams.departmentId,
+    branchId: filterParams.branchId,
     status: "inactive",
   });
-  const inactiveCount = inactiveEmployees?.length ?? 0;
 
-  const staffCount = rawEmployees?.filter((e) => e.employmentType !== "production").length ?? 0;
-  const productionCount = rawEmployees?.filter((e) => e.employmentType === "production").length ?? 0;
-
-  const employees = rawEmployees?.filter((e) => {
-    const isProduction = e.employmentType === "production";
-    if (typeFilter === "production" ? !isProduction : isProduction) return false;
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return (
-      e.firstName?.toLowerCase().includes(q) ||
-      e.lastName?.toLowerCase().includes(q) ||
-      e.email?.toLowerCase().includes(q) ||
-      e.phone?.includes(q) ||
-      e.employeeCode?.toLowerCase().includes(q)
-    );
-  });
   const { data: departments } = useListDepartments();
   const { data: branches } = useListBranches({ enabled: !isBranchScoped, queryKey: getListBranchesQueryKey() });
   const deleteMutation = useDeleteEmployee();
   const statusMutation = useUpdateEmployeeStatus();
 
-  const [page, setPage] = useState(1);
-  // State, not a constant -the pagination bar lets the user change it.
-  const [pageSize, setPageSize] = useState(10);
-  const totalEmployees = employees?.length ?? 0;
   const totalPages = Math.max(1, Math.ceil(totalEmployees / pageSize));
-  const paginatedEmployees = employees ? employees.slice((page - 1) * pageSize, page * pageSize) : [];
 
+  // Any filter changing invalidates which page "1" even means -e.g. a
+  // department with only 3 people can't show a page 4 that used to exist
+  // under a broader filter. Keyed on the filter VALUES, not on
+  // totalEmployees, so this fires exactly once per actual filter change
+  // rather than once per page's worth of server response.
   useEffect(() => {
     setPage(1);
-  }, [totalEmployees]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    filterParams.departmentId, filterParams.branchId, filterParams.status,
+    filterParams.employmentType, filterParams.search,
+  ]);
 
   useEffect(() => {
     if (page > totalPages) {
@@ -115,7 +132,7 @@ export default function Employees() {
           <div className="flex items-center justify-between">
           <div>
             <h2 className="text-2xl font-black">Employees</h2>
-            <p className="text-muted-foreground text-sm mt-0.5">{employees?.length ?? 0} records</p>
+            <p className="text-muted-foreground text-sm mt-0.5">{totalEmployees} records</p>
             {/* Staff / Production toggle */}
             <div className="mt-2">
               <PillTabs
@@ -231,14 +248,20 @@ export default function Employees() {
                   <TableHead className="pr-4 text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
-              <TableBody>
+              <TableBody
+                // The previous page's rows stay visible (see placeholderData
+                // above) while the next page loads, dimmed slightly so a
+                // Next/Previous click reads as "loading", not as if nothing
+                // happened yet.
+                className={isPlaceholderData ? "opacity-60 transition-opacity" : "transition-opacity"}
+              >
                 {isLoading ? (
                   <TableRow>
                     <TableCell colSpan={9} className="py-16">
                       <CircleLoader />
                     </TableCell>
                   </TableRow>
-                ) : employees && employees.length > 0 ? (
+                ) : paginatedEmployees.length > 0 ? (
                   paginatedEmployees.map((emp) => (
                     <TableRow key={emp.id} data-testid={`row-employee-${emp.id}`}>
                       <TableCell className="pl-4">

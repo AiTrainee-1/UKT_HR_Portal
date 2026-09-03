@@ -13,7 +13,7 @@ import {
   Building2, Clock, Mail, Database, IndianRupee, FileText, Upload, X,
   Fingerprint, CreditCard, Plus, Trash2, Power, Pencil, FileSignature, Award, Eye,
   AlertTriangle, Info, Briefcase, Factory, UserCheck, MessageCircle, CheckCircle2,
-  Palette,
+  Palette, Download,
 } from "lucide-react";
 import { ThemesPanel } from "@/components/ThemesPanel";
 import {
@@ -29,6 +29,7 @@ import {
   useProductionNextPeriod, useListShifts,
   useWhatsAppStatus, useWhatsAppTemplates, useUpdateWhatsAppTemplate,
   type WhatsAppDocumentType,
+  downloadAuthedFile,
 } from "@/lib/api-client/custom-hooks";
 import { TimePicker12h } from "@/components/ui/time-picker-12h";
 import { useAuth, permissionLevel } from "@/contexts/AuthContext";
@@ -218,20 +219,50 @@ function formatBackupFileSize(bytes: number): string {
 const RECENT_BACKUPS_VISIBLE = 3;
 
 function RecentBackupsList({ backups }: { backups: BackupFileItem[] }) {
+  const { token } = useAuth();
+  const { toast } = useToast();
   const [expanded, setExpanded] = useState(false);
+  const [downloading, setDownloading] = useState<string | null>(null);
   const visible = expanded ? backups : backups.slice(0, RECENT_BACKUPS_VISIBLE);
   const hiddenCount = backups.length - visible.length;
 
+  const handleDownload = async (file: string) => {
+    setDownloading(file);
+    try {
+      // Always a fresh fetch from the server -this endpoint reads the
+      // database copy (falling back to local disk only for a backup made
+      // before that existed), never anything cached in the browser. That is
+      // what "fetched from the cloud at that moment" means here.
+      await downloadAuthedFile(`/api/backup/download/${encodeURIComponent(file)}`, file, () => token);
+    } catch (e: any) {
+      toast({ title: "Download failed", description: e?.message, variant: "destructive" });
+    } finally {
+      setDownloading(null);
+    }
+  };
+
   return (
     <div className="space-y-2">
-      <p className="text-xs font-semibold text-gray-600">Recent backups in this folder</p>
+      <p className="text-xs font-semibold text-gray-600">Recent backups</p>
       <div className="border rounded-lg divide-y">
         {visible.map(b => (
-          <div key={b.file} className="flex items-center justify-between px-3 py-2 text-xs">
-            <span className="font-mono text-gray-700 truncate">{b.file}</span>
-            <span className="text-gray-400 shrink-0 ml-3">
-              {formatBackupFileSize(b.sizeBytes)} · {new Date(b.createdAt).toLocaleString("en-IN")}
-            </span>
+          <div key={b.file} className="flex items-center justify-between gap-3 px-3 py-2 text-xs">
+            <div className="min-w-0">
+              <span className="font-mono text-gray-700 truncate block">{b.file}</span>
+              <span className="text-gray-400">
+                {formatBackupFileSize(b.sizeBytes)} · {new Date(b.createdAt).toLocaleString("en-IN")}
+              </span>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="shrink-0 gap-1.5"
+              disabled={downloading === b.file}
+              onClick={() => handleDownload(b.file)}
+            >
+              <Download size={13} />
+              {downloading === b.file ? "Downloading…" : "Download"}
+            </Button>
           </div>
         ))}
       </div>

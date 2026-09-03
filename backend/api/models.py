@@ -1632,6 +1632,37 @@ class BranchSettingsOverride(models.Model):
         return f"Settings override for branch {self.branch_id} ({len(self.overrides or {})} fields)"
 
 
+class FileBlob(models.Model):
+    """Backing store for api.db_file_storage.HybridFileStorage.
+
+    Every FileField in this app (geo-punch selfies, recruitment resumes,
+    employee documents) is unmodified -it still calls .save()/.open()/
+    .read()/.delete() exactly as before. Only the storage backend those calls
+    resolve to has changed: new uploads now write here, in Postgres, instead
+    of the local disk Railway wipes on every redeploy. `name` is the exact
+    value Django's FileField already used as a relative path
+    (e.g. "resumes/2026/09/resume_ab12c3.pdf"), so it lines up 1:1 with what
+    each FileField's `.name` stores -nothing about that naming changed either.
+
+    Files that existed on local disk before this shipped are deliberately
+    NOT migrated here -HybridFileStorage falls back to reading them from
+    disk, so they keep working exactly as they did. This table only ever
+    gains rows for files uploaded from now on.
+    """
+
+    name = models.TextField(unique=True, db_column="name")
+    content = models.BinaryField(db_column="content")
+    content_type = models.TextField(blank=True, default="", db_column="content_type")
+    size = models.BigIntegerField(default=0, db_column="size")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "file_blobs"
+
+    def __str__(self):
+        return f"{self.name} ({self.size} bytes)"
+
+
 class SalaryRecord(models.Model):
     employee = models.ForeignKey(
         Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="salary_records"

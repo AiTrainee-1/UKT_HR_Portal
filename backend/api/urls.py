@@ -135,8 +135,8 @@ from .chat_views import (
     chat_channels, chat_messages, chat_message_reactions,
 )
 from .backup_views import (
-    backup_status, run_backup, backup_schedule_view, backup_drive_view, backup_drive_test,
-    backup_restore_validate, backup_restore_run, backup_restore_status,
+    backup_status, run_backup, download_backup, backup_schedule_view, backup_drive_view,
+    backup_drive_test, backup_restore_validate, backup_restore_run, backup_restore_status,
 )
 
 urlpatterns = [
@@ -161,6 +161,7 @@ urlpatterns = [
     # ── Employees ───────────────────────────────────────────────────────────
     path("employees", views.employees),
     path("employees/<int:pk>", views.employee_detail),
+    path("employees/<int:pk>/photo", views.employee_photo),
     path("employees/<int:pk>/status", views.employee_status),
     path("employees/bulk-upload", views.bulk_upload_employees),
     path("employees/bulk-update", views.bulk_update_employees),
@@ -405,6 +406,7 @@ urlpatterns = [
     # ── Database Backup (Settings → Backup) ──────────────────────────────────
     path("backup", backup_status),
     path("backup/run", run_backup),
+    path("backup/download/<str:filename>", download_backup),
     path("backup/schedule", backup_schedule_view),
     path("backup/drive", backup_drive_view),
     path("backup/drive/test", backup_drive_test),
