@@ -92,6 +92,43 @@ def employee_json(emp, department_name: str | None = None) -> dict:
     }
 
 
+def co_portal_employee_json(emp) -> dict:
+    """Safe-subset employee payload for the Co HRMS Portal's read-only sync
+    (backend/api/co_portal_views.py). Deliberately a standalone dict literal
+    rather than a filtered view of employee_json() -a field added there in
+    the future (salary, bank, PF/ESI/UAN, etc.) must never leak into this
+    external-facing endpoint just by inheriting it silently.
+    """
+    dept_name = emp.department.name if emp.department_id and emp.department else None
+    designation_title = emp.designation.title if emp.designation_id and emp.designation else None
+    branch_name = branch_code = None
+    if emp.branch_id and emp.branch:
+        branch_name = emp.branch.name
+        branch_code = emp.branch.code
+    return {
+        "id": emp.id,
+        "employeeCode": emp.employee_code,
+        "firstName": emp.first_name,
+        "lastName": emp.last_name,
+        "gender": emp.gender,
+        "dateOfBirth": emp.date_of_birth.isoformat() if emp.date_of_birth else None,
+        "email": emp.email,
+        "phone": emp.phone,
+        "photoUrl": emp.photo_url,
+        "status": emp.status,
+        "employmentType": emp.employment_type,
+        "departmentId": emp.department_id,
+        "departmentName": dept_name,
+        "designationId": emp.designation_id,
+        "designationTitle": designation_title,
+        "branchId": emp.branch_id,
+        "branchName": branch_name,
+        "branchCode": branch_code,
+        "joinDate": emp.join_date,
+        "updatedAt": _dt(emp.updated_at),
+    }
+
+
 def salary_record_json(record, employee_name: str | None = None) -> dict:
     return {
         "id": record.id,

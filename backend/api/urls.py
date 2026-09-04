@@ -21,6 +21,10 @@ from .mobile_login_views import (
     mobile_app_logins, mobile_app_logins_export, mobile_app_reset_password,
 )
 from .theme_views import theme_settings, update_theme_settings
+from .co_portal_views import (
+    co_portal_employees, co_portal_attendance_logs,
+    co_portal_departments, co_portal_designations, co_portal_branches,
+)
 from .hr_user_views import (
     roles, role_detail,
     hr_users, hr_user_detail,
@@ -309,6 +313,13 @@ urlpatterns = [
     path("attendance/override", attendance_day_override),
     path("attendance/override-requests", attendance_override_requests),
     path("biometric/punch", biometric_punch),
+
+    # ── Co HRMS Portal (read-only external pull, X-Portal-Key auth) ─────────
+    path("co-portal/employees", co_portal_employees),
+    path("co-portal/attendance-logs", co_portal_attendance_logs),
+    path("co-portal/departments", co_portal_departments),
+    path("co-portal/designations", co_portal_designations),
+    path("co-portal/branches", co_portal_branches),
 
     # ── Geo Attendance (location-based punching + live tracking) ────────────
     path("attendance/geo-punch", geo_punch),

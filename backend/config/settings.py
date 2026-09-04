@@ -10,6 +10,9 @@ load_dotenv(BASE_DIR / ".env")
 
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-only-change-me")
 BIOMETRIC_API_KEY = os.environ.get("BIOMETRIC_API_KEY", "")
+# Shared secret the Co HRMS Portal's backend sends in X-Portal-Key when
+# pulling employees/attendance from the read-only /api/co-portal/* endpoints.
+CO_PORTAL_API_KEY = os.environ.get("CO_PORTAL_API_KEY", "")
 # The frontend's own public origin -needed because the backend can no longer
 # assume it shares a hostname with the frontend (see growth_views.py's
 # _public_base_url, which used to build public QR-verification links from

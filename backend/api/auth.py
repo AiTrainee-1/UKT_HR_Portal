@@ -135,6 +135,31 @@ def require_super_admin(view_func):
     return wrapper
 
 
+def require_portal_key(view_func):
+    """
+    Gates the read-only /api/co-portal/* endpoints the Co HRMS Portal (a
+    separate application, separate database) pulls from on a schedule.
+
+    Not JWT-based -there's no human login on the other end, just a scheduled
+    background job -so this checks a static shared secret instead, the same
+    shape attendance_views.py's biometric_punch check already uses for its
+    own non-human caller (a device): a fixed header, compared against a
+    server-side .env value, failing closed if that value is unset.
+    """
+    @wraps(view_func)
+    def wrapper(request: Request, *args, **kwargs):
+        from django.conf import settings
+
+        expected = getattr(settings, "CO_PORTAL_API_KEY", "")
+        if not expected:
+            return Response({"error": "CO_PORTAL_API_KEY is not configured on the server"}, status=500)
+        if request.headers.get("X-Portal-Key") != expected:
+            return Response({"error": "Unauthorized"}, status=401)
+        return view_func(request, *args, **kwargs)
+
+    return wrapper
+
+
 def get_token_employee_id(request: Request) -> int | None:
     """If the logged-in user is an employee, return their employeeId from the JWT. HR returns None."""
     user = getattr(request, "jwt_user", {})
