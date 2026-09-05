@@ -1047,6 +1047,14 @@ export default function Settings() {
     prodPfRate: 0,
     prodEsiRate: 0,
     prodEsiApplicableBelow: 21000,
+    // Compensation (CTC breakdown -does not affect payroll generation)
+    basicPercent: 50,
+    hraPercent: 20,
+    // Statutory Bonus (Payment of Bonus Act)
+    bonusPercent: 8.33,
+    bonusWageCeiling: 7000,
+    bonusEligibilityCeiling: 21000,
+    bonusFyStartMonth: 4,
     // General
     payDay: 5,
     defaultSalaryPerShift: 0,
@@ -1087,6 +1095,12 @@ export default function Settings() {
         prodPfRate: payrollSettingsData.prodPfRate,
         prodEsiRate: payrollSettingsData.prodEsiRate,
         prodEsiApplicableBelow: payrollSettingsData.prodEsiApplicableBelow,
+        basicPercent: payrollSettingsData.basicPercent ?? 50,
+        hraPercent: payrollSettingsData.hraPercent ?? 20,
+        bonusPercent: payrollSettingsData.bonusPercent ?? 8.33,
+        bonusWageCeiling: payrollSettingsData.bonusWageCeiling ?? 7000,
+        bonusEligibilityCeiling: payrollSettingsData.bonusEligibilityCeiling ?? 21000,
+        bonusFyStartMonth: payrollSettingsData.bonusFyStartMonth ?? 4,
         payDay: payrollSettingsData.payDay,
         defaultSalaryPerShift: payrollSettingsData.defaultSalaryPerShift ?? 0,
         slipCompanyName: payrollSettingsData.slipCompanyName || "UK TEXTILES - H.O",
@@ -1203,6 +1217,35 @@ export default function Settings() {
       });
     } catch {
       toast({ title: errorTitle ?? "Failed to save payroll settings", variant: "destructive" });
+    }
+  };
+
+  const saveCompensationSettings = async () => {
+    try {
+      await updatePayrollSettings.mutateAsync({
+        basicPercent: payroll.basicPercent,
+        hraPercent: payroll.hraPercent,
+      } as never);
+      toast({
+        title: "Compensation settings saved",
+        description: "Only affects the Compensation page's CTC breakdown -actual payroll generation is unchanged.",
+      });
+    } catch {
+      toast({ title: "Failed to save compensation settings", variant: "destructive" });
+    }
+  };
+
+  const saveBonusSettings = async () => {
+    try {
+      await updatePayrollSettings.mutateAsync({
+        bonusPercent: payroll.bonusPercent,
+        bonusWageCeiling: payroll.bonusWageCeiling,
+        bonusEligibilityCeiling: payroll.bonusEligibilityCeiling,
+        bonusFyStartMonth: payroll.bonusFyStartMonth,
+      } as never);
+      toast({ title: "Bonus settings saved" });
+    } catch {
+      toast({ title: "Failed to save bonus settings", variant: "destructive" });
     }
   };
 
@@ -2749,6 +2792,106 @@ export default function Settings() {
                   disabled={updatePayrollSettings.isPending || psLoading}
                 >
                   {updatePayrollSettings.isPending ? "Saving…" : "Save Payroll Settings"}
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* ── Compensation breakdown (Compensation page) ── */}
+            <Card className="border-0 shadow-sm mt-4">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-bold flex items-center gap-2">
+                  <IndianRupee size={15} className="text-teal-500" /> Compensation Breakdown
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="p-3 rounded-lg bg-blue-50 border border-blue-100 text-xs text-blue-700">
+                  Used only by the <strong>Compensation</strong> page's CTC breakdown (Basic / HRA / Allowances
+                  per employee). Does <strong>not</strong> affect actual payroll generation or salary slips.
+                </div>
+                <div className="grid sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Basic (%)</Label>
+                    <Input
+                      type="number" min={0} max={100} step={0.01}
+                      value={payroll.basicPercent}
+                      onChange={e => setPayroll(p => ({ ...p, basicPercent: Number(e.target.value) }))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">HRA (%)</Label>
+                    <Input
+                      type="number" min={0} max={100} step={0.01}
+                      value={payroll.hraPercent}
+                      onChange={e => setPayroll(p => ({ ...p, hraPercent: Number(e.target.value) }))}
+                    />
+                  </div>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Allowances is computed as the remainder (Gross − Basic − HRA) on the Compensation page.
+                </p>
+                <Button
+                  size="sm"
+                  onClick={() => saveCompensationSettings()}
+                  disabled={updatePayrollSettings.isPending || psLoading}
+                >
+                  {updatePayrollSettings.isPending ? "Saving…" : "Save Compensation Settings"}
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* ── Statutory Bonus (Bonus page) ── */}
+            <Card className="border-0 shadow-sm mt-4">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-bold flex items-center gap-2">
+                  <IndianRupee size={15} className="text-amber-500" /> Statutory Bonus
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800">
+                  Payment of Bonus Act, 1965: bonus % must be between 8.33 (minimum) and 20 (maximum).
+                  Used by the <strong>Bonus</strong> page's calculation engine.
+                </div>
+                <div className="grid sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Bonus (%)</Label>
+                    <Input
+                      type="number" min={8.33} max={20} step={0.01}
+                      value={payroll.bonusPercent}
+                      onChange={e => setPayroll(p => ({ ...p, bonusPercent: Number(e.target.value) }))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Wage Ceiling (&#8377;)</Label>
+                    <Input
+                      type="number" min={0}
+                      value={payroll.bonusWageCeiling}
+                      onChange={e => setPayroll(p => ({ ...p, bonusWageCeiling: Number(e.target.value) }))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Eligibility Ceiling (&#8377;)</Label>
+                    <Input
+                      type="number" min={0}
+                      value={payroll.bonusEligibilityCeiling}
+                      onChange={e => setPayroll(p => ({ ...p, bonusEligibilityCeiling: Number(e.target.value) }))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Financial Year Start Month</Label>
+                    <Input
+                      type="number" min={1} max={12}
+                      value={payroll.bonusFyStartMonth}
+                      onChange={e => setPayroll(p => ({ ...p, bonusFyStartMonth: Number(e.target.value) }))}
+                      placeholder="4 = April"
+                    />
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => saveBonusSettings()}
+                  disabled={updatePayrollSettings.isPending || psLoading}
+                >
+                  {updatePayrollSettings.isPending ? "Saving…" : "Save Bonus Settings"}
                 </Button>
               </CardContent>
             </Card>

@@ -2415,6 +2415,14 @@ export type PayrollSettingsItem = {
   prodPfRate: number;
   prodEsiRate: number;
   prodEsiApplicableBelow: number;
+  // Compensation (CTC breakdown -does not affect payroll generation)
+  basicPercent: number;
+  hraPercent: number;
+  // Statutory Bonus (Payment of Bonus Act)
+  bonusPercent: number;
+  bonusWageCeiling: number;
+  bonusEligibilityCeiling: number;
+  bonusFyStartMonth: number;
   // General
   payDay: number;
   productionPayType: string;
@@ -3190,6 +3198,134 @@ export const useAddIncrement = () => {
       queryClient.invalidateQueries({ queryKey: ["/api/increments/summary"] });
       queryClient.invalidateQueries({ queryKey: ["/api/employees"] });
     },
+  });
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Statutory Bonus (Payment of Bonus Act) -Bonus.tsx
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type BonusCalculationRow = {
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department: string | null;
+  employmentType: string | null;
+  monthlyWage: number;
+  eligible: boolean;
+  reason: string | null;
+  recordsConsidered: number;
+  calculationBase: number;
+  bonusPercent: number;
+  bonusAmount: number;
+};
+
+export type BonusCalculateResult = {
+  financialYear: string;
+  results: BonusCalculationRow[];
+  totalEmployees: number;
+  totalEligible: number;
+  totalBonusAmount: number;
+  avgBonusAmount: number;
+};
+
+export type BonusItem = {
+  id: number;
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department: string | null;
+  financialYear: string;
+  recordsConsidered: number;
+  calculationBase: number;
+  bonusPercentApplied: number;
+  bonusAmount: number;
+  status: "calculated" | "approved" | "paid";
+  notes: string | null;
+  computedBy: string | null;
+  createdAt: string | null;
+};
+
+export const useBonusCalculate = (financialYear: string, enabled = true) =>
+  useQuery<BonusCalculateResult>({
+    queryKey: ["/api/bonus/calculate", financialYear],
+    queryFn: () => customFetch<BonusCalculateResult>(`/api/bonus/calculate?financialYear=${encodeURIComponent(financialYear)}`),
+    enabled: enabled && !!financialYear,
+  });
+
+export const useBonusList = (financialYear: string, enabled = true) =>
+  useQuery<{ results: BonusItem[] }>({
+    queryKey: ["/api/bonus", financialYear],
+    queryFn: () => customFetch<{ results: BonusItem[] }>(`/api/bonus?financialYear=${encodeURIComponent(financialYear)}`),
+    enabled: enabled && !!financialYear,
+  });
+
+export const useGenerateBonus = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (financialYear: string) =>
+      customFetch<{ financialYear: string; generated: number }>("/api/bonus/generate", {
+        method: "POST",
+        body: JSON.stringify({ financialYear }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/bonus"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/bonus/calculate"] });
+    },
+  });
+};
+
+export const useUpdateBonus = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: number; data: { status?: BonusItem["status"]; notes?: string } }) =>
+      customFetch<BonusItem>(`/api/bonus/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/bonus"] });
+    },
+  });
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Compensation -read-only CTC breakdown (Compensation.tsx)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type CompensationRow = {
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department: string | null;
+  designation: string | null;
+  branch: string | null;
+  employmentType: string | null;
+  basic: number;
+  hra: number;
+  allowances: number;
+  employerPf: number;
+  employerEsi: number;
+  grossMonthly: number;
+  annualCtc: number;
+};
+
+export type CompensationParams = {
+  departmentId?: number;
+  branchId?: number;
+  employmentType?: string;
+  status?: string;
+  search?: string;
+};
+
+export const useCompensation = (params: CompensationParams) => {
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== "") qs.set(key, String(value));
+  }
+  return useQuery<{ results: CompensationRow[]; count: number }>({
+    queryKey: ["/api/compensation", params],
+    queryFn: () => customFetch<{ results: CompensationRow[]; count: number }>(`/api/compensation?${qs.toString()}`),
   });
 };
 

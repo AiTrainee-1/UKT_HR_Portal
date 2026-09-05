@@ -10,7 +10,7 @@ import {
   ChevronRight, Search, X, Command, UserCheck, UserMinus,
   CalendarCheck, Bell, Award, TrendingUp, Gift, CreditCard,
   CalendarHeart, MoonStar, MessageCircle, UserCog, FolderOpen, MonitorSmartphone,
-  Smartphone,
+  Smartphone, Landmark,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -85,6 +85,7 @@ const navGroups: NavGroupData[] = [
     items: [
       { path: '/hr/payroll', label: 'Staff Payroll', icon: IndianRupee },
       { path: '/hr/production-payroll', label: 'Production Payroll', icon: Factory },
+      { path: '/hr/compensation', label: 'Compensation', icon: Landmark },
       { path: '/hr/settlement', label: 'Settlement', icon: Wallet },
       { path: '/hr/reports', label: 'Reports', icon: BarChart3 },
     ],

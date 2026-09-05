@@ -59,6 +59,7 @@ import LeaveHoliday from "@/pages/hr/LeaveHoliday";
 import ApprovedRequests from "@/pages/hr/ApprovedRequests";
 import ProductionPayroll from "@/pages/hr/ProductionPayroll";
 import Settlement from "@/pages/hr/Settlement";
+import Compensation from "@/pages/hr/Compensation";
 import Reports from "@/pages/hr/Reports";
 import UserManagement from "@/pages/hr/UserManagement";
 import ManagerDetail from "@/pages/hr/ManagerDetail";
@@ -302,6 +303,9 @@ function Router() {
       </Route>
       <Route path="/hr/salary">
         {() => <Redirect to="/hr/payroll" />}
+      </Route>
+      <Route path="/hr/compensation">
+        {() => <ProtectedRoute component={Compensation} allowedRoles={["hr"]} />}
       </Route>
       <Route path="/hr/settlement">
         {() => <ProtectedRoute component={Settlement} allowedRoles={["hr"]} />}

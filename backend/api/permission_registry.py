@@ -52,6 +52,7 @@ MODULE_TREE: list[dict] = [
     ]},
     {"key": "payroll", "label": "Payroll"},
     {"key": "production_payroll", "label": "Production Payroll"},
+    {"key": "compensation", "label": "Compensation"},
     {"key": "salary", "label": "Salary"},
     {"key": "salary_slip", "label": "Salary Slip"},
     {"key": "settlement", "label": "Settlement"},
@@ -185,6 +186,8 @@ URL_MODULE_MAP: dict[str, str] = {
 
     "payroll/production": "production_payroll",
     "payroll": "payroll",
+    "compensation": "compensation",
+    "bonus": "bonus",
 
     "department-managers": "user_management",
 

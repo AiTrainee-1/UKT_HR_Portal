@@ -101,8 +101,10 @@ from .growth_views import (
     employee_monthly_attendance, attendance_day_override, attendance_override_requests,
     promotions, promotion_detail,
     increment_summary, add_increment, increment_dashboard,
+    bonus_calculate, bonus_generate, bonus_list, bonus_detail, bonus_export,
     idcard_data, verify_employee, email_idcard, idcard_whatsapp,
 )
+from .compensation_views import compensation_list
 from .system_settings_views import (
     biometric_devices, biometric_device_detail, idcard_settings_view,
     production_shift_config_view, production_shift_segments, production_shift_segment_detail,
@@ -363,6 +365,12 @@ urlpatterns = [
     path("increments/summary", increment_summary),
     path("increments/dashboard", increment_dashboard),
     path("increments", add_increment),
+    path("bonus/calculate", bonus_calculate),
+    path("bonus/generate", bonus_generate),
+    path("bonus/export", bonus_export),
+    path("bonus", bonus_list),
+    path("bonus/<int:pk>", bonus_detail),
+    path("compensation", compensation_list),
     path("idcard", idcard_data),
     path("idcard/email", email_idcard),
     path("idcard/whatsapp", idcard_whatsapp),

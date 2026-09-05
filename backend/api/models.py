@@ -1305,6 +1305,43 @@ class PayrollSettings(models.Model):
         help_text="Production: ESI applies only when monthly-equivalent earnings are below this amount."
     )
 
+    # ── Compensation (CTC breakdown) ─────────────────────────────────────
+    # Feeds ONLY the read-only Compensation page's CTC breakdown -defaults
+    # match the 50/20 split _generate_staff_payroll already hardcodes, so
+    # nothing about actual payroll generation changes unless these are
+    # edited on purpose.
+    basic_percent = models.DecimalField(
+        max_digits=5, decimal_places=2, default=50,
+        db_column="basic_percent",
+        help_text="% of salary treated as Basic for the Compensation page's CTC breakdown. Does not affect payroll generation."
+    )
+    hra_percent = models.DecimalField(
+        max_digits=5, decimal_places=2, default=20,
+        db_column="hra_percent",
+        help_text="% of salary treated as HRA for the Compensation page's CTC breakdown. Does not affect payroll generation."
+    )
+
+    # ── Statutory Bonus (Payment of Bonus Act, 1965) ─────────────────────
+    bonus_percent = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal("8.33"),
+        db_column="bonus_percent",
+        help_text="Statutory bonus % applied to eligible wages (Act range: 8.33 min, 20 max)."
+    )
+    bonus_wage_ceiling = models.DecimalField(
+        max_digits=10, decimal_places=2, default=7000,
+        db_column="bonus_wage_ceiling",
+        help_text="Monthly wage ceiling used in the bonus calculation base -min(basic, this) per record."
+    )
+    bonus_eligibility_ceiling = models.DecimalField(
+        max_digits=10, decimal_places=2, default=21000,
+        db_column="bonus_eligibility_ceiling",
+        help_text="Employees earning at or below this monthly wage are bonus-eligible."
+    )
+    bonus_fy_start_month = models.IntegerField(
+        default=4, db_column="bonus_fy_start_month",
+        help_text="Financial year start month (1-12). Default 4 = April (Indian FY)."
+    )
+
     # ── General ───────────────────────────────────────────────────────────
     pay_day = models.IntegerField(
         default=5, db_column="pay_day",
@@ -1877,6 +1914,46 @@ class SalaryIncrement(models.Model):
     class Meta:
         db_table = "salary_increments"
         ordering = ["-effective_date", "-created_at"]
+
+
+class Bonus(models.Model):
+    """One employee's statutory bonus (Payment of Bonus Act, 1965) for one
+    financial year -see growth_views.py::_calculate_bonus_for_employee for
+    how calculation_base/bonus_amount are derived from that employee's
+    SalarySlip history for the year.
+    """
+    STATUS_CALCULATED = "calculated"
+    STATUS_APPROVED = "approved"
+    STATUS_PAID = "paid"
+    STATUS_CHOICES = [
+        (STATUS_CALCULATED, "Calculated"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_PAID, "Paid"),
+    ]
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="bonuses"
+    )
+    financial_year = models.TextField(db_column="financial_year")  # e.g. "2025-26"
+    # Number of SalarySlip rows found in the FY window and used to build
+    # calculation_base -shown in the UI so HR can see how complete the
+    # underlying payroll data was for this employee this year.
+    records_considered = models.IntegerField(db_column="records_considered")
+    calculation_base = models.DecimalField(
+        max_digits=10, decimal_places=2, db_column="calculation_base",
+        help_text="Sum of min(basic, bonus_wage_ceiling) across the FY's salary slips."
+    )
+    bonus_percent_applied = models.DecimalField(max_digits=5, decimal_places=2, db_column="bonus_percent_applied")
+    bonus_amount = models.DecimalField(max_digits=10, decimal_places=2, db_column="bonus_amount")
+    status = models.TextField(choices=STATUS_CHOICES, default=STATUS_CALCULATED)
+    notes = models.TextField(null=True, blank=True)
+    computed_by = models.TextField(null=True, blank=True, db_column="computed_by")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "bonuses"
+        unique_together = [("employee", "financial_year")]
+        ordering = ["-created_at"]
 
 
 # ──────────────────────────────────────────────

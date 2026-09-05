@@ -8,21 +8,27 @@ Growth & Final-Attendance API
 • ID card data + public QR verification endpoint
 """
 
+import io
 from datetime import date as date_type, datetime
 from decimal import Decimal, InvalidOperation
 
 from django.conf import settings as django_settings
+from django.http import HttpResponse
+from django.utils import timezone
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from .audit_utils import log_action
 from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name
-from .user_settings import settings_for
+from .user_settings import settings_for, settings_for_employee
 from .branch_scope import scope_to_branch
 from .clock import ist_now, ist_today
 from .models import (
-    AttendanceDayRecord, AttendanceOverrideRequest, Department, Designation, Employee,
-    PayrollSettings, Promotion, SalaryIncrement,
+    AttendanceDayRecord, AttendanceOverrideRequest, Bonus, Department, Designation, Employee,
+    PayrollSettings, Promotion, SalaryIncrement, SalarySlip,
 )
 from .attendance_final import (
     compute_month_records, compute_day_record, month_summary_from_records,
@@ -543,6 +549,269 @@ def increment_dashboard(request: Request) -> Response:
         "recentIncrements": [_increment_dict(i) for i in increments[:10]],
         "topIncrements": [_increment_dict(i) for i in top_increments],
     })
+
+
+# ── Statutory Bonus (Payment of Bonus Act, 1965) ────────────────────────────
+#
+# Calculation base per employee = sum across the financial year's generated
+# SalarySlip rows of min(slip.basic, bonus_wage_ceiling); bonus_amount =
+# calculation_base * bonus_percent / 100, only if the employee's most recent
+# in-year monthly wage is at or below bonus_eligibility_ceiling.
+#
+# Caveat that matters for correctness, not just performance: for STAFF
+# employees, SalarySlip.basic is a genuine Basic-pay component (see
+# _generate_staff_payroll). For PRODUCTION employees, _generate_production_payroll
+# deliberately puts the entire period gross into `basic` (hra/allowances are
+# zeroed there) -so a production employee's "basic" in this calculation is
+# really their period gross, not a true Basic component. This is applied
+# uniformly rather than papered over with a separate proxy formula, because
+# it's the real generated payroll data this company already relies on -but
+# it means production bonus figures run on a different effective definition
+# of "wage" than staff ones, and that should stay visible, not hidden.
+
+def _fy_label_for_date(d: date_type, fy_start_month: int) -> str:
+    start_year = d.year if d.month >= fy_start_month else d.year - 1
+    return f"{start_year}-{str(start_year + 1)[-2:]}"
+
+
+def _fy_month_years(financial_year: str, fy_start_month: int) -> set[tuple[int, int]]:
+    """{"2025-26", fy_start_month=4} -> {(2025,4), (2025,5), ..., (2026,3)}."""
+    try:
+        start_year = int(str(financial_year).split("-")[0])
+    except (ValueError, AttributeError, IndexError):
+        start_year = ist_today().year
+    pairs = set()
+    for i in range(12):
+        raw = fy_start_month + i
+        year = start_year + (raw - 1) // 12
+        month = ((raw - 1) % 12) + 1
+        pairs.add((year, month))
+    return pairs
+
+
+def _calculate_bonus_for_employee(emp: Employee, financial_year: str, settings: PayrollSettings) -> dict:
+    fy_start_month = int(settings.bonus_fy_start_month or 4)
+    month_years = _fy_month_years(financial_year, fy_start_month)
+
+    fy_slips = sorted(
+        (s for s in SalarySlip.objects.filter(employee=emp) if (s.year, s.month) in month_years),
+        key=lambda s: (s.year, s.month),
+    )
+
+    ceiling = settings.bonus_wage_ceiling
+    calculation_base = sum((min(s.basic, ceiling) for s in fy_slips), Decimal("0"))
+    records_considered = len(fy_slips)
+
+    if fy_slips:
+        monthly_wage = fy_slips[-1].basic
+    else:
+        monthly_wage = emp.salary_amount or Decimal("0")
+
+    has_data = bool(fy_slips) or bool(emp.salary_amount)
+    eligible = has_data and monthly_wage <= settings.bonus_eligibility_ceiling
+    bonus_amount = (
+        (calculation_base * settings.bonus_percent / 100).quantize(Decimal("0.01"))
+        if eligible else Decimal("0.00")
+    )
+
+    if not has_data:
+        reason = "No salary or payroll data available"
+    elif not eligible:
+        reason = f"Monthly wage ₹{monthly_wage:,.2f} exceeds the ₹{settings.bonus_eligibility_ceiling:,.0f} eligibility ceiling"
+    else:
+        reason = None
+
+    return {
+        "employeeId": emp.id,
+        "employeeCode": emp.employee_code,
+        "employeeName": f"{emp.first_name} {emp.last_name}",
+        "department": emp.department.name if emp.department else None,
+        "employmentType": emp.employment_type,
+        "monthlyWage": float(monthly_wage),
+        "eligible": eligible,
+        "reason": reason,
+        "recordsConsidered": records_considered,
+        "calculationBase": float(calculation_base),
+        "bonusPercent": float(settings.bonus_percent),
+        "bonusAmount": float(bonus_amount),
+    }
+
+
+def _bonus_dict(b: Bonus) -> dict:
+    return {
+        "id": b.id,
+        "employeeId": b.employee_id,
+        "employeeCode": b.employee.employee_code,
+        "employeeName": f"{b.employee.first_name} {b.employee.last_name}",
+        "department": b.employee.department.name if b.employee.department_id and b.employee.department else None,
+        "financialYear": b.financial_year,
+        "recordsConsidered": b.records_considered,
+        "calculationBase": float(b.calculation_base),
+        "bonusPercentApplied": float(b.bonus_percent_applied),
+        "bonusAmount": float(b.bonus_amount),
+        "status": b.status,
+        "notes": b.notes,
+        "computedBy": b.computed_by,
+        "createdAt": b.created_at.isoformat() if b.created_at else None,
+    }
+
+
+@api_view(["GET"])
+@require_hr
+def bonus_calculate(request: Request) -> Response:
+    """Dry-run preview -no writes. Every active branch-scoped employee,
+    eligible and ineligible both, with the full calculation trail.
+
+    Settings are resolved PER EMPLOYEE (settings_for_employee), not once for
+    the requesting operator -same reasoning as payroll generation: a run
+    spanning several branches must apply each branch's own bonus_percent/
+    ceilings, not whichever branch (or none) the operator happens to be on.
+    """
+    default_settings = settings_for(request)
+    fy = request.query_params.get("financialYear") or _fy_label_for_date(
+        ist_today(), int(default_settings.bonus_fy_start_month or 4)
+    )
+
+    employees = scope_to_branch(Employee.objects, request).filter(status="active").select_related("department")
+    rows = [_calculate_bonus_for_employee(emp, fy, settings_for_employee(emp)) for emp in employees]
+
+    eligible_rows = [r for r in rows if r["eligible"]]
+    total_bonus = sum((Decimal(str(r["bonusAmount"])) for r in eligible_rows), Decimal("0"))
+    return Response({
+        "financialYear": fy,
+        "results": rows,
+        "totalEmployees": len(rows),
+        "totalEligible": len(eligible_rows),
+        "totalBonusAmount": float(total_bonus),
+        "avgBonusAmount": float((total_bonus / len(eligible_rows)).quantize(Decimal("0.01"))) if eligible_rows else 0.0,
+    })
+
+
+@api_view(["POST"])
+@require_hr
+def bonus_generate(request: Request) -> Response:
+    """Body: { financialYear }. Persists a Bonus row per ELIGIBLE employee
+    -re-running for the same FY updates existing rows (unique_together on
+    employee+financial_year) rather than duplicating. Settings resolved per
+    employee's own branch, same reasoning as bonus_calculate above."""
+    fy = (request.data.get("financialYear") or "").strip()
+    if not fy:
+        return Response({"error": "financialYear is required"}, status=400)
+
+    employees = scope_to_branch(Employee.objects, request).filter(status="active").select_related("department")
+    computed_by = get_hr_display_name(request)
+    created = 0
+    for emp in employees:
+        emp_settings = settings_for_employee(emp)
+        result = _calculate_bonus_for_employee(emp, fy, emp_settings)
+        if not result["eligible"]:
+            continue
+        Bonus.objects.update_or_create(
+            employee=emp, financial_year=fy,
+            defaults={
+                "records_considered": result["recordsConsidered"],
+                "calculation_base": Decimal(str(result["calculationBase"])),
+                "bonus_percent_applied": emp_settings.bonus_percent,
+                "bonus_amount": Decimal(str(result["bonusAmount"])),
+                "computed_by": computed_by,
+            },
+        )
+        created += 1
+
+    log_action(request, "create", "bonus", description=f"Generated bonus register for FY {fy} -{created} eligible employee(s)")
+    return Response({"financialYear": fy, "generated": created})
+
+
+@api_view(["GET"])
+@require_hr
+def bonus_list(request: Request) -> Response:
+    qs = scope_to_branch(
+        Bonus.objects.select_related("employee", "employee__department"),
+        request, field="employee__branch_id",
+    )
+    fy = request.query_params.get("financialYear")
+    if fy:
+        qs = qs.filter(financial_year=fy)
+    status_filter = request.query_params.get("status")
+    if status_filter:
+        qs = qs.filter(status=status_filter)
+    dept_id = request.query_params.get("departmentId")
+    if dept_id:
+        qs = qs.filter(employee__department_id=dept_id)
+    return Response({"results": [_bonus_dict(b) for b in qs]})
+
+
+@api_view(["PATCH"])
+@require_hr
+def bonus_detail(request: Request, pk: int) -> Response:
+    b = scope_to_branch(Bonus.objects, request, field="employee__branch_id").filter(pk=pk).first()
+    if not b:
+        return Response({"error": "Bonus record not found"}, status=404)
+    data = request.data
+    if "status" in data and data["status"] in dict(Bonus.STATUS_CHOICES):
+        b.status = data["status"]
+    if "notes" in data:
+        b.notes = data["notes"]
+    b.save(update_fields=["status", "notes"])
+    return Response(_bonus_dict(b))
+
+
+@api_view(["GET"])
+@require_hr
+def bonus_export(request: Request) -> HttpResponse:
+    qs = scope_to_branch(
+        Bonus.objects.select_related("employee", "employee__department"),
+        request, field="employee__branch_id",
+    )
+    fy = request.query_params.get("financialYear")
+    if fy:
+        qs = qs.filter(financial_year=fy)
+    rows = list(qs.order_by("employee__employee_code"))
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Bonus Register"[:31]
+
+    headers = [
+        "Employee Code", "Name", "Department", "Financial Year",
+        "Records Considered", "Calculation Base", "Bonus %", "Bonus Amount", "Status",
+    ]
+    ws.append(headers)
+    header_fill = PatternFill("solid", fgColor="006496")
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="left", vertical="center")
+
+    for b in rows:
+        ws.append([
+            str(b.employee.employee_code or ""),
+            f"{b.employee.first_name} {b.employee.last_name}".strip(),
+            b.employee.department.name if b.employee.department_id and b.employee.department else "",
+            b.financial_year,
+            b.records_considered,
+            float(b.calculation_base),
+            float(b.bonus_percent_applied),
+            float(b.bonus_amount),
+            b.status,
+        ])
+
+    for col, width in zip("ABCDEFGHI", (16, 26, 20, 14, 16, 16, 10, 14, 12)):
+        ws.column_dimensions[col].width = width
+    ws.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    filename = f"bonus-register-{fy or 'all'}-{timezone.localdate().isoformat()}.xlsx"
+    response = HttpResponse(
+        buf.read(),
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    log_action(request, "export", "bonus", description=f"Exported bonus register for FY {fy or 'all'} ({len(rows)} record(s))")
+    return response
 
 
 # ── ID Card data + QR verification ─────────────────────────────────────────
