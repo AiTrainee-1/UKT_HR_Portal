@@ -35,6 +35,17 @@ import { TimePicker12h } from "@/components/ui/time-picker-12h";
 import { useAuth, permissionLevel } from "@/contexts/AuthContext";
 import ProductionShiftConfigCard from "@/components/ProductionShiftConfigCard";
 import { lockMutatingControls } from "@/lib/view-only-lock";
+import { compressImageToDataUrl } from "@/lib/image-compression";
+
+// Every logo/signature upload on this page goes into PayrollSettings as a
+// base64 data URI inside an ordinary JSON PUT, not a multipart file upload
+// -so it counts against the backend's request-body size cap, not a file-
+// upload cap. Every upload below is compressed automatically via
+// compressImageToDataUrl (Canvas API, no manual action needed) before it
+// ever becomes a data URI, instead of just rejecting an oversized file -see
+// config/settings.py's DATA_UPLOAD_MAX_MEMORY_SIZE comment for the incident
+// this came from. PNG is used (not JPEG) to preserve transparency, which a
+// logo or signature typically needs.
 
 // Settings tab -> its own permission key. Each Settings tab has a distinct
 // settings.* entry in Account Management (see permission_registry.py) except
@@ -164,12 +175,15 @@ function DocumentThemeCard({
                       type="file"
                       accept="image/*"
                       className="hidden"
-                      onChange={e => {
+                      onChange={async e => {
                         const file = e.target.files?.[0];
                         if (!file) return;
-                        const reader = new FileReader();
-                        reader.onload = ev => setForm(f => ({ ...f, logoOverride: ev.target?.result as string }));
-                        reader.readAsDataURL(file);
+                        try {
+                          const dataUrl = await compressImageToDataUrl(file, { maxWidth: 600, maxHeight: 600 });
+                          setForm(f => ({ ...f, logoOverride: dataUrl }));
+                        } catch (err) {
+                          toast({ title: "Couldn't process that image", description: err instanceof Error ? err.message : undefined, variant: "destructive" });
+                        }
                       }}
                     />
                   </label>
@@ -1708,12 +1722,15 @@ export default function Settings() {
                           type="file"
                           accept="image/*"
                           className="hidden"
-                          onChange={e => {
+                          onChange={async e => {
                             const file = e.target.files?.[0];
                             if (!file) return;
-                            const reader = new FileReader();
-                            reader.onload = ev => setPayroll(p => ({ ...p, companyLogo: ev.target?.result as string }));
-                            reader.readAsDataURL(file);
+                            try {
+                              const dataUrl = await compressImageToDataUrl(file, { maxWidth: 600, maxHeight: 600 });
+                              setPayroll(p => ({ ...p, companyLogo: dataUrl }));
+                            } catch (err) {
+                              toast({ title: "Couldn't process that image", description: err instanceof Error ? err.message : undefined, variant: "destructive" });
+                            }
                           }}
                         />
                       </label>
@@ -3868,14 +3885,15 @@ export default function Settings() {
                           type="file"
                           accept="image/*"
                           className="hidden"
-                          onChange={e => {
+                          onChange={async e => {
                             const file = e.target.files?.[0];
                             if (!file) return;
-                            const reader = new FileReader();
-                            reader.onload = ev => {
-                              setPayroll(p => ({ ...p, signatureImage: ev.target?.result as string }));
-                            };
-                            reader.readAsDataURL(file);
+                            try {
+                              const dataUrl = await compressImageToDataUrl(file, { maxWidth: 600, maxHeight: 600 });
+                              setPayroll(p => ({ ...p, signatureImage: dataUrl }));
+                            } catch (err) {
+                              toast({ title: "Couldn't process that image", description: err instanceof Error ? err.message : undefined, variant: "destructive" });
+                            }
                           }}
                         />
                       </label>
@@ -3910,14 +3928,15 @@ export default function Settings() {
                           type="file"
                           accept="image/*"
                           className="hidden"
-                          onChange={e => {
+                          onChange={async e => {
                             const file = e.target.files?.[0];
                             if (!file) return;
-                            const reader = new FileReader();
-                            reader.onload = ev => {
-                              setPayroll(p => ({ ...p, companyLogo: ev.target?.result as string }));
-                            };
-                            reader.readAsDataURL(file);
+                            try {
+                              const dataUrl = await compressImageToDataUrl(file, { maxWidth: 600, maxHeight: 600 });
+                              setPayroll(p => ({ ...p, companyLogo: dataUrl }));
+                            } catch (err) {
+                              toast({ title: "Couldn't process that image", description: err instanceof Error ? err.message : undefined, variant: "destructive" });
+                            }
                           }}
                         />
                       </label>
@@ -3952,14 +3971,15 @@ export default function Settings() {
                           type="file"
                           accept="image/*"
                           className="hidden"
-                          onChange={e => {
+                          onChange={async e => {
                             const file = e.target.files?.[0];
                             if (!file) return;
-                            const reader = new FileReader();
-                            reader.onload = ev => {
-                              setPayroll(p => ({ ...p, authorizedSignature: ev.target?.result as string }));
-                            };
-                            reader.readAsDataURL(file);
+                            try {
+                              const dataUrl = await compressImageToDataUrl(file, { maxWidth: 600, maxHeight: 600 });
+                              setPayroll(p => ({ ...p, authorizedSignature: dataUrl }));
+                            } catch (err) {
+                              toast({ title: "Couldn't process that image", description: err instanceof Error ? err.message : undefined, variant: "destructive" });
+                            }
                           }}
                         />
                       </label>

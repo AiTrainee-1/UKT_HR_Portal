@@ -202,6 +202,20 @@ STORAGES = {
     },
 }
 
+# PayrollSettings stores a handful of images (company_logo, signature_image,
+# authorized_signature) as base64 data URIs inside an ordinary JSON PUT body
+# to /api/payroll-settings, not as multipart file uploads -so they count
+# against Django's DATA_UPLOAD_MAX_MEMORY_SIZE (in-memory request body cap),
+# not FILE_UPLOAD_MAX_MEMORY_SIZE. Django's own default there is 2.5 MB, and
+# base64 already inflates a file by ~33% over its raw size, so a perfectly
+# reasonable few-MB logo image was enough to trip Django's own guard before
+# the request ever reached payroll_views.py -producing a bare 400
+# "RequestDataTooBig" with no field-level error message HR could act on.
+# Raised to 15 MB (comfortably above a ~10 MB raw image at the base64
+# overhead) rather than removed outright, so an actually-oversized/malformed
+# payload still gets rejected instead of silently accepted.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 15 * 1024 * 1024
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
