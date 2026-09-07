@@ -1,6 +1,15 @@
+from django.http import JsonResponse
 from django.urls import path
 
 from . import views
+
+
+def api_index(request):
+    """Landing response for /api/ itself (no trailing path) -otherwise this
+    401s/404s at the exact URL people naturally hit first when checking the
+    backend is up, since every real route below needs a path segment after
+    'api/'."""
+    return JsonResponse({"status": "ok", "service": "UK Textiles HRMS API", "health": "/api/healthz"})
 from .shift_views import (
     shift_templates, shift_template_detail,
     shift_assignments, shift_assignment_detail,
@@ -152,6 +161,8 @@ from .backup_views import (
 )
 
 urlpatterns = [
+    path("", api_index),
+
     # ── Health ──────────────────────────────────────────────────────────────
     path("healthz", views.healthz),
 

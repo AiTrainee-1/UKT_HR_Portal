@@ -1,8 +1,19 @@
+from django.http import JsonResponse
 from django.urls import include, path
 
 from api.adms_views import adms_cdata, adms_devicecmd, adms_getrequest
 
+
+def api_root(request):
+    """Plain landing response for the bare host URL, so hitting the API's
+    base URL directly (e.g. api.uktextiles.in/) shows a real status
+    response instead of Django's default 404/debug page -this backend has
+    no UI of its own to serve at '/', everything lives under /api/."""
+    return JsonResponse({"status": "ok", "service": "UK Textiles HRMS API", "api": "/api/"})
+
+
 urlpatterns = [
+    path("", api_root),
     path("api/", include("api.urls")),
 
     # ── ZKTeco / eSSL ADMS device endpoints ──────────────────────────────
