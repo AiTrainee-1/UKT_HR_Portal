@@ -119,43 +119,23 @@ function LateCell({ row }: { row: ShiftLogEntry }) {
   );
 }
 
-// ── Daily Report helpers (Late/Permission/On-Leave export, this page only) ──
-
-function dailyIsPermission(row: ReportLogDailyRow): boolean {
-  return row.permissionMorning || row.permissionAfternoon || row.permissionDeparture;
-}
-
-function dailyStatusLabel(row: ReportLogDailyRow): string {
-  if (dailyIsPermission(row)) return "Permission";
-  if (row.isLate) return row.lateAfternoon ? "Night Late" : "Late";
-  if (row.status === "on_leave") return "On Leave";
-  if (row.status === "half_shift") return "Half Shift";
-  if (row.status === "absent") return "Absent";
-  if (row.status === "holiday") return "Holiday";
-  return "Present";
-}
-
-function dailyRowCategories(row: ReportLogDailyRow): Array<"late_permission" | "on_leave"> {
-  const cats: Array<"late_permission" | "on_leave"> = [];
-  if (row.isLate || dailyIsPermission(row)) cats.push("late_permission");
-  if (row.status === "on_leave") cats.push("on_leave");
-  return cats;
-}
+// ── Daily Report helpers (Absent-employees export, this page only) ──────────
+// The report is deliberately Absent-only: HR generates it around 10-11 AM,
+// by which point anyone Late has already punched in (shows Present) and
+// anyone on approved Leave is already accounted for on file -what's left
+// and needs a human decision is who simply never showed up, hence the
+// Informed/Not Informed call per employee.
 
 const formatDMY = (iso: string) => {
   const [y, m, d] = iso.split("-");
   return `${d}.${m}.${y}`;
 };
 
-const remarksLabel = (row: ReportLogDailyRow): string =>
-  row.status === "on_leave"
-    ? (row.isInformed === true ? "Informed" : row.isInformed === false ? "Not informed" : "Unset")
-    : dailyStatusLabel(row);
+const informedLabel = (row: ReportLogDailyRow): string =>
+  row.isInformed === true ? "Informed" : row.isInformed === false ? "Not Informed" : "Unset";
 
-const remarksColor = (row: ReportLogDailyRow): string | undefined =>
-  row.status === "on_leave"
-    ? (row.isInformed === true ? "#92d050" : row.isInformed === false ? "#ffa500" : "#dddddd")
-    : undefined;
+const informedColor = (row: ReportLogDailyRow): string =>
+  row.isInformed === true ? "#92d050" : row.isInformed === false ? "#ffa500" : "#dddddd";
 
 const exportCellStyle: CSSProperties = { border: "1px solid #333", padding: "5px 6px", textAlign: "center" };
 
@@ -180,7 +160,6 @@ export default function AttendanceReportLog() {
   const [dailyDate, setDailyDate] = useState(todayIso());
   const [dailyDepartment, setDailyDepartment] = useState("");
   const [dailySearch, setDailySearch] = useState("");
-  const [categoryFilters, setCategoryFilters] = useState<Set<"late_permission" | "on_leave">>(new Set());
   const [informedFilter, setInformedFilter] = useState<"all" | "informed" | "not_informed" | "unset">("all");
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
   const [exporting, setExporting] = useState<"excel" | "pdf" | "image" | null>(null);
@@ -197,26 +176,19 @@ export default function AttendanceReportLog() {
   );
   const dailyRows = dailyData?.rows ?? [];
 
+  // Absent-only, deliberately -see the helpers comment above. Generated
+  // around 10-11 AM, not first thing, so Late/Permission/On-Leave people
+  // have already resolved themselves in the normal attendance view by then.
+  const absentRows = useMemo(() => dailyRows.filter((row) => row.status === "absent"), [dailyRows]);
+
   const filteredDailyRows = useMemo(() => {
-    return dailyRows.filter((row) => {
-      const cats = dailyRowCategories(row);
-      const categoryOk = categoryFilters.size === 0 || cats.some((c) => categoryFilters.has(c));
-      if (!categoryOk) return false;
+    return absentRows.filter((row) => {
       if (informedFilter === "all") return true;
-      if (row.status !== "on_leave") return false;
       if (informedFilter === "informed") return row.isInformed === true;
       if (informedFilter === "not_informed") return row.isInformed === false;
       return row.isInformed === null;
     });
-  }, [dailyRows, categoryFilters, informedFilter]);
-
-  const toggleCategory = (cat: "late_permission" | "on_leave") => {
-    setCategoryFilters((prev) => {
-      const next = new Set(prev);
-      if (next.has(cat)) next.delete(cat); else next.add(cat);
-      return next;
-    });
-  };
+  }, [absentRows, informedFilter]);
 
   const toggleRowSelected = (id: number) => {
     setSelectedRows((prev) => {
@@ -249,12 +221,7 @@ export default function AttendanceReportLog() {
     }
   };
 
-  const reportTitle = useMemo(() => {
-    const onlyLeave = categoryFilters.size === 1 && categoryFilters.has("on_leave");
-    const onlyLate = categoryFilters.size === 1 && categoryFilters.has("late_permission");
-    const label = onlyLeave ? "STAFF LEAVE LIST" : onlyLate ? "LATE / PERMISSION LIST" : "ATTENDANCE EXCEPTION REPORT";
-    return `${formatDMY(dailyDate)} ${label}`;
-  }, [dailyDate, categoryFilters]);
+  const reportTitle = useMemo(() => `${formatDMY(dailyDate)} STAFF LEAVE LIST`, [dailyDate]);
 
   async function exportDailyExcel() {
     if (selectedDailyRows.length === 0) return;
@@ -298,7 +265,7 @@ export default function AttendanceReportLog() {
       ws.getRow(3).height = 24;
 
       const headerRow = ws.getRow(5);
-      ["S.No", "Ticket No", "Employee Name", "Department", "Designation", "Remarks"].forEach((c, i) => {
+      ["S.No", "Ticket No", "Employee Name", "Department", "Designation", "Informed Status"].forEach((c, i) => {
         const cell = headerRow.getCell(i + 1);
         cell.value = c;
         cell.font = { bold: true };
@@ -313,14 +280,11 @@ export default function AttendanceReportLog() {
         r.getCell(3).value = row.employeeName;
         r.getCell(4).value = row.department ?? "—";
         r.getCell(5).value = row.designation ?? "—";
-        const remarksCell = r.getCell(6);
-        remarksCell.value = remarksLabel(row);
-        const color = remarksColor(row);
-        if (color) {
-          remarksCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${color.replace("#", "")}` } };
-        }
-        remarksCell.font = { bold: true };
-        remarksCell.alignment = { horizontal: "center" };
+        const informedCell = r.getCell(6);
+        informedCell.value = informedLabel(row);
+        informedCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${informedColor(row).replace("#", "")}` } };
+        informedCell.font = { bold: true };
+        informedCell.alignment = { horizontal: "center" };
         for (let c = 1; c <= 6; c++) r.getCell(c).border = { bottom: { style: "hair" } };
       });
 
@@ -729,7 +693,7 @@ export default function AttendanceReportLog() {
         )}
         </>)}
 
-        {/* ── Daily Report: Late/Permission/On-Leave filter + Informed + export ── */}
+        {/* ── Daily Report: Absent employees, Informed status + export ── */}
         {viewMode === "daily" && (
           <div className="space-y-4">
             {/* Filter bar */}
@@ -765,28 +729,10 @@ export default function AttendanceReportLog() {
 
               <div className="h-6 w-px bg-gray-200 mx-1" />
 
-              {([
-                { key: "late_permission" as const, label: "Late / Permission" },
-                { key: "on_leave" as const, label: "On Leave" },
-              ]).map(({ key, label }) => (
-                <button
-                  key={key}
-                  onClick={() => toggleCategory(key)}
-                  className={`h-8 px-3 text-xs font-semibold rounded-lg border transition-colors ${
-                    categoryFilters.has(key)
-                      ? "bg-indigo-600 text-white border-indigo-600"
-                      : "text-gray-600 border-gray-200 hover:bg-gray-50"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-
               <select
                 value={informedFilter}
                 onChange={(e) => setInformedFilter(e.target.value as typeof informedFilter)}
                 className="h-8 rounded-md border px-2 text-xs bg-background"
-                title="Only applies to On Leave rows"
               >
                 <option value="all">Informed: All</option>
                 <option value="informed">Informed only</option>
@@ -826,7 +772,7 @@ export default function AttendanceReportLog() {
               ) : filteredDailyRows.length === 0 ? (
                 <div className="py-20 text-center">
                   <Users size={36} className="text-gray-200 mx-auto mb-3" />
-                  <p className="text-sm text-gray-500">No employees match the current filters for {formatDMY(dailyDate)}.</p>
+                  <p className="text-sm text-gray-500">No absent employees {absentRows.length > 0 ? "match this Informed filter" : `for ${formatDMY(dailyDate)}`}.</p>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -838,7 +784,7 @@ export default function AttendanceReportLog() {
                             {allFilteredSelected ? <CheckSquare size={15} /> : <Square size={15} />}
                           </button>
                         </th>
-                        {["Ticket No", "Employee Name", "Department", "Designation", "Status", "Remarks"].map(h => (
+                        {["Ticket No", "Employee Name", "Department", "Designation", "Informed Status"].map(h => (
                           <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
                         ))}
                       </tr>
@@ -855,31 +801,26 @@ export default function AttendanceReportLog() {
                           <td className="px-4 py-3 font-semibold text-sm text-gray-900 whitespace-nowrap">{row.employeeName}</td>
                           <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">{row.department ?? "—"}</td>
                           <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">{row.designation ?? "—"}</td>
-                          <td className="px-4 py-3 text-xs font-semibold whitespace-nowrap">{dailyStatusLabel(row)}</td>
                           <td className="px-4 py-3">
-                            {row.status === "on_leave" ? (
-                              <select
-                                value={row.isInformed === true ? "informed" : row.isInformed === false ? "not_informed" : "unset"}
-                                onChange={(e) => {
-                                  const v = e.target.value;
-                                  handleSetInformed(row, v === "informed" ? true : v === "not_informed" ? false : null);
-                                }}
-                                disabled={setInformedMutation.isPending}
-                                className={`h-7 text-xs font-semibold rounded-md border px-2 ${
-                                  row.isInformed === true
-                                    ? "bg-green-100 text-green-700 border-green-200"
-                                    : row.isInformed === false
-                                    ? "bg-amber-100 text-amber-700 border-amber-200"
-                                    : "bg-gray-50 text-gray-500 border-gray-200"
-                                }`}
-                              >
-                                <option value="unset">Unset</option>
-                                <option value="informed">Informed</option>
-                                <option value="not_informed">Not Informed</option>
-                              </select>
-                            ) : (
-                              <span className="text-gray-300 text-xs">—</span>
-                            )}
+                            <select
+                              value={row.isInformed === true ? "informed" : row.isInformed === false ? "not_informed" : "unset"}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                handleSetInformed(row, v === "informed" ? true : v === "not_informed" ? false : null);
+                              }}
+                              disabled={setInformedMutation.isPending}
+                              className={`h-7 text-xs font-semibold rounded-md border px-2 ${
+                                row.isInformed === true
+                                  ? "bg-green-100 text-green-700 border-green-200"
+                                  : row.isInformed === false
+                                  ? "bg-amber-100 text-amber-700 border-amber-200"
+                                  : "bg-gray-50 text-gray-500 border-gray-200"
+                              }`}
+                            >
+                              <option value="unset">Unset</option>
+                              <option value="informed">Informed</option>
+                              <option value="not_informed">Not Informed</option>
+                            </select>
                           </td>
                         </tr>
                       ))}
@@ -911,7 +852,7 @@ export default function AttendanceReportLog() {
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 0 }}>
                   <thead>
                     <tr>
-                      {["S.No", "Ticket No", "Employee Name", "Department", "Designation", "Remarks"].map(h => (
+                      {["S.No", "Ticket No", "Employee Name", "Department", "Designation", "Informed Status"].map(h => (
                         <th key={h} style={{ ...exportCellStyle, background: "#f2f2f2" }}>{h}</th>
                       ))}
                     </tr>
@@ -924,8 +865,8 @@ export default function AttendanceReportLog() {
                         <td style={{ ...exportCellStyle, textAlign: "left" }}>{row.employeeName}</td>
                         <td style={exportCellStyle}>{row.department ?? "—"}</td>
                         <td style={{ ...exportCellStyle, textAlign: "left" }}>{row.designation ?? "—"}</td>
-                        <td style={{ ...exportCellStyle, fontWeight: 700, background: remarksColor(row) }}>
-                          {remarksLabel(row)}
+                        <td style={{ ...exportCellStyle, fontWeight: 700, background: informedColor(row) }}>
+                          {informedLabel(row)}
                         </td>
                       </tr>
                     ))}

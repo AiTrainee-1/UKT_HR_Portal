@@ -6,7 +6,7 @@ from datetime import date as date_type, datetime, time as time_type, timedelta
 from decimal import Decimal
 from io import StringIO
 
-from django.db.models import Count, Q
+from django.db.models import Count, F, Q
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -1193,7 +1193,10 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
         scope_to_branch(Employee.objects, request)
         .filter(status="active", employment_type="staff")
         .select_related("department", "designation")
-        .order_by("first_name")
+        # Grouped by department for the Daily Report (unrelated modes on this
+        # same endpoint keep their own first_name-only ordering); employees
+        # with no department set sort last rather than first.
+        .order_by(F("department__name").asc(nulls_last=True), "first_name")
     )
     if department_param:
         emps_qs = emps_qs.filter(department_id=department_param)
