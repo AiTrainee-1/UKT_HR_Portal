@@ -1,3 +1,4 @@
+import uuid
 from datetime import time
 from decimal import Decimal
 
@@ -3115,3 +3116,98 @@ class WhatsAppMessageTemplate(models.Model):
 
     class Meta:
         db_table = "whatsapp_message_template"
+
+
+# ──────────────────────────────────────────────
+#  Outpass / Visitors -pure gate data-collection, no attendance/payroll link
+# ──────────────────────────────────────────────
+
+class GateQRCode(models.Model):
+    """One permanent QR token per (branch, kind) -generated once via
+    get_or_create_for(), never rotated automatically, so the physical QR
+    print at a gate keeps working indefinitely. Kept separate from the
+    per-employee ID-card QR (IdCardViews.tsx/verify_employee) -that one
+    identifies a person; this one identifies "the outpass/visitor form for
+    branch X", the token itself carrying no PII."""
+
+    KIND_OUTPASS = "outpass"
+    KIND_VISITOR = "visitor"
+    KIND_CHOICES = [(KIND_OUTPASS, "Outpass"), (KIND_VISITOR, "Visitor")]
+
+    branch = models.ForeignKey(
+        Branch, on_delete=models.CASCADE, db_column="branch_id", related_name="gate_qr_codes"
+    )
+    kind = models.TextField(choices=KIND_CHOICES, db_column="kind")
+    token = models.TextField(unique=True, db_column="token")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "gate_qr_codes"
+        constraints = [
+            models.UniqueConstraint(fields=["branch", "kind"], name="uniq_branch_qr_kind"),
+        ]
+
+    @classmethod
+    def get_or_create_for(cls, branch: "Branch", kind: str) -> "GateQRCode":
+        obj, _ = cls.objects.get_or_create(branch=branch, kind=kind, defaults={"token": uuid.uuid4().hex})
+        return obj
+
+
+class OutpassRecord(models.Model):
+    """A single gate exit, submitted anonymously from the QR form -see
+    outpass_visitor_views.py::outpass_gate_submit. employee_name/employee_code
+    are free text rather than only the FK so a typo'd or unrecognized code
+    never blocks the submission; `employee` is populated best-effort."""
+
+    branch = models.ForeignKey(
+        Branch, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="branch_id", related_name="outpass_records",
+    )
+    employee = models.ForeignKey(
+        Employee, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="employee_id", related_name="outpass_records",
+    )
+    employee_name = models.TextField(db_column="employee_name")
+    employee_code = models.TextField(db_column="employee_code")
+    destination = models.TextField(db_column="destination")
+    submitted_at = models.DateTimeField(auto_now_add=True, db_column="submitted_at")
+
+    class Meta:
+        db_table = "outpass_records"
+        ordering = ["-submitted_at"]
+
+
+class Visitor(models.Model):
+    """A real person's identity, deduped by phone -visit-specific details
+    (why/whom/purpose) live on VisitorVisit below, so a returning visitor
+    scanning the gate QR again reuses this row (see
+    outpass_visitor_views.py::visitor_gate_repeat) instead of a second
+    person record with the same name/Aadhaar re-entered."""
+
+    name = models.TextField(db_column="name")
+    phone = models.TextField(unique=True, db_column="phone")
+    aadhaar_number = models.TextField(null=True, blank=True, db_column="aadhaar_number")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "visitors"
+
+
+class VisitorVisit(models.Model):
+    """One row per physical visit. KPI counts ("Today's/Week's/Month's
+    visitor records") are counts of this table, not of Visitor -a repeat
+    visitor still adds one more real visit to count."""
+
+    visitor = models.ForeignKey(Visitor, on_delete=models.CASCADE, db_column="visitor_id", related_name="visits")
+    branch = models.ForeignKey(
+        Branch, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="branch_id", related_name="visitor_visits",
+    )
+    why_came = models.TextField(null=True, blank=True, db_column="why_came")
+    whom_to_meet = models.TextField(db_column="whom_to_meet")
+    purpose = models.TextField(db_column="purpose")
+    visited_at = models.DateTimeField(auto_now_add=True, db_column="visited_at")
+
+    class Meta:
+        db_table = "visitor_visits"
+        ordering = ["-visited_at"]

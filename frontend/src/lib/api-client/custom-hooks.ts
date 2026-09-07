@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UseQueryOptions } from "@tanstack/react-query";
 import { customFetch, getApiOrigin } from "./custom-fetch";
 import type { Employee } from "./generated/api.schemas";
@@ -5308,3 +5308,141 @@ export const useBulkUpdateLocationTracking = () => {
     },
   });
 };
+
+// ── Outpass / Visitors -pure gate data-collection, see backend/api/outpass_visitor_views.py ──
+
+export type GateRange = "today" | "week" | "month";
+
+export type GateQr = { token: string; branchId: number; branchName: string };
+export type GateSummary = { today: number; thisWeek: number; thisMonth: number };
+
+export const getOutpassQrQueryKey = (branchId?: number | null) => ["/api/outpass/qr", branchId] as const;
+export const useOutpassQr = (branchId?: number | null) =>
+  useQuery<GateQr>({
+    queryKey: getOutpassQrQueryKey(branchId),
+    queryFn: () => customFetch<GateQr>(`/api/outpass/qr${branchId ? `?branchId=${branchId}` : ""}`),
+  });
+
+export const getOutpassSummaryQueryKey = () => ["/api/outpass/summary"] as const;
+export const useOutpassSummary = () =>
+  useQuery<GateSummary>({
+    queryKey: getOutpassSummaryQueryKey(),
+    queryFn: () => customFetch<GateSummary>("/api/outpass/summary"),
+  });
+
+export type OutpassRecordRow = {
+  id: number;
+  employeeName: string;
+  employeeCode: string;
+  destination: string;
+  branchName: string | null;
+  submittedAt: string;
+};
+
+export type PaginatedRecords<T> = { items: T[]; total: number; page: number; pageSize: number };
+
+export const getOutpassRecordsQueryKey = (range: GateRange, page: number) =>
+  ["/api/outpass/records", range, page] as const;
+export const useOutpassRecords = (range: GateRange, page: number, pageSize = 20) =>
+  useQuery<PaginatedRecords<OutpassRecordRow>>({
+    queryKey: getOutpassRecordsQueryKey(range, page),
+    queryFn: () =>
+      customFetch<PaginatedRecords<OutpassRecordRow>>(
+        `/api/outpass/records?range=${range}&page=${page}&pageSize=${pageSize}`,
+      ),
+    placeholderData: keepPreviousData,
+  });
+
+export const useOutpassGateInfo = (token: string) =>
+  useQuery<{ branchName: string }>({
+    queryKey: ["/api/outpass/gate", token],
+    queryFn: () => customFetch<{ branchName: string }>(`/api/outpass/gate/${encodeURIComponent(token)}`),
+    enabled: !!token,
+    retry: false,
+  });
+
+export const useOutpassGateSubmit = (token: string) =>
+  useMutation({
+    mutationFn: (body: { name: string; employeeCode: string; destination: string }) =>
+      customFetch<{ submitted: boolean }>(`/api/outpass/gate/${encodeURIComponent(token)}/submit`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+  });
+
+export const getVisitorQrQueryKey = (branchId?: number | null) => ["/api/visitor/qr", branchId] as const;
+export const useVisitorQr = (branchId?: number | null) =>
+  useQuery<GateQr>({
+    queryKey: getVisitorQrQueryKey(branchId),
+    queryFn: () => customFetch<GateQr>(`/api/visitor/qr${branchId ? `?branchId=${branchId}` : ""}`),
+  });
+
+export const getVisitorSummaryQueryKey = () => ["/api/visitor/summary"] as const;
+export const useVisitorSummary = () =>
+  useQuery<GateSummary>({
+    queryKey: getVisitorSummaryQueryKey(),
+    queryFn: () => customFetch<GateSummary>("/api/visitor/summary"),
+  });
+
+export type VisitorRecordRow = {
+  id: number;
+  name: string;
+  phone: string;
+  aadhaar: string | null;
+  aadhaarLast4: string | null;
+  whyCame: string | null;
+  whomToMeet: string;
+  purpose: string;
+  branchName: string | null;
+  visitedAt: string;
+};
+
+export const getVisitorRecordsQueryKey = (range: GateRange, page: number) =>
+  ["/api/visitor/records", range, page] as const;
+export const useVisitorRecords = (range: GateRange, page: number, pageSize = 20) =>
+  useQuery<PaginatedRecords<VisitorRecordRow>>({
+    queryKey: getVisitorRecordsQueryKey(range, page),
+    queryFn: () =>
+      customFetch<PaginatedRecords<VisitorRecordRow>>(
+        `/api/visitor/records?range=${range}&page=${page}&pageSize=${pageSize}`,
+      ),
+    placeholderData: keepPreviousData,
+  });
+
+export const useVisitorGateInfo = (token: string) =>
+  useQuery<{ branchName: string }>({
+    queryKey: ["/api/visitor/gate", token],
+    queryFn: () => customFetch<{ branchName: string }>(`/api/visitor/gate/${encodeURIComponent(token)}`),
+    enabled: !!token,
+    retry: false,
+  });
+
+export const useVisitorCheckPhone = (token: string) =>
+  useMutation({
+    mutationFn: (body: { phone: string }) =>
+      customFetch<{ found: boolean; name?: string }>(
+        `/api/visitor/gate/${encodeURIComponent(token)}/check-phone`,
+        { method: "POST", body: JSON.stringify(body) },
+      ),
+  });
+
+export const useVisitorGateNew = (token: string) =>
+  useMutation({
+    mutationFn: (body: {
+      name: string; phone: string; aadhaarNumber?: string;
+      whyCame?: string; whomToMeet: string; purpose: string;
+    }) =>
+      customFetch<{ submitted: boolean }>(`/api/visitor/gate/${encodeURIComponent(token)}/new`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+  });
+
+export const useVisitorGateRepeat = (token: string) =>
+  useMutation({
+    mutationFn: (body: { phone: string; whomToMeet: string; purpose: string }) =>
+      customFetch<{ submitted: boolean }>(`/api/visitor/gate/${encodeURIComponent(token)}/repeat`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+  });

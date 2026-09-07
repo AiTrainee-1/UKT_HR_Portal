@@ -10,7 +10,7 @@ import {
   ChevronRight, Search, X, Command, UserCheck, UserMinus,
   CalendarCheck, Bell, Award, TrendingUp, Gift, CreditCard,
   CalendarHeart, MoonStar, MessageCircle, UserCog, FolderOpen, MonitorSmartphone,
-  Smartphone, Landmark,
+  Smartphone, Landmark, DoorOpen,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -62,6 +62,15 @@ const navGroups: NavGroupData[] = [
           { path: '/hr/attendance/search', label: 'Attendance Search' },
           { path: '/hr/attendance/report-log', label: 'Report Log' },
           { path: '/hr/missing-punch', label: 'Missing Punch' },
+        ],
+      },
+      {
+        path: '/hr/outpass-visitors',
+        label: 'Outpass / Visitors',
+        icon: DoorOpen,
+        children: [
+          { path: '/hr/outpass-visitors/outpass', label: 'Outpass' },
+          { path: '/hr/outpass-visitors/visitors', label: 'Visitors' },
         ],
       },
     ],

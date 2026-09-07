@@ -68,6 +68,7 @@ MODULE_TREE: list[dict] = [
     {"key": "notifications", "label": "Notifications"},
     {"key": "night_shift", "label": "Night Shift"},
     {"key": "geo_attendance", "label": "Geo Attendance"},
+    {"key": "outpass_visitors", "label": "Outpass / Visitors"},
     {"key": "settings", "label": "Settings", "children": [
         {"key": "settings.company", "label": "Company"},
         {"key": "settings.attendance", "label": "Attendance"},
@@ -183,6 +184,16 @@ URL_MODULE_MAP: dict[str, str] = {
     "on-duty-punch-verifications": "geo_attendance",
     "on-duty-map": "geo_attendance",
     "live-location/team": "geo_attendance",
+
+    # Only the HR-portal endpoints -"outpass/gate/..."/"visitor/gate/..." are
+    # deliberately left out of this table so they stay reachable with no
+    # bearer token at all (see outpass_visitor_views.py's module docstring).
+    "outpass/qr": "outpass_visitors",
+    "outpass/summary": "outpass_visitors",
+    "outpass/records": "outpass_visitors",
+    "visitor/qr": "outpass_visitors",
+    "visitor/summary": "outpass_visitors",
+    "visitor/records": "outpass_visitors",
 
     "payroll/production": "production_payroll",
     "payroll": "payroll",

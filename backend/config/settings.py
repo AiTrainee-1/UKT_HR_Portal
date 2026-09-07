@@ -240,6 +240,11 @@ REST_FRAMEWORK = {
         # Per-IP safety net on top of the per-username lockout in views.py —
         # slows down credential-stuffing even if it's spread across usernames.
         "login": "10/min",
+        # Outpass/Visitor gate forms (outpass_visitor_views.py) -anonymous,
+        # unauthenticated writes, one of which (visitor "new") accepts an
+        # Aadhaar number, so worth rate-limiting per IP even though nothing
+        # here is a login.
+        "gate_submit": "20/min",
     },
 }
 

@@ -97,6 +97,11 @@ from .reports_views import (
     employee_report, headcount_report,
     settlement_report, new_joinings_report,
 )
+from .outpass_visitor_views import (
+    outpass_qr, outpass_summary, outpass_records, outpass_gate_info, outpass_gate_submit,
+    visitor_qr, visitor_summary, visitor_records, visitor_gate_info,
+    visitor_check_phone, visitor_gate_new, visitor_gate_repeat,
+)
 from .attendance_views import (
     attendance_summary, attendance_daily, attendance_monthly_trend,
     attendance_employee_history, biometric_punch, manual_attendance,
@@ -324,6 +329,20 @@ urlpatterns = [
     path("attendance/sync-status-live", sync_status),
     path("attendance/report-log", attendance_report_log),
     path("attendance/day-informed", set_day_informed),
+
+    # ── Outpass / Visitors -pure gate data-collection, see outpass_visitor_views.py ──
+    path("outpass/qr", outpass_qr),
+    path("outpass/summary", outpass_summary),
+    path("outpass/records", outpass_records),
+    path("outpass/gate/<str:token>", outpass_gate_info),
+    path("outpass/gate/<str:token>/submit", outpass_gate_submit),
+    path("visitor/qr", visitor_qr),
+    path("visitor/summary", visitor_summary),
+    path("visitor/records", visitor_records),
+    path("visitor/gate/<str:token>", visitor_gate_info),
+    path("visitor/gate/<str:token>/check-phone", visitor_check_phone),
+    path("visitor/gate/<str:token>/new", visitor_gate_new),
+    path("visitor/gate/<str:token>/repeat", visitor_gate_repeat),
     path("attendance/search", attendance_search),
     path("attendance/search/range", attendance_search_range),
     path("attendance/compute-shifts", compute_shift_logs),

@@ -29,6 +29,8 @@ import ErpLogin from "@/pages/ErpLogin";
 import SetPassword from "@/pages/SetPassword";
 import JobApply from "@/pages/JobApply";
 import DatabaseOffline from "@/pages/DatabaseOffline";
+import OutpassGate from "@/pages/gate/OutpassGate";
+import VisitorGate from "@/pages/gate/VisitorGate";
 
 // HR pages
 import HrDashboard from "@/pages/hr/Dashboard";
@@ -51,6 +53,7 @@ import ResumeScreening from "@/pages/hr/recruitment/ResumeScreening";
 import Documents from "@/pages/hr/recruitment/Documents";
 import Attendance from "@/pages/hr/Attendance";
 import AttendanceReportLog from "@/pages/hr/AttendanceReportLog";
+import OutpassVisitors from "@/pages/hr/OutpassVisitors";
 import Departments from "@/pages/hr/Departments";
 import Designations from "@/pages/hr/Designations";
 import Branches from "@/pages/hr/Branches";
@@ -207,6 +210,8 @@ function Router() {
       <Route path="/apply/job/:id" component={JobApply} />
       <Route path="/verify/:code" component={VerifyEmployee} />
       <Route path="/db-offline" component={DatabaseOffline} />
+      <Route path="/gate/outpass/:token" component={OutpassGate} />
+      <Route path="/gate/visitor/:token" component={VisitorGate} />
 
       {/* ── HR Routes ─────────────────────────────────────────── */}
       <Route path="/hr/dashboard">
@@ -238,6 +243,15 @@ function Router() {
       </Route>
       <Route path="/hr/attendance/report-log">
         {() => <ProtectedRoute component={AttendanceReportLog} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/outpass-visitors/outpass">
+        {() => <ProtectedRoute component={OutpassVisitors} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/outpass-visitors/visitors">
+        {() => <ProtectedRoute component={OutpassVisitors} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/outpass-visitors">
+        {() => <ProtectedRoute component={OutpassVisitors} allowedRoles={["hr"]} />}
       </Route>
       <Route path="/hr/attendance/search">
         {() => <ProtectedRoute component={AttendancePunchSearch} allowedRoles={["hr"]} />}
