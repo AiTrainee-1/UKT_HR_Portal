@@ -640,6 +640,13 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
             "status":       status,
             "isLate":       bool(rec.is_late) if rec else False,
             "isHalfShift":  bool(rec.is_half_shift) if rec else False,
+            "permissionMorning":    bool(rec.permission_morning) if rec else False,
+            "permissionMorningWithRequest": bool(rec.permission_morning_with_request) if rec else False,
+            "permissionAfternoon":  bool(rec.permission_afternoon) if rec else False,
+            "permissionAfternoonWithRequest": bool(rec.permission_afternoon_with_request) if rec else False,
+            "permissionDeparture":  bool(rec.permission_departure) if rec else False,
+            "permissionDepartureWithRequest": bool(rec.permission_departure_with_request) if rec else False,
+            "isCompensationDay": bool(rec.is_compensation_day) if rec else False,
             "present":      status in ("present", "half_shift"),
             "firstPunch":   first_in,
             "lastPunch":    last_out,
@@ -1099,8 +1106,22 @@ def _full_day_row(emp, rec, shift, dsl, cl, perm, leave=None) -> dict:
         "earlyLeave": bool(rec.early_leave),
         "shiftsCompleted": str(rec.shifts_earned),
         "lateMorning": bool(late_morning),
+        "lateAfternoon": bool(rec.late_afternoon),
         "lateReturn": bool(late_return),
         "lateReason": late_reason,
+        # Auto-Permission zone (see shift_engine.py's ZONE_* / _classify_zone)
+        # -detected purely from punch timing, independent of any submitted
+        # EmployeePermission. The *_with_request flags label whether an
+        # approved request also covered that edge.
+        "permissionMorning": bool(rec.permission_morning),
+        "permissionMorningWithRequest": bool(rec.permission_morning_with_request),
+        "permissionAfternoon": bool(rec.permission_afternoon),
+        "permissionAfternoonWithRequest": bool(rec.permission_afternoon_with_request),
+        "permissionDeparture": bool(rec.permission_departure),
+        "permissionDepartureWithRequest": bool(rec.permission_departure_with_request),
+        "permissionZoneCount": rec.permission_zone_count,
+        "permissionEscalatedToHalfShift": bool(rec.permission_escalated_to_half_shift),
+        "isCompensationDay": bool(rec.is_compensation_day),
         "casualLeave": {"status": cl.status, "reason": cl.reason} if cl else None,
         "permission": (
             {
@@ -1484,6 +1505,13 @@ def attendance_search_range(request: Request) -> Response:
             "status": rec.status,
             "isLate": bool(rec.is_late),
             "isHalfShift": bool(rec.is_half_shift),
+            "lateAfternoon": bool(rec.late_afternoon),
+            "permissionMorning": bool(rec.permission_morning),
+            "permissionAfternoon": bool(rec.permission_afternoon),
+            "permissionDeparture": bool(rec.permission_departure),
+            "permissionZoneCount": rec.permission_zone_count,
+            "permissionEscalatedToHalfShift": bool(rec.permission_escalated_to_half_shift),
+            "isCompensationDay": bool(rec.is_compensation_day),
             "totalPunches": rec.total_punches,
             "punches": punches,
             "casualLeave": {"status": cl.status, "reason": cl.reason} if cl else None,
@@ -1802,6 +1830,12 @@ def employee_shift_monthly_stats(request: Request) -> Response:
             "isLate": is_late,
             "lateMorning": late_am,
             "lateReturn": late_ret,
+            "lateAfternoon": bool(rec.late_afternoon) if rec else False,
+            "permissionMorning": bool(rec.permission_morning) if rec else False,
+            "permissionAfternoon": bool(rec.permission_afternoon) if rec else False,
+            "permissionDeparture": bool(rec.permission_departure) if rec else False,
+            "permissionEscalatedToHalfShift": bool(rec.permission_escalated_to_half_shift) if rec else False,
+            "isCompensationDay": bool(rec.is_compensation_day) if rec else False,
         })
 
     summary = month_summary_from_records(list(day_records.values()))

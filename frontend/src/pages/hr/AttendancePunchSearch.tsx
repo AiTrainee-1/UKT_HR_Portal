@@ -144,6 +144,13 @@ function DayRow({ day, alt }: { day: AttendanceSearchDay; alt: boolean }) {
         />
         <StatusSlot label="Half Shift" active={day.isHalfShift} activeClassName="bg-amber-50 text-amber-700 border-amber-100" />
         <StatusSlot
+          label="Auto Permission"
+          active={!!(day.permissionMorning || day.permissionAfternoon || day.permissionDeparture)}
+          activeClassName="bg-emerald-50 text-emerald-700 border-emerald-100"
+          valueLine={[day.permissionMorning && "Morning", day.permissionAfternoon && "Afternoon", day.permissionDeparture && "Departure"].filter(Boolean).join(" + ") || undefined}
+        />
+        <StatusSlot label="Comp Day" active={!!day.isCompensationDay} activeClassName="bg-purple-50 text-purple-700 border-purple-100" />
+        <StatusSlot
           label="Leave"
           active={!!day.leave}
           activeClassName="bg-blue-50 text-blue-700 border-blue-100"

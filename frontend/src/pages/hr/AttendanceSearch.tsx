@@ -339,17 +339,30 @@ export default function AttendanceSearchSection({
                           <td className="px-3 py-2 font-mono text-xs text-gray-700">{day.date}</td>
                           <td className="px-3 py-2 text-xs text-gray-500">{day.day}</td>
                           <td className="px-3 py-2">
-                            <Badge className={`text-[10px] border ${STATUS_BADGE[day.status]}`}>
-                              {STATUS_LABEL[day.status]}
-                            </Badge>
+                            <div className="flex items-center gap-1 flex-wrap">
+                              <Badge className={`text-[10px] border ${STATUS_BADGE[day.status]}`}>
+                                {STATUS_LABEL[day.status]}
+                              </Badge>
+                              {day.isCompensationDay && (
+                                <Badge className="text-[10px] border bg-purple-50 text-purple-700 border-purple-200">
+                                  Comp Day
+                                </Badge>
+                              )}
+                            </div>
                           </td>
                           <td className="px-3 py-2 font-mono text-xs text-gray-700">{day.firstPunch ?? "—"}</td>
                           <td className="px-3 py-2 font-mono text-xs text-gray-700">{day.lastPunch ?? "—"}</td>
                           <td className="px-3 py-2 text-xs font-bold text-gray-800">{day.shiftsEarned}</td>
                           <td className="px-3 py-2 text-xs">
-                            {day.isLate
-                              ? <span className="text-red-600 font-semibold">Late</span>
-                              : <span className="text-gray-300">—</span>}
+                            {(day.permissionMorning || day.permissionAfternoon || day.permissionDeparture) ? (
+                              <span className="text-emerald-700 font-semibold">
+                                Permission{(day.permissionMorningWithRequest || day.permissionAfternoonWithRequest || day.permissionDepartureWithRequest) ? "" : " (No Request)"}
+                              </span>
+                            ) : day.isLate ? (
+                              <span className="text-red-600 font-semibold">{day.lateAfternoon ? "Night Late" : "Late"}</span>
+                            ) : (
+                              <span className="text-gray-300">—</span>
+                            )}
                           </td>
                           <td className="px-3 py-2 text-xs">
                             {day.isHalfShift

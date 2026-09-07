@@ -1463,9 +1463,45 @@ class PayrollSettings(models.Model):
             "requires the first punch within this many minutes of the "
             "employee's assigned shift start time, and the last punch "
             "within the same window of the assigned shift end time -"
-            "otherwise the day is capped at Half Shift, regardless of any "
-            "approved Permission. Employees with no assigned shift have no "
-            "reference to check against, so this never applies to them."
+            "otherwise the day moves into the Permission zone (see "
+            "permission_window_minutes) or, past that, is capped at Half "
+            "Shift. Employees with no assigned shift have no reference to "
+            "check against, so this never applies to them."
+        ),
+    )
+
+    # ── Auto-Permission zone (staff, arrival + departure) ─────────────────
+    # Inserted between the existing Late/Half-Shift boundary
+    # (shift_punctuality_window_minutes) and a new, farther-out Half-Shift
+    # boundary: a first/last punch landing past the punctuality window but
+    # still within this many EXTRA minutes is auto-detected as "Permission"
+    # (not Half Shift) -purely from punch timing, independent of whether an
+    # EmployeePermission was ever submitted (see permission_*_with_request
+    # on AttendanceDayRecord for that separate axis). Past this extra window,
+    # the day is Half Shift, same as before this feature existed.
+    permission_window_minutes = models.IntegerField(
+        default=60, db_column="permission_window_minutes",
+        help_text=(
+            "Staff only. Extra minutes past shift_punctuality_window_minutes "
+            "(on either the arrival or departure edge) during which a punch "
+            "is auto-detected as Permission instead of Half Shift. Past "
+            "this window too, the day is Half Shift."
+        ),
+    )
+    max_permissions_per_day = models.IntegerField(
+        default=1, db_column="max_permissions_per_day",
+        help_text=(
+            "Staff only. Maximum shift edges (morning arrival, lunch return, "
+            "departure) per day that may resolve to Permission status. Any "
+            "edge beyond this on the same day escalates to Half Shift."
+        ),
+    )
+    max_permissions_per_week = models.IntegerField(
+        default=2, db_column="max_permissions_per_week",
+        help_text=(
+            "Staff only. Maximum Permission-zone edges per ISO week (Mon-Sun) "
+            "across all days. Once exhausted, further edges that week "
+            "escalate to Half Shift even if under the daily cap."
         ),
     )
 
@@ -1513,18 +1549,19 @@ class PayrollSettings(models.Model):
     )
 
     # ── Without Permission policy (staff payroll) -separate pool ─────────
-    # Counts late-in/early-out occurrences inside the 1-hour permission
-    # window that had NO approved Permission covering them (see
-    # AttendanceDayRecord.late_in_without_permission/early_out_without_
-    # permission). Independent from the Late Attendance pool above -an
-    # occurrence here does not also draw down late_free_allowance, and vice
-    # versa. Ships with an empty slab table (zero deduction) so this new
-    # detection is purely informational until HR deliberately opts in here.
+    # Counts auto-detected Permission-zone edges (morning arrival, lunch
+    # return, departure) that had NO approved EmployeePermission covering
+    # them (see AttendanceDayRecord.permission_*_with_request). Independent
+    # from the Late Attendance pool above -an occurrence here does not also
+    # draw down late_free_allowance, and vice versa. Ships with an empty
+    # slab table (zero deduction) so this detection is purely informational
+    # until HR deliberately opts in here.
     without_permission_free_allowance = models.IntegerField(
         default=0, db_column="without_permission_free_allowance",
         help_text=(
-            "Free late-in/early-out-without-permission occurrences allowed "
-            "per employee per month before any shift deduction applies."
+            "Free Permission-zone-without-a-submitted-request occurrences "
+            "allowed per employee per month before any shift deduction "
+            "applies."
         ),
     )
     without_permission_deduction_slabs = models.JSONField(
@@ -1534,6 +1571,67 @@ class PayrollSettings(models.Model):
             "Same shape/semantics as late_deduction_slabs, applied to the "
             "Without Permission pool instead. Empty by default -no "
             "deduction until HR configures rows here."
+        ),
+    )
+
+    # ── Afternoon (Night) Late / lunch-return zone (staff, strict mode) ───
+    # Strict mode only -simple mode has no punch2/punch3 (lunch) concept.
+    # Mirrors the arrival/departure zone chain above but anchored to
+    # (punch2 + lunch_duration_minutes) instead of a fixed shift edge, since
+    # the lunch window is a DURATION, not a time-of-day. Widths are kept
+    # independent of the arrival/departure window so HR can tune the lunch
+    # policy separately.
+    afternoon_late_window_minutes = models.IntegerField(
+        default=60, db_column="afternoon_late_window_minutes",
+        help_text=(
+            "Strict mode only. Minutes past the lunch-return deadline "
+            "(punch2 + lunch_duration_minutes) during which a late return "
+            "is flagged Night Late but does not affect shift value. Beyond "
+            "this, the afternoon Permission zone begins."
+        ),
+    )
+    afternoon_permission_window_minutes = models.IntegerField(
+        default=60, db_column="afternoon_permission_window_minutes",
+        help_text=(
+            "Strict mode only. Extra minutes past afternoon_late_window_"
+            "minutes during which a late lunch return is auto-detected as "
+            "Permission. Beyond this window, see "
+            "afternoon_late_can_cause_half_shift."
+        ),
+    )
+    afternoon_late_can_cause_half_shift = models.BooleanField(
+        default=True, db_column="afternoon_late_can_cause_half_shift",
+        help_text=(
+            "Strict mode only. When on, a lunch return beyond the afternoon "
+            "Late + Permission windows caps the day at Half Shift, the same "
+            "way an arrival/departure edge already can. When off, a late "
+            "lunch return is only ever flagged (never demotes shift value) "
+            "-matches behavior before this feature existed."
+        ),
+    )
+
+    # ── OT (Overtime) compensation detection ──────────────────────────────
+    # Off by default -no employee is auto-flagged for OT until HR opts in
+    # here. See backend/api/overtime.py for the detection engine and
+    # OvertimeRecord for the announced result. compensation_type is a
+    # single company-wide choice (HR-controlled, never per-employee) per the
+    # user's explicit requirement that employees cannot choose or
+    # self-assign compensation.
+    ot_detection_enabled = models.BooleanField(
+        default=False, db_column="ot_detection_enabled",
+        help_text="Staff only. Off by default -OT is never detected until HR enables this.",
+    )
+    ot_threshold_minutes = models.IntegerField(
+        default=60, db_column="ot_threshold_minutes",
+        help_text="Minutes worked past the assigned shift's end time before a day is OT-eligible.",
+    )
+    ot_compensation_type = models.TextField(
+        default="pay", db_column="ot_compensation_type",
+        help_text=(
+            "Company-wide default: 'pay' (one day's equivalent salary added to "
+            "the next payroll run as OT) or 'relaxation' (a paid Alternative "
+            "Day credit HR can redeem later). Snapshotted onto each "
+            "OvertimeRecord at announce time; HR may override per-batch."
         ),
     )
 
@@ -1604,6 +1702,20 @@ class PayrollSettings(models.Model):
     # Night Shift Relaxation (staff-only). Controls sidebar visibility of the
     # page; default True preserves the pre-toggle behavior.
     night_shift_enabled = models.BooleanField(default=True, db_column="night_shift_enabled")
+    # Compensation feature master switch (CTC Breakdown + OT Detection +
+    # Compensation Leave + History & Reports -the whole /hr/compensation
+    # page). Checked at a single choke point everywhere it matters
+    # (compensation_views.py's @require_compensation_enabled, attendance_
+    # final.py's _compensation_day_for, payroll_views.py's OT-pay block,
+    # overtime.py's detect_overtime_for_month) -mirrors night_shift_enabled's
+    # own fix history: a toggle that only hid a sidebar entry while the
+    # underlying calculations kept running regardless was found to be a bug,
+    # not a feature, so this one is wired to genuinely disable everything at
+    # once from day one. Sub-settings (ot_detection_enabled, ot_threshold_
+    # minutes, ot_compensation_type) stay independent finer-grained controls
+    # underneath this master switch -this is default True since the pages
+    # are already live; HR turns it off explicitly to postpone the feature.
+    compensation_feature_enabled = models.BooleanField(default=True, db_column="compensation_feature_enabled")
 
     # ── Database backup ─────────────────────────────────────────────────────
     backup_directory = models.TextField(blank=True, default="", db_column="backup_directory")
@@ -1633,7 +1745,18 @@ class PayrollSettings(models.Model):
 
     @classmethod
     def get(cls) -> "PayrollSettings":
-        obj, _ = cls.objects.get_or_create(pk=1)
+        obj, created = cls.objects.get_or_create(pk=1)
+        if created:
+            # get_or_create's freshly-inserted instance keeps its Python-level
+            # field defaults verbatim (e.g. TimeField(default="14:30") stays
+            # the literal string "14:30", not a time object) until reloaded
+            # from the DB, which runs it through the field's from_db
+            # conversion. Every caller that reads a Time/Date-typed field off
+            # a first-ever singleton row (a brand-new install, or a test's
+            # rolled-back-clean DB) would otherwise get a raw string and
+            # crash the first time that value reaches a time-arithmetic call
+            # (e.g. half_shift_late_reference_time in shift_engine.py).
+            obj.refresh_from_db()
         return obj
 
 
@@ -1827,6 +1950,36 @@ class AttendanceDayRecord(models.Model):
     # early departure was never flagged at all before this.
     late_in_without_permission = models.BooleanField(default=False, db_column="late_in_without_permission")
     early_out_without_permission = models.BooleanField(default=False, db_column="early_out_without_permission")
+    # Night Late: strict-mode lunch-return lateness (punch3 beyond punch2 +
+    # lunch_duration_minutes, within the afternoon Late window -see
+    # PayrollSettings.afternoon_late_window_minutes). is_late/late_morning
+    # covers the morning arrival edge; this is its afternoon counterpart.
+    late_afternoon = models.BooleanField(default=False, db_column="late_afternoon")
+    # Auto-Permission zone per edge (see PayrollSettings.permission_window_
+    # minutes / afternoon_permission_window_minutes) -detected purely from
+    # punch timing, independent of any submitted EmployeePermission. The
+    # matching *_with_request flag is a secondary label: True when an
+    # approved EmployeePermission's own time also covers that edge.
+    permission_morning = models.BooleanField(default=False, db_column="permission_morning")
+    permission_morning_with_request = models.BooleanField(default=False, db_column="permission_morning_with_request")
+    permission_afternoon = models.BooleanField(default=False, db_column="permission_afternoon")
+    permission_afternoon_with_request = models.BooleanField(default=False, db_column="permission_afternoon_with_request")
+    permission_departure = models.BooleanField(default=False, db_column="permission_departure")
+    permission_departure_with_request = models.BooleanField(default=False, db_column="permission_departure_with_request")
+    # How many edges resolved to Permission today, AFTER daily/weekly cap
+    # enforcement (PayrollSettings.max_permissions_per_day/_per_week) -used
+    # to roll the weekly cap forward day by day without re-deriving it from
+    # the three booleans above. permission_escalated_to_half_shift records
+    # that at least one edge WOULD have been Permission but was pushed to
+    # Half Shift by a cap, for HR auditability.
+    permission_zone_count = models.IntegerField(default=0, db_column="permission_zone_count")
+    permission_escalated_to_half_shift = models.BooleanField(default=False, db_column="permission_escalated_to_half_shift")
+    # True when a CompensationDayAnnouncement covered this day -Late/Permission
+    # detection was suppressed (see attendance_final.py's compensation-day
+    # exemption). Display/audit only: Full vs Half is still decided from real
+    # punches (against leave_until_time as the effective shift end, when set)
+    # -this flag never changes shifts_earned by itself.
+    is_compensation_day = models.BooleanField(default=False, db_column="is_compensation_day")
     # Display-only explanation of why is_late/is_half_shift ended up True this
     # day (e.g. "Late morning (Without Permission): arrived 09:40, deadline
     # 09:15"). Never read by any calculation — purely so Payroll/Attendance
@@ -2535,6 +2688,116 @@ class NightShiftRelaxation(models.Model):
         db_table = "night_shift_relaxations"
         unique_together = [["employee", "relaxation_date"]]
         ordering = ["-relaxation_date"]
+
+
+# ──────────────────────────────────────────────
+#  Compensation: OT detection + Compensation-Leave announcements
+# ──────────────────────────────────────────────
+#
+# Two independent HR-announced flows (see backend/api/overtime.py and
+# compensation_views.py):
+#   1. OvertimeRecord -auto-detected (worked past shift end), HR reviews and
+#      announces Pay or Relaxation. Nothing is paid/credited until announced.
+#   2. CompensationDayAnnouncement -HR declares a festival/special day for
+#      specific employees/branch/department; actual punches still decide
+#      Full vs Half that day (see attendance_final.py's compensation-day
+#      exemption) -a compensation day never auto-grants Full Day.
+# Distinct from NightShiftRelaxation above (that's about tomorrow's
+# punctuality after working late; this is about rewarding today's extra
+# hours) -the two coexist without conflict.
+
+class OvertimeRecord(models.Model):
+    STATUS_DETECTED = "detected"
+    STATUS_ANNOUNCED = "announced"
+    STATUS_REJECTED = "rejected"
+    STATUS_CHOICES = [
+        (STATUS_DETECTED, "Detected"),
+        (STATUS_ANNOUNCED, "Announced"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+    TYPE_PAY = "pay"
+    TYPE_RELAXATION = "relaxation"
+    TYPE_CHOICES = [(TYPE_PAY, "Pay"), (TYPE_RELAXATION, "Relaxation")]
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="overtime_records",
+    )
+    date = models.DateField()
+    shift_end_time = models.TimeField(null=True, blank=True, db_column="shift_end_time")
+    last_punch_out = models.TimeField(db_column="last_punch_out")
+    ot_minutes = models.IntegerField(db_column="ot_minutes")
+    status = models.TextField(choices=STATUS_CHOICES, default=STATUS_DETECTED)
+    # Snapshot of PayrollSettings.ot_compensation_type at the moment HR
+    # announces this record -so a later Settings change never retroactively
+    # changes an already-announced record's compensation type.
+    compensation_type = models.TextField(choices=TYPE_CHOICES, null=True, blank=True, db_column="compensation_type")
+    announced_by = models.TextField(null=True, blank=True, db_column="announced_by")
+    announced_at = models.DateTimeField(null=True, blank=True, db_column="announced_at")
+    notes = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "overtime_records"
+        unique_together = [["employee", "date"]]
+        ordering = ["-date"]
+
+
+class CompensationLeaveCredit(models.Model):
+    """One credited Alternative Day off, earned from an announced
+    Relaxation-type OvertimeRecord. Redeemed by HR against a specific date
+    on the employee's behalf (see compensation_views.redeem_credit) -this
+    intentionally reuses casual_leave_views._write_attendance_for_cl's
+    hardcode-present pattern, since a redeemed day is a genuine day off, not
+    a modified work day (contrast with CompensationDayAnnouncement below)."""
+    STATUS_AVAILABLE = "available"
+    STATUS_USED = "used"
+    STATUS_CHOICES = [(STATUS_AVAILABLE, "Available"), (STATUS_USED, "Used")]
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="compensation_credits",
+    )
+    source_overtime_record = models.ForeignKey(
+        OvertimeRecord, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="source_overtime_record_id", related_name="credits",
+    )
+    status = models.TextField(choices=STATUS_CHOICES, default=STATUS_AVAILABLE)
+    used_date = models.DateField(null=True, blank=True, db_column="used_date")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "compensation_leave_credits"
+        ordering = ["-created_at"]
+
+
+class CompensationDayAnnouncement(models.Model):
+    """HR-declared compensation day (festival/special day). Scoped by an
+    explicit employee list and/or branch/department (Holiday's nullable-FK
+    convention -null means unscoped on that axis). `leave_until_time` null
+    means the whole day is exempted from Late/Permission detection; a time
+    means only that early-release edge is exempted -see attendance_final.py's
+    _compensation_day_for / its callers for how this is applied. Never
+    changes shifts_earned by itself -Full vs Half is still decided from real
+    punches, against `leave_until_time` as the effective shift end when set."""
+    date = models.DateField()
+    leave_until_time = models.TimeField(null=True, blank=True, db_column="leave_until_time")
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="branch_id", related_name="compensation_days",
+    )
+    department = models.ForeignKey(
+        Department, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="department_id", related_name="compensation_days",
+    )
+    employees = models.ManyToManyField(
+        Employee, blank=True, related_name="compensation_day_announcements",
+    )
+    reason = models.TextField(null=True, blank=True)
+    announced_by = models.TextField(null=True, blank=True, db_column="announced_by")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "compensation_day_announcements"
+        ordering = ["-date"]
 
 
 # ──────────────────────────────────────────────

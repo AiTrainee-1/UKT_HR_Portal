@@ -52,7 +52,6 @@ export function ManagerAssignmentLookup({
   const assignMutation = useAssignEmployeeToManager();
 
   const [tab, setTab] = useState<"users" | "unassigned">("users");
-  const [userQuery, setUserQuery] = useState("");
   const [empQuery, setEmpQuery] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -87,8 +86,11 @@ export function ManagerAssignmentLookup({
   // The same search box now answers both "who is this HOD?" and "who does
   // this person report to?" -searching a staff member and getting nothing
   // back was the gap, since their HOD is exactly what you want to see.
+  // Driven by `listSearch` (the single search box in the header above) -
+  // there used to be a second, near-identical box just for this, which read
+  // as two different searches doing two different things side by side.
   const { data: staffMatches, isFetching: staffFetching } = useSearchEmployees(
-    tab === "users" ? userQuery : "",
+    tab === "users" ? listSearch : "",
   );
 
   /** employeeId -> the HOD they report to. Built from every manager's
@@ -113,7 +115,7 @@ export function ManagerAssignmentLookup({
   );
 
   const matchedUsers = useMemo(() => {
-    const q = userQuery.trim().toLowerCase();
+    const q = listSearch.trim().toLowerCase();
     if (!q) return [];
     return managers.filter(
       (m) =>
@@ -121,7 +123,7 @@ export function ManagerAssignmentLookup({
         m.employeeCode.toLowerCase().includes(q) ||
         (m.department ?? "").toLowerCase().includes(q),
     );
-  }, [managers, userQuery]);
+  }, [managers, listSearch]);
 
   const totalPages = Math.max(1, Math.ceil(unassigned.length / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -161,10 +163,10 @@ export function ManagerAssignmentLookup({
             onChange={(v) => setTab(v as "users" | "unassigned")}
           />
 
-          <div className="relative w-full sm:w-64">
+          <div className="relative w-full sm:w-72">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="Search users…"
+              placeholder={tab === "users" ? "Search HOD or employee, name/code…" : "Search users…"}
               value={listSearch}
               onChange={(e) => onListSearchChange(e.target.value)}
               className="h-9 pl-9 pr-8 text-sm"
@@ -185,36 +187,17 @@ export function ManagerAssignmentLookup({
         {tab === "users" ? (
           <>
             <p className="text-xs text-muted-foreground">
-              Search a department head, or any employee to see which HOD they report to.
+              Search a department head, or any employee to see which HOD they report to -one box above
+              answers both.
             </p>
-
-            <div className="relative max-w-sm">
-              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder="HOD or employee name / code…"
-                value={userQuery}
-                onChange={(e) => setUserQuery(e.target.value)}
-                className="pl-9 pr-9"
-              />
-              {userQuery && (
-                <Button
-                  variant="ghost" size="icon"
-                  className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2"
-                  onClick={() => setUserQuery("")}
-                  aria-label="Clear search"
-                >
-                  <X size={13} />
-                </Button>
-              )}
-            </div>
 
             {(managersLoading || staffFetching) && (
               <p className="text-xs text-muted-foreground">Searching…</p>
             )}
-            {!managersLoading && !staffFetching && userQuery.trim() &&
+            {!managersLoading && !staffFetching && listSearch.trim() &&
               matchedUsers.length === 0 && matchedStaff.length === 0 && (
                 <p className="text-xs text-muted-foreground">
-                  Nothing matches “{userQuery}” — no department head and no employee.
+                  Nothing matches “{listSearch}” — no department head and no employee.
                 </p>
               )}
 

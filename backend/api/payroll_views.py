@@ -492,10 +492,29 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
     # branch login would have produced, and lets one Admin run spanning
     # several branches apply each branch's own rates.
     ps = settings if settings is not None else settings_for_employee(emp)
+
+    # OT (Overtime) compensation, Pay type only -one day's equivalent salary
+    # per announced OT day falling in this period. Recomputed fresh on every
+    # generation/regeneration (same convention as every other pool in this
+    # function) -period-keyed, so re-running never double-counts. Relaxation-
+    # type OT never touches payroll -it's a CompensationLeaveCredit instead
+    # (see compensation_views.py). Master off-switch: when the Compensation
+    # feature is disabled in Settings, no OT pay is added regardless of any
+    # already-announced records -mirrors _compensation_day_for's own gate.
+    ot_amount = Decimal("0")
+    ot_days = 0
+    if ps.compensation_feature_enabled:
+        from .models import OvertimeRecord
+        ot_days = OvertimeRecord.objects.filter(
+            employee=emp, status=OvertimeRecord.STATUS_ANNOUNCED, compensation_type=OvertimeRecord.TYPE_PAY,
+            date__gte=month_start, date__lte=month_end,
+        ).count()
+        ot_amount = _d2(daily_rate * ot_days) if ot_days else Decimal("0")
+
+    esi_ceiling = ps.esi_applicable_below
     if ps.staff_payroll_rules_enabled:
         pf_rate     = ps.pf_rate / Decimal("100")          # e.g. 12 -> 0.12
         esi_rate    = ps.esi_rate / Decimal("100")          # e.g. 0.75 -> 0.0075
-        esi_ceiling = ps.esi_applicable_below
 
         pf_deduction = _d2(basic * pf_rate) if pf_rate > 0 else Decimal("0")
 
@@ -574,7 +593,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
     advance_total, advance_details = _pending_advance_repayments(emp, month, year)
 
     total_deductions = _d2(pf_deduction + esi_deduction + advance_total + late_penalty + without_permission_penalty)
-    net_salary = _d2(base_gross - total_deductions)
+    net_salary = _d2(base_gross + ot_amount - total_deductions)
 
     # 9. Build breakdown JSON (full traceability)
     breakdown = {
@@ -610,6 +629,8 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             "hra": float(hra),
             "allowances": float(allowances),
             "grossSalary": float(base_gross),
+            "otDays": ot_days,
+            "otAmount": float(ot_amount),
         },
         "deductions": {
             "pf": float(pf_deduction),
@@ -638,7 +659,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             absent_days=Decimal(str(absent_count + unpaid_leave_count)),
             completed_sessions=0,
             ot_hours=Decimal("0"),
-            ot_amount=Decimal("0"),
+            ot_amount=ot_amount,
             base_salary=emp.salary_amount,
             gross_salary=base_gross,
             deductions=total_deductions,
@@ -666,7 +687,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             allowances=allowances,
             incentives=Decimal("0"),
             bonuses=Decimal("0"),
-            ot_amount=Decimal("0"),
+            ot_amount=ot_amount,
             gross_salary=base_gross,
             pf_deduction=pf_deduction,
             esi_deduction=esi_deduction,
@@ -1610,6 +1631,10 @@ def _ps_response(ps) -> dict:
         "bonusWageCeiling": float(ps.bonus_wage_ceiling),
         "bonusEligibilityCeiling": float(ps.bonus_eligibility_ceiling),
         "bonusFyStartMonth": ps.bonus_fy_start_month,
+        # OT / Compensation (Compensation page's OT detection + announce)
+        "otDetectionEnabled": ps.ot_detection_enabled,
+        "otThresholdMinutes": ps.ot_threshold_minutes,
+        "otCompensationType": ps.ot_compensation_type,
         # General
         "payDay": ps.pay_day,
         "productionPayType": ps.production_pay_type,
@@ -1639,6 +1664,12 @@ def _ps_response(ps) -> dict:
         "lastPunchPostShiftGraceHours": float(ps.last_punch_post_shift_grace_hours),
         "firstPunchPreShiftBufferHours": float(ps.first_punch_pre_shift_buffer_hours),
         "halfShiftLateReferenceTime": str(ps.half_shift_late_reference_time)[:5],
+        # Auto-Permission zone (arrival/departure) + afternoon (lunch-return)
+        # zone -see shift_engine.py's ZONE_* / _classify_zone.
+        "permissionWindowMinutes": ps.permission_window_minutes,
+        "afternoonLateWindowMinutes": ps.afternoon_late_window_minutes,
+        "afternoonPermissionWindowMinutes": ps.afternoon_permission_window_minutes,
+        "afternoonLateCanCauseHalfShift": ps.afternoon_late_can_cause_half_shift,
         # Defaults pre-filled into a newly created shift (Manage Shift still
         # owns the real per-shift times)
         "defaultShiftGraceMinutes": ps.default_shift_grace_minutes,
@@ -1651,6 +1682,8 @@ def _ps_response(ps) -> dict:
         # Without Permission policy -separate pool, see late_shift_deduction()
         "withoutPermissionFreeAllowance": ps.without_permission_free_allowance,
         "withoutPermissionDeductionSlabs": ps.without_permission_deduction_slabs or [],
+        "maxPermissionsPerDay": ps.max_permissions_per_day,
+        "maxPermissionsPerWeek": ps.max_permissions_per_week,
         # Production attendance windows (1.5-shift day)
         "prodFirstHalfStart": str(ps.prod_first_half_start)[:5],
         "prodFirstHalfEnd": str(ps.prod_first_half_end)[:5],
@@ -1664,6 +1697,7 @@ def _ps_response(ps) -> dict:
         "staffPayrollRulesEnabled": ps.staff_payroll_rules_enabled,
         "prodPayrollRulesEnabled": ps.prod_payroll_rules_enabled,
         "nightShiftEnabled": ps.night_shift_enabled,
+        "compensationFeatureEnabled": ps.compensation_feature_enabled,
         # Backup
         "backupDirectory": ps.backup_directory,
         # SMTP / Email
@@ -1711,6 +1745,10 @@ FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "defaultShiftFirstHalfEnd": ("settings.attendance",),
     "defaultShiftLunchDurationMinutes": ("settings.attendance",),
     "defaultShiftLunchGraceMinutes": ("settings.attendance",),
+    "permissionWindowMinutes": ("settings.attendance",),
+    "afternoonLateWindowMinutes": ("settings.attendance",),
+    "afternoonPermissionWindowMinutes": ("settings.attendance",),
+    "afternoonLateCanCauseHalfShift": ("settings.attendance",),
     # Late Detection is its own Settings tab, so it gets its own permission
     # group -HR can be given the attendance timings without the power to
     # change what a late actually costs an employee.
@@ -1718,6 +1756,8 @@ FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "lateDeductionSlabs": ("settings.late_detection",),
     "withoutPermissionFreeAllowance": ("settings.late_detection",),
     "withoutPermissionDeductionSlabs": ("settings.late_detection",),
+    "maxPermissionsPerDay": ("settings.late_detection",),
+    "maxPermissionsPerWeek": ("settings.late_detection",),
     "pfRate": ("settings.payroll",),
     "esiRate": ("settings.payroll",),
     "esiApplicableBelow": ("settings.payroll",),
@@ -1730,6 +1770,10 @@ FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "bonusWageCeiling": ("settings.payroll",),
     "bonusEligibilityCeiling": ("settings.payroll",),
     "bonusFyStartMonth": ("settings.payroll",),
+    "compensationFeatureEnabled": ("settings.payroll",),
+    "otDetectionEnabled": ("settings.payroll",),
+    "otThresholdMinutes": ("settings.payroll",),
+    "otCompensationType": ("settings.payroll",),
     "payDay": ("settings.payroll",),
     "productionPayType": ("settings.payroll",),
     "defaultSalaryPerShift": ("settings.payroll",),
@@ -1834,6 +1878,8 @@ def payroll_settings_view(request: Request) -> Response:
         "bonusWageCeiling": ("bonus_wage_ceiling", Decimal),
         "bonusEligibilityCeiling": ("bonus_eligibility_ceiling", Decimal),
         "bonusFyStartMonth": ("bonus_fy_start_month", int),
+        "otThresholdMinutes": ("ot_threshold_minutes", int),
+        "otCompensationType": ("ot_compensation_type", str),
         "payDay": ("pay_day", int),
         "productionPayType": ("production_pay_type", str),
         "defaultSalaryPerShift": ("default_salary_per_shift", Decimal),
@@ -1868,12 +1914,17 @@ def payroll_settings_view(request: Request) -> Response:
         "prodExtraStart": ("prod_extra_start", str),
         "prodExtraEnd": ("prod_extra_end", str),
         "halfShiftLateReferenceTime": ("half_shift_late_reference_time", str),
+        "permissionWindowMinutes": ("permission_window_minutes", int),
+        "afternoonLateWindowMinutes": ("afternoon_late_window_minutes", int),
+        "afternoonPermissionWindowMinutes": ("afternoon_permission_window_minutes", int),
         "defaultShiftGraceMinutes": ("default_shift_grace_minutes", int),
         "defaultShiftFirstHalfEnd": ("default_shift_first_half_end", str),
         "defaultShiftLunchDurationMinutes": ("default_shift_lunch_duration_minutes", int),
         "defaultShiftLunchGraceMinutes": ("default_shift_lunch_grace_minutes", int),
         "lateFreeAllowance": ("late_free_allowance", int),
         "withoutPermissionFreeAllowance": ("without_permission_free_allowance", int),
+        "maxPermissionsPerDay": ("max_permissions_per_day", int),
+        "maxPermissionsPerWeek": ("max_permissions_per_week", int),
     }
     # Image fields may legitimately be set to null (user removed the logo /
     # signature) -str(None) would store the literal string "None".
@@ -1956,6 +2007,12 @@ def payroll_settings_view(request: Request) -> Response:
         ps.prod_payroll_rules_enabled = bool(data["prodPayrollRulesEnabled"])
     if "nightShiftEnabled" in data:
         ps.night_shift_enabled = bool(data["nightShiftEnabled"])
+    if "afternoonLateCanCauseHalfShift" in data:
+        ps.afternoon_late_can_cause_half_shift = bool(data["afternoonLateCanCauseHalfShift"])
+    if "otDetectionEnabled" in data:
+        ps.ot_detection_enabled = bool(data["otDetectionEnabled"])
+    if "compensationFeatureEnabled" in data:
+        ps.compensation_feature_enabled = bool(data["compensationFeatureEnabled"])
     if "backupDirectory" in data:
         ps.backup_directory = str(data["backupDirectory"] or "")
 

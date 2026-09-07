@@ -13,7 +13,7 @@ import {
   Building2, Clock, Mail, Database, IndianRupee, FileText, Upload, X,
   Fingerprint, CreditCard, Plus, Trash2, Power, Pencil, FileSignature, Award, Eye,
   AlertTriangle, Info, Briefcase, Factory, UserCheck, MessageCircle, CheckCircle2,
-  Palette, Download,
+  Palette, Download, Landmark,
 } from "lucide-react";
 import { ThemesPanel } from "@/components/ThemesPanel";
 import {
@@ -980,6 +980,10 @@ export default function Settings() {
     attendanceMode: "strict" as "strict" | "simple",
     simpleHalfShiftCutoff: "13:30",
     shiftPunctualityWindowMinutes: 60,
+    permissionWindowMinutes: 60,
+    afternoonLateWindowMinutes: 60,
+    afternoonPermissionWindowMinutes: 60,
+    afternoonLateCanCauseHalfShift: true,
     lastPunchPostShiftGraceHours: 9,
     firstPunchPreShiftBufferHours: 2,
     prodFirstHalfStart: "08:30",
@@ -998,6 +1002,21 @@ export default function Settings() {
   // punctuality window, night relaxation and the half-shift reference are
   // all staff-only concepts, so they live under Staff.
   const [attSubTab, setAttSubTab] = useState<"staff" | "production">("staff");
+  // Staff attendance sub-tab further splits into Calculation Mode & Zones
+  // vs. Night Shift Relaxation -two independent concerns that used to be
+  // stacked in one long scroll.
+  const [staffAttSubTab, setStaffAttSubTab] = useState<"mode" | "night">("mode");
+  // Late Detection tab split into its two independent policies.
+  const [lateDetectionSubTab, setLateDetectionSubTab] = useState<"late" | "permission">("late");
+  // Payroll tab split into its independent settings groups.
+  const [payrollSubTab, setPayrollSubTab] = useState<"rates" | "compensation" | "bonus" | "otCompensation" | "prodPfEf">("rates");
+  // OT / Compensation -loaded from DB
+  const [compensationFeatureEnabled, setCompensationFeatureEnabled] = useState(true);
+  const [otDetectionEnabled, setOtDetectionEnabled] = useState(false);
+  const [otThresholdMinutes, setOtThresholdMinutes] = useState(60);
+  const [otCompensationType, setOtCompensationType] = useState<"pay" | "relaxation">("pay");
+  // Production Payroll tab split into its independent settings groups.
+  const [prodPayrollSubTab, setProdPayrollSubTab] = useState<"period" | "shift" | "late">("period");
 
   // ── Late Detection policy -loaded from DB ─────────────────────────────
   const [lateFreeAllowance, setLateFreeAllowance] = useState(3);
@@ -1005,6 +1024,9 @@ export default function Settings() {
   // Without Permission -a separate pool from Late Attendance above.
   const [wpFreeAllowance, setWpFreeAllowance] = useState(0);
   const [wpSlabs, setWpSlabs] = useState<{ fromLates: number; deductionShifts: number }[]>([]);
+  // Daily/weekly caps on the auto-detected Permission zone.
+  const [maxPermissionsPerDay, setMaxPermissionsPerDay] = useState(1);
+  const [maxPermissionsPerWeek, setMaxPermissionsPerWeek] = useState(2);
   // ── Payroll -loaded from DB ───────────────────────────────────────────
   const { data: payrollSettingsData, isLoading: psLoading } = usePayrollSettings();
   const updatePayrollSettings = useUpdatePayrollSettings();
@@ -1120,6 +1142,10 @@ export default function Settings() {
         attendanceMode: (payrollSettingsData.attendanceMode as "strict" | "simple") || "strict",
         simpleHalfShiftCutoff: payrollSettingsData.simpleHalfShiftCutoff || "13:30",
         shiftPunctualityWindowMinutes: payrollSettingsData.shiftPunctualityWindowMinutes ?? 60,
+        permissionWindowMinutes: payrollSettingsData.permissionWindowMinutes ?? 60,
+        afternoonLateWindowMinutes: payrollSettingsData.afternoonLateWindowMinutes ?? 60,
+        afternoonPermissionWindowMinutes: payrollSettingsData.afternoonPermissionWindowMinutes ?? 60,
+        afternoonLateCanCauseHalfShift: payrollSettingsData.afternoonLateCanCauseHalfShift ?? true,
         lastPunchPostShiftGraceHours: payrollSettingsData.lastPunchPostShiftGraceHours ?? 9,
         firstPunchPreShiftBufferHours: payrollSettingsData.firstPunchPreShiftBufferHours ?? 2,
         prodFirstHalfStart: payrollSettingsData.prodFirstHalfStart || "08:30",
@@ -1138,6 +1164,12 @@ export default function Settings() {
       setLateSlabs(payrollSettingsData.lateDeductionSlabs ?? []);
       setWpFreeAllowance(payrollSettingsData.withoutPermissionFreeAllowance ?? 0);
       setWpSlabs(payrollSettingsData.withoutPermissionDeductionSlabs ?? []);
+      setMaxPermissionsPerDay(payrollSettingsData.maxPermissionsPerDay ?? 1);
+      setMaxPermissionsPerWeek(payrollSettingsData.maxPermissionsPerWeek ?? 2);
+      setCompensationFeatureEnabled(payrollSettingsData.compensationFeatureEnabled ?? true);
+      setOtDetectionEnabled(payrollSettingsData.otDetectionEnabled ?? false);
+      setOtThresholdMinutes(payrollSettingsData.otThresholdMinutes ?? 60);
+      setOtCompensationType((payrollSettingsData.otCompensationType as "pay" | "relaxation") ?? "pay");
       setPfEfEnabled(payrollSettingsData.prodPfEfEnabled ?? false);
       setPfEfRules(payrollSettingsData.prodPfEfRules ?? []);
       setStaffRulesEnabled(payrollSettingsData.staffPayrollRulesEnabled ?? false);
@@ -1246,6 +1278,19 @@ export default function Settings() {
       toast({ title: "Bonus settings saved" });
     } catch {
       toast({ title: "Failed to save bonus settings", variant: "destructive" });
+    }
+  };
+
+  const saveOtCompensationSettings = async () => {
+    try {
+      await updatePayrollSettings.mutateAsync({
+        otDetectionEnabled,
+        otThresholdMinutes,
+        otCompensationType,
+      } as never);
+      toast({ title: "OT / Compensation settings saved" });
+    } catch {
+      toast({ title: "Failed to save OT / Compensation settings", variant: "destructive" });
     }
   };
 
@@ -1393,6 +1438,10 @@ export default function Settings() {
         attendanceMode: attMode.attendanceMode,
         simpleHalfShiftCutoff: attMode.simpleHalfShiftCutoff,
         shiftPunctualityWindowMinutes: attMode.shiftPunctualityWindowMinutes,
+        permissionWindowMinutes: attMode.permissionWindowMinutes,
+        afternoonLateWindowMinutes: attMode.afternoonLateWindowMinutes,
+        afternoonPermissionWindowMinutes: attMode.afternoonPermissionWindowMinutes,
+        afternoonLateCanCauseHalfShift: attMode.afternoonLateCanCauseHalfShift,
         lastPunchPostShiftGraceHours: attMode.lastPunchPostShiftGraceHours,
         firstPunchPreShiftBufferHours: attMode.firstPunchPreShiftBufferHours,
         prodFirstHalfStart: attMode.prodFirstHalfStart,
@@ -1475,6 +1524,8 @@ export default function Settings() {
       await updatePayrollSettings.mutateAsync({
         withoutPermissionFreeAllowance: wpFreeAllowance,
         withoutPermissionDeductionSlabs: [...wpSlabs].sort((a, b) => a.fromLates - b.fromLates),
+        maxPermissionsPerDay,
+        maxPermissionsPerWeek,
       } as never);
       toast({
         title: "Without Permission policy saved",
@@ -2032,6 +2083,17 @@ export default function Settings() {
             />
 
             {attSubTab === "staff" && (<>
+            <PillTabs
+              items={[
+                { value: "mode", label: "Calculation Mode & Zones", icon: <Clock size={13} /> },
+                { value: "night", label: "Night Shift Relaxation", icon: <Clock size={13} /> },
+              ]}
+              value={staffAttSubTab}
+              onChange={(v) => setStaffAttSubTab(v as "mode" | "night")}
+              baseColor="#334155"
+              pillBg="#f8fafc"
+            />
+            {staffAttSubTab === "mode" && (<>
             {/* ── How each mode works ── */}
             <Card className="border-0 shadow-sm bg-slate-50/60">
               <CardHeader className="pb-2">
@@ -2162,6 +2224,61 @@ export default function Settings() {
                       employee -an employee with no shift assigned has no reference to check against, so this
                       never applies to them.
                     </p>
+                  </div>
+                </div>
+
+                {/* Auto-Permission zone -inserted between the punctuality window above
+                    and Half Shift. A first/last punch past the window but still inside
+                    this extra width is auto-detected Permission instead of Half Shift,
+                    purely from punch timing (see Late Detection tab for the daily/weekly
+                    caps and the With/Without Permission split). */}
+                <div className="grid sm:grid-cols-2 gap-4 p-3 bg-emerald-50/50 border border-emerald-100 rounded-lg">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Permission Zone Width -Morning/Departure (minutes)</Label>
+                    <p className="text-[11px] text-gray-500 -mt-1">
+                      Extra minutes past the punctuality window above during which a late arrival or early
+                      departure is auto-detected as <strong>Permission</strong> instead of Half Shift.
+                    </p>
+                    <Input
+                      type="number" min={0} step={5}
+                      value={attMode.permissionWindowMinutes}
+                      onChange={e => setAttMode(a => ({ ...a, permissionWindowMinutes: Math.max(0, Number(e.target.value) || 0) }))}
+                      className="max-w-[140px]"
+                    />
+                  </div>
+                  <div className="space-y-1.5 sm:col-span-2 border-t border-emerald-200 pt-3">
+                    <p className="text-[11px] font-semibold text-emerald-900">Afternoon (Night Late) -lunch return, strict mode only</p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Night Late Window (minutes past lunch deadline)</Label>
+                    <Input
+                      type="number" min={0} step={5}
+                      value={attMode.afternoonLateWindowMinutes}
+                      onChange={e => setAttMode(a => ({ ...a, afternoonLateWindowMinutes: Math.max(0, Number(e.target.value) || 0) }))}
+                      className="max-w-[140px]"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Afternoon Permission Zone Width (minutes)</Label>
+                    <Input
+                      type="number" min={0} step={5}
+                      value={attMode.afternoonPermissionWindowMinutes}
+                      onChange={e => setAttMode(a => ({ ...a, afternoonPermissionWindowMinutes: Math.max(0, Number(e.target.value) || 0) }))}
+                      className="max-w-[140px]"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between sm:col-span-2 bg-white rounded-lg border border-emerald-100 p-3">
+                    <div>
+                      <Label className="text-xs">Night Late Can Cause Half Shift</Label>
+                      <p className="text-[11px] text-gray-500">
+                        When off, a very late lunch return is only ever flagged -it never demotes the day
+                        to Half Shift on its own.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={attMode.afternoonLateCanCauseHalfShift}
+                      onCheckedChange={v => setAttMode(a => ({ ...a, afternoonLateCanCauseHalfShift: v }))}
+                    />
                   </div>
                 </div>
 
@@ -2297,7 +2414,9 @@ export default function Settings() {
                 </Button>
               </CardContent>
             </Card>
+            </>)}
 
+            {staffAttSubTab === "night" && (<>
             {/* ── Night Shift Relaxation (staff-only feature toggle) ── */}
             <Card className="border-0 shadow-sm">
               <CardHeader className="pb-3">
@@ -2339,6 +2458,7 @@ export default function Settings() {
                 </p>
               </CardContent>
             </Card>
+            </>)}
 
             </>)}
 
@@ -2373,6 +2493,17 @@ export default function Settings() {
           {/* Late Detection -how many lates are free, and what each further
               late costs. Drives the shift deduction applied during payroll. */}
           <TabsContent value="late_detection" className="mt-4 space-y-4">
+            <PillTabs
+              items={[
+                { value: "late", label: "Late Detection", icon: <AlertTriangle size={13} /> },
+                { value: "permission", label: "Permission Policy", icon: <AlertTriangle size={13} /> },
+              ]}
+              value={lateDetectionSubTab}
+              onChange={(v) => setLateDetectionSubTab(v as "late" | "permission")}
+              baseColor="#0f172a"
+              pillBg="#f1f5f9"
+            />
+            {lateDetectionSubTab === "late" && (<>
             <Card className="border-0 shadow-sm bg-slate-50/60">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-bold flex items-center gap-2">
@@ -2510,29 +2641,30 @@ export default function Settings() {
                 </Button>
               </CardContent>
             </Card>
+            </>)}
 
+            {lateDetectionSubTab === "permission" && (<>
             {/* ── Without Permission -a separate pool ── */}
             <Card className="border-0 shadow-sm bg-slate-50/60">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-bold flex items-center gap-2">
-                  <Info size={15} className="text-slate-500" /> How Without Permission Detection Works
+                  <Info size={15} className="text-slate-500" /> How the Permission Zone Works
                 </CardTitle>
               </CardHeader>
               <CardContent className="text-xs text-slate-600 leading-relaxed space-y-2">
                 <p>
-                  Staff only. Arriving late or leaving early inside a <strong>1-hour window</strong> around
-                  the shift's start/end time (the same window as the Half Shift punctuality cutoff above) is
-                  covered automatically by an approved <strong>Permission</strong> for that day -no detection
-                  at all. Without one, it's marked <strong>Late</strong> and tagged <strong>Without
-                  Permission</strong> here, separately from ordinary Late Attendance above. Arriving/leaving
-                  beyond that 1-hour window is unaffected -that's still handled entirely by the existing
-                  Half Shift rule.
+                  Staff only. An arrival, lunch return, or departure that's past the ordinary Late window
+                  (see the Attendance tab's Permission Zone Width) but still inside the extra Permission
+                  window is <strong>auto-detected as Permission</strong> -purely from punch timing, whether
+                  or not a formal Permission request was ever submitted. Only past both windows does the
+                  day become Half Shift.
                 </p>
                 <p>
-                  <strong>Morning</strong> (late-in): a Permission requested near the shift's start time
-                  covers it. <strong>Evening</strong> (early-out -new detection, nothing was flagged here
-                  before): a Permission requested near the shift's end time covers it. A Permission with no
-                  time recorded covers whichever side actually happened that day.
+                  Once an edge lands in the Permission zone, a submitted+approved <strong>Permission</strong>
+                  request covering that time labels it <strong>With Permission</strong>; otherwise it's
+                  <strong> Without Permission</strong> here, tracked separately from ordinary Late Attendance
+                  above. Every employee may have at most Max-Permissions-Per-Day/Week edges land in this zone
+                  (set below) -beyond that, the extra edge escalates to Half Shift instead.
                 </p>
               </CardContent>
             </Card>
@@ -2540,14 +2672,42 @@ export default function Settings() {
             <Card className="border-0 shadow-sm">
               <CardHeader className="pb-3">
                 <CardTitle className="text-sm font-bold flex items-center gap-2">
-                  <AlertTriangle size={15} className="text-rose-500" /> Without Permission Policy
+                  <AlertTriangle size={15} className="text-rose-500" /> Permission Policy
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-5">
+                <div className="grid sm:grid-cols-2 gap-4 p-3 bg-emerald-50/50 border border-emerald-100 rounded-lg max-w-lg">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Max Permissions Per Day</Label>
+                    <p className="text-[11px] text-gray-500 -mt-1">
+                      Edges (morning, afternoon, departure) that may resolve to Permission on the same day.
+                    </p>
+                    <Input
+                      type="number" min={0} className="max-w-[140px]"
+                      value={maxPermissionsPerDay}
+                      onChange={e => setMaxPermissionsPerDay(Math.max(0, Number(e.target.value) || 0))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Max Permissions Per Week</Label>
+                    <p className="text-[11px] text-gray-500 -mt-1">
+                      Total Permission-zone edges allowed across an ISO week (Mon-Sun).
+                    </p>
+                    <Input
+                      type="number" min={0} className="max-w-[140px]"
+                      value={maxPermissionsPerWeek}
+                      onChange={e => setMaxPermissionsPerWeek(Math.max(0, Number(e.target.value) || 0))}
+                    />
+                  </div>
+                  <p className="text-[11px] text-gray-500 sm:col-span-2">
+                    Beyond either cap, the extra edge escalates from Permission to Half Shift for that day.
+                  </p>
+                </div>
+
                 <div className="space-y-1.5 max-w-md">
                   <Label className="text-xs">Free Allowance -occurrences allowed per month</Label>
                   <p className="text-[11px] text-gray-500 -mt-1">
-                    No deduction at all until an employee exceeds this many late-in/early-out-without-permission
+                    No deduction at all until an employee exceeds this many Permission-zone-without-a-request
                     occurrences in a calendar month. Ships at 0 -every occurrence is billable unless raised here.
                   </p>
                   <Input
@@ -2648,14 +2808,29 @@ export default function Settings() {
                 </div>
 
                 <Button size="sm" onClick={saveWithoutPermission} disabled={updatePayrollSettings.isPending}>
-                  {updatePayrollSettings.isPending ? "Saving…" : "Save Without Permission Policy"}
+                  {updatePayrollSettings.isPending ? "Saving…" : "Save Permission Policy"}
                 </Button>
               </CardContent>
             </Card>
+            </>)}
           </TabsContent>
 
           {/* Payroll */}
-          <TabsContent value="payroll" className="mt-4">
+          <TabsContent value="payroll" className="mt-4 space-y-4">
+            <PillTabs
+              items={[
+                { value: "rates", label: "Payroll Rules", icon: <IndianRupee size={13} /> },
+                { value: "compensation", label: "Compensation", icon: <IndianRupee size={13} /> },
+                { value: "bonus", label: "Bonus", icon: <IndianRupee size={13} /> },
+                { value: "otCompensation", label: "OT / Compensation", icon: <Clock size={13} /> },
+                { value: "prodPfEf", label: "Production PF/EF", icon: <IndianRupee size={13} /> },
+              ]}
+              value={payrollSubTab}
+              onChange={(v) => setPayrollSubTab(v as "rates" | "compensation" | "bonus" | "otCompensation" | "prodPfEf")}
+              baseColor="#0f172a"
+              pillBg="#f1f5f9"
+            />
+            {payrollSubTab === "rates" && (<>
             <Card className="border-0 shadow-sm">
               <CardHeader className="pb-3">
                 <CardTitle className="text-sm font-bold flex items-center gap-2">
@@ -2795,7 +2970,9 @@ export default function Settings() {
                 </Button>
               </CardContent>
             </Card>
+            </>)}
 
+            {payrollSubTab === "compensation" && (<>
             {/* ── Compensation breakdown (Compensation page) ── */}
             <Card className="border-0 shadow-sm mt-4">
               <CardHeader className="pb-3">
@@ -2838,7 +3015,9 @@ export default function Settings() {
                 </Button>
               </CardContent>
             </Card>
+            </>)}
 
+            {payrollSubTab === "bonus" && (<>
             {/* ── Statutory Bonus (Bonus page) ── */}
             <Card className="border-0 shadow-sm mt-4">
               <CardHeader className="pb-3">
@@ -2895,7 +3074,117 @@ export default function Settings() {
                 </Button>
               </CardContent>
             </Card>
+            </>)}
 
+            {payrollSubTab === "otCompensation" && (<>
+            {/* ── Compensation feature master switch ── */}
+            <Card className="border-0 shadow-sm">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm font-bold flex items-center gap-2">
+                    <Landmark size={15} className="text-teal-600" /> Compensation Feature
+                  </CardTitle>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-bold ${compensationFeatureEnabled ? "text-green-600" : "text-gray-400"}`}>
+                      {compensationFeatureEnabled ? "ENABLED" : "DISABLED"}
+                    </span>
+                    <Switch
+                      checked={compensationFeatureEnabled}
+                      onCheckedChange={async (v) => {
+                        setCompensationFeatureEnabled(v);
+                        try {
+                          await updatePayrollSettings.mutateAsync({ compensationFeatureEnabled: v } as never);
+                          toast({
+                            title: v ? "Compensation feature enabled" : "Compensation feature disabled",
+                            description: v
+                              ? "The Compensation page is visible again, and OT detection / Compensation-Leave / OT pay in payroll are all active."
+                              : "The Compensation page is hidden from the sidebar, and OT detection, the Compensation-Leave exemption, and OT pay in payroll are all switched off -existing records are kept, not deleted.",
+                          });
+                        } catch {
+                          setCompensationFeatureEnabled(!v);
+                          toast({ title: "Failed to update setting", variant: "destructive" });
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  Master switch for the entire Compensation page -CTC Breakdown, OT Detection, Compensation
+                  Leave, and History &amp; Reports. Turning this off hides the page from the sidebar and
+                  genuinely stops the underlying calculations everywhere (OT is no longer detected, announced
+                  OT no longer adds pay to a generated payslip, and Compensation-Leave announcements stop
+                  exempting Late/Permission detection) -not just a cosmetic hide. Turn it back on any time;
+                  nothing is deleted while it's off. The settings below only matter while this is on.
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card className="border-0 shadow-sm bg-slate-50/60">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-bold flex items-center gap-2">
+                  <Info size={15} className="text-slate-500" /> How OT / Compensation Works
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="text-xs text-slate-600 leading-relaxed space-y-2">
+                <p>
+                  Staff only. Off by default. When enabled, an employee working more than the threshold below
+                  past their assigned shift's end time is auto-detected as OT-eligible on the <strong>Compensation
+                  → OT Detection</strong> page -HR reviews and Announces each one as <strong>Pay</strong> (one
+                  day's equivalent salary, added to that employee's next payroll run) or <strong>Relaxation</strong>
+                  (a paid Alternative Day credit HR can redeem later). Nothing is paid or credited until announced.
+                </p>
+                <p className="text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">
+                  Compensation type is a single company-wide default here -employees never choose or self-assign
+                  their own compensation.
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card className="border-0 shadow-sm">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-bold flex items-center gap-2">
+                  <Clock size={15} className="text-amber-500" /> OT Detection
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between bg-slate-50 rounded-lg border p-3">
+                  <div>
+                    <Label className="text-xs">Enable OT Detection</Label>
+                    <p className="text-[11px] text-gray-500">No employee is flagged for OT until this is on.</p>
+                  </div>
+                  <Switch checked={otDetectionEnabled} onCheckedChange={setOtDetectionEnabled} />
+                </div>
+                <div className="grid sm:grid-cols-2 gap-4 max-w-lg">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Threshold (minutes past shift end)</Label>
+                    <Input
+                      type="number" min={0} step={5}
+                      value={otThresholdMinutes}
+                      onChange={e => setOtThresholdMinutes(Math.max(0, Number(e.target.value) || 0))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Compensation Type (company-wide default)</Label>
+                    <select
+                      className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                      value={otCompensationType}
+                      onChange={(e) => setOtCompensationType(e.target.value as "pay" | "relaxation")}
+                    >
+                      <option value="pay">Pay -one day's equivalent salary</option>
+                      <option value="relaxation">Relaxation -paid Alternative Day</option>
+                    </select>
+                  </div>
+                </div>
+                <Button size="sm" onClick={saveOtCompensationSettings} disabled={updatePayrollSettings.isPending}>
+                  {updatePayrollSettings.isPending ? "Saving…" : "Save OT / Compensation Settings"}
+                </Button>
+              </CardContent>
+            </Card>
+            </>)}
+
+            {payrollSubTab === "prodPfEf" && (<>
             {/* ── Production PF / EF salary-range rules ── */}
             <Card className="border-0 shadow-sm mt-4">
               <CardHeader className="pb-3">
@@ -2985,11 +3274,24 @@ export default function Settings() {
                 </div>
               </CardContent>
             </Card>
+            </>)}
           </TabsContent>
 
           {/* Production Payroll -period/frequency configuration that drives
               the dedicated Production Payroll page's generate flow. */}
           <TabsContent value="production_payroll" className="mt-4 space-y-4">
+            <PillTabs
+              items={[
+                { value: "period", label: "Payroll Period", icon: <Factory size={13} /> },
+                { value: "shift", label: "Attendance & Shift", icon: <UserCheck size={13} /> },
+                { value: "late", label: "Late Detection", icon: <AlertTriangle size={13} /> },
+              ]}
+              value={prodPayrollSubTab}
+              onChange={(v) => setProdPayrollSubTab(v as "period" | "shift" | "late")}
+              baseColor="#0f172a"
+              pillBg="#f1f5f9"
+            />
+            {prodPayrollSubTab === "period" && (<>
             <Card className="border-0 shadow-sm bg-slate-50/60">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-bold flex items-center gap-2">
@@ -3134,7 +3436,9 @@ export default function Settings() {
                 )}
               </CardContent>
             </Card>
+            </>)}
 
+            {prodPayrollSubTab === "shift" && (<>
             {/* Attendance Mode -production only, independent of the staff
                 attendance_mode toggle. Only affects the Late Detection check
                 below -shifts-earned/pay math is unaffected. */}
@@ -3221,7 +3525,9 @@ export default function Settings() {
                 )}
               </CardContent>
             </Card>
+            </>)}
 
+            {prodPayrollSubTab === "late" && (<>
             {/* Production Late Detection -independent pool, off by default */}
             <Card className="border-0 shadow-sm bg-slate-50/60">
               <CardHeader className="pb-2">
@@ -3369,6 +3675,7 @@ export default function Settings() {
                 </Button>
               </CardContent>
             </Card>
+            </>)}
           </TabsContent>
 
           {/* SMTP */}

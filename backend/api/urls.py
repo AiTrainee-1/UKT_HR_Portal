@@ -104,7 +104,13 @@ from .growth_views import (
     bonus_calculate, bonus_generate, bonus_list, bonus_detail, bonus_export,
     idcard_data, verify_employee, email_idcard, idcard_whatsapp,
 )
-from .compensation_views import compensation_list
+from .compensation_views import (
+    compensation_list,
+    overtime_list, overtime_announce, overtime_reject,
+    compensation_credits_list, compensation_credit_redeem,
+    compensation_leave_days, compensation_leave_day_detail,
+    compensation_summary,
+)
 from .system_settings_views import (
     biometric_devices, biometric_device_detail, idcard_settings_view,
     production_shift_config_view, production_shift_segments, production_shift_segment_detail,
@@ -371,6 +377,14 @@ urlpatterns = [
     path("bonus", bonus_list),
     path("bonus/<int:pk>", bonus_detail),
     path("compensation", compensation_list),
+    path("compensation/ot", overtime_list),
+    path("compensation/ot/announce", overtime_announce),
+    path("compensation/ot/reject", overtime_reject),
+    path("compensation/credits", compensation_credits_list),
+    path("compensation/credits/<int:pk>/redeem", compensation_credit_redeem),
+    path("compensation/leave-days", compensation_leave_days),
+    path("compensation/leave-days/<int:pk>", compensation_leave_day_detail),
+    path("compensation/summary", compensation_summary),
     path("idcard", idcard_data),
     path("idcard/email", email_idcard),
     path("idcard/whatsapp", idcard_whatsapp),

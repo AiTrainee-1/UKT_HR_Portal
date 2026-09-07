@@ -608,6 +608,10 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
               // "not loaded yet" as enabled so the entry doesn't flash in
               // and out on page load.
               if (item.path === '/hr/night-shift' && settings?.nightShiftEnabled === false) return false;
+              // Compensation page (CTC Breakdown + OT Detection + Compensation
+              // Leave + History & Reports) is gated by its own Settings master
+              // switch -same "not loaded yet = enabled" convention as above.
+              if (item.path === '/hr/compensation' && settings?.compensationFeatureEnabled === false) return false;
               // Account Management is admin-only, independent of Role.permissions.
               if (item.path === '/hr/account-management') return !!user?.isSuperAdmin;
               // Admin-only, same as Account Management -no per-role grant.

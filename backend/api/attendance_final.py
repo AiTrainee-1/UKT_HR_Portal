@@ -41,7 +41,7 @@ import calendar
 from datetime import date as date_type, datetime, time as time_type, timedelta
 from decimal import Decimal
 
-from django.db.models import Q
+from django.db.models import Q, Sum
 
 from .clock import ist_now, ist_today
 from .models import (
@@ -53,6 +53,8 @@ from .shift_engine import (
     _punctuality_ok, _punctuality_window_minutes, resolve_day_punch_logs,
     _is_after_half_shift_late_reference,
     _permission_covers_late_in, _permission_covers_early_out,
+    _permission_window_minutes, _classify_zone,
+    ZONE_ON_TIME, ZONE_LATE, ZONE_PERMISSION, ZONE_HALF_SHIFT,
 )
 
 # The simple-mode half-shift cutoff as it actually stood at
@@ -121,6 +123,118 @@ def _sunday(d: date_type) -> bool:
     return d.weekday() == 6
 
 
+def _compensation_day_for(emp, d: date_type, settings=None):
+    """
+    The CompensationDayAnnouncement covering (emp, d), or None. Scoping
+    (Holiday's nullable-FK convention, extended with an explicit employee
+    list): an announcement applies to `emp` when either
+      - `emp` is explicitly listed in `announcement.employees`, or
+      - the employee list is empty AND emp's branch/department match
+        whichever of `announcement.branch`/`announcement.department` are
+        set (null on either axis = unscoped there).
+    Announcements are expected to be rare (a handful of festival/special
+    days a year), so this queries fresh per call rather than needing a
+    month-wide prefetch like approved_permissions_by_date.
+
+    Master off-switch: PayrollSettings.compensation_feature_enabled. Checked
+    here -the single choke point compute_day_record already goes through -
+    so turning the Compensation feature off in Settings stops this exemption
+    from applying at all, even though the CompensationDayAnnouncement rows
+    themselves are left untouched in the database (mirrors night_shift.py's
+    get_relaxation_for master-switch check).
+    """
+    if settings is None:
+        settings = PayrollSettings.get()
+    if not settings.compensation_feature_enabled:
+        return None
+    from .models import CompensationDayAnnouncement
+    for ann in CompensationDayAnnouncement.objects.filter(date=d):
+        if ann.employees.filter(pk=emp.pk).exists():
+            return ann
+        if ann.employees.exists():
+            continue
+        if ann.branch_id and ann.branch_id != emp.branch_id:
+            continue
+        if ann.department_id and ann.department_id != emp.department_id:
+            continue
+        return ann
+    return None
+
+
+def _permission_zone_count_this_week(emp, d: date_type, week_permission_counts=None) -> int:
+    """
+    Sum of AttendanceDayRecord.permission_zone_count for days in the current
+    ISO week (Mon-Sun) strictly BEFORE `d` -used to enforce
+    PayrollSettings.max_permissions_per_week without re-deriving it from the
+    per-edge booleans on every prior day.
+
+    `week_permission_counts`, when given, is a {date: permission_zone_count}
+    map a bulk caller (compute_month_records) already fetched once for the
+    employee's whole month (plus a little lead-in) -avoids one query per day.
+    Omitted, queries directly (cheap: one employee, up to 6 rows).
+    """
+    week_start = d - timedelta(days=d.weekday())
+    if week_permission_counts is not None:
+        return sum(
+            count for day, count in week_permission_counts.items()
+            if week_start <= day < d
+        )
+    total = AttendanceDayRecord.objects.filter(
+        employee=emp, date__gte=week_start, date__lt=d,
+    ).aggregate(total=Sum("permission_zone_count"))["total"]
+    return total or 0
+
+
+def _enforce_permission_caps(emp, d: date_type, fields: dict, settings, week_permission_counts=None) -> None:
+    """
+    Mutates `fields` in place: enforces max_permissions_per_day (priority
+    order morning -> afternoon -> departure) then max_permissions_per_week.
+    Any edge beyond the surviving budget is escalated -its permission_*/
+    *_with_request flags are cleared, and the day is demoted to Half Shift
+    (permission_escalated_to_half_shift=True), mirroring how any other edge
+    failure already demotes shifts_earned today. No-op when the day isn't a
+    Full-Shift ("present") staff day, or when no edge landed in a
+    Permission zone.
+    """
+    if fields.get("status") != "present":
+        return
+    edges = [k for k in ("permission_morning", "permission_afternoon", "permission_departure") if fields.get(k)]
+    if not edges:
+        return
+
+    max_per_day = settings.max_permissions_per_day
+    max_per_day = 1 if max_per_day is None else max_per_day
+    max_per_week = settings.max_permissions_per_week
+    max_per_week = 2 if max_per_week is None else max_per_week
+
+    surviving = edges[:max_per_day] if max_per_day >= 0 else list(edges)
+    escalated = edges[len(surviving):]
+
+    week_used = _permission_zone_count_this_week(emp, d, week_permission_counts=week_permission_counts)
+    week_budget = max(0, max_per_week - week_used)
+    if len(surviving) > week_budget:
+        escalated = surviving[week_budget:] + escalated
+        surviving = surviving[:week_budget]
+
+    if escalated:
+        legacy_without_permission_field = {
+            "permission_morning": "late_in_without_permission",
+            "permission_departure": "early_out_without_permission",
+        }
+        for key in escalated:
+            fields[key] = False
+            fields[f"{key}_with_request"] = False
+            legacy_field = legacy_without_permission_field.get(key)
+            if legacy_field:
+                fields[legacy_field] = False
+        fields["permission_escalated_to_half_shift"] = True
+        fields["status"] = "half_shift"
+        fields["is_half_shift"] = True
+        fields["shifts_earned"] = Decimal("0.50")
+
+    fields["permission_zone_count"] = len(surviving)
+
+
 # ── Staff: simple mode ─────────────────────────────────────────────────────
 
 def _compute_staff_simple(emp, d, punch_times, settings, shift, legacy_rule: bool = False,
@@ -137,51 +251,66 @@ def _compute_staff_simple(emp, d, punch_times, settings, shift, legacy_rule: boo
     # no Settings-level default: without an assigned shift there is no basis
     # for late detection, so the day is simply never flagged late.
     #
-    # Without-Permission detection (Full-Shift days only -see the "present"
-    # return branch below, the only place these two flags are actually kept):
-    # a punch inside the punctuality window but past grace is Late as always;
-    # if an approved EmployeePermission covers that moment, is_late is
-    # suppressed entirely instead (no detection). Same idea mirrored onto the
-    # evening side for early departure -brand new, nothing detected there
-    # before. Half Shift days (below) are entirely unaffected -see
-    # shift_engine.py's compute_daily_shift_log for the identical strict-mode
-    # version of this same logic.
+    # Zone-based detection (Full-Shift days only -see the "present" return
+    # branch below, the only place these flags are actually kept): a punch
+    # past grace but still inside the punctuality window is Late (Morning);
+    # past that window but inside the extra permission window is auto-
+    # detected Permission, independent of any submitted EmployeePermission -
+    # a submitted+approved one occurring near this edge only labels the
+    # occurrence "with request" (late_in_without_permission is the inverse,
+    # repurposed from its old "waives Late" meaning). Same idea mirrored onto
+    # the evening side for early departure. Simple mode has no punch2/punch3,
+    # so there is no afternoon/Night-Late axis here -see shift_engine.py's
+    # compute_daily_shift_log for the strict-mode version, which does.
     is_late = False
     early_leave = False
     late_in_without_permission = False
     early_out_without_permission = False
+    permission_morning = permission_morning_with_request = False
+    permission_departure = permission_departure_with_request = False
     late_reasons: list[str] = []
+    window_minutes = _punctuality_window_minutes(shift, settings=settings) if shift else 0
+    permission_window_min = _permission_window_minutes(settings=settings) if shift else 0
     if shift:
         grace = (shift.grace_period_minutes if shift.grace_period_minutes is not None else 0) * 60
-        if _t2s(first) > _t2s(shift.start_time) + grace:
+        shift_start_secs = _t2s(shift.start_time)
+        delta = max(0, _t2s(first) - shift_start_secs)
+        zone = _classify_zone(delta, grace, window_minutes * 60, permission_window_min * 60)
+        if zone == ZONE_LATE:
             is_late = True
-            window_minutes = _punctuality_window_minutes(shift, settings=settings)
-            deadline_t = _s2t(_t2s(shift.start_time) + grace)
-            if has_permission and _permission_covers_late_in(permission_time, shift, window_minutes):
-                is_late = False
-                late_reasons.append(f"Late-in covered by approved Permission: arrived {first.strftime('%H:%M')}")
-            else:
-                late_in_without_permission = True
-                late_reasons.append(
-                    f"Late morning (Without Permission): arrived {first.strftime('%H:%M')}, "
-                    f"deadline {deadline_t.strftime('%H:%M')}"
-                )
+            late_reasons.append(
+                f"Late morning: arrived {first.strftime('%H:%M')}, "
+                f"deadline {_s2t(shift_start_secs + grace).strftime('%H:%M')}"
+            )
+        elif zone == ZONE_PERMISSION:
+            permission_morning = True
+            permission_morning_with_request = bool(has_permission and _permission_covers_late_in(
+                permission_time, shift, window_minutes + permission_window_min,
+            ))
+            late_in_without_permission = not permission_morning_with_request
+            tag = "With Permission" if permission_morning_with_request else "Without Permission"
+            late_reasons.append(f"Permission (morning, {tag}): arrived {first.strftime('%H:%M')}")
+
         if last and _t2s(last) < _t2s(shift.end_time):
             early_leave = True
         if last:
-            early_deadline = _t2s(shift.end_time) - grace
-            if _t2s(last) < early_deadline:
-                window_minutes = _punctuality_window_minutes(shift, settings=settings)
-                deadline_t = _s2t(early_deadline)
-                if has_permission and _permission_covers_early_out(permission_time, shift, window_minutes):
-                    late_reasons.append(f"Early-out covered by approved Permission: left {last.strftime('%H:%M')}")
-                else:
-                    early_out_without_permission = True
-                    is_late = True
-                    late_reasons.append(
-                        f"Early out (Without Permission): left {last.strftime('%H:%M')}, "
-                        f"deadline {deadline_t.strftime('%H:%M')}"
-                    )
+            shift_end_secs = _t2s(shift.end_time)
+            delta = max(0, shift_end_secs - _t2s(last))
+            zone = _classify_zone(delta, grace, window_minutes * 60, permission_window_min * 60)
+            if zone == ZONE_LATE:
+                is_late = True
+                late_reasons.append(
+                    f"Early out: left {last.strftime('%H:%M')}, "
+                    f"deadline {_s2t(shift_end_secs - grace).strftime('%H:%M')}"
+                )
+            elif zone == ZONE_PERMISSION:
+                permission_departure = True
+                permission_departure_with_request = bool(has_permission and _permission_covers_early_out(
+                    permission_time, shift, window_minutes + permission_window_min,
+                ))
+                early_out_without_permission = not permission_departure_with_request
+                tag = "With Permission" if permission_departure_with_request else "Without Permission"
+                late_reasons.append(f"Permission (departure, {tag}): left {last.strftime('%H:%M')}")
 
     # For a day that resolves to Half Shift, Late is decided purely against
     # the configured half-shift late reference (Settings → Attendance →
@@ -245,8 +374,7 @@ def _compute_staff_simple(emp, d, punch_times, settings, shift, legacy_rule: boo
     # is Half Shift here regardless of an otherwise-valid last punch,
     # confirmed against a 14/14 boundary test on 2026-07-25.
     if not legacy_rule:
-        window_minutes = _punctuality_window_minutes(shift, settings=settings)
-        if not _punctuality_ok(first, last, shift, window_minutes):
+        if not _punctuality_ok(first, last, shift, window_minutes, permission_window_min):
             return {
                 "status": "half_shift", "is_half_shift": True,
                 "is_late": is_late_half_shift, "late_reason": half_shift_reason,
@@ -257,6 +385,10 @@ def _compute_staff_simple(emp, d, punch_times, settings, shift, legacy_rule: boo
         "status": "present", "is_late": is_late, "early_leave": early_leave,
         "late_in_without_permission": late_in_without_permission,
         "early_out_without_permission": early_out_without_permission,
+        "permission_morning": permission_morning,
+        "permission_morning_with_request": permission_morning_with_request,
+        "permission_departure": permission_departure,
+        "permission_departure_with_request": permission_departure_with_request,
         "late_reason": "; ".join(late_reasons) if late_reasons else None,
         "shifts_earned": Decimal("1.00"),
         "first_punch": first, "last_punch": last,
@@ -266,14 +398,15 @@ def _compute_staff_simple(emp, d, punch_times, settings, shift, legacy_rule: boo
 # ── Staff: strict mode (reuse 4-punch engine result) ───────────────────────
 
 def _compute_staff_strict(emp, d, punch_logs, punch_times, assignments=None, relaxation=None, legacy_rule: bool = False,
-                           has_permission: bool = False, permission_time=None, settings=None):
+                           has_permission: bool = False, permission_time=None, settings=None,
+                           shift_end_override=None):
     from .shift_engine import compute_daily_shift_log
     if not punch_times:
         return {"status": "absent", "shifts_earned": Decimal("0")}
     log = compute_daily_shift_log(
         emp, d, punch_logs, assignments=assignments, relaxation=relaxation,
         legacy=legacy_rule, has_permission=has_permission, permission_time=permission_time,
-        settings=settings,
+        settings=settings, shift_end_override=shift_end_override,
     )
     shifts = Decimal(log.shifts_completed or 0)
     is_half = shifts == Decimal("0.50")
@@ -286,8 +419,15 @@ def _compute_staff_strict(emp, d, punch_logs, punch_times, assignments=None, rel
         # lunch-return), not replacing either.
         "is_late": bool(log.late_morning or log.late_return or early_out_wp),
         "is_half_shift": is_half,
+        "late_afternoon": getattr(log, "late_afternoon", False),
         "late_in_without_permission": getattr(log, "late_in_without_permission", False),
         "early_out_without_permission": early_out_wp,
+        "permission_morning": getattr(log, "permission_morning", False),
+        "permission_morning_with_request": getattr(log, "permission_morning_with_request", False),
+        "permission_afternoon": getattr(log, "permission_afternoon", False),
+        "permission_afternoon_with_request": getattr(log, "permission_afternoon_with_request", False),
+        "permission_departure": getattr(log, "permission_departure", False),
+        "permission_departure_with_request": getattr(log, "permission_departure_with_request", False),
         "late_reason": log.late_reason,
         "shifts_earned": shifts,
         "first_punch": log.punch1,
@@ -470,7 +610,13 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
 
     fields = {
         "is_late": False, "is_half_shift": False, "early_leave": False,
+        "late_afternoon": False,
         "late_in_without_permission": False, "early_out_without_permission": False,
+        "permission_morning": False, "permission_morning_with_request": False,
+        "permission_afternoon": False, "permission_afternoon_with_request": False,
+        "permission_departure": False, "permission_departure_with_request": False,
+        "permission_zone_count": 0, "permission_escalated_to_half_shift": False,
+        "is_compensation_day": False,
         "late_reason": None,
         "first_punch": None, "last_punch": None,
     }
@@ -497,6 +643,14 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         has_permission = _perm is not None
         permission_time = _perm.permission_time if _perm else None
 
+    # This day's Compensation Day announcement, if any -staff only. See
+    # _compensation_day_for's docstring for scoping rules. `leave_until_time`
+    # (when set) overrides the effective shift end for the Full/Half-Shift
+    # decision below; either way, the resulting Late/Permission flags are
+    # zeroed out afterward (a compensation day is never penalized), while
+    # Full vs Half is still judged from real punches -never auto-granted.
+    comp_day = None if is_production else _compensation_day_for(emp, d, settings=settings)
+
     if day_times or has_manual:
         if not day_times and has_manual:
             computed = {"status": "present", "shifts_earned": Decimal("1.00")}
@@ -504,6 +658,10 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
             computed = _compute_production(emp, d, day_times, settings, prod_config, prod_segments)
         elif settings.attendance_mode == "simple":
             shift = _get_shift_for_date(emp, d, assignments=assignments)
+            if comp_day and comp_day.leave_until_time and shift:
+                from copy import copy
+                shift = copy(shift)
+                shift.end_time = comp_day.leave_until_time
             computed = _compute_staff_simple(
                 emp, d, day_times, settings, shift, legacy_rule=legacy_rule,
                 has_permission=has_permission, permission_time=permission_time,
@@ -512,7 +670,24 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
             computed = _compute_staff_strict(
                 emp, d, punch_logs, day_times, assignments=assignments, relaxation=relaxation, legacy_rule=legacy_rule,
                 has_permission=has_permission, permission_time=permission_time, settings=settings,
+                shift_end_override=comp_day.leave_until_time if comp_day else None,
             )
+        if comp_day:
+            # Suppress every Late/Permission flag -a compensation day is
+            # never penalized. Deliberately does NOT touch status/
+            # shifts_earned/is_half_shift -Full vs Half still comes from
+            # real punches (against leave_until_time as the effective shift
+            # end, when set), never auto-granted.
+            for key in (
+                "late_afternoon", "late_in_without_permission", "early_out_without_permission",
+                "permission_morning", "permission_morning_with_request",
+                "permission_afternoon", "permission_afternoon_with_request",
+                "permission_departure", "permission_departure_with_request",
+            ):
+                if key in computed:
+                    computed[key] = False
+            computed["is_late"] = False
+            computed["late_reason"] = None
     elif punch_times and relaxation and relaxation.crossed_midnight:
         # Only last night's checkout punches exist so far today -the employee
         # has not yet reported for the new day. Not absent; still within the
@@ -534,6 +709,7 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         computed = {"status": "absent", "shifts_earned": Decimal("0")}
 
     fields.update(computed)
+    fields["is_compensation_day"] = bool(comp_day)
 
     # Apply the relaxation: arriving within the allowed window is never Late,
     # and a half-shift caused purely by the late arrival becomes a full shift
@@ -547,6 +723,17 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
                 fields["status"] = "present"
                 fields["is_half_shift"] = False
                 fields["shifts_earned"] = Decimal("1.00")
+
+    # Daily/weekly Permission-zone caps (staff only -see _enforce_permission_
+    # caps). Runs last, after Night Shift Relaxation, so a relaxation-driven
+    # promotion back to Full Shift can't be silently undone by this, and this
+    # can't be silently undone by relaxation either.
+    if not is_production:
+        _enforce_permission_caps(
+            emp, d, fields, settings,
+            week_permission_counts=prefetch.get("week_permission_counts"),
+        )
+
     fields["total_punches"] = len(punch_times)
     fields["computed_mode"] = (
         "production" if emp.employment_type == "production" else settings.attendance_mode

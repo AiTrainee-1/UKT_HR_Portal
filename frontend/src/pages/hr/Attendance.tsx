@@ -1150,8 +1150,13 @@ export default function AttendancePage() {
                               <Badge className={`text-xs border ${meta.cls}`}>
                                 {rec.status === "on_leave" && rec.leaveType ? `${rec.leaveType} Leave` : meta.label}
                               </Badge>
-                              {rec.isLate && (rec.status === "present" || rec.status === "half_shift") && (
+                              {(rec.permissionMorning || rec.permissionAfternoon || rec.permissionDeparture) ? (
+                                <Badge className="text-xs border bg-emerald-50 text-emerald-700 border-emerald-200">Permission</Badge>
+                              ) : rec.isLate && (rec.status === "present" || rec.status === "half_shift") && (
                                 <Badge className="text-xs border bg-amber-50 text-amber-700 border-amber-200">Late</Badge>
+                              )}
+                              {rec.isCompensationDay && (
+                                <Badge className="text-xs border bg-purple-50 text-purple-700 border-purple-200">Comp Day</Badge>
                               )}
                             </div>
                           </td>

@@ -85,8 +85,26 @@ function LeaveBadge({ leave }: { leave: ShiftLogEntry["leave"] }) {
 }
 
 function LateCell({ row }: { row: ShiftLogEntry }) {
+  const permParts = [
+    row.permissionMorning && "Morning",
+    row.permissionAfternoon && "Afternoon",
+    row.permissionDeparture && "Departure",
+  ].filter(Boolean) as string[];
+  const anyWithRequest = row.permissionMorningWithRequest || row.permissionAfternoonWithRequest || row.permissionDepartureWithRequest;
+
+  if (permParts.length > 0) {
+    return (
+      <span
+        className="flex items-center gap-1.5 text-emerald-700 font-semibold text-xs"
+        title={row.lateReason ?? ""}
+      >
+        <AlertTriangle size={13} />
+        Permission ({permParts.join(" + ")}) · {anyWithRequest ? "With Request" : "Without Request"}
+      </span>
+    );
+  }
   if (!row.isLate) return <span className="text-green-600 text-sm">✓</span>;
-  const parts = [row.lateMorning && "AM", row.lateReturn && "Return"].filter(Boolean);
+  const parts = [row.lateMorning && "AM", row.lateAfternoon && "Night", row.lateReturn && !row.lateAfternoon && "Return"].filter(Boolean);
   return (
     <span className="flex items-center gap-1.5 text-red-600 font-semibold text-xs" title={row.lateReason ?? ""}>
       <AlertTriangle size={13} />
@@ -162,7 +180,19 @@ export default function AttendanceReportLog() {
           </>
         )}
         <td className="px-4 py-3 font-mono text-sm text-gray-600 whitespace-nowrap">{row.punch4 ?? <span className="text-gray-300">—</span>}</td>
-        <td className="px-4 py-3"><StatusBadge status={row.status} /></td>
+        <td className="px-4 py-3">
+          <div className="flex items-center gap-1 flex-wrap">
+            <StatusBadge status={row.status} />
+            {row.isCompensationDay && (
+              <span
+                className="text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap bg-purple-100 text-purple-700"
+                title="HR-announced Compensation Day -Late/Permission penalties exempted; Full/Half still judged from real punches"
+              >
+                Comp Day
+              </span>
+            )}
+          </div>
+        </td>
         <td className="px-4 py-3">
           <span className={`font-bold ${row.isHalfShift ? "text-amber-700" : "text-gray-800"}`}>{row.shiftsCompleted}</span>
         </td>

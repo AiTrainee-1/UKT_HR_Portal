@@ -323,11 +323,22 @@ def employee_request_action(request: Request, pk: int) -> Response:
 # not blocked; they're picked up by the payroll deduction engine instead
 # (see shift_engine.compute_monthly_shift_summary), which treats each
 # approved permission past the first 3 as a late entry.
+#
+# Separately, PayrollSettings.max_permissions_per_day/_per_week (Settings ->
+# Late Detection -> Permission Policy) cap the AUTO-DETECTED Permission zone
+# (see attendance_final.py's _enforce_permission_caps), not this submission
+# form -submitting a request is still uncapped; only how many auto-detected
+# zone occurrences count as Permission (vs. escalate to Half Shift) is
+# capped. Surfaced here too so the employee-facing UI can show all three
+# limits together.
 
 MONTHLY_PERMISSION_LIMIT = 3
 
 
-def _permission_json(p, monthly_used=None):
+def _permission_json(p, monthly_used=None, settings=None):
+    if settings is None:
+        from .models import PayrollSettings
+        settings = PayrollSettings.get()
     emp = p.employee
     return {
         "id": p.id,
@@ -346,6 +357,8 @@ def _permission_json(p, monthly_used=None):
         "createdAt": p.created_at.isoformat() if p.created_at else None,
         "monthlyUsed": monthly_used,
         "monthlyLimit": MONTHLY_PERMISSION_LIMIT,
+        "dailyLimit": settings.max_permissions_per_day,
+        "weeklyLimit": settings.max_permissions_per_week,
     }
 
 
@@ -373,7 +386,9 @@ def employee_permissions(request: Request) -> Response:
             qs = qs.filter(date__month=month)
         if year := request.query_params.get("year"):
             qs = qs.filter(date__year=year)
-        return Response([_permission_json(p) for p in qs])
+        from .models import PayrollSettings
+        settings = PayrollSettings.get()
+        return Response([_permission_json(p, settings=settings) for p in qs])
 
     data = request.data
     # Accept employeeCode, camelCase, or snake_case

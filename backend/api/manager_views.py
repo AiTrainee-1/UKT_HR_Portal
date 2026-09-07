@@ -22,6 +22,21 @@ def _manager_json(m, include_assignments=False):
     emp_assignments = list(
         m.employee_assignments.select_related("employee__department", "employee__designation").all()
     )
+    # An HOD covers employees two ways -a whole assigned DEPARTMENT (every
+    # employee in it, automatically) and/or individually assigned employees
+    # (ManagerEmployeeAssignment, for cross-department reports). Both count
+    # toward this manager's real headcount -matches _get_manager_employee_ids
+    # / manager_pending_requests, the actual approval-routing logic, which
+    # already ORs both together. Previously this only counted direct
+    # assignments, so an employee covered purely via their department showed
+    # up as "Unassigned" on the User Management page and employeeCount
+    # silently undercounted -this line brings the two back in sync.
+    dept_ids = [da.department_id for da in dept_assignments]
+    direct_employee_ids = {ea.employee_id for ea in emp_assignments}
+    dept_employee_ids = set(
+        Employee.objects.filter(department_id__in=dept_ids).values_list("id", flat=True)
+    ) if dept_ids else set()
+    all_assigned_employee_ids = sorted(direct_employee_ids | dept_employee_ids)
     data = {
         "id": m.id,
         "employeeId": emp.id,
@@ -40,12 +55,12 @@ def _manager_json(m, include_assignments=False):
         "notes": m.notes,
         "createdAt": m.created_at.isoformat() if m.created_at else None,
         "departmentCount": len(dept_assignments),
-        "employeeCount": len(emp_assignments),
+        "employeeCount": len(all_assigned_employee_ids),
         # The IDs, not just the count: the User Management page needs to work
         # out which employees are under NO manager, which it can only do by
-        # subtracting the union of every manager's assignments. The rows are
-        # already prefetched above, so this adds no queries.
-        "assignedEmployeeIds": [ea.employee_id for ea in emp_assignments],
+        # subtracting the union of every manager's assignments. Includes both
+        # department-covered and directly-assigned employees (see above).
+        "assignedEmployeeIds": all_assigned_employee_ids,
     }
     if include_assignments:
         data["assignedDepartments"] = [
