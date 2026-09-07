@@ -91,7 +91,7 @@ from .reports_views import (
 from .attendance_views import (
     attendance_summary, attendance_daily, attendance_monthly_trend,
     attendance_employee_history, biometric_punch, manual_attendance,
-    sync_biometric_api, sync_biometric_progress, attendance_report_log, compute_shift_logs,
+    sync_biometric_api, sync_biometric_progress, attendance_report_log, set_day_informed, compute_shift_logs,
     attendance_search, attendance_search_range,
     attendance_late_summary, employee_shift_monthly_stats, attendance_sync_status,
     mobile_home_summary, attendance_live_feed,
@@ -312,6 +312,7 @@ urlpatterns = [
     path("attendance/punches/import", punch_import),
     path("attendance/sync-status-live", sync_status),
     path("attendance/report-log", attendance_report_log),
+    path("attendance/day-informed", set_day_informed),
     path("attendance/search", attendance_search),
     path("attendance/search/range", attendance_search_range),
     path("attendance/compute-shifts", compute_shift_logs),

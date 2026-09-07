@@ -1652,6 +1652,64 @@ export const useAttendanceReportDetail = (params: ReportLogDetailParams, enabled
     enabled,
   });
 
+// ── Mode C -Daily Report: one row per employee for a single date ──────────
+// (Report Log page only -Late/Permission/On-Leave filtering, Informed
+// status, Excel/PDF/Image export.)
+
+export type ReportLogDailyRow = {
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department: string | null;
+  designation: string | null;
+  status: "present" | "half_shift" | "absent" | "on_leave" | "holiday";
+  isLate: boolean;
+  lateAfternoon: boolean;
+  permissionMorning: boolean;
+  permissionAfternoon: boolean;
+  permissionDeparture: boolean;
+  isCompensationDay: boolean;
+  isInformed: boolean | null;
+};
+
+export type ReportLogDailyResponse = {
+  date: string;
+  rows: ReportLogDailyRow[];
+  count: number;
+};
+
+export type ReportLogDailyParams = {
+  date: string;
+  department?: number;
+  search?: string;
+};
+
+export const getReportLogDailyQueryKey = (params: ReportLogDailyParams) =>
+  ["/api/attendance/report-log", "daily", params] as const;
+
+export const useAttendanceReportDaily = (params: ReportLogDailyParams, enabled = true) =>
+  useQuery<ReportLogDailyResponse>({
+    queryKey: getReportLogDailyQueryKey(params),
+    queryFn: () => customFetch<ReportLogDailyResponse>(
+      `/api/attendance/report-log?${reportLogQueryString(params)}`,
+    ),
+    enabled,
+  });
+
+export const useSetDayInformed = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ employeeId, date, isInformed }: { employeeId: number; date: string; isInformed: boolean | null }) =>
+      customFetch<{ employeeId: number; date: string; isInformed: boolean | null }>(
+        "/api/attendance/day-informed",
+        { method: "PATCH", body: JSON.stringify({ employeeId, date, isInformed }) },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance/report-log", "daily"] });
+    },
+  });
+};
+
 export type AttendanceSearchPunch = {
   time: string;
   type: "IN" | "OUT";

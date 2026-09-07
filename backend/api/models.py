@@ -1980,6 +1980,14 @@ class AttendanceDayRecord(models.Model):
     # punches (against leave_until_time as the effective shift end, when set)
     # -this flag never changes shifts_earned by itself.
     is_compensation_day = models.BooleanField(default=False, db_column="is_compensation_day")
+    # HR-set report annotation for the Report Log page's Daily Report (on-leave
+    # employees: did they inform in advance?) -null/blank = never set, True =
+    # Informed, False = Not Informed. Set only via PATCH /api/attendance/
+    # day-informed (attendance_views.py::set_day_informed), never by any
+    # compute_day_record recompute -update_or_create's defaults=fields only
+    # touches keys present in that dict, and this one deliberately isn't, so
+    # a later recompute of this day never clobbers HR's manual note here.
+    is_informed = models.BooleanField(null=True, blank=True, default=None, db_column="is_informed")
     # Display-only explanation of why is_late/is_half_shift ended up True this
     # day (e.g. "Late morning (Without Permission): arrived 09:40, deadline
     # 09:15"). Never read by any calculation — purely so Payroll/Attendance

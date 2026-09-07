@@ -1169,6 +1169,126 @@ def _month_summary_row(emp, summary: dict, cl_count: int, perm_count: int) -> di
     }
 
 
+def _attendance_report_log_daily(request: Request, date_param: str, department_param, search_param, settings) -> Response:
+    """
+    Report Log -> Daily Report: one row per active staff employee for a
+    single date, for HR to filter (Late/Permission, On Leave, Informed) and
+    export. Mirrors attendance_company_summary's bulk-prefetch pattern
+    (attendance_views.py) so a ~230-employee roster stays a handful of
+    queries instead of one compute_day_record's worth of queries per
+    employee, but keeps each employee's own row instead of collapsing to
+    counts. View-only aside from compute_day_record's own normal persistence
+    side effect (same as every other page that reads attendance).
+    """
+    from .attendance_final import compute_day_record
+    from .models import AttendanceDayRecord, EmployeeShiftAssignment, NightShiftRelaxation, NightShiftRule
+    from .night_shift import ensure_default_rules
+
+    try:
+        d = date_type.fromisoformat(date_param)
+    except ValueError:
+        return Response({"error": "Invalid date"}, status=400)
+
+    emps_qs = (
+        scope_to_branch(Employee.objects, request)
+        .filter(status="active", employment_type="staff")
+        .select_related("department", "designation")
+        .order_by("first_name")
+    )
+    if department_param:
+        emps_qs = emps_qs.filter(department_id=department_param)
+    if search_param:
+        q = search_param.strip()
+        emps_qs = emps_qs.filter(
+            Q(employee_code__icontains=q) | Q(first_name__icontains=q) | Q(last_name__icontains=q)
+        )
+    employees = list(emps_qs)
+    emp_ids = [e.id for e in employees]
+
+    prod_config = None
+    prod_segments = None
+    leave_ids_today = _leave_ids(d)
+    is_holiday_today = Holiday.objects.filter(date=d).exists()
+
+    yesterday = d - timedelta(days=1)
+    logs_by_emp_date: dict[int, dict] = {}
+    for log in AttendanceLog.objects.filter(
+        employee_id__in=emp_ids, date__gte=yesterday, date__lte=d,
+    ).order_by("punch_time"):
+        logs_by_emp_date.setdefault(log.employee_id, {}).setdefault(log.date, []).append(log)
+
+    assignments_by_emp: dict[int, list] = {}
+    for a in (
+        EmployeeShiftAssignment.objects.filter(employee_id__in=emp_ids, effective_from__lte=d)
+        .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=yesterday))
+        .select_related("shift")
+    ):
+        assignments_by_emp.setdefault(a.employee_id, []).append(a)
+
+    existing_records_by_emp: dict[int, dict] = {}
+    for r in AttendanceDayRecord.objects.filter(employee_id__in=emp_ids, date=d):
+        existing_records_by_emp.setdefault(r.employee_id, {})[r.date] = r
+
+    manual_present_by_emp: dict[int, set] = {}
+    for emp_id in Attendance.objects.filter(
+        employee_id__in=emp_ids, date=d.isoformat(), present=True,
+    ).values_list("employee_id", flat=True):
+        manual_present_by_emp.setdefault(emp_id, set()).add(d)
+
+    ensure_default_rules()
+    night_rules = list(NightShiftRule.objects.filter(is_active=True))
+
+    relaxations_by_emp: dict[int, dict] = {}
+    for r in NightShiftRelaxation.objects.filter(employee_id__in=emp_ids, relaxation_date=d):
+        relaxations_by_emp.setdefault(r.employee_id, {})[r.relaxation_date] = r
+
+    permissions_by_emp: dict[int, dict] = {}
+    for p in EmployeePermission.objects.filter(
+        employee_id__in=emp_ids, date=d, status="approved",
+    ).order_by("updated_at"):
+        permissions_by_emp.setdefault(p.employee_id, {})[p.date] = p
+
+    rows = []
+    for emp in employees:
+        emp_logs_by_date = logs_by_emp_date.get(emp.id, {})
+        prefetch = {
+            "assignments": assignments_by_emp.get(emp.id, []),
+            "existing_day_records": existing_records_by_emp.get(emp.id, {}),
+            "manual_attendance_dates": manual_present_by_emp.get(emp.id, set()),
+            "night_logs_by_date": emp_logs_by_date,
+            "night_rules": night_rules,
+            "existing_relaxations": relaxations_by_emp.get(emp.id, {}),
+            "approved_permissions_by_date": permissions_by_emp.get(emp.id, {}),
+        }
+        rec = compute_day_record(
+            emp, d,
+            punch_logs=emp_logs_by_date.get(d, []),
+            settings=settings,
+            leave_dates={d} if emp.id in leave_ids_today else set(),
+            holiday_dates={d} if is_holiday_today else set(),
+            prod_config=prod_config,
+            prod_segments=prod_segments,
+            prefetch=prefetch,
+        )
+        rows.append({
+            "employeeId": emp.id,
+            "employeeCode": emp.employee_code,
+            "employeeName": f"{emp.first_name} {emp.last_name}",
+            "department": emp.department.name if emp.department else None,
+            "designation": emp.designation.title if emp.designation else None,
+            "status": rec.status,
+            "isLate": bool(rec.is_late),
+            "lateAfternoon": bool(rec.late_afternoon),
+            "permissionMorning": bool(rec.permission_morning),
+            "permissionAfternoon": bool(rec.permission_afternoon),
+            "permissionDeparture": bool(rec.permission_departure),
+            "isCompensationDay": bool(rec.is_compensation_day),
+            "isInformed": rec.is_informed,
+        })
+
+    return Response({"date": str(d), "rows": rows, "count": len(rows)})
+
+
 @api_view(["GET"])
 @require_hr
 def attendance_report_log(request: Request) -> Response:
@@ -1200,7 +1320,18 @@ def attendance_report_log(request: Request) -> Response:
     emp_id_param = request.query_params.get("employeeId")
     department_param = request.query_params.get("department")
     search_param = request.query_params.get("search")
+    date_param = request.query_params.get("date")
     is_strict = settings.attendance_mode != "simple"
+
+    # ── Daily mode: every matching employee, one row each, for one date ─────
+    # Report Log's "Daily Report" (Late/Permission/On-Leave + Informed status
+    # export) -mutually exclusive with the month/year summary/detail modes
+    # above. Reuses attendance_company_summary's bulk-prefetch-then-
+    # compute_day_record loop (assignments/night-shift/permissions/manual
+    # attendance all fetched once for the whole roster) but keeps each
+    # employee's row instead of collapsing to aggregate counts.
+    if date_param:
+        return _attendance_report_log_daily(request, date_param, department_param, search_param, settings)
 
     if not month_param or not year_param:
         return Response({"error": "Provide month and year"}, status=400)
@@ -1319,6 +1450,47 @@ def attendance_report_log(request: Request) -> Response:
         employees.append(_month_summary_row(emp, summary, cl_counts[emp.id], perm_counts[emp.id]))
 
     return Response({"month": m, "year": y, "employees": employees})
+
+
+@api_view(["PATCH"])
+@require_hr
+def set_day_informed(request: Request) -> Response:
+    """
+    Report Log's Daily Report: HR marks/updates whether an on-leave employee
+    informed in advance. Body: {employeeId, date, isInformed}. A pure report
+    annotation, not an attendance reclassification -deliberately does not
+    touch source/status/any other field, so it's invisible to every other
+    page's attendance logic and safely survives a later recompute (see
+    AttendanceDayRecord.is_informed's docstring in models.py).
+    """
+    from .attendance_final import compute_day_record
+    from .models import AttendanceDayRecord
+
+    data = request.data
+    emp_id = data.get("employeeId")
+    date_str = data.get("date")
+    if not emp_id or not date_str:
+        return Response({"error": "employeeId and date are required"}, status=400)
+    if "isInformed" not in data:
+        return Response({"error": "isInformed is required"}, status=400)
+
+    emp = scope_to_branch(Employee.objects, request).filter(pk=emp_id).first()
+    if not emp:
+        return Response({"error": "Employee not found"}, status=404)
+    try:
+        d = date_type.fromisoformat(date_str)
+    except ValueError:
+        return Response({"error": "Invalid date"}, status=400)
+
+    record = AttendanceDayRecord.objects.filter(employee=emp, date=d).first()
+    if record is None:
+        record = compute_day_record(emp, d)
+
+    is_informed = data["isInformed"]
+    record.is_informed = bool(is_informed) if is_informed is not None else None
+    record.save(update_fields=["is_informed"])
+
+    return Response({"employeeId": emp.id, "date": str(d), "isInformed": record.is_informed})
 
 
 @api_view(["GET"])
