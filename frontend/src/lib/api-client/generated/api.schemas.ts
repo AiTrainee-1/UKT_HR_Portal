@@ -339,6 +339,12 @@ export interface LeaveRequest {
   endDate: string;
   /** @nullable */
   totalDays?: number | null;
+  /** Hand-added -see backend/api/serializers.py::leave_request_json. Not
+   * part of the last orval generation; keep this in sync by hand until the
+   * client is regenerated from a live OpenAPI schema. */
+  isHalfDay?: boolean;
+  /** @nullable */
+  halfDaySlot?: 'morning' | 'afternoon' | null;
   /** @nullable */
   reason?: string | null;
   status: LeaveRequestStatus;

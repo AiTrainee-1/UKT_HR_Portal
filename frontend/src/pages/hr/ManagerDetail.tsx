@@ -161,7 +161,7 @@ export default function ManagerDetail() {
               <div className="grid grid-cols-2 gap-2">
                 {[
                   { key: "canApproveLeaves" as const, label: "Approve Leaves" },
-                  { key: "canApprovePermissions" as const, label: "Approve Permissions" },
+                  { key: "canApprovePermissions" as const, label: "Approve Permissions & Outpass" },
                   { key: "canApproveResignations" as const, label: "Approve Resignations" },
                   { key: "canApproveAttendance" as const, label: "Approve Attendance Edits" },
                   { key: "canApproveCasualLeave" as const, label: "Approve Casual Leave" },

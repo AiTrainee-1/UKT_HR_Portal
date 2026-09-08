@@ -162,6 +162,8 @@ def leave_request_json(record, employee_name: str | None = None) -> dict:
         "startDate": record.start_date,
         "endDate": record.end_date,
         "totalDays": float(record.total_days) if record.total_days is not None else 1,
+        "isHalfDay": record.is_half_day,
+        "halfDaySlot": record.half_day_slot,
         "reason": record.reason,
         "status": record.status,
         "hrComment": record.hr_comment,

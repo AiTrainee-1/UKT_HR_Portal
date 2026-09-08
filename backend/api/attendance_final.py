@@ -68,11 +68,15 @@ LEGACY_SIMPLE_HALF_SHIFT_CUTOFF = time_type(13, 30)
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 def _leave_dates_for_month(emp, year: int, month: int) -> set:
-    """Set of date objects covered by approved leave in the given month."""
+    """Set of date objects covered by approved FULL-day leave in the given
+    month. Half-Day Leave rows are deliberately excluded (is_half_day=False)
+    -see _half_day_leave_dates_for_month below, which handles those
+    separately since a half day needs to carry which half, not just
+    membership in a set."""
     first = date_type(year, month, 1)
     last = date_type(year, month, calendar.monthrange(year, month)[1])
     dates = set()
-    for lr in LeaveRequest.objects.filter(employee=emp, status="approved"):
+    for lr in LeaveRequest.objects.filter(employee=emp, status="approved", is_half_day=False):
         try:
             s = datetime.strptime(str(lr.start_date)[:10], "%Y-%m-%d").date()
             e = datetime.strptime(str(lr.end_date)[:10], "%Y-%m-%d").date()
@@ -83,6 +87,23 @@ def _leave_dates_for_month(emp, year: int, month: int) -> set:
             dates.add(d)
             d += timedelta(days=1)
     return dates
+
+
+def _half_day_leave_dates_for_month(emp, year: int, month: int) -> dict:
+    """{date: "morning"|"afternoon"} for approved Half-Day Leave in the given
+    month -a half-day leave is always a single day (enforced at submission),
+    so this is a lookup, not a range walk like _leave_dates_for_month."""
+    first = date_type(year, month, 1)
+    last = date_type(year, month, calendar.monthrange(year, month)[1])
+    out: dict = {}
+    for lr in LeaveRequest.objects.filter(employee=emp, status="approved", is_half_day=True):
+        try:
+            d = datetime.strptime(str(lr.start_date)[:10], "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            continue
+        if first <= d <= last:
+            out[d] = lr.half_day_slot
+    return out
 
 
 def _holiday_dates_for_month(year: int, month: int) -> set:
@@ -520,7 +541,7 @@ def _compute_production(emp, d, punch_times, settings, config=None, segments=Non
 # ── Main entry: compute (or keep) the final record for one day ─────────────
 
 def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
-                       leave_dates=None, holiday_dates=None,
+                       leave_dates=None, holiday_dates=None, half_day_leave_dates=None,
                        prod_config=None, prod_segments=None, prefetch=None):
     """
     Compute and persist the AttendanceDayRecord for (emp, d).
@@ -607,6 +628,8 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
 
     on_leave = (d in leave_dates) if leave_dates is not None else False
     is_holiday = (d in holiday_dates) if holiday_dates is not None else False
+    # "morning" | "afternoon" | None -see _half_day_leave_dates_for_month.
+    half_day_slot = half_day_leave_dates.get(d) if half_day_leave_dates is not None else None
 
     fields = {
         "is_late": False, "is_half_shift": False, "early_leave": False,
@@ -617,6 +640,7 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         "permission_departure": False, "permission_departure_with_request": False,
         "permission_zone_count": 0, "permission_escalated_to_half_shift": False,
         "is_compensation_day": False,
+        "is_half_day_leave": False,
         "late_reason": None,
         "first_punch": None, "last_punch": None,
     }
@@ -688,6 +712,29 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
                     computed[key] = False
             computed["is_late"] = False
             computed["late_reason"] = None
+
+        # Half-Day Leave: a single punch (or a punctuality-window failure)
+        # that the engine already resolved to Half Shift is exactly what a
+        # half day covered by approved leave looks like -don't invent a new
+        # status, just annotate it (shifts_earned stays the same 0.50 Half
+        # Shift already pays, so payroll needs no separate branch either).
+        # Deliberately does NOT touch a "present"/"absent" outcome: if the
+        # employee worked the whole day anyway, their real attendance wins
+        # (same "punches always win" rule the on_leave check already
+        # follows); if they never punched at all, that falls through to the
+        # ordinary absent branch below -a no-show for the half they still
+        # owed is not covered by a half-day leave.
+        if half_day_slot and not is_production and computed.get("status") == "half_shift":
+            computed["is_half_day_leave"] = True
+            if half_day_slot == LeaveRequest.HALF_DAY_MORNING:
+                # Leave covers the morning -an afternoon-only arrival is
+                # never "late"; they were never expected before the
+                # half-shift reference time in the first place.
+                computed["is_late"] = False
+                computed["late_reason"] = None
+            # Afternoon slot: the employee still owes a normal morning
+            # arrival, so whatever is_late/late_reason the engine already
+            # computed for that arrival is left exactly as it is.
     elif punch_times and relaxation and relaxation.crossed_midnight:
         # Only last night's checkout punches exist so far today -the employee
         # has not yet reported for the new day. Not absent; still within the
@@ -719,7 +766,11 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         record_report(relaxation, first_day_punch)
         if first_day_punch <= relaxation.allowed_until:
             fields["is_late"] = False
-            if fields.get("status") == "half_shift" and len(day_times) > 1:
+            # A Half-Day Leave's Half Shift is never eligible for this
+            # promotion -it isn't "half" because of a late/incomplete punch
+            # pattern the rest of the day could still complete, it's half
+            # because the OTHER half is covered by approved leave.
+            if fields.get("status") == "half_shift" and len(day_times) > 1 and not fields.get("is_half_day_leave"):
                 fields["status"] = "present"
                 fields["is_half_shift"] = False
                 fields["shifts_earned"] = Decimal("1.00")
@@ -799,6 +850,7 @@ def compute_month_records(emp, year: int, month: int, settings=None):
 
     leave_dates = _leave_dates_for_month(emp, year, month)
     holiday_dates = _holiday_dates_for_month(year, month)
+    half_day_leave_dates = _half_day_leave_dates_for_month(emp, year, month)
 
     prod_config = ProductionShiftConfig.get() if emp.employment_type == "production" else None
     prod_segments = (
@@ -861,6 +913,7 @@ def compute_month_records(emp, year: int, month: int, settings=None):
             settings=settings,
             leave_dates=leave_dates,
             holiday_dates=holiday_dates,
+            half_day_leave_dates=half_day_leave_dates,
             prod_config=prod_config,
             prod_segments=prod_segments,
             prefetch=prefetch,
@@ -886,9 +939,11 @@ def compute_range_records(emp, date_from: date_type, date_to: date_type, setting
 
     months = {(d.year, d.month) for d in (date_from, date_to)}
     leave_dates, holiday_dates = set(), set()
+    half_day_leave_dates: dict = {}
     for y, m in months:
         leave_dates |= _leave_dates_for_month(emp, y, m)
         holiday_dates |= _holiday_dates_for_month(y, m)
+        half_day_leave_dates.update(_half_day_leave_dates_for_month(emp, y, m))
 
     prod_config = ProductionShiftConfig.get() if emp.employment_type == "production" else None
     prod_segments = (
@@ -907,6 +962,7 @@ def compute_range_records(emp, date_from: date_type, date_to: date_type, setting
             settings=settings,
             leave_dates=leave_dates,
             holiday_dates=holiday_dates,
+            half_day_leave_dates=half_day_leave_dates,
             prod_config=prod_config,
             prod_segments=prod_segments,
             prefetch={"night_logs_by_date": logs_by_date},

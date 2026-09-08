@@ -400,6 +400,14 @@ export default function AttendanceReportLog() {
                 Comp Day
               </span>
             )}
+            {row.isHalfDayLeave && (
+              <span
+                className="text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap bg-blue-100 text-blue-700"
+                title="Approved Half-Day Leave accounts for this Half Shift"
+              >
+                Half Day Leave
+              </span>
+            )}
           </div>
         </td>
         <td className="px-4 py-3">

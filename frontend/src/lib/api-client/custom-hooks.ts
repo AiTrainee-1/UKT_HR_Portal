@@ -1032,6 +1032,7 @@ export type AttendanceEmployeeHistory = {
     permissionDeparture?: boolean;
     permissionDepartureWithRequest?: boolean;
     isCompensationDay?: boolean;
+    isHalfDayLeave?: boolean;
     present: boolean;
     firstPunch?: string | null;
     lastPunch?: string | null;
@@ -1276,6 +1277,7 @@ export type ShiftLogEntry = {
   permissionZoneCount?: number;
   permissionEscalatedToHalfShift?: boolean;
   isCompensationDay?: boolean;
+  isHalfDayLeave?: boolean;
   casualLeave: { status: "pending" | "approved" | "rejected"; reason: string | null } | null;
   permission: { status: "pending" | "approved" | "rejected"; time: string | null; reason: string | null } | null;
   leave: { status: "pending" | "approved" | "rejected"; type: string | null; reason: string | null } | null;
@@ -1750,6 +1752,7 @@ export type AttendanceSearchDay = {
   permissionZoneCount?: number;
   permissionEscalatedToHalfShift?: boolean;
   isCompensationDay?: boolean;
+  isHalfDayLeave?: boolean;
   totalPunches: number;
   punches: AttendanceSearchPunch[];
   casualLeave: { status: string; reason: string | null } | null;
@@ -3038,6 +3041,7 @@ export type FinalAttendanceDay = {
   permissionDepartureWithRequest?: boolean;
   permissionEscalatedToHalfShift?: boolean;
   isCompensationDay?: boolean;
+  isHalfDayLeave?: boolean;
   shiftsEarned: string;
   firstPunch?: string | null;
   lastPunch?: string | null;
@@ -5442,6 +5446,126 @@ export const useVisitorGateRepeat = (token: string) =>
   useMutation({
     mutationFn: (body: { phone: string; whomToMeet: string; purpose: string }) =>
       customFetch<{ submitted: boolean }>(`/api/visitor/gate/${encodeURIComponent(token)}/repeat`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+  });
+
+// ── Outpass Approval (HR side) -see backend/api/outpass_request_views.py ──
+// Employee-side submission happens in the Mobile App / Employee Web App
+// (separate repos, separate API clients); this HR portal only ever reads and
+// approves/rejects, same split as Permissions above.
+
+export type OutpassScanStatus = "not_applicable" | "pending_exit" | "exited" | "expired_unscanned";
+
+export type OutpassRequestItem = {
+  id: number;
+  employeeId: number;
+  destination: string;
+  reason: string;
+  status: string;
+  source: "manual" | "on_duty";
+  approverRole?: string | null;
+  approvedBy?: string | null;
+  reviewComment?: string | null;
+  approvedAt?: string | null;
+  expiresAt?: string | null;
+  createdAt: string;
+  // Gate Scanner fields -see backend/api/gate_scanner_views.py. qrToken is
+  // only ever present while the pass is actually presentable at a gate
+  // (approved, unexpired, not yet exited); HR never needs it, only the
+  // employee-facing apps that render it as a QR code.
+  qrToken?: string | null;
+  exitGateName?: string | null;
+  exitedAt?: string | null;
+  scanStatus: OutpassScanStatus;
+  employee?: {
+    id: number; employeeCode: string; name: string;
+    department?: string | null; designation?: string | null; photoUrl?: string | null;
+  };
+};
+
+export const getListOutpassRequestsQueryKey = (status?: string) => ["/api/outpass-requests", status] as const;
+export const useListOutpassRequests = (status?: string) =>
+  useQuery<OutpassRequestItem[]>({
+    queryKey: getListOutpassRequestsQueryKey(status),
+    queryFn: () => customFetch<OutpassRequestItem[]>(`/api/outpass-requests${status ? `?status=${status}` : ""}`),
+    refetchInterval: 30_000,
+  });
+
+export const useUpdateOutpassRequestStatus = () =>
+  useMutation({
+    // approvedBy is never client-sendable -always server-derived from the
+    // logged-in HR user, same convention as useUpdatePermissionStatus.
+    mutationFn: ({ id, data }: { id: number; data: { status: string; comment?: string } }) =>
+      customFetch<OutpassRequestItem>(`/api/outpass-requests/${id}/hr-status`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
+  });
+
+// ── Gate Scanner device management (HR side) -see backend/api/gate_scanner_views.py ──
+// Deliberately separate from the GateQr/GateSummary/GateRecords hooks above:
+// those cover the permanent, unauthenticated per-branch QR (outpass/visitor
+// entry forms); this is a real username/password login for a kiosk device
+// that verifies an approved OutpassRequest's QR and records the exit.
+
+export type GateDevice = {
+  id: number;
+  name: string;
+  branchId: number | null;
+  branchName: string | null;
+  username: string;
+  isActive: boolean;
+  loginToken: string;
+  createdBy: string | null;
+  createdAt: string;
+  lastLoginAt: string | null;
+};
+
+export const getListGateDevicesQueryKey = () => ["/api/gate-devices"] as const;
+export const useListGateDevices = () =>
+  useQuery<GateDevice[]>({
+    queryKey: getListGateDevicesQueryKey(),
+    queryFn: () => customFetch<GateDevice[]>("/api/gate-devices"),
+  });
+
+export const useCreateGateDevice = () =>
+  useMutation({
+    mutationFn: (data: { name: string; branchId?: number; username: string; password: string }) =>
+      customFetch<GateDevice>("/api/gate-devices", { method: "POST", body: JSON.stringify(data) }),
+  });
+
+export const useUpdateGateDevice = () =>
+  useMutation({
+    mutationFn: ({ id, data }: { id: number; data: { name?: string; isActive?: boolean; password?: string } }) =>
+      customFetch<GateDevice>(`/api/gate-devices/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  });
+
+export const useDeleteGateDevice = () =>
+  useMutation({
+    mutationFn: (id: number) => customFetch<void>(`/api/gate-devices/${id}`, { method: "DELETE" }),
+  });
+
+// ── Gate Scanner kiosk auth -public login-info, public login ───────────────
+// The kiosk itself (POST /api/gate-devices/scan) is deliberately NOT a hook
+// here -it authenticates with a gate_device token stored under its own
+// localStorage key, not the HR "uk_textile_token" customFetch auto-attaches,
+// so that one call is made directly from the kiosk page with an explicit
+// Authorization header instead.
+
+export const useGateLoginInfo = (loginToken: string) =>
+  useQuery<{ gateName: string; branchName: string; isActive: boolean }>({
+    queryKey: ["/api/gate-devices/login-info", loginToken],
+    queryFn: () => customFetch(`/api/gate-devices/login-info/${encodeURIComponent(loginToken)}`),
+    enabled: !!loginToken,
+    retry: false,
+  });
+
+export const useGateLogin = () =>
+  useMutation({
+    mutationFn: (body: { username: string; password: string }) =>
+      customFetch<{ token: string; gateId: number; gateName: string }>("/api/gate-devices/login", {
         method: "POST",
         body: JSON.stringify(body),
       }),

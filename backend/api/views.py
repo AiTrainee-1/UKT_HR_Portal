@@ -1515,17 +1515,30 @@ def _leave_requests_create(request: Request) -> Response:
     start_date  = data.get("startDate")  or data.get("start_date")
     end_date    = data.get("endDate")    or data.get("end_date") or start_date
     leave_type  = data.get("type") or data.get("leave_type", "casual")
+    is_half_day = bool(data.get("isHalfDay") or data.get("is_half_day"))
+    half_day_slot = data.get("halfDaySlot") or data.get("half_day_slot")
 
     if not employee_id or not start_date:
         return Response({"error": "employeeId and startDate are required"}, status=400)
 
-    total_days = _count_leave_days(start_date, end_date)
+    if is_half_day:
+        if half_day_slot not in (LeaveRequest.HALF_DAY_MORNING, LeaveRequest.HALF_DAY_AFTERNOON):
+            return Response({"error": "halfDaySlot must be 'morning' or 'afternoon'"}, status=400)
+        if end_date != start_date:
+            return Response({"error": "A half-day leave request must be for a single day"}, status=400)
+        total_days = Decimal("0.5")
+    else:
+        half_day_slot = None
+        total_days = _count_leave_days(start_date, end_date)
+
     record = LeaveRequest.objects.create(
         employee_id=employee_id,
         type=leave_type,
         start_date=start_date,
         end_date=end_date,
         total_days=total_days,
+        is_half_day=is_half_day,
+        half_day_slot=half_day_slot,
         reason=data.get("reason"),
     )
     return Response(_leave_with_name(record), status=201)

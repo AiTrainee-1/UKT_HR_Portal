@@ -339,6 +339,16 @@ class LeaveRequest(models.Model):
     start_date = models.TextField(db_column="start_date")
     end_date = models.TextField(db_column="end_date")
     total_days = models.DecimalField(max_digits=4, decimal_places=1, default=1, db_column="total_days")
+    # Half-Day Leave -start_date == end_date whenever this is set (enforced in
+    # views.py::_leave_requests_create), total_days is always 0.5. Otherwise
+    # this is a normal (possibly multi-day) leave request, unaffected.
+    is_half_day = models.BooleanField(default=False, db_column="is_half_day")
+    HALF_DAY_MORNING = "morning"
+    HALF_DAY_AFTERNOON = "afternoon"
+    HALF_DAY_CHOICES = [
+        (HALF_DAY_MORNING, "Morning (First Half)"), (HALF_DAY_AFTERNOON, "Afternoon (Second Half)"),
+    ]
+    half_day_slot = models.TextField(choices=HALF_DAY_CHOICES, null=True, blank=True, db_column="half_day_slot")
     reason = models.TextField(null=True, blank=True)
     status = models.TextField(default="pending")  # pending/approved/rejected
     hr_comment = models.TextField(null=True, blank=True, db_column="hr_comment")
@@ -1995,6 +2005,12 @@ class AttendanceDayRecord(models.Model):
     # UI can show HR *why* a detection fired instead of just that it fired.
     # Null whenever nothing was flagged.
     late_reason = models.TextField(null=True, blank=True, db_column="late_reason")
+    # Set when an approved Half-Day Leave (LeaveRequest.is_half_day) accounts
+    # for this day -see attendance_final.py::_half_day_leave_for. Distinct
+    # from is_half_shift, which is purely punch-derived (a single punch, or a
+    # late arrival) and carries its own punctuality/relaxation machinery that
+    # a leave-derived half day must never be pulled into.
+    is_half_day_leave = models.BooleanField(default=False, db_column="is_half_day_leave")
     shifts_earned = models.DecimalField(
         max_digits=3, decimal_places=2, default=0, db_column="shifts_earned",
         help_text="0.50 per half. Staff max 1.00, production max 1.50."
@@ -3171,10 +3187,149 @@ class OutpassRecord(models.Model):
     employee_code = models.TextField(db_column="employee_code")
     destination = models.TextField(db_column="destination")
     submitted_at = models.DateTimeField(auto_now_add=True, db_column="submitted_at")
+    # "qr" (gate scan, the original flow) | "request" (approved via
+    # OutpassRequest -manual employee request or an approved On-Duty session).
+    # Default preserves every row created before this field existed.
+    source = models.TextField(default="qr", db_column="source")
 
     class Meta:
         db_table = "outpass_records"
         ordering = ["-submitted_at"]
+
+
+class OutpassRequest(models.Model):
+    """An employee-initiated (or On-Duty-derived) request for an Outpass,
+    approved the same way EmployeePermission is -either the employee's HOD
+    or HR is sufficient, whichever acts first. Approval creates a matching
+    OutpassRecord (see outpass_visitor_views.py::_create_outpass_record_for)
+    so the gate-facing Outpass page needs no changes at all to show it."""
+
+    STATUS_PENDING = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_REJECTED = "rejected"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"), (STATUS_APPROVED, "Approved"), (STATUS_REJECTED, "Rejected"),
+    ]
+
+    SOURCE_MANUAL = "manual"
+    SOURCE_ON_DUTY = "on_duty"
+    SOURCE_CHOICES = [(SOURCE_MANUAL, "Manual"), (SOURCE_ON_DUTY, "On-Duty")]
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="outpass_requests"
+    )
+    destination = models.TextField(db_column="destination")
+    reason = models.TextField(db_column="reason")
+    status = models.TextField(choices=STATUS_CHOICES, default=STATUS_PENDING, db_column="status")
+    source = models.TextField(choices=SOURCE_CHOICES, default=SOURCE_MANUAL, db_column="source")
+    on_duty_session = models.ForeignKey(
+        OnDutySession, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="on_duty_session_id", related_name="outpass_requests",
+    )
+    # "hr" | "dept_head" | "system" (auto-approved via an On-Duty approval) —
+    # mirrors EmployeePermission.approver_role.
+    approver_role = models.TextField(null=True, blank=True, db_column="approver_role")
+    approved_by = models.TextField(null=True, blank=True, db_column="approved_by")
+    review_comment = models.TextField(null=True, blank=True, db_column="review_comment")
+    # Pass validity window is approved_at + 60 minutes -computed at read time,
+    # not stored, so there's nothing to keep in sync if that window ever changes.
+    approved_at = models.DateTimeField(null=True, blank=True, db_column="approved_at")
+    outpass_record = models.ForeignKey(
+        OutpassRecord, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="outpass_record_id", related_name="+",
+    )
+    # Set once a gate scan verifies and records the employee's exit -see
+    # gate_scanner_views.py::gate_scan. Both null until then; exit_gate uses
+    # SET_NULL rather than CASCADE so deleting a gate profile never deletes
+    # the historical fact that a pass was exited through it.
+    exit_gate = models.ForeignKey(
+        "GateDevice", on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="exit_gate_id", related_name="exited_requests",
+    )
+    exited_at = models.DateTimeField(null=True, blank=True, db_column="exited_at")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "outpass_requests"
+        ordering = ["-created_at"]
+
+
+class GateDevice(models.Model):
+    """A login profile for one physical gate-scanner kiosk (e.g. "Gate 1").
+
+    Deliberately separate from GateQRCode (outpass_visitor_views.py) -that
+    model is a permanent, tokenized, *unauthenticated* QR for the public
+    outpass/visitor entry form; this one is a real username/password login
+    for a device that VERIFIES an already-approved OutpassRequest's QR and
+    records the employee's exit against a specific gate. Two unrelated
+    concepts that happen to share the word "gate".
+
+    Auth is always username+password (see gate_scanner_views.py::gate_login)
+    -login_token only identifies which gate a login *link* points at, so the
+    kiosk page can show "Logging into Gate 1" before any credentials are
+    entered. `is_active` is the revocation switch: require_gate_device
+    re-checks it on every request, so deactivating a gate here blocks its
+    session immediately without waiting for the JWT to expire.
+    """
+
+    name = models.TextField(db_column="name")
+    branch = models.ForeignKey(
+        Branch, on_delete=models.CASCADE, db_column="branch_id", related_name="gate_devices"
+    )
+    username = models.TextField(unique=True, db_column="username")
+    password_hash = models.TextField(db_column="password_hash")
+    login_token = models.TextField(unique=True, db_column="login_token")
+    is_active = models.BooleanField(default=True, db_column="is_active")
+    created_by = models.TextField(null=True, blank=True, db_column="created_by")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    last_login_at = models.DateTimeField(null=True, blank=True, db_column="last_login_at")
+
+    class Meta:
+        db_table = "gate_devices"
+        ordering = ["name"]
+
+
+class OutpassGateScan(models.Model):
+    """Audit log of every QR scan attempt at a gate -success AND failure, so
+    HR can see not just who exited but who *tried* to and was denied (an
+    expired pass re-shown, an already-used pass, a tampered/invalid QR).
+    `outpass_request`/`employee` are nullable because an unparseable or
+    forged QR never resolves to a real request -the attempt is still worth
+    logging."""
+
+    RESULT_SUCCESS = "success"
+    RESULT_ALREADY_SCANNED = "already_scanned"
+    RESULT_EXPIRED = "expired"
+    RESULT_NOT_APPROVED = "not_approved"
+    RESULT_INVALID_QR = "invalid_qr"
+    RESULT_CHOICES = [
+        (RESULT_SUCCESS, "Success"),
+        (RESULT_ALREADY_SCANNED, "Already Scanned"),
+        (RESULT_EXPIRED, "Expired"),
+        (RESULT_NOT_APPROVED, "Not Approved"),
+        (RESULT_INVALID_QR, "Invalid QR"),
+    ]
+
+    gate = models.ForeignKey(
+        GateDevice, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="gate_id", related_name="scans",
+    )
+    outpass_request = models.ForeignKey(
+        OutpassRequest, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="outpass_request_id", related_name="gate_scans",
+    )
+    employee = models.ForeignKey(
+        Employee, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="employee_id", related_name="+",
+    )
+    result = models.TextField(choices=RESULT_CHOICES, db_column="result")
+    message = models.TextField(db_column="message")
+    scanned_at = models.DateTimeField(auto_now_add=True, db_column="scanned_at")
+
+    class Meta:
+        db_table = "outpass_gate_scans"
+        ordering = ["-scanned_at"]
 
 
 class Visitor(models.Model):

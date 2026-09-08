@@ -122,7 +122,7 @@ function CreateUserDialog({
             <div className="space-y-2">
               {[
                 { label: "Can approve leave requests", value: canApproveLeaves, set: setCanApproveLeaves },
-                { label: "Can approve permission requests", value: canApprovePermissions, set: setCanApprovePermissions },
+                { label: "Can approve permission & outpass requests", value: canApprovePermissions, set: setCanApprovePermissions },
                 { label: "Can approve resignations", value: canApproveResignations, set: setCanApproveResignations },
                 { label: "Can approve attendance edits", value: canApproveAttendance, set: setCanApproveAttendance },
                 { label: "Can approve casual leave", value: canApproveCasualLeave, set: setCanApproveCasualLeave },
@@ -394,7 +394,7 @@ export default function UserManagement() {
                             }`}
                           >
                             {m.canApprovePermissions ? <CheckCircle size={10} /> : <XCircle size={10} />}
-                            Permissions
+                            Permissions & Outpass
                           </span>
                           <span
                             className={`flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border ${

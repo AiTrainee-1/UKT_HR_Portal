@@ -23,7 +23,7 @@ import {
   getListLeaveRequestsQueryKey,
 } from "@/lib/api-client";
 import { useQueryClient } from "@tanstack/react-query";
-import { Calendar, Plus, Trash2, CheckCircle, XCircle, Gift, Clock, User, Building2, Briefcase, FileText } from "lucide-react";
+import { Calendar, Plus, Trash2, CheckCircle, XCircle, Gift, Clock, User, Building2, Briefcase, FileText, Sunrise } from "lucide-react";
 import EmployeeSearchSelect from "@/components/EmployeeSearchSelect";
 import { Separator } from "@/components/ui/separator";
 import { CircleLoader } from "@/components/ui/CircleLoader";
@@ -32,6 +32,11 @@ const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
   pending:  { label: "Pending",  className: "bg-amber-50 text-amber-700 border-amber-200" },
   approved: { label: "Approved", className: "bg-green-50 text-green-700 border-green-200" },
   rejected: { label: "Rejected", className: "bg-red-50 text-red-700 border-red-200" },
+};
+
+const HALF_DAY_LABEL: Record<string, string> = {
+  morning: "Morning (First Half)",
+  afternoon: "Afternoon (Second Half)",
 };
 
 export default function LeaveHoliday() {
@@ -45,6 +50,7 @@ export default function LeaveHoliday() {
   const [holidayForm, setHolidayForm] = useState({ name: "", date: "", holidayType: "national", description: "" });
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
+  const [halfDayFilterStatus, setHalfDayFilterStatus] = useState("all");
 
   const [permFilterStatus, setPermFilterStatus] = useState("all");
   const [permFilterMonth, setPermFilterMonth] = useState<number | "all">("all");
@@ -74,8 +80,14 @@ export default function LeaveHoliday() {
   const updatePermMutation = useUpdatePermissionStatus();
   const deletePermMutation = useDeletePermission();
 
+  // Half-Day Leave requests get their own dedicated tab below -excluded here
+  // so they aren't listed twice.
   const filteredLeaves = (leaves ?? []).filter(l =>
-    filterStatus === "all" || l.status === filterStatus,
+    !l.isHalfDay && (filterStatus === "all" || l.status === filterStatus),
+  );
+  const halfDayLeaves = (leaves ?? []).filter(l => l.isHalfDay);
+  const filteredHalfDayLeaves = halfDayLeaves.filter(l =>
+    halfDayFilterStatus === "all" || l.status === halfDayFilterStatus,
   );
 
   const updateLeaveStatus = async (id: number, status: string) => {
@@ -196,7 +208,12 @@ export default function LeaveHoliday() {
 
         {/* Summary -changes based on active tab */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {(activeTab === "permissions" ? [
+          {(activeTab === "halfDay" ? [
+            { label: "Pending",   value: filteredHalfDayLeaves.filter(l => l.status === "pending").length,  color: "text-amber-700 bg-amber-50 border-amber-100" },
+            { label: "Approved",  value: halfDayLeaves.filter(l => l.status === "approved").length, color: "text-green-700 bg-green-50 border-green-100" },
+            { label: "Rejected",  value: halfDayLeaves.filter(l => l.status === "rejected").length, color: "text-red-700 bg-red-50 border-red-100" },
+            { label: "Total",     value: halfDayLeaves.length,                                      color: "text-gray-700 bg-gray-50 border-gray-100" },
+          ] : activeTab === "permissions" ? [
             { label: "Pending",   value: (permissions ?? []).filter(p => p.status === "pending").length,  color: "text-amber-700 bg-amber-50 border-amber-100" },
             { label: "Approved",  value: (permissions ?? []).filter(p => p.status === "approved").length, color: "text-green-700 bg-green-50 border-green-100" },
             { label: "Rejected",  value: (permissions ?? []).filter(p => p.status === "rejected").length, color: "text-red-700 bg-red-50 border-red-100" },
@@ -226,6 +243,7 @@ export default function LeaveHoliday() {
           <PillTabs
             items={[
               { value: "leaves", label: "Leave Requests", icon: <Calendar size={14} /> },
+              { value: "halfDay", label: "Half-Day Leave", icon: <Sunrise size={14} /> },
               { value: "permissions", label: "Permissions", icon: <Clock size={14} /> },
               { value: "holidays", label: "Holidays", icon: <Gift size={14} /> },
             ]}
@@ -272,6 +290,82 @@ export default function LeaveHoliday() {
                                 ? new Date(leave.startDate).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "long", year: "numeric" })
                                 : `${leave.startDate} → ${leave.endDate}`}
                               &nbsp;·&nbsp; {days} day{days !== 1 ? "s" : ""}
+                            </p>
+                            {leave.reason && <p className="text-xs text-gray-400 mt-0.5 truncate">{leave.reason}</p>}
+                            {(leave as any).approvedBy && (
+                              <p className="text-[11px] text-gray-400 mt-0.5">
+                                {leave.status === "rejected" ? "Rejected By" : "Approved By"}: {(leave as any).approvedBy}
+                                {(leave as any).approverRole === "dept_head" ? " (Dept Head)" : " (HR)"}
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+                            {leave.status === "pending" && (
+                              <>
+                                <Button size="sm" variant="outline"
+                                  className="h-8 gap-1 text-green-700 border-green-200 hover:bg-green-50"
+                                  onClick={() => updateLeaveStatus(leave.id, "approved")}
+                                  disabled={updateLeaveMutation.isPending}>
+                                  <CheckCircle size={13} /> Approve
+                                </Button>
+                                <Button size="sm" variant="outline"
+                                  className="h-8 gap-1 text-red-600 border-red-200 hover:bg-red-50"
+                                  onClick={() => updateLeaveStatus(leave.id, "rejected")}
+                                  disabled={updateLeaveMutation.isPending}>
+                                  <XCircle size={13} /> Reject
+                                </Button>
+                              </>
+                            )}
+                            <Button variant="ghost" size="icon" className="h-7 w-7 text-red-400 hover:text-red-600"
+                              onClick={() => deleteLeaveRequest(leave.id)}
+                              disabled={deleteLeaveMutation.isPending}>
+                              <Trash2 size={13} />
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })
+              )}
+            </div>
+          </TabsContent>
+
+          <TabsContent value="halfDay" className="mt-4 space-y-4">
+            <div className="flex items-center gap-2 flex-wrap">
+              <PillTabs
+                items={["all", "pending", "approved", "rejected"].map((s) => ({ value: s, label: s.charAt(0).toUpperCase() + s.slice(1) }))}
+                value={halfDayFilterStatus}
+                onChange={setHalfDayFilterStatus}
+                size="sm"
+              />
+            </div>
+
+            <div className="space-y-3">
+              {leavesLoading ? (
+                <CircleLoader texts={["UK Textiles", "Half-Day Leave", "Loading"]} />
+              ) : filteredHalfDayLeaves.length === 0 ? (
+                <div className="text-center py-12 text-muted-foreground text-sm">No half-day leave requests found.</div>
+              ) : (
+                filteredHalfDayLeaves.map(leave => {
+                  const cfg = STATUS_CONFIG[leave.status] ?? STATUS_CONFIG.pending;
+                  return (
+                    <Card key={leave.id}
+                      className="border hover:shadow-sm transition-shadow cursor-pointer"
+                      onClick={() => setSelectedLeave({ ...leave, totalDays: leave.totalDays ?? 0.5 })}>
+                      <CardContent className="p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="font-bold text-sm text-gray-900">{leave.employeeName ?? (leave as any).employeeCode ?? `#${leave.employeeId}`}</p>
+                              <Badge className={`text-xs border ${cfg.className}`}>{cfg.label}</Badge>
+                              <Badge className="text-xs bg-sky-50 text-sky-700 border-sky-200 gap-1">
+                                <Sunrise size={11} /> {leave.halfDaySlot === "afternoon" ? "Afternoon" : "Morning"}
+                              </Badge>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1">
+                              {new Date(leave.startDate).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "long", year: "numeric" })}
+                              &nbsp;·&nbsp; Half day
                             </p>
                             {leave.reason && <p className="text-xs text-gray-400 mt-0.5 truncate">{leave.reason}</p>}
                             {(leave as any).approvedBy && (
@@ -637,7 +731,17 @@ export default function LeaveHoliday() {
                         {(STATUS_CONFIG[selectedLeave.status] ?? STATUS_CONFIG.pending).label}
                       </Badge>
                     </div>
-                    {selectedLeave.startDate === selectedLeave.endDate ? (
+                    {selectedLeave.isHalfDay ? (
+                      <div className="col-span-2">
+                        <p className="text-xs text-gray-400">Date</p>
+                        <p className="text-sm font-semibold text-gray-900">
+                          {new Date(selectedLeave.startDate).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+                          <span className="ml-2 text-xs font-normal text-gray-400">
+                            ({HALF_DAY_LABEL[selectedLeave.halfDaySlot] ?? "Half day"})
+                          </span>
+                        </p>
+                      </div>
+                    ) : selectedLeave.startDate === selectedLeave.endDate ? (
                       <div className="col-span-2">
                         <p className="text-xs text-gray-400">Date</p>
                         <p className="text-sm font-semibold text-gray-900">

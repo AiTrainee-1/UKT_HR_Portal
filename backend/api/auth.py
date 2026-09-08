@@ -60,6 +60,32 @@ def require_hr(view_func):
     return wrapper
 
 
+def require_gate_device(view_func):
+    """Gates the gate-scanner kiosk endpoints (gate_scanner_views.py::gate_scan).
+
+    Unlike require_hr, this also live-checks GateDevice.is_active on every
+    request rather than relying on token expiry -a kiosk token is meant to
+    stay valid for a long time, so HR deactivating a gate (lost/stolen
+    device, decommissioned gate) needs to take effect on the very next
+    request, not whenever the JWT happens to expire.
+    """
+    @wraps(view_func)
+    @require_auth
+    def wrapper(request: Request, *args, **kwargs):
+        if request.jwt_user.get("role") != "gate_device":
+            return Response({"error": "Gate device access required"}, status=403)
+
+        from .models import GateDevice
+
+        device = GateDevice.objects.filter(id=request.jwt_user.get("deviceId"), is_active=True).first()
+        if device is None:
+            return Response({"error": "This gate's access has been revoked"}, status=403)
+        request.gate_device = device
+        return view_func(request, *args, **kwargs)
+
+    return wrapper
+
+
 def is_master_admin(hr_user) -> bool:
     """Is this the ONE designated admin account?
 

@@ -71,7 +71,7 @@ from .geo_utils import haversine_distance_m
 from .clock import ist_time, ist_today
 from .models import (
     AttendanceLog, DepartmentManager, Employee, LiveLocationPing, Notification,
-    OnDutyPunchVerification, OnDutySession,
+    OnDutyPunchVerification, OnDutySession, OutpassRequest,
 )
 
 ALLOWED_PHOTO_EXTENSIONS = {"jpg", "jpeg", "png"}
@@ -434,6 +434,29 @@ def _on_duty_punch_verification_dict(v: OnDutyPunchVerification) -> dict:
     }
 
 
+def _create_outpass_from_on_duty(session: OnDutySession, reviewer_name: str) -> None:
+    """Called once, only from resolve_on_duty_session_hr's approved branch —
+    On-Duty's own status/fields are never touched here, this only ever adds a
+    new, already-approved OutpassRequest + its matching OutpassRecord (the
+    same row shape a QR-scan or a manual Outpass request produces) so the
+    employee has something to show at the gate."""
+    from .outpass_visitor_views import _create_outpass_record_for
+
+    record = _create_outpass_record_for(session.employee, session.destination, source="request")
+    OutpassRequest.objects.create(
+        employee=session.employee,
+        destination=session.destination,
+        reason=session.destination,
+        status=OutpassRequest.STATUS_APPROVED,
+        source=OutpassRequest.SOURCE_ON_DUTY,
+        on_duty_session=session,
+        approver_role="system",
+        approved_by=reviewer_name,
+        approved_at=timezone.now(),
+        outpass_record=record,
+    )
+
+
 def resolve_on_duty_session_hod(session: OnDutySession, decision: str, reviewer_name: str, comment: str | None) -> None:
     """
     Stage 1 -Department Head decision on the destination request. Called
@@ -490,6 +513,12 @@ def resolve_on_duty_session_hr(session: OnDutySession, decision: str, reviewer_n
         # One decision, one card: approving the request accepts every punch
         # captured under it as real attendance.
         approved = _approve_session_punches(session, reviewer_name)
+        # Data-collection only, no attendance/payroll link -see
+        # outpass_visitor_views.py's module docstring. Generated here (final
+        # On-Duty approval), never at submission time, per the explicit
+        # requirement that an Outpass must not appear before the On-Duty
+        # request itself has actually been approved.
+        _create_outpass_from_on_duty(session, reviewer_name)
         message = f"Your On-Duty request for {session.destination} was approved by HR."
         message += (
             f" Your {approved} recorded punch(es) have been accepted as attendance."

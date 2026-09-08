@@ -31,6 +31,8 @@ import JobApply from "@/pages/JobApply";
 import DatabaseOffline from "@/pages/DatabaseOffline";
 import OutpassGate from "@/pages/gate/OutpassGate";
 import VisitorGate from "@/pages/gate/VisitorGate";
+import GateScannerLogin from "@/pages/gate/GateScannerLogin";
+import GateScannerConsole from "@/pages/gate/GateScannerConsole";
 
 // HR pages
 import HrDashboard from "@/pages/hr/Dashboard";
@@ -212,6 +214,11 @@ function Router() {
       <Route path="/db-offline" component={DatabaseOffline} />
       <Route path="/gate/outpass/:token" component={OutpassGate} />
       <Route path="/gate/visitor/:token" component={VisitorGate} />
+      {/* Gate Scanner kiosk -literal /console route must be registered
+          before the :loginToken param route, or "console" would itself be
+          matched as a login token. */}
+      <Route path="/gate-scanner/console" component={GateScannerConsole} />
+      <Route path="/gate-scanner/:loginToken" component={GateScannerLogin} />
 
       {/* ── HR Routes ─────────────────────────────────────────── */}
       <Route path="/hr/dashboard">

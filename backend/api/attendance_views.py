@@ -71,10 +71,19 @@ def _bio_punched_ids(d: date_type) -> set[int]:
 def _leave_ids(d: date_type) -> set[int]:
     return set(
         LeaveRequest.objects.filter(
-            status="approved",
+            status="approved", is_half_day=False,
             start_date__lte=str(d),
             end_date__gte=str(d),
         ).values_list("employee_id", flat=True)
+    )
+
+
+def _half_day_leave_slots(d: date_type) -> dict[int, str]:
+    """{employee_id: "morning"|"afternoon"} for approved Half-Day Leave on d."""
+    return dict(
+        LeaveRequest.objects.filter(
+            status="approved", is_half_day=True, start_date=str(d),
+        ).values_list("employee_id", "half_day_slot")
     )
 
 
@@ -234,6 +243,7 @@ def attendance_company_summary(request: Request) -> Response:
     prod_config = ProductionShiftConfig.get()
     prod_segments = list(ProductionShiftSegment.objects.filter(is_active=True))
     leave_ids_today = _leave_ids(d)
+    half_day_leave_slots_today = _half_day_leave_slots(d)
     is_holiday_today = Holiday.objects.filter(date=d).exists()
 
     yesterday = d - timedelta(days=1)
@@ -294,6 +304,7 @@ def attendance_company_summary(request: Request) -> Response:
             settings=ps,
             leave_dates={d} if emp.id in leave_ids_today else set(),
             holiday_dates={d} if is_holiday_today else set(),
+            half_day_leave_dates={d: half_day_leave_slots_today[emp.id]} if emp.id in half_day_leave_slots_today else None,
             prod_config=prod_config if is_production else None,
             prod_segments=prod_segments if is_production else None,
             prefetch=prefetch,
@@ -647,6 +658,7 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
             "permissionDeparture":  bool(rec.permission_departure) if rec else False,
             "permissionDepartureWithRequest": bool(rec.permission_departure_with_request) if rec else False,
             "isCompensationDay": bool(rec.is_compensation_day) if rec else False,
+            "isHalfDayLeave": bool(rec.is_half_day_leave) if rec else False,
             "present":      status in ("present", "half_shift"),
             "firstPunch":   first_in,
             "lastPunch":    last_out,
@@ -1122,6 +1134,7 @@ def _full_day_row(emp, rec, shift, dsl, cl, perm, leave=None) -> dict:
         "permissionZoneCount": rec.permission_zone_count,
         "permissionEscalatedToHalfShift": bool(rec.permission_escalated_to_half_shift),
         "isCompensationDay": bool(rec.is_compensation_day),
+        "isHalfDayLeave": bool(rec.is_half_day_leave),
         "casualLeave": {"status": cl.status, "reason": cl.reason} if cl else None,
         "permission": (
             {
@@ -1211,6 +1224,7 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
     prod_config = None
     prod_segments = None
     leave_ids_today = _leave_ids(d)
+    half_day_leave_slots_today = _half_day_leave_slots(d)
     is_holiday_today = Holiday.objects.filter(date=d).exists()
 
     yesterday = d - timedelta(days=1)
@@ -1269,6 +1283,7 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
             settings=settings,
             leave_dates={d} if emp.id in leave_ids_today else set(),
             holiday_dates={d} if is_holiday_today else set(),
+            half_day_leave_dates={d: half_day_leave_slots_today[emp.id]} if emp.id in half_day_leave_slots_today else None,
             prod_config=prod_config,
             prod_segments=prod_segments,
             prefetch=prefetch,
@@ -1286,6 +1301,7 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
             "permissionAfternoon": bool(rec.permission_afternoon),
             "permissionDeparture": bool(rec.permission_departure),
             "isCompensationDay": bool(rec.is_compensation_day),
+        "isHalfDayLeave": bool(rec.is_half_day_leave),
             "isInformed": rec.is_informed,
         })
 
@@ -1687,6 +1703,7 @@ def attendance_search_range(request: Request) -> Response:
             "permissionZoneCount": rec.permission_zone_count,
             "permissionEscalatedToHalfShift": bool(rec.permission_escalated_to_half_shift),
             "isCompensationDay": bool(rec.is_compensation_day),
+        "isHalfDayLeave": bool(rec.is_half_day_leave),
             "totalPunches": rec.total_punches,
             "punches": punches,
             "casualLeave": {"status": cl.status, "reason": cl.reason} if cl else None,
@@ -2011,6 +2028,7 @@ def employee_shift_monthly_stats(request: Request) -> Response:
             "permissionDeparture": bool(rec.permission_departure) if rec else False,
             "permissionEscalatedToHalfShift": bool(rec.permission_escalated_to_half_shift) if rec else False,
             "isCompensationDay": bool(rec.is_compensation_day) if rec else False,
+            "isHalfDayLeave": bool(rec.is_half_day_leave) if rec else False,
         })
 
     summary = month_summary_from_records(list(day_records.values()))

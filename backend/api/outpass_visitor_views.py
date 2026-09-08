@@ -91,6 +91,22 @@ def _gate_qr_or_none(token: str, kind: str) -> GateQRCode | None:
     return GateQRCode.objects.filter(token=token, kind=kind).select_related("branch").first()
 
 
+def _create_outpass_record_for(employee: Employee, destination: str, source: str) -> OutpassRecord:
+    """Shared with outpass_request_views.py (manual/HR/HOD-approved requests)
+    and geo_attendance_views.py::_create_outpass_from_on_duty -every path
+    that produces an Outpass ends up creating exactly this same row shape,
+    so the HR Outpass page (outpass_qr/summary/records above) needs no
+    changes at all to show requests approved outside the QR flow."""
+    return OutpassRecord.objects.create(
+        branch=employee.branch,
+        employee=employee,
+        employee_name=f"{employee.first_name} {employee.last_name}",
+        employee_code=employee.employee_code,
+        destination=destination,
+        source=source,
+    )
+
+
 _QR_NOT_FOUND = Response({"error": "This QR code is not recognized."}, status=404)
 
 
@@ -140,6 +156,7 @@ def outpass_records(request: Request) -> Response:
                 "destination": r.destination,
                 "branchName": r.branch.name if r.branch else None,
                 "submittedAt": r.submitted_at.isoformat(),
+                "source": r.source,
             }
             for r in rows
         ],

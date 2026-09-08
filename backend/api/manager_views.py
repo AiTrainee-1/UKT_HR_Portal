@@ -477,6 +477,17 @@ def manager_pending_requests(request: Request) -> Response:
         missing_punch_qs = MissingPunchRequest.objects.none()
     missing_punch_qs = missing_punch_qs.order_by("-created_at")
 
+    from .models import OutpassRequest
+    from .outpass_request_views import _outpass_request_json
+    outpass_qs = OutpassRequest.objects.select_related(
+        "employee__department", "employee__designation"
+    ).filter(emp_filter, source=OutpassRequest.SOURCE_MANUAL)
+    if status_filter != "all" and m.can_approve_permissions:
+        outpass_qs = outpass_qs.filter(status=status_filter)
+    elif not m.can_approve_permissions:
+        outpass_qs = OutpassRequest.objects.none()
+    outpass_qs = outpass_qs.order_by("-created_at")
+
     return Response({
         "leaveRequests": [_leave_with_emp(r) for r in leave_qs],
         "permissions": [_perm_with_emp(p) for p in perm_qs],
@@ -485,6 +496,7 @@ def manager_pending_requests(request: Request) -> Response:
         "casualLeaves": [_cl_dict(r) for r in casual_qs],
         "onDutySessions": [_on_duty_session_dict(s) for s in on_duty_qs],
         "missingPunchRequests": [_missing_punch_dict(r) for r in missing_punch_qs],
+        "outpassRequests": [_outpass_request_json(r, with_employee=True) for r in outpass_qs],
         "totalPending": (
             LeaveRequest.objects.filter(emp_filter, status="pending").count()
             + EmployeePermission.objects.filter(emp_filter, status="pending").count()
@@ -493,6 +505,7 @@ def manager_pending_requests(request: Request) -> Response:
             + (CasualLeaveRequest.objects.filter(emp_filter, status="pending").count() if m.can_approve_casual_leave else 0)
             + (OnDutySession.objects.filter(emp_filter, status=OnDutySession.STATUS_PENDING_HOD).count() if m.can_approve_on_duty else 0)
             + (MissingPunchRequest.objects.filter(emp_filter, status=MissingPunchRequest.STATUS_PENDING_HOD).count() if m.can_approve_missing_punch else 0)
+            + (OutpassRequest.objects.filter(emp_filter, source=OutpassRequest.SOURCE_MANUAL, status="pending").count() if m.can_approve_permissions else 0)
         ),
     })
 
@@ -608,6 +621,56 @@ def manager_update_permission_status(request: Request, pk: int) -> Response:
         message=f"Your permission request for {perm.date.isoformat()} was {status}.",
     )
     return Response(_permission_json(perm))
+
+
+@api_view(["PATCH"])
+@require_auth
+def manager_update_outpass_status(request: Request, pk: int) -> Response:
+    """Manager approves/rejects a manually-requested Outpass from their team.
+    Reuses the Permissions capability (can_approve_permissions) rather than a
+    dedicated flag -this is deliberately "the same approval system" as
+    EmployeePermission, per the feature request."""
+    from .models import OutpassRequest
+    from .outpass_request_views import _outpass_request_json, resolve_outpass_request
+
+    token_emp_id = get_token_employee_id(request)
+    if not token_emp_id:
+        return Response({"error": "Employee authentication required"}, status=403)
+
+    try:
+        m = DepartmentManager.objects.prefetch_related(
+            "department_assignments", "employee_assignments"
+        ).get(employee_id=token_emp_id, is_active=True)
+    except DepartmentManager.DoesNotExist:
+        return Response({"error": "Not a department manager"}, status=403)
+
+    if not m.can_approve_permissions:
+        return Response({
+            "error": "Approve-permission access is disabled for your account. Ask HR to enable it.",
+            "code": "APPROVE_PERMISSIONS_DISABLED",
+        }, status=403)
+
+    dept_ids, direct_ids = _get_manager_employee_ids(m)
+    emp_filter = Q(employee_id__in=direct_ids)
+    if dept_ids:
+        emp_filter |= Q(employee__department_id__in=dept_ids)
+
+    try:
+        req = OutpassRequest.objects.select_related(
+            "employee__department", "employee__designation"
+        ).filter(emp_filter).get(pk=pk)
+    except OutpassRequest.DoesNotExist:
+        if OutpassRequest.objects.filter(pk=pk).exists():
+            return Response({"error": "This outpass request is not in your approval scope"}, status=403)
+        return Response({"error": "Outpass request not found"}, status=404)
+
+    status = request.data.get("status")
+    if status not in ["approved", "rejected"]:
+        return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
+
+    reviewer_name = f"{m.employee.first_name} {m.employee.last_name}"
+    resolve_outpass_request(req, status, reviewer_name, "dept_head", request.data.get("comment"))
+    return Response(_outpass_request_json(req))
 
 
 @api_view(["PATCH"])

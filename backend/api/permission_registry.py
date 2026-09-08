@@ -138,6 +138,7 @@ URL_MODULE_MAP: dict[str, str] = {
 
     "employee-requests": "requests",
     "permissions": "requests",
+    "outpass-requests": "requests",
 
     "promotions": "promotion",
 
@@ -194,6 +195,13 @@ URL_MODULE_MAP: dict[str, str] = {
     "visitor/qr": "outpass_visitors",
     "visitor/summary": "outpass_visitors",
     "visitor/records": "outpass_visitors",
+
+    # Gate Scanner device management (create/list/update/delete a gate login
+    # profile) -same page, same permission as the rest of Outpass/Visitors.
+    # gate-devices/login-info, /login and /scan are deliberately absent: they
+    # are never called with an HR token (public, or gate_device-role), so
+    # HrPermissionMiddleware (role=="hr" only) never applies to them anyway.
+    "gate-devices": "outpass_visitors",
 
     "payroll/production": "production_payroll",
     "payroll": "payroll",
