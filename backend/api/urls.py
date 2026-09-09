@@ -85,7 +85,7 @@ from .manager_views import (
 )
 from .outpass_request_views import outpass_requests, outpass_request_hr_status
 from .gate_scanner_views import (
-    gate_devices, gate_device_detail, gate_login_info, gate_login, gate_scan,
+    gate_devices, gate_device_detail, gate_login_info, gate_login, gate_scan, gate_scan_log,
 )
 from .geo_attendance_views import (
     geo_punch, geo_punch_precheck, geo_punch_status, live_location_ping,
@@ -522,6 +522,7 @@ urlpatterns = [
     path("gate-devices/login-info/<str:login_token>", gate_login_info),
     path("gate-devices/login", gate_login),
     path("gate-devices/scan", gate_scan),
+    path("gate-devices/scan-log", gate_scan_log),
     path("gate-devices/<int:pk>", gate_device_detail),
 
     # ── Audit Logs ───────────────────────────────────────────────────────────

@@ -24,7 +24,7 @@ import {
   useListBranches, getListBranchesQueryKey,
   useOutpassQr, useOutpassSummary, useOutpassRecords,
   useVisitorQr, useVisitorSummary, useVisitorRecords,
-  useListOutpassRequests, getListOutpassRequestsQueryKey,
+  useListOutpassRequests, getListOutpassRequestsQueryKey, useUpdateOutpassRequestStatus,
   useListGateDevices, getListGateDevicesQueryKey,
   useCreateGateDevice, useUpdateGateDevice, useDeleteGateDevice,
   type GateRange, type GateSummary, type OutpassRecordRow, type VisitorRecordRow,
@@ -33,6 +33,7 @@ import {
 import {
   DoorOpen, UserRound, QrCode as QrCodeIcon, CalendarDays, CalendarRange, Calendar,
   Download, Eye, EyeOff, ShieldCheck, Plus, Copy, KeyRound, Trash2,
+  CheckCircle2, XCircle, Inbox,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
@@ -463,9 +464,30 @@ const APPROVAL_STATUS_CLS: Record<string, string> = {
   rejected: "bg-red-50 text-red-700 border-red-200",
 };
 
+// "hr" -> just "HR"; "dept_head" -> "HOD – <name>", the name coming straight
+// from OutpassRequest.approved_by, never hardcoded; "system" is an On-Duty
+// session's auto-approval (geo_attendance_views.py::_create_outpass_from_on_duty).
+// Mirrors gate/GateScannerConsole.tsx's formatApprover so the same request
+// reads the same way on both the gate console and this HR table.
+function formatApprover(approverRole?: string | null, approvedBy?: string | null): string {
+  if (!approvedBy && !approverRole) return "—";
+  if (approverRole === "hr") return "HR";
+  if (approverRole === "dept_head") return approvedBy ? `HOD – ${approvedBy}` : "HOD";
+  if (approverRole === "system") return "On-Duty approval";
+  return approvedBy ?? "—";
+}
+
 function ApprovedPassesSection() {
+  const [page, setPage] = useState(1);
   const { data: requests, isLoading } = useListOutpassRequests();
   const rows: OutpassRequestItem[] = requests ?? [];
+  // Client-side paging, same reasoning as OutpassRequestsSection below -this
+  // endpoint also serves the Mobile/Web apps' own flat "my requests" array,
+  // so it can't switch to a {items,total,page,pageSize} response shape
+  // without breaking them.
+  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const pageSafe = Math.min(page, pageCount);
+  const pageRows = rows.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
 
   return (
     <Card>
@@ -487,6 +509,7 @@ function ApprovedPassesSection() {
                 <TableHead>Date / Time</TableHead>
                 <TableHead>Expiry</TableHead>
                 <TableHead>Approval</TableHead>
+                <TableHead>Approved By</TableHead>
                 <TableHead>Gate</TableHead>
                 <TableHead>Scan Status</TableHead>
                 <TableHead>Exit Time</TableHead>
@@ -494,11 +517,11 @@ function ApprovedPassesSection() {
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={10} className="text-center py-10 text-muted-foreground">Loading…</TableCell></TableRow>
+                <TableRow><TableCell colSpan={11} className="text-center py-10 text-muted-foreground">Loading…</TableCell></TableRow>
               ) : !rows.length ? (
-                <TableRow><TableCell colSpan={10} className="text-center py-10 text-muted-foreground">No outpass requests yet.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={11} className="text-center py-10 text-muted-foreground">No outpass requests yet.</TableCell></TableRow>
               ) : (
-                rows.map((r) => {
+                pageRows.map((r) => {
                   const scan = SCAN_STATUS_BADGE[r.scanStatus] ?? SCAN_STATUS_BADGE.not_applicable;
                   return (
                     <TableRow key={r.id}>
@@ -522,6 +545,7 @@ function ApprovedPassesSection() {
                       <TableCell>
                         <Badge className={`text-xs border ${APPROVAL_STATUS_CLS[r.status] ?? APPROVAL_STATUS_CLS.pending}`}>{r.status}</Badge>
                       </TableCell>
+                      <TableCell className="text-muted-foreground">{formatApprover(r.approverRole, r.approvedBy)}</TableCell>
                       <TableCell>{r.exitGateName ?? "—"}</TableCell>
                       <TableCell><Badge className={`text-xs border ${scan.cls}`}>{scan.label}</Badge></TableCell>
                       <TableCell className="text-muted-foreground">{r.exitedAt ? fmtDateTime(r.exitedAt) : "—"}</TableCell>
@@ -532,6 +556,109 @@ function ApprovedPassesSection() {
             </TableBody>
           </Table>
         </div>
+        {rows.length > 0 && (
+          <RecordsPagination page={pageSafe} total={rows.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Pending Outpass Requests (approve/reject, right here in the Outpass
+//    section) -there's no notification/sidebar popup anywhere else in the
+//    HRMS for a submitted Outpass request today, so this sub-tab is the
+//    dedicated place to see and act on them without leaving this page.
+//    Same hooks/endpoint as ApprovedPassesSection above and the general
+//    Requests page (ApprovedRequests.tsx) -just filtered to pending and
+//    laid out for acting on rather than auditing. ─────────────────────────
+
+const REQUESTS_PAGE_SIZE = 5;
+
+function OutpassRequestsSection() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [page, setPage] = useState(1);
+  const { data: requests, isLoading } = useListOutpassRequests("pending");
+  const updateStatus = useUpdateOutpassRequestStatus();
+  const pending: OutpassRequestItem[] = requests ?? [];
+  // Client-side paging -this endpoint also serves the Mobile/Web apps' own
+  // "my requests" list as a flat array, so it can't switch to a
+  // {items,total,page,pageSize} shape without breaking them. A pending
+  // queue is small enough that paging the already-fetched list is fine.
+  const pageCount = Math.max(1, Math.ceil(pending.length / REQUESTS_PAGE_SIZE));
+  const pageSafe = Math.min(page, pageCount);
+  const pageItems = pending.slice((pageSafe - 1) * REQUESTS_PAGE_SIZE, pageSafe * REQUESTS_PAGE_SIZE);
+
+  const act = async (id: number, status: "approved" | "rejected") => {
+    try {
+      await updateStatus.mutateAsync({ id, data: { status } });
+      toast({ title: status === "approved" ? "Outpass approved" : "Outpass rejected" });
+      queryClient.invalidateQueries({ queryKey: getListOutpassRequestsQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getListOutpassRequestsQueryKey("pending") });
+    } catch {
+      toast({ title: "Failed to update the request", variant: "destructive" });
+    }
+  };
+
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <div className="px-4 pt-4 pb-2">
+          <p className="font-bold text-sm">Pending Outpass Requests</p>
+          <p className="text-xs text-muted-foreground">
+            Submitted from the Mobile App / Employee Web App -approval from either the employee's HOD or HR is enough.
+          </p>
+        </div>
+        <div className="divide-y">
+          {isLoading ? (
+            <p className="py-10 text-center text-sm text-muted-foreground">Loading…</p>
+          ) : !pending.length ? (
+            <div className="flex flex-col items-center gap-2 py-10 text-center text-muted-foreground">
+              <Inbox size={22} className="opacity-40" />
+              <p className="text-sm">No pending outpass requests.</p>
+            </div>
+          ) : (
+            pageItems.map((r) => (
+              <div key={r.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+                <Avatar className="size-9 shrink-0">
+                  <AvatarImage src={r.employee?.photoUrl ?? undefined} />
+                  <AvatarFallback className="text-xs">{r.employee?.name?.[0] ?? "?"}</AvatarFallback>
+                </Avatar>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-medium">
+                    {r.employee?.name ?? `#${r.employeeId}`}
+                    <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                      {r.employee?.employeeCode}{r.employee?.department && ` · ${r.employee.department}`}
+                    </span>
+                  </p>
+                  <p className="truncate text-xs text-muted-foreground">{r.destination} · {r.reason}</p>
+                  <p className="text-[11px] text-muted-foreground/70">{fmtDateTime(r.createdAt)}</p>
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <Button
+                    size="sm" variant="outline"
+                    className="h-8 gap-1 border-green-200 text-green-700 hover:bg-green-50"
+                    onClick={() => act(r.id, "approved")}
+                    disabled={updateStatus.isPending}
+                  >
+                    <CheckCircle2 size={14} /> Approve
+                  </Button>
+                  <Button
+                    size="sm" variant="outline"
+                    className="h-8 gap-1 border-red-200 text-red-600 hover:bg-red-50"
+                    onClick={() => act(r.id, "rejected")}
+                    disabled={updateStatus.isPending}
+                  >
+                    <XCircle size={14} /> Reject
+                  </Button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+        {pending.length > 0 && (
+          <RecordsPagination page={pageSafe} total={pending.length} pageSize={REQUESTS_PAGE_SIZE} onPageChange={setPage} />
+        )}
       </CardContent>
     </Card>
   );
@@ -540,6 +667,7 @@ function ApprovedPassesSection() {
 // ── Outpass tab ───────────────────────────────────────────────────────────
 
 function OutpassTab({ isBranchScoped }: { isBranchScoped: boolean }) {
+  const [section, setSection] = useState<"overview" | "requests">("overview");
   const [range, setRange] = useState<GateRange>("today");
   const [page, setPage] = useState(1);
   const { branches, branchId, setBranchId } = useSelectedBranch(isBranchScoped);
@@ -549,57 +677,78 @@ function OutpassTab({ isBranchScoped }: { isBranchScoped: boolean }) {
   const { data: summary, isLoading: summaryLoading } = useOutpassSummary();
   const { data: page_, isLoading: recordsLoading } = useOutpassRecords(range, page, PAGE_SIZE);
   const records: OutpassRecordRow[] = page_?.items ?? [];
+  // Shares its cache with OutpassRequestsSection's own identical call -this
+  // is purely to badge the sub-tab with a live pending count.
+  const { data: pendingRequests } = useListOutpassRequests("pending");
 
   const changeRange = (v: GateRange) => { setRange(v); setPage(1); };
 
   return (
     <div className="space-y-4">
-      <KpiRow summary={summary} isLoading={summaryLoading} />
+      <PillTabs
+        size="sm"
+        items={[
+          { value: "overview", label: "Overview" },
+          { value: "requests", label: "Requests", count: pendingRequests?.length || undefined },
+        ]}
+        value={section}
+        onChange={(v) => setSection(v as "overview" | "requests")}
+        baseColor="#0f172a"
+        pillBg="#f1f5f9"
+      />
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <RangeFilter value={range} onChange={changeRange} />
-        <div className="flex items-center gap-2">
-          {!isBranchScoped && <BranchPicker branches={branches} branchId={branchId} setBranchId={setBranchId} />}
-          <GateDevicesDialog isBranchScoped={isBranchScoped} branches={branches} defaultBranchId={branchId} />
-          <GateQrDialog kind="outpass" token={qr?.token} branchName={qr?.branchName} />
-        </div>
-      </div>
+      {section === "requests" ? (
+        <OutpassRequestsSection />
+      ) : (
+        <>
+          <KpiRow summary={summary} isLoading={summaryLoading} />
 
-      <ApprovedPassesSection />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <RangeFilter value={range} onChange={changeRange} />
+            <div className="flex items-center gap-2">
+              {!isBranchScoped && <BranchPicker branches={branches} branchId={branchId} setBranchId={setBranchId} />}
+              <GateDevicesDialog isBranchScoped={isBranchScoped} branches={branches} defaultBranchId={branchId} />
+              <GateQrDialog kind="outpass" token={qr?.token} branchName={qr?.branchName} />
+            </div>
+          </div>
 
-      <Card>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Employee</TableHead>
-                <TableHead>Code</TableHead>
-                <TableHead>Destination</TableHead>
-                <TableHead>Branch</TableHead>
-                <TableHead>Submitted</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {recordsLoading && !page_ ? (
-                <TableRow><TableCell colSpan={5} className="text-center py-10 text-muted-foreground">Loading…</TableCell></TableRow>
-              ) : !records.length ? (
-                <TableRow><TableCell colSpan={5} className="text-center py-10 text-muted-foreground">No outpass records for {RANGE_LABEL[range].toLowerCase()}.</TableCell></TableRow>
-              ) : (
-                records.map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell className="font-medium">{r.employeeName}</TableCell>
-                    <TableCell>{r.employeeCode}</TableCell>
-                    <TableCell>{r.destination}</TableCell>
-                    <TableCell>{r.branchName ?? "—"}</TableCell>
-                    <TableCell className="text-muted-foreground">{fmtDateTime(r.submittedAt)}</TableCell>
+          <ApprovedPassesSection />
+
+          <Card>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Employee</TableHead>
+                    <TableHead>Code</TableHead>
+                    <TableHead>Destination</TableHead>
+                    <TableHead>Branch</TableHead>
+                    <TableHead>Submitted</TableHead>
                   </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-          {page_ && <RecordsPagination page={page_.page} total={page_.total} pageSize={page_.pageSize} onPageChange={setPage} />}
-        </CardContent>
-      </Card>
+                </TableHeader>
+                <TableBody>
+                  {recordsLoading && !page_ ? (
+                    <TableRow><TableCell colSpan={5} className="text-center py-10 text-muted-foreground">Loading…</TableCell></TableRow>
+                  ) : !records.length ? (
+                    <TableRow><TableCell colSpan={5} className="text-center py-10 text-muted-foreground">No outpass records for {RANGE_LABEL[range].toLowerCase()}.</TableCell></TableRow>
+                  ) : (
+                    records.map((r) => (
+                      <TableRow key={r.id}>
+                        <TableCell className="font-medium">{r.employeeName}</TableCell>
+                        <TableCell>{r.employeeCode}</TableCell>
+                        <TableCell>{r.destination}</TableCell>
+                        <TableCell>{r.branchName ?? "—"}</TableCell>
+                        <TableCell className="text-muted-foreground">{fmtDateTime(r.submittedAt)}</TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+              {page_ && <RecordsPagination page={page_.page} total={page_.total} pageSize={page_.pageSize} onPageChange={setPage} />}
+            </CardContent>
+          </Card>
+        </>
+      )}
     </div>
   );
 }

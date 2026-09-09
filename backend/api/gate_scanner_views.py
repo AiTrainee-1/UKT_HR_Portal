@@ -25,8 +25,17 @@ from rest_framework.throttling import ScopedRateThrottle
 
 from .auth import get_hr_display_name, require_gate_device, require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
+from .clock import FACTORY_TZ
 from .jwt_utils import sign_token, verify_token
 from .models import Branch, GateDevice, OutpassGateScan, OutpassRequest
+from .outpass_visitor_views import _paginate_params
+
+
+def _today_start():
+    """Asia/Kolkata midnight -matches outpass_visitor_views.py::_range_bounds
+    so "today" means the same thing everywhere in this feature."""
+    now_ist = timezone.now().astimezone(FACTORY_TZ)
+    return now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 def _gate_device_json(gate: GateDevice) -> dict:
@@ -56,6 +65,8 @@ def _gate_scan_employee_payload(req: OutpassRequest) -> dict:
         },
         "destination": req.destination,
         "reason": req.reason,
+        "approvedBy": req.approved_by,
+        "approverRole": req.approver_role,
         "approvedAt": req.approved_at.isoformat() if req.approved_at else None,
         "expiresAt": expires_at.isoformat() if expires_at else None,
         "gateName": req.exit_gate.name if req.exit_gate_id else None,
@@ -233,3 +244,48 @@ def resolve_gate_scan(gate: GateDevice, qr_token: str) -> tuple[dict, int]:
 def gate_scan(request: Request) -> Response:
     body, status = resolve_gate_scan(request.gate_device, request.data.get("qrToken"))
     return Response(body, status=status)
+
+
+# ── Today's gate-out log -gate kiosk ─────────────────────────────────────────
+
+@api_view(["GET"])
+@require_gate_device
+def gate_scan_log(request: Request) -> Response:
+    """Every successful exit recorded through THIS gate today, newest first —
+    the left-hand "Today's Gate-Out Report" on the kiosk console. Scoped to
+    the authenticated gate, not the whole branch, since that's what the
+    operator standing at this specific gate actually wants to see. Paginated
+    the same way outpass_visitor_views.py::outpass_records is -page/pageSize
+    query params, {items,total,page,pageSize} shape -so the console can reuse
+    the app's usual RecordsPagination component, and the "export everything"
+    flow can page through it without a separate unbounded endpoint."""
+    page, page_size = _paginate_params(request)
+    qs = (
+        OutpassGateScan.objects
+        .filter(gate=request.gate_device, result=OutpassGateScan.RESULT_SUCCESS, scanned_at__gte=_today_start())
+        .select_related("employee__department", "outpass_request")
+        .order_by("-scanned_at")
+    )
+    total = qs.count()
+    offset = (page - 1) * page_size
+    rows = qs[offset:offset + page_size]
+    return Response({
+        "items": [
+            {
+                "id": s.id,
+                "employeeName": f"{s.employee.first_name} {s.employee.last_name}" if s.employee else "—",
+                "employeeCode": s.employee.employee_code if s.employee else None,
+                "department": s.employee.department.name if s.employee and s.employee.department else None,
+                "photoUrl": s.employee.photo_url if s.employee else None,
+                "destination": s.outpass_request.destination if s.outpass_request else None,
+                "reason": s.outpass_request.reason if s.outpass_request else None,
+                "approvedBy": s.outpass_request.approved_by if s.outpass_request else None,
+                "approverRole": s.outpass_request.approver_role if s.outpass_request else None,
+                "exitedAt": s.scanned_at.isoformat(),
+            }
+            for s in rows
+        ],
+        "total": total,
+        "page": page,
+        "pageSize": page_size,
+    })

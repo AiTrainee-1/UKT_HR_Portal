@@ -5486,11 +5486,12 @@ export type OutpassRequestItem = {
 };
 
 export const getListOutpassRequestsQueryKey = (status?: string) => ["/api/outpass-requests", status] as const;
-export const useListOutpassRequests = (status?: string) =>
+export const useListOutpassRequests = (status?: string, options?: { enabled?: boolean }) =>
   useQuery<OutpassRequestItem[]>({
     queryKey: getListOutpassRequestsQueryKey(status),
     queryFn: () => customFetch<OutpassRequestItem[]>(`/api/outpass-requests${status ? `?status=${status}` : ""}`),
     refetchInterval: 30_000,
+    enabled: options?.enabled,
   });
 
 export const useUpdateOutpassRequestStatus = () =>

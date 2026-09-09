@@ -3,7 +3,7 @@ import { Link, useLocation } from 'wouter';
 import { useAuth, canView, canViewRoute } from '@/contexts/AuthContext';
 import { moduleForPath } from '@/lib/permission-modules';
 import { useListLeaveRequests, useListPermissions, useListResignations, useListAdvances, useListNotifications } from '@/lib/api-client';
-import { usePayrollSettings, useOnDutySessionsHR, useOnDutyPunchVerificationsHR } from '@/lib/api-client/custom-hooks';
+import { usePayrollSettings, useOnDutySessionsHR, useOnDutyPunchVerificationsHR, useListOutpassRequests } from '@/lib/api-client/custom-hooks';
 import {
   LayoutDashboard, Users, Clock, Calendar, CheckCircle2, IndianRupee, Factory,
   Wallet, BarChart3, Shield, Activity, Settings, FileText, LogOut,
@@ -460,6 +460,7 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
   const canSeeSettlement = canView(user, 'settlement');
   const canSeeGeoAttendance = canView(user, 'geo_attendance');
   const canSeeNotifications = canView(user, 'notifications');
+  const canSeeOutpass = canView(user, 'outpass_visitors');
 
   const { data: leaveData }  = useListLeaveRequests(undefined, { query: { refetchInterval: 30_000, enabled: canSeeRequests } } as any);
   const { data: permData }   = useListPermissions(undefined, { refetchInterval: 30_000, enabled: canSeeRequests } as any);
@@ -467,6 +468,11 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
   const { data: advanceData } = useListAdvances(undefined, { refetchInterval: 30_000, enabled: canSeeSettlement } as any);
   const { data: onDutySessionData } = useOnDutySessionsHR('pending', canSeeGeoAttendance);
   const { data: onDutyPunchData } = useOnDutyPunchVerificationsHR('pending', canSeeGeoAttendance);
+  // Outpass requests also show up in the general Requests queue (see
+  // ApprovedRequests.tsx's unified list) AND get their own badge on the
+  // Outpass / Visitors nav item, exactly like Geo Attendance's On-Duty badge
+  // below -fetched once, pending-filtered server-side, used for both.
+  const { data: outpassData } = useListOutpassRequests('pending', { enabled: canSeeRequests || canSeeOutpass });
   // Live notification count -polls independently of the Notifications page
   // itself so the sidebar badge updates even while the user is elsewhere.
   const { data: unreadNotifications } = useListNotifications(
@@ -474,9 +480,11 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
     { query: { refetchInterval: 12_000, enabled: canSeeNotifications } } as any
   );
   const unreadNotificationCount = (unreadNotifications ?? []).length;
+  const pendingOutpassCount = (outpassData ?? []).length;
   const pendingCount =
     ((leaveData ?? []).filter((l: any) => l.status === 'pending').length) +
-    ((permData  ?? []).filter((p: any) => p.status === 'pending').length);
+    ((permData  ?? []).filter((p: any) => p.status === 'pending').length) +
+    pendingOutpassCount;
   const activeResignationsCount = (resignData ?? []).filter(
     (r: any) => r.status === 'pending' || r.status === 'dept_approved'
   ).length;
@@ -675,6 +683,15 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
                         children: item.children?.map((c) =>
                           c.path === '/hr/geo-attendance'
                             ? { ...c, badge: pendingOnDutyCount || undefined }
+                            : c
+                        ),
+                      }
+                    : item.path === '/hr/outpass-visitors'
+                    ? {
+                        ...item,
+                        children: item.children?.map((c) =>
+                          c.path === '/hr/outpass-visitors/outpass'
+                            ? { ...c, badge: pendingOutpassCount || undefined }
                             : c
                         ),
                       }
