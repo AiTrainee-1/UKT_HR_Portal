@@ -34,27 +34,42 @@ class BackupServiceError(Exception):
     pass
 
 
-def find_pg_dump() -> str | None:
-    """pg_dump from PATH, or the newest PostgreSQL install on Windows."""
-    found = shutil.which("pg_dump")
+def _find_binary(name: str, windows_glob: str, nix_glob: str) -> str | None:
+    """PATH first, then a couple of well-known install locations that don't
+    reliably end up on PATH even when genuinely present:
+      - Windows: a local PostgreSQL install under Program Files.
+      - Nix (Railway/Nixpacks -see backend/nixpacks.toml): `nixPkgs =
+        ["postgresql"]` puts the binary in the Nix store at BUILD time, but
+        Nixpacks' generated start command doesn't always export that
+        directory onto the PATH the running Django *process* actually
+        inherits -a known gotcha, distinct from the package failing to
+        install at all. Globbing the store directly sidesteps needing that
+        PATH export to work.
+    """
+    found = shutil.which(name)
     if found:
         return found
-    candidates = sorted(
-        glob.glob(r"C:\Program Files\PostgreSQL\*\bin\pg_dump.exe"),
-        reverse=True,  # highest version first
-    )
+    candidates = sorted(glob.glob(windows_glob), reverse=True)  # highest version first
+    if candidates:
+        return candidates[0]
+    candidates = sorted(glob.glob(nix_glob), reverse=True)
     return candidates[0] if candidates else None
+
+
+def find_pg_dump() -> str | None:
+    return _find_binary(
+        "pg_dump",
+        r"C:\Program Files\PostgreSQL\*\bin\pg_dump.exe",
+        "/nix/store/*-postgresql-*/bin/pg_dump",
+    )
 
 
 def find_psql() -> str | None:
-    found = shutil.which("psql")
-    if found:
-        return found
-    candidates = sorted(
-        glob.glob(r"C:\Program Files\PostgreSQL\*\bin\psql.exe"),
-        reverse=True,
+    return _find_binary(
+        "psql",
+        r"C:\Program Files\PostgreSQL\*\bin\psql.exe",
+        "/nix/store/*-postgresql-*/bin/psql",
     )
-    return candidates[0] if candidates else None
 
 
 def _db_config() -> dict:

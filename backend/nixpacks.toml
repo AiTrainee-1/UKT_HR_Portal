@@ -2,14 +2,22 @@
 # doesn't include the Postgres CLI tools (pg_dump/psql), so the in-app
 # Backup & Restore feature (Settings → Backup) fails with "pg_dump was not
 # found on this server" on a stock Railway deploy -adding the "postgresql"
-# Nix package puts pg_dump/psql/pg_restore on PATH, which
-# backend/api/backup_service.py finds via a plain PATH lookup
-# (shutil.which), same as it does for a local install.
+# Nix package puts pg_dump/psql/pg_restore in the Nix store, which
+# backend/api/backup_service.py finds via a PATH lookup (falling back to
+# /nix/store/*-postgresql-*/... directly if PATH doesn't carry it, since
+# Nixpacks' generated start command doesn't always export that).
 #
-# Deliberately does NOT pin a Python version here -Railway/Nixpacks already
-# auto-detects Python from this repo (no runtime.txt/Procfile needed for
-# that part), and specifying a second one alongside it risks the app
-# ending up in a different interpreter than the one Nixpacks builds the
-# venv against.
+# python3 is listed explicitly alongside it -earlier this file relied on
+# Railway/Nixpacks auto-detecting Python for this repo and merging it in
+# next to postgresql, on the assumption that a hand-written [phases.setup]
+# only ADDS to the auto-detected setup phase. In practice it replaced it:
+# the build ran `nix-env -if ...` with only postgresql actually installed,
+# then `nix-collect-garbage -d` swept away the Python interpreter Nixpacks
+# would otherwise have added, and the very next step (`python -m venv`)
+# failed with "python: command not found" -a full build failure, not just
+# a missing backup feature. So this now pins the interpreter itself rather
+# than trusting that merge to happen. Django 5.1+ needs Python >=3.10;
+# nixpkgs' generic "python3" alias always resolves to a current 3.x, so
+# there's no separate version file to keep in sync here.
 [phases.setup]
-nixPkgs = ["postgresql"]
+nixPkgs = ["postgresql", "python3"]
