@@ -19,5 +19,15 @@
 # than trusting that merge to happen. Django 5.1+ needs Python >=3.10;
 # nixpkgs' generic "python3" alias always resolves to a current 3.x, so
 # there's no separate version file to keep in sync here.
+#
+# "postgresql" (unversioned) resolves to whatever major version happens to
+# be default in Railway's pinned nixpkgs snapshot (16.4, in practice) --
+# older than the actual database server (18.x). pg_dump refuses to dump
+# from a NEWER server than its own major version ("server version: 18.6 ...
+# pg_dump version: 16.4"), even though dumping from an OLDER server works
+# fine -so this has to be pinned to match the server's major version, not
+# left to float. If the server is ever upgraded to a newer major version,
+# bump this to match (nixpkgs postgresql packages are versioned
+# postgresql_<major>).
 [phases.setup]
-nixPkgs = ["postgresql", "python3"]
+nixPkgs = ["postgresql_18", "python3"]
