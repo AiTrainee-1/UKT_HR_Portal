@@ -37,7 +37,12 @@ import {
  */
 
 type ScanResult = {
-  result: "success" | "already_scanned" | "expired" | "not_approved" | "invalid_qr";
+  result: "success" | "already_scanned" | "expired" | "not_approved" | "invalid_qr" | "not_exited";
+  // Which leg this scan was for -exit-QR vs return-QR (see backend/api/
+  // gate_scanner_views.py::resolve_gate_scan). Absent only for the rare
+  // "invalid_qr" case where the token couldn't even be decoded, so its role
+  // (and therefore which leg was attempted) is genuinely unknown.
+  scanType?: "exit" | "entry";
   message: string;
   employee?: { name: string; employeeCode: string; department: string | null; photoUrl: string | null };
   destination?: string;
@@ -48,6 +53,8 @@ type ScanResult = {
   expiresAt?: string | null;
   gateName?: string | null;
   exitedAt?: string | null;
+  entryGateName?: string | null;
+  enteredAt?: string | null;
 };
 
 type GateLogEntry = {
@@ -108,6 +115,8 @@ const RESULT_TONE: Record<ScanResult["result"], { cls: string; icon: typeof Chec
   expired: { cls: "bg-amber-50 border-amber-300 text-amber-800", icon: Clock },
   not_approved: { cls: "bg-red-50 border-red-300 text-red-800", icon: XCircle },
   invalid_qr: { cls: "bg-gray-100 border-gray-300 text-gray-700", icon: XCircle },
+  // A return QR scanned before the employee's exit was ever recorded.
+  not_exited: { cls: "bg-red-50 border-red-300 text-red-800", icon: XCircle },
 };
 
 function fmtTime(iso?: string | null) {
@@ -120,8 +129,10 @@ function fmtClock(iso: string) {
 }
 
 const VOICE_LANG = "en-IN";
-const VOICE_APPROVED = "Approved. You may proceed.";
+const VOICE_EXIT_APPROVED = "Approved. You may proceed.";
+const VOICE_ENTRY_APPROVED = "Welcome back.";
 const VOICE_NOT_APPROVED = "This outpass is not approved. Please get it approved first.";
+const VOICE_NOT_EXITED = "This employee has not exited yet.";
 
 // Voices load asynchronously in most browsers (empty on the very first call
 // until the "voiceschanged" event fires) -wait for that once rather than
@@ -346,6 +357,11 @@ function ScanDetailPanel({ result, onDone }: { result: ScanResult | null; onDone
         <div className="flex items-center gap-2">
           <ToneIcon size={22} className="shrink-0" />
           <p className="font-bold">{result.message}</p>
+          {result.scanType && (
+            <span className="ml-auto rounded-full border border-current/20 bg-white/60 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide">
+              {result.scanType === "entry" ? "Return" : "Exit"}
+            </span>
+          )}
         </div>
 
         {result.employee && (
@@ -394,6 +410,12 @@ function ScanDetailPanel({ result, onDone }: { result: ScanResult | null; onDone
               <div>
                 <p className="mb-0.5 font-semibold uppercase tracking-wide opacity-70">Exited</p>
                 <p className="font-medium">{fmtTime(result.exitedAt)}</p>
+              </div>
+            )}
+            {result.enteredAt && (
+              <div>
+                <p className="mb-0.5 font-semibold uppercase tracking-wide opacity-70">Returned</p>
+                <p className="font-medium">{fmtTime(result.enteredAt)}</p>
               </div>
             )}
           </div>
@@ -618,7 +640,11 @@ export default function GateScannerConsole() {
     setLastResult(body);
     const ok = body.result === "success";
     setFlash(ok ? "success" : "error");
-    speak(ok ? VOICE_APPROVED : VOICE_NOT_APPROVED);
+    const voiceText = ok
+      ? (body.scanType === "entry" ? VOICE_ENTRY_APPROVED : VOICE_EXIT_APPROVED)
+      : body.result === "not_exited" ? VOICE_NOT_EXITED
+      : VOICE_NOT_APPROVED;
+    speak(voiceText);
     if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
     flashTimerRef.current = setTimeout(() => setFlash("idle"), FLASH_DURATION_MS);
     if (ok) {

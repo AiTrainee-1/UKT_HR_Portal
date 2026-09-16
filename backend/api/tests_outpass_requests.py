@@ -7,10 +7,13 @@ submission or at the HOD stage.
 
 Run via: python manage.py test api.tests_outpass_requests -v 2
 """
-from django.test import TestCase
+from datetime import timedelta
 
-from .models import Employee, Notification, OnDutySession, OutpassRecord, OutpassRequest
-from .outpass_request_views import resolve_outpass_request
+from django.test import TestCase
+from django.utils import timezone
+
+from .models import Branch, Employee, GateDevice, Notification, OnDutySession, OutpassRecord, OutpassRequest
+from .outpass_request_views import _outpass_request_json, _outpass_scan_status, resolve_outpass_request
 from .geo_attendance_views import (
     _create_outpass_from_on_duty, resolve_on_duty_session_hod, resolve_on_duty_session_hr,
 )
@@ -102,3 +105,74 @@ class OnDutyOutpassHookTests(TestCase):
         _create_outpass_from_on_duty(self.session, "HR Person")
         self.session.refresh_from_db()
         self.assertEqual((self.session.status, self.session.destination), before)
+
+
+class ReturnQrScanStatusAndSerializerTests(TestCase):
+    """The return/in-time leg's read-side: _outpass_scan_status's new states
+    and _outpass_request_json's returnQrToken/entered fields. The write side
+    (resolve_gate_scan's "outpass_return" branch) is covered in
+    tests_gate_scanner.py::ResolveGateScanReturnTests."""
+
+    def setUp(self):
+        self.branch = Branch.objects.create(name="Main Unit")
+        self.gate = GateDevice.objects.create(
+            name="Gate 1", branch=self.branch, username="serializer_gate1",
+            password_hash="x", login_token="stok1",
+        )
+        self.emp = Employee.objects.create(
+            employee_code="OPTEST_RET1", first_name="Return", last_name="Serializer",
+            employment_type="staff", status="active",
+        )
+
+    def _base(self, **overrides):
+        defaults = dict(
+            employee=self.emp, destination="Bank", reason="Cash withdrawal",
+            status=OutpassRequest.STATUS_APPROVED, approved_at=timezone.now(),
+            approver_role="hr", approved_by="HR Person",
+        )
+        defaults.update(overrides)
+        return OutpassRequest.objects.create(**defaults)
+
+    def test_exited_without_return_qr_is_status_exited_with_no_return_token(self):
+        req = self._base(exit_gate=self.gate, exited_at=timezone.now())
+        data = _outpass_request_json(req)
+        self.assertEqual(data["scanStatus"], "exited")
+        self.assertIsNone(data["returnQrToken"])
+        self.assertTrue(data["canGenerateReturnQr"])
+        self.assertIsNone(data["qrToken"])  # exit QR must not reappear post-exit
+
+    def test_generated_return_qr_is_pending_return_with_a_token(self):
+        req = self._base(exit_gate=self.gate, exited_at=timezone.now(), return_qr_generated_at=timezone.now())
+        data = _outpass_request_json(req)
+        self.assertEqual(data["scanStatus"], "pending_return")
+        self.assertIsNotNone(data["returnQrToken"])
+        self.assertTrue(data["canGenerateReturnQr"])
+
+    def test_expired_return_qr_is_return_expired_with_no_token(self):
+        req = self._base(
+            exit_gate=self.gate, exited_at=timezone.now() - timedelta(minutes=90),
+            return_qr_generated_at=timezone.now() - timedelta(minutes=90),
+        )
+        data = _outpass_request_json(req)
+        self.assertEqual(data["scanStatus"], "return_expired")
+        self.assertIsNone(data["returnQrToken"])
+        self.assertTrue(data["canGenerateReturnQr"])  # re-generating is allowed
+
+    def test_returned_is_completed_with_no_qr_and_cannot_regenerate(self):
+        req = self._base(
+            exit_gate=self.gate, exited_at=timezone.now() - timedelta(minutes=30),
+            entry_gate=self.gate, entered_at=timezone.now(),
+        )
+        data = _outpass_request_json(req)
+        self.assertEqual(data["scanStatus"], "completed")
+        self.assertIsNone(data["returnQrToken"])
+        self.assertFalse(data["canGenerateReturnQr"])
+        self.assertIsNotNone(data["enteredAt"])
+        self.assertEqual(data["entryGateName"], "Gate 1")
+
+    def test_not_yet_exited_cannot_generate_return_qr(self):
+        req = self._base()
+        data = _outpass_request_json(req)
+        self.assertEqual(data["scanStatus"], "pending_exit")
+        self.assertFalse(data["canGenerateReturnQr"])
+        self.assertIsNotNone(data["qrToken"])

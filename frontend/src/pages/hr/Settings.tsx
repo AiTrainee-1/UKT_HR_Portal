@@ -613,6 +613,7 @@ const WHATSAPP_DOCUMENT_TYPES: { value: WhatsAppDocumentType; label: string }[] 
   { value: "experience_letter", label: "Experience Letter" },
   { value: "resignation_letter", label: "Resignation Letter" },
   { value: "other", label: "Other Employee Documents" },
+  { value: "visitor_notification", label: "Visitor Notification (Reception)" },
 ];
 
 function WhatsAppTemplateRow({ documentType, label }: { documentType: WhatsAppDocumentType; label: string }) {

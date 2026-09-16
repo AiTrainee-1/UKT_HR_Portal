@@ -32,6 +32,8 @@ import DatabaseOffline from "@/pages/DatabaseOffline";
 import OutpassGate from "@/pages/gate/OutpassGate";
 import VisitorGate from "@/pages/gate/VisitorGate";
 import GateScannerLogin from "@/pages/gate/GateScannerLogin";
+import ReceptionLogin from "@/pages/gate/ReceptionLogin";
+import ReceptionConsole from "@/pages/gate/ReceptionConsole";
 import GateScannerConsole from "@/pages/gate/GateScannerConsole";
 
 // HR pages
@@ -219,6 +221,9 @@ function Router() {
           matched as a login token. */}
       <Route path="/gate-scanner/console" component={GateScannerConsole} />
       <Route path="/gate-scanner/:loginToken" component={GateScannerLogin} />
+      {/* Reception desk -same literal-before-param ordering as Gate Scanner above. */}
+      <Route path="/reception/console" component={ReceptionConsole} />
+      <Route path="/reception-login/:loginToken" component={ReceptionLogin} />
 
       {/* ── HR Routes ─────────────────────────────────────────── */}
       <Route path="/hr/dashboard">

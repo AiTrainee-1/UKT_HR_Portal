@@ -24,7 +24,11 @@ UTC.
 """
 from __future__ import annotations
 
+import smtplib
+import ssl
 from datetime import timedelta
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 from django.utils import timezone
 from rest_framework.decorators import api_view, throttle_classes
@@ -36,6 +40,7 @@ from .auth import require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
 from .clock import FACTORY_TZ
 from .models import Branch, Employee, GateQRCode, OutpassRecord, Visitor, VisitorVisit
+from .user_settings import settings_for_employee
 
 
 # ── Shared helpers ───────────────────────────────────────────────────────────
@@ -112,6 +117,136 @@ _QR_NOT_FOUND = Response({"error": "This QR code is not recognized."}, status=40
 
 def _throttled(request: Request) -> None:
     request.throttle_scope = "gate_submit"
+
+
+def _digits_only(raw: str | None) -> str:
+    return "".join(ch for ch in (raw or "") if ch.isdigit())
+
+
+def _find_employee_by_phone(raw_phone: str) -> Employee | None:
+    """Employee.phone is free-text (no formatting guarantee -see
+    whatsapp_service.normalize_phone's own docstring), so an exact match is
+    tried first (fast, cheap) and a digits-only comparison is the fallback
+    for anything typed with different spacing/punctuation/country-code
+    presence. Matches on the LAST 10 digits so a visitor typing a number
+    with or without a country code both still resolve to the same person."""
+    raw_phone = (raw_phone or "").strip()
+    if not raw_phone:
+        return None
+
+    exact = Employee.objects.filter(phone=raw_phone).first()
+    if exact:
+        return exact
+
+    digits = _digits_only(raw_phone)
+    if len(digits) < 7:
+        return None
+    tail = digits[-10:]
+    for emp in Employee.objects.exclude(phone__isnull=True).exclude(phone="").only("id", "phone"):
+        if _digits_only(emp.phone)[-10:] == tail:
+            return Employee.objects.select_related("department", "designation").get(pk=emp.pk)
+    return None
+
+
+def _employee_contact_json(emp: Employee) -> dict:
+    return {
+        "id": emp.id,
+        "employeeCode": emp.employee_code,
+        "name": f"{emp.first_name} {emp.last_name}",
+        "department": emp.department.name if emp.department else None,
+        "designation": emp.designation.title if emp.designation else None,
+        "phone": emp.phone,
+        "email": emp.email,
+        "photoUrl": emp.photo_url,
+    }
+
+
+# ── Visitor -> host employee notification ───────────────────────────────────
+# Best-effort on both channels -a visitor's check-in must always succeed
+# regardless of whether their host can be reached right now, exactly like
+# whatsapp_service.send_document never raises for an "expected" failure.
+# Nothing here is ever surfaced back to the visitor's own form; only
+# notified_email_at/notified_whatsapp_at on VisitorVisit (read from the
+# Reception dashboard) and the WhatsAppMessageLog audit trail reflect it.
+
+def _send_visitor_email(visit: VisitorVisit, emp: Employee) -> None:
+    if not emp.email:
+        return
+    ps = settings_for_employee(emp)
+    if not ps.smtp_host or not ps.smtp_username or not ps.smtp_password:
+        return
+
+    visitor = visit.visitor
+    emp_name = f"{emp.first_name} {emp.last_name}".strip()
+    company_name = ps.company_name or ps.slip_company_name or "UKTextiles"
+    subject = f"You have a visitor: {visitor.name}"
+    html_body = f"""
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1a3a2e">
+      <div style="background:#0E4B3A;padding:20px;text-align:center;border-radius:8px 8px 0 0">
+        <h1 style="color:white;margin:0;font-size:18px">{company_name.upper()}</h1>
+        <p style="color:rgba(255,255,255,0.8);margin:4px 0 0;font-size:12px">Visitor Arrival Notice</p>
+      </div>
+      <div style="background:#ffffff;padding:30px;border:1px solid #d8e5df;border-top:none">
+        <p>Dear <strong>{emp_name}</strong>,</p>
+        <p><strong>{visitor.name}</strong> has arrived at reception to meet you.</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">
+          <tr><td style="padding:4px 0;color:#666">Phone</td><td style="padding:4px 0"><strong>{visitor.phone}</strong></td></tr>
+          <tr><td style="padding:4px 0;color:#666">Purpose</td><td style="padding:4px 0"><strong>{visit.purpose}</strong></td></tr>
+        </table>
+        <p style="color:#888;font-size:12px">This is a system-generated email from the Reception desk.</p>
+      </div>
+    </div>
+    """
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = f"{ps.smtp_from_name} <{ps.smtp_from_email or ps.smtp_username}>"
+    msg["To"] = emp.email
+    msg.attach(MIMEText(html_body, "html"))
+
+    try:
+        context = ssl.create_default_context()
+        if ps.smtp_port == 465:
+            with smtplib.SMTP_SSL(ps.smtp_host, ps.smtp_port, context=context) as server:
+                server.login(ps.smtp_username, ps.smtp_password)
+                server.sendmail(ps.smtp_from_email or ps.smtp_username, emp.email, msg.as_string())
+        else:
+            with smtplib.SMTP(ps.smtp_host, ps.smtp_port, timeout=15) as server:
+                server.ehlo()
+                server.starttls(context=context)
+                server.login(ps.smtp_username, ps.smtp_password)
+                server.sendmail(ps.smtp_from_email or ps.smtp_username, emp.email, msg.as_string())
+    except Exception:
+        return
+
+    visit.notified_email_at = timezone.now()
+    visit.save(update_fields=["notified_email_at"])
+
+
+def _send_visitor_whatsapp(visit: VisitorVisit, emp: Employee) -> None:
+    from . import whatsapp_service
+
+    visitor = visit.visitor
+    emp_name = f"{emp.first_name} {emp.last_name}".strip()
+    body_params = [emp_name, visitor.name, visitor.phone, visit.purpose or "—"]
+    result = whatsapp_service.send_text(emp, "visitor_notification", body_params, document_ref_id=visit.id)
+    if result.status == "sent":
+        visit.notified_whatsapp_at = timezone.now()
+        visit.save(update_fields=["notified_whatsapp_at"])
+
+
+def _notify_employee_of_visitor(visit: VisitorVisit) -> None:
+    emp = visit.meeting_employee
+    if not emp:
+        return
+    try:
+        _send_visitor_email(visit, emp)
+    except Exception:
+        pass
+    try:
+        _send_visitor_whatsapp(visit, emp)
+    except Exception:
+        pass
 
 
 # ── Outpass -HR portal ───────────────────────────────────────────────────────
@@ -228,6 +363,8 @@ def _visitor_visit_dict(v: VisitorVisit) -> dict:
     # module (see permission_registry.py), so whoever can load this table at
     # all is already trusted with the data; the UI just defaults to masked
     # so it isn't left on-screen for anyone glancing at a shared monitor.
+    # Same trust level applies to reception_views.py's @require_reception_device
+    # endpoint, which calls this same function.
     aadhaar = v.visitor.aadhaar_number or ""
     return {
         "id": v.id,
@@ -240,6 +377,9 @@ def _visitor_visit_dict(v: VisitorVisit) -> dict:
         "purpose": v.purpose,
         "branchName": v.branch.name if v.branch else None,
         "visitedAt": v.visited_at.isoformat(),
+        "meetingEmployee": _employee_contact_json(v.meeting_employee) if v.meeting_employee_id else None,
+        "notifiedEmailAt": v.notified_email_at.isoformat() if v.notified_email_at else None,
+        "notifiedWhatsappAt": v.notified_whatsapp_at.isoformat() if v.notified_whatsapp_at else None,
     }
 
 
@@ -251,7 +391,7 @@ def visitor_records(request: Request) -> Response:
     qs = (
         scope_to_branch(VisitorVisit.objects, request)
         .filter(visited_at__gte=start)
-        .select_related("visitor", "branch")
+        .select_related("visitor", "branch", "meeting_employee__department", "meeting_employee__designation")
     )
     total = qs.count()
     offset = (page - 1) * page_size
@@ -294,6 +434,32 @@ def visitor_check_phone(request: Request, token: str) -> Response:
 
 @api_view(["POST"])
 @throttle_classes([ScopedRateThrottle])
+def visitor_check_employee_phone(request: Request, token: str) -> Response:
+    """"Are you meeting a specific employee?" -> Yes step: the visitor (or
+    receptionist filling in on their behalf) enters the employee's name and
+    phone number, and this resolves the actual Employee record by matching
+    that phone against Employee.phone (see _find_employee_by_phone), so the
+    form can show "is this who you mean?" before the visit is recorded and
+    an arrival notification goes out. Never blocks check-in: if nothing
+    matches, the caller falls back to the plain free-text whomToMeet field,
+    exactly like before this feature existed."""
+    _throttled(request)
+    qr = _gate_qr_or_none(token, GateQRCode.KIND_VISITOR)
+    if not qr:
+        return _QR_NOT_FOUND
+
+    phone = (request.data.get("phone") or "").strip()
+    if not phone:
+        return Response({"error": "Phone number is required."}, status=400)
+
+    employee = _find_employee_by_phone(phone)
+    if not employee:
+        return Response({"found": False})
+    return Response({"found": True, "employee": _employee_contact_json(employee)})
+
+
+@api_view(["POST"])
+@throttle_classes([ScopedRateThrottle])
 def visitor_gate_new(request: Request, token: str) -> Response:
     _throttled(request)
     qr = _gate_qr_or_none(token, GateQRCode.KIND_VISITOR)
@@ -306,6 +472,7 @@ def visitor_gate_new(request: Request, token: str) -> Response:
     why_came = (request.data.get("whyCame") or "").strip()
     whom_to_meet = (request.data.get("whomToMeet") or "").strip()
     purpose = (request.data.get("purpose") or "").strip()
+    meeting_employee_id = request.data.get("meetingEmployeeId")
     if not name or not phone or not whom_to_meet or not purpose:
         return Response(
             {"error": "Name, phone, whom you're meeting and purpose are all required."}, status=400
@@ -317,11 +484,14 @@ def visitor_gate_new(request: Request, token: str) -> Response:
             status=409,
         )
 
+    meeting_employee = Employee.objects.filter(pk=meeting_employee_id).first() if meeting_employee_id else None
+
     visitor = Visitor.objects.create(name=name, phone=phone, aadhaar_number=aadhaar or None)
-    VisitorVisit.objects.create(
+    visit = VisitorVisit.objects.create(
         visitor=visitor, branch=qr.branch, why_came=why_came or None,
-        whom_to_meet=whom_to_meet, purpose=purpose,
+        whom_to_meet=whom_to_meet, purpose=purpose, meeting_employee=meeting_employee,
     )
+    _notify_employee_of_visitor(visit)
     return Response({"submitted": True}, status=201)
 
 
@@ -336,6 +506,7 @@ def visitor_gate_repeat(request: Request, token: str) -> Response:
     phone = (request.data.get("phone") or "").strip()
     whom_to_meet = (request.data.get("whomToMeet") or "").strip()
     purpose = (request.data.get("purpose") or "").strip()
+    meeting_employee_id = request.data.get("meetingEmployeeId")
 
     visitor = Visitor.objects.filter(phone=phone).first()
     if not visitor:
@@ -343,5 +514,11 @@ def visitor_gate_repeat(request: Request, token: str) -> Response:
     if not whom_to_meet or not purpose:
         return Response({"error": "Whom you're meeting and purpose are both required."}, status=400)
 
-    VisitorVisit.objects.create(visitor=visitor, branch=qr.branch, whom_to_meet=whom_to_meet, purpose=purpose)
+    meeting_employee = Employee.objects.filter(pk=meeting_employee_id).first() if meeting_employee_id else None
+
+    visit = VisitorVisit.objects.create(
+        visitor=visitor, branch=qr.branch, whom_to_meet=whom_to_meet, purpose=purpose,
+        meeting_employee=meeting_employee,
+    )
+    _notify_employee_of_visitor(visit)
     return Response({"submitted": True}, status=201)

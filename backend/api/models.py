@@ -3080,6 +3080,12 @@ class WhatsAppMessageLog(models.Model):
         ("experience_letter", "Experience Letter"),
         ("resignation_letter", "Resignation Letter"),
         ("other", "Other Document"),
+        # Not a document at all -a plain text "you have a visitor" alert (see
+        # whatsapp_service.send_text / outpass_visitor_views.py::
+        # _notify_visitor_whatsapp). Reuses this table's existing
+        # per-purpose template config + send-audit mechanism rather than
+        # building a parallel one just because it has no attachment.
+        ("visitor_notification", "Visitor Notification"),
     )
 
     employee = models.ForeignKey(
@@ -3247,6 +3253,20 @@ class OutpassRequest(models.Model):
         db_column="exit_gate_id", related_name="exited_requests",
     )
     exited_at = models.DateTimeField(null=True, blank=True, db_column="exited_at")
+    # The return leg -mirrors exit_gate/exited_at exactly. return_qr_generated_at
+    # is the "manual Generate Return QR button" state: unlike the exit QR (always
+    # computable once approved), the return QR is only ever presentable after the
+    # employee explicitly asks for it, so there's a real moment to stamp -see
+    # outpass_request_views.py::generate_return_qr. Re-clicking the button after
+    # the first QR expires simply bumps this timestamp, which invalidates the old
+    # token (resolve_gate_scan checks the token's own generatedAt claim against
+    # this live column, not just its own signature/exp).
+    entry_gate = models.ForeignKey(
+        "GateDevice", on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="entry_gate_id", related_name="entered_requests",
+    )
+    entered_at = models.DateTimeField(null=True, blank=True, db_column="entered_at")
+    return_qr_generated_at = models.DateTimeField(null=True, blank=True, db_column="return_qr_generated_at")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
@@ -3303,13 +3323,19 @@ class OutpassGateScan(models.Model):
     RESULT_EXPIRED = "expired"
     RESULT_NOT_APPROVED = "not_approved"
     RESULT_INVALID_QR = "invalid_qr"
+    RESULT_NOT_EXITED = "not_exited"
     RESULT_CHOICES = [
         (RESULT_SUCCESS, "Success"),
         (RESULT_ALREADY_SCANNED, "Already Scanned"),
         (RESULT_EXPIRED, "Expired"),
         (RESULT_NOT_APPROVED, "Not Approved"),
         (RESULT_INVALID_QR, "Invalid QR"),
+        (RESULT_NOT_EXITED, "Not Yet Exited"),
     ]
+
+    SCAN_TYPE_EXIT = "exit"
+    SCAN_TYPE_ENTRY = "entry"
+    SCAN_TYPE_CHOICES = [(SCAN_TYPE_EXIT, "Exit"), (SCAN_TYPE_ENTRY, "Entry")]
 
     gate = models.ForeignKey(
         GateDevice, on_delete=models.SET_NULL, null=True, blank=True,
@@ -3323,6 +3349,11 @@ class OutpassGateScan(models.Model):
         Employee, on_delete=models.SET_NULL, null=True, blank=True,
         db_column="employee_id", related_name="+",
     )
+    # Which leg this attempt was for -exit-QR vs return-QR -so a single
+    # OutpassRequest's audit trail (up to two successes plus any denied
+    # attempts of either kind) can be told apart. Defaults to "exit" since
+    # every scan before this field existed was necessarily an exit attempt.
+    scan_type = models.TextField(choices=SCAN_TYPE_CHOICES, default=SCAN_TYPE_EXIT, db_column="scan_type")
     result = models.TextField(choices=RESULT_CHOICES, db_column="result")
     message = models.TextField(db_column="message")
     scanned_at = models.DateTimeField(auto_now_add=True, db_column="scanned_at")
@@ -3361,8 +3392,64 @@ class VisitorVisit(models.Model):
     why_came = models.TextField(null=True, blank=True, db_column="why_came")
     whom_to_meet = models.TextField(db_column="whom_to_meet")
     purpose = models.TextField(db_column="purpose")
+    # Free-text whom_to_meet above is kept exactly as before (always set,
+    # even when this FK can't be resolved) -this is the ADDITIVE, strong
+    # link, populated when the visitor gate form looks up the person they're
+    # meeting by phone number against the Employee table (see
+    # outpass_visitor_views.py::visitor_check_employee_phone) and gets a
+    # match. Never required: a visitor who doesn't know an exact phone match,
+    # or isn't here for anyone specific, still checks in exactly as before.
+    meeting_employee = models.ForeignKey(
+        Employee, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="meeting_employee_id", related_name="visitor_visits_as_host",
+    )
+    # Set once the "you have a visitor" notification actually goes out on
+    # that channel -see outpass_visitor_views.py::_notify_employee_of_visitor.
+    # Both null when there's no meeting_employee to notify, or when sending
+    # was attempted and failed (not configured, no email/phone on file, etc.)
+    # -failure is never surfaced back to the visitor, only to the Reception
+    # dashboard, since check-in must always succeed regardless of whether the
+    # host could be reached.
+    notified_email_at = models.DateTimeField(null=True, blank=True, db_column="notified_email_at")
+    notified_whatsapp_at = models.DateTimeField(null=True, blank=True, db_column="notified_whatsapp_at")
     visited_at = models.DateTimeField(auto_now_add=True, db_column="visited_at")
 
     class Meta:
         db_table = "visitor_visits"
         ordering = ["-visited_at"]
+
+
+class ReceptionDevice(models.Model):
+    """A login profile for the Reception desk (per branch) -structurally
+    identical to GateDevice (gate_scanner_views.py's own docstring explains
+    the shape/reasoning; this mirrors it exactly), just for a different
+    kiosk: instead of scanning an Outpass QR to record an exit, this login
+    gives Reception staff their own dashboard onto VisitorVisit -today's
+    visitor count, who they came to see, and their details -without needing
+    an HR login at all. It never handles scanning itself: the visitor's own
+    phone scanning the existing permanent per-branch Visitor QR (GateQRCode)
+    remains the only way a visit gets recorded; this is a read (+ device
+    management) surface on top of that same data.
+
+    Auth is always username+password (see reception_views.py::reception_login)
+    -login_token only identifies which desk a login *link* points at.
+    `is_active` is the revocation switch, re-checked on every request by
+    require_reception_device exactly like require_gate_device does for
+    GateDevice.
+    """
+
+    name = models.TextField(db_column="name")
+    branch = models.ForeignKey(
+        Branch, on_delete=models.CASCADE, db_column="branch_id", related_name="reception_devices"
+    )
+    username = models.TextField(unique=True, db_column="username")
+    password_hash = models.TextField(db_column="password_hash")
+    login_token = models.TextField(unique=True, db_column="login_token")
+    is_active = models.BooleanField(default=True, db_column="is_active")
+    created_by = models.TextField(null=True, blank=True, db_column="created_by")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    last_login_at = models.DateTimeField(null=True, blank=True, db_column="last_login_at")
+
+    class Meta:
+        db_table = "reception_devices"
+        ordering = ["name"]

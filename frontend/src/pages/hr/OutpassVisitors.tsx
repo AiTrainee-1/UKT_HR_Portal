@@ -27,13 +27,15 @@ import {
   useListOutpassRequests, getListOutpassRequestsQueryKey, useUpdateOutpassRequestStatus,
   useListGateDevices, getListGateDevicesQueryKey,
   useCreateGateDevice, useUpdateGateDevice, useDeleteGateDevice,
+  useListReceptionDevices, getListReceptionDevicesQueryKey,
+  useCreateReceptionDevice, useUpdateReceptionDevice, useDeleteReceptionDevice,
   type GateRange, type GateSummary, type OutpassRecordRow, type VisitorRecordRow,
-  type OutpassRequestItem, type OutpassScanStatus, type GateDevice,
+  type OutpassRequestItem, type OutpassScanStatus, type GateDevice, type ReceptionDevice,
 } from "@/lib/api-client/custom-hooks";
 import {
   DoorOpen, UserRound, QrCode as QrCodeIcon, CalendarDays, CalendarRange, Calendar,
   Download, Eye, EyeOff, ShieldCheck, Plus, Copy, KeyRound, Trash2,
-  CheckCircle2, XCircle, Inbox,
+  CheckCircle2, XCircle, Inbox, Mail, MessageCircle,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
@@ -347,6 +349,214 @@ function GateDevicesDialog({ isBranchScoped, branches, defaultBranchId }: {
   );
 }
 
+// ── Reception device management ─────────────────────────────────────────
+// A ReceptionDevice is to the Visitors tab what GateDevice is to the
+// Outpass tab above: a real username/password login for Reception staff's
+// own dashboard (/reception/console) onto VisitorVisit -no scanning of any
+// kind, the visitor's own phone scanning the permanent Visitor QR above
+// remains the only way a visit gets recorded. See backend/api/reception_views.py.
+
+function ReceptionDeviceRow({
+  device, onToggleActive, onResetPassword, onDelete, isMutating,
+}: {
+  device: ReceptionDevice;
+  onToggleActive: (device: ReceptionDevice, next: boolean) => void;
+  onResetPassword: (device: ReceptionDevice) => void;
+  onDelete: (device: ReceptionDevice) => void;
+  isMutating: boolean;
+}) {
+  const { toast } = useToast();
+  const loginUrl = `${window.location.origin}/reception-login/${device.loginToken}`;
+
+  const copyLink = () => {
+    navigator.clipboard.writeText(loginUrl);
+    toast({ title: "Login link copied" });
+  };
+
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border p-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <p className="font-semibold">{device.name}</p>
+          <Badge
+            variant={device.isActive ? "default" : "secondary"}
+            className={`text-[10px] ${device.isActive ? "!bg-green-100 !text-green-700" : ""}`}
+          >
+            {device.isActive ? "Active" : "Deactivated"}
+          </Badge>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {device.branchName ?? "No branch"} · Username: <span className="font-mono">{device.username}</span>
+          {device.lastLoginAt && ` · Last login ${new Date(device.lastLoginAt).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}`}
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+        <Button variant="outline" size="sm" className="h-7 gap-1 text-xs px-2" onClick={copyLink}>
+          <Copy size={12} /> Copy Login Link
+        </Button>
+        <Button variant="outline" size="sm" className="h-7 gap-1 text-xs px-2" onClick={() => onResetPassword(device)} disabled={isMutating}>
+          <KeyRound size={12} /> Reset Password
+        </Button>
+        <Switch checked={device.isActive} onCheckedChange={(v) => onToggleActive(device, v)} disabled={isMutating} />
+        <Button variant="outline" size="sm" className="h-7 gap-1 text-xs px-2 text-red-600 border-red-200 hover:bg-red-50" onClick={() => onDelete(device)} disabled={isMutating}>
+          <Trash2 size={12} />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function ReceptionDevicesDialog({ isBranchScoped, branches, defaultBranchId }: {
+  isBranchScoped: boolean;
+  branches: { id: number; name: string }[] | undefined;
+  defaultBranchId?: string;
+}) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({ name: "", branchId: defaultBranchId ?? "", username: "", password: "" });
+  const [formError, setFormError] = useState<string | null>(null);
+  const [resetTarget, setResetTarget] = useState<ReceptionDevice | null>(null);
+  const [resetPassword, setResetPassword] = useState("");
+
+  const { data: devices, isLoading } = useListReceptionDevices();
+  const createMutation = useCreateReceptionDevice();
+  const updateMutation = useUpdateReceptionDevice();
+  const deleteMutation = useDeleteReceptionDevice();
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: getListReceptionDevicesQueryKey() });
+
+  const handleCreate = async (e: FormEvent) => {
+    e.preventDefault();
+    setFormError(null);
+    if (form.name.trim().length < 1) return setFormError("Desk name is required.");
+    if (!isBranchScoped && !form.branchId) return setFormError("Please select a branch.");
+    if (form.username.trim().length < 3) return setFormError("Username must be at least 3 characters.");
+    if (form.password.length < 6) return setFormError("Password must be at least 6 characters.");
+
+    try {
+      await createMutation.mutateAsync({
+        name: form.name.trim(),
+        branchId: form.branchId ? Number(form.branchId) : undefined,
+        username: form.username.trim(),
+        password: form.password,
+      });
+      toast({ title: `${form.name.trim()} created` });
+      setForm({ name: "", branchId: defaultBranchId ?? "", username: "", password: "" });
+      invalidate();
+    } catch (err: any) {
+      setFormError(err?.message ?? "Could not create reception desk");
+    }
+  };
+
+  const toggleActive = async (device: ReceptionDevice, next: boolean) => {
+    await updateMutation.mutateAsync({ id: device.id, data: { isActive: next } });
+    toast({ title: next ? `${device.name} reactivated` : `${device.name} deactivated` });
+    invalidate();
+  };
+
+  const submitReset = async () => {
+    if (!resetTarget) return;
+    if (resetPassword.length < 6) return toast({ title: "Password must be at least 6 characters", variant: "destructive" });
+    await updateMutation.mutateAsync({ id: resetTarget.id, data: { password: resetPassword } });
+    toast({ title: `Password reset for ${resetTarget.name}` });
+    setResetTarget(null);
+    setResetPassword("");
+  };
+
+  const handleDelete = async (device: ReceptionDevice) => {
+    if (!confirm(`Remove ${device.name}? Its login will stop working immediately.`)) return;
+    await deleteMutation.mutateAsync(device.id);
+    toast({ title: `${device.name} removed` });
+    invalidate();
+  };
+
+  return (
+    <>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setOpen(true)}>
+          <ShieldCheck size={14} /> Manage Reception
+        </Button>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Reception Desk Logins</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-4 py-1 max-h-[70vh] overflow-y-auto">
+            <div className="flex flex-col gap-2">
+              {isLoading ? (
+                <p className="text-sm text-muted-foreground py-4 text-center">Loading…</p>
+              ) : !devices?.length ? (
+                <p className="text-sm text-muted-foreground py-4 text-center">No reception desks created yet.</p>
+              ) : (
+                devices.map((d) => (
+                  <ReceptionDeviceRow
+                    key={d.id}
+                    device={d}
+                    onToggleActive={toggleActive}
+                    onResetPassword={(device) => setResetTarget(device)}
+                    onDelete={handleDelete}
+                    isMutating={updateMutation.isPending || deleteMutation.isPending}
+                  />
+                ))
+              )}
+            </div>
+
+            <form onSubmit={handleCreate} className="flex flex-col gap-3 rounded-xl border p-3">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Add a Reception Desk</p>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="reception-name">Desk Name</Label>
+                  <Input id="reception-name" placeholder="Front Desk" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+                </div>
+                {!isBranchScoped && (
+                  <div className="flex flex-col gap-1">
+                    <Label>Branch</Label>
+                    <Select value={form.branchId} onValueChange={(v) => setForm((f) => ({ ...f, branchId: v }))}>
+                      <SelectTrigger><SelectValue placeholder="Select branch" /></SelectTrigger>
+                      <SelectContent>
+                        {branches?.map((b) => <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="reception-username">Username</Label>
+                  <Input id="reception-username" value={form.username} onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))} />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="reception-password">Password</Label>
+                  <Input id="reception-password" type="password" value={form.password} onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))} />
+                </div>
+              </div>
+              {formError && <p className="text-sm text-destructive">{formError}</p>}
+              <Button type="submit" className="gap-1.5" disabled={createMutation.isPending}>
+                <Plus size={14} /> {createMutation.isPending ? "Creating…" : "Create Desk"}
+              </Button>
+            </form>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reset-password mini dialog */}
+      {resetTarget && (
+        <Dialog open onOpenChange={() => { setResetTarget(null); setResetPassword(""); }}>
+          <DialogContent className="max-w-xs">
+            <DialogHeader>
+              <DialogTitle>Reset password for {resetTarget.name}</DialogTitle>
+            </DialogHeader>
+            <div className="flex flex-col gap-3">
+              <Input type="password" placeholder="New password" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} />
+              <DialogFooter>
+                <Button onClick={submitReset} disabled={updateMutation.isPending}>Save</Button>
+              </DialogFooter>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+    </>
+  );
+}
+
 // ── Range filter ──────────────────────────────────────────────────────────
 
 function RangeFilter({ value, onChange }: { value: GateRange; onChange: (v: GateRange) => void }) {
@@ -456,7 +666,22 @@ const SCAN_STATUS_BADGE: Record<OutpassScanStatus, { label: string; cls: string 
   pending_exit: { label: "Awaiting Exit", cls: "bg-blue-50 text-blue-700 border-blue-200" },
   exited: { label: "Exited", cls: "bg-green-50 text-green-700 border-green-200" },
   expired_unscanned: { label: "Expired, Not Scanned", cls: "bg-red-50 text-red-700 border-red-200" },
+  // Return/re-entry leg -see backend/api/outpass_request_views.py::_outpass_scan_status.
+  pending_return: { label: "Awaiting Return", cls: "bg-amber-50 text-amber-700 border-amber-200" },
+  return_expired: { label: "Return QR Expired", cls: "bg-red-50 text-red-700 border-red-200" },
+  completed: { label: "Returned", cls: "bg-teal-50 text-teal-700 border-teal-200" },
 };
+
+// Exit -> return, in minutes-and-hours. No end time yet means "still out" -
+// measured against now, refreshed by useListOutpassRequests' own 30s poll.
+function fmtDuration(startIso: string, endIso?: string | null): string {
+  const start = new Date(startIso).getTime();
+  const end = endIso ? new Date(endIso).getTime() : Date.now();
+  const totalMin = Math.max(0, Math.round((end - start) / 60000));
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
 
 const APPROVAL_STATUS_CLS: Record<string, string> = {
   pending: "bg-amber-50 text-amber-700 border-amber-200",
@@ -558,6 +783,101 @@ function ApprovedPassesSection() {
         </div>
         {rows.length > 0 && (
           <RecordsPagination page={pageSafe} total={rows.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── In/Out (exit + return leg, one row per employee who has actually exited
+//    at least once) -reuses the exact same useListOutpassRequests() data as
+//    ApprovedPassesSection above (Overview tab), just filtered to rows with
+//    an exitedAt and reshaped around the Name/Department/Gate/Scan Status/
+//    Approved By/Exit Time/In Time/Taken Time columns the user asked for.
+//    No new backend endpoint -every field it needs is already on
+//    OutpassRequestItem. ─────────────────────────────────────────────────
+
+const INOUT_PAGE_SIZE = 20;
+
+function InOutSection() {
+  const [page, setPage] = useState(1);
+  const { data: requests, isLoading } = useListOutpassRequests();
+  const rows: OutpassRequestItem[] = (requests ?? []).filter((r) => !!r.exitedAt);
+  const pageCount = Math.max(1, Math.ceil(rows.length / INOUT_PAGE_SIZE));
+  const pageSafe = Math.min(page, pageCount);
+  const pageRows = rows.slice((pageSafe - 1) * INOUT_PAGE_SIZE, pageSafe * INOUT_PAGE_SIZE);
+
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <div className="px-4 pt-4 pb-2">
+          <p className="font-bold text-sm">In / Out</p>
+          <p className="text-xs text-muted-foreground">
+            Every recorded gate exit, and its return if scanned back in yet -with how long each employee was outside.
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Department</TableHead>
+                <TableHead>Gate</TableHead>
+                <TableHead>Scan Status</TableHead>
+                <TableHead>Approved By</TableHead>
+                <TableHead>Exit Time</TableHead>
+                <TableHead>In Time</TableHead>
+                <TableHead>Taken Time</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                <TableRow><TableCell colSpan={8} className="text-center py-10 text-muted-foreground">Loading…</TableCell></TableRow>
+              ) : !rows.length ? (
+                <TableRow><TableCell colSpan={8} className="text-center py-10 text-muted-foreground">No gate exits recorded yet.</TableCell></TableRow>
+              ) : (
+                pageRows.map((r) => {
+                  const scan = SCAN_STATUS_BADGE[r.scanStatus] ?? SCAN_STATUS_BADGE.not_applicable;
+                  const stillOut = !r.enteredAt;
+                  return (
+                    <TableRow key={r.id}>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <Avatar className="size-7">
+                            <AvatarImage src={r.employee?.photoUrl ?? undefined} />
+                            <AvatarFallback className="text-[10px]">{r.employee?.name?.[0] ?? "?"}</AvatarFallback>
+                          </Avatar>
+                          <div className="min-w-0">
+                            <p className="font-medium truncate">{r.employee?.name ?? `#${r.employeeId}`}</p>
+                            <p className="text-xs text-muted-foreground">{r.employee?.employeeCode}</p>
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">{r.employee?.department ?? "—"}</TableCell>
+                      <TableCell>
+                        <p>{r.exitGateName ?? "—"}</p>
+                        {r.entryGateName && r.entryGateName !== r.exitGateName && (
+                          <p className="text-xs text-muted-foreground">back via {r.entryGateName}</p>
+                        )}
+                      </TableCell>
+                      <TableCell><Badge className={`text-xs border ${scan.cls}`}>{scan.label}</Badge></TableCell>
+                      <TableCell className="text-muted-foreground">{formatApprover(r.approverRole, r.approvedBy)}</TableCell>
+                      <TableCell className="text-muted-foreground">{r.exitedAt ? fmtDateTime(r.exitedAt) : "—"}</TableCell>
+                      <TableCell className="text-muted-foreground">{r.enteredAt ? fmtDateTime(r.enteredAt) : "—"}</TableCell>
+                      <TableCell>
+                        <span className={stillOut ? "text-amber-600 font-medium" : "text-muted-foreground"}>
+                          {fmtDuration(r.exitedAt!, r.enteredAt)}{stillOut ? " (still out)" : ""}
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
+              )}
+            </TableBody>
+          </Table>
+        </div>
+        {rows.length > 0 && (
+          <RecordsPagination page={pageSafe} total={rows.length} pageSize={INOUT_PAGE_SIZE} onPageChange={setPage} />
         )}
       </CardContent>
     </Card>
@@ -667,7 +987,7 @@ function OutpassRequestsSection() {
 // ── Outpass tab ───────────────────────────────────────────────────────────
 
 function OutpassTab({ isBranchScoped }: { isBranchScoped: boolean }) {
-  const [section, setSection] = useState<"overview" | "requests">("overview");
+  const [section, setSection] = useState<"overview" | "requests" | "inout">("overview");
   const [range, setRange] = useState<GateRange>("today");
   const [page, setPage] = useState(1);
   const { branches, branchId, setBranchId } = useSelectedBranch(isBranchScoped);
@@ -690,15 +1010,18 @@ function OutpassTab({ isBranchScoped }: { isBranchScoped: boolean }) {
         items={[
           { value: "overview", label: "Overview" },
           { value: "requests", label: "Requests", count: pendingRequests?.length || undefined },
+          { value: "inout", label: "In/Out" },
         ]}
         value={section}
-        onChange={(v) => setSection(v as "overview" | "requests")}
+        onChange={(v) => setSection(v as "overview" | "requests" | "inout")}
         baseColor="#0f172a"
         pillBg="#f1f5f9"
       />
 
       {section === "requests" ? (
         <OutpassRequestsSection />
+      ) : section === "inout" ? (
+        <InOutSection />
       ) : (
         <>
           <KpiRow summary={summary} isLoading={summaryLoading} />
@@ -784,61 +1107,105 @@ function VisitorsTab({ isBranchScoped }: { isBranchScoped: boolean }) {
         <RangeFilter value={range} onChange={changeRange} />
         <div className="flex items-center gap-2">
           {!isBranchScoped && <BranchPicker branches={branches} branchId={branchId} setBranchId={setBranchId} />}
+          <ReceptionDevicesDialog isBranchScoped={isBranchScoped} branches={branches} defaultBranchId={branchId} />
           <GateQrDialog kind="visitor" token={qr?.token} branchName={qr?.branchName} />
         </div>
       </div>
 
       <Card>
         <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Visitor</TableHead>
-                <TableHead>Phone</TableHead>
-                <TableHead>Aadhaar</TableHead>
-                <TableHead>Whom to Meet</TableHead>
-                <TableHead>Purpose</TableHead>
-                <TableHead>Branch</TableHead>
-                <TableHead>Visited</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {recordsLoading && !page_ ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-10 text-muted-foreground">Loading…</TableCell></TableRow>
-              ) : !records.length ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-10 text-muted-foreground">No visitor records for {RANGE_LABEL[range].toLowerCase()}.</TableCell></TableRow>
-              ) : (
-                records.map((r) => {
-                  const isRevealed = revealed.has(r.id);
-                  return (
-                    <TableRow key={r.id}>
-                      <TableCell className="font-medium">{r.name}</TableCell>
-                      <TableCell>{r.phone}</TableCell>
-                      <TableCell className="tracking-wider">
-                        {r.aadhaarLast4 ? (
-                          <button
-                            type="button"
-                            onClick={() => toggleReveal(r.id)}
-                            className="inline-flex items-center gap-1.5 hover:text-foreground text-muted-foreground"
-                            title={isRevealed ? "Hide Aadhaar number" : "Reveal Aadhaar number"}
-                          >
-                            <span className="font-mono">{isRevealed && r.aadhaar ? r.aadhaar : `••••${r.aadhaarLast4}`}</span>
-                            {isRevealed ? <EyeOff size={13} /> : <Eye size={13} />}
-                          </button>
-                        ) : (
-                          "—"
-                        )}
-                      </TableCell>
-                      <TableCell>{r.whomToMeet}</TableCell>
-                      <TableCell>{r.purpose}</TableCell>
-                      <TableCell>{r.branchName ?? "—"}</TableCell>
-                      <TableCell className="text-muted-foreground">{fmtDateTime(r.visitedAt)}</TableCell>
-                    </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </Table>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Visitor</TableHead>
+                  <TableHead>Phone</TableHead>
+                  <TableHead>Aadhaar</TableHead>
+                  <TableHead>Meeting</TableHead>
+                  <TableHead>Purpose</TableHead>
+                  <TableHead>Notified</TableHead>
+                  <TableHead>Branch</TableHead>
+                  <TableHead>Visited</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {recordsLoading && !page_ ? (
+                  <TableRow><TableCell colSpan={8} className="text-center py-10 text-muted-foreground">Loading…</TableCell></TableRow>
+                ) : !records.length ? (
+                  <TableRow><TableCell colSpan={8} className="text-center py-10 text-muted-foreground">No visitor records for {RANGE_LABEL[range].toLowerCase()}.</TableCell></TableRow>
+                ) : (
+                  records.map((r) => {
+                    const isRevealed = revealed.has(r.id);
+                    const emp = r.meetingEmployee;
+                    return (
+                      <TableRow key={r.id}>
+                        <TableCell className="font-medium">{r.name}</TableCell>
+                        <TableCell>{r.phone}</TableCell>
+                        <TableCell className="tracking-wider">
+                          {r.aadhaarLast4 ? (
+                            <button
+                              type="button"
+                              onClick={() => toggleReveal(r.id)}
+                              className="inline-flex items-center gap-1.5 hover:text-foreground text-muted-foreground"
+                              title={isRevealed ? "Hide Aadhaar number" : "Reveal Aadhaar number"}
+                            >
+                              <span className="font-mono">{isRevealed && r.aadhaar ? r.aadhaar : `••••${r.aadhaarLast4}`}</span>
+                              {isRevealed ? <EyeOff size={13} /> : <Eye size={13} />}
+                            </button>
+                          ) : (
+                            "—"
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {emp ? (
+                            <div className="flex items-center gap-2">
+                              <Avatar className="size-7">
+                                <AvatarImage src={emp.photoUrl ?? undefined} />
+                                <AvatarFallback className="text-[10px]">{emp.name[0]}</AvatarFallback>
+                              </Avatar>
+                              <div className="min-w-0">
+                                <p className="truncate font-medium">{emp.name}</p>
+                                <p className="text-xs text-muted-foreground">{emp.department ?? emp.employeeCode}</p>
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">{r.whomToMeet}</span>
+                          )}
+                        </TableCell>
+                        <TableCell>{r.purpose}</TableCell>
+                        <TableCell>
+                          {emp ? (
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                                  r.notifiedEmailAt ? "border-green-200 bg-green-50 text-green-700" : "border-gray-200 bg-gray-50 text-gray-400"
+                                }`}
+                                title={r.notifiedEmailAt ? `Emailed ${fmtDateTime(r.notifiedEmailAt)}` : "Not emailed"}
+                              >
+                                <Mail size={11} /> {r.notifiedEmailAt ? "Sent" : "—"}
+                              </span>
+                              <span
+                                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                                  r.notifiedWhatsappAt ? "border-green-200 bg-green-50 text-green-700" : "border-gray-200 bg-gray-50 text-gray-400"
+                                }`}
+                                title={r.notifiedWhatsappAt ? `WhatsApp sent ${fmtDateTime(r.notifiedWhatsappAt)}` : "Not sent"}
+                              >
+                                <MessageCircle size={11} /> {r.notifiedWhatsappAt ? "Sent" : "—"}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell>{r.branchName ?? "—"}</TableCell>
+                        <TableCell className="text-muted-foreground">{fmtDateTime(r.visitedAt)}</TableCell>
+                      </TableRow>
+                    );
+                  })
+                )}
+              </TableBody>
+            </Table>
+          </div>
           {page_ && <RecordsPagination page={page_.page} total={page_.total} pageSize={page_.pageSize} onPageChange={setPage} />}
         </CardContent>
       </Card>
@@ -851,36 +1218,32 @@ function VisitorsTab({ isBranchScoped }: { isBranchScoped: boolean }) {
 export default function OutpassVisitors() {
   const { user } = useAuth();
   const isBranchScoped = !!user?.branchId;
-  const [location, navigate] = useLocation();
+  const [location] = useLocation();
   // URL-driven, same convention as Attendance's Staff/Production split
-  // (/hr/attendance/staff | /hr/attendance/production) -so the sidebar's
-  // Outpass/Visitors children (dashboard-sidebar.tsx) deep-link straight
-  // into the right tab of this one page.
+  // (/hr/attendance/staff | /hr/attendance/production) -Outpass and
+  // Visitors are two independent pages sharing one route file; the sidebar
+  // (dashboard-sidebar.tsx) has its own separate "Outpass" / "Visitors"
+  // nav entries for moving between them -deliberately no in-page switcher
+  // here, so neither page shows any trace of the other.
   const tab: "outpass" | "visitors" = location.includes("/outpass-visitors/visitors") ? "visitors" : "outpass";
-  const setTab = (v: "outpass" | "visitors") => navigate(`/hr/outpass-visitors/${v}`);
 
   return (
     <HrLayout>
       <div className="space-y-5">
         <div>
           <h2 className="text-2xl font-black flex items-center gap-2">
-            <DoorOpen size={20} className="text-teal-600" /> Outpass / Visitors
+            {tab === "outpass" ? (
+              <><DoorOpen size={20} className="text-teal-600" /> Outpass</>
+            ) : (
+              <><UserRound size={20} className="text-teal-600" /> Visitors</>
+            )}
           </h2>
           <p className="text-muted-foreground text-sm mt-0.5">
-            Gate exit and front-desk visitor logs, collected via a permanent per-branch QR code -no attendance or payroll impact.
+            {tab === "outpass"
+              ? "Gate exit logs and Outpass requests, collected via a permanent per-branch QR code -no attendance or payroll impact."
+              : "Front-desk visitor logs, collected via a permanent per-branch QR code."}
           </p>
         </div>
-
-        <PillTabs
-          items={[
-            { value: "outpass", label: "Outpass", icon: <DoorOpen size={13} /> },
-            { value: "visitors", label: "Visitors", icon: <UserRound size={13} /> },
-          ]}
-          value={tab}
-          onChange={(v) => setTab(v as "outpass" | "visitors")}
-          baseColor="#0f172a"
-          pillBg="#f1f5f9"
-        />
 
         {tab === "outpass" ? <OutpassTab isBranchScoped={isBranchScoped} /> : <VisitorsTab isBranchScoped={isBranchScoped} />}
       </div>

@@ -9,9 +9,10 @@ from datetime import timedelta
 
 from django.test import TestCase
 from django.utils import timezone
+from rest_framework.test import APIRequestFactory
 
 from .auth import require_gate_device
-from .gate_scanner_views import resolve_gate_scan
+from .gate_scanner_views import gate_scan_log, resolve_gate_scan
 from .jwt_utils import sign_token
 from .models import Branch, Employee, GateDevice, OutpassGateScan, OutpassRequest
 
@@ -130,6 +131,153 @@ class ResolveGateScanTests(TestCase):
         body, status = resolve_gate_scan(self.gate, qr)
         self.assertEqual(status, 404)
         self.assertEqual(body["result"], "invalid_qr")
+
+
+def _return_qr_for(req: OutpassRequest, expires_in: timedelta = timedelta(minutes=60)) -> str:
+    return sign_token(
+        {"role": "outpass_return", "requestId": req.id, "generatedAt": req.return_qr_generated_at.isoformat()},
+        expires_in=expires_in,
+    )
+
+
+class ResolveGateScanReturnTests(TestCase):
+    """The return/re-entry leg -resolve_gate_scan branching on the
+    "outpass_return" token role. Mirrors ResolveGateScanTests above but for
+    entry_gate/entered_at instead of exit_gate/exited_at."""
+
+    def setUp(self):
+        self.branch = Branch.objects.create(name="Main Unit")
+        self.gate = GateDevice.objects.create(
+            name="Gate 1", branch=self.branch, username="ret_gate1",
+            password_hash="x", login_token="rtok1",
+        )
+        self.other_gate = GateDevice.objects.create(
+            name="Gate 2", branch=self.branch, username="ret_gate2",
+            password_hash="x", login_token="rtok2",
+        )
+        self.emp = Employee.objects.create(
+            employee_code="GATETEST_RET1", first_name="Return", last_name="Tester",
+            employment_type="staff", status="active",
+        )
+
+    def _exited_request(self, **overrides):
+        defaults = dict(
+            employee=self.emp, destination="Bank", reason="Cash withdrawal",
+            status=OutpassRequest.STATUS_APPROVED, approved_at=timezone.now(),
+            approver_role="hr", approved_by="HR Person",
+            exit_gate=self.gate, exited_at=timezone.now(),
+            return_qr_generated_at=timezone.now(),
+        )
+        defaults.update(overrides)
+        return OutpassRequest.objects.create(**defaults)
+
+    def test_valid_return_scan_records_entry_and_logs_success(self):
+        req = self._exited_request()
+        body, status = resolve_gate_scan(self.gate, _return_qr_for(req))
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["result"], "success")
+        self.assertEqual(body["scanType"], "entry")
+
+        req.refresh_from_db()
+        self.assertIsNotNone(req.entered_at)
+        self.assertEqual(req.entry_gate_id, self.gate.id)
+        scan = OutpassGateScan.objects.get(outpass_request=req, scan_type=OutpassGateScan.SCAN_TYPE_ENTRY)
+        self.assertEqual(scan.result, OutpassGateScan.RESULT_SUCCESS)
+
+        # The original exit fields must be untouched by the return scan.
+        self.assertEqual(req.exit_gate_id, self.gate.id)
+        self.assertIsNotNone(req.exited_at)
+
+    def test_return_scan_before_exit_is_denied_as_not_exited(self):
+        req = OutpassRequest.objects.create(
+            employee=self.emp, destination="Bank", reason="Cash withdrawal",
+            status=OutpassRequest.STATUS_APPROVED, approved_at=timezone.now(),
+            approver_role="hr", approved_by="HR Person",
+            return_qr_generated_at=timezone.now(),
+        )
+        body, status = resolve_gate_scan(self.gate, _return_qr_for(req))
+        self.assertEqual(status, 403)
+        self.assertEqual(body["result"], "not_exited")
+        self.assertIsNone(req.entered_at)
+
+    def test_second_return_scan_is_denied_as_already_scanned(self):
+        req = self._exited_request()
+        qr = _return_qr_for(req)
+        resolve_gate_scan(self.gate, qr)
+
+        body, status = resolve_gate_scan(self.other_gate, qr)
+        self.assertEqual(status, 409)
+        self.assertEqual(body["result"], "already_scanned")
+        self.assertIn("Gate 1", body["message"])
+
+        req.refresh_from_db()
+        self.assertEqual(req.entry_gate_id, self.gate.id)
+
+    def test_stale_return_qr_after_regeneration_is_rejected(self):
+        req = self._exited_request()
+        old_qr = _return_qr_for(req)
+
+        # Employee re-clicks "Generate Return QR" -this bumps the live
+        # timestamp, so the previously issued token's embedded claim no
+        # longer matches even though it's still a validly signed, unexpired JWT.
+        req.return_qr_generated_at = timezone.now() + timedelta(seconds=5)
+        req.save(update_fields=["return_qr_generated_at"])
+
+        body, status = resolve_gate_scan(self.gate, old_qr)
+        self.assertEqual(status, 400)
+        self.assertEqual(body["result"], "invalid_qr")
+        req.refresh_from_db()
+        self.assertIsNone(req.entered_at)
+
+    def test_exit_qr_and_return_qr_are_independent_token_roles(self):
+        # A stray exit-role token must not be accepted as a return scan, and
+        # vice versa -resolve_gate_scan must route on the role claim, not
+        # just decode-and-trust the requestId.
+        req = self._exited_request()
+        exit_qr = sign_token({"role": "outpass_pass", "requestId": req.id}, expires_in=timedelta(minutes=60))
+        body, status = resolve_gate_scan(self.gate, exit_qr)
+        # exit-role token against an already-exited request -treated as an
+        # exit attempt, correctly denied as already_scanned (not "success").
+        self.assertEqual(status, 409)
+        self.assertEqual(body["result"], "already_scanned")
+
+
+class GateScanLogExitOnlyTests(TestCase):
+    """Today's Gate-Out Report (gate_scan_log) must stay exit-only -a
+    successful RETURN scan logs its own OutpassGateScan row too (scan_type=
+    "entry"), and without filtering on scan_type it would leak into this
+    report and look like a second, mislabelled exit for the same employee."""
+
+    def setUp(self):
+        self.branch = Branch.objects.create(name="Main Unit")
+        self.gate = GateDevice.objects.create(
+            name="Gate 1", branch=self.branch, username="log_gate1",
+            password_hash="x", login_token="ltok1",
+        )
+        self.emp = Employee.objects.create(
+            employee_code="GATETEST_LOG1", first_name="Log", last_name="Tester",
+            employment_type="staff", status="active",
+        )
+
+    def test_return_scan_success_does_not_appear_in_exit_log(self):
+        req = OutpassRequest.objects.create(
+            employee=self.emp, destination="Bank", reason="Cash withdrawal",
+            status=OutpassRequest.STATUS_APPROVED, approved_at=timezone.now(),
+            approver_role="hr", approved_by="HR Person",
+            exit_gate=self.gate, exited_at=timezone.now(),
+            return_qr_generated_at=timezone.now(),
+        )
+        resolve_gate_scan(self.gate, _return_qr_for(req))
+        req.refresh_from_db()
+        self.assertIsNotNone(req.entered_at)
+
+        token = sign_token({"role": "gate_device", "deviceId": self.gate.id, "gateName": self.gate.name})
+        request = APIRequestFactory().get("/api/gate-devices/scan-log", HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        response = gate_scan_log(request)
+        self.assertEqual(response.data["total"], 0)
+        self.assertEqual(response.data["items"], [])
 
 
 class GateDeviceRevocationTests(TestCase):

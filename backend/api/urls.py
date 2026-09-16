@@ -83,7 +83,7 @@ from .manager_views import (
     manager_update_on_duty_status, manager_update_missing_punch_status,
     manager_update_outpass_status,
 )
-from .outpass_request_views import outpass_requests, outpass_request_hr_status
+from .outpass_request_views import outpass_requests, outpass_request_hr_status, generate_return_qr
 from .gate_scanner_views import (
     gate_devices, gate_device_detail, gate_login_info, gate_login, gate_scan, gate_scan_log,
 )
@@ -105,7 +105,11 @@ from .reports_views import (
 from .outpass_visitor_views import (
     outpass_qr, outpass_summary, outpass_records, outpass_gate_info, outpass_gate_submit,
     visitor_qr, visitor_summary, visitor_records, visitor_gate_info,
-    visitor_check_phone, visitor_gate_new, visitor_gate_repeat,
+    visitor_check_phone, visitor_check_employee_phone, visitor_gate_new, visitor_gate_repeat,
+)
+from .reception_views import (
+    reception_devices, reception_device_detail, reception_login_info, reception_login,
+    reception_summary, reception_visits,
 )
 from .attendance_views import (
     attendance_summary, attendance_daily, attendance_monthly_trend,
@@ -346,8 +350,19 @@ urlpatterns = [
     path("visitor/records", visitor_records),
     path("visitor/gate/<str:token>", visitor_gate_info),
     path("visitor/gate/<str:token>/check-phone", visitor_check_phone),
+    path("visitor/gate/<str:token>/check-employee-phone", visitor_check_employee_phone),
     path("visitor/gate/<str:token>/new", visitor_gate_new),
     path("visitor/gate/<str:token>/repeat", visitor_gate_repeat),
+
+    # ── Reception -per-desk kiosk login onto the existing Visitor data, see
+    #    reception_views.py. login-info/login are deliberately public;
+    #    summary/visits are reception-device-authenticated, not HR-token ────
+    path("reception-devices", reception_devices),
+    path("reception-devices/login-info/<str:login_token>", reception_login_info),
+    path("reception-devices/login", reception_login),
+    path("reception-devices/summary", reception_summary),
+    path("reception-devices/visits", reception_visits),
+    path("reception-devices/<int:pk>", reception_device_detail),
     path("attendance/search", attendance_search),
     path("attendance/search/range", attendance_search_range),
     path("attendance/compute-shifts", compute_shift_logs),
@@ -514,6 +529,7 @@ urlpatterns = [
     #    approved by either HOD (manager/outpass-requests above) or HR ────────
     path("outpass-requests", outpass_requests),
     path("outpass-requests/<int:pk>/hr-status", outpass_request_hr_status),
+    path("outpass-requests/<int:pk>/generate-return-qr", generate_return_qr),
 
     # ── Gate Scanner -per-gate kiosk login + QR exit verification, see
     #    gate_scanner_views.py. login-info/login/scan are deliberately public

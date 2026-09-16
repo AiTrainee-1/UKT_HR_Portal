@@ -203,6 +203,12 @@ URL_MODULE_MAP: dict[str, str] = {
     # HrPermissionMiddleware (role=="hr" only) never applies to them anyway.
     "gate-devices": "outpass_visitors",
 
+    # Reception device management (create/list/update/delete a Reception
+    # login profile) -same page, same permission as the rest of
+    # Outpass/Visitors. login-info/login/summary/visits are deliberately
+    # absent for the same reason as gate-devices' equivalents above.
+    "reception-devices": "outpass_visitors",
+
     "payroll/production": "production_payroll",
     "payroll": "payroll",
     "compensation": "compensation",

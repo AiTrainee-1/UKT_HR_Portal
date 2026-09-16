@@ -86,6 +86,28 @@ def require_gate_device(view_func):
     return wrapper
 
 
+def require_reception_device(view_func):
+    """Gates the Reception dashboard endpoints (reception_views.py) -same
+    shape as require_gate_device above, just for ReceptionDevice instead of
+    GateDevice: a live is_active check on every request, so HR revoking a
+    Reception login takes effect on the very next request."""
+    @wraps(view_func)
+    @require_auth
+    def wrapper(request: Request, *args, **kwargs):
+        if request.jwt_user.get("role") != "reception_device":
+            return Response({"error": "Reception device access required"}, status=403)
+
+        from .models import ReceptionDevice
+
+        device = ReceptionDevice.objects.filter(id=request.jwt_user.get("deviceId"), is_active=True).first()
+        if device is None:
+            return Response({"error": "This desk's access has been revoked"}, status=403)
+        request.reception_device = device
+        return view_func(request, *args, **kwargs)
+
+    return wrapper
+
+
 def is_master_admin(hr_user) -> bool:
     """Is this the ONE designated admin account?
 

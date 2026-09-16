@@ -71,6 +71,8 @@ def _gate_scan_employee_payload(req: OutpassRequest) -> dict:
         "expiresAt": expires_at.isoformat() if expires_at else None,
         "gateName": req.exit_gate.name if req.exit_gate_id else None,
         "exitedAt": req.exited_at.isoformat() if req.exited_at else None,
+        "entryGateName": req.entry_gate.name if req.entry_gate_id else None,
+        "enteredAt": req.entered_at.isoformat() if req.entered_at else None,
     }
 
 
@@ -171,34 +173,7 @@ def gate_login(request: Request) -> Response:
 
 # ── QR verification + exit recording -gate kiosk ────────────────────────────
 
-def resolve_gate_scan(gate: GateDevice, qr_token: str) -> tuple[dict, int]:
-    """The whole verify-and-record decision, factored out of the view so it
-    can be unit-tested directly (this codebase's convention -see
-    outpass_request_views.py::resolve_outpass_request) without going through
-    the HTTP/JWT-decorator stack. Every branch, success or failure, logs an
-    OutpassGateScan row -HR should be able to see denied attempts too."""
-    qr_token = (qr_token or "").strip()
-    if not qr_token:
-        return {"result": "invalid_qr", "message": "qrToken is required"}, 400
-
-    try:
-        payload = verify_token(qr_token)
-        if payload.get("role") != "outpass_pass":
-            raise ValueError("wrong token role")
-        req_id = payload["requestId"]
-    except Exception:
-        message = "This QR code is not a valid Outpass pass."
-        OutpassGateScan.objects.create(gate=gate, result=OutpassGateScan.RESULT_INVALID_QR, message=message)
-        return {"result": "invalid_qr", "message": message}, 400
-
-    req = OutpassRequest.objects.select_related(
-        "employee__department", "employee__designation", "exit_gate"
-    ).filter(pk=req_id).first()
-    if not req:
-        message = "This Outpass request no longer exists."
-        OutpassGateScan.objects.create(gate=gate, result=OutpassGateScan.RESULT_INVALID_QR, message=message)
-        return {"result": "invalid_qr", "message": message}, 404
-
+def _resolve_exit_scan(gate: GateDevice, req: OutpassRequest) -> tuple[dict, int]:
     now = timezone.now()
     expires_at = req.approved_at + timedelta(minutes=60) if req.approved_at else None
 
@@ -207,36 +182,119 @@ def resolve_gate_scan(gate: GateDevice, qr_token: str) -> tuple[dict, int]:
         if req.exit_gate_id:
             message += f" via {req.exit_gate.name}"
         OutpassGateScan.objects.create(
-            gate=gate, outpass_request=req, employee=req.employee,
+            gate=gate, outpass_request=req, employee=req.employee, scan_type=OutpassGateScan.SCAN_TYPE_EXIT,
             result=OutpassGateScan.RESULT_ALREADY_SCANNED, message=message,
         )
-        return {"result": "already_scanned", "message": message, **_gate_scan_employee_payload(req)}, 409
+        return {"result": "already_scanned", "scanType": "exit", "message": message, **_gate_scan_employee_payload(req)}, 409
 
     if req.status != OutpassRequest.STATUS_APPROVED:
         message = "This Outpass request was not approved."
         OutpassGateScan.objects.create(
-            gate=gate, outpass_request=req, employee=req.employee,
+            gate=gate, outpass_request=req, employee=req.employee, scan_type=OutpassGateScan.SCAN_TYPE_EXIT,
             result=OutpassGateScan.RESULT_NOT_APPROVED, message=message,
         )
-        return {"result": "not_approved", "message": message, **_gate_scan_employee_payload(req)}, 403
+        return {"result": "not_approved", "scanType": "exit", "message": message, **_gate_scan_employee_payload(req)}, 403
 
     if not expires_at or now >= expires_at:
         message = "This Outpass has expired."
         OutpassGateScan.objects.create(
-            gate=gate, outpass_request=req, employee=req.employee,
+            gate=gate, outpass_request=req, employee=req.employee, scan_type=OutpassGateScan.SCAN_TYPE_EXIT,
             result=OutpassGateScan.RESULT_EXPIRED, message=message,
         )
-        return {"result": "expired", "message": message, **_gate_scan_employee_payload(req)}, 410
+        return {"result": "expired", "scanType": "exit", "message": message, **_gate_scan_employee_payload(req)}, 410
 
     req.exit_gate = gate
     req.exited_at = now
     req.save(update_fields=["exit_gate", "exited_at", "updated_at"])
     message = f"Exit recorded via {gate.name}"
     OutpassGateScan.objects.create(
-        gate=gate, outpass_request=req, employee=req.employee,
+        gate=gate, outpass_request=req, employee=req.employee, scan_type=OutpassGateScan.SCAN_TYPE_EXIT,
         result=OutpassGateScan.RESULT_SUCCESS, message=message,
     )
-    return {"result": "success", "message": message, **_gate_scan_employee_payload(req)}, 200
+    return {"result": "success", "scanType": "exit", "message": message, **_gate_scan_employee_payload(req)}, 200
+
+
+def _resolve_return_scan(gate: GateDevice, req: OutpassRequest, generated_at_claim: str | None) -> tuple[dict, int]:
+    now = timezone.now()
+
+    if req.entered_at:
+        message = "Already returned at " + req.entered_at.strftime("%I:%M %p")
+        if req.entry_gate_id:
+            message += f" via {req.entry_gate.name}"
+        OutpassGateScan.objects.create(
+            gate=gate, outpass_request=req, employee=req.employee, scan_type=OutpassGateScan.SCAN_TYPE_ENTRY,
+            result=OutpassGateScan.RESULT_ALREADY_SCANNED, message=message,
+        )
+        return {"result": "already_scanned", "scanType": "entry", "message": message, **_gate_scan_employee_payload(req)}, 409
+
+    if not req.exited_at:
+        message = "This employee hasn't exited yet -there's no return to record."
+        OutpassGateScan.objects.create(
+            gate=gate, outpass_request=req, employee=req.employee, scan_type=OutpassGateScan.SCAN_TYPE_ENTRY,
+            result=OutpassGateScan.RESULT_NOT_EXITED, message=message,
+        )
+        return {"result": "not_exited", "scanType": "entry", "message": message, **_gate_scan_employee_payload(req)}, 403
+
+    # The token's own "generatedAt" claim must match the live column -if the
+    # employee has since re-clicked "Generate Return QR", a newer token now
+    # exists and this one, though still cryptographically valid and unexpired
+    # on its own terms, is stale and must be rejected.
+    current = req.return_qr_generated_at.isoformat() if req.return_qr_generated_at else None
+    if not current or generated_at_claim != current:
+        message = "This return QR is no longer valid -a newer one was generated for this Outpass."
+        OutpassGateScan.objects.create(
+            gate=gate, outpass_request=req, employee=req.employee, scan_type=OutpassGateScan.SCAN_TYPE_ENTRY,
+            result=OutpassGateScan.RESULT_INVALID_QR, message=message,
+        )
+        return {"result": "invalid_qr", "scanType": "entry", "message": message, **_gate_scan_employee_payload(req)}, 400
+
+    req.entry_gate = gate
+    req.entered_at = now
+    req.save(update_fields=["entry_gate", "entered_at", "updated_at"])
+    message = f"Return recorded via {gate.name}"
+    OutpassGateScan.objects.create(
+        gate=gate, outpass_request=req, employee=req.employee, scan_type=OutpassGateScan.SCAN_TYPE_ENTRY,
+        result=OutpassGateScan.RESULT_SUCCESS, message=message,
+    )
+    return {"result": "success", "scanType": "entry", "message": message, **_gate_scan_employee_payload(req)}, 200
+
+
+def resolve_gate_scan(gate: GateDevice, qr_token: str) -> tuple[dict, int]:
+    """The whole verify-and-record decision, factored out of the view so it
+    can be unit-tested directly (this codebase's convention -see
+    outpass_request_views.py::resolve_outpass_request) without going through
+    the HTTP/JWT-decorator stack. Every branch, success or failure, logs an
+    OutpassGateScan row -HR should be able to see denied attempts too.
+
+    Branches on the token's "role" claim -"outpass_pass" is the original exit
+    QR (unchanged behaviour), "outpass_return" is the new return/re-entry QR
+    generated on demand via outpass_request_views.py::generate_return_qr."""
+    qr_token = (qr_token or "").strip()
+    if not qr_token:
+        return {"result": "invalid_qr", "message": "qrToken is required"}, 400
+
+    try:
+        payload = verify_token(qr_token)
+        role = payload.get("role")
+        if role not in ("outpass_pass", "outpass_return"):
+            raise ValueError("wrong token role")
+        req_id = payload["requestId"]
+    except Exception:
+        message = "This QR code is not a valid Outpass pass."
+        OutpassGateScan.objects.create(gate=gate, result=OutpassGateScan.RESULT_INVALID_QR, message=message)
+        return {"result": "invalid_qr", "message": message}, 400
+
+    req = OutpassRequest.objects.select_related(
+        "employee__department", "employee__designation", "exit_gate", "entry_gate"
+    ).filter(pk=req_id).first()
+    if not req:
+        message = "This Outpass request no longer exists."
+        OutpassGateScan.objects.create(gate=gate, result=OutpassGateScan.RESULT_INVALID_QR, message=message)
+        return {"result": "invalid_qr", "message": message}, 404
+
+    if role == "outpass_return":
+        return _resolve_return_scan(gate, req, payload.get("generatedAt"))
+    return _resolve_exit_scan(gate, req)
 
 
 @api_view(["POST"])
@@ -262,7 +320,10 @@ def gate_scan_log(request: Request) -> Response:
     page, page_size = _paginate_params(request)
     qs = (
         OutpassGateScan.objects
-        .filter(gate=request.gate_device, result=OutpassGateScan.RESULT_SUCCESS, scanned_at__gte=_today_start())
+        .filter(
+            gate=request.gate_device, result=OutpassGateScan.RESULT_SUCCESS,
+            scan_type=OutpassGateScan.SCAN_TYPE_EXIT, scanned_at__gte=_today_start(),
+        )
         .select_related("employee__department", "outpass_request")
         .order_by("-scanned_at")
     )

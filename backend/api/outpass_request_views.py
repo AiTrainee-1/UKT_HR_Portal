@@ -27,8 +27,18 @@ from .models import Employee, Notification, OutpassRequest
 from .outpass_visitor_views import _create_outpass_record_for
 
 
+# How long a generated return QR stays valid, mirroring the exit pass's own
+# approved_at + 60min window -see _outpass_request_json's return_qr_token.
+RETURN_QR_VALID_MINUTES = 60
+
+
 def _outpass_scan_status(req: OutpassRequest, expires_at, now) -> str:
+    if req.entered_at:
+        return "completed"
     if req.exited_at:
+        if req.return_qr_generated_at:
+            return_expires_at = req.return_qr_generated_at + timedelta(minutes=RETURN_QR_VALID_MINUTES)
+            return "pending_return" if now < return_expires_at else "return_expired"
         return "exited"
     if req.status != OutpassRequest.STATUS_APPROVED:
         return "not_applicable"
@@ -50,6 +60,22 @@ def _outpass_request_json(req: OutpassRequest, with_employee: bool = False) -> d
     if scan_status == "pending_exit":
         qr_token = sign_token({"role": "outpass_pass", "requestId": req.id}, expires_in=expires_at - now)
 
+    # The return QR is never auto-computed the way the exit one is -it only
+    # exists once the employee explicitly taps "Generate Return QR"
+    # (generate_return_qr below), which stamps return_qr_generated_at. The
+    # token embeds that same timestamp as a "generatedAt" claim so
+    # resolve_gate_scan can tell a stale, since-regenerated token apart from
+    # the current one even though both would otherwise still verify/decode.
+    return_qr_token = None
+    return_qr_expires_at = None
+    if req.return_qr_generated_at:
+        return_qr_expires_at = req.return_qr_generated_at + timedelta(minutes=RETURN_QR_VALID_MINUTES)
+    if scan_status == "pending_return":
+        return_qr_token = sign_token(
+            {"role": "outpass_return", "requestId": req.id, "generatedAt": req.return_qr_generated_at.isoformat()},
+            expires_in=return_qr_expires_at - now,
+        )
+
     data = {
         "id": req.id,
         "employeeId": req.employee_id,
@@ -66,6 +92,11 @@ def _outpass_request_json(req: OutpassRequest, with_employee: bool = False) -> d
         "qrToken": qr_token,
         "exitGateName": req.exit_gate.name if req.exit_gate_id else None,
         "exitedAt": req.exited_at.isoformat() if req.exited_at else None,
+        "entryGateName": req.entry_gate.name if req.entry_gate_id else None,
+        "enteredAt": req.entered_at.isoformat() if req.entered_at else None,
+        "returnQrToken": return_qr_token,
+        "returnQrExpiresAt": return_qr_expires_at.isoformat() if return_qr_expires_at else None,
+        "canGenerateReturnQr": bool(req.exited_at and not req.entered_at),
         "scanStatus": scan_status,
     }
     if with_employee:
@@ -112,7 +143,7 @@ def resolve_outpass_request(
 def outpass_requests(request: Request) -> Response:
     if request.method == "GET":
         qs = OutpassRequest.objects.select_related(
-            "employee__department", "employee__designation", "exit_gate"
+            "employee__department", "employee__designation", "exit_gate", "entry_gate"
         ).order_by("-created_at")
         qs = scope_to_branch(qs, request, field="employee__branch_id")
 
@@ -164,4 +195,29 @@ def outpass_request_hr_status(request: Request, pk: int) -> Response:
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
 
     resolve_outpass_request(req, status, get_hr_display_name(request), "hr", request.data.get("comment"))
+    return Response(_outpass_request_json(req))
+
+
+@api_view(["POST"])
+@require_auth
+def generate_return_qr(request: Request, pk: int) -> Response:
+    """The "manual Generate Return QR button" on the employee's own Outpass
+    card -self-scoped exactly like outpass_requests' POST, since this is an
+    employee action on their own pass, not an HR one. Re-calling this after
+    an earlier return QR already expired (or even before it expires) simply
+    issues a fresh one -see the "generatedAt" claim check in
+    gate_scanner_views.py::resolve_gate_scan for why that's safe."""
+    token_emp_id = get_token_employee_id(request)
+    req = OutpassRequest.objects.select_related("employee").filter(pk=pk).first()
+    if not req:
+        return Response({"error": "Outpass request not found"}, status=404)
+    if token_emp_id and str(token_emp_id) != str(req.employee_id):
+        return Response({"error": "You can only generate a return QR for your own outpass"}, status=403)
+    if not req.exited_at:
+        return Response({"error": "This Outpass hasn't been exited yet, so there's no return to record."}, status=400)
+    if req.entered_at:
+        return Response({"error": "This Outpass has already been marked as returned."}, status=400)
+
+    req.return_qr_generated_at = timezone.now()
+    req.save(update_fields=["return_qr_generated_at", "updated_at"])
     return Response(_outpass_request_json(req))

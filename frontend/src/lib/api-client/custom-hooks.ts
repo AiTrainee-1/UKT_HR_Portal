@@ -2212,7 +2212,8 @@ export type SalarySlipBulkEmailResult = {
 // ── WhatsApp (Settings, single-send mutations, bulk-send progress) ─────────
 
 export type WhatsAppDocumentType =
-  | "salary_slip" | "id_card" | "offer_letter" | "experience_letter" | "resignation_letter" | "other";
+  | "salary_slip" | "id_card" | "offer_letter" | "experience_letter" | "resignation_letter" | "other"
+  | "visitor_notification";
 
 export type WhatsAppStatus = { configured: boolean; phoneNumberId: string | null; apiVersion: string };
 
@@ -5388,6 +5389,21 @@ export const useVisitorSummary = () =>
     queryFn: () => customFetch<GateSummary>("/api/visitor/summary"),
   });
 
+// The employee a visitor came to meet, resolved by phone-matching against
+// Employee (see backend/api/outpass_visitor_views.py::_employee_contact_json).
+// Shared by the visitor-gate-form lookup result and every visit list that
+// shows who a visit was for (VisitorRecordRow below, ReceptionVisit).
+export type EmployeeContact = {
+  id: number;
+  employeeCode: string;
+  name: string;
+  department: string | null;
+  designation: string | null;
+  phone: string | null;
+  email: string | null;
+  photoUrl: string | null;
+};
+
 export type VisitorRecordRow = {
   id: number;
   name: string;
@@ -5399,6 +5415,12 @@ export type VisitorRecordRow = {
   purpose: string;
   branchName: string | null;
   visitedAt: string;
+  // Additive -null for a visit not tied to a specific employee, or where the
+  // phone lookup found no match (whomToMeet above still carries whatever
+  // free text was entered either way).
+  meetingEmployee: EmployeeContact | null;
+  notifiedEmailAt: string | null;
+  notifiedWhatsappAt: string | null;
 };
 
 export const getVisitorRecordsQueryKey = (range: GateRange, page: number) =>
@@ -5430,11 +5452,24 @@ export const useVisitorCheckPhone = (token: string) =>
       ),
   });
 
+// "Are you meeting a specific employee?" -> Yes step: looks up the employee
+// being visited by phone (see backend/api/outpass_visitor_views.py::
+// visitor_check_employee_phone) -entirely separate from useVisitorCheckPhone
+// above, which looks up the VISITOR's own phone for the "Already Visited" flow.
+export const useVisitorCheckEmployeePhone = (token: string) =>
+  useMutation({
+    mutationFn: (body: { phone: string }) =>
+      customFetch<{ found: boolean; employee?: EmployeeContact }>(
+        `/api/visitor/gate/${encodeURIComponent(token)}/check-employee-phone`,
+        { method: "POST", body: JSON.stringify(body) },
+      ),
+  });
+
 export const useVisitorGateNew = (token: string) =>
   useMutation({
     mutationFn: (body: {
       name: string; phone: string; aadhaarNumber?: string;
-      whyCame?: string; whomToMeet: string; purpose: string;
+      whyCame?: string; whomToMeet: string; purpose: string; meetingEmployeeId?: number;
     }) =>
       customFetch<{ submitted: boolean }>(`/api/visitor/gate/${encodeURIComponent(token)}/new`, {
         method: "POST",
@@ -5444,7 +5479,7 @@ export const useVisitorGateNew = (token: string) =>
 
 export const useVisitorGateRepeat = (token: string) =>
   useMutation({
-    mutationFn: (body: { phone: string; whomToMeet: string; purpose: string }) =>
+    mutationFn: (body: { phone: string; whomToMeet: string; purpose: string; meetingEmployeeId?: number }) =>
       customFetch<{ submitted: boolean }>(`/api/visitor/gate/${encodeURIComponent(token)}/repeat`, {
         method: "POST",
         body: JSON.stringify(body),
@@ -5456,7 +5491,11 @@ export const useVisitorGateRepeat = (token: string) =>
 // (separate repos, separate API clients); this HR portal only ever reads and
 // approves/rejects, same split as Permissions above.
 
-export type OutpassScanStatus = "not_applicable" | "pending_exit" | "exited" | "expired_unscanned";
+export type OutpassScanStatus =
+  | "not_applicable" | "pending_exit" | "exited" | "expired_unscanned"
+  // The return/re-entry leg -see backend/api/outpass_request_views.py::_outpass_scan_status.
+  // "exited" now specifically means "exited, return QR not yet generated".
+  | "pending_return" | "return_expired" | "completed";
 
 export type OutpassRequestItem = {
   id: number;
@@ -5478,6 +5517,14 @@ export type OutpassRequestItem = {
   qrToken?: string | null;
   exitGateName?: string | null;
   exitedAt?: string | null;
+  // Return/re-entry leg -returnQrToken mirrors qrToken's "only present when
+  // actually presentable" rule (generated, unexpired, not yet returned).
+  // HR never needs it either; only the employee-facing apps render it.
+  entryGateName?: string | null;
+  enteredAt?: string | null;
+  returnQrToken?: string | null;
+  returnQrExpiresAt?: string | null;
+  canGenerateReturnQr?: boolean;
   scanStatus: OutpassScanStatus;
   employee?: {
     id: number; employeeCode: string; name: string;
@@ -5570,4 +5617,94 @@ export const useGateLogin = () =>
         method: "POST",
         body: JSON.stringify(body),
       }),
+  });
+
+// ── Reception device management (HR side) -see backend/api/reception_views.py ──
+// A per-desk login onto the existing VisitorVisit data -mirrors GateDevice's
+// shape exactly, just for Reception instead of the gate kiosk. It never
+// scans anything itself: the visitor's own phone scanning the permanent
+// Visitor QR (useVisitorQr above) remains the only way a visit is recorded.
+
+export type ReceptionDevice = {
+  id: number;
+  name: string;
+  branchId: number | null;
+  branchName: string | null;
+  username: string;
+  isActive: boolean;
+  loginToken: string;
+  createdBy: string | null;
+  createdAt: string;
+  lastLoginAt: string | null;
+};
+
+export const getListReceptionDevicesQueryKey = () => ["/api/reception-devices"] as const;
+export const useListReceptionDevices = () =>
+  useQuery<ReceptionDevice[]>({
+    queryKey: getListReceptionDevicesQueryKey(),
+    queryFn: () => customFetch<ReceptionDevice[]>("/api/reception-devices"),
+  });
+
+export const useCreateReceptionDevice = () =>
+  useMutation({
+    mutationFn: (data: { name: string; branchId?: number; username: string; password: string }) =>
+      customFetch<ReceptionDevice>("/api/reception-devices", { method: "POST", body: JSON.stringify(data) }),
+  });
+
+export const useUpdateReceptionDevice = () =>
+  useMutation({
+    mutationFn: ({ id, data }: { id: number; data: { name?: string; isActive?: boolean; password?: string } }) =>
+      customFetch<ReceptionDevice>(`/api/reception-devices/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  });
+
+export const useDeleteReceptionDevice = () =>
+  useMutation({
+    mutationFn: (id: number) => customFetch<void>(`/api/reception-devices/${id}`, { method: "DELETE" }),
+  });
+
+// ── Reception desk auth + dashboard -public login-info/login, desk-token-
+//    authenticated summary/visits. Same "own localStorage key, explicit
+//    Authorization header" reasoning as the Gate Scanner kiosk above. ──────
+
+export const useReceptionLoginInfo = (loginToken: string) =>
+  useQuery<{ deskName: string; branchName: string; isActive: boolean }>({
+    queryKey: ["/api/reception-devices/login-info", loginToken],
+    queryFn: () => customFetch(`/api/reception-devices/login-info/${encodeURIComponent(loginToken)}`),
+    enabled: !!loginToken,
+    retry: false,
+  });
+
+export const useReceptionLogin = () =>
+  useMutation({
+    mutationFn: (body: { username: string; password: string }) =>
+      customFetch<{ token: string; deviceId: number; deskName: string }>("/api/reception-devices/login", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+  });
+
+function receptionAuthHeader(): HeadersInit | undefined {
+  const token = localStorage.getItem("reception_device_token");
+  return token ? { Authorization: `Bearer ${token}` } : undefined;
+}
+
+export const useReceptionSummary = () =>
+  useQuery<GateSummary>({
+    queryKey: ["/api/reception-devices/summary"],
+    queryFn: () => customFetch<GateSummary>("/api/reception-devices/summary", { headers: receptionAuthHeader() }),
+    refetchInterval: 30_000,
+  });
+
+export type ReceptionVisit = VisitorRecordRow;
+
+export const useReceptionVisits = (range: GateRange, page: number, pageSize = 20) =>
+  useQuery<PaginatedRecords<ReceptionVisit>>({
+    queryKey: ["/api/reception-devices/visits", range, page],
+    queryFn: () =>
+      customFetch<PaginatedRecords<ReceptionVisit>>(
+        `/api/reception-devices/visits?range=${range}&page=${page}&pageSize=${pageSize}`,
+        { headers: receptionAuthHeader() },
+      ),
+    placeholderData: keepPreviousData,
+    refetchInterval: 20_000,
   });

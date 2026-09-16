@@ -141,6 +141,40 @@ def send_document_template(
     return body
 
 
+def send_text_template(to_phone: str, template_name: str, language_code: str, body_params: list[str]) -> dict:
+    """POST /{PHONE_NUMBER_ID}/messages -a template message with no header
+    component, just body {{n}} params. For a plain informational alert (e.g.
+    "you have a visitor") that has no document/image to attach, unlike
+    send_document_template above which always sends a header media."""
+    url = _api_url(f"{dj_settings.WHATSAPP_PHONE_NUMBER_ID}/messages")
+    components = []
+    if body_params:
+        components.append({
+            "type": "body",
+            "parameters": [{"type": "text", "text": p} for p in body_params],
+        })
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to_phone,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": language_code or "en"},
+            "components": components,
+        },
+    }
+    try:
+        resp = requests.post(url, headers={**_auth_headers(), "Content-Type": "application/json"}, json=payload, timeout=30)
+    except requests.RequestException as exc:
+        raise WhatsAppServiceError(f"Could not reach WhatsApp API: {exc}")
+
+    body = resp.json() if resp.content else {}
+    if resp.status_code >= 400:
+        detail = (body.get("error") or {}).get("message") or resp.text[:200]
+        raise WhatsAppServiceError(f"Send failed: {detail}")
+    return body
+
+
 def _log(employee, document_type: str, document_ref_id, phone_number: str,
           status: str, meta_message_id: str = "", error_message: str = "", sent_by_id=None):
     from .models import WhatsAppMessageLog
@@ -192,6 +226,49 @@ def send_document(
             phone, template.meta_template_name, template.meta_language_code, media_id, filename, body_params,
             header_type=header_type,
         )
+    except WhatsAppServiceError as exc:
+        return _log(employee, document_type, document_ref_id, phone, "failed",
+                     error_message=str(exc), sent_by_id=sent_by_id)
+
+    message_id = ""
+    messages = result.get("messages") or []
+    if messages:
+        message_id = messages[0].get("id", "")
+
+    return _log(employee, document_type, document_ref_id, phone, "sent",
+                meta_message_id=message_id, sent_by_id=sent_by_id)
+
+
+def send_text(
+    employee, document_type: str, body_params: list[str],
+    document_ref_id: int | None = None, sent_by_id: int | None = None,
+):
+    """Same contract as send_document above (always returns a
+    WhatsAppMessageLog row, never raises) but for a template with no
+    header/media -see send_text_template. Used for the visitor-arrival
+    notification (document_type="visitor_notification"), which has nothing
+    to attach."""
+    from .models import WhatsAppMessageTemplate
+
+    phone = normalize_phone(getattr(employee, "phone", None))
+
+    if not is_configured():
+        return _log(employee, document_type, document_ref_id, phone or "", "failed",
+                     error_message="WhatsApp is not configured on this server (missing credentials in .env).",
+                     sent_by_id=sent_by_id)
+
+    if not phone:
+        return _log(employee, document_type, document_ref_id, "", "failed",
+                     error_message="No phone number on file for this employee.", sent_by_id=sent_by_id)
+
+    template = WhatsAppMessageTemplate.objects.filter(document_type=document_type, is_enabled=True).first()
+    if not template or not template.meta_template_name:
+        return _log(employee, document_type, document_ref_id, phone, "failed",
+                     error_message=f"No WhatsApp template configured for '{document_type}' -set one up in Settings → WhatsApp.",
+                     sent_by_id=sent_by_id)
+
+    try:
+        result = send_text_template(phone, template.meta_template_name, template.meta_language_code, body_params)
     except WhatsAppServiceError as exc:
         return _log(employee, document_type, document_ref_id, phone, "failed",
                      error_message=str(exc), sent_by_id=sent_by_id)
