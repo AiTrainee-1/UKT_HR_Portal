@@ -25,9 +25,19 @@
 # older than the actual database server (18.x). pg_dump refuses to dump
 # from a NEWER server than its own major version ("server version: 18.6 ...
 # pg_dump version: 16.4"), even though dumping from an OLDER server works
-# fine -so this has to be pinned to match the server's major version, not
-# left to float. If the server is ever upgraded to a newer major version,
-# bump this to match (nixpkgs postgresql packages are versioned
-# postgresql_<major>).
+# fine -so ideally this would be pinned to match the server's major version.
+#
+# It ISN'T pinned that way, deliberately: "postgresql_18" (nixpkgs'
+# versioned name for that major) does not exist in Railway's pinned nixpkgs
+# snapshot at all -the build fails outright with "error: undefined variable
+# 'postgresql_18'" (confirmed by an actual deploy attempt), which breaks the
+# ENTIRE app, not just the backup feature. That's strictly worse than the
+# backup feature alone being broken, so this stays on the unversioned
+# package -pg_dump then fails its own version check and the Backup &
+# Restore feature reports that clearly, while everything else deploys and
+# works. If a future nixpkgs snapshot does carry a postgresql_18 (or
+# whatever the server's major version is by then), switching back to it here
+# is safe to try again -just watch the build log for the same "undefined
+# variable" failure and revert immediately if it recurs.
 [phases.setup]
-nixPkgs = ["postgresql_18", "python3"]
+nixPkgs = ["postgresql", "python3"]
