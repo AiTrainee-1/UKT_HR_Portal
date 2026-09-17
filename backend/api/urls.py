@@ -87,6 +87,9 @@ from .outpass_request_views import outpass_requests, outpass_request_hr_status, 
 from .gate_scanner_views import (
     gate_devices, gate_device_detail, gate_login_info, gate_login, gate_scan, gate_scan_log,
 )
+from .tea_break_views import (
+    tea_break_qr_token, tea_break_my_status, tea_break_rule, tea_break_summary, tea_break_records,
+)
 from .geo_attendance_views import (
     geo_punch, geo_punch_precheck, geo_punch_status, live_location_ping,
     on_duty_session_request, on_duty_session_complete, on_duty_session_status,
@@ -540,6 +543,15 @@ urlpatterns = [
     path("gate-devices/scan", gate_scan),
     path("gate-devices/scan-log", gate_scan_log),
     path("gate-devices/<int:pk>", gate_device_detail),
+
+    # ── Tea Break -permanent per-employee QR, no approval, same gate logins
+    #    as above (see tea_break_views.py). qr-token/my-status are employee-
+    #    token-authenticated; rule/summary/records are HR-only ─────────────
+    path("tea-break/qr-token", tea_break_qr_token),
+    path("tea-break/my-status", tea_break_my_status),
+    path("tea-break/rule", tea_break_rule),
+    path("tea-break/summary", tea_break_summary),
+    path("tea-break/records", tea_break_records),
 
     # ── Audit Logs ───────────────────────────────────────────────────────────
     path("audit-logs", audit_logs),

@@ -264,11 +264,17 @@ def resolve_gate_scan(gate: GateDevice, qr_token: str) -> tuple[dict, int]:
     can be unit-tested directly (this codebase's convention -see
     outpass_request_views.py::resolve_outpass_request) without going through
     the HTTP/JWT-decorator stack. Every branch, success or failure, logs an
-    OutpassGateScan row -HR should be able to see denied attempts too.
+    OutpassGateScan row -HR should be able to see denied attempts too
+    (except the tea_break branch below, which has no approval/denial states
+    to log -see tea_break_views.py's module docstring).
 
     Branches on the token's "role" claim -"outpass_pass" is the original exit
-    QR (unchanged behaviour), "outpass_return" is the new return/re-entry QR
-    generated on demand via outpass_request_views.py::generate_return_qr."""
+    QR (unchanged behaviour), "outpass_return" is the return/re-entry QR
+    generated on demand via outpass_request_views.py::generate_return_qr,
+    "tea_break" is the permanent per-employee QR from tea_break_views.py::
+    tea_break_qr_token -the same gate logins scan all three, deliberately,
+    per explicit product decision not to stand up a separate device/login
+    concept just for tea breaks."""
     qr_token = (qr_token or "").strip()
     if not qr_token:
         return {"result": "invalid_qr", "message": "qrToken is required"}, 400
@@ -276,14 +282,25 @@ def resolve_gate_scan(gate: GateDevice, qr_token: str) -> tuple[dict, int]:
     try:
         payload = verify_token(qr_token)
         role = payload.get("role")
-        if role not in ("outpass_pass", "outpass_return"):
+        if role not in ("outpass_pass", "outpass_return", "tea_break"):
             raise ValueError("wrong token role")
-        req_id = payload["requestId"]
     except Exception:
-        message = "This QR code is not a valid Outpass pass."
+        message = "This QR code is not recognized."
         OutpassGateScan.objects.create(gate=gate, result=OutpassGateScan.RESULT_INVALID_QR, message=message)
         return {"result": "invalid_qr", "message": message}, 400
 
+    if role == "tea_break":
+        from .models import Employee
+        from .tea_break_views import resolve_tea_break_scan
+
+        employee = Employee.objects.select_related("department").filter(pk=payload.get("employeeId")).first()
+        if not employee:
+            message = "This employee no longer exists."
+            OutpassGateScan.objects.create(gate=gate, result=OutpassGateScan.RESULT_INVALID_QR, message=message)
+            return {"result": "invalid_qr", "message": message}, 404
+        return resolve_tea_break_scan(gate, employee)
+
+    req_id = payload.get("requestId")
     req = OutpassRequest.objects.select_related(
         "employee__department", "employee__designation", "exit_gate", "entry_gate"
     ).filter(pk=req_id).first()

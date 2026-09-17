@@ -5708,3 +5708,72 @@ export const useReceptionVisits = (range: GateRange, page: number, pageSize = 20
     placeholderData: keepPreviousData,
     refetchInterval: 20_000,
   });
+
+// ── Tea Break (HR side) -see backend/api/tea_break_views.py ────────────────
+// A permanent per-employee QR, no approval, toggled OUT/IN at any active
+// GateDevice (same gate logins as Outpass -see gate_scanner_views.py's role
+// dispatch). This section is the HR dashboard's read/config surface; the
+// employee-facing QR + own-status hooks live in the mobile/web apps' own
+// API clients, not here.
+
+export type TeaBreakRemark = "overtime" | "on_time" | "in_progress" | "not_returned";
+
+export type TeaBreakEmployee = {
+  id: number;
+  employeeCode: string;
+  name: string;
+  department: string | null;
+  photoUrl: string | null;
+};
+
+export type TeaBreakRecord = {
+  id: number;
+  employee: TeaBreakEmployee;
+  outGateName: string | null;
+  outAt: string;
+  inGateName: string | null;
+  inAt: string | null;
+  takenMinutes: number;
+  remark: TeaBreakRemark;
+};
+
+export type TeaBreakRule = { allowedMinutes: number; updatedAt: string };
+
+export const getTeaBreakRuleQueryKey = () => ["/api/tea-break/rule"] as const;
+export const useTeaBreakRule = () =>
+  useQuery<TeaBreakRule>({
+    queryKey: getTeaBreakRuleQueryKey(),
+    queryFn: () => customFetch<TeaBreakRule>("/api/tea-break/rule"),
+  });
+
+export const useUpdateTeaBreakRule = () =>
+  useMutation({
+    mutationFn: (allowedMinutes: number) =>
+      customFetch<TeaBreakRule>("/api/tea-break/rule", {
+        method: "PUT",
+        body: JSON.stringify({ allowedMinutes }),
+      }),
+  });
+
+export const getTeaBreakSummaryQueryKey = () => ["/api/tea-break/summary"] as const;
+export const useTeaBreakSummary = () =>
+  useQuery<GateSummary>({
+    queryKey: getTeaBreakSummaryQueryKey(),
+    queryFn: () => customFetch<GateSummary>("/api/tea-break/summary"),
+    refetchInterval: 30_000,
+  });
+
+export type TeaBreakFilter = "overtime" | "not_returned" | null;
+
+export const getTeaBreakRecordsQueryKey = (range: GateRange, page: number, filter: TeaBreakFilter) =>
+  ["/api/tea-break/records", range, page, filter] as const;
+export const useTeaBreakRecords = (range: GateRange, page: number, filter: TeaBreakFilter, pageSize = 20) =>
+  useQuery<PaginatedRecords<TeaBreakRecord>>({
+    queryKey: getTeaBreakRecordsQueryKey(range, page, filter),
+    queryFn: () =>
+      customFetch<PaginatedRecords<TeaBreakRecord>>(
+        `/api/tea-break/records?range=${range}&page=${page}&pageSize=${pageSize}${filter ? `&filter=${filter}` : ""}`,
+      ),
+    placeholderData: keepPreviousData,
+    refetchInterval: 30_000,
+  });

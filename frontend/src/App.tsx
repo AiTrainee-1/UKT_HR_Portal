@@ -262,6 +262,9 @@ function Router() {
       <Route path="/hr/outpass-visitors/visitors">
         {() => <ProtectedRoute component={OutpassVisitors} allowedRoles={["hr"]} />}
       </Route>
+      <Route path="/hr/outpass-visitors/tea-break">
+        {() => <ProtectedRoute component={OutpassVisitors} allowedRoles={["hr"]} />}
+      </Route>
       <Route path="/hr/outpass-visitors">
         {() => <ProtectedRoute component={OutpassVisitors} allowedRoles={["hr"]} />}
       </Route>

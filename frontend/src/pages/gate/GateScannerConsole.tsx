@@ -43,6 +43,12 @@ type ScanResult = {
   // "invalid_qr" case where the token couldn't even be decoded, so its role
   // (and therefore which leg was attempted) is genuinely unknown.
   scanType?: "exit" | "entry";
+  // Present instead of scanType for a Tea Break QR (see tea_break_views.py::
+  // resolve_tea_break_scan) -a totally different, approval-free flow that
+  // happens to share this same scan endpoint/console, per explicit product
+  // decision not to stand up a separate device/login for it.
+  action?: "out" | "in";
+  takenMinutes?: number;
   message: string;
   employee?: { name: string; employeeCode: string; department: string | null; photoUrl: string | null };
   destination?: string;
@@ -133,6 +139,8 @@ const VOICE_EXIT_APPROVED = "Approved. You may proceed.";
 const VOICE_ENTRY_APPROVED = "Welcome back.";
 const VOICE_NOT_APPROVED = "This outpass is not approved. Please get it approved first.";
 const VOICE_NOT_EXITED = "This employee has not exited yet.";
+const VOICE_TEA_BREAK_OUT = "Tea break started.";
+const VOICE_TEA_BREAK_IN = "Tea break ended.";
 
 // Voices load asynchronously in most browsers (empty on the very first call
 // until the "voiceschanged" event fires) -wait for that once rather than
@@ -325,10 +333,10 @@ function ScannerCard({ flash }: { flash: FlashPhase }) {
         animate={{ opacity: 1, y: 0 }}
         className="text-base font-bold text-white"
       >
-        {flash === "idle" ? "Ready -scan an employee's Outpass QR code" : tone.label}
+        {flash === "idle" ? "Ready -scan an Outpass or Tea Break QR code" : tone.label}
       </motion.p>
       {flash === "idle" && (
-        <p className="text-xs text-white/50">Point the connected scanner at the QR code on the employee's card.</p>
+        <p className="text-xs text-white/50">Point the connected scanner at the employee's QR code.</p>
       )}
     </div>
   );
@@ -360,6 +368,11 @@ function ScanDetailPanel({ result, onDone }: { result: ScanResult | null; onDone
           {result.scanType && (
             <span className="ml-auto rounded-full border border-current/20 bg-white/60 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide">
               {result.scanType === "entry" ? "Return" : "Exit"}
+            </span>
+          )}
+          {result.action && (
+            <span className="ml-auto rounded-full border border-current/20 bg-white/60 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide">
+              Tea Break -{result.action === "in" ? "In" : "Out"}
             </span>
           )}
         </div>
@@ -640,7 +653,9 @@ export default function GateScannerConsole() {
     setLastResult(body);
     const ok = body.result === "success";
     setFlash(ok ? "success" : "error");
-    const voiceText = ok
+    const voiceText = body.action
+      ? (body.action === "in" ? VOICE_TEA_BREAK_IN : VOICE_TEA_BREAK_OUT)
+      : ok
       ? (body.scanType === "entry" ? VOICE_ENTRY_APPROVED : VOICE_EXIT_APPROVED)
       : body.result === "not_exited" ? VOICE_NOT_EXITED
       : VOICE_NOT_APPROVED;

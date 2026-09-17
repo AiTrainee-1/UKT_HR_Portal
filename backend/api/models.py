@@ -3310,6 +3310,58 @@ class GateDevice(models.Model):
         ordering = ["name"]
 
 
+class TeaBreakLog(models.Model):
+    """One row per tea-break OUT/IN cycle. Deliberately NOT like OutpassRequest:
+    there is no approval step and no separate "request" object -an employee's
+    own permanent Tea Break QR (see tea_break_views.py::tea_break_qr_token)
+    simply toggles this when scanned at any active GateDevice (the same
+    gate logins used for Outpass -see resolve_gate_scan's role dispatch in
+    gate_scanner_views.py, no separate device/login concept for this).
+
+    A scan with no existing OPEN row (in_at IS NULL) for that employee starts
+    a new row (OUT); a scan while one exists closes it (IN) -see
+    tea_break_views.py::resolve_tea_break_scan for the toggle + staleness
+    logic."""
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="tea_break_logs"
+    )
+    out_gate = models.ForeignKey(
+        "GateDevice", on_delete=models.SET_NULL, null=True, blank=True, db_column="out_gate_id", related_name="+"
+    )
+    out_at = models.DateTimeField(db_column="out_at")
+    in_gate = models.ForeignKey(
+        "GateDevice", on_delete=models.SET_NULL, null=True, blank=True, db_column="in_gate_id", related_name="+"
+    )
+    in_at = models.DateTimeField(null=True, blank=True, db_column="in_at")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "tea_break_logs"
+        ordering = ["-out_at"]
+
+
+class TeaBreakRule(models.Model):
+    """Singleton (always pk=1, see get()) -the allowed break duration before
+    a COMPLETED break is flagged "Overtime" on the HR dashboard (see
+    tea_break_views.py::_log_json). Global, not per-branch, matching the
+    simple "one number HR sets" the feature asks for. Separate from the
+    fixed, non-configurable 60-minute "not returned" cutoff used for a break
+    that's still open (tea_break_views.py::NOT_RETURNED_MINUTES) -that one
+    isn't a rule HR tunes, it's just when an open scan stops being plausible."""
+
+    allowed_minutes = models.IntegerField(default=15, db_column="allowed_minutes")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "tea_break_rule"
+
+    @classmethod
+    def get(cls) -> "TeaBreakRule":
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
 class OutpassGateScan(models.Model):
     """Audit log of every QR scan attempt at a gate -success AND failure, so
     HR can see not just who exited but who *tried* to and was denied (an

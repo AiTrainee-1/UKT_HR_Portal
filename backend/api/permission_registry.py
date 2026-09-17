@@ -209,6 +209,12 @@ URL_MODULE_MAP: dict[str, str] = {
     # absent for the same reason as gate-devices' equivalents above.
     "reception-devices": "outpass_visitors",
 
+    # Tea Break -a third page under the same Outpass/Visitors sidebar group
+    # (/hr/outpass-visitors/tea-break), same permission. qr-token/my-status
+    # are never called with an HR token (employee-token-authenticated), so
+    # HrPermissionMiddleware never applies to them regardless of this table.
+    "tea-break": "outpass_visitors",
+
     "payroll/production": "production_payroll",
     "payroll": "payroll",
     "compensation": "compensation",
