@@ -71,7 +71,7 @@ const navGroups: NavGroupData[] = [
         children: [
           { path: '/hr/outpass-visitors/outpass', label: 'Outpass' },
           { path: '/hr/outpass-visitors/visitors', label: 'Visitors' },
-          { path: '/hr/outpass-visitors/tea-break', label: 'Tea Break' },
+          // { path: '/hr/outpass-visitors/tea-break', label: 'Tea Break' },
         ],
       },
     ],
