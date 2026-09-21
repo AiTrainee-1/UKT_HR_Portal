@@ -212,7 +212,8 @@ def set_password(request: Request) -> Response:
     if not employee:
         return _error("Employee not found. Please contact HR.", 404)
     employee.password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=10)).decode()
-    employee.save(update_fields=["password_hash", "updated_at"])
+    employee.password_updated_at = timezone.now()
+    employee.save(update_fields=["password_hash", "password_updated_at", "updated_at"])
     return Response({"message": "Password set successfully"})
 
 
@@ -320,7 +321,9 @@ def delete_department(request: Request, pk: int) -> Response:
 
 
 def _employee_queryset():
-    return Employee.objects.select_related("department", "designation", "branch")
+    return Employee.objects.select_related(
+        "department", "designation", "branch", "reporting_manager", "reporting_manager__designation"
+    )
 
 
 def _serialize_employee(emp: Employee) -> dict:

@@ -350,6 +350,8 @@ def _permission_json(p, monthly_used=None, settings=None):
         "date": p.date.isoformat() if p.date else None,
         "permissionTime": p.permission_time.strftime("%H:%M") if p.permission_time else None,
         "reason": p.reason,
+        "type": p.type,
+        "durationMinutes": p.duration_minutes,
         "status": p.status,
         "hrComment": p.hr_comment,
         "approvedBy": p.approved_by,
@@ -425,11 +427,26 @@ def employee_permissions(request: Request) -> Response:
         except Exception:
             return Response({"error": "Invalid permissionTime format (HH:MM)"}, status=400)
 
+    perm_type = data.get("type")
+    if perm_type and perm_type not in dict(EmployeePermission.TYPE_CHOICES):
+        return Response({"error": "Invalid permission type"}, status=400)
+
+    duration_minutes = data.get("durationMinutes") or data.get("duration_minutes")
+    if duration_minutes is not None:
+        try:
+            duration_minutes = int(duration_minutes)
+        except (TypeError, ValueError):
+            return Response({"error": "Invalid durationMinutes"}, status=400)
+        if duration_minutes not in dict(EmployeePermission.DURATION_CHOICES):
+            return Response({"error": "durationMinutes must be one of 30, 45, 60, 90"}, status=400)
+
     p = EmployeePermission.objects.create(
         employee=emp,
         date=parsed_date,
         permission_time=perm_time,
         reason=data.get("reason"),
+        type=perm_type,
+        duration_minutes=duration_minutes,
         status=data.get("status", "pending"),
     )
 

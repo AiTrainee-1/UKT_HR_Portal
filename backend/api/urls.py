@@ -84,6 +84,7 @@ from .manager_views import (
     manager_update_outpass_status,
 )
 from .outpass_request_views import outpass_requests, outpass_request_hr_status, generate_return_qr
+from .family_views import my_family
 from .gate_scanner_views import (
     gate_devices, gate_device_detail, gate_login_info, gate_login, gate_scan, gate_scan_log,
 )
@@ -308,6 +309,7 @@ urlpatterns = [
     path("employee-documents/<int:pk>/file", employee_document_file),
     path("employee-documents/<int:pk>/whatsapp", whatsapp_employee_document),
     path("my/resignation", my_resignation),
+    path("my/family", my_family),
     path("manager/resignations", manager_pending_resignations),
     path("manager/resignations/<int:pk>/action", manager_resignation_action),
 

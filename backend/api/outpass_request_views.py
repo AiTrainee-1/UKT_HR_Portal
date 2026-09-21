@@ -81,6 +81,8 @@ def _outpass_request_json(req: OutpassRequest, with_employee: bool = False) -> d
         "employeeId": req.employee_id,
         "destination": req.destination,
         "reason": req.reason,
+        "passType": req.pass_type,
+        "expectedReturnAt": req.expected_return_at.isoformat() if req.expected_return_at else None,
         "status": req.status,
         "source": req.source,
         "approverRole": req.approver_role,
@@ -173,12 +175,29 @@ def outpass_requests(request: Request) -> Response:
     if not destination or not reason:
         return Response({"error": "destination and reason are required"}, status=400)
 
+    pass_type = data.get("passType") or data.get("pass_type")
+    if pass_type and pass_type not in dict(OutpassRequest.PASS_TYPE_CHOICES):
+        return Response({"error": "Invalid passType"}, status=400)
+
+    expected_return_at = data.get("expectedReturnAt") or data.get("expected_return_at")
+    if expected_return_at:
+        from django.utils.dateparse import parse_datetime
+        parsed_return = parse_datetime(expected_return_at)
+        if parsed_return is None:
+            return Response({"error": "Invalid expectedReturnAt format (ISO 8601)"}, status=400)
+        expected_return_at = parsed_return
+    else:
+        expected_return_at = None
+
     try:
         emp = Employee.objects.get(pk=emp_id)
     except Employee.DoesNotExist:
         return Response({"error": "Employee not found"}, status=404)
 
-    req = OutpassRequest.objects.create(employee=emp, destination=destination, reason=reason)
+    req = OutpassRequest.objects.create(
+        employee=emp, destination=destination, reason=reason,
+        pass_type=pass_type, expected_return_at=expected_return_at,
+    )
     return Response(_outpass_request_json(req), status=201)
 
 

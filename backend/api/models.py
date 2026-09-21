@@ -182,11 +182,59 @@ class Employee(models.Model):
     co_emp_enabled = models.BooleanField(
         default=False, db_column="co_emp_enabled"
     )
+    # Profile-detail fields (HR-managed, no self-service edit yet) — surfaced
+    # on the mobile Employee Profile screen's header tags / detail cards.
+    nationality = models.TextField(null=True, blank=True, db_column="nationality")
+    workstation = models.TextField(null=True, blank=True, db_column="workstation")
+    zone = models.TextField(null=True, blank=True, db_column="zone")
+    staff_tier = models.TextField(null=True, blank=True, db_column="staff_tier")
+    # Stamped whenever the employee's password_hash is replaced (Set Password
+    # or Change Password) — powers the "Last updated N days ago" line under
+    # Change Portal Password. NULL means never set.
+    password_updated_at = models.DateTimeField(
+        null=True, blank=True, db_column="password_updated_at"
+    )
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
     class Meta:
         db_table = "employees"
+
+
+# ──────────────────────────────────────────────
+#  Family & Dependents
+# ──────────────────────────────────────────────
+
+class FamilyDependent(models.Model):
+    RELATION_SPOUSE = "spouse"
+    RELATION_CHILD = "child"
+    RELATION_FATHER = "father"
+    RELATION_MOTHER = "mother"
+    RELATION_SIBLING = "sibling"
+    RELATION_OTHER = "other"
+    RELATION_CHOICES = [
+        (RELATION_SPOUSE, "Spouse"),
+        (RELATION_CHILD, "Child"),
+        (RELATION_FATHER, "Father"),
+        (RELATION_MOTHER, "Mother"),
+        (RELATION_SIBLING, "Sibling"),
+        (RELATION_OTHER, "Other"),
+    ]
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="dependents"
+    )
+    name = models.TextField()
+    relation = models.TextField(choices=RELATION_CHOICES)
+    date_of_birth = models.DateField(null=True, blank=True, db_column="date_of_birth")
+    is_insurance_nominee = models.BooleanField(default=False, db_column="is_insurance_nominee")
+    covered_under_health_scheme = models.BooleanField(
+        default=False, db_column="covered_under_health_scheme"
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "family_dependents"
 
 
 # ──────────────────────────────────────────────
@@ -770,6 +818,17 @@ class EmployeePermission(models.Model):
         (STATUS_REJECTED, "Rejected"),
     ]
 
+    TYPE_EARLY_OUT = "Early Out"
+    TYPE_LATE_IN = "Late In"
+    TYPE_SHORT_LEAVE = "Short Leave"
+    TYPE_CHOICES = [
+        (TYPE_EARLY_OUT, "Early Out"),
+        (TYPE_LATE_IN, "Late In"),
+        (TYPE_SHORT_LEAVE, "Short Leave"),
+    ]
+
+    DURATION_CHOICES = [(30, "30 minutes"), (45, "45 minutes"), (60, "60 minutes"), (90, "90 minutes")]
+
     employee = models.ForeignKey(
         Employee, on_delete=models.CASCADE,
         db_column="employee_id", related_name="permissions"
@@ -778,6 +837,13 @@ class EmployeePermission(models.Model):
     permission_time = models.TimeField(null=True, blank=True, db_column="permission_time")
     reason = models.TextField(null=True, blank=True)
     status = models.TextField(choices=STATUS_CHOICES, default=STATUS_PENDING)
+    # What kind of permission this is (arriving late / leaving early / a
+    # short leave mid-shift) and how long the employee expects to be away —
+    # both purely descriptive, shown on the request and its approval card.
+    # Neither ever gates the monthly/daily/weekly count limits, which are
+    # counted per-request regardless of type or duration.
+    type = models.TextField(choices=TYPE_CHOICES, null=True, blank=True, db_column="type")
+    duration_minutes = models.IntegerField(choices=DURATION_CHOICES, null=True, blank=True, db_column="duration_minutes")
     hr_comment = models.TextField(null=True, blank=True, db_column="hr_comment")
     approved_by = models.TextField(null=True, blank=True, db_column="approved_by")
     approver_role = models.TextField(null=True, blank=True, db_column="approver_role")  # "hr" | "dept_head"
@@ -3221,6 +3287,15 @@ class OutpassRequest(models.Model):
     SOURCE_ON_DUTY = "on_duty"
     SOURCE_CHOICES = [(SOURCE_MANUAL, "Manual"), (SOURCE_ON_DUTY, "On-Duty")]
 
+    PASS_TYPE_OFFICIAL = "official"
+    PASS_TYPE_PERSONAL = "personal"
+    PASS_TYPE_EARLY_DISMISSAL = "early_dismissal"
+    PASS_TYPE_CHOICES = [
+        (PASS_TYPE_OFFICIAL, "Official / Mill Duty"),
+        (PASS_TYPE_PERSONAL, "Personal Emergency"),
+        (PASS_TYPE_EARLY_DISMISSAL, "Early Shift Dismissal"),
+    ]
+
     employee = models.ForeignKey(
         Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="outpass_requests"
     )
@@ -3228,6 +3303,12 @@ class OutpassRequest(models.Model):
     reason = models.TextField(db_column="reason")
     status = models.TextField(choices=STATUS_CHOICES, default=STATUS_PENDING, db_column="status")
     source = models.TextField(choices=SOURCE_CHOICES, default=SOURCE_MANUAL, db_column="source")
+    # What kind of pass this is, and when the employee expects to be back —
+    # both purely descriptive/informational. Neither changes the real
+    # approval-gated pass validity window above (approved_at + 60 minutes),
+    # which stays the single source of truth for how long the QR is live.
+    pass_type = models.TextField(choices=PASS_TYPE_CHOICES, null=True, blank=True, db_column="pass_type")
+    expected_return_at = models.DateTimeField(null=True, blank=True, db_column="expected_return_at")
     on_duty_session = models.ForeignKey(
         OnDutySession, on_delete=models.SET_NULL, null=True, blank=True,
         db_column="on_duty_session_id", related_name="outpass_requests",

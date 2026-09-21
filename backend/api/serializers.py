@@ -44,11 +44,23 @@ def employee_json(emp, department_name: str | None = None) -> dict:
         branch_address = emp.branch.address or emp.branch.location
         branch_lat = _float_or_none(emp.branch.geofence_lat)
         branch_lng = _float_or_none(emp.branch.geofence_lng)
+    reporting_manager = None
+    if hasattr(emp, "reporting_manager") and emp.reporting_manager_id and emp.reporting_manager:
+        mgr = emp.reporting_manager
+        mgr_title = None
+        if mgr.designation_id and mgr.designation:
+            mgr_title = mgr.designation.title
+        reporting_manager = {
+            "id": mgr.id,
+            "name": f"{mgr.first_name} {mgr.last_name}".strip(),
+            "designationTitle": mgr_title,
+        }
     return {
         "id": emp.id,
         "employeeCode": emp.employee_code,
         "firstName": emp.first_name,
         "lastName": emp.last_name,
+        "name": f"{emp.first_name} {emp.last_name}".strip(),
         "gender": emp.gender,
         "dateOfBirth": emp.date_of_birth.isoformat() if emp.date_of_birth else None,
         "email": emp.email,
@@ -86,9 +98,29 @@ def employee_json(emp, department_name: str | None = None) -> dict:
         "motherName": emp.mother_name,
         "biometricDeviceId": emp.biometric_device_id,
         "hasPassword": bool(emp.password_hash),
+        "passwordUpdatedAt": _dt(emp.password_updated_at),
         "locationTrackingEnabled": emp.location_tracking_enabled,
         "coEmpEnabled": emp.co_emp_enabled,
+        "nationality": emp.nationality,
+        "workstation": emp.workstation,
+        "zone": emp.zone,
+        "staffTier": emp.staff_tier,
+        "reportingManagerId": emp.reporting_manager_id,
+        "reportingManager": reporting_manager,
+        "isConfirmed": bool(emp.confirmation_date),
+        "confirmationDate": emp.confirmation_date.isoformat() if emp.confirmation_date else None,
         "createdAt": _dt(emp.created_at),
+    }
+
+
+def family_dependent_json(dep) -> dict:
+    return {
+        "id": dep.id,
+        "name": dep.name,
+        "relation": dep.relation,
+        "dateOfBirth": dep.date_of_birth.isoformat() if dep.date_of_birth else None,
+        "isInsuranceNominee": dep.is_insurance_nominee,
+        "coveredUnderHealthScheme": dep.covered_under_health_scheme,
     }
 
 
