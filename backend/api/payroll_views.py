@@ -354,9 +354,9 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
     # 5. Final attendance records -the ONE engine every screen in the app
     #    uses (attendance_final.compute_month_records), for every day and
     #    every attendance mode. Internally this already applies the correct
-    #    strict/simple classification, night-shift relaxation, and manual
-    #    HR overrides (source="manual" rows are returned untouched) -payroll
-    #    no longer needs (or has) its own separate classification path.
+    #    strict/simple classification and manual HR overrides (source="manual"
+    #    rows are returned untouched) -payroll no longer needs (or has) its
+    #    own separate classification path.
     from .models import PayrollSettings as _PS
     from .attendance_final import compute_month_records
     _settings = _PS.get()
@@ -1696,7 +1696,6 @@ def _ps_response(ps) -> dict:
         # Feature toggles
         "staffPayrollRulesEnabled": ps.staff_payroll_rules_enabled,
         "prodPayrollRulesEnabled": ps.prod_payroll_rules_enabled,
-        "nightShiftEnabled": ps.night_shift_enabled,
         "compensationFeatureEnabled": ps.compensation_feature_enabled,
         # Backup
         "backupDirectory": ps.backup_directory,
@@ -2005,8 +2004,6 @@ def payroll_settings_view(request: Request) -> Response:
         ps.staff_payroll_rules_enabled = bool(data["staffPayrollRulesEnabled"])
     if "prodPayrollRulesEnabled" in data:
         ps.prod_payroll_rules_enabled = bool(data["prodPayrollRulesEnabled"])
-    if "nightShiftEnabled" in data:
-        ps.night_shift_enabled = bool(data["nightShiftEnabled"])
     if "afternoonLateCanCauseHalfShift" in data:
         ps.afternoon_late_can_cause_half_shift = bool(data["afternoonLateCanCauseHalfShift"])
     if "otDetectionEnabled" in data:

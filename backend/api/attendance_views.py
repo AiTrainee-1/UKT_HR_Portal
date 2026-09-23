@@ -217,18 +217,17 @@ def attendance_company_summary(request: Request) -> Response:
     per-employee search already shows, not a separate approximation.
 
     Everything compute_day_record() would otherwise look up one employee at
-    a time (punches, shift assignment, night-shift relaxation state,
-    approved permission, existing day record) is bulk-fetched here ONCE
-    across the whole roster and handed down per employee via `prefetch`
-    -the same prefetch-dict shape compute_month_records() already uses for
-    one employee across many days, just sliced the other way (many
-    employees, one day). Calling compute_day_record with no prefetch at all
-    across a ~230-employee roster measured at ~57s per request; this keeps
-    it to a small, fixed number of bulk queries regardless of roster size."""
+    a time (punches, shift assignment, approved permission, existing day
+    record) is bulk-fetched here ONCE across the whole roster and handed
+    down per employee via `prefetch` -the same prefetch-dict shape
+    compute_month_records() already uses for one employee across many days,
+    just sliced the other way (many employees, one day). Calling
+    compute_day_record with no prefetch at all across a ~230-employee roster
+    measured at ~57s per request; this keeps it to a small, fixed number of
+    bulk queries regardless of roster size."""
     from decimal import Decimal
     from .attendance_final import compute_day_record
-    from .models import AttendanceDayRecord, EmployeeShiftAssignment, NightShiftRelaxation, NightShiftRule
-    from .night_shift import ensure_default_rules
+    from .models import AttendanceDayRecord, EmployeeShiftAssignment
 
     d = _today()
     branch_id = get_branch_scope(request)
@@ -271,13 +270,6 @@ def attendance_company_summary(request: Request) -> Response:
     ).values_list("employee_id", flat=True):
         manual_present_by_emp.setdefault(emp_id, set()).add(d)
 
-    ensure_default_rules()
-    night_rules = list(NightShiftRule.objects.filter(is_active=True))
-
-    relaxations_by_emp: dict[int, dict] = {}
-    for r in NightShiftRelaxation.objects.filter(employee_id__in=emp_ids, relaxation_date=d):
-        relaxations_by_emp.setdefault(r.employee_id, {})[r.relaxation_date] = r
-
     permissions_by_emp: dict[int, dict] = {}
     for p in EmployeePermission.objects.filter(
         employee_id__in=emp_ids, date=d, status="approved",
@@ -294,8 +286,6 @@ def attendance_company_summary(request: Request) -> Response:
             "existing_day_records": existing_records_by_emp.get(emp.id, {}),
             "manual_attendance_dates": manual_present_by_emp.get(emp.id, set()),
             "night_logs_by_date": emp_logs_by_date,
-            "night_rules": night_rules,
-            "existing_relaxations": relaxations_by_emp.get(emp.id, {}),
             "approved_permissions_by_date": permissions_by_emp.get(emp.id, {}),
         }
         rec = compute_day_record(
@@ -1194,8 +1184,7 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
     side effect (same as every other page that reads attendance).
     """
     from .attendance_final import compute_day_record
-    from .models import AttendanceDayRecord, EmployeeShiftAssignment, NightShiftRelaxation, NightShiftRule
-    from .night_shift import ensure_default_rules
+    from .models import AttendanceDayRecord, EmployeeShiftAssignment
 
     try:
         d = date_type.fromisoformat(date_param)
@@ -1252,13 +1241,6 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
     ).values_list("employee_id", flat=True):
         manual_present_by_emp.setdefault(emp_id, set()).add(d)
 
-    ensure_default_rules()
-    night_rules = list(NightShiftRule.objects.filter(is_active=True))
-
-    relaxations_by_emp: dict[int, dict] = {}
-    for r in NightShiftRelaxation.objects.filter(employee_id__in=emp_ids, relaxation_date=d):
-        relaxations_by_emp.setdefault(r.employee_id, {})[r.relaxation_date] = r
-
     permissions_by_emp: dict[int, dict] = {}
     for p in EmployeePermission.objects.filter(
         employee_id__in=emp_ids, date=d, status="approved",
@@ -1273,8 +1255,6 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
             "existing_day_records": existing_records_by_emp.get(emp.id, {}),
             "manual_attendance_dates": manual_present_by_emp.get(emp.id, set()),
             "night_logs_by_date": emp_logs_by_date,
-            "night_rules": night_rules,
-            "existing_relaxations": relaxations_by_emp.get(emp.id, {}),
             "approved_permissions_by_date": permissions_by_emp.get(emp.id, {}),
         }
         rec = compute_day_record(
@@ -1346,9 +1326,9 @@ def attendance_report_log(request: Request) -> Response:
     # Report Log's "Daily Report" (Late/Permission/On-Leave + Informed status
     # export) -mutually exclusive with the month/year summary/detail modes
     # above. Reuses attendance_company_summary's bulk-prefetch-then-
-    # compute_day_record loop (assignments/night-shift/permissions/manual
-    # attendance all fetched once for the whole roster) but keeps each
-    # employee's row instead of collapsing to aggregate counts.
+    # compute_day_record loop (assignments/permissions/manual attendance all
+    # fetched once for the whole roster) but keeps each employee's row
+    # instead of collapsing to aggregate counts.
     if date_param:
         return _attendance_report_log_daily(request, date_param, department_param, search_param, settings)
 
@@ -1469,6 +1449,134 @@ def attendance_report_log(request: Request) -> Response:
         employees.append(_month_summary_row(emp, summary, cl_counts[emp.id], perm_counts[emp.id]))
 
     return Response({"month": m, "year": y, "employees": employees})
+
+
+@api_view(["GET"])
+@require_hr
+def attendance_report_log_sheet(request: Request) -> Response:
+    """
+    GET /api/attendance/report-log/sheet?dateFrom=2026-09-01&dateTo=2026-09-30[&department=3&search=ram]
+
+    The classic paper "Monthly Attendance Sheet" register, reborn as a grid:
+    every matching staff employee is a row, every date in [dateFrom, dateTo]
+    is a column, one status cell per employee per day, plus a per-date
+    "Strength" count (how many were present/half-shift that day) and a
+    per-employee month summary for the totals column -mirrors the physical
+    sheet's own Strength row and per-employee tally down the right edge.
+
+    Powers Attendance Sheet (frontend/src/pages/hr/AttendanceSheet.tsx) for
+    all three of its Day/Week/Month views -those are just this same
+    endpoint given a 1-day, 7-day, or up to 31-day range, not three
+    different code paths.
+
+    Built on compute_range_records (attendance_final.py), the same engine
+    every other attendance page reads -this endpoint only reshapes its
+    output into a grid, it never changes how a day is judged. Range capped
+    at 31 days so the payload stays bounded regardless of how the frontend
+    drives it.
+    """
+    from .attendance_final import compute_range_records, month_summary_from_records
+    from .shift_engine import half_shift_late_reference
+
+    date_from_param = request.query_params.get("dateFrom")
+    date_to_param = request.query_params.get("dateTo")
+    department_param = request.query_params.get("department")
+    search_param = request.query_params.get("search")
+
+    if not date_from_param or not date_to_param:
+        return Response({"error": "Provide dateFrom and dateTo"}, status=400)
+    try:
+        date_from = date_type.fromisoformat(date_from_param)
+        date_to = date_type.fromisoformat(date_to_param)
+    except ValueError:
+        return Response({"error": "Invalid dateFrom/dateTo"}, status=400)
+    if date_to < date_from:
+        return Response({"error": "dateTo must not be before dateFrom"}, status=400)
+    if (date_to - date_from).days > 30:
+        return Response({"error": "Range too large -31 days maximum"}, status=400)
+
+    settings = settings_for(request)
+
+    emps_qs = (
+        scope_to_branch(Employee.objects, request)
+        .filter(status="active", employment_type="staff")
+        .select_related("department", "designation")
+        .order_by("first_name")
+    )
+    if department_param:
+        emps_qs = emps_qs.filter(department_id=department_param)
+    if search_param:
+        q = search_param.strip()
+        emps_qs = emps_qs.filter(
+            Q(employee_code__icontains=q) | Q(first_name__icontains=q) | Q(last_name__icontains=q)
+        )
+    emps = list(emps_qs)
+
+    dates = []
+    d = date_from
+    while d <= date_to:
+        dates.append(d)
+        d += timedelta(days=1)
+
+    # Half Shift doesn't record which half was actually worked -only that
+    # shifts_earned came out to 0.5 -so it's inferred here from first_punch
+    # against the same reference time shift_engine already uses to decide
+    # whether a late arrival is late enough to BECOME a half shift in the
+    # first place (PayrollSettings.half_shift_late_reference_time, default
+    # 14:30): arriving before it means the morning was worked and the
+    # afternoon wasn't (or vice versa is what caused the shortfall);
+    # arriving at/after it (or never punching in at all) means only the
+    # afternoon was worked. This covers both a punch-derived half shift and
+    # a half shift covered by approved Half-Day Leave identically, since
+    # either way the question is simply "which half do the real punches
+    # fall in."
+    half_shift_ref = half_shift_late_reference(settings=settings)
+
+    employees = []
+    strength_by_date: dict = defaultdict(int)
+    for emp in emps:
+        records = compute_range_records(emp, date_from, date_to, settings)
+        by_date = {r.date: r for r in records}
+        days = []
+        for d in dates:
+            r = by_date.get(d)
+            if r is None:
+                days.append({"date": d.isoformat(), "status": None})
+                continue
+            half_day_period = None
+            if r.status == "half_shift":
+                half_day_period = "morning" if (r.first_punch and r.first_punch < half_shift_ref) else "afternoon"
+            days.append({
+                "date": d.isoformat(),
+                "status": r.status,
+                "isLate": r.is_late,
+                "isHalfShift": r.is_half_shift,
+                "halfDayPeriod": half_day_period,
+                "firstPunch": r.first_punch.strftime("%H:%M") if r.first_punch else None,
+                "lastPunch": r.last_punch.strftime("%H:%M") if r.last_punch else None,
+                "shiftsEarned": str(r.shifts_earned) if r.shifts_earned is not None else None,
+            })
+            if r.status in ("present", "half_shift"):
+                strength_by_date[d.isoformat()] += 1
+        summary = month_summary_from_records(records)
+        employees.append({
+            "employeeId": emp.id,
+            "employeeCode": emp.employee_code,
+            "employeeName": f"{emp.first_name} {emp.last_name}".strip(),
+            "department": emp.department.name if emp.department else None,
+            "designation": emp.designation.title if emp.designation else None,
+            "days": days,
+            "summary": summary,
+        })
+
+    date_strs = [d.isoformat() for d in dates]
+    return Response({
+        "dateFrom": date_from.isoformat(),
+        "dateTo": date_to.isoformat(),
+        "dates": date_strs,
+        "employees": employees,
+        "strength": [strength_by_date.get(ds, 0) for ds in date_strs],
+    })
 
 
 @api_view(["PATCH"])

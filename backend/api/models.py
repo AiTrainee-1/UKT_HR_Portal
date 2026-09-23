@@ -1776,22 +1776,19 @@ class PayrollSettings(models.Model):
     # (Production salary-range rules keep their own prod_pf_ef_enabled toggle.)
     staff_payroll_rules_enabled = models.BooleanField(default=False, db_column="staff_payroll_rules_enabled")
     prod_payroll_rules_enabled = models.BooleanField(default=False, db_column="prod_payroll_rules_enabled")
-    # Night Shift Relaxation (staff-only). Controls sidebar visibility of the
-    # page; default True preserves the pre-toggle behavior.
-    night_shift_enabled = models.BooleanField(default=True, db_column="night_shift_enabled")
     # Compensation feature master switch (CTC Breakdown + OT Detection +
     # Compensation Leave + History & Reports -the whole /hr/compensation
     # page). Checked at a single choke point everywhere it matters
     # (compensation_views.py's @require_compensation_enabled, attendance_
     # final.py's _compensation_day_for, payroll_views.py's OT-pay block,
-    # overtime.py's detect_overtime_for_month) -mirrors night_shift_enabled's
-    # own fix history: a toggle that only hid a sidebar entry while the
-    # underlying calculations kept running regardless was found to be a bug,
-    # not a feature, so this one is wired to genuinely disable everything at
-    # once from day one. Sub-settings (ot_detection_enabled, ot_threshold_
-    # minutes, ot_compensation_type) stay independent finer-grained controls
-    # underneath this master switch -this is default True since the pages
-    # are already live; HR turns it off explicitly to postpone the feature.
+    # overtime.py's detect_overtime_for_month) -a toggle that only hides a
+    # sidebar entry while the underlying calculations keep running regardless
+    # is a bug, not a feature, so this one is wired to genuinely disable
+    # everything at once from day one. Sub-settings (ot_detection_enabled,
+    # ot_threshold_minutes, ot_compensation_type) stay independent finer-
+    # grained controls underneath this master switch -this is default True
+    # since the pages are already live; HR turns it off explicitly to
+    # postpone the feature.
     compensation_feature_enabled = models.BooleanField(default=True, db_column="compensation_feature_enabled")
 
     # ── Database backup ─────────────────────────────────────────────────────
@@ -1859,7 +1856,7 @@ class BranchSettingsOverride(models.Model):
       * payroll and attendance resolve from the EMPLOYEE's branch, so a run
         started from the Admin page produces exactly what the branch login
         would have produced.
-    Engine and background paths (attendance_final, shift_engine, night_shift,
+    Engine and background paths (attendance_final, shift_engine,
     backup_scheduler) have neither, and read the universal row.
     """
     branch = models.OneToOneField(
@@ -2715,73 +2712,6 @@ class CasualLeaveRequest(models.Model):
 
 
 # ──────────────────────────────────────────────
-#  Night Shift Relaxation
-# ──────────────────────────────────────────────
-
-class NightShiftRule(models.Model):
-    """
-    DB-driven relaxation rule: if the employee's last punch-out of the night
-    is at or before `worked_until` (with `crosses_midnight` marking early-
-    morning times as belonging to the previous night), the next morning they
-    may punch in as late as `allowed_first_punch` without late/half-shift.
-
-    Rules are matched in ascending `worked_until` order -the first rule whose
-    threshold is >= the actual punch-out time wins.
-    """
-    name = models.TextField()
-    worked_until = models.TimeField(
-        db_column="worked_until",
-        help_text="Latest punch-out this rule covers (e.g. 22:30, or 02:30 next day).",
-    )
-    crosses_midnight = models.BooleanField(
-        default=False, db_column="crosses_midnight",
-        help_text="True when worked_until is an early-morning time of the NEXT day.",
-    )
-    allowed_first_punch = models.TimeField(
-        db_column="allowed_first_punch",
-        help_text="Next-day first punch allowed up to this time without penalty.",
-    )
-    order = models.IntegerField(default=0)
-    is_active = models.BooleanField(default=True, db_column="is_active")
-    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
-
-    class Meta:
-        db_table = "night_shift_rules"
-        ordering = ["order", "id"]
-
-
-class NightShiftRelaxation(models.Model):
-    """
-    One row per employee per night worked late. Detected automatically from
-    AttendanceLog punches. `relaxation_date` (= night_date + 1) is the day the
-    late-arrival allowance applies to; attendance/payroll consult this table
-    when classifying that day.
-    """
-    employee = models.ForeignKey(
-        Employee, on_delete=models.CASCADE, db_column="employee_id",
-        related_name="night_relaxations",
-    )
-    night_date = models.DateField(db_column="night_date", help_text="The day the night shift started.")
-    relaxation_date = models.DateField(db_column="relaxation_date", help_text="Next day -allowance applies here.")
-    last_punch_out = models.TimeField(db_column="last_punch_out")
-    crossed_midnight = models.BooleanField(default=False, db_column="crossed_midnight")
-    allowed_until = models.TimeField(db_column="allowed_until")
-    rule = models.ForeignKey(
-        NightShiftRule, on_delete=models.SET_NULL, null=True, blank=True,
-        db_column="rule_id", related_name="relaxations",
-    )
-    # Filled in once the employee punches in the next day
-    reported_at = models.TimeField(null=True, blank=True, db_column="reported_at")
-    within_allowance = models.BooleanField(null=True, blank=True, db_column="within_allowance")
-    computed_at = models.DateTimeField(auto_now=True, db_column="computed_at")
-
-    class Meta:
-        db_table = "night_shift_relaxations"
-        unique_together = [["employee", "relaxation_date"]]
-        ordering = ["-relaxation_date"]
-
-
-# ──────────────────────────────────────────────
 #  Compensation: OT detection + Compensation-Leave announcements
 # ──────────────────────────────────────────────
 #
@@ -2793,9 +2723,6 @@ class NightShiftRelaxation(models.Model):
 #      specific employees/branch/department; actual punches still decide
 #      Full vs Half that day (see attendance_final.py's compensation-day
 #      exemption) -a compensation day never auto-grants Full Day.
-# Distinct from NightShiftRelaxation above (that's about tomorrow's
-# punctuality after working late; this is about rewarding today's extra
-# hours) -the two coexist without conflict.
 
 class OvertimeRecord(models.Model):
     STATUS_DETECTED = "detected"
@@ -3164,7 +3091,7 @@ class WhatsAppMessageLog(models.Model):
     document_ref_id = models.IntegerField(null=True, blank=True, db_column="document_ref_id")
     phone_number = models.TextField(db_column="phone_number")
     status = models.TextField(default="sent", db_column="status")  # "sent" | "failed"
-    meta_message_id = models.TextField(blank=True, default="", db_column="meta_message_id")
+    gupshup_message_id = models.TextField(blank=True, default="", db_column="gupshup_message_id")
     error_message = models.TextField(blank=True, default="", db_column="error_message")
     sent_by = models.ForeignKey(
         HRUser, null=True, blank=True, on_delete=models.SET_NULL,
@@ -3182,19 +3109,21 @@ class WhatsAppMessageLog(models.Model):
 
 class WhatsAppMessageTemplate(models.Model):
     """
-    Per-document-type Meta message template configuration, editable from
+    Per-document-type Gupshup message template configuration, editable from
     Settings -> WhatsApp. This is business configuration, not a secret (the
-    actual API credentials stay .env-only, see settings.WHATSAPP_*) -it just
-    records which pre-approved Meta template name/language to use for each
-    document type, since Meta requires every business-initiated WhatsApp
-    message to use a template it has already reviewed and approved; the
-    template's wording itself can't be freely edited here, only which
-    approved template gets used and a human-readable note on what its
-    {{n}} variables mean, for HR's reference.
+    actual API credentials stay .env-only, see settings.GUPSHUP_*) -it just
+    records which pre-approved Gupshup template ID to use for each document
+    type, since WhatsApp requires every business-initiated message to use a
+    template that has already been reviewed and approved -the template's
+    wording itself can't be freely edited here, only which approved template
+    gets used and a human-readable note on what its {{n}} variables mean,
+    for HR's reference. No language field: unlike Meta's Cloud API (one
+    template name shared across language variants, language picked at send
+    time), a Gupshup template ID already refers to one specific approved
+    language variant.
     """
     document_type = models.TextField(unique=True, db_column="document_type")
-    meta_template_name = models.TextField(blank=True, default="", db_column="meta_template_name")
-    meta_language_code = models.TextField(default="en", db_column="meta_language_code")
+    gupshup_template_id = models.TextField(blank=True, default="", db_column="gupshup_template_id")
     variable_note = models.TextField(
         blank=True, default="", db_column="variable_note",
         help_text="Human-readable note on what each {{n}} in the template maps to, e.g. '{{1}}=employee name, {{2}}=month/year'.",
@@ -3204,6 +3133,29 @@ class WhatsAppMessageTemplate(models.Model):
 
     class Meta:
         db_table = "whatsapp_message_template"
+
+
+class WhatsAppMediaAsset(models.Model):
+    """
+    Short-lived, token-addressed blob store so a document/image WhatsApp
+    template message can be sent via Gupshup. Unlike Meta's Cloud API (which
+    accepts a direct media upload and hands back a media_id), Gupshup's
+    Access API only accepts a *public URL* it fetches the file from -see
+    whatsapp_service.send_document. Every generated PDF/PNG is written here
+    just before sending, exposed read-only at GET /api/whatsapp/media/<token>
+    (whatsapp_views.whatsapp_media, no auth -Gupshup's servers fetch it),
+    and pruned lazily (expired rows deleted whenever a new one is created --
+    no separate scheduled job needed given the low daily volume of sends).
+    """
+    token = models.CharField(max_length=64, unique=True, db_column="token")
+    content = models.BinaryField(db_column="content")
+    filename = models.TextField(db_column="filename")
+    mime_type = models.TextField(db_column="mime_type")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    expires_at = models.DateTimeField(db_column="expires_at")
+
+    class Meta:
+        db_table = "whatsapp_media_asset"
 
 
 # ──────────────────────────────────────────────

@@ -1034,7 +1034,7 @@ def idcard_whatsapp(request: Request) -> Response:
     png_bytes = render_idcard_png(idcard, verify_url)
 
     log = whatsapp_service.send_document(
-        emp, "id_card", png_bytes, f"idcard-{emp.employee_code}.png",
+        request, emp, "id_card", png_bytes, f"idcard-{emp.employee_code}.png",
         body_params=[idcard["name"]], mime_type="image/png",
         document_ref_id=emp.id, sent_by_id=request.jwt_user.get("hrUserId"),
     )

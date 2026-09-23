@@ -622,25 +622,23 @@ function WhatsAppTemplateRow({ documentType, label }: { documentType: WhatsAppDo
   const updateTemplate = useUpdateWhatsAppTemplate();
   const existing = templates?.find(t => t.documentType === documentType);
 
-  const [templateName, setTemplateName] = useState("");
-  const [languageCode, setLanguageCode] = useState("en");
+  const [templateId, setTemplateId] = useState("");
   const [variableNote, setVariableNote] = useState("");
   const [isEnabled, setIsEnabled] = useState(false);
 
   useEffect(() => {
     if (existing) {
-      setTemplateName(existing.metaTemplateName);
-      setLanguageCode(existing.metaLanguageCode);
+      setTemplateId(existing.gupshupTemplateId);
       setVariableNote(existing.variableNote);
       setIsEnabled(existing.isEnabled);
     }
-  }, [existing?.metaTemplateName, existing?.metaLanguageCode, existing?.variableNote, existing?.isEnabled]);
+  }, [existing?.gupshupTemplateId, existing?.variableNote, existing?.isEnabled]);
 
   const save = async () => {
     try {
       await updateTemplate.mutateAsync({
         documentType,
-        data: { metaTemplateName: templateName, metaLanguageCode: languageCode, variableNote, isEnabled },
+        data: { gupshupTemplateId: templateId, variableNote, isEnabled },
       });
       toast({ title: `${label} WhatsApp template saved` });
     } catch {
@@ -657,15 +655,9 @@ function WhatsAppTemplateRow({ documentType, label }: { documentType: WhatsAppDo
           <Switch checked={isEnabled} onCheckedChange={setIsEnabled} />
         </div>
       </div>
-      <div className="grid sm:grid-cols-2 gap-3">
-        <div className="space-y-1.5">
-          <Label className="text-xs">Meta Template Name</Label>
-          <Input value={templateName} onChange={e => setTemplateName(e.target.value)} placeholder="e.g. salary_slip_ready" />
-        </div>
-        <div className="space-y-1.5">
-          <Label className="text-xs">Language Code</Label>
-          <Input value={languageCode} onChange={e => setLanguageCode(e.target.value)} placeholder="en" />
-        </div>
+      <div className="space-y-1.5">
+        <Label className="text-xs">Gupshup Template ID</Label>
+        <Input value={templateId} onChange={e => setTemplateId(e.target.value)} placeholder="e.g. 8f2a1c3e-...-template-id" />
       </div>
       <div className="space-y-1.5">
         <Label className="text-xs">Variable Note (for your reference only)</Label>
@@ -686,12 +678,12 @@ function WhatsAppSettingsCard() {
       <Card className="border-0 shadow-sm">
         <CardHeader className="pb-3">
           <CardTitle className="text-sm font-bold flex items-center gap-2">
-            <MessageCircle size={15} className="text-emerald-500" /> WhatsApp Cloud API
+            <MessageCircle size={15} className="text-emerald-500" /> Gupshup WhatsApp API
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="p-3 rounded-lg bg-amber-50 border border-amber-100 text-xs text-amber-700">
-            Credentials (access token, phone number ID) are configured directly in the server's{" "}
+            Credentials (API key, app name, source number) are configured directly in the server's{" "}
             <code>.env</code> file, never stored in the database or entered here -this keeps them out of
             reach of anything that reads Settings data, including database backups.
           </div>
@@ -701,15 +693,15 @@ function WhatsAppSettingsCard() {
             <div className="flex items-center gap-2 p-3 rounded-lg bg-green-50 border border-green-100 text-xs text-green-700">
               <CheckCircle2 size={14} />
               <span>
-                Configured -phone number ending in <strong>…{status.phoneNumberId}</strong>, API {status.apiVersion}.
+                Configured -source number ending in <strong>…{status.sourceNumber}</strong>, app <strong>{status.appName}</strong>.
               </span>
             </div>
           ) : (
             <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 border border-red-100 text-xs text-red-700">
               <AlertTriangle size={14} />
               <span>
-                Not configured -set <code>WHATSAPP_ACCESS_TOKEN</code>, <code>WHATSAPP_PHONE_NUMBER_ID</code>, and{" "}
-                <code>WHATSAPP_BUSINESS_ACCOUNT_ID</code> in <code>.env</code> and restart the server.
+                Not configured -set <code>GUPSHUP_API_KEY</code>, <code>GUPSHUP_APP_NAME</code>, and{" "}
+                <code>GUPSHUP_SOURCE_NUMBER</code> in <code>.env</code> and restart the server.
               </span>
             </div>
           )}
@@ -724,12 +716,12 @@ function WhatsAppSettingsCard() {
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="p-3 rounded-lg bg-blue-50 border border-blue-100 text-xs text-blue-700">
-            Meta requires every WhatsApp message a business sends first (rather than replying to the
-            customer) to use a pre-approved template -its wording can't be freely edited here, only which
-            approved template gets used per document type. Create and get templates approved in{" "}
-            <strong>Meta Business Manager → WhatsApp → Message Templates</strong> first, then enter the
-            exact template name below. A document type stays disabled (send attempts fail with a clear
-            error) until a template name is set and the toggle is turned on.
+            WhatsApp requires every business-initiated message (rather than a reply to the customer) to use
+            a pre-approved template -its wording can't be freely edited here, only which approved template
+            gets used per document type. Create and get templates approved on your{" "}
+            <strong>Gupshup dashboard → Templates</strong> first, then paste the approved template's ID
+            below. A document type stays disabled (send attempts fail with a clear error) until a template
+            ID is set and the toggle is turned on.
           </div>
           <div className="grid gap-3">
             {WHATSAPP_DOCUMENT_TYPES.map(({ value, label }) => (
@@ -1014,13 +1006,9 @@ export default function Settings() {
     defaultShiftLunchGraceMinutes: 10,
   });
   // Attendance tab is split Staff / Production -Strict/Simple mode, the
-  // punctuality window, night relaxation and the half-shift reference are
-  // all staff-only concepts, so they live under Staff.
+  // punctuality window and the half-shift reference are all staff-only
+  // concepts, so they live under Staff.
   const [attSubTab, setAttSubTab] = useState<"staff" | "production">("staff");
-  // Staff attendance sub-tab further splits into Calculation Mode & Zones
-  // vs. Night Shift Relaxation -two independent concerns that used to be
-  // stacked in one long scroll.
-  const [staffAttSubTab, setStaffAttSubTab] = useState<"mode" | "night">("mode");
   // Late Detection tab split into its two independent policies.
   const [lateDetectionSubTab, setLateDetectionSubTab] = useState<"late" | "permission">("late");
   // Payroll tab split into its independent settings groups.
@@ -1071,9 +1059,6 @@ export default function Settings() {
   // deduction is applied for that employee class until explicitly enabled)
   const [staffRulesEnabled, setStaffRulesEnabled] = useState(false);
   const [prodRulesEnabled, setProdRulesEnabled] = useState(false);
-
-  // Night Shift Relaxation feature toggle (staff-only page in the sidebar)
-  const [nightShiftEnabled, setNightShiftEnabled] = useState(true);
 
   const [payroll, setPayroll] = useState({
     // Staff
@@ -1189,7 +1174,6 @@ export default function Settings() {
       setPfEfRules(payrollSettingsData.prodPfEfRules ?? []);
       setStaffRulesEnabled(payrollSettingsData.staffPayrollRulesEnabled ?? false);
       setProdRulesEnabled(payrollSettingsData.prodPayrollRulesEnabled ?? false);
-      setNightShiftEnabled(payrollSettingsData.nightShiftEnabled ?? true);
       setProdPeriodFrequency(payrollSettingsData.prodPeriodFrequency ?? "2weeks");
       setProdPeriodStyle(payrollSettingsData.prodPeriodStyle ?? "calendar_month");
       setProdPeriodWeekdayAnchor((payrollSettingsData.prodPeriodWeekdayAnchor as "mon_sat" | "sun_sat") ?? "mon_sat");
@@ -2101,17 +2085,6 @@ export default function Settings() {
             />
 
             {attSubTab === "staff" && (<>
-            <PillTabs
-              items={[
-                { value: "mode", label: "Calculation Mode & Zones", icon: <Clock size={13} /> },
-                { value: "night", label: "Night Shift Relaxation", icon: <Clock size={13} /> },
-              ]}
-              value={staffAttSubTab}
-              onChange={(v) => setStaffAttSubTab(v as "mode" | "night")}
-              baseColor="#334155"
-              pillBg="#f8fafc"
-            />
-            {staffAttSubTab === "mode" && (<>
             {/* ── How each mode works ── */}
             <Card className="border-0 shadow-sm bg-slate-50/60">
               <CardHeader className="pb-2">
@@ -2432,51 +2405,6 @@ export default function Settings() {
                 </Button>
               </CardContent>
             </Card>
-            </>)}
-
-            {staffAttSubTab === "night" && (<>
-            {/* ── Night Shift Relaxation (staff-only feature toggle) ── */}
-            <Card className="border-0 shadow-sm">
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-sm font-bold flex items-center gap-2">
-                    <Clock size={15} className="text-indigo-500" /> Night Shift Relaxation (Staff)
-                  </CardTitle>
-                  <div className="flex items-center gap-2">
-                    <span className={`text-xs font-bold ${nightShiftEnabled ? "text-green-600" : "text-gray-400"}`}>
-                      {nightShiftEnabled ? "ENABLED" : "DISABLED"}
-                    </span>
-                    <Switch
-                      checked={nightShiftEnabled}
-                      onCheckedChange={async (v) => {
-                        setNightShiftEnabled(v);
-                        try {
-                          await updatePayrollSettings.mutateAsync({ nightShiftEnabled: v } as never);
-                          toast({
-                            title: v ? "Night Shift Relaxation enabled" : "Night Shift Relaxation disabled",
-                            description: v
-                              ? "The Night Shift page is now visible in the sidebar."
-                              : "The Night Shift page is hidden from the sidebar. Existing relaxation logic is unchanged.",
-                          });
-                        } catch {
-                          setNightShiftEnabled(!v);
-                          toast({ title: "Failed to update setting", variant: "destructive" });
-                        }
-                      }}
-                    />
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <p className="text-xs text-gray-500 leading-relaxed">
-                  Staff who work late into the night get a grace window to report late the next
-                  morning without being marked Late. This switch controls whether the
-                  <strong> Night Shift</strong> page appears in the sidebar -the underlying
-                  detection logic and rules keep working exactly as before either way.
-                </p>
-              </CardContent>
-            </Card>
-            </>)}
 
             </>)}
 

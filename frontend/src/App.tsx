@@ -57,6 +57,7 @@ import ResumeScreening from "@/pages/hr/recruitment/ResumeScreening";
 import Documents from "@/pages/hr/recruitment/Documents";
 import Attendance from "@/pages/hr/Attendance";
 import AttendanceReportLog from "@/pages/hr/AttendanceReportLog";
+import AttendanceSheet from "@/pages/hr/AttendanceSheet";
 import OutpassVisitors from "@/pages/hr/OutpassVisitors";
 import Departments from "@/pages/hr/Departments";
 import Designations from "@/pages/hr/Designations";
@@ -82,7 +83,6 @@ import Bonus from "@/pages/hr/Bonus";
 import IdCards from "@/pages/hr/IdCards";
 import CasualLeave from "@/pages/hr/CasualLeave";
 import MissingPunch from "@/pages/hr/MissingPunch";
-import NightShift from "@/pages/hr/NightShift";
 import GeoAttendance from "@/pages/hr/GeoAttendance";
 import AttendancePunchSearch from "@/pages/hr/AttendancePunchSearch";
 import HrChat from "@/pages/hr/Chat";
@@ -256,6 +256,9 @@ function Router() {
       <Route path="/hr/attendance/report-log">
         {() => <ProtectedRoute component={AttendanceReportLog} allowedRoles={["hr"]} />}
       </Route>
+      <Route path="/hr/attendance/sheet">
+        {() => <ProtectedRoute component={AttendanceSheet} allowedRoles={["hr"]} />}
+      </Route>
       <Route path="/hr/outpass-visitors/outpass">
         {() => <ProtectedRoute component={OutpassVisitors} allowedRoles={["hr"]} />}
       </Route>
@@ -305,9 +308,6 @@ function Router() {
       </Route>
       <Route path="/hr/missing-punch">
         {() => <ProtectedRoute component={MissingPunch} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/night-shift">
-        {() => <ProtectedRoute component={NightShift} allowedRoles={["hr"]} />}
       </Route>
       <Route path="/hr/geo-attendance">
         {() => <ProtectedRoute component={GeoAttendance} allowedRoles={["hr"]} />}

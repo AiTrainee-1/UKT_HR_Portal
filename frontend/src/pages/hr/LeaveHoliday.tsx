@@ -65,13 +65,22 @@ export default function LeaveHoliday() {
     reason: "",
   });
 
-  const { data: leaves, isLoading: leavesLoading } = useListLeaveRequests();
+  // refetchInterval: this page has no other live-update mechanism (no
+  // websocket, no manual refresh button), and a mobile HOD approval writes
+  // straight to the DB with no signal back to whatever HR is looking at -see
+  // ApprovedRequests.tsx, which polls the same two query keys for the same
+  // reason. Without this, an HR user parked on this page (not navigating
+  // away, not refocusing the window) would never see a mobile-approved
+  // request's status change until something else happened to invalidate it.
+  const { data: leaves, isLoading: leavesLoading } = useListLeaveRequests(undefined, {
+    query: { refetchInterval: 30_000 },
+  } as any);
   const { data: holidays, isLoading: holidaysLoading } = useListHolidays({ year: filterYear });
   const { data: permissions, isLoading: permissionsLoading } = useListPermissions({
     ...(permFilterStatus !== "all" ? { status: permFilterStatus } : {}),
     ...(permFilterMonth !== "all" ? { month: permFilterMonth } : {}),
     year: permFilterYear,
-  });
+  }, { refetchInterval: 30_000 } as any);
   const updateLeaveMutation = useUpdateLeaveStatus();
   const deleteLeaveMutation = useDeleteLeaveRequest();
   const createHolidayMutation = useCreateHoliday();

@@ -23,7 +23,7 @@ Resolution differs by purpose, and getting this wrong is a payroll bug:
                             regeneration from either place agree.
 
   PayrollSettings.get()     untouched. Engine and background paths
-                            (attendance_final, shift_engine, night_shift,
+                            (attendance_final, shift_engine,
                             backup_scheduler) hold neither a request nor an
                             employee, and read universal values.
 

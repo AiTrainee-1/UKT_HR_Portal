@@ -237,6 +237,57 @@ def manager_department_assignments(request: Request, pk: int) -> Response:
 
 # ─── Individual employee assignments ─────────────────────────────────────────
 
+def _conflict_manager_json(m: DepartmentManager) -> dict:
+    emp = m.employee
+    return {
+        "id": m.id,
+        "employeeId": emp.id,
+        "employeeName": f"{emp.first_name} {emp.last_name}",
+        "employeeCode": emp.employee_code,
+    }
+
+
+def _find_employee_assignment_conflict(emp: Employee, m: DepartmentManager):
+    """An employee should never be actively assigned to two HODs at once
+    (direct assignment OR department coverage) -see _get_manager_employee_ids/
+    _manager_json, which already treat both as equally "assigned" for
+    headcount/Unassigned-staff purposes. Returns (conflict_type, other_manager)
+    or (None, None) when there's no conflict, where conflict_type is
+    "direct" (another manager has a ManagerEmployeeAssignment row for this
+    exact employee -cleanly resolvable by moving that one row) or
+    "department" (this employee's own department is assigned to a different
+    active manager -not a single row to move, since the whole department is
+    covered, not just this employee; the caller can still choose to also add
+    a direct assignment to the new manager, but that leaves them reporting to
+    both until the department assignment itself is changed -see the frontend
+    confirm dialog's wording for how this is explained to HR).
+    Only ACTIVE managers count as a real conflict -an assignment under a
+    deactivated HOD is not "actively assigned" per the same convention
+    ManagerAssignmentLookup.tsx's `assignable` list already uses."""
+    direct = (
+        ManagerEmployeeAssignment.objects
+        .filter(employee=emp, manager__is_active=True)
+        .exclude(manager=m)
+        .select_related("manager__employee")
+        .first()
+    )
+    if direct:
+        return "direct", direct.manager
+
+    if emp.department_id:
+        dept_assignment = (
+            ManagerDepartmentAssignment.objects
+            .filter(department_id=emp.department_id, manager__is_active=True)
+            .exclude(manager=m)
+            .select_related("manager__employee")
+            .first()
+        )
+        if dept_assignment:
+            return "department", dept_assignment.manager
+
+    return None, None
+
+
 @api_view(["POST", "DELETE"])
 @require_hr
 def manager_employee_assignments(request: Request, pk: int) -> Response:
@@ -257,12 +308,49 @@ def manager_employee_assignments(request: Request, pk: int) -> Response:
         if not emp_id:
             return Response({"error": "employeeCode or employeeId is required"}, status=400)
         try:
-            emp = scope_to_branch(Employee.objects, request).get(pk=emp_id)
+            emp = scope_to_branch(Employee.objects, request).select_related("department").get(pk=emp_id)
         except Employee.DoesNotExist:
             return Response({"error": "Employee not found"}, status=404)
-        _, created = ManagerEmployeeAssignment.objects.get_or_create(manager=m, employee=emp)
-        if not created:
+
+        # Already directly assigned to THIS manager -idempotent no-op, same
+        # response as before this feature existed. Checked before conflict
+        # detection so a merely-coincidental department-level conflict from a
+        # THIRD manager (e.g. their dept was separately claimed after this
+        # direct assignment was made) doesn't turn a harmless re-add attempt
+        # into a confusing 409.
+        if ManagerEmployeeAssignment.objects.filter(manager=m, employee=emp).exists():
             return Response({"error": "Employee already assigned to this manager"}, status=400)
+
+        force = bool(request.data.get("force"))
+        conflict_type, other_manager = _find_employee_assignment_conflict(emp, m)
+        if conflict_type and not force:
+            emp_name = f"{emp.first_name} {emp.last_name}"
+            other_name = f"{other_manager.employee.first_name} {other_manager.employee.last_name}"
+            if conflict_type == "direct":
+                message = f"{emp_name} is already assigned to {other_name}. Remove them from {other_name} and assign to this HOD instead?"
+            else:
+                message = (
+                    f"{emp_name} is already covered under {other_name} via their department "
+                    f"({emp.department.name if emp.department else '—'}). Assign them individually to this HOD as well?"
+                )
+            return Response({
+                "conflict": True,
+                "conflictType": conflict_type,
+                "existingManager": _conflict_manager_json(other_manager),
+                "error": message,
+            }, status=409)
+
+        if conflict_type == "direct" and force:
+            # A clean swap -the employee only ever reports to one HOD via a
+            # direct assignment, so moving them means removing the old row.
+            # A "department" conflict has no row to remove here (see
+            # _find_employee_assignment_conflict) -force just adds the new
+            # direct assignment alongside the existing department coverage.
+            ManagerEmployeeAssignment.objects.filter(employee=emp).exclude(manager=m).delete()
+
+        # Always a genuine create at this point -the "already assigned to
+        # this manager" case returned early above.
+        ManagerEmployeeAssignment.objects.create(manager=m, employee=emp)
         return Response({"message": f"{emp.first_name} {emp.last_name} assigned"}, status=201)
 
     emp_id = request.data.get("employeeId") or request.data.get("employee_id")

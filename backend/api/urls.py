@@ -50,7 +50,7 @@ from .company_documents_views import (
     offer_letter_pdf, offer_letter_email, experience_letter_pdf, salary_slip_pdf,
     offer_letter_whatsapp, experience_letter_whatsapp,
 )
-from .whatsapp_views import whatsapp_status, whatsapp_templates, whatsapp_template_update
+from .whatsapp_views import whatsapp_status, whatsapp_templates, whatsapp_template_update, whatsapp_media
 from .org_views import (
     branches, branch_detail,
     designations, designation_detail,
@@ -118,7 +118,8 @@ from .reception_views import (
 from .attendance_views import (
     attendance_summary, attendance_daily, attendance_monthly_trend,
     attendance_employee_history, biometric_punch, manual_attendance,
-    sync_biometric_api, sync_biometric_progress, attendance_report_log, set_day_informed, compute_shift_logs,
+    sync_biometric_api, sync_biometric_progress, attendance_report_log, attendance_report_log_sheet,
+    set_day_informed, compute_shift_logs,
     attendance_search, attendance_search_range,
     attendance_late_summary, employee_shift_monthly_stats, attendance_sync_status,
     mobile_home_summary, attendance_live_feed,
@@ -149,10 +150,6 @@ from .missing_punch_views import (
     missing_punch_requests, missing_punch_request_hr_status,
 )
 from .auto_sync_views import auto_sync_rules, auto_sync_rule_detail
-from .night_shift_views import (
-    night_shift_dashboard, night_shift_recompute,
-    night_shift_rules, night_shift_rule_detail,
-)
 from .production_payroll_views import (
     production_next_period, production_generate_payroll,
     production_skip_check, production_payroll_list,
@@ -342,6 +339,7 @@ urlpatterns = [
     path("attendance/punches/import", punch_import),
     path("attendance/sync-status-live", sync_status),
     path("attendance/report-log", attendance_report_log),
+    path("attendance/report-log/sheet", attendance_report_log_sheet),
     path("attendance/day-informed", set_day_informed),
 
     # ── Outpass / Visitors -pure gate data-collection, see outpass_visitor_views.py ──
@@ -415,12 +413,6 @@ urlpatterns = [
     path("missing-punch-requests", missing_punch_requests),
     path("missing-punch-requests/<int:pk>/status", missing_punch_request_hr_status),
 
-    # ── Night Shift Relaxation ──────────────────────────────────────────────
-    path("night-shift/dashboard", night_shift_dashboard),
-    path("night-shift/recompute", night_shift_recompute),
-    path("night-shift/rules", night_shift_rules),
-    path("night-shift/rules/<int:pk>", night_shift_rule_detail),
-
     # ── Growth: Promotions / Increments / ID Cards ─────────────────────────
     path("promotions", promotions),
     path("promotions/<int:pk>", promotion_detail),
@@ -450,6 +442,7 @@ urlpatterns = [
     path("whatsapp/status", whatsapp_status),
     path("whatsapp/templates", whatsapp_templates),
     path("whatsapp/templates/<str:document_type>", whatsapp_template_update),
+    path("whatsapp/media/<str:token>", whatsapp_media),
     path("verify-employee/<str:code>", verify_employee),
 
     # ── Biometric Device Management ─────────────────────────────────────────

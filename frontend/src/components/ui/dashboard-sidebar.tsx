@@ -9,7 +9,7 @@ import {
   Wallet, BarChart3, Shield, Activity, Settings, FileText, LogOut,
   ChevronRight, Search, X, Command, UserCheck, UserMinus,
   CalendarCheck, Bell, Award, TrendingUp, Gift, CreditCard,
-  CalendarHeart, MoonStar, MessageCircle, UserCog, FolderOpen, MonitorSmartphone,
+  CalendarHeart, MessageCircle, UserCog, FolderOpen, MonitorSmartphone,
   Smartphone, Landmark, DoorOpen,
 } from 'lucide-react';
 
@@ -61,6 +61,7 @@ const navGroups: NavGroupData[] = [
           { path: '/hr/geo-attendance', label: 'Geo Attendance' },
           { path: '/hr/attendance/search', label: 'Attendance Search' },
           { path: '/hr/attendance/report-log', label: 'Report Log' },
+          { path: '/hr/attendance/sheet', label: 'Attendance Sheet' },
           { path: '/hr/missing-punch', label: 'Missing Punch' },
         ],
       },
@@ -130,9 +131,6 @@ const navGroups: NavGroupData[] = [
       { path: '/hr/activity-logs', label: 'Activity Logs', icon: Activity },
       { path: '/hr/chat', label: 'Chat', icon: MessageCircle },
       { path: '/hr/notifications', label: 'Notifications', icon: Bell },
-      // Settings-gated: hidden at render time when the Night Shift Relaxation
-      // toggle (Settings → Attendance) is off. Staff-only feature.
-      { path: '/hr/night-shift', label: 'Night Shift', icon: MoonStar },
       { path: '/hr/login-devices', label: 'Login Devices', icon: MonitorSmartphone },
       { path: '/hr/mobile-app-login', label: 'Mobile App Login', icon: Smartphone },
       { path: '/hr/settings', label: 'Settings', icon: Settings },
@@ -622,10 +620,6 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
             // every child are hidden (a parent with a visible child stays,
             // even if its own path's module happens to be hidden).
             .filter((item) => {
-              // Night Shift page is also gated by the Settings toggle. Treat
-              // "not loaded yet" as enabled so the entry doesn't flash in
-              // and out on page load.
-              if (item.path === '/hr/night-shift' && settings?.nightShiftEnabled === false) return false;
               // Compensation page (CTC Breakdown + OT Detection + Compensation
               // Leave + History & Reports) is gated by its own Settings master
               // switch -same "not loaded yet = enabled" convention as above.

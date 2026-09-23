@@ -33,10 +33,7 @@ def require_compensation_enabled(view_func):
     (PayrollSettings.compensation_feature_enabled) -every endpoint in this
     module goes through it, so turning the feature off in Settings genuinely
     disables CTC Breakdown, OT Detection, Compensation Leave, and History &
-    Reports everywhere at once, not just hides the sidebar entry. Mirrors
-    night_shift.py's get_relaxation_for, which was fixed the same way after
-    its own toggle was found to only hide a page while calculations kept
-    running regardless.
+    Reports everywhere at once, not just hides the sidebar entry.
     """
     @wraps(view_func)
     def wrapper(request, *args, **kwargs):

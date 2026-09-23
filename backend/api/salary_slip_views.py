@@ -282,10 +282,11 @@ def email_salary_slip(request: Request, pk: int) -> Response:
     return Response({"ok": True, "sentTo": result})
 
 
-def _send_slip_whatsapp(s: SalarySlip, sent_by_id: int | None = None):
+def _send_slip_whatsapp(request: Request, s: SalarySlip, sent_by_id: int | None = None):
     """Shared by the single-send and bulk-send endpoints -mirrors
     _send_slip_email's role but for WhatsApp. Always returns a
-    WhatsAppMessageLog row (see whatsapp_service.send_document)."""
+    WhatsAppMessageLog row (see whatsapp_service.send_document). Needs
+    `request` to build the public media URL Gupshup fetches the PDF from."""
     from . import whatsapp_service
     from .company_documents_views import build_salary_slip_pdf
 
@@ -293,7 +294,7 @@ def _send_slip_whatsapp(s: SalarySlip, sent_by_id: int | None = None):
     pdf_bytes = build_salary_slip_pdf(s)
     emp_name = f"{emp.first_name} {emp.last_name}".strip()
     return whatsapp_service.send_document(
-        emp, "salary_slip", pdf_bytes, f"salary_slip_{s.slip_number}.pdf",
+        request, emp, "salary_slip", pdf_bytes, f"salary_slip_{s.slip_number}.pdf",
         body_params=[emp_name, f"{MONTHS[s.month]} {s.year}"],
         document_ref_id=s.id, sent_by_id=sent_by_id,
     )
@@ -302,7 +303,7 @@ def _send_slip_whatsapp(s: SalarySlip, sent_by_id: int | None = None):
 @api_view(["POST"])
 @require_hr
 def whatsapp_salary_slip(request: Request, pk: int) -> Response:
-    """Send a salary slip via WhatsApp using the configured Meta template."""
+    """Send a salary slip via WhatsApp using the configured Gupshup template."""
     from . import whatsapp_service
 
     if not whatsapp_service.is_configured():
@@ -317,7 +318,7 @@ def whatsapp_salary_slip(request: Request, pk: int) -> Response:
     except SalarySlip.DoesNotExist:
         return Response({"error": "Slip not found"}, status=404)
 
-    log = _send_slip_whatsapp(s, sent_by_id=request.jwt_user.get("hrUserId"))
+    log = _send_slip_whatsapp(request, s, sent_by_id=request.jwt_user.get("hrUserId"))
     if log.status != "sent":
         return Response({"error": log.error_message}, status=400)
     return Response({"ok": True, "sentTo": log.phone_number})
@@ -350,7 +351,7 @@ def salary_slip_bulk_whatsapp(request: Request) -> Response:
     sent, failed = 0, 0
     for s in slips:
         emp_name = f"{s.employee.first_name} {s.employee.last_name}".strip()
-        log = _send_slip_whatsapp(s, sent_by_id=sent_by_id)
+        log = _send_slip_whatsapp(request, s, sent_by_id=sent_by_id)
         ok = log.status == "sent"
         if ok:
             sent += 1

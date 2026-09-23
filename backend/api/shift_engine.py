@@ -497,22 +497,19 @@ def _get_shift_for_date(emp, d: date_type, assignments=None):
     return shift
 
 
-_UNSET = object()
-
-
-def compute_daily_shift_log(emp, d: date_type, punches: list, assignments=None, relaxation=_UNSET, legacy: bool = False,
+def compute_daily_shift_log(emp, d: date_type, punches: list, assignments=None, legacy: bool = False,
                              has_permission: bool = False, permission_time=None, settings=None,
                              shift_end_override=None) -> dict:
     """
     Given a list of AttendanceLog objects for (emp, date), compute the
     4-punch shift result and persist it to DailyShiftLog.
 
-    `assignments` and `relaxation` let a bulk caller (compute_month_records)
-    pass in data it already fetched/computed once for the whole month,
-    instead of this function re-querying per day -see the same parameters
-    on _get_shift_for_date / night_shift.get_relaxation_for. Any other
-    caller (single-day recompute, etc.) can omit them and behavior is
-    unchanged: everything is looked up fresh, exactly as before.
+    `assignments` lets a bulk caller (compute_month_records) pass in data it
+    already fetched/computed once for the whole month, instead of this
+    function re-querying per day -see the same parameter on
+    _get_shift_for_date. Any other caller (single-day recompute, etc.) can
+    omit it and behavior is unchanged: everything is looked up fresh,
+    exactly as before.
 
     `settings`, similarly, lets a caller that already holds a fetched
     PayrollSettings object pass it straight through to
@@ -754,33 +751,6 @@ def compute_daily_shift_log(emp, d: date_type, punches: list, assignments=None, 
             )
 
     late_reason = "; ".join(late_reasons) if late_reasons else None
-
-    # ── Night Shift Relaxation ───────────────────────────────────────────────
-    # Worked late last night → allowed to arrive late today without penalty,
-    # and the day still counts as a full shift once completed.
-    if relaxation is _UNSET:
-        try:
-            from .night_shift import get_relaxation_for
-            relaxation = get_relaxation_for(emp, d) if punch1 else None
-        except Exception:
-            relaxation = None
-    elif not punch1:
-        relaxation = None
-    if relaxation and punch1 and punch1 <= relaxation.allowed_until:
-        if late_morning:
-            late_morning = False
-            late_in_without_permission = False
-            late_reason = (
-                f"Night-shift relaxation: worked until "
-                f"{relaxation.last_punch_out.strftime('%H:%M')} -allowed until "
-                f"{relaxation.allowed_until.strftime('%H:%M')}"
-            )
-        # A half day caused purely by the late start becomes full once the
-        # employee has a distinct end-of-day punch.
-        if shifts_completed == Decimal("0.50") and punch4 and punch4 != punch1:
-            first_half = True
-            second_half = True
-            shifts_completed = Decimal("1.00")
 
     # ── Persist ──────────────────────────────────────────────────────────────
     log, _ = DailyShiftLog.objects.update_or_create(

@@ -51,7 +51,6 @@ export const MODULE_TREE: ModuleNode[] = [
   { key: "mobile_app_login", label: "Mobile App Login" },
   { key: "chat", label: "Chat" },
   { key: "notifications", label: "Notifications" },
-  { key: "night_shift", label: "Night Shift" },
   { key: "geo_attendance", label: "Geo Attendance" },
   { key: "outpass_visitors", label: "Outpass / Visitors" },
   {
@@ -164,7 +163,6 @@ export const ROUTE_MODULE_MAP: Record<string, string> = {
   "/hr/mobile-app-login": "mobile_app_login",
   "/hr/chat": "chat",
   "/hr/notifications": "notifications",
-  "/hr/night-shift": "night_shift",
   "/hr/geo-attendance": "geo_attendance",
   "/hr/outpass-visitors": "outpass_visitors",
   "/hr/settings": "settings",

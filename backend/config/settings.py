@@ -257,14 +257,24 @@ JWT_SECRET = os.environ.get("JWT_SECRET", "fallback-secret")
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "").strip()
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "").strip()
 
-# Meta WhatsApp Cloud API credentials -.env only, same rule as ADMIN_* above:
+# Gupshup WhatsApp API credentials -.env only, same rule as ADMIN_* above:
 # never stored in the database, never editable from the UI. See
-# api/whatsapp_service.py for how these are consumed.
-WHATSAPP_ACCESS_TOKEN = os.environ.get("WHATSAPP_ACCESS_TOKEN", "").strip()
-WHATSAPP_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "").strip()
-WHATSAPP_BUSINESS_ACCOUNT_ID = os.environ.get("WHATSAPP_BUSINESS_ACCOUNT_ID", "").strip()
-WHATSAPP_API_VERSION = os.environ.get("WHATSAPP_API_VERSION", "v21.0").strip()
+# api/whatsapp_service.py for how these are consumed. GUPSHUP_SOURCE_NUMBER
+# is the WhatsApp Business number connected to the Gupshup app (Meta
+# Embedded Signup happens once, on Gupshup's dashboard, when the app is
+# created -see docs/GUPSHUP_WHATSAPP_SETUP.md).
+GUPSHUP_API_KEY = os.environ.get("GUPSHUP_API_KEY", "").strip()
+GUPSHUP_APP_NAME = os.environ.get("GUPSHUP_APP_NAME", "").strip()
+GUPSHUP_SOURCE_NUMBER = os.environ.get("GUPSHUP_SOURCE_NUMBER", "").strip()
 WHATSAPP_DEFAULT_COUNTRY_CODE = os.environ.get("WHATSAPP_DEFAULT_COUNTRY_CODE", "91").strip()
+
+# Optional override for the public origin Gupshup's servers use to fetch a
+# document/image media asset (whatsapp_service._media_url) -only needed if
+# the backend sits behind a proxy/tunnel where the request's own Host header
+# isn't the real public one. Mirrors FRONTEND_URL's identical fallback
+# pattern (see growth_views._public_base_url); left unset, the request's own
+# origin is used, which is correct for this project's on-premise Nginx setup.
+BACKEND_PUBLIC_URL = os.environ.get("BACKEND_PUBLIC_URL", "").strip()
 
 # Security headers -safe defaults regardless of DEBUG/HTTPS setup.
 SECURE_CONTENT_TYPE_NOSNIFF = True

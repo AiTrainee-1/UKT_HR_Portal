@@ -1712,6 +1712,79 @@ export const useSetDayInformed = () => {
   });
 };
 
+// ── Mode D -Attendance Sheet: the classic paper register as a grid, every
+// employee × every date in a range (see attendance_report_log_sheet in
+// attendance_views.py). Powers AttendanceSheet.tsx's Day/Week/Month views,
+// which are all just this one endpoint given a shorter or longer range.
+
+export type AttendanceSheetDayStatus = "present" | "half_shift" | "absent" | "on_leave" | "holiday" | null;
+
+export type AttendanceSheetDayCell = {
+  date: string;
+  status: AttendanceSheetDayStatus;
+  isLate?: boolean;
+  isHalfShift?: boolean;
+  // Which half was actually worked, only meaningful when status is
+  // "half_shift" -see attendance_report_log_sheet's half_day_period
+  // derivation (first punch vs. PayrollSettings.half_shift_late_reference_time).
+  halfDayPeriod?: "morning" | "afternoon" | null;
+  firstPunch?: string | null;
+  lastPunch?: string | null;
+  // Decimal as string, e.g. "1.00" / "0.50" / "0.00" -the actual shift
+  // credit for the day, independent of the raw punch-in/punch-out span.
+  shiftsEarned?: string | null;
+};
+
+export type AttendanceSheetEmployeeSummary = {
+  totalDays: number;
+  workingDays: number;
+  present: number;
+  halfShift: number;
+  absent: number;
+  onLeave: number;
+  holidays: number;
+  late: number;
+  totalShifts: string;
+  effectiveDays: string;
+};
+
+export type AttendanceSheetEmployeeRow = {
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department: string | null;
+  designation: string | null;
+  days: AttendanceSheetDayCell[];
+  summary: AttendanceSheetEmployeeSummary;
+};
+
+export type AttendanceSheetResponse = {
+  dateFrom: string;
+  dateTo: string;
+  dates: string[];
+  employees: AttendanceSheetEmployeeRow[];
+  strength: number[];
+};
+
+export type AttendanceSheetParams = {
+  dateFrom: string;
+  dateTo: string;
+  department?: number;
+  search?: string;
+};
+
+export const getAttendanceSheetQueryKey = (params: AttendanceSheetParams) =>
+  ["/api/attendance/report-log/sheet", params] as const;
+
+export const useAttendanceReportSheet = (params: AttendanceSheetParams, enabled = true) =>
+  useQuery<AttendanceSheetResponse>({
+    queryKey: getAttendanceSheetQueryKey(params),
+    queryFn: () => customFetch<AttendanceSheetResponse>(
+      `/api/attendance/report-log/sheet?${reportLogQueryString(params)}`,
+    ),
+    enabled,
+  });
+
 export type AttendanceSearchPunch = {
   time: string;
   type: "IN" | "OUT";
@@ -2215,7 +2288,7 @@ export type WhatsAppDocumentType =
   | "salary_slip" | "id_card" | "offer_letter" | "experience_letter" | "resignation_letter" | "other"
   | "visitor_notification";
 
-export type WhatsAppStatus = { configured: boolean; phoneNumberId: string | null; apiVersion: string };
+export type WhatsAppStatus = { configured: boolean; sourceNumber: string | null; appName: string | null };
 
 export const useWhatsAppStatus = () =>
   useQuery<WhatsAppStatus>({
@@ -2225,8 +2298,7 @@ export const useWhatsAppStatus = () =>
 
 export type WhatsAppTemplate = {
   documentType: WhatsAppDocumentType;
-  metaTemplateName: string;
-  metaLanguageCode: string;
+  gupshupTemplateId: string;
   variableNote: string;
   isEnabled: boolean;
 };
@@ -2587,7 +2659,6 @@ export type PayrollSettingsItem = {
   // Feature toggles (Settings master switches)
   staffPayrollRulesEnabled?: boolean;
   prodPayrollRulesEnabled?: boolean;
-  nightShiftEnabled?: boolean;
   compensationFeatureEnabled?: boolean;
   // Backup
   backupDirectory?: string;
@@ -3854,105 +3925,6 @@ export const useUpdateMissingPunchHR = () => {
   });
 };
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  Night Shift Relaxation
-// ═══════════════════════════════════════════════════════════════════════════
-
-export type NightShiftRecord = {
-  id: number;
-  employeeId: number;
-  employeeCode: string;
-  employeeName: string;
-  department?: string | null;
-  nightDate: string;
-  relaxationDate: string;
-  lastPunchOut: string;
-  crossedMidnight: boolean;
-  allowedUntil: string;
-  ruleName?: string | null;
-  reportedAt?: string | null;
-  withinAllowance?: boolean | null;
-  status: "reported_within" | "reported_late" | "waiting" | "window_expired" | "no_report";
-  remainingMinutes?: number | null;
-};
-
-export type NightShiftDashboard = {
-  detected: number | null;
-  count: number;
-  summary: { reportedWithin: number; reportedLate: number; waiting: number; noReport: number };
-  records: NightShiftRecord[];
-};
-
-export const useNightShiftDashboard = (params: {
-  date?: string; month?: number; year?: number; employeeId?: number; departmentId?: number;
-}) => {
-  const qs = new URLSearchParams();
-  if (params.date) qs.set("date", params.date);
-  if (params.month) qs.set("month", String(params.month));
-  if (params.year) qs.set("year", String(params.year));
-  if (params.employeeId) qs.set("employeeId", String(params.employeeId));
-  if (params.departmentId) qs.set("departmentId", String(params.departmentId));
-  return useQuery<NightShiftDashboard>({
-    queryKey: ["/api/night-shift/dashboard", qs.toString()],
-    queryFn: () => customFetch<NightShiftDashboard>(`/api/night-shift/dashboard?${qs.toString()}`),
-  });
-};
-
-export const useNightShiftRecompute = () => {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (data: { date?: string; month?: number; year?: number }) =>
-      customFetch<{ ok: boolean; detected: number }>("/api/night-shift/recompute", {
-        method: "POST",
-        body: JSON.stringify(data),
-      }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/night-shift/dashboard"] }),
-  });
-};
-
-export type NightShiftRuleItem = {
-  id: number;
-  name: string;
-  workedUntil: string;
-  crossesMidnight: boolean;
-  allowedFirstPunch: string;
-  order: number;
-  isActive: boolean;
-};
-
-export const useNightShiftRules = () =>
-  useQuery<NightShiftRuleItem[]>({
-    queryKey: ["/api/night-shift/rules"],
-    queryFn: () => customFetch<NightShiftRuleItem[]>("/api/night-shift/rules"),
-  });
-
-export const useSaveNightShiftRule = () => {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (data: Partial<NightShiftRuleItem> & { id?: number }) =>
-      data.id
-        ? customFetch<NightShiftRuleItem>(`/api/night-shift/rules/${data.id}`, {
-            method: "PUT", body: JSON.stringify(data),
-          })
-        : customFetch<NightShiftRuleItem>("/api/night-shift/rules", {
-            method: "POST", body: JSON.stringify(data),
-          }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/night-shift/rules"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/night-shift/dashboard"] });
-    },
-  });
-};
-
-export const useDeleteNightShiftRule = () => {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (id: number) =>
-      customFetch<{ ok: boolean }>(`/api/night-shift/rules/${id}`, { method: "DELETE" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/night-shift/rules"] }),
-  });
-};
-
 // ── Department Manager Types ──────────────────────────────────────────────────
 
 export type AssignedDepartment = {
@@ -4111,13 +4083,25 @@ export const useRemoveDepartmentFromManager = () => {
   });
 };
 
+// Thrown by manager_employee_assignments as a 409 (see ApiError.data) when
+// the employee is already actively assigned to a DIFFERENT HOD -either
+// directly, or via their department being assigned elsewhere. Not an error
+// to just toast: the caller re-POSTs with force:true to confirm the
+// reassignment, or leaves the existing assignment alone.
+export type EmployeeAssignmentConflict = {
+  conflict: true;
+  conflictType: "direct" | "department";
+  existingManager: { id: number; employeeId: number; employeeName: string; employeeCode: string };
+  error: string;
+};
+
 export const useAssignEmployeeToManager = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ managerId, employeeCode }: { managerId: number; employeeCode: string }) =>
+    mutationFn: ({ managerId, employeeCode, force }: { managerId: number; employeeCode: string; force?: boolean }) =>
       customFetch(`/api/department-managers/${managerId}/employees`, {
         method: "POST",
-        body: JSON.stringify({ employeeCode }),
+        body: JSON.stringify({ employeeCode, force }),
       }),
     onSuccess: (_r, { managerId }) => {
       queryClient.invalidateQueries({ queryKey: getDepartmentManagerQueryKey(managerId) });

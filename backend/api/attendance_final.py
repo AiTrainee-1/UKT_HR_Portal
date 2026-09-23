@@ -22,8 +22,6 @@ lateness is additionally tracked):
   • Half Shift  → any other punch pattern with >=1 punch (a single punch,
                   or a first+last pair outside the punctuality window).
   • Absent      → zero punches (and not on leave/holiday).
-  • Night Shift Relaxation can still upgrade a punctuality-caused Half
-    Shift back to Full once the day completes -see get_relaxation_for.
 
 Pre-cutover days stay frozen under the OLD rule (punch3+punch4 required
 for strict, a 13:30 cutoff for simple) so already-paid history never
@@ -161,8 +159,7 @@ def _compensation_day_for(emp, d: date_type, settings=None):
     here -the single choke point compute_day_record already goes through -
     so turning the Compensation feature off in Settings stops this exemption
     from applying at all, even though the CompensationDayAnnouncement rows
-    themselves are left untouched in the database (mirrors night_shift.py's
-    get_relaxation_for master-switch check).
+    themselves are left untouched in the database.
     """
     if settings is None:
         settings = PayrollSettings.get()
@@ -418,14 +415,14 @@ def _compute_staff_simple(emp, d, punch_times, settings, shift, legacy_rule: boo
 
 # ── Staff: strict mode (reuse 4-punch engine result) ───────────────────────
 
-def _compute_staff_strict(emp, d, punch_logs, punch_times, assignments=None, relaxation=None, legacy_rule: bool = False,
+def _compute_staff_strict(emp, d, punch_logs, punch_times, assignments=None, legacy_rule: bool = False,
                            has_permission: bool = False, permission_time=None, settings=None,
                            shift_end_override=None):
     from .shift_engine import compute_daily_shift_log
     if not punch_times:
         return {"status": "absent", "shifts_earned": Decimal("0")}
     log = compute_daily_shift_log(
-        emp, d, punch_logs, assignments=assignments, relaxation=relaxation,
+        emp, d, punch_logs, assignments=assignments,
         legacy=legacy_rule, has_permission=has_permission, permission_time=permission_time,
         settings=settings, shift_end_override=shift_end_override,
     )
@@ -556,9 +553,9 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
       existing_day_records    -{date: AttendanceDayRecord}
       manual_attendance_dates -set of date objects with a manual present row
       night_logs_by_date      -{date: [AttendanceLog, ...]} spanning one day
-                                 before the month through the month's end
-      night_rules             -active NightShiftRule list
-      existing_relaxations    -{date: NightShiftRelaxation} by relaxation_date
+                                 before the month through the month's end,
+                                 used by resolve_day_punch_logs' cross-midnight
+                                 punch reattribution (see below)
     Omitted (the default), every one of these is looked up fresh exactly as
     before -every other caller is unaffected.
     """
@@ -581,31 +578,11 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
             AttendanceLog.objects.filter(employee=emp, date=d).order_by("punch_time")
         )
     punch_times = sorted(p.punch_time for p in punch_logs)
-
-    # ── Night Shift Relaxation ──────────────────────────────────────────
-    # If the employee worked late last night they may report late today
-    # without Late / Half-Shift penalties. Also, early-morning punches that
-    # are actually last night's checkout must not count as today's arrival.
-    from .night_shift import get_relaxation_for, record_report, MORNING_CUTOFF
-    relaxation = get_relaxation_for(
-        emp, d,
-        assignments=assignments,
-        logs_by_date=prefetch.get("night_logs_by_date"),
-        rules=prefetch.get("night_rules"),
-        existing_relaxations=prefetch.get("existing_relaxations"),
-        settings=settings,
-    ) if punch_times else None
-    if relaxation and relaxation.crossed_midnight:
-        day_times = [t for t in punch_times if t > MORNING_CUTOFF]
-        punch_logs = [p for p in punch_logs if p.punch_time > MORNING_CUTOFF]
-    else:
-        day_times = punch_times
+    day_times = punch_times
 
     # ── Cross-midnight punch reattribution ───────────────────────────────
-    # Separate from Night Shift Relaxation above (that's for a genuine
-    # continuous night-shift session); this is for an ordinary day's
-    # forgotten evening exit punch made hours late, after midnight, which
-    # would otherwise be misread as tomorrow's first punch -silently
+    # An ordinary day's forgotten evening exit punch made hours late, after
+    # midnight, would otherwise be misread as tomorrow's first punch -silently
     # shifting every one of tomorrow's real punches down a slot. See
     # resolve_day_punch_logs. No-ops (returns punch_logs unchanged) when
     # disabled in Settings or for non-staff employees.
@@ -692,7 +669,7 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
             )
         else:
             computed = _compute_staff_strict(
-                emp, d, punch_logs, day_times, assignments=assignments, relaxation=relaxation, legacy_rule=legacy_rule,
+                emp, d, punch_logs, day_times, assignments=assignments, legacy_rule=legacy_rule,
                 has_permission=has_permission, permission_time=permission_time, settings=settings,
                 shift_end_override=comp_day.leave_until_time if comp_day else None,
             )
@@ -735,11 +712,6 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
             # Afternoon slot: the employee still owes a normal morning
             # arrival, so whatever is_late/late_reason the engine already
             # computed for that arrival is left exactly as it is.
-    elif punch_times and relaxation and relaxation.crossed_midnight:
-        # Only last night's checkout punches exist so far today -the employee
-        # has not yet reported for the new day. Not absent; still within the
-        # relaxation window (or simply not arrived yet).
-        computed = {"status": "absent", "shifts_earned": Decimal("0")}
     elif is_production:
         # Production employees have no leave/CL and work Sundays as a normal
         # day -only an explicit company Holiday exempts them; otherwise a
@@ -758,27 +730,8 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
     fields.update(computed)
     fields["is_compensation_day"] = bool(comp_day)
 
-    # Apply the relaxation: arriving within the allowed window is never Late,
-    # and a half-shift caused purely by the late arrival becomes a full shift
-    # once the day is completed (a distinct evening punch exists).
-    if relaxation and day_times:
-        first_day_punch = day_times[0]
-        record_report(relaxation, first_day_punch)
-        if first_day_punch <= relaxation.allowed_until:
-            fields["is_late"] = False
-            # A Half-Day Leave's Half Shift is never eligible for this
-            # promotion -it isn't "half" because of a late/incomplete punch
-            # pattern the rest of the day could still complete, it's half
-            # because the OTHER half is covered by approved leave.
-            if fields.get("status") == "half_shift" and len(day_times) > 1 and not fields.get("is_half_day_leave"):
-                fields["status"] = "present"
-                fields["is_half_shift"] = False
-                fields["shifts_earned"] = Decimal("1.00")
-
     # Daily/weekly Permission-zone caps (staff only -see _enforce_permission_
-    # caps). Runs last, after Night Shift Relaxation, so a relaxation-driven
-    # promotion back to Full Shift can't be silently undone by this, and this
-    # can't be silently undone by relaxation either.
+    # caps).
     if not is_production:
         _enforce_permission_caps(
             emp, d, fields, settings,
@@ -822,8 +775,8 @@ def compute_month_records(emp, year: int, month: int, settings=None):
 
     Everything compute_day_record() would otherwise look up one day at a
     time (existing AttendanceDayRecord, manual Attendance rows, the
-    employee's shift assignment(s), night-shift rules/relaxation state) is
-    fetched here ONCE for the whole month and handed down via `prefetch`.
+    employee's shift assignment(s)) is fetched here ONCE for the whole month
+    and handed down via `prefetch`.
     Calling this per employee across a full roster (Report Log summary,
     Payroll generation) would otherwise be an O(employees × days) query
     storm -this keeps each employee's month to a small, fixed number of
@@ -837,10 +790,10 @@ def compute_month_records(emp, year: int, month: int, settings=None):
     month_start = date_type(year, month, 1)
     month_end = date_type(year, month, days_in_month)
 
-    # One day before AND after the month too -night-shift detection for
-    # day 1 needs the previous night's punches, and cross-midnight punch
+    # One day before AND after the month too -cross-midnight punch
     # reattribution (resolve_day_punch_logs) for the LAST day of the month
-    # needs the following day's early punches to check.
+    # needs the following day's early punches to check, and for symmetry the
+    # first day of the month also gets the previous day's punches available.
     logs = AttendanceLog.objects.filter(
         employee=emp, date__gte=month_start - timedelta(days=1), date__lte=month_end + timedelta(days=1),
     ).order_by("punch_time")
@@ -858,8 +811,7 @@ def compute_month_records(emp, year: int, month: int, settings=None):
         if emp.employment_type == "production" else None
     )
 
-    from .models import EmployeeShiftAssignment, NightShiftRelaxation, NightShiftRule
-    from .night_shift import ensure_default_rules
+    from .models import EmployeeShiftAssignment
 
     assignments = list(
         EmployeeShiftAssignment.objects.filter(employee=emp, effective_from__lte=month_end)
@@ -878,13 +830,6 @@ def compute_month_records(emp, year: int, month: int, settings=None):
             present=True,
         ).values_list("date", flat=True)
     }
-    ensure_default_rules()
-    night_rules = list(NightShiftRule.objects.filter(is_active=True))
-    existing_relaxations = {
-        r.relaxation_date: r for r in NightShiftRelaxation.objects.filter(
-            employee=emp, relaxation_date__gte=month_start, relaxation_date__lte=month_end,
-        )
-    }
     from .models import EmployeePermission
     approved_permissions_by_date = {}
     if emp.employment_type != "production":
@@ -897,8 +842,6 @@ def compute_month_records(emp, year: int, month: int, settings=None):
         "existing_day_records": existing_day_records,
         "manual_attendance_dates": manual_attendance_dates,
         "night_logs_by_date": logs_by_date,
-        "night_rules": night_rules,
-        "existing_relaxations": existing_relaxations,
         "approved_permissions_by_date": approved_permissions_by_date,
     }
 
@@ -927,9 +870,9 @@ def compute_range_records(emp, date_from: date_type, date_to: date_type, setting
         settings = PayrollSettings.get()
 
     today = ist_today()
-    # One day of padding on each side -night-shift detection for the
-    # first day and cross-midnight punch reattribution (resolve_day_punch_logs)
-    # for the last day both need a neighboring day's punches to check.
+    # One day of padding on each side -cross-midnight punch reattribution
+    # (resolve_day_punch_logs) for the last day needs the following day's
+    # early punches to check.
     logs = AttendanceLog.objects.filter(
         employee=emp, date__gte=date_from - timedelta(days=1), date__lte=date_to + timedelta(days=1),
     ).order_by("punch_time")

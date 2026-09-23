@@ -36,6 +36,7 @@ from .models import (
     Job,
     LeaveBalance,
     LeaveRequest,
+    LeaveType,
     LoginSession,
     Notification,
     OnDutyPunchVerification,
@@ -1517,7 +1518,18 @@ def _leave_requests_create(request: Request) -> Response:
         employee_id = data.get("employeeId") or data.get("employee_id")
     start_date  = data.get("startDate")  or data.get("start_date")
     end_date    = data.get("endDate")    or data.get("end_date") or start_date
-    leave_type  = data.get("type") or data.get("leave_type", "casual")
+    # The mobile app's Apply Leave form submits leaveTypeId (see
+    # useApplyLeave/app/(tabs)/leave.tsx), not a "type" string -this was
+    # previously never read here, so every mobile-submitted leave silently
+    # stored as type="casual" regardless of what the employee actually
+    # picked, and leave_type_ref stayed unset (which also made
+    # update_leave_status's LeaveBalance deduction below match ANY balance
+    # row for the employee/year instead of the specific leave type's row).
+    # HR web's own create form, if any, keeps working exactly as before by
+    # sending "type"/"leave_type" directly.
+    leave_type_id = data.get("leaveTypeId") or data.get("leave_type_id")
+    leave_type_ref = LeaveType.objects.filter(pk=leave_type_id).first() if leave_type_id else None
+    leave_type = data.get("type") or data.get("leave_type") or (leave_type_ref.name if leave_type_ref else "casual")
     is_half_day = bool(data.get("isHalfDay") or data.get("is_half_day"))
     half_day_slot = data.get("halfDaySlot") or data.get("half_day_slot")
 
@@ -1537,6 +1549,7 @@ def _leave_requests_create(request: Request) -> Response:
     record = LeaveRequest.objects.create(
         employee_id=employee_id,
         type=leave_type,
+        leave_type_ref=leave_type_ref,
         start_date=start_date,
         end_date=end_date,
         total_days=total_days,

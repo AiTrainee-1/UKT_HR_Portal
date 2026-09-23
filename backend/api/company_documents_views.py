@@ -371,7 +371,7 @@ def offer_letter_whatsapp(request: Request, employee_id: int) -> Response:
     desig_title = emp.designation.title if emp.designation_id and emp.designation else ""
 
     log = whatsapp_service.send_document(
-        emp, "offer_letter", pdf_bytes, f"offer_letter_{emp.employee_code}.pdf",
+        request, emp, "offer_letter", pdf_bytes, f"offer_letter_{emp.employee_code}.pdf",
         body_params=[full_name(emp), desig_title],
         document_ref_id=emp.id, sent_by_id=request.jwt_user.get("hrUserId"),
     )
@@ -484,7 +484,7 @@ def experience_letter_whatsapp(request: Request, employee_id: int) -> Response:
     pdf_bytes = build_experience_letter_pdf(emp, opts)
 
     log = whatsapp_service.send_document(
-        emp, "experience_letter", pdf_bytes, f"experience_letter_{emp.employee_code}.pdf",
+        request, emp, "experience_letter", pdf_bytes, f"experience_letter_{emp.employee_code}.pdf",
         body_params=[full_name(emp)],
         document_ref_id=emp.id, sent_by_id=request.jwt_user.get("hrUserId"),
     )

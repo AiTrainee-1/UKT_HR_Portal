@@ -3,17 +3,11 @@ OT (Overtime) Detection Engine
 ==============================
 Staff only. A day is OT-eligible when the last punch is more than
 `PayrollSettings.ot_threshold_minutes` past the employee's OWN assigned
-shift's end time (never a fixed clock time -mirrors night_shift.py's
-convention). Detection is a safe, idempotent upsert (status="detected") -it
-never changes attendance/payroll on its own; HR must explicitly announce a
-record (see compensation_views.py) before it becomes Pay (feeds
-SalarySlip.ot_amount at the next payroll generation) or Relaxation (credits
-a CompensationLeaveCredit).
-
-Distinct from Night Shift Relaxation (night_shift.py): that feature is about
-tomorrow's punctuality after working late tonight; OT compensation rewards
-today's extra hours worked. The two are independent and can both apply to
-the same late night.
+shift's end time (never a fixed clock time). Detection is a safe, idempotent
+upsert (status="detected") -it never changes attendance/payroll on its own;
+HR must explicitly announce a record (see compensation_views.py) before it
+becomes Pay (feeds SalarySlip.ot_amount at the next payroll generation) or
+Relaxation (credits a CompensationLeaveCredit).
 """
 
 from datetime import date as date_type, timedelta

@@ -66,7 +66,6 @@ MODULE_TREE: list[dict] = [
     {"key": "mobile_app_login", "label": "Mobile App Login"},
     {"key": "chat", "label": "Chat"},
     {"key": "notifications", "label": "Notifications"},
-    {"key": "night_shift", "label": "Night Shift"},
     {"key": "geo_attendance", "label": "Geo Attendance"},
     {"key": "outpass_visitors", "label": "Outpass / Visitors"},
     {"key": "settings", "label": "Settings", "children": [
@@ -173,8 +172,6 @@ URL_MODULE_MAP: dict[str, str] = {
     "work-sessions": "attendance",
     "session-configs": "attendance",
     "auto-sync-rules": "attendance",
-
-    "night-shift": "night_shift",
 
     # Employee-facing geo-punch/live-location routes (attendance/geo-punch*,
     # live-location/ping) are called with employee tokens, not HR ones, so

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useLocation, useParams } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Shield, Building2, Users, X, Plus, UserRound, CheckCircle, XCircle } from "lucide-react";
+import { ArrowLeft, Shield, Building2, Users, X, Plus, UserRound, CheckCircle, XCircle, AlertTriangle } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
 import EmployeeSearchSelect from "@/components/EmployeeSearchSelect";
 import { Button } from "@/components/ui/button";
@@ -11,8 +11,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useListDepartments, useListEmployees } from "@/lib/api-client";
+import { ApiError } from "@/lib/api-client/custom-fetch";
 import {
   useGetDepartmentManager,
   useAssignDepartmentToManager,
@@ -20,6 +22,7 @@ import {
   useAssignEmployeeToManager,
   useRemoveEmployeeFromManager,
   useUpdateDepartmentManager,
+  type EmployeeAssignmentConflict,
 } from "@/lib/api-client/custom-hooks";
 
 /**
@@ -40,6 +43,14 @@ export default function ManagerDetail() {
   const queryClient = useQueryClient();
   const [newDeptId, setNewDeptId] = useState("");
   const [newEmpId, setNewEmpId] = useState("");
+  // Set when assigning an employee 409s with a conflict (see
+  // manager_employee_assignments) -holds everything the confirm dialog
+  // needs to either reassign (force:true) or leave the existing HOD alone.
+  const [assignConflict, setAssignConflict] = useState<{
+    employeeCode: string;
+    employeeName: string;
+    conflict: EmployeeAssignmentConflict;
+  } | null>(null);
 
   const { data: manager, isLoading } = useGetDepartmentManager(managerId);
   const { data: departments = [] } = useListDepartments();
@@ -82,7 +93,30 @@ export default function ManagerDetail() {
       setNewEmpId("");
       toast({ title: "Employee assigned" });
     } catch (e: any) {
+      if (e instanceof ApiError && e.status === 409 && (e.data as any)?.conflict) {
+        setAssignConflict({
+          employeeCode: emp.employeeCode!,
+          employeeName: `${emp.firstName} ${emp.lastName}`,
+          conflict: e.data as EmployeeAssignmentConflict,
+        });
+        return;
+      }
       toast({ title: e?.message ?? "Already assigned", variant: "destructive" });
+    }
+  };
+
+  const confirmReassign = async () => {
+    if (!managerId || !assignConflict) return;
+    try {
+      await assignEmpMutation.mutateAsync({
+        managerId, employeeCode: assignConflict.employeeCode, force: true,
+      });
+      setNewEmpId("");
+      toast({ title: `${assignConflict.employeeName} reassigned to this HOD` });
+    } catch (e: any) {
+      toast({ title: e?.message ?? "Failed to reassign", variant: "destructive" });
+    } finally {
+      setAssignConflict(null);
     }
   };
 
@@ -297,6 +331,41 @@ export default function ManagerDetail() {
           </p>
         )}
       </div>
+
+      {/* "Already assigned to another HOD" conflict -see manager_employee_
+          assignments' 409 response. Reassign moves the employee here
+          (deleting the old direct assignment); Keep Existing just closes
+          this without touching anything. */}
+      <Dialog open={!!assignConflict} onOpenChange={(open) => !open && setAssignConflict(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <AlertTriangle size={16} className="text-amber-500" />
+              Already assigned elsewhere
+            </DialogTitle>
+            <DialogDescription className="pt-1 text-sm text-foreground">
+              {assignConflict?.conflict.error}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col gap-2 sm:flex-col">
+            <Button
+              className="w-full"
+              onClick={confirmReassign}
+              disabled={assignEmpMutation.isPending}
+            >
+              {assignEmpMutation.isPending ? "Reassigning…" : `Remove from ${assignConflict?.conflict.existingManager.employeeName} and assign here`}
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => setAssignConflict(null)}
+              disabled={assignEmpMutation.isPending}
+            >
+              Keep existing assignment
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </HrLayout>
   );
 }

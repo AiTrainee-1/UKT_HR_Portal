@@ -745,7 +745,7 @@ def resignation_whatsapp(request: Request, pk: int) -> Response:
     last_working = r.last_working_date.strftime("%d %B %Y") if r.last_working_date else "as mutually agreed"
 
     log = whatsapp_service.send_document(
-        emp, "resignation_letter", pdf_bytes, f"resignation_acceptance_{emp.employee_code}_{r.id}.pdf",
+        request, emp, "resignation_letter", pdf_bytes, f"resignation_acceptance_{emp.employee_code}_{r.id}.pdf",
         body_params=[emp_name, last_working],
         document_ref_id=r.id, sent_by_id=request.jwt_user.get("hrUserId"),
     )

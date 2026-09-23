@@ -147,7 +147,7 @@ def whatsapp_employee_document(request: Request, pk: int) -> Response:
     file_bytes = doc.file.read()
 
     log = whatsapp_service.send_document(
-        doc.employee, "other", file_bytes, doc.original_filename or f"document-{doc.id}",
+        request, doc.employee, "other", file_bytes, doc.original_filename or f"document-{doc.id}",
         body_params=[f"{doc.employee.first_name} {doc.employee.last_name}".strip(), doc.get_category_display()],
         mime_type=mime_type, document_ref_id=doc.id, sent_by_id=request.jwt_user.get("hrUserId"),
     )
