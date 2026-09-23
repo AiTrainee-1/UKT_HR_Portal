@@ -185,6 +185,8 @@ def holidays(request: Request) -> Response:
         is_recurring=bool(data.get("isRecurring", False)),
         description=data.get("description"),
     )
+    from .attendance_final import _holiday_dates_for_month
+    _holiday_dates_for_month.cache_clear()
     return Response(holiday_json(h), status=201)
 
 
@@ -196,6 +198,8 @@ def holiday_detail(request: Request, pk: int) -> Response:
     except Holiday.DoesNotExist:
         return Response({"error": "Holiday not found"}, status=404)
 
+    from .attendance_final import _holiday_dates_for_month
+
     if request.method == "PUT":
         data = request.data
         for field, attr in [
@@ -206,9 +210,11 @@ def holiday_detail(request: Request, pk: int) -> Response:
             if field in data:
                 setattr(h, attr, data[field])
         h.save()
+        _holiday_dates_for_month.cache_clear()
         return Response(holiday_json(h))
 
     h.delete()
+    _holiday_dates_for_month.cache_clear()
     return Response(status=204)
 
 

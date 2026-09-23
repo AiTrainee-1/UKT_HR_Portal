@@ -38,6 +38,7 @@ production:     1.5-shift day (works in both modes):
 import calendar
 from datetime import date as date_type, datetime, time as time_type, timedelta
 from decimal import Decimal
+from functools import lru_cache
 
 from django.db.models import Q, Sum
 
@@ -104,7 +105,17 @@ def _half_day_leave_dates_for_month(emp, year: int, month: int) -> dict:
     return out
 
 
+@lru_cache(maxsize=512)
 def _holiday_dates_for_month(year: int, month: int) -> set:
+    """Company-wide -identical for every employee, unlike
+    _leave_dates_for_month/_half_day_leave_dates_for_month above. Cached
+    since compute_month_records/compute_range_records call this once per
+    employee: looping a few hundred employees over a month range otherwise
+    reissues the exact same query that many times (see
+    attendance_report_log_sheet, the worst offender -every employee in the
+    roster, every request). Holiday CRUD (leave_views.py) clears this cache
+    on create/update/delete so an edit takes effect immediately rather than
+    waiting for a process restart."""
     return set(
         Holiday.objects.filter(date__year=year, date__month=month)
         .values_list("date", flat=True)
@@ -865,7 +876,20 @@ def compute_month_records(emp, year: int, month: int, settings=None):
 
 
 def compute_range_records(emp, date_from: date_type, date_to: date_type, settings=None):
-    """Compute final records for every day in [date_from, date_to] (inclusive)."""
+    """
+    Compute final records for every day in [date_from, date_to] (inclusive).
+
+    Builds the same full prefetch dict compute_month_records does (shift
+    assignments, existing AttendanceDayRecord rows, manual attendance,
+    approved permissions -see that function's docstring), just scoped to an
+    arbitrary range instead of a calendar month. This used to only prefetch
+    night_logs_by_date, leaving compute_day_record to fall back to a live
+    query per missing key on EVERY day -harmless for a single employee's
+    range (attendance_search/range's own use), but attendance_report_log_sheet
+    calls this once per employee across the whole roster, which turned that
+    per-day gap into exactly the O(employees × days) query storm
+    compute_month_records's docstring warns about avoiding.
+    """
     if settings is None:
         settings = PayrollSettings.get()
 
@@ -894,6 +918,40 @@ def compute_range_records(emp, date_from: date_type, date_to: date_type, setting
         if emp.employment_type == "production" else None
     )
 
+    from .models import EmployeePermission, EmployeeShiftAssignment
+
+    assignments = list(
+        EmployeeShiftAssignment.objects.filter(employee=emp, effective_from__lte=date_to)
+        .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=date_from - timedelta(days=1)))
+        .select_related("shift")
+    )
+    existing_day_records = {
+        r.date: r for r in AttendanceDayRecord.objects.filter(
+            employee=emp, date__gte=date_from, date__lte=date_to,
+        )
+    }
+    manual_attendance_dates = {
+        date_type.fromisoformat(str(dt)[:10])
+        for dt in Attendance.objects.filter(
+            employee=emp, date__gte=date_from.isoformat(), date__lte=date_to.isoformat(),
+            present=True,
+        ).values_list("date", flat=True)
+    }
+    approved_permissions_by_date = {}
+    if emp.employment_type != "production":
+        for p in EmployeePermission.objects.filter(
+            employee=emp, date__gte=date_from, date__lte=date_to, status="approved",
+        ).order_by("updated_at"):
+            approved_permissions_by_date[p.date] = p
+
+    prefetch = {
+        "assignments": assignments,
+        "existing_day_records": existing_day_records,
+        "manual_attendance_dates": manual_attendance_dates,
+        "night_logs_by_date": logs_by_date,
+        "approved_permissions_by_date": approved_permissions_by_date,
+    }
+
     records = []
     d = date_from
     while d <= date_to:
@@ -908,7 +966,7 @@ def compute_range_records(emp, date_from: date_type, date_to: date_type, setting
             half_day_leave_dates=half_day_leave_dates,
             prod_config=prod_config,
             prod_segments=prod_segments,
-            prefetch={"night_logs_by_date": logs_by_date},
+            prefetch=prefetch,
         ))
         d += timedelta(days=1)
     return records

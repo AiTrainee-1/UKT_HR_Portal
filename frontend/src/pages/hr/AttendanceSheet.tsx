@@ -6,7 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PillTabs } from "@/components/ui/pill-tabs";
-import { Skeleton } from "@/components/ui/skeleton";
+import { AttendanceLoader } from "@/components/ui/AttendanceLoader";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Tooltip, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
@@ -474,8 +474,11 @@ export function AttendanceSheetContent() {
           <Card className="border-0 shadow-sm overflow-hidden">
             <CardContent className="p-0">
               {isLoading ? (
-                <div className="p-4 space-y-2">
-                  {Array.from({ length: 10 }).map((_, i) => <Skeleton key={i} className="h-9 rounded" />)}
+                <div className="py-6">
+                  <AttendanceLoader />
+                  <p className="text-center text-xs text-muted-foreground -mt-2">
+                    Computing attendance for every employee in this range…
+                  </p>
                 </div>
               ) : employees.length === 0 ? (
                 <div className="py-16 text-center">
