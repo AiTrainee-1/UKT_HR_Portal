@@ -61,7 +61,6 @@ const navGroups: NavGroupData[] = [
           { path: '/hr/geo-attendance', label: 'Geo Attendance' },
           { path: '/hr/attendance/search', label: 'Attendance Search' },
           { path: '/hr/attendance/report-log', label: 'Report Log' },
-          { path: '/hr/attendance/sheet', label: 'Attendance Sheet' },
           { path: '/hr/missing-punch', label: 'Missing Punch' },
         ],
       },

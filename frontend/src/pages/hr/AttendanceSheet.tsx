@@ -1,9 +1,7 @@
 import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { useLocation } from "wouter";
 import ExcelJS from "exceljs";
 import html2canvas from "html2canvas-pro";
 import jsPDF from "jspdf";
-import HrLayout from "@/components/HrLayout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -133,9 +131,12 @@ type RangeMode = "day" | "week" | "month";
  * selected range is a column, one status cell per day. Day/Week/Month are
  * the same grid at three range lengths, all backed by the same endpoint
  * (attendance_report_log_sheet) -there's no separate code path per mode.
+ *
+ * Content-only -no page shell of its own (no HrLayout, no header/back
+ * button). Embedded directly into Report Log's Monthly Report tab
+ * (AttendanceReportLog.tsx), which owns the surrounding page chrome.
  */
-export default function AttendanceSheet() {
-  const [, navigate] = useLocation();
+export function AttendanceSheetContent() {
   const { toast } = useToast();
   const { user } = useAuth();
   const exportRef = useRef<HTMLDivElement>(null);
@@ -349,58 +350,38 @@ export default function AttendanceSheet() {
   }
 
   return (
-    <HrLayout>
-      <TooltipProvider delayDuration={150}>
-        {/* Cell-tooltip reveal animation -a springy pop keyed off Radix's own
-            data-state, plus a slight delay on the arrow so it feels like the
-            pointer "grows" a beat after the card, echoing a branch-and-leaf
-            reveal without hand-drawn SVG paths (which only work for a fixed
-            trigger position -these tooltips open from any of thousands of
-            grid cells at any scroll position, so Radix's own dynamic
-            placement has to stay in charge of where the card actually goes). */}
-        <style>{`
-          .att-tooltip-content {
-            animation: att-tooltip-in 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
-          }
-          .att-tooltip-content[data-state="closed"] {
-            animation: att-tooltip-out 0.12s ease-in both;
-          }
-          @keyframes att-tooltip-in {
-            0%   { opacity: 0; transform: scale(0.85) translateY(-6px); }
-            65%  { opacity: 1; transform: scale(1.04) translateY(1px); }
-            100% { opacity: 1; transform: scale(1) translateY(0); }
-          }
-          @keyframes att-tooltip-out {
-            to { opacity: 0; transform: scale(0.94) translateY(-3px); }
-          }
-          .att-tooltip-arrow {
-            animation: att-arrow-in 0.22s ease-out 0.14s both;
-          }
-          @keyframes att-arrow-in {
-            from { transform: scale(0); opacity: 0; }
-            to   { transform: scale(1); opacity: 1; }
-          }
-        `}</style>
-        <div className="max-w-[1500px] mx-auto px-6 py-6 space-y-5">
-          {/* Header */}
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => navigate("/hr/attendance")}
-              className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500 transition-colors"
-            >
-              <ChevronLeft size={18} />
-            </button>
-            <div className="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center shrink-0">
-              <ClipboardList size={18} className="text-white" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold text-gray-900">Attendance Sheet</h1>
-              <p className="text-xs text-muted-foreground">
-                Every employee, every day -a colored register you can print, export, or share.
-              </p>
-            </div>
-          </div>
-
+    <TooltipProvider delayDuration={150}>
+      {/* Cell-tooltip reveal animation -a springy pop keyed off Radix's own
+          data-state, plus a slight delay on the arrow so it feels like the
+          pointer "grows" a beat after the card, echoing a branch-and-leaf
+          reveal without hand-drawn SVG paths (which only work for a fixed
+          trigger position -these tooltips open from any of thousands of
+          grid cells at any scroll position, so Radix's own dynamic
+          placement has to stay in charge of where the card actually goes). */}
+      <style>{`
+        .att-tooltip-content {
+          animation: att-tooltip-in 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
+        }
+        .att-tooltip-content[data-state="closed"] {
+          animation: att-tooltip-out 0.12s ease-in both;
+        }
+        @keyframes att-tooltip-in {
+          0%   { opacity: 0; transform: scale(0.85) translateY(-6px); }
+          65%  { opacity: 1; transform: scale(1.04) translateY(1px); }
+          100% { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        @keyframes att-tooltip-out {
+          to { opacity: 0; transform: scale(0.94) translateY(-3px); }
+        }
+        .att-tooltip-arrow {
+          animation: att-arrow-in 0.22s ease-out 0.14s both;
+        }
+        @keyframes att-arrow-in {
+          from { transform: scale(0); opacity: 0; }
+          to   { transform: scale(1); opacity: 1; }
+        }
+      `}</style>
+      <div className="space-y-5">
           {/* Controls */}
           <Card className="border-0 shadow-sm">
             <CardContent className="p-4 space-y-3">
@@ -557,9 +538,8 @@ export default function AttendanceSheet() {
               )}
             </CardContent>
           </Card>
-        </div>
-      </TooltipProvider>
-    </HrLayout>
+      </div>
+    </TooltipProvider>
   );
 }
 

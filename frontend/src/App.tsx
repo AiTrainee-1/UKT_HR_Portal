@@ -57,7 +57,6 @@ import ResumeScreening from "@/pages/hr/recruitment/ResumeScreening";
 import Documents from "@/pages/hr/recruitment/Documents";
 import Attendance from "@/pages/hr/Attendance";
 import AttendanceReportLog from "@/pages/hr/AttendanceReportLog";
-import AttendanceSheet from "@/pages/hr/AttendanceSheet";
 import OutpassVisitors from "@/pages/hr/OutpassVisitors";
 import Departments from "@/pages/hr/Departments";
 import Designations from "@/pages/hr/Designations";
@@ -255,9 +254,6 @@ function Router() {
       </Route>
       <Route path="/hr/attendance/report-log">
         {() => <ProtectedRoute component={AttendanceReportLog} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/attendance/sheet">
-        {() => <ProtectedRoute component={AttendanceSheet} allowedRoles={["hr"]} />}
       </Route>
       <Route path="/hr/outpass-visitors/outpass">
         {() => <ProtectedRoute component={OutpassVisitors} allowedRoles={["hr"]} />}

@@ -42,7 +42,7 @@ import {
   Users, UserCheck, UserX, CalendarDays, Plus,
   Factory, Briefcase, Fingerprint, PenLine, ChevronRight, RefreshCw,
   Search, ChevronDown, CalendarClock, Trash2,
-  TrendingUp, Calendar, ChevronLeft, FileSpreadsheet,
+  TrendingUp, Calendar, ChevronLeft,
 } from "lucide-react";
 
 // ── Pagination ─────────────────────────────────────────────────────────────
@@ -514,14 +514,6 @@ export default function AttendancePage() {
             >
               <Fingerprint size={14} />
               <span className="text-[13px] font-semibold">Punch View</span>
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => navigate("/hr/attendance/sheet")}
-              className="clay-btn gap-1.5 h-9 px-3 rounded-xl border-0 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-700 shrink-0"
-            >
-              <FileSpreadsheet size={14} />
-              <span className="text-[13px] font-semibold">Attendance Sheet</span>
             </Button>
             <SyncStatusIndicator />
             <Input
