@@ -14,6 +14,8 @@ Gupshup's servers fetch document/image attachments from -see
 whatsapp_service.send_document / WhatsAppMediaAsset.
 """
 
+import logging
+
 from django.conf import settings as dj_settings
 from django.http import HttpResponse
 from django.utils import timezone
@@ -25,6 +27,8 @@ from . import whatsapp_service
 from .view_common import error_response as _error
 from .auth import require_hr
 from .models import WhatsAppMediaAsset, WhatsAppMessageLog, WhatsAppMessageTemplate
+
+logger = logging.getLogger(__name__)
 
 DOCUMENT_TYPES = [key for key, _ in WhatsAppMessageLog.DOCUMENT_TYPES]
 
@@ -144,6 +148,10 @@ def _status_updates(event: dict):
 def _apply_message_event(event: dict) -> None:
     """Fold Gupshup delivery events (either payload format) into WhatsAppMessageLog.status."""
     for ids, new_status, error_text in _status_updates(event):
+        # Delivery outcomes only exist here (Gupshup accepts a send long before
+        # WhatsApp delivers or rejects it), so surface every one in the server log
+        # (WARNING because the project has no LOGGING config, so INFO is dropped).
+        logger.warning("WhatsApp event: status=%s ids=%s reason=%s", new_status, ids, error_text or "-")
         if not new_status or not ids:
             continue
         for log in WhatsAppMessageLog.objects.filter(gupshup_message_id__in=ids):
@@ -178,7 +186,5 @@ def whatsapp_webhook(request: Request) -> Response:
             if isinstance(body, dict):
                 _apply_message_event(body)
         except Exception:
-            import logging
-
-            logging.getLogger(__name__).exception("Gupshup webhook event could not be processed")
+            logger.exception("Gupshup webhook event could not be processed")
     return Response({"status": "ok"})
