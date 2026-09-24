@@ -48,7 +48,7 @@ def paginate(request, rows, serialize, *, cap: int = DEFAULT_LIST_CAP) -> Respon
     try:
         page_num = max(1, int(page))
         page_size = max(1, min(MAX_PAGE_SIZE, int(request.query_params.get("pageSize", DEFAULT_PAGE_SIZE))))
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return error_response("page and pageSize must be numbers")
 
     total = rows.count() if isinstance(rows, QuerySet) else len(rows)

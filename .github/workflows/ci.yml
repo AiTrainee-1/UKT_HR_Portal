@@ -53,6 +53,15 @@ jobs:
         run: pip install -r requirements.txt -r requirements-dev.txt -c constraints.txt
       - name: Lint (ruff)
         run: ruff check .
+      # Railway runs Python 3.13 while this job runs 3.14. 3.14-only syntax
+      # (e.g. `except A, B:`) compiles here but crashes production at startup.
+      - uses: actions/setup-python@v5
+        id: py313
+        with:
+          python-version: "3.13"
+          update-environment: false
+      - name: Byte-compile on the production Python (3.13)
+        run: ${{ steps.py313.outputs.python-path }} -m compileall -q api config manage.py
       - name: Format (files listed in .format-enforced must be ruff-clean)
         run: xargs -a .format-enforced ruff format --check
       - name: Django system check
