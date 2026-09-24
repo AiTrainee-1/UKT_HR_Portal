@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { TONE } from "@/lib/statusTones";
 import HrLayout from "@/components/HrLayout";
 import {
   Pagination,
@@ -60,10 +61,10 @@ type JobForm = z.infer<typeof jobSchema>;
 
 function statusBadge(status: string) {
   const map: Record<string, string> = {
-    applied: "bg-blue-100 text-blue-800",
-    attended: "bg-purple-100 text-purple-800",
-    selected: "bg-green-100 text-green-800",
-    rejected: "bg-red-100 text-red-800",
+    applied: TONE.info,
+    attended: TONE.accent,
+    selected: TONE.success,
+    rejected: TONE.danger,
   };
   return <Badge className={map[status] ?? ""}>{status}</Badge>;
 }

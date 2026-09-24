@@ -52,3 +52,10 @@ backend/backup_staging/
 backend/backups/
 backend/media_pre_restore_*/
 
+# Local DB notes (contained a connection string)
+dbconfig.txt
+
+# Coverage / test artifacts
+.coverage
+htmlcov/
+coverage/

@@ -128,7 +128,7 @@ class Command(BaseCommand):
         designations = self._seed_designations(departments)
         shifts      = self._seed_shifts(departments)
         leave_types = self._seed_leave_types()
-        holidays    = self._seed_holidays(branch)
+        self._seed_holidays(branch)
 
         staff_emps  = self._seed_employees(departments, designations, branch, "staff")
         prod_emps   = self._seed_employees(departments, designations, branch, "production")
@@ -429,7 +429,6 @@ class Command(BaseCommand):
     def _seed_leave_requests(self, employees, leave_types):
         cl = leave_types["CL"]
         sl = leave_types["SL"]
-        statuses = ["approved", "approved", "approved", "rejected", "pending"]
 
         requests = [
             (employees[0],  cl, "2026-06-02", "2026-06-02", 1, "Personal work",   "approved"),

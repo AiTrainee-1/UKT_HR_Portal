@@ -1,5 +1,5 @@
 import bcrypt
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from django.utils import timezone
 from django.db.models import Count
@@ -8,7 +8,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from .auth import is_master_admin, require_hr, require_master_admin, require_super_admin
+from .auth import is_master_admin, require_master_admin, require_super_admin
 from .branch_scope import scope_to_branch
 from .models import HRUser, Role, AuditLog
 from .audit_utils import log_action

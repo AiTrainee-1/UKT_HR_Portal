@@ -21,6 +21,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from .view_common import error_response as _error
 from .auth import get_token_employee_id, is_hr, require_auth, require_hr
 from .branch_scope import scope_to_branch
 from .models import Employee, EmployeeDocument
@@ -49,10 +50,6 @@ def _required_categories(employment_type: str) -> list:
         else EmployeeDocument.CATEGORY_STAFF_LETTER
     )
     return _REQUIRED_COMMON + [extra]
-
-
-def _error(message: str, code: int = 400) -> Response:
-    return Response({"error": message}, status=code)
 
 
 def _document_json(doc: EmployeeDocument) -> dict:

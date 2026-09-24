@@ -4,12 +4,11 @@ from typing import Optional
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
-from rest_framework import status
 
 from .auth import require_hr, require_auth, get_token_employee_id, is_hr
 from .branch_scope import get_branch_scope, scope_to_branch
-from .clock import ist_now, ist_today
-from .models import ShiftTemplate, EmployeeShiftAssignment, Employee, Department
+from .clock import ist_today
+from .models import ShiftTemplate, EmployeeShiftAssignment, Employee
 
 
 def auto_assign_production_shift(emp: Employee, effective_from: Optional[date] = None) -> bool:

@@ -1,13 +1,14 @@
 import math
-from datetime import datetime, date
+from datetime import datetime
 
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .auth import require_hr, require_auth, get_token_employee_id, is_hr
-from .clock import ist_now, ist_today
+from .clock import ist_today
 from .models import Advance, AdvanceRepayment, Employee
+from .view_common import paginate
 
 
 MONTH_NAMES = [
@@ -137,7 +138,7 @@ def advances(request: Request) -> Response:
                 qs = qs.filter(status="approved")
             else:
                 qs = qs.filter(status=adv_status)
-        return Response([advance_json(a) for a in qs])
+        return paginate(request, qs, advance_json)
 
     if not is_hr(request):
         return Response({"error": "HR access required"}, status=403)

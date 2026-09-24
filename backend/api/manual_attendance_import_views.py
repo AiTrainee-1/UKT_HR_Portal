@@ -29,6 +29,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from .view_common import error_response as _error
 from .auth import require_hr
 from .attendance_views import _date_from_for_mode
 from .biometric_sync import BiometricSyncError, get_sync_targets, fetch_records_for_export, _ingest_punches
@@ -38,10 +39,6 @@ from .models import Employee
 EXPORT_HEADERS = [
     "Employee Code", "Employee Name", "Device User ID", "Matched", "Date", "Punch Time", "Punch Type",
 ]
-
-
-def _error(message: str, code: int = 400) -> Response:
-    return Response({"error": message}, status=code)
 
 
 @api_view(["GET"])

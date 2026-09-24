@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { TONE } from "@/lib/statusTones";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -22,20 +23,20 @@ export const MONTH_NAMES = [
 export const MONTH_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
 export const STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
-  pending:  { label: "Pending",  cls: "bg-yellow-50 text-yellow-700 border-yellow-200" },
-  paid:     { label: "Paid",     cls: "bg-green-50 text-green-700 border-green-200" },
-  draft:    { label: "Draft",    cls: "bg-gray-50 text-gray-700 border-gray-200" },
-  approved: { label: "Approved", cls: "bg-blue-50 text-blue-700 border-blue-200" },
-  locked:   { label: "Locked",   cls: "bg-purple-50 text-purple-700 border-purple-200" },
+  pending:  { label: "Pending",  cls: TONE.warning },
+  paid:     { label: "Paid",     cls: TONE.success },
+  draft:    { label: "Draft",    cls: TONE.neutral },
+  approved: { label: "Approved", cls: TONE.info },
+  locked:   { label: "Locked",   cls: TONE.accent },
 };
 
 export const STATUS_COLORS: Record<string, string> = {
-  present:      "bg-green-100 text-green-700",
-  absent:       "bg-red-100 text-red-700",
-  paid_leave:   "bg-blue-100 text-blue-700",
-  unpaid_leave: "bg-orange-100 text-orange-700",
-  half_shift:   "bg-amber-100 text-amber-700",
-  holiday:      "bg-gray-100 text-gray-600",
+  present:      TONE.success,
+  absent:       TONE.danger,
+  paid_leave:   TONE.info,
+  unpaid_leave: TONE.caution,
+  half_shift:   TONE.warning,
+  holiday:      TONE.neutral,
 };
 
 export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: () => void }) {
@@ -309,7 +310,7 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                             <td className="px-3 py-1.5 font-mono">{d.date}</td>
                             <td className="px-3 py-1.5 text-muted-foreground">{d.day}</td>
                             <td className="px-3 py-1.5">
-                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[d.status ?? "absent"] ?? "bg-gray-100 text-gray-600"}`}>
+                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[d.status ?? "absent"] ?? TONE.neutral}`}>
                                 {d.status === "paid_leave" ? (d.leaveType ?? "Paid Leave")
                                   : d.status === "unpaid_leave" ? "Unpaid Leave"
                                   : d.status ?? "—"}
@@ -476,7 +477,7 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                             <td className="px-3 py-1.5 font-mono text-green-700">{d.firstPunch ?? "—"}</td>
                             <td className="px-3 py-1.5 font-mono text-blue-700">{d.lastPunch ?? "—"}</td>
                             <td className="px-3 py-1.5">
-                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[d.status ?? "absent"] ?? "bg-gray-100 text-gray-600"}`}>
+                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[d.status ?? "absent"] ?? TONE.neutral}`}>
                                 {d.status ?? "—"}
                               </span>
                               {d.isLate && <span className="ml-1 text-amber-600 font-semibold text-xs">Late</span>}

@@ -18,7 +18,6 @@ Print/Download flow on the ID Cards page is untouched and still the tool
 for producing print-quality physical cards.
 """
 
-import base64
 import io
 
 from .document_pdf import _decode_b64_image

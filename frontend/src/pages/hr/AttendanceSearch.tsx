@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { TONE } from "@/lib/statusTones";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,11 +20,11 @@ import {
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
 const STATUS_BADGE: Record<string, string> = {
-  present:    "bg-green-100 text-green-800 border-green-200",
-  half_shift: "bg-amber-100 text-amber-800 border-amber-200",
-  absent:     "bg-red-100 text-red-800 border-red-200",
-  on_leave:   "bg-purple-100 text-purple-800 border-purple-200",
-  holiday:    "bg-gray-100 text-gray-600 border-gray-200",
+  present:    TONE.success,
+  half_shift: TONE.warning,
+  absent:     TONE.danger,
+  on_leave:   TONE.info,
+  holiday:    TONE.neutral,
 };
 const STATUS_LABEL: Record<string, string> = {
   present: "Present", half_shift: "Half Shift", absent: "Absent",

@@ -7,10 +7,7 @@ export const getJobById = (id: number, options?: RequestInit) =>
 
 export const getJobByIdQueryKey = (id: number) => ["/api/jobs", id] as const;
 
-export function useGetJobById(
-  id: number,
-  options?: { enabled?: boolean },
-) {
+export function useGetJobById(id: number, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: getJobByIdQueryKey(id),
     queryFn: ({ signal }) => getJobById(id, { signal }),

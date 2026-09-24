@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { useLocation } from "wouter";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent } from "@/components/ui/card";
@@ -322,9 +323,9 @@ export default function Employees() {
                         <span className="text-muted-foreground text-xs ml-1">/{emp.salaryType === "monthly" ? "mo" : "wk"}</span>
                       </TableCell>
                       <TableCell>
-                        <Badge variant={emp.status === "active" ? "default" : "secondary"} className={emp.status === "active" ? "bg-green-100 text-green-800" : ""}>
+                        <StatusBadge tone={emp.status === "active" ? "success" : "neutral"} className="text-xs font-semibold capitalize">
                           {emp.status}
-                        </Badge>
+                        </StatusBadge>
                       </TableCell>
                       {viewingCoEmp && (
                         <TableCell>

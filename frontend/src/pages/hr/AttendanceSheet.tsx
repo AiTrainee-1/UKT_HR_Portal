@@ -1,7 +1,9 @@
 import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import ExcelJS from "exceljs";
-import html2canvas from "html2canvas-pro";
-import jsPDF from "jspdf";
+import { flushSync } from "react-dom";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import {
+  addTitleBlock, downloadWorkbook, exportElementToFile, fileSafe, newWorkbook, solidFill, styleHeaderCell,
+} from "@/lib/exportUtils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -123,6 +125,11 @@ const COL_LEFT = {
 };
 const stickyStyle = (left: number, width: number): CSSProperties => ({ left, width, minWidth: width, maxWidth: width });
 
+// Above this many employees the grid renders only the rows on screen (plus a
+// small buffer) -a full roster x 31 days is thousands of tooltip-wrapped cells.
+// The PDF export switches it off so the captured DOM has every row.
+const VIRTUALIZE_ABOVE = 60;
+
 type RangeMode = "day" | "week" | "month";
 
 /**
@@ -183,6 +190,20 @@ export function AttendanceSheetContent() {
   // so only Day/Week switch to a full-width, evenly-distributed layout.
   const isCompactRange = dates.length <= 7;
 
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const virtualize = exporting !== "pdf" && employees.length > VIRTUALIZE_ABOVE;
+  const rowVirtualizer = useVirtualizer({
+    count: employees.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => (isWide ? 58 : 37),
+    overscan: 10,
+    enabled: virtualize,
+  });
+  const virtualRows = virtualize ? rowVirtualizer.getVirtualItems() : [];
+  const padTop = virtualRows.length > 0 ? virtualRows[0].start : 0;
+  const padBottom = virtualRows.length > 0 ? rowVirtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end : 0;
+  const tableCols = 4 + dates.length + 3;
+
   const goPrev = () => {
     if (rangeMode === "day") setAnchorDate((d) => addDaysISO(d, -1));
     else if (rangeMode === "week") setAnchorDate((d) => addDaysISO(d, -7));
@@ -209,14 +230,14 @@ export function AttendanceSheetContent() {
     return `${kind} Attendance Sheet - ${rangeLabel}`;
   }, [rangeMode, rangeLabel]);
 
-  // ── Excel export -colored cells, Strength row, frozen employee columns,
-  // built with ExcelJS exactly like AttendanceReportLog's exportDailyExcel
-  // so both exports look and behave the same way across the app. ─────────
+  // ── Excel export -colored cells, Strength row, frozen employee columns.
+  // Title block, header styling and download all come from lib/exportUtils,
+  // shared with the Daily Report export in AttendanceReportLog. ───────────
   async function exportExcel() {
     if (employees.length === 0 || dates.length === 0) return;
     setExporting("excel");
     try {
-      const wb = new ExcelJS.Workbook();
+      const wb = newWorkbook();
       const ws = wb.addWorksheet("Attendance Sheet");
       const fixedCols = 4; // S.No, Emp Code, Name, Department
       const summaryCols = 3; // P, A, Eff. Days
@@ -229,19 +250,13 @@ export function AttendanceSheetContent() {
       for (let i = 0; i < dates.length; i++) ws.getColumn(fixedCols + 1 + i).width = 5;
       for (let i = 0; i < summaryCols; i++) ws.getColumn(fixedCols + dates.length + 1 + i).width = 7;
 
-      const mergeAndTitle = (row: number, text: string, opts: { size?: number; bold?: boolean; fill?: string } = {}) => {
-        ws.mergeCells(row, 1, row, totalCols);
-        const cell = ws.getCell(row, 1);
-        cell.value = text;
-        cell.font = { bold: opts.bold ?? true, size: opts.size ?? 12 };
-        cell.alignment = { horizontal: "center", vertical: "middle" };
-        if (opts.fill) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${opts.fill}` } };
-      };
-
-      mergeAndTitle(1, settings?.companyName ?? "Company", { size: 14 });
-      mergeAndTitle(2, user?.branchName ? `${user.branchName} Branch` : "All Branches", { size: 10, bold: false });
-      mergeAndTitle(3, sheetTitle, { size: 13, fill: "E8A9A3" });
-      ws.getRow(3).height = 22;
+      addTitleBlock(wb, ws, {
+        totalCols,
+        company: settings?.companyName ?? "Company",
+        branchLabel: user?.branchName ? `${user.branchName} Branch` : "All Branches",
+        title: sheetTitle,
+        logoDataUrl: settings?.companyLogo,
+      });
 
       const headerRowIdx = 5;
       const headerRow = ws.getRow(headerRowIdx);
@@ -251,10 +266,10 @@ export function AttendanceSheetContent() {
       headers.forEach((h, i) => {
         const cell = headerRow.getCell(i + 1);
         cell.value = h;
-        cell.font = { bold: true, size: 10 };
-        cell.alignment = { horizontal: "center", vertical: "middle" };
-        cell.border = { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "hair" }, right: { style: "hair" } };
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
+        styleHeaderCell(cell, {
+          fill: "FFF1F5F9", color: "FF000000", size: 10, wrapText: false,
+          border: { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "hair" }, right: { style: "hair" } },
+        });
       });
       headerRow.height = 20;
 
@@ -270,7 +285,7 @@ export function AttendanceSheetContent() {
           c.value = meta ? meta.code : "";
           c.alignment = { horizontal: "center", vertical: "middle" };
           c.font = { bold: true, size: 9 };
-          if (meta) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${meta.hex}` } };
+          if (meta) c.fill = solidFill(`FF${meta.hex}`);
         });
         r.getCell(fixedCols + dates.length + 1).value = emp.summary.present;
         r.getCell(fixedCols + dates.length + 2).value = emp.summary.absent;
@@ -292,7 +307,7 @@ export function AttendanceSheetContent() {
         c.value = n;
         c.font = { bold: true, size: 9 };
         c.alignment = { horizontal: "center" };
-        c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
+        c.fill = solidFill("FFF1F5F9");
         c.border = { top: { style: "thin" } };
       });
 
@@ -303,7 +318,7 @@ export function AttendanceSheetContent() {
         const cell = ws.getCell(legendRowIdx, 2 + i * 2);
         cell.value = `${meta.code} = ${meta.label}`;
         cell.font = { size: 9 };
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${meta.hex}` } };
+        cell.fill = solidFill(`FF${meta.hex}`);
       });
 
       ws.getCell(legendRowIdx + 2, 1).value = `Generated by ${settings?.companyName ?? ""} HRMS`;
@@ -311,14 +326,7 @@ export function AttendanceSheetContent() {
 
       ws.views = [{ state: "frozen", xSplit: fixedCols, ySplit: headerRowIdx }];
 
-      const buffer = await wb.xlsx.writeBuffer();
-      const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${sheetTitle.replace(/[^a-z0-9]+/gi, "_")}.xlsx`;
-      a.click();
-      URL.revokeObjectURL(url);
+      await downloadWorkbook(wb, `${fileSafe(sheetTitle)}.xlsx`);
     } catch {
       toast({ title: "Failed to export Excel", variant: "destructive" });
     } finally {
@@ -326,22 +334,16 @@ export function AttendanceSheetContent() {
     }
   }
 
-  // ── PDF export -renders the visible table to an image, exactly like
-  // AttendanceReportLog's exportDailyVisual, so both PDF exports in this
-  // app behave identically. ────────────────────────────────────────────
+  // ── PDF export -renders the visible table (lib/exportUtils). ──────────
   async function exportPdf() {
     if (employees.length === 0 || !exportRef.current) return;
-    setExporting("pdf");
+    // Un-virtualize and un-clamp the table synchronously, and let the browser
+    // paint it, so the captured DOM holds every row rather than just the
+    // ones currently scrolled into view.
+    flushSync(() => setExporting("pdf"));
     try {
-      const canvas = await html2canvas(exportRef.current, { backgroundColor: "#ffffff", scale: 2, useCORS: true });
-      const imgData = canvas.toDataURL("image/png");
-      const pdf = new jsPDF({
-        orientation: canvas.width > canvas.height ? "landscape" : "portrait",
-        unit: "px",
-        format: [canvas.width, canvas.height],
-      });
-      pdf.addImage(imgData, "PNG", 0, 0, canvas.width, canvas.height);
-      pdf.save(`${sheetTitle.replace(/[^a-z0-9]+/gi, "_")}.pdf`);
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+      await exportElementToFile(exportRef.current, fileSafe(sheetTitle), "pdf");
     } catch {
       toast({ title: "Failed to export PDF", variant: "destructive" });
     } finally {
@@ -398,7 +400,7 @@ export function AttendanceSheetContent() {
                 />
 
                 <div className="flex items-center gap-1.5">
-                  <Button variant="outline" size="icon" className="h-8 w-8" onClick={goPrev}>
+                  <Button variant="outline" size="icon" className="h-8 w-8" onClick={goPrev} aria-label="Previous period">
                     <ChevronLeft size={14} />
                   </Button>
                   <button
@@ -407,7 +409,7 @@ export function AttendanceSheetContent() {
                   >
                     {rangeLabel}
                   </button>
-                  <Button variant="outline" size="icon" className="h-8 w-8" onClick={goNext}>
+                  <Button variant="outline" size="icon" className="h-8 w-8" onClick={goNext} aria-label="Next period">
                     <ChevronRight size={14} />
                   </Button>
                 </div>
@@ -491,21 +493,21 @@ export function AttendanceSheetContent() {
                     <p className="text-center font-bold text-base">{settings?.companyName ?? "Company"}</p>
                     <p className="text-center text-xs text-muted-foreground">{sheetTitle}</p>
                   </div>
-                  <div className="overflow-x-auto">
+                  <div ref={scrollRef} className={exporting === "pdf" ? "overflow-x-auto" : "overflow-auto max-h-[70vh]"}>
                     <table className={`text-xs border-collapse ${isCompactRange ? "w-full table-fixed" : ""}`}>
                       <thead>
                         <tr className="bg-slate-50">
-                          <th style={stickyStyle(COL_LEFT.sno, COL_W.sno)} className="sticky z-20 bg-slate-50 border px-2 py-2 text-[10px] font-bold uppercase text-gray-500">#</th>
-                          <th style={stickyStyle(COL_LEFT.code, COL_W.code)} className="sticky z-20 bg-slate-50 border px-2 py-2 text-[10px] font-bold uppercase text-gray-500 whitespace-nowrap text-left">Emp Code</th>
-                          <th style={stickyStyle(COL_LEFT.name, COL_W.name)} className="sticky z-20 bg-slate-50 border px-2 py-2 text-[10px] font-bold uppercase text-gray-500 whitespace-nowrap text-left">Employee Name</th>
-                          <th style={stickyStyle(COL_LEFT.dept, COL_W.dept)} className="sticky z-20 bg-slate-50 border px-2 py-2 text-[10px] font-bold uppercase text-gray-500 whitespace-nowrap text-left">Department</th>
+                          <th style={stickyStyle(COL_LEFT.sno, COL_W.sno)} className="sticky top-0 z-30 bg-slate-50 border px-2 py-2 text-[10px] font-bold uppercase text-gray-500">#</th>
+                          <th style={stickyStyle(COL_LEFT.code, COL_W.code)} className="sticky top-0 z-30 bg-slate-50 border px-2 py-2 text-[10px] font-bold uppercase text-gray-500 whitespace-nowrap text-left">Emp Code</th>
+                          <th style={stickyStyle(COL_LEFT.name, COL_W.name)} className="sticky top-0 z-30 bg-slate-50 border px-2 py-2 text-[10px] font-bold uppercase text-gray-500 whitespace-nowrap text-left">Employee Name</th>
+                          <th style={stickyStyle(COL_LEFT.dept, COL_W.dept)} className="sticky top-0 z-30 bg-slate-50 border px-2 py-2 text-[10px] font-bold uppercase text-gray-500 whitespace-nowrap text-left">Department</th>
                           {dates.map((d) => {
                             const day = new Date(`${d}T00:00:00`);
                             const isSunday = day.getDay() === 0;
                             return (
                               <th
                                 key={d}
-                                className={`border px-1 py-1.5 text-center whitespace-nowrap ${isSunday ? "bg-rose-50" : ""} ${isCompactRange ? "" : "w-12"}`}
+                                className={`sticky top-0 z-20 border px-1 py-1.5 text-center whitespace-nowrap ${isSunday ? "bg-rose-50" : "bg-slate-50"} ${isCompactRange ? "" : "w-12"}`}
                                 title={fmtLong(d)}
                               >
                                 <div className="font-bold text-[11px] text-gray-700">{day.getDate()}</div>
@@ -513,26 +515,43 @@ export function AttendanceSheetContent() {
                               </th>
                             );
                           })}
-                          <th className="border px-2 py-2 text-[10px] font-bold uppercase text-gray-500 w-10">P</th>
-                          <th className="border px-2 py-2 text-[10px] font-bold uppercase text-gray-500 w-10">A</th>
-                          <th className="border px-2 py-2 text-[10px] font-bold uppercase text-gray-500 w-14">Eff.</th>
+                          <th className="sticky top-0 z-20 bg-slate-50 border px-2 py-2 text-[10px] font-bold uppercase text-gray-500 w-10">P</th>
+                          <th className="sticky top-0 z-20 bg-slate-50 border px-2 py-2 text-[10px] font-bold uppercase text-gray-500 w-10">A</th>
+                          <th className="sticky top-0 z-20 bg-slate-50 border px-2 py-2 text-[10px] font-bold uppercase text-gray-500 w-14">Eff.</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {employees.map((emp, i) => (
-                          <EmployeeRow key={emp.employeeId} emp={emp} index={i} isWide={isWide} />
-                        ))}
+                        {virtualize ? (
+                          <>
+                            {padTop > 0 && <tr aria-hidden="true"><td colSpan={tableCols} style={{ height: padTop, padding: 0, border: 0 }} /></tr>}
+                            {virtualRows.map((v) => (
+                              <EmployeeRow
+                                key={employees[v.index].employeeId}
+                                emp={employees[v.index]}
+                                index={v.index}
+                                isWide={isWide}
+                                dataIndex={v.index}
+                                rowRef={rowVirtualizer.measureElement}
+                              />
+                            ))}
+                            {padBottom > 0 && <tr aria-hidden="true"><td colSpan={tableCols} style={{ height: padBottom, padding: 0, border: 0 }} /></tr>}
+                          </>
+                        ) : (
+                          employees.map((emp, i) => (
+                            <EmployeeRow key={emp.employeeId} emp={emp} index={i} isWide={isWide} />
+                          ))
+                        )}
                       </tbody>
                       <tfoot>
                         <tr className="bg-slate-100 font-bold">
-                          <td style={stickyStyle(COL_LEFT.sno, COL_W.sno)} className="sticky z-20 bg-slate-100 border px-2 py-2" />
-                          <td style={stickyStyle(COL_LEFT.code, COL_W.code)} className="sticky z-20 bg-slate-100 border px-2 py-2" />
-                          <td style={stickyStyle(COL_LEFT.name, COL_W.name)} className="sticky z-20 bg-slate-100 border px-2 py-2 text-[11px] text-gray-700">Strength</td>
-                          <td style={stickyStyle(COL_LEFT.dept, COL_W.dept)} className="sticky z-20 bg-slate-100 border px-2 py-2" />
+                          <td style={stickyStyle(COL_LEFT.sno, COL_W.sno)} className="sticky bottom-0 z-30 bg-slate-100 border px-2 py-2" />
+                          <td style={stickyStyle(COL_LEFT.code, COL_W.code)} className="sticky bottom-0 z-30 bg-slate-100 border px-2 py-2" />
+                          <td style={stickyStyle(COL_LEFT.name, COL_W.name)} className="sticky bottom-0 z-30 bg-slate-100 border px-2 py-2 text-[11px] text-gray-700">Strength</td>
+                          <td style={stickyStyle(COL_LEFT.dept, COL_W.dept)} className="sticky bottom-0 z-30 bg-slate-100 border px-2 py-2" />
                           {strength.map((n, i) => (
-                            <td key={dates[i]} className="border px-1 py-2 text-center text-[11px] text-gray-700">{n}</td>
+                            <td key={dates[i]} className="sticky bottom-0 z-20 bg-slate-100 border px-1 py-2 text-center text-[11px] text-gray-700">{n}</td>
                           ))}
-                          <td className="border" colSpan={3} />
+                          <td className="sticky bottom-0 z-20 bg-slate-100 border" colSpan={3} />
                         </tr>
                       </tfoot>
                     </table>
@@ -546,9 +565,18 @@ export function AttendanceSheetContent() {
   );
 }
 
-function EmployeeRow({ emp, index, isWide }: { emp: AttendanceSheetEmployeeRow; index: number; isWide: boolean }) {
+function EmployeeRow({
+  emp, index, isWide, dataIndex, rowRef,
+}: {
+  emp: AttendanceSheetEmployeeRow;
+  index: number;
+  isWide: boolean;
+  /** Set only when virtualized: the virtualizer measures each row by this. */
+  dataIndex?: number;
+  rowRef?: (node: HTMLTableRowElement | null) => void;
+}) {
   return (
-    <tr className="hover:bg-slate-50/60 group">
+    <tr ref={rowRef} data-index={dataIndex} className="hover:bg-slate-50/60 group">
       <td style={stickyStyle(COL_LEFT.sno, COL_W.sno)} className="sticky z-10 bg-white group-hover:bg-slate-50/60 border px-2 py-1.5 text-[10px] text-gray-400 text-center tabular-nums">{index + 1}</td>
       <td style={stickyStyle(COL_LEFT.code, COL_W.code)} className="sticky z-10 bg-white group-hover:bg-slate-50/60 border px-2 py-1.5 font-mono text-[10px] text-gray-500 whitespace-nowrap">{emp.employeeCode}</td>
       <td style={stickyStyle(COL_LEFT.name, COL_W.name)} className="sticky z-10 bg-white group-hover:bg-slate-50/60 border px-2 py-1.5 font-semibold text-gray-800 whitespace-nowrap overflow-hidden text-ellipsis">{emp.employeeName}</td>

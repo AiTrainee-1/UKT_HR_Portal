@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { useLocation } from "wouter";
-import ExcelJS from "exceljs";
+import type ExcelJS from "exceljs";
+import { downloadWorkbook, newWorkbook, solidFill, styleHeaderCell, todayStamp } from "@/lib/exportUtils";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -47,10 +48,6 @@ type ImportResult = {
   suspiciousDays: { employeeId: number; employeeName: string; date: string; punches: number }[];
 };
 
-function todayStamp(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -61,17 +58,17 @@ function styleHeaderRow(headerRow: ExcelJS.Row) {
   PUNCH_HEADERS.forEach((h, i) => {
     const cell = headerRow.getCell(i + 1);
     cell.value = h;
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1B4B6E" } };
-    cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
-    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    cell.border = { bottom: { style: "medium", color: { argb: "FF0A2E3E" } } };
+    styleHeaderCell(cell, {
+      fill: "FF1B4B6E",
+      size: 11,
+      border: { bottom: { style: "medium", color: { argb: "FF0A2E3E" } } },
+    });
   });
   headerRow.height = 28;
 }
 
 async function downloadPunchesAsExcel(rows: PunchRow[]) {
-  const wb = new ExcelJS.Workbook();
-  wb.creator = "UKTextiles HRMS";
+  const wb = newWorkbook();
   const ws = wb.addWorksheet("Punches");
   ws.columns = PUNCH_HEADERS.map((h) => ({ key: h, width: Math.max(16, h.length + 4) }));
   styleHeaderRow(ws.getRow(1));
@@ -85,11 +82,11 @@ async function downloadPunchesAsExcel(rows: PunchRow[]) {
     ]);
     if (isNoPunch) {
       row.eachCell((cell) => {
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE8EEF3" } };
+        cell.fill = solidFill("FFE8EEF3");
       });
     } else if (!r.matched) {
       row.eachCell((cell) => {
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFDF3D6" } };
+        cell.fill = solidFill("FFFDF3D6");
       });
     }
   });
@@ -104,14 +101,7 @@ async function downloadPunchesAsExcel(rows: PunchRow[]) {
 
   ws.views = [{ state: "frozen", ySplit: 1 }];
 
-  const buffer = await wb.xlsx.writeBuffer();
-  const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `Biometric_Punches_${todayStamp()}.xlsx`;
-  a.click();
-  URL.revokeObjectURL(url);
+  await downloadWorkbook(wb, `Biometric_Punches_${todayStamp()}.xlsx`);
 }
 
 export default function ManualPunchImport() {

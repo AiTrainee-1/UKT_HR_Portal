@@ -64,9 +64,10 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from .view_common import error_response as _error
 from .auth import get_token_employee_id, is_hr, require_auth, require_hr
 from .biometric_sync import _ingest_punches
-from .branch_scope import get_branch_scope, scope_to_branch
+from .branch_scope import scope_to_branch
 from .geo_utils import haversine_distance_m
 from .clock import ist_time, ist_today
 from .models import (
@@ -79,10 +80,6 @@ MAX_PHOTO_BYTES = 8 * 1024 * 1024  # 8MB
 DEFAULT_RADIUS_M = 200
 PING_RETENTION_HOURS = 72
 IST_OFFSET = timedelta(hours=5, minutes=30)
-
-
-def _error(msg: str, code: int = 400) -> Response:
-    return Response({"error": msg}, status=code)
 
 
 def source_label(source: str) -> str:
@@ -1190,10 +1187,13 @@ def on_duty_punch_verification_photo(request: Request, pk: int) -> Response:
     elif is_hr(request):
         allowed = scope_to_branch(Employee.objects, request).filter(pk=v.employee_id).exists()
     elif owner_employee_id:
+        scope = Q(employee_assignments__employee_id=v.employee_id)
+        # An employee with no department must not match "department IS NULL"
+        # on every manager who simply has no department assignments.
+        if v.employee.department_id:
+            scope |= Q(department_assignments__department_id=v.employee.department_id)
         allowed = DepartmentManager.objects.filter(
-            Q(employee_assignments__employee_id=v.employee_id)
-            | Q(department_assignments__department_id=v.employee.department_id),
-            employee_id=owner_employee_id, is_active=True,
+            scope, employee_id=owner_employee_id, is_active=True,
         ).exists()
     if not allowed:
         return _error("Access denied", 403)

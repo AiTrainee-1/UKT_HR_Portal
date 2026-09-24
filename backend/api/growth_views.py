@@ -25,7 +25,7 @@ from .audit_utils import log_action
 from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name
 from .user_settings import settings_for, settings_for_employee
 from .branch_scope import scope_to_branch
-from .clock import ist_now, ist_today
+from .clock import ist_today
 from .models import (
     AttendanceDayRecord, AttendanceOverrideRequest, Bonus, Department, Designation, Employee,
     PayrollSettings, Promotion, SalaryIncrement, SalarySlip,

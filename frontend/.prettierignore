@@ -1,0 +1,6 @@
+dist
+node_modules
+coverage
+src/lib/api-client/generated
+package-lock.json
+*.tsbuildinfo

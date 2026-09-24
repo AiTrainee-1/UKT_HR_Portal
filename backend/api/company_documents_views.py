@@ -768,8 +768,8 @@ def _compact_salary_slip_flowables(s: SalarySlip, ds: CompanyDocumentSettings, p
     title_style = ParagraphStyle("CTitle", fontName=FONT_BODY_BOLD, fontSize=11, textColor=accent, alignment=2)
     info_label_style = ParagraphStyle("CInfoL", fontName=FONT_BODY_BOLD, fontSize=9, textColor=primary)
     info_val_style = ParagraphStyle("CInfoV", fontName=FONT_BODY, fontSize=9, textColor=colors.HexColor("#1f2937"))
-    personal_label_style = ParagraphStyle("CPersL", fontName=FONT_BODY_BOLD, fontSize=8, textColor=colors.HexColor("#4b5563"))
-    personal_val_style = ParagraphStyle("CPersV", fontName=FONT_BODY, fontSize=8, textColor=colors.HexColor("#1f2937"))
+    ParagraphStyle("CPersL", fontName=FONT_BODY_BOLD, fontSize=8, textColor=colors.HexColor("#4b5563"))
+    ParagraphStyle("CPersV", fontName=FONT_BODY, fontSize=8, textColor=colors.HexColor("#1f2937"))
     words_style = ParagraphStyle("CWords", fontName=FONT_BODY, fontSize=7.7, textColor=colors.HexColor("#6b7280"))
     sig_style = ParagraphStyle("CSig", fontName=FONT_BODY, fontSize=8.7, textColor=colors.HexColor("#4b5563"))
 

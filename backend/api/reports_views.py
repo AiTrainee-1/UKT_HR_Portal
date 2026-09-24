@@ -4,7 +4,7 @@ Frontend handles table rendering and Excel export via exceljs.
 """
 import calendar
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date
 
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
@@ -13,10 +13,9 @@ from rest_framework.response import Response
 from .auth import require_hr
 from .branch_scope import scope_to_branch
 from .geo_attendance_views import source_label
-from .clock import ist_now, ist_today
+from .clock import ist_today
 from .models import (
-    Employee, Attendance, AttendanceLog, LeaveRequest, LeaveBalance, LeaveType,
-    Department, Branch, Advance, AdvanceRepayment, SalarySlip,
+    Employee, AttendanceLog, LeaveRequest, LeaveBalance, Advance, SalarySlip,
 )
 
 MONTH_NAMES = [

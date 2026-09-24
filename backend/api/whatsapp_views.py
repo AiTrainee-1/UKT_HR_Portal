@@ -22,14 +22,11 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from . import whatsapp_service
+from .view_common import error_response as _error
 from .auth import require_hr
 from .models import WhatsAppMediaAsset, WhatsAppMessageLog, WhatsAppMessageTemplate
 
 DOCUMENT_TYPES = [key for key, _ in WhatsAppMessageLog.DOCUMENT_TYPES]
-
-
-def _error(message: str, code: int = 400) -> Response:
-    return Response({"error": message}, status=code)
 
 
 @api_view(["GET"])
@@ -101,3 +98,87 @@ def whatsapp_media(request: Request, token: str):
     response = HttpResponse(bytes(asset.content), content_type=asset.mime_type)
     response["Content-Disposition"] = f'inline; filename="{asset.filename}"'
     return response
+
+
+# ── Gupshup webhook (delivery / read receipts) ───────────────────────────────
+
+# Later states never get overwritten by earlier ones: Gupshup can deliver
+# events out of order or more than once.
+_STATUS_RANK = {"sent": 0, "enqueued": 0, "delivered": 1, "read": 2}
+
+
+def _status_updates(event: dict):
+    """Yield (ids, status, error_text) from either Gupshup payload format.
+
+    v2 (Gupshup format): {"type": "message-event", "payload": {"id": <WhatsApp
+    id>, "gsId": <Gupshup id>, "type": "sent|delivered|read|failed|enqueued",
+    "payload": {"code": ..., "reason": ...}}}
+
+    v3 (Meta format): {"object": "whatsapp_business_account", "entry": [{
+    "changes": [{"value": {"statuses": [{"id": <WhatsApp id>, "gs_id":
+    <Gupshup id>, "status": "...", "errors": [{"code", "title", "message"}]}]}}]}]}
+
+    Our stored gupshup_message_id is what the send API returned, which is the
+    Gupshup id (gsId / gs_id), so both ids are tried.
+    """
+    if event.get("type") == "message-event":
+        outer = event.get("payload") or {}
+        detail = outer.get("payload") or {}
+        yield (
+            [i for i in (outer.get("gsId"), outer.get("id")) if i],
+            outer.get("type"),
+            str(detail.get("reason") or detail.get("code") or ""),
+        )
+        return
+    for entry in event.get("entry") or []:
+        for change in entry.get("changes") or []:
+            for st in (change.get("value") or {}).get("statuses") or []:
+                err = (st.get("errors") or [{}])[0]
+                yield (
+                    [i for i in (st.get("gs_id"), st.get("id")) if i],
+                    st.get("status"),
+                    str(err.get("message") or err.get("title") or err.get("code") or ""),
+                )
+
+
+def _apply_message_event(event: dict) -> None:
+    """Fold Gupshup delivery events (either payload format) into WhatsAppMessageLog.status."""
+    for ids, new_status, error_text in _status_updates(event):
+        if not new_status or not ids:
+            continue
+        for log in WhatsAppMessageLog.objects.filter(gupshup_message_id__in=ids):
+            if new_status == "failed":
+                log.status = "failed"
+                log.error_message = (error_text or "Delivery failed")[:500]
+            elif _STATUS_RANK.get(new_status, -1) > _STATUS_RANK.get(log.status, 0):
+                log.status = new_status
+            else:
+                continue
+            log.save(update_fields=["status", "error_message"])
+
+
+@api_view(["GET", "POST", "HEAD", "OPTIONS"])
+def whatsapp_webhook(request: Request) -> Response:
+    """Public callback URL for Gupshup (Settings -> Webhook in the Gupshup console).
+
+    Gupshup validates the URL when you save it by calling it and requiring a
+    2xx, so this must always answer 200 -even for an empty or unrecognised
+    body, and even if processing an event fails (a 5xx makes Gupshup retry and
+    eventually disable the callback). If WHATSAPP_WEBHOOK_TOKEN is set, the
+    callback URL must carry it as ?token=...; a wrong token is a 403.
+    """
+    expected = dj_settings.WHATSAPP_WEBHOOK_TOKEN
+    if expected and request.query_params.get("token") != expected:
+        return _error("Forbidden", 403)
+
+    if request.method == "POST":
+        try:
+            # Reading the body can itself raise (non-JSON content type, bad JSON).
+            body = request.data
+            if isinstance(body, dict):
+                _apply_message_event(body)
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception("Gupshup webhook event could not be processed")
+    return Response({"status": "ok"})

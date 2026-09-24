@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { useLocation } from "wouter";
-import ExcelJS from "exceljs";
+import type ExcelJS from "exceljs";
+import { downloadWorkbook, newWorkbook, solidFill, styleHeaderCell, todayStamp } from "@/lib/exportUtils";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -88,10 +89,6 @@ function scopeLabel(user: ReturnType<typeof useAuth>["user"]): string {
   return "AllBranches";
 }
 
-function todayStamp(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -103,13 +100,11 @@ function styleHeaderRow(headerRow: ExcelJS.Row) {
     const cell = headerRow.getCell(i + 1);
     const isRequired = REQUIRED_COLUMNS.has(h);
     cell.value = isRequired ? `${h} *` : h;
-    cell.fill = {
-      type: "pattern", pattern: "solid",
-      fgColor: { argb: isRequired ? "FF0F4C63" : "FF1B4B6E" },
-    };
-    cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
-    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    cell.border = { bottom: { style: "medium", color: { argb: "FF0A2E3E" } } };
+    styleHeaderCell(cell, {
+      fill: isRequired ? "FF0F4C63" : "FF1B4B6E",
+      size: 11,
+      border: { bottom: { style: "medium", color: { argb: "FF0A2E3E" } } },
+    });
     const note = COLUMN_NOTES[h];
     if (note) cell.note = { texts: [{ text: note }] };
   });
@@ -117,8 +112,7 @@ function styleHeaderRow(headerRow: ExcelJS.Row) {
 }
 
 async function downloadTemplate(user: ReturnType<typeof useAuth>["user"]) {
-  const wb = new ExcelJS.Workbook();
-  wb.creator = "UKTextiles HRMS";
+  const wb = newWorkbook();
   const ws = wb.addWorksheet("Employees");
 
   ws.columns = EMPLOYEE_TEMPLATE_HEADERS.map((h) => ({ key: h, width: Math.max(16, h.length + 4) }));
@@ -129,7 +123,7 @@ async function downloadTemplate(user: ReturnType<typeof useAuth>["user"]) {
   SAMPLE_ROWS.forEach((values) => {
     const row = ws.addRow(values);
     row.eachCell((cell) => {
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFDF3D6" } };
+      cell.fill = solidFill("FFFDF3D6");
       cell.font = { italic: true, color: { argb: "FF8A6D1D" } };
       cell.border = {
         top: { style: "thin", color: { argb: "FFE8D69A" } },
@@ -148,23 +142,14 @@ async function downloadTemplate(user: ReturnType<typeof useAuth>["user"]) {
   ws.mergeCells(bannerRow.number, 1, bannerRow.number, EMPLOYEE_TEMPLATE_HEADERS.length);
   const bannerCell = bannerRow.getCell(1);
   bannerCell.value = `SAMPLE ROWS ABOVE (2–${1 + SAMPLE_ROWS.length}) -for reference only, skipped automatically on upload. Enter your real employees starting from row ${bannerRow.number + 1} ⬇`;
-  bannerCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1B4B6E" } };
+  bannerCell.fill = solidFill("FF1B4B6E");
   bannerCell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 10 };
   bannerCell.alignment = { horizontal: "center", vertical: "middle" };
   bannerRow.height = 22;
 
   ws.views = [{ state: "frozen", ySplit: 1 }];
 
-  const buffer = await wb.xlsx.writeBuffer();
-  const blob = new Blob([buffer], {
-    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `Employee_Bulk_Upload_Template_${scopeLabel(user)}_${todayStamp()}.xlsx`;
-  a.click();
-  URL.revokeObjectURL(url);
+  await downloadWorkbook(wb, `Employee_Bulk_Upload_Template_${scopeLabel(user)}_${todayStamp()}.xlsx`);
 }
 
 function employeeToRow(emp: Employee): (string | number)[] {
@@ -197,8 +182,7 @@ async function downloadCurrentEmployees(
   const rows = employmentType ? employees.filter((e) => e.employmentType === employmentType) : employees;
   const typeLabel = employmentType === "staff" ? "Staff" : employmentType === "production" ? "Production" : "";
 
-  const wb = new ExcelJS.Workbook();
-  wb.creator = "UKTextiles HRMS";
+  const wb = newWorkbook();
   const ws = wb.addWorksheet("Employees");
   ws.columns = EMPLOYEE_TEMPLATE_HEADERS.map((h) => ({ key: h, width: Math.max(16, h.length + 4) }));
   // Employee Code is written as text (employeeToRow) so a code like "007"
@@ -212,16 +196,10 @@ async function downloadCurrentEmployees(
   rows.forEach((emp) => ws.addRow(employeeToRow(emp)));
   ws.views = [{ state: "frozen", ySplit: 1 }];
 
-  const buffer = await wb.xlsx.writeBuffer();
-  const blob = new Blob([buffer], {
-    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `Employee_Data_Export_${typeLabel ? `${typeLabel}_` : ""}${scopeLabel(user)}_${todayStamp()}.xlsx`;
-  a.click();
-  URL.revokeObjectURL(url);
+  await downloadWorkbook(
+    wb,
+    `Employee_Data_Export_${typeLabel ? `${typeLabel}_` : ""}${scopeLabel(user)}_${todayStamp()}.xlsx`,
+  );
 }
 
 const COLUMN_LETTERS = Array.from({ length: EMPLOYEE_TEMPLATE_HEADERS.length }, (_, i) => {

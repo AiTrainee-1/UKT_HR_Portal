@@ -10,11 +10,12 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from .view_common import error_response as _error
 from .auth import get_token_employee_id, require_auth, require_hr
 from .user_settings import settings_for
 from .branch_scope import scope_to_branch
 from .company_documents_views import build_resignation_letter_pdf
-from .clock import ist_now, ist_today
+from .clock import ist_today
 from .models import (
     Department,
     DepartmentHeadcount,
@@ -25,13 +26,8 @@ from .models import (
     ManagerDepartmentAssignment,
     ManagerEmployeeAssignment,
     Notification,
-    PayrollSettings,
     ResignationRequest,
 )
-
-
-def _error(message: str, code: int = 400) -> Response:
-    return Response({"error": message}, status=code)
 
 
 # ── Serializers ───────────────────────────────────────────────────────────────
@@ -432,7 +428,6 @@ def my_resignation(request: Request) -> Response:
     last_working_date_raw = data.get("last_working_date") or data.get("lastWorkingDate")
     last_working_date = None
     if last_working_date_raw:
-        from datetime import date as date_type
         try:
             from django.utils.dateparse import parse_date
             last_working_date = parse_date(str(last_working_date_raw))
@@ -486,6 +481,8 @@ def manager_resignation_action(request: Request, pk: int) -> Response:
     emp_filter = Q(employee_id__in=direct_ids)
     if dept_ids:
         emp_filter |= Q(employee__department_id__in=dept_ids)
+    # A head never decides their own request.
+    emp_filter &= ~Q(employee_id=token_emp_id)
 
     r = (
         ResignationRequest.objects.select_related("employee", "employee__department", "dept_head")
@@ -517,7 +514,7 @@ def manager_resignation_action(request: Request, pk: int) -> Response:
         Notification.objects.create(
             employee_id=r.employee_id,
             type="resignation",
-            message=f"Your resignation request has been reviewed and approved by your Department Head. It is now with HR for final approval.",
+            message="Your resignation request has been reviewed and approved by your Department Head. It is now with HR for final approval.",
         )
     else:
         r.dept_head_status = "rejected"
@@ -530,7 +527,7 @@ def manager_resignation_action(request: Request, pk: int) -> Response:
         Notification.objects.create(
             employee_id=r.employee_id,
             type="resignation",
-            message=f"Your resignation request has been rejected by your Department Head. Please contact them for more information.",
+            message="Your resignation request has been rejected by your Department Head. Please contact them for more information.",
         )
 
     return Response(_resignation_json(r))
@@ -682,7 +679,7 @@ def resignation_email(request: Request, pk: int) -> Response:
         pdf_bytes = build_resignation_letter_pdf(r)
         emp_code = emp.employee_code
         pdf_filename = f"resignation_acceptance_{emp_code}_{r.id}.pdf"
-    except Exception as pdf_err:
+    except Exception:
         pdf_bytes = None
         pdf_filename = None
 

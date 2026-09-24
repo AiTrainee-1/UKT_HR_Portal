@@ -21,13 +21,13 @@ from rest_framework.response import Response
 from .auth import require_hr
 from .branch_scope import scope_to_branch
 from .user_settings import settings_for
-from .clock import ist_now, ist_today
-from .models import Employee, Payroll, PayrollSettings
+from .clock import ist_today
+from .models import Employee, Payroll
 from .payroll_views import (
     PayrollSkip, _DryRunAbort, _error, _generate_production_payroll, _payroll_json,
 )
 from .production_period import (
-    InvalidPeriodConfig, get_next_production_period, resolve_production_period,
+    InvalidPeriodConfig, get_next_production_period,
 )
 
 

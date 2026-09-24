@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { TONE } from "@/lib/statusTones";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -29,9 +30,9 @@ import { Separator } from "@/components/ui/separator";
 import { CircleLoader } from "@/components/ui/CircleLoader";
 
 const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
-  pending:  { label: "Pending",  className: "bg-amber-50 text-amber-700 border-amber-200" },
-  approved: { label: "Approved", className: "bg-green-50 text-green-700 border-green-200" },
-  rejected: { label: "Rejected", className: "bg-red-50 text-red-700 border-red-200" },
+  pending:  { label: "Pending",  className: TONE.warning },
+  approved: { label: "Approved", className: TONE.success },
+  rejected: { label: "Rejected", className: TONE.danger },
 };
 
 const HALF_DAY_LABEL: Record<string, string> = {

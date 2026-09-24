@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { TONE } from "@/lib/statusTones";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -60,15 +61,15 @@ function sourceStyle(label: string) {
 }
 
 const STATUS_STYLES: Record<string, { label: string; className: string }> = {
-  present: { label: "Present", className: "bg-emerald-50 text-emerald-700" },
-  half_shift: { label: "Half Shift", className: "bg-amber-50 text-amber-700" },
-  absent: { label: "Absent", className: "bg-red-50 text-red-700" },
-  on_leave: { label: "On Leave", className: "bg-blue-50 text-blue-700" },
-  holiday: { label: "Holiday", className: "bg-gray-100 text-gray-500" },
+  present: { label: "Present", className: TONE.success },
+  half_shift: { label: "Half Shift", className: TONE.warning },
+  absent: { label: "Absent", className: TONE.danger },
+  on_leave: { label: "On Leave", className: TONE.info },
+  holiday: { label: "Holiday", className: TONE.neutral },
 };
 
 function StatusPill({ status }: { status: string }) {
-  const s = STATUS_STYLES[status] ?? { label: status, className: "bg-gray-100 text-gray-600" };
+  const s = STATUS_STYLES[status] ?? { label: status, className: TONE.neutral };
   return <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase ${s.className}`}>{s.label}</span>;
 }
 

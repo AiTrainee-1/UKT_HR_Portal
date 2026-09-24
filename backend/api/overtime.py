@@ -11,7 +11,6 @@ Relaxation (credits a CompensationLeaveCredit).
 """
 
 from datetime import date as date_type, timedelta
-from decimal import Decimal
 
 from .models import AttendanceDayRecord, Employee, OvertimeRecord, PayrollSettings
 from .shift_engine import _get_shift_for_date, _t2s

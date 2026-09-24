@@ -1,4 +1,8 @@
 from decimal import Decimal
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .models import Employee
 
 
 def _float_or_none(value) -> float | None:

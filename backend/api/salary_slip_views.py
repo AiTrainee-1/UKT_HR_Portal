@@ -13,6 +13,7 @@ from .auth import require_hr, require_auth, get_token_employee_id
 from .user_settings import settings_for
 from .branch_scope import get_branch_scope, scope_to_branch
 from .models import SalarySlip, PayrollSettings, LeaveBalance
+from .view_common import paginate
 
 MONTHS = ["","January","February","March","April","May","June",
           "July","August","September","October","November","December"]
@@ -452,4 +453,4 @@ def employee_salary_slips(request: Request) -> Response:
         .filter(employee_id=emp_id)
         .order_by("-year", "-month")
     )
-    return Response([slip_json(s) for s in qs])
+    return paginate(request, qs, slip_json)

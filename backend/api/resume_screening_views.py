@@ -25,14 +25,11 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from .view_common import error_response as _error
 from .auth import require_hr
 from .branch_scope import scope_to_branch
 from .models import Department, HiringRuleSet, PayrollSettings, ScreeningCandidate
 from . import resume_screening_progress
-
-
-def _error(message: str, code: int = 400) -> Response:
-    return Response({"error": message}, status=code)
 
 
 # ── JSON shapers ────────────────────────────────────────────────────────────

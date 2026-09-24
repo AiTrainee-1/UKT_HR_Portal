@@ -22,7 +22,10 @@ CO_PORTAL_API_KEY = os.environ.get("CO_PORTAL_API_KEY", "")
 # Left empty for on-premise/local dev, where request-host-based building is
 # still correct and this var isn't needed.
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "").rstrip("/")
-DEBUG = os.environ.get("DEBUG", "true").lower() in ("1", "true", "yes")
+# Off unless explicitly enabled: an unset variable on a server must never leave
+# debug behaviour (and the dev-only JWT fallback below) switched on. Local dev
+# opts in via DEBUG=true in .env (see .env.example).
+DEBUG = os.environ.get("DEBUG", "false").lower() in ("1", "true", "yes")
 ALLOWED_HOSTS = [
     h.strip()
     for h in os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
@@ -230,6 +233,8 @@ CORS_ALLOWED_ORIGINS = [
     if o.strip()
 ]
 CORS_ALLOW_CREDENTIALS = True
+# Lets the browser clients see that a capped list was cut short (view_common.paginate).
+CORS_EXPOSE_HEADERS = ["X-Truncated"]
 
 REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
@@ -240,6 +245,9 @@ REST_FRAMEWORK = {
         # Per-IP safety net on top of the per-username lockout in views.py —
         # slows down credential-stuffing even if it's spread across usernames.
         "login": "10/min",
+        # Employee sign-in / set-password. Looser than "login" because a whole
+        # shop floor can sit behind one NAT'd IP at shift start.
+        "employee_login": "120/min",
         # Outpass/Visitor gate forms (outpass_visitor_views.py) -anonymous,
         # unauthenticated writes, one of which (visitor "new") accepts an
         # Aadhaar number, so worth rate-limiting per IP even though nothing
@@ -248,7 +256,16 @@ REST_FRAMEWORK = {
     },
 }
 
-JWT_SECRET = os.environ.get("JWT_SECRET", "fallback-secret")
+# No hardcoded fallback outside DEBUG: a guessable signing key means anyone
+# can mint a valid HR token. In DEBUG (local dev/tests) a throwaway key keeps
+# a fresh checkout runnable; anywhere else a missing value refuses to start.
+JWT_SECRET = os.environ.get("JWT_SECRET", "").strip()
+if not JWT_SECRET:
+    if DEBUG:
+        JWT_SECRET = "dev-only-insecure-jwt-secret"
+    else:
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured("JWT_SECRET is not set -refusing to start with an insecure signing key.")
 
 # The only credential left in .env -bootstraps the one super-admin HRUser row
 # on first startup (see api/apps.py::_bootstrap_admin_account). Every other
@@ -267,6 +284,9 @@ GUPSHUP_API_KEY = os.environ.get("GUPSHUP_API_KEY", "").strip()
 GUPSHUP_APP_NAME = os.environ.get("GUPSHUP_APP_NAME", "").strip()
 GUPSHUP_SOURCE_NUMBER = os.environ.get("GUPSHUP_SOURCE_NUMBER", "").strip()
 WHATSAPP_DEFAULT_COUNTRY_CODE = os.environ.get("WHATSAPP_DEFAULT_COUNTRY_CODE", "91").strip()
+# Optional shared secret for the Gupshup callback URL (?token=...). Empty = open,
+# which is what Gupshup's own URL validation needs until you choose to set one.
+WHATSAPP_WEBHOOK_TOKEN = os.environ.get("WHATSAPP_WEBHOOK_TOKEN", "").strip()
 
 # Optional override for the public origin Gupshup's servers use to fetch a
 # document/image media asset (whatsapp_service._media_url) -only needed if

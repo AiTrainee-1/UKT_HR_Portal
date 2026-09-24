@@ -1,0 +1,40 @@
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+extend-exclude = [
+    "api/migrations",
+    "staticfiles",
+    "media*",
+    "backups",
+    "backup_staging",
+    "logs",
+]
+
+[tool.ruff.lint]
+# Deliberately conservative: pyflakes (unused/undefined names, redefinitions)
+# and syntax errors. These are the ones that point at real bugs; style rules
+# would mean rewriting a large existing codebase for no behavioural gain.
+select = ["E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# Facades: re-export names for `views.X` in urls.py and `from .models import X`
+# across the app, so their imports are the point.
+"api/views.py" = ["F401"]
+"api/models/__init__.py" = ["F401"]
+
+[tool.coverage.run]
+source = ["api", "config"]
+omit = [
+    "*/migrations/*",
+    "*/tests*.py",
+    "*/management/commands/*",
+    "manage.py",
+    "config/wsgi.py",
+    "config/asgi.py",
+]
+
+[tool.coverage.report]
+# A floor set just under the measured figure so coverage can only go up.
+# Raise it as tests are added. `python -m coverage report` enforces it.
+fail_under = 38
+skip_empty = true

@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Skeleton } from "@/components/ui/skeleton";
 import { KpiRunningBorder } from "@/components/ui/KpiLoader";
 import { useToast } from "@/hooks/use-toast";
+import { TONE } from "@/lib/statusTones";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChartContainer } from "@/components/ui/chart";
 import {
@@ -50,11 +51,11 @@ import {
 const PAGE_SIZE = 10;
 
 const HISTORY_STATUS_META: Record<string, { label: string; cls: string }> = {
-  present:    { label: "Present",    cls: "bg-green-100 text-green-800 border-green-200" },
-  half_shift: { label: "Half Shift", cls: "bg-amber-100 text-amber-800 border-amber-200" },
-  absent:     { label: "Absent",     cls: "bg-red-100 text-red-800 border-red-200" },
-  on_leave:   { label: "On Leave",   cls: "bg-purple-100 text-purple-800 border-purple-200" },
-  holiday:    { label: "Holiday",    cls: "bg-slate-100 text-slate-600 border-slate-200" },
+  present:    { label: "Present",    cls: TONE.success },
+  half_shift: { label: "Half Shift", cls: TONE.warning },
+  absent:     { label: "Absent",     cls: TONE.danger },
+  on_leave:   { label: "On Leave",   cls: TONE.info },
+  holiday:    { label: "Holiday",    cls: TONE.neutral },
   future:     { label: "Upcoming",   cls: "bg-gray-50 text-gray-400 border-gray-200" },
 };
 
@@ -94,10 +95,10 @@ const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct"
 const MONTH_FULL  = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 
 const STATUS_CFG: Record<string, { label: string; className: string }> = {
-  present:  { label: "Present",  className: "bg-green-100 text-green-800 border-green-200" },
-  manual:   { label: "Manual",   className: "bg-blue-100 text-blue-800 border-blue-200" },
-  on_leave: { label: "On Leave", className: "bg-purple-100 text-purple-800 border-purple-200" },
-  absent:   { label: "Absent",   className: "bg-red-100 text-red-800 border-red-200" },
+  present:  { label: "Present",  className: TONE.success },
+  manual:   { label: "Manual",   className: TONE.accent },
+  on_leave: { label: "On Leave", className: TONE.info },
+  absent:   { label: "Absent",   className: TONE.danger },
 };
 
 // ── Summary Card ───────────────────────────────────────────────────────────

@@ -189,6 +189,8 @@ def chat_message_reactions(request: Request, pk: int) -> Response:
     msg = ChatMessage.objects.select_related("channel__department").filter(pk=pk).first()
     if not msg:
         return Response({"error": "Message not found"}, status=404)
+    if msg.channel.branch_id != emp.branch_id:
+        return Response({"error": "Message not found"}, status=404)
     if not _check_department_access(msg.channel, emp):
         return Response({"error": "You are not a member of this department"}, status=403)
 

@@ -42,9 +42,9 @@ from functools import lru_cache
 
 from django.db.models import Q, Sum
 
-from .clock import ist_now, ist_today
+from .clock import ist_today
 from .models import (
-    AttendanceDayRecord, AttendanceLog, Attendance, Employee, Holiday,
+    AttendanceDayRecord, AttendanceLog, Attendance, Holiday,
     LeaveRequest, PayrollSettings, ProductionShiftConfig, ProductionShiftSegment,
 )
 from .shift_engine import (
@@ -53,7 +53,7 @@ from .shift_engine import (
     _is_after_half_shift_late_reference,
     _permission_covers_late_in, _permission_covers_early_out,
     _permission_window_minutes, _classify_zone,
-    ZONE_ON_TIME, ZONE_LATE, ZONE_PERMISSION, ZONE_HALF_SHIFT,
+    ZONE_LATE, ZONE_PERMISSION,
 )
 
 # The simple-mode half-shift cutoff as it actually stood at
@@ -153,7 +153,26 @@ def _sunday(d: date_type) -> bool:
     return d.weekday() == 6
 
 
-def _compensation_day_for(emp, d: date_type, settings=None):
+def _compensation_days_by_date(date_from: date_type, date_to: date_type, settings=None) -> dict:
+    """{date: [CompensationDayAnnouncement, ...]} for [date_from, date_to],
+    with each announcement's explicit employee list prefetched -one round of
+    queries for the whole range instead of one per employee-day. Empty when
+    the Compensation feature is switched off (matches _compensation_day_for's
+    own master-switch check)."""
+    if settings is None:
+        settings = PayrollSettings.get()
+    if not settings.compensation_feature_enabled:
+        return {}
+    from .models import CompensationDayAnnouncement
+    out: dict = {}
+    for ann in CompensationDayAnnouncement.objects.filter(
+        date__gte=date_from, date__lte=date_to,
+    ).prefetch_related("employees"):
+        out.setdefault(ann.date, []).append(ann)
+    return out
+
+
+def _compensation_day_for(emp, d: date_type, settings=None, prefetched=None):
     """
     The CompensationDayAnnouncement covering (emp, d), or None. Scoping
     (Holiday's nullable-FK convention, extended with an explicit employee
@@ -162,9 +181,11 @@ def _compensation_day_for(emp, d: date_type, settings=None):
       - the employee list is empty AND emp's branch/department match
         whichever of `announcement.branch`/`announcement.department` are
         set (null on either axis = unscoped there).
-    Announcements are expected to be rare (a handful of festival/special
-    days a year), so this queries fresh per call rather than needing a
-    month-wide prefetch like approved_permissions_by_date.
+    Announcements are rare, but this is called once per employee per day, so
+    bulk callers pass `prefetched` ({date: [announcement, ...]} from
+    _compensation_days_by_date, employees already prefetched) -otherwise a
+    roster-wide month view issues one query per employee-day. Without it,
+    it queries fresh per call (single-day callers).
 
     Master off-switch: PayrollSettings.compensation_feature_enabled. Checked
     here -the single choke point compute_day_record already goes through -
@@ -176,11 +197,16 @@ def _compensation_day_for(emp, d: date_type, settings=None):
         settings = PayrollSettings.get()
     if not settings.compensation_feature_enabled:
         return None
-    from .models import CompensationDayAnnouncement
-    for ann in CompensationDayAnnouncement.objects.filter(date=d):
-        if ann.employees.filter(pk=emp.pk).exists():
+    if prefetched is not None:
+        announcements = prefetched.get(d, [])
+    else:
+        from .models import CompensationDayAnnouncement
+        announcements = CompensationDayAnnouncement.objects.filter(date=d).prefetch_related("employees")
+    for ann in announcements:
+        listed = {e.pk for e in ann.employees.all()}
+        if emp.pk in listed:
             return ann
-        if ann.employees.exists():
+        if listed:
             continue
         if ann.branch_id and ann.branch_id != emp.branch_id:
             continue
@@ -661,7 +687,9 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
     # decision below; either way, the resulting Late/Permission flags are
     # zeroed out afterward (a compensation day is never penalized), while
     # Full vs Half is still judged from real punches -never auto-granted.
-    comp_day = None if is_production else _compensation_day_for(emp, d, settings=settings)
+    comp_day = None if is_production else _compensation_day_for(
+        emp, d, settings=settings, prefetched=prefetch.get("compensation_days_by_date"),
+    )
 
     if day_times or has_manual:
         if not day_times and has_manual:
@@ -854,6 +882,10 @@ def compute_month_records(emp, year: int, month: int, settings=None):
         "manual_attendance_dates": manual_attendance_dates,
         "night_logs_by_date": logs_by_date,
         "approved_permissions_by_date": approved_permissions_by_date,
+        "compensation_days_by_date": (
+            None if emp.employment_type == "production"
+            else _compensation_days_by_date(month_start, month_end, settings)
+        ),
     }
 
     records = []
@@ -950,6 +982,10 @@ def compute_range_records(emp, date_from: date_type, date_to: date_type, setting
         "manual_attendance_dates": manual_attendance_dates,
         "night_logs_by_date": logs_by_date,
         "approved_permissions_by_date": approved_permissions_by_date,
+        "compensation_days_by_date": (
+            None if emp.employment_type == "production"
+            else _compensation_days_by_date(date_from, date_to, settings)
+        ),
     }
 
     records = []

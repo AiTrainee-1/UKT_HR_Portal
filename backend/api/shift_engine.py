@@ -38,8 +38,7 @@ Note: employees may still SUBMIT more than 3 permission requests per month
 the 4th-and-beyond approved one as a late entry.
 """
 
-import calendar
-from datetime import date as date_type, datetime, time as time_type, timedelta
+from datetime import date as date_type, time as time_type, timedelta
 from decimal import Decimal
 
 from django.db.models import Q

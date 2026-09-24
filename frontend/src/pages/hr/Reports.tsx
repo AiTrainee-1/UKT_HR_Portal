@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
+import { TONE } from "@/lib/statusTones";
 import { useQuery } from "@tanstack/react-query";
-import ExcelJS from "exceljs";
+import { addMergedTextRow, downloadWorkbook, newWorkbook, solidFill, styleHeaderCell } from "@/lib/exportUtils";
 import {
   useListDepartments,
   useListEmployees,
@@ -71,12 +72,12 @@ const MONTHS = [
 ];
 
 const STATUS_COLORS: Record<string, string> = {
-  pending:  "bg-amber-100 text-amber-800",
-  approved: "bg-green-100 text-green-800",
-  rejected: "bg-red-100 text-red-800",
-  closed:   "bg-slate-100 text-slate-600",
-  active:   "bg-blue-100 text-blue-800",
-  inactive: "bg-slate-100 text-slate-500",
+  pending:  TONE.warning,
+  approved: TONE.success,
+  rejected: TONE.danger,
+  closed:   TONE.neutral,
+  active:   TONE.info,
+  inactive: TONE.neutral,
 };
 
 const REPORTS: ReportConfig[] = [
@@ -117,7 +118,7 @@ const REPORTS: ReportConfig[] = [
       { key: "department",   label: "Department", type: "text",  width: 18 },
       { key: "date",         label: "Date",       type: "date",  width: 12 },
       { key: "punchType",    label: "Type",       type: "badge", width: 8,
-        badgeColors: { IN: "bg-green-100 text-green-800", OUT: "bg-red-100 text-red-700" } },
+        badgeColors: { IN: TONE.success, OUT: TONE.danger } },
       { key: "punchTime",    label: "Time",       type: "text",  width: 10 },
       { key: "source",       label: "Source",     type: "text",  width: 12 },
     ],
@@ -343,7 +344,7 @@ async function exportToExcel(
   totals: Record<string, number> | undefined,
   subtitle: string,
 ) {
-  const wb = new ExcelJS.Workbook();
+  const wb = newWorkbook();
   const ws = wb.addWorksheet(report.label.substring(0, 31));
 
   const HEADER_BG = "FF1E3A5F";
@@ -353,31 +354,22 @@ async function exportToExcel(
 
   ws.columns = report.columns.map(c => ({ key: c.key, width: c.width ?? 14 }));
 
-  // Title row
-  ws.mergeCells(1, 1, 1, report.columns.length);
-  const titleCell = ws.getCell("A1");
-  titleCell.value = report.label.toUpperCase();
-  titleCell.font  = { bold: true, size: 14, color: { argb: HEADER_BG } };
-  titleCell.alignment = { horizontal: "center", vertical: "middle" };
-  ws.getRow(1).height = 28;
-
-  // Subtitle
-  ws.mergeCells(2, 1, 2, report.columns.length);
-  const subCell = ws.getCell("A2");
-  subCell.value = subtitle;
-  subCell.font  = { size: 10, color: { argb: "FF555555" } };
-  subCell.alignment = { horizontal: "center" };
-  ws.getRow(2).height = 18;
+  addMergedTextRow(ws, 1, report.columns.length, report.label.toUpperCase(), {
+    size: 14, color: HEADER_BG, height: 28,
+  });
+  addMergedTextRow(ws, 2, report.columns.length, subtitle, {
+    size: 10, bold: false, color: "FF555555", height: 18,
+  });
 
   // Header row
   const headerRow = ws.getRow(3);
   report.columns.forEach((col, i) => {
     const cell = headerRow.getCell(i + 1);
     cell.value = col.label.toUpperCase();
-    cell.fill  = { type: "pattern", pattern: "solid", fgColor: { argb: HEADER_BG } };
-    cell.font  = { bold: true, color: { argb: HEADER_FG }, size: 10 };
-    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    cell.border = { bottom: { style: "thin", color: { argb: "FF999999" } } };
+    styleHeaderCell(cell, {
+      fill: HEADER_BG, color: HEADER_FG, size: 10,
+      border: { bottom: { style: "thin", color: { argb: "FF999999" } } },
+    });
   });
   ws.getRow(3).height = 22;
 
@@ -396,7 +388,7 @@ async function exportToExcel(
       }
       cell.alignment = { horizontal: "center", vertical: "middle" };
       if (ri % 2 === 1) {
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: ALT_BG } };
+        cell.fill = solidFill(ALT_BG);
       }
     });
     wsRow.height = 18;
@@ -413,22 +405,13 @@ async function exportToExcel(
         cell.value  = totals[col.key];
         cell.numFmt = '₹#,##0.00';
       }
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: TOTAL_BG } };
+      cell.fill = solidFill(TOTAL_BG);
       cell.font = { bold: true };
       cell.alignment = { horizontal: "center", vertical: "middle" };
     });
   }
 
-  const buffer = await wb.xlsx.writeBuffer();
-  const blob = new Blob([buffer], {
-    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  });
-  const url = URL.createObjectURL(blob);
-  const a   = document.createElement("a");
-  a.href    = url;
-  a.download = `${report.id}-${Date.now()}.xlsx`;
-  a.click();
-  URL.revokeObjectURL(url);
+  await downloadWorkbook(wb, `${report.id}-${Date.now()}.xlsx`);
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────

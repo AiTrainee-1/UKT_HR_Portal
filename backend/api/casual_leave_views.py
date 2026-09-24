@@ -22,7 +22,7 @@ from rest_framework.response import Response
 
 from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name
 from .branch_scope import scope_to_branch
-from .clock import ist_now, ist_today
+from .clock import ist_today
 from .models import AttendanceDayRecord, CasualLeaveRequest, Employee, Notification
 
 ELIGIBILITY_MONTHS = 6

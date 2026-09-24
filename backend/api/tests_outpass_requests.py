@@ -13,7 +13,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from .models import Branch, Employee, GateDevice, Notification, OnDutySession, OutpassRecord, OutpassRequest
-from .outpass_request_views import _outpass_request_json, _outpass_scan_status, resolve_outpass_request
+from .outpass_request_views import _outpass_request_json, resolve_outpass_request
 from .geo_attendance_views import (
     _create_outpass_from_on_duty, resolve_on_duty_session_hod, resolve_on_duty_session_hr,
 )

@@ -12,7 +12,7 @@ from django.test import TestCase
 
 from .models import (
     Employee, ShiftTemplate, EmployeeShiftAssignment, AttendanceLog,
-    AttendanceDayRecord, PayrollSettings,
+    PayrollSettings,
 )
 from .attendance_final import compute_day_record
 

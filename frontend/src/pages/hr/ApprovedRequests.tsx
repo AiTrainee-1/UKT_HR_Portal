@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { TONE } from "@/lib/statusTones";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -35,9 +36,9 @@ type UnifiedItem =
   | { kind: "outpass";     id: number; employeeName: string; employeeId: number; createdAt: string; status: string; label: string; meta: string };
 
 const STATUS_CLS: Record<string, string> = {
-  pending:  "bg-amber-50 text-amber-700 border-amber-200",
-  approved: "bg-green-50 text-green-700 border-green-200",
-  rejected: "bg-red-50 text-red-700 border-red-200",
+  pending:  TONE.warning,
+  approved: TONE.success,
+  rejected: TONE.danger,
 };
 
 function isWithinPeriod(dateStr: string, period: Period): boolean {

@@ -12,13 +12,7 @@
  * alpha maths on them (see `hsl(var(--primary) / 0.5)` usage).
  */
 
-export type ThemeId =
-  | "default"
-  | "dark"
-  | "premium"
-  | "mono"
-  | "mono-dark"
-  | "professional";
+export type ThemeId = "default" | "dark" | "premium" | "mono" | "mono-dark" | "professional";
 
 export type ThemeDef = {
   id: ThemeId;
@@ -126,7 +120,10 @@ export function hslTripleToHex(triple: string): string {
     g = hue(p, q, h);
     b = hue(p, q, h - 1 / 3);
   }
-  const to255 = (v: number) => Math.round(v * 255).toString(16).padStart(2, "0");
+  const to255 = (v: number) =>
+    Math.round(v * 255)
+      .toString(16)
+      .padStart(2, "0");
   return `#${to255(r)}${to255(g)}${to255(b)}`;
 }
 

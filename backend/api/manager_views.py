@@ -626,6 +626,9 @@ def manager_update_leave_status(request: Request, pk: int) -> Response:
     emp_filter = Q(employee_id__in=direct_ids)
     if dept_ids:
         emp_filter |= Q(employee__department_id__in=dept_ids)
+    # A head never decides their own request, even when their own department is
+    # one of the ones assigned to them.
+    emp_filter &= ~Q(employee_id=token_emp_id)
 
     try:
         leave = LeaveRequest.objects.select_related(
@@ -636,6 +639,9 @@ def manager_update_leave_status(request: Request, pk: int) -> Response:
         if LeaveRequest.objects.filter(pk=pk).exists():
             return Response({"error": "This leave request is not in your approval scope"}, status=403)
         return Response({"error": "Leave request not found"}, status=404)
+
+    if leave.status != "pending":
+        return Response({"error": f"This leave request was already {leave.status}"}, status=400)
 
     status = request.data.get("status")
     if status not in ["approved", "rejected"]:
@@ -683,6 +689,9 @@ def manager_update_permission_status(request: Request, pk: int) -> Response:
     emp_filter = Q(employee_id__in=direct_ids)
     if dept_ids:
         emp_filter |= Q(employee__department_id__in=dept_ids)
+    # A head never decides their own request, even when their own department is
+    # one of the ones assigned to them.
+    emp_filter &= ~Q(employee_id=token_emp_id)
 
     try:
         perm = EmployeePermission.objects.select_related(
@@ -692,6 +701,9 @@ def manager_update_permission_status(request: Request, pk: int) -> Response:
         if EmployeePermission.objects.filter(pk=pk).exists():
             return Response({"error": "This permission request is not in your approval scope"}, status=403)
         return Response({"error": "Permission request not found"}, status=404)
+
+    if perm.status != "pending":
+        return Response({"error": f"This permission request was already {perm.status}"}, status=400)
 
     status = request.data.get("status")
     if status not in ["approved", "rejected"]:
@@ -742,15 +754,21 @@ def manager_update_outpass_status(request: Request, pk: int) -> Response:
     emp_filter = Q(employee_id__in=direct_ids)
     if dept_ids:
         emp_filter |= Q(employee__department_id__in=dept_ids)
+    # A head never decides their own request, even when their own department is
+    # one of the ones assigned to them.
+    emp_filter &= ~Q(employee_id=token_emp_id)
 
     try:
         req = OutpassRequest.objects.select_related(
             "employee__department", "employee__designation"
-        ).filter(emp_filter).get(pk=pk)
+        ).filter(emp_filter, source=OutpassRequest.SOURCE_MANUAL).get(pk=pk)
     except OutpassRequest.DoesNotExist:
         if OutpassRequest.objects.filter(pk=pk).exists():
             return Response({"error": "This outpass request is not in your approval scope"}, status=403)
         return Response({"error": "Outpass request not found"}, status=404)
+
+    if req.status != OutpassRequest.STATUS_PENDING:
+        return Response({"error": f"This outpass request was already {req.status}"}, status=400)
 
     status = request.data.get("status")
     if status not in ["approved", "rejected"]:
@@ -793,6 +811,9 @@ def manager_update_attendance_status(request: Request, pk: int) -> Response:
     emp_filter = Q(employee_id__in=direct_ids)
     if dept_ids:
         emp_filter |= Q(employee__department_id__in=dept_ids)
+    # A head never decides their own request, even when their own department is
+    # one of the ones assigned to them.
+    emp_filter &= ~Q(employee_id=token_emp_id)
 
     try:
         req = AttendanceOverrideRequest.objects.select_related(
@@ -867,6 +888,9 @@ def manager_update_on_duty_status(request: Request, pk: int) -> Response:
     emp_filter = Q(employee_id__in=direct_ids)
     if dept_ids:
         emp_filter |= Q(employee__department_id__in=dept_ids)
+    # A head never decides their own request, even when their own department is
+    # one of the ones assigned to them.
+    emp_filter &= ~Q(employee_id=token_emp_id)
 
     try:
         session = OnDutySession.objects.select_related(
@@ -922,6 +946,9 @@ def manager_update_missing_punch_status(request: Request, pk: int) -> Response:
     emp_filter = Q(employee_id__in=direct_ids)
     if dept_ids:
         emp_filter |= Q(employee__department_id__in=dept_ids)
+    # A head never decides their own request, even when their own department is
+    # one of the ones assigned to them.
+    emp_filter &= ~Q(employee_id=token_emp_id)
 
     try:
         req = MissingPunchRequest.objects.select_related(
@@ -971,6 +998,9 @@ def manager_update_casual_leave_status(request: Request, pk: int) -> Response:
     emp_filter = Q(employee_id__in=direct_ids)
     if dept_ids:
         emp_filter |= Q(employee__department_id__in=dept_ids)
+    # A head never decides their own request, even when their own department is
+    # one of the ones assigned to them.
+    emp_filter &= ~Q(employee_id=token_emp_id)
 
     try:
         cl = CasualLeaveRequest.objects.select_related(

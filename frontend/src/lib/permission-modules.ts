@@ -11,7 +11,9 @@ export type ModuleNode = { key: string; label: string; children?: ModuleNode[] }
 export const MODULE_TREE: ModuleNode[] = [
   { key: "dashboard", label: "Dashboard" },
   {
-    key: "employees", label: "Employees", children: [
+    key: "employees",
+    label: "Employees",
+    children: [
       { key: "employees.departments", label: "Departments" },
       { key: "employees.designations", label: "Designations" },
       { key: "employees.branches", label: "Manage Branch" },
@@ -28,7 +30,9 @@ export const MODULE_TREE: ModuleNode[] = [
   { key: "bonus", label: "Bonus" },
   { key: "id_cards", label: "ID Cards" },
   {
-    key: "recruitment", label: "Recruitment", children: [
+    key: "recruitment",
+    label: "Recruitment",
+    children: [
       { key: "recruitment.new_joinees", label: "New Joinees" },
       { key: "recruitment.resignations", label: "Resignations" },
       { key: "recruitment.required_roles", label: "Required Roles" },
@@ -54,7 +58,9 @@ export const MODULE_TREE: ModuleNode[] = [
   { key: "geo_attendance", label: "Geo Attendance" },
   { key: "outpass_visitors", label: "Outpass / Visitors" },
   {
-    key: "settings", label: "Settings", children: [
+    key: "settings",
+    label: "Settings",
+    children: [
       { key: "settings.company", label: "Company" },
       { key: "settings.attendance", label: "Attendance" },
       { key: "settings.late_detection", label: "Late Detection" },

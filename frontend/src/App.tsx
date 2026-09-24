@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { Switch, Route, Router as WouterRouter, useLocation, Redirect } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -18,6 +19,7 @@ import { WhatsAppBulkProvider } from "@/contexts/WhatsAppBulkContext";
 import GlobalWhatsAppBulkBanner from "@/components/GlobalWhatsAppBulkBanner";
 import { ResumeScreeningProvider } from "@/contexts/ResumeScreeningContext";
 import GlobalResumeScreeningBanner from "@/components/GlobalResumeScreeningBanner";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 import NotFound from "@/pages/not-found";
 
 // Public pages
@@ -25,75 +27,74 @@ import Landing from "@/pages/Landing";
 import LoginSelect from "@/pages/LoginSelect";
 import HrLogin from "@/pages/HrLogin";
 import EmployeeLogin from "@/pages/EmployeeLogin";
-import ErpLogin from "@/pages/ErpLogin";
-import SetPassword from "@/pages/SetPassword";
-import JobApply from "@/pages/JobApply";
-import DatabaseOffline from "@/pages/DatabaseOffline";
-import OutpassGate from "@/pages/gate/OutpassGate";
-import VisitorGate from "@/pages/gate/VisitorGate";
-import GateScannerLogin from "@/pages/gate/GateScannerLogin";
-import ReceptionLogin from "@/pages/gate/ReceptionLogin";
-import ReceptionConsole from "@/pages/gate/ReceptionConsole";
-import GateScannerConsole from "@/pages/gate/GateScannerConsole";
+const ErpLogin = lazy(() => import("@/pages/ErpLogin"));
+const SetPassword = lazy(() => import("@/pages/SetPassword"));
+const JobApply = lazy(() => import("@/pages/JobApply"));
+const DatabaseOffline = lazy(() => import("@/pages/DatabaseOffline"));
+const OutpassGate = lazy(() => import("@/pages/gate/OutpassGate"));
+const VisitorGate = lazy(() => import("@/pages/gate/VisitorGate"));
+const GateScannerLogin = lazy(() => import("@/pages/gate/GateScannerLogin"));
+const ReceptionLogin = lazy(() => import("@/pages/gate/ReceptionLogin"));
+const ReceptionConsole = lazy(() => import("@/pages/gate/ReceptionConsole"));
+const GateScannerConsole = lazy(() => import("@/pages/gate/GateScannerConsole"));
 
 // HR pages
-import HrDashboard from "@/pages/hr/Dashboard";
-import Employees from "@/pages/hr/Employees";
-import NewEmployee from "@/pages/hr/NewEmployee";
-import BulkUploadEmployees from "@/pages/hr/BulkUploadEmployees";
-import ManualPunchImport from "@/pages/hr/ManualPunchImport";
-import PunchView from "@/pages/hr/PunchView";
-import EmployeeDetail from "@/pages/hr/EmployeeDetail";
-import EditEmployee from "@/pages/hr/EditEmployee";
-import Leave from "@/pages/hr/Leave";
-import StaffPayroll from "@/pages/hr/StaffPayroll";
-import HrNotifications from "@/pages/hr/Notifications";
-import Interviews from "@/pages/hr/Interviews";
-import RecruitmentDashboard from "@/pages/hr/recruitment/RecruitmentDashboard";
-import NewJoinees from "@/pages/hr/recruitment/NewJoinees";
-import Resignations from "@/pages/hr/recruitment/Resignations";
-import RequiredRoles from "@/pages/hr/recruitment/RequiredRoles";
-import ResumeScreening from "@/pages/hr/recruitment/ResumeScreening";
-import Documents from "@/pages/hr/recruitment/Documents";
-import Attendance from "@/pages/hr/Attendance";
-import AttendanceReportLog from "@/pages/hr/AttendanceReportLog";
-import OutpassVisitors from "@/pages/hr/OutpassVisitors";
-import Departments from "@/pages/hr/Departments";
-import Designations from "@/pages/hr/Designations";
-import Branches from "@/pages/hr/Branches";
-import ManageShift from "@/pages/hr/ManageShift";
-import LeaveHoliday from "@/pages/hr/LeaveHoliday";
-import ApprovedRequests from "@/pages/hr/ApprovedRequests";
-import ProductionPayroll from "@/pages/hr/ProductionPayroll";
-import Settlement from "@/pages/hr/Settlement";
-import Compensation from "@/pages/hr/Compensation";
-import Reports from "@/pages/hr/Reports";
-import UserManagement from "@/pages/hr/UserManagement";
-import ManagerDetail from "@/pages/hr/ManagerDetail";
-import AccountManagement from "@/pages/hr/AccountManagement";
-import AccountManagementMaster from "@/pages/hr/AccountManagementMaster";
-import ActivityLogs from "@/pages/hr/ActivityLogs";
-import LoginDevices from "@/pages/hr/LoginDevices";
-import MobileAppLogin from "@/pages/hr/MobileAppLogin";
-import Settings from "@/pages/hr/Settings";
-import Promotion from "@/pages/hr/Promotion";
-import Increment from "@/pages/hr/Increment";
-import Bonus from "@/pages/hr/Bonus";
-import IdCards from "@/pages/hr/IdCards";
-import CasualLeave from "@/pages/hr/CasualLeave";
-import MissingPunch from "@/pages/hr/MissingPunch";
-import GeoAttendance from "@/pages/hr/GeoAttendance";
-import AttendancePunchSearch from "@/pages/hr/AttendancePunchSearch";
-import HrChat from "@/pages/hr/Chat";
-import VerifyEmployee from "@/pages/VerifyEmployee";
+const HrDashboard = lazy(() => import("@/pages/hr/Dashboard"));
+const Employees = lazy(() => import("@/pages/hr/Employees"));
+const NewEmployee = lazy(() => import("@/pages/hr/NewEmployee"));
+const BulkUploadEmployees = lazy(() => import("@/pages/hr/BulkUploadEmployees"));
+const ManualPunchImport = lazy(() => import("@/pages/hr/ManualPunchImport"));
+const PunchView = lazy(() => import("@/pages/hr/PunchView"));
+const EmployeeDetail = lazy(() => import("@/pages/hr/EmployeeDetail"));
+const EditEmployee = lazy(() => import("@/pages/hr/EditEmployee"));
+const Leave = lazy(() => import("@/pages/hr/Leave"));
+const StaffPayroll = lazy(() => import("@/pages/hr/StaffPayroll"));
+const HrNotifications = lazy(() => import("@/pages/hr/Notifications"));
+const Interviews = lazy(() => import("@/pages/hr/Interviews"));
+const RecruitmentDashboard = lazy(() => import("@/pages/hr/recruitment/RecruitmentDashboard"));
+const NewJoinees = lazy(() => import("@/pages/hr/recruitment/NewJoinees"));
+const Resignations = lazy(() => import("@/pages/hr/recruitment/Resignations"));
+const RequiredRoles = lazy(() => import("@/pages/hr/recruitment/RequiredRoles"));
+const ResumeScreening = lazy(() => import("@/pages/hr/recruitment/ResumeScreening"));
+const Documents = lazy(() => import("@/pages/hr/recruitment/Documents"));
+const Attendance = lazy(() => import("@/pages/hr/Attendance"));
+const AttendanceReportLog = lazy(() => import("@/pages/hr/AttendanceReportLog"));
+const OutpassVisitors = lazy(() => import("@/pages/hr/OutpassVisitors"));
+const Departments = lazy(() => import("@/pages/hr/Departments"));
+const Designations = lazy(() => import("@/pages/hr/Designations"));
+const Branches = lazy(() => import("@/pages/hr/Branches"));
+const ManageShift = lazy(() => import("@/pages/hr/ManageShift"));
+const LeaveHoliday = lazy(() => import("@/pages/hr/LeaveHoliday"));
+const ApprovedRequests = lazy(() => import("@/pages/hr/ApprovedRequests"));
+const ProductionPayroll = lazy(() => import("@/pages/hr/ProductionPayroll"));
+const Settlement = lazy(() => import("@/pages/hr/Settlement"));
+const Compensation = lazy(() => import("@/pages/hr/Compensation"));
+const Reports = lazy(() => import("@/pages/hr/Reports"));
+const UserManagement = lazy(() => import("@/pages/hr/UserManagement"));
+const ManagerDetail = lazy(() => import("@/pages/hr/ManagerDetail"));
+const AccountManagement = lazy(() => import("@/pages/hr/AccountManagement"));
+const AccountManagementMaster = lazy(() => import("@/pages/hr/AccountManagementMaster"));
+const ActivityLogs = lazy(() => import("@/pages/hr/ActivityLogs"));
+const LoginDevices = lazy(() => import("@/pages/hr/LoginDevices"));
+const MobileAppLogin = lazy(() => import("@/pages/hr/MobileAppLogin"));
+const Settings = lazy(() => import("@/pages/hr/Settings"));
+const Promotion = lazy(() => import("@/pages/hr/Promotion"));
+const Increment = lazy(() => import("@/pages/hr/Increment"));
+const Bonus = lazy(() => import("@/pages/hr/Bonus"));
+const IdCards = lazy(() => import("@/pages/hr/IdCards"));
+const CasualLeave = lazy(() => import("@/pages/hr/CasualLeave"));
+const MissingPunch = lazy(() => import("@/pages/hr/MissingPunch"));
+const GeoAttendance = lazy(() => import("@/pages/hr/GeoAttendance"));
+const AttendancePunchSearch = lazy(() => import("@/pages/hr/AttendancePunchSearch"));
+const HrChat = lazy(() => import("@/pages/hr/Chat"));
+const VerifyEmployee = lazy(() => import("@/pages/VerifyEmployee"));
 
 // Employee pages
-import EmployeeDashboard from "@/pages/employee/Dashboard";
-import EmployeeProfile from "@/pages/employee/Profile";
-import EmployeeSalary from "@/pages/employee/Salary";
-import EmployeeLeave from "@/pages/employee/Leave";
-import EmployeeNotifications from "@/pages/employee/Notifications";
-import { CircleLoader } from "@/components/ui/CircleLoader";
+const EmployeeDashboard = lazy(() => import("@/pages/employee/Dashboard"));
+const EmployeeProfile = lazy(() => import("@/pages/employee/Profile"));
+const EmployeeSalary = lazy(() => import("@/pages/employee/Salary"));
+const EmployeeLeave = lazy(() => import("@/pages/employee/Leave"));
+const EmployeeNotifications = lazy(() => import("@/pages/employee/Notifications"));
 
 // ERP pages
 import {
@@ -200,8 +201,22 @@ function ProtectedRoute({
   return <Component />;
 }
 
+// Every page except the entry/login screens is its own chunk, so the first
+// paint no longer downloads all ~70 pages (Settings alone is ~4k lines).
+function PageLoader() {
+  return (
+    <div
+      className="min-h-screen flex items-center justify-center"
+      style={{ background: "linear-gradient(135deg, #f0f5fa 0%, #e8f2f8 50%, #eef4fc 100%)" }}
+    >
+      <CircleLoader logo texts={["UK Textiles", "HR Portal", "Loading"]} />
+    </div>
+  );
+}
+
 function Router() {
   return (
+    <Suspense fallback={<PageLoader />}>
     <Switch>
       {/* ── Public ────────────────────────────────────────────── */}
       <Route path="/" component={Landing} />
@@ -431,6 +446,7 @@ function Router() {
 
       <Route component={NotFound} />
     </Switch>
+    </Suspense>
   );
 }
 

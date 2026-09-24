@@ -1,10 +1,11 @@
 import { useState } from "react";
+import { TONE, REQUEST_STATUS_TONE } from "@/lib/statusTones";
+import { StatusBadge } from "@/components/ui/status-badge";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -24,9 +25,9 @@ import {
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
 const STATUS_BADGE: Record<string, string> = {
-  pending:  "bg-amber-100 text-amber-800 border-amber-200",
-  approved: "bg-green-100 text-green-800 border-green-200",
-  rejected: "bg-red-100 text-red-800 border-red-200",
+  pending:  TONE.warning,
+  approved: TONE.success,
+  rejected: TONE.danger,
 };
 
 export default function CasualLeave() {
@@ -110,7 +111,7 @@ export default function CasualLeave() {
           </p>
         )}
       </div>
-      <Badge className={`text-xs border shrink-0 capitalize ${STATUS_BADGE[l.status]}`}>{l.status}</Badge>
+      <StatusBadge tone={REQUEST_STATUS_TONE[l.status] ?? "neutral"} className="text-xs font-semibold shrink-0 capitalize">{l.status}</StatusBadge>
       {showActions && l.status === "pending" && (
         <div className="flex items-center gap-1.5 shrink-0">
           <Button
@@ -284,7 +285,7 @@ export default function CasualLeave() {
                             </td>
                             <td className="px-4 py-2.5">
                               {e.eligible ? (
-                                <Badge className="text-xs border bg-green-100 text-green-800 border-green-200">Eligible</Badge>
+                                <StatusBadge tone="success" className="text-xs font-semibold">Eligible</StatusBadge>
                               ) : (
                                 <span className="text-xs text-gray-400">{e.reason ?? (e.usedThisMonth ? "Already used" : "Not eligible")}</span>
                               )}

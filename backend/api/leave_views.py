@@ -6,7 +6,8 @@ from rest_framework.response import Response
 
 from .auth import require_hr, require_auth, get_token_employee_id, is_hr, get_hr_display_name
 from .branch_scope import scope_to_branch
-from .models import LeaveType, LeaveBalance, Holiday, LeaveRequest, Employee, Notification, EmployeePermission
+from .models import LeaveType, LeaveBalance, Holiday, Employee, Notification, EmployeePermission
+from .view_common import paginate
 
 
 def leave_type_json(lt):
@@ -255,7 +256,7 @@ def employee_requests(request: Request) -> Response:
             qs = qs.filter(request_type=req_type)
         if req_status:
             qs = qs.filter(status=req_status)
-        return Response([_req_json(r) for r in qs])
+        return paginate(req, qs, _req_json)
 
     return _get(request)
 
@@ -264,6 +265,11 @@ def _employee_request_create(request: Request) -> Response:
     from .models import EmployeeRequest
     data = request.data
     emp_id = data.get("employeeId")
+    token_emp_id = get_token_employee_id(request)
+    if token_emp_id is not None:
+        if emp_id and str(emp_id) != str(token_emp_id):
+            return Response({"error": "You can only submit requests for yourself"}, status=403)
+        emp_id = token_emp_id
     if not emp_id:
         return Response({"error": "employeeId is required"}, status=400)
     if not data.get("subject") or not data.get("requestType"):
@@ -274,7 +280,6 @@ def _employee_request_create(request: Request) -> Response:
     except Employee.DoesNotExist:
         return Response({"error": "Employee not found"}, status=404)
 
-    from .models import EmployeeRequest
     er = EmployeeRequest.objects.create(
         employee=emp,
         request_type=data["requestType"],
@@ -396,7 +401,7 @@ def employee_permissions(request: Request) -> Response:
             qs = qs.filter(date__year=year)
         from .models import PayrollSettings
         settings = PayrollSettings.get()
-        return Response([_permission_json(p, settings=settings) for p in qs])
+        return paginate(request, qs, lambda p: _permission_json(p, settings=settings))
 
     data = request.data
     # Accept employeeCode, camelCase, or snake_case
@@ -453,7 +458,8 @@ def employee_permissions(request: Request) -> Response:
         reason=data.get("reason"),
         type=perm_type,
         duration_minutes=duration_minutes,
-        status=data.get("status", "pending"),
+        # Only HR may create a permission that is already decided.
+        status=data.get("status", "pending") if is_hr(request) else "pending",
     )
 
     month_used_after = EmployeePermission.objects.filter(

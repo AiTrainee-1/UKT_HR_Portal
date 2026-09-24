@@ -68,7 +68,7 @@ def _run_scheduled_backup() -> None:
         drive = BackupDriveConfig.get()
         if drive.is_enabled and drive.folder_id and drive.service_account_json:
             try:
-                upload = google_drive.upload_to_drive(result["path"], drive.folder_id, drive.service_account_json)
+                google_drive.upload_to_drive(result["path"], drive.folder_id, drive.service_account_json)
                 drive.last_upload_at = timezone.now()
                 drive.last_upload_status = "success"
                 drive.last_upload_summary = f"Uploaded {result['file']}"

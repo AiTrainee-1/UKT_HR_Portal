@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import ExcelJS from "exceljs";
+import { downloadWorkbook, newWorkbook, styleHeaderCell } from "@/lib/exportUtils";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -29,7 +29,7 @@ const fmt = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigi
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 async function exportCompensation(rows: CompensationRow[]) {
-  const wb = new ExcelJS.Workbook();
+  const wb = newWorkbook();
   const ws = wb.addWorksheet("Compensation");
 
   const columns = [
@@ -52,9 +52,7 @@ async function exportCompensation(rows: CompensationRow[]) {
   columns.forEach((col, i) => {
     const cell = headerRow.getCell(i + 1);
     cell.value = col.label.toUpperCase();
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF006496" } };
-    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
-    cell.alignment = { horizontal: "center", vertical: "middle" };
+    styleHeaderCell(cell, { fill: "FF006496", wrapText: false });
   });
   headerRow.height = 22;
 
@@ -73,14 +71,7 @@ async function exportCompensation(rows: CompensationRow[]) {
     });
   });
 
-  const buffer = await wb.xlsx.writeBuffer();
-  const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `compensation-${Date.now()}.xlsx`;
-  a.click();
-  URL.revokeObjectURL(url);
+  await downloadWorkbook(wb, `compensation-${Date.now()}.xlsx`);
 }
 
 export default function Compensation() {
@@ -633,7 +624,7 @@ async function exportCompensationHistory(
   benefiting: CompensationBenefitRow[], notBenefiting: CompensationBenefitRow[],
   leaveDays: CompensationLeaveDayRow[],
 ) {
-  const wb = new ExcelJS.Workbook();
+  const wb = newWorkbook();
 
   const addSheet = (name: string, rows: CompensationBenefitRow[]) => {
     const ws = wb.addWorksheet(name);
@@ -662,14 +653,7 @@ async function exportCompensationHistory(
   leaveWs.getRow(1).font = { bold: true };
   leaveDays.forEach((a) => leaveWs.addRow(a));
 
-  const buffer = await wb.xlsx.writeBuffer();
-  const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `compensation-history-${year}-${String(month).padStart(2, "0")}.xlsx`;
-  a.click();
-  URL.revokeObjectURL(url);
+  await downloadWorkbook(wb, `compensation-history-${year}-${String(month).padStart(2, "0")}.xlsx`);
 }
 
 function HistoryTab() {

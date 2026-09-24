@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
-import ExcelJS from "exceljs";
+import { downloadWorkbook, newWorkbook, todayStamp } from "@/lib/exportUtils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -692,7 +692,7 @@ export default function GateScannerConsole() {
         batchPage += 1;
       }
 
-      const wb = new ExcelJS.Workbook();
+      const wb = newWorkbook();
       const ws = wb.addWorksheet("Gate-Out Report");
       ws.columns = [
         { header: "Employee", key: "employeeName", width: 26 },
@@ -718,14 +718,7 @@ export default function GateScannerConsole() {
         });
       });
 
-      const buffer = await wb.xlsx.writeBuffer();
-      const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${gateName.replace(/[^a-z0-9]+/gi, "_")}_gate_out_${new Date().toISOString().slice(0, 10)}.xlsx`;
-      a.click();
-      URL.revokeObjectURL(url);
+      await downloadWorkbook(wb, `${gateName.replace(/[^a-z0-9]+/gi, "_")}_gate_out_${todayStamp()}.xlsx`);
       toast({ title: "Exported", description: `${all.length} record${all.length === 1 ? "" : "s"} exported.` });
     } catch {
       toast({ title: "Export failed", description: "Could not export the report. Please try again.", variant: "destructive" });

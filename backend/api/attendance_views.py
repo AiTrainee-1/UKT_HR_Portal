@@ -4,7 +4,6 @@ import threading
 from collections import defaultdict
 from datetime import date as date_type, datetime, time as time_type, timedelta
 from decimal import Decimal
-from io import StringIO
 
 from django.db.models import Count, F, Q
 from rest_framework.decorators import api_view
@@ -15,11 +14,11 @@ from .auth import require_hr, require_auth, get_token_employee_id
 from .user_settings import settings_for
 from .branch_scope import get_branch_scope, scope_to_branch
 from .geo_attendance_views import source_label
-from .clock import ist_now, ist_today
+from .clock import ist_today
 from .models import (
     Attendance, AttendanceLog, Employee, EmployeePermission, EmployeeShiftAssignment,
     LeaveRequest, DailyShiftLog, MonthlyShiftSummary, Holiday,
-    PayrollSettings, ProductionShiftConfig, ProductionShiftSegment,
+    ProductionShiftConfig, ProductionShiftSegment,
 )
 
 logger = logging.getLogger(__name__)
@@ -179,7 +178,7 @@ def attendance_summary(request: Request) -> Response:
     if restrict_ids is not None:
         y_leave &= restrict_ids
     y_late = _late_count(yesterday, restrict_ids)
-    y_absent = max(0, total - len(y_present_ids) - len(y_leave & (set(range(total + 1)) - y_present_ids)))
+    max(0, total - len(y_present_ids) - len(y_leave & (set(range(total + 1)) - y_present_ids)))
 
     return Response({
         "date": str(d),
@@ -225,7 +224,6 @@ def attendance_company_summary(request: Request) -> Response:
     compute_day_record with no prefetch at all across a ~230-employee roster
     measured at ~57s per request; this keeps it to a small, fixed number of
     bulk queries regardless of roster size."""
-    from decimal import Decimal
     from .attendance_final import compute_day_record
     from .models import AttendanceDayRecord, EmployeeShiftAssignment
 
@@ -903,7 +901,6 @@ def attendance_sync_status(request: Request) -> Response:
 
 def _date_from_for_mode(mode: str):
     """mode: 'day' | 'week' | 'month' | 'all' -the only 4 sync ranges HR needs."""
-    from datetime import date as _date
     today = ist_today()
     if mode == "day":
         return today
@@ -1309,7 +1306,7 @@ def attendance_report_log(request: Request) -> Response:
     elsewhere (compute_month_records persists AttendanceDayRecord as a
     side effect, same as every other page that reads attendance).
     """
-    from .models import PayrollSettings, CasualLeaveRequest, EmployeePermission
+    from .models import CasualLeaveRequest, EmployeePermission
     from .attendance_final import compute_month_records, month_summary_from_records
     from .shift_engine import _get_shift_for_date
 
@@ -1850,7 +1847,6 @@ def compute_shift_logs(request: Request) -> Response:
     Body: { "month": 7, "year": 2026, "employeeId": 123 }  -one employee
     """
     from .shift_engine import compute_daily_shift_log, compute_monthly_shift_summary, recompute_date, NEW_ATTENDANCE_RULE_CUTOVER, resolve_day_punch_logs
-    from .models import PayrollSettings
     from collections import defaultdict
 
     data = request.data

@@ -13,7 +13,14 @@ def get_bearer_token(request: Request) -> str | None:
     return None
 
 
-def require_auth(view_func):
+def _authenticate(view_func, allowed_roles: tuple[str, ...]):
+    """Shared token check. Tokens are all signed with one secret, so a valid
+    signature alone proves nothing about *what kind* of token it is: QR passes
+    ("tea_break", "outpass_pass", "outpass_return") and kiosk devices carry
+    their own roles. Each decorator therefore names the roles it accepts, and
+    anything else is a 403 -otherwise a photographed tea-break QR would work as
+    a login for every endpoint guarded by require_auth."""
+
     @wraps(view_func)
     def wrapper(request: Request, *args, **kwargs):
         token = get_bearer_token(request)
@@ -23,6 +30,9 @@ def require_auth(view_func):
             request.jwt_user = verify_token(token)
         except Exception:
             return Response({"error": "Invalid or expired token"}, status=401)
+
+        if request.jwt_user.get("role") not in allowed_roles:
+            return Response({"error": "This token cannot be used here"}, status=403)
 
         # LoginSession revocation check -the JWT itself is stateless and
         # stays "valid" for its full 12h lifetime, so a Login Devices revoke
@@ -49,6 +59,18 @@ def require_auth(view_func):
     return wrapper
 
 
+def require_auth(view_func):
+    """Any logged-in HR user or employee -and nothing else (see _authenticate)."""
+    return _authenticate(view_func, ("hr", "employee"))
+
+
+def _role_only(role: str):
+    def decorator(view_func):
+        return _authenticate(view_func, (role,))
+
+    return decorator
+
+
 def require_hr(view_func):
     @wraps(view_func)
     @require_auth
@@ -70,11 +92,8 @@ def require_gate_device(view_func):
     request, not whenever the JWT happens to expire.
     """
     @wraps(view_func)
-    @require_auth
+    @_role_only("gate_device")
     def wrapper(request: Request, *args, **kwargs):
-        if request.jwt_user.get("role") != "gate_device":
-            return Response({"error": "Gate device access required"}, status=403)
-
         from .models import GateDevice
 
         device = GateDevice.objects.filter(id=request.jwt_user.get("deviceId"), is_active=True).first()
@@ -92,11 +111,8 @@ def require_reception_device(view_func):
     GateDevice: a live is_active check on every request, so HR revoking a
     Reception login takes effect on the very next request."""
     @wraps(view_func)
-    @require_auth
+    @_role_only("reception_device")
     def wrapper(request: Request, *args, **kwargs):
-        if request.jwt_user.get("role") != "reception_device":
-            return Response({"error": "Reception device access required"}, status=403)
-
         from .models import ReceptionDevice
 
         device = ReceptionDevice.objects.filter(id=request.jwt_user.get("deviceId"), is_active=True).first()

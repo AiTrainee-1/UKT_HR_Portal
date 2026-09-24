@@ -19,16 +19,15 @@ class PayrollSkip(Exception):
 
 
 import calendar
-import io
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import transaction
-from rest_framework.decorators import api_view, parser_classes
-from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from .view_common import error_response as _error, paginate
 from .auth import require_hr
 from .branch_scope import scope_to_branch
 from .audit_utils import log_action
@@ -37,19 +36,15 @@ from .user_settings import (
 )
 from .geo_attendance_views import source_label
 from .permission_registry import resolve_permission
-from .clock import ist_now, ist_today
+from .clock import ist_today
 from .models import (
-    Advance,
     AdvanceRepayment,
     Attendance,
     AttendanceLog,
     Employee,
     EmployeeShiftAssignment,
     Holiday,
-    LeaveRequest,
-    MonthlyShiftSummary,
     Payroll,
-    PayrollSettings,
     SalarySlip,
     SessionConfig,
     WorkSession,
@@ -59,10 +54,6 @@ from .models import (
 # ─────────────────────────────────────────────────────────────────────────────
 #  Utilities
 # ─────────────────────────────────────────────────────────────────────────────
-
-def _error(msg: str, code: int = 400) -> Response:
-    return Response({"error": msg}, status=code)
-
 
 def _d2(value) -> Decimal:
     """Round to 2 decimal places."""
@@ -337,19 +328,8 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             "(check Holidays and Saturday-off configuration)"
         )
 
-    # 4. Fetch approved leave requests that overlap this month
     month_start = date(year, month, 1)
     month_end = date(year, month, calendar.monthrange(year, month)[1])
-    approved_leaves = list(
-        LeaveRequest.objects
-        .select_related("leave_type_ref")
-        .filter(
-            employee=emp,
-            status="approved",
-            start_date__lte=month_end.isoformat(),
-            end_date__gte=month_start.isoformat(),
-        )
-    )
 
     # 5. Final attendance records -the ONE engine every screen in the app
     #    uses (attendance_final.compute_month_records), for every day and
@@ -1048,10 +1028,11 @@ def _payroll_json(p: Payroll, employee_name: str | None = None) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @api_view(["GET", "POST"])
+@require_hr
 def session_configs(request: Request) -> Response:
     if request.method == "GET":
         return Response([_session_config_json(sc) for sc in SessionConfig.objects.all()])
-    return require_hr(_create_session_config)(request)
+    return _create_session_config(request)
 
 
 def _create_session_config(request: Request) -> Response:
@@ -1226,8 +1207,8 @@ def payroll_list(request: Request) -> Response:
         qs = qs.filter(year=int(year))
     if status_filter:
         qs = qs.filter(status=status_filter)
-    result = []
-    for p in qs:
+
+    def _row(p: Payroll) -> dict:
         emp = p.employee
         name = f"{emp.first_name} {emp.last_name}" if emp else None
         row = _payroll_json(p, name)
@@ -1239,8 +1220,12 @@ def payroll_list(request: Request) -> Response:
         row["email"] = emp.email or ""
         row["departmentId"] = emp.department_id
         row["departmentName"] = emp.department.name if emp.department_id and emp.department else None
-        result.append(row)
-    return Response(result)
+        return row
+
+    # Ordered on a unique tiebreaker (id) so pages never overlap or skip rows.
+    # A payroll export for one month is a few hundred to a few thousand rows,
+    # so the legacy (no `page`) cap is set well above a whole-company month.
+    return paginate(request, qs.order_by("-year", "-month", "employee__first_name", "id"), _row, cap=5000)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1405,7 +1390,9 @@ def generate_payroll_progress(request: Request) -> Response:
 @api_view(["PATCH"])
 @require_hr
 def payroll_detail(request: Request, pk: int) -> Response:
-    p = Payroll.objects.select_related("employee").filter(pk=pk).first()
+    p = scope_to_branch(
+        Payroll.objects.select_related("employee"), request, field="employee__branch_id",
+    ).filter(pk=pk).first()
     if not p:
         return _error("Not found", 404)
     d = request.data
@@ -1431,7 +1418,9 @@ def payroll_detail(request: Request, pk: int) -> Response:
 @require_hr
 def payroll_breakdown(request: Request, pk: int) -> Response:
     """Return the full day-by-day breakdown stored in the associated SalarySlip."""
-    p = Payroll.objects.select_related("employee").filter(pk=pk).first()
+    p = scope_to_branch(
+        Payroll.objects.select_related("employee"), request, field="employee__branch_id",
+    ).filter(pk=pk).first()
     if not p:
         return _error("Not found", 404)
 

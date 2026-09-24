@@ -1,0 +1,4 @@
+# Dev/CI-only tooling (kept out of requirements.txt so deploys stay lean).
+# Use: pip install -r requirements-dev.txt -c constraints.txt
+ruff==0.16.8
+coverage==7.16.1

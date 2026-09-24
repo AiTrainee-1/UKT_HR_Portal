@@ -25,6 +25,7 @@ from .branch_scope import scope_to_branch
 from .jwt_utils import sign_token
 from .models import Employee, Notification, OutpassRequest
 from .outpass_visitor_views import _create_outpass_record_for
+from .view_common import paginate
 
 
 # How long a generated return QR stays valid, mirroring the exit pass's own
@@ -160,7 +161,7 @@ def outpass_requests(request: Request) -> Response:
         # An employee only ever sees their own -no employee{} block needed.
         # HR's list (no token_emp_id) includes it, same convention as
         # manager_pending_requests' *_with_emp() serializers.
-        return Response([_outpass_request_json(r, with_employee=not token_emp_id) for r in qs])
+        return paginate(request, qs, lambda r: _outpass_request_json(r, with_employee=not token_emp_id))
 
     data = request.data
     token_emp_id = get_token_employee_id(request)

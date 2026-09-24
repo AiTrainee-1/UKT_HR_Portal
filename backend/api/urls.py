@@ -50,7 +50,9 @@ from .company_documents_views import (
     offer_letter_pdf, offer_letter_email, experience_letter_pdf, salary_slip_pdf,
     offer_letter_whatsapp, experience_letter_whatsapp,
 )
-from .whatsapp_views import whatsapp_status, whatsapp_templates, whatsapp_template_update, whatsapp_media
+from .whatsapp_views import (
+    whatsapp_status, whatsapp_templates, whatsapp_template_update, whatsapp_media, whatsapp_webhook,
+)
 from .org_views import (
     branches, branch_detail,
     designations, designation_detail,
@@ -443,6 +445,10 @@ urlpatterns = [
     path("whatsapp/templates", whatsapp_templates),
     path("whatsapp/templates/<str:document_type>", whatsapp_template_update),
     path("whatsapp/media/<str:token>", whatsapp_media),
+    # Both spellings: Gupshup is given the trailing-slash form, and APPEND_SLASH
+    # cannot redirect a POST.
+    path("whatsapp/webhook", whatsapp_webhook),
+    path("whatsapp/webhook/", whatsapp_webhook),
     path("verify-employee/<str:code>", verify_employee),
 
     # ── Biometric Device Management ─────────────────────────────────────────

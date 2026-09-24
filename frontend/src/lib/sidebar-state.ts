@@ -52,7 +52,11 @@ function subscribe(cb: () => void) {
 }
 
 export function useSidebarCollapsed(): boolean {
-  return useSyncExternalStore(subscribe, () => collapsed, () => false);
+  return useSyncExternalStore(
+    subscribe,
+    () => collapsed,
+    () => false,
+  );
 }
 
 const DESKTOP_QUERY = "(min-width: 1024px)";

@@ -32,19 +32,16 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from . import backup_service
+from .view_common import error_response as _error
 from .auth import require_hr, require_super_admin
 from .user_settings import settings_for
 from .audit_utils import log_action
 from .backup_scheduler import apply_schedule_to_scheduler
 from .google_drive import test_drive_connection
-from .models import BackupDriveConfig, BackupSchedule, PayrollSettings
+from .models import BackupDriveConfig, BackupSchedule
 
 _STATUS_FILE = os.path.join(str(dj_settings.BASE_DIR), "restore_status.json")
 _MAINTENANCE_MARKER = os.path.join(str(dj_settings.BASE_DIR), "maintenance.lock")
-
-
-def _error(message: str, code: int = 400) -> Response:
-    return Response({"error": message}, status=code)
 
 
 # ── Status + manual backup ──────────────────────────────────────────────────
