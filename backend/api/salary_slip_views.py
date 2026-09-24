@@ -1,3 +1,4 @@
+import logging
 import smtplib
 import ssl
 from email.mime.application import MIMEApplication
@@ -17,6 +18,8 @@ from .view_common import paginate
 
 MONTHS = ["","January","February","March","April","May","June",
           "July","August","September","October","November","December"]
+
+logger = logging.getLogger(__name__)
 
 
 def slip_json(s: SalarySlip, include_settings: bool = False) -> dict:
@@ -274,10 +277,12 @@ def email_salary_slip(request: Request, pk: int) -> Response:
 
     ps = settings_for(request)
     if not ps.smtp_host or not ps.smtp_username or not ps.smtp_password:
+        logger.warning("Salary slip %s email refused: SMTP settings not configured", pk)
         return Response({"error": "SMTP settings not configured. Please save SMTP settings first."}, status=400)
 
     ok, result = _send_slip_email(s, ps, request.data.get("toEmail"))
     if not ok:
+        logger.warning("Salary slip %s email failed: %s", pk, result)
         status = 400 if result.startswith("Employee has no email") else 502
         return Response({"error": result}, status=status)
     return Response({"ok": True, "sentTo": result})
@@ -308,6 +313,7 @@ def whatsapp_salary_slip(request: Request, pk: int) -> Response:
     from . import whatsapp_service
 
     if not whatsapp_service.is_configured():
+        logger.warning("Salary slip %s WhatsApp refused: GUPSHUP_API_KEY / APP_NAME / SOURCE_NUMBER not set", pk)
         return Response({"error": "WhatsApp is not configured on this server (missing credentials in .env)."}, status=400)
 
     try:
@@ -321,6 +327,7 @@ def whatsapp_salary_slip(request: Request, pk: int) -> Response:
 
     log = _send_slip_whatsapp(request, s, sent_by_id=request.jwt_user.get("hrUserId"))
     if log.status != "sent":
+        logger.warning("Salary slip %s WhatsApp failed: %s", pk, log.error_message)
         return Response({"error": log.error_message}, status=400)
     return Response({"ok": True, "sentTo": log.phone_number})
 
