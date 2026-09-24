@@ -6,6 +6,7 @@ import { usePayrollSettings } from "@/lib/api-client/custom-hooks";
 import { useAuth, isRouteViewOnly } from "@/contexts/AuthContext";
 import { moduleForPath } from "@/lib/permission-modules";
 import { lockMutatingControls } from "@/lib/view-only-lock";
+import { useSidebarCollapsed, useIsDesktop, toggleSidebarCollapsed } from "@/lib/sidebar-state";
 
 // Scroll positions per pathname, surviving page remounts (each page renders its
 // own HrLayout, so navigating away and back would otherwise reset to the top).
@@ -29,6 +30,26 @@ export default function HrLayout({ children }: { children: React.ReactNode }) {
   const isViewOnly = isRouteViewOnly(user, location, moduleKey);
 
   const mainRef = useRef<HTMLElement>(null);
+
+  // The rail only exists at lg+; below that the sidebar is a drawer that
+  // always shows full labels regardless of the saved preference.
+  const collapsedPref = useSidebarCollapsed();
+  const isDesktop = useIsDesktop();
+  const collapsed = collapsedPref && isDesktop;
+
+  // Ctrl/Cmd+B toggles the rail (same shortcut VS Code and most IDE-style
+  // apps use) -skipped while typing, where it means "bold".
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "b") return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      e.preventDefault();
+      toggleSidebarCollapsed();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(() => {
     if (!isViewOnly) return;
@@ -92,10 +113,11 @@ export default function HrLayout({ children }: { children: React.ReactNode }) {
       {/* ── Sidebar ── */}
       <aside
         className={`
-          fixed inset-y-0 left-0 z-50 flex flex-col w-64 overflow-hidden
-          transform transition-transform duration-300 ease-out
+          fixed inset-y-0 left-0 z-50 flex flex-col w-64 overflow-hidden shrink-0
+          transform transition-[transform,width] duration-300 ease-out
           ${mobileOpen ? "translate-x-0" : "-translate-x-full"}
           lg:relative lg:translate-x-0
+          ${collapsed ? "lg:w-[68px]" : "lg:w-64"}
         `}
         style={{
           background: "#f6fafe",
@@ -104,7 +126,11 @@ export default function HrLayout({ children }: { children: React.ReactNode }) {
             "10px 0 30px rgba(0,100,150,0.08), 2px 0 8px rgba(255,255,255,0.9)",
         }}
       >
-        <HrSidebar onClose={() => setMobileOpen(false)} />
+        <HrSidebar
+          onClose={() => setMobileOpen(false)}
+          collapsed={collapsed}
+          onToggleCollapse={toggleSidebarCollapsed}
+        />
       </aside>
 
       {/* ── Mobile overlay ── */}

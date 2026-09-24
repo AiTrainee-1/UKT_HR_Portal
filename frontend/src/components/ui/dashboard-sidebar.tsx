@@ -1,5 +1,9 @@
 import React, { useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'wouter';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { SidebarToggle } from '@/components/ui/sidebar-toggle';
 import { useAuth, canView, canViewRoute } from '@/contexts/AuthContext';
 import { moduleForPath } from '@/lib/permission-modules';
 import { useListLeaveRequests, useListPermissions, useListResignations, useListAdvances, useListNotifications } from '@/lib/api-client';
@@ -209,8 +213,10 @@ function SearchModal({ onClose }: { onClose: () => void }) {
     onClose();
   };
 
-  return (
-    <div className="absolute inset-0 z-50 flex items-start justify-center pt-[12vh] bg-[#006496]/10 backdrop-blur-sm px-4">
+  // Portaled to <body>: the sidebar can be a 68px rail with overflow-hidden,
+  // which would otherwise clip the palette to a sliver.
+  return createPortal(
+    <div className="fixed inset-0 z-[60] flex items-start justify-center pt-[12vh] bg-[#006496]/10 backdrop-blur-sm px-4">
       <div className="absolute inset-0" onClick={onClose} />
       <div
         className="relative w-full max-w-sm rounded-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200"
@@ -280,7 +286,8 @@ function SearchModal({ onClose }: { onClose: () => void }) {
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -432,6 +439,127 @@ function NavItem({
   );
 }
 
+// ── Collapsed (icon rail) Nav Row ──────────────────────────────────────────
+
+const badgeBubbleStyle = { background: 'linear-gradient(135deg, #f59e0b, #d97706)' };
+
+/** Icon-only row for the collapsed sidebar. A plain page shows its label in
+ *  a tooltip; a parent with sub-pages opens them in a flyout instead, since
+ *  there's no room to expand them inline. */
+function RailItem({
+  item,
+  currentPath,
+  onClose,
+}: {
+  item: NavItemData;
+  currentPath: string;
+  onClose: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const children = item.children;
+
+  const isActive = children
+    ? children.some((c) => currentPath === c.path || currentPath.startsWith(c.path + '/'))
+    : currentPath === item.path || currentPath.startsWith(item.path + '/');
+
+  const badgeCount = (item.badge ?? 0) + (children?.reduce((n, c) => n + (c.badge ?? 0), 0) ?? 0);
+
+  const face = (
+    <div
+      className={`relative flex items-center justify-center w-12 h-11 rounded-xl cursor-pointer select-none transition-all duration-200 ${
+        isActive
+          ? 'clay-nav-active'
+          : 'text-[#006496]/80 hover:text-[#006496] hover:bg-[#006496]/[0.08]'
+      }`}
+    >
+      {isActive && (
+        <span className="absolute -left-[10px] top-2.5 bottom-2.5 w-[3px] rounded-r-full bg-[#006496]" />
+      )}
+      <item.icon className="w-[18px] h-[18px]" strokeWidth={1.8} />
+      {badgeCount > 0 && (
+        <span
+          className="absolute top-0.5 right-0.5 flex items-center justify-center min-w-[16px] h-4 px-1 text-[9px] font-bold rounded-full text-white ring-2 ring-[#f6fafe]"
+          style={badgeBubbleStyle}
+        >
+          {badgeCount > 99 ? '99+' : badgeCount}
+        </span>
+      )}
+    </div>
+  );
+
+  const tipLabel = badgeCount > 0 ? `${item.label} · ${badgeCount} pending` : item.label;
+
+  if (!children) {
+    return (
+      <Link href={item.path} onClick={onClose} aria-label={item.label}>
+        <Tooltip>
+          <TooltipTrigger asChild>{face}</TooltipTrigger>
+          <TooltipContent side="right" sideOffset={10}>{tipLabel}</TooltipContent>
+        </Tooltip>
+      </Link>
+    );
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <Tooltip open={open ? false : undefined}>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild aria-label={item.label}>{face}</PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="right" sideOffset={10}>{tipLabel}</TooltipContent>
+      </Tooltip>
+      <PopoverContent
+        side="right"
+        align="start"
+        sideOffset={12}
+        className="w-56 p-1.5 rounded-2xl border-0"
+        style={{
+          background: '#ffffff',
+          boxShadow: '10px 10px 24px rgba(0,100,150,0.16), -4px -4px 14px rgba(255,255,255,0.9)',
+        }}
+      >
+        <p
+          className="px-2.5 pt-1.5 pb-1.5 text-[9.5px] font-extrabold tracking-[0.2em] uppercase"
+          style={{ color: 'rgba(0,60,100,0.5)' }}
+        >
+          {item.label}
+        </p>
+        <div className="flex flex-col gap-0.5">
+          {children.map((child) => {
+            const childActive = currentPath === child.path;
+            return (
+              <Link
+                key={child.path}
+                href={child.path}
+                onClick={() => { setOpen(false); onClose(); }}
+              >
+                <div
+                  className={`flex items-center gap-2.5 px-2.5 py-2 rounded-xl cursor-pointer text-[12.5px] transition-colors select-none ${
+                    childActive
+                      ? 'font-semibold clay-nav-active'
+                      : 'text-[#1e4d6b] hover:text-[#006496] hover:bg-[#006496]/[0.07]'
+                  }`}
+                >
+                  <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${childActive ? 'bg-white' : 'bg-[#006496]/25'}`} />
+                  <span className={`flex-1 ${childActive ? 'text-white' : ''}`}>{child.label}</span>
+                  {child.badge != null && child.badge > 0 && (
+                    <span
+                      className="flex items-center justify-center min-w-[16px] h-4 px-1 text-[9px] font-bold rounded-full text-white"
+                      style={badgeBubbleStyle}
+                    >
+                      {child.badge}
+                    </span>
+                  )}
+                </div>
+              </Link>
+            );
+          })}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 // ── Exported Sidebar ───────────────────────────────────────────────────────
 
 // Every HR page renders its own <HrLayout>, so HrSidebar fully remounts on
@@ -443,7 +571,15 @@ function NavItem({
 // module re-executes from scratch.
 let sidebarScrollTop = 0;
 
-export function HrSidebar({ onClose }: { onClose: () => void }) {
+export function HrSidebar({
+  onClose,
+  collapsed = false,
+  onToggleCollapse,
+}: {
+  onClose: () => void;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
+}) {
   const [location] = useLocation();
   const { user, logout } = useAuth();
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -540,42 +676,127 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
+  // Badge counts are attached per item here so the expanded rows and the
+  // collapsed rail render exactly the same numbers.
+  const withBadges = (item: NavItemData): NavItemData =>
+    item.path === '/hr/requests'
+      ? { ...item, badge: pendingCount || undefined }
+      : item.path === '/hr/settlement'
+      ? { ...item, badge: pendingAdvancesCount || undefined }
+      : item.path === '/hr/notifications'
+      ? { ...item, badge: unreadNotificationCount || undefined }
+      : item.path === '/hr/recruitment'
+      ? {
+          ...item,
+          children: item.children?.map((c) =>
+            c.path === '/hr/recruitment/resignations'
+              ? { ...c, badge: activeResignationsCount || undefined }
+              : c
+          ),
+        }
+      : item.path === '/hr/attendance'
+      ? {
+          ...item,
+          children: item.children?.map((c) =>
+            c.path === '/hr/geo-attendance'
+              ? { ...c, badge: pendingOnDutyCount || undefined }
+              : c
+          ),
+        }
+      : item.path === '/hr/outpass-visitors'
+      ? {
+          ...item,
+          children: item.children?.map((c) =>
+            c.path === '/hr/outpass-visitors/outpass'
+              ? { ...c, badge: pendingOutpassCount || undefined }
+              : c
+          ),
+        }
+      : item;
+
+  const railBtn =
+    'flex items-center justify-center w-12 h-11 rounded-xl transition-all duration-200 shrink-0';
+  let shownGroups = 0;
+
   return (
+    <TooltipProvider delayDuration={120}>
     <div className="relative flex flex-col h-full" style={{ fontFamily: "'Hanken Grotesk', 'Inter', sans-serif" }}>
 
-      {/* ── Brand Header ── */}
+      {/* ── Header ──
+          Expanded: brand on the left, compact toggle on the right edge.
+          Collapsed: the toggle alone, centred in the rail (icon centre at
+          34px, same as every rail icon below). */}
       <div
-        className="flex items-center justify-between px-4 py-4"
+        className={`flex items-center py-3 ${collapsed ? 'px-[10px]' : 'pl-4 pr-3'}`}
         style={{ borderBottom: '1px solid rgba(0,100,150,0.08)' }}
       >
-        <div className="flex items-center gap-3 min-w-0">
-          {companyLogo ? (
-            <img src={companyLogo} alt={companyName} className="h-9 w-9 rounded-full object-contain shrink-0 bg-white" />
-          ) : (
-            <UKTLogo className="h-9 w-auto shrink-0" />
-          )}
-          <div className="min-w-0">
-            <h1
-              className="text-[15px] font-black leading-none tracking-tight truncate"
-              style={{ color: '#006496' }}
+        {!collapsed && (
+          <>
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+              {companyLogo ? (
+                <img src={companyLogo} alt={companyName} className="h-9 w-9 rounded-full object-contain shrink-0 bg-white" />
+              ) : (
+                <UKTLogo className="h-9 w-auto shrink-0" />
+              )}
+              <div className="min-w-0">
+                <h1
+                  className="text-[15px] font-black leading-none tracking-tight truncate"
+                  style={{ color: '#006496' }}
+                >
+                  {companyName}
+                </h1>
+                <p className="text-[10px] font-semibold tracking-widest uppercase leading-none mt-0.5" style={{ color: '#006496', opacity: 0.45 }}>
+                  HR Portal
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={onClose}
+              className="lg:hidden p-1.5 rounded-lg transition-colors shrink-0"
+              style={{ color: 'rgba(0,100,150,0.4)' }}
             >
-              {companyName}
-            </h1>
-            <p className="text-[10px] font-semibold tracking-widest uppercase leading-none mt-0.5" style={{ color: '#006496', opacity: 0.45 }}>
-              HR Portal
-            </p>
-          </div>
-        </div>
-        <button
-          onClick={onClose}
-          className="lg:hidden p-1.5 rounded-lg transition-colors shrink-0"
-          style={{ color: 'rgba(0,100,150,0.4)' }}
-        >
-          <X className="w-4 h-4" strokeWidth={1.5} />
-        </button>
+              <X className="w-4 h-4" strokeWidth={1.5} />
+            </button>
+          </>
+        )}
+        {onToggleCollapse && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <SidebarToggle
+                collapsed={collapsed}
+                onToggle={onToggleCollapse}
+                compact={!collapsed}
+                className="hidden lg:flex"
+              />
+            </TooltipTrigger>
+            <TooltipContent side={collapsed ? 'right' : 'bottom'} sideOffset={10}>
+              {collapsed ? 'Expand sidebar' : 'Collapse sidebar'} <span className="opacity-60 ml-1">Ctrl+B</span>
+            </TooltipContent>
+          </Tooltip>
+        )}
       </div>
 
-      {/* ── Search Bar ── */}
+      {/* ── Search ── */}
+      {collapsed ? (
+        <div className="flex justify-center px-[10px] py-2.5" style={{ borderBottom: '1px solid rgba(0,100,150,0.06)' }}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => setIsSearchOpen(true)}
+                aria-label="Search pages"
+                className={`${railBtn} text-[#006496]/60 hover:text-[#006496] hover:bg-[#006496]/[0.08]`}
+                style={{
+                  background: '#f0f4f8',
+                  boxShadow: 'inset 3px 3px 7px rgba(0,100,150,0.08), inset -3px -3px 7px rgba(255,255,255,0.9)',
+                }}
+              >
+                <Search className="w-4 h-4" strokeWidth={2} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right" sideOffset={10}>Search pages</TooltipContent>
+          </Tooltip>
+        </div>
+      ) : (
       <div className="px-3 py-2.5" style={{ borderBottom: '1px solid rgba(0,100,150,0.06)' }}>
         <button
           onClick={() => setIsSearchOpen(true)}
@@ -596,11 +817,14 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
           </span>
         </button>
       </div>
+      )}
 
       {/* ── Navigation ── */}
       <nav
         ref={navRef}
-        className="flex-1 overflow-y-auto py-3 px-2.5 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col gap-4"
+        className={`flex-1 overflow-y-auto py-3 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col ${
+          collapsed ? 'px-[10px] gap-3 items-center' : 'px-2.5 gap-4'
+        }`}
       >
         {navGroups.map((group, idx) => {
           const visibleItems = group.items
@@ -641,9 +865,21 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
 
           if (visibleItems.length === 0) return null;
 
+          // Collapsed: no room for group headings, so groups are separated
+          // by a hairline instead (skipped above the first visible group).
+          const isFirstShown = shownGroups++ === 0;
+
           return (
-          <div key={idx} className="flex flex-col gap-0.5">
-            {group.heading && (
+          <div
+            key={idx}
+            className={
+              collapsed
+                ? `flex flex-col items-center gap-1 w-full ${isFirstShown ? '' : 'pt-3 border-t'}`
+                : 'flex flex-col gap-0.5'
+            }
+            style={collapsed && !isFirstShown ? { borderColor: 'rgba(0,100,150,0.1)' } : undefined}
+          >
+            {!collapsed && group.heading && (
               <span
                 className="px-3 mb-1 text-[9.5px] font-extrabold tracking-[0.2em] uppercase"
                 style={{ color: 'rgba(0,60,100,0.45)' }}
@@ -651,56 +887,36 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
                 {group.heading}
               </span>
             )}
-            {visibleItems
-              .map((item) => (
-              <NavItem
-                key={item.path}
-                item={
-                  item.path === '/hr/requests'
-                    ? { ...item, badge: pendingCount || undefined }
-                    : item.path === '/hr/settlement'
-                    ? { ...item, badge: pendingAdvancesCount || undefined }
-                    : item.path === '/hr/notifications'
-                    ? { ...item, badge: unreadNotificationCount || undefined }
-                    : item.path === '/hr/recruitment'
-                    ? {
-                        ...item,
-                        children: item.children?.map((c) =>
-                          c.path === '/hr/recruitment/resignations'
-                            ? { ...c, badge: activeResignationsCount || undefined }
-                            : c
-                        ),
-                      }
-                    : item.path === '/hr/attendance'
-                    ? {
-                        ...item,
-                        children: item.children?.map((c) =>
-                          c.path === '/hr/geo-attendance'
-                            ? { ...c, badge: pendingOnDutyCount || undefined }
-                            : c
-                        ),
-                      }
-                    : item.path === '/hr/outpass-visitors'
-                    ? {
-                        ...item,
-                        children: item.children?.map((c) =>
-                          c.path === '/hr/outpass-visitors/outpass'
-                            ? { ...c, badge: pendingOutpassCount || undefined }
-                            : c
-                        ),
-                      }
-                    : item
-                }
-                currentPath={location}
-                onClose={onClose}
-              />
-            ))}
+            {visibleItems.map((item) =>
+              collapsed ? (
+                <RailItem key={item.path} item={withBadges(item)} currentPath={location} onClose={onClose} />
+              ) : (
+                <NavItem key={item.path} item={withBadges(item)} currentPath={location} onClose={onClose} />
+              )
+            )}
           </div>
           );
         })}
       </nav>
 
       {/* ── Sign Out ── */}
+      {collapsed ? (
+        <div className="flex justify-center px-[10px] py-3" style={{ borderTop: '1px solid rgba(0,100,150,0.08)' }}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={logout}
+                data-testid="button-logout"
+                aria-label="Sign out"
+                className={`${railBtn} text-[#006496]/55 hover:text-[#c0392b] hover:bg-[#c0392b]/[0.07]`}
+              >
+                <LogOut className="w-[18px] h-[18px]" strokeWidth={1.8} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right" sideOffset={10}>Sign out</TooltipContent>
+          </Tooltip>
+        </div>
+      ) : (
       <div className="px-3 py-3" style={{ borderTop: '1px solid rgba(0,100,150,0.08)' }}>
         <button
           onClick={logout}
@@ -720,10 +936,12 @@ export function HrSidebar({ onClose }: { onClose: () => void }) {
           <span>Sign Out</span>
         </button>
       </div>
+      )}
 
       {/* ── Search Modal ── */}
       {isSearchOpen && <SearchModal onClose={() => setIsSearchOpen(false)} />}
     </div>
+    </TooltipProvider>
   );
 }
 
