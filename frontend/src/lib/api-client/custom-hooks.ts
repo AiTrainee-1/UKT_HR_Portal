@@ -187,6 +187,32 @@ export const useListBranches = <TData = Branch[]>(
     ...options,
   });
 
+// The orval-generated useCreateDepartment (generated/api.ts) types its body
+// as DepartmentInput = {name, description} -stale against the backend,
+// which has required an explicit branchId for any unscoped (super admin /
+// branch-less) HR user ever since department creation became branch-scoped
+// (views.py::_departments_create). Departments.tsx's create dialog never
+// collected or sent one, so every unscoped user's "Add Department" silently
+// 400'd with no branch field on screen to explain why. Named distinctly
+// from the generated hook (not useCreateDepartment) -both are re-exported
+// through the same `export *` barrel in index.ts, and two same-named
+// exports there would silently shadow one another with no compile error.
+export type CreateDepartmentInput = { name: string; description?: string; branchId?: number };
+
+export const useCreateDepartmentWithBranch = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: CreateDepartmentInput) =>
+      customFetch<{ id: number; name: string; description: string | null; employeeCount: number }>(
+        "/api/departments",
+        { method: "POST", body: JSON.stringify(data) },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/departments"] });
+    },
+  });
+};
+
 export const useCreateBranch = () =>
   useMutation({
     mutationFn: (data: {

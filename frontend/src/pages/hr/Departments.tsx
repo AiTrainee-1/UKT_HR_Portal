@@ -15,13 +15,15 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import {
-  useListDepartments, useCreateDepartment, useDeleteDepartment,
+  useListDepartments, useDeleteDepartment,
   getListDepartmentsQueryKey,
 } from "@/lib/api-client";
 import {
   useSearchEmployees, useAssignEmployee,
 } from "@/lib/api-client";
 import { useListEmployees, getListEmployeesQueryKey } from "@/lib/api-client";
+import { useCreateDepartmentWithBranch, useListBranches, getListBranchesQueryKey } from "@/lib/api-client/custom-hooks";
+import { useAuth } from "@/contexts/AuthContext";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -307,13 +309,21 @@ function DeptCard({
 // ── Main Departments page ─────────────────────────────────────────────────────
 export default function Departments() {
   const { toast } = useToast();
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [showDialog, setShowDialog] = useState(false);
-  const [form, setForm] = useState({ name: "", description: "" });
+  const [form, setForm] = useState({ name: "", description: "", branchId: "" });
+
+  // A branch-scoped HR user's own branch is implicit server-side (see
+  // views.py::_departments_create) -only an unscoped user (super admin /
+  // branch-less role) needs to pick one explicitly, so this only fetches
+  // the branch list when it'll actually be shown.
+  const needsBranchPicker = !user?.branchId;
+  const { data: branches } = useListBranches({ enabled: needsBranchPicker, queryKey: getListBranchesQueryKey() });
 
   const { data: departments, isLoading } = useListDepartments();
-  const createMutation = useCreateDepartment();
+  const createMutation = useCreateDepartmentWithBranch();
   const deleteMutation = useDeleteDepartment();
 
   const filtered = (departments ?? []).filter((d) =>
@@ -334,9 +344,15 @@ export default function Departments() {
       toast({ title: "Department name is required", variant: "destructive" });
       return;
     }
+    if (needsBranchPicker && !form.branchId) {
+      toast({ title: "Select a branch", description: "A department with no branch is hidden from every branch login.", variant: "destructive" });
+      return;
+    }
     try {
       await createMutation.mutateAsync({
-        data: { name: form.name.trim(), description: form.description.trim() || undefined },
+        name: form.name.trim(),
+        description: form.description.trim() || undefined,
+        branchId: form.branchId ? Number(form.branchId) : undefined,
       });
     } catch {
       toast({ title: "Failed to create department", variant: "destructive" });
@@ -344,7 +360,7 @@ export default function Departments() {
     }
     toast({ title: "Department created" });
     setShowDialog(false);
-    setForm({ name: "", description: "" });
+    setForm({ name: "", description: "", branchId: "" });
     queryClient.invalidateQueries({ queryKey: getListDepartmentsQueryKey() });
   }
 
@@ -479,6 +495,22 @@ export default function Departments() {
                 onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
               />
             </div>
+            {needsBranchPicker && (
+              <div className="space-y-1.5">
+                <Label htmlFor="dept-branch">Branch <span className="text-red-500">*</span></Label>
+                <select
+                  id="dept-branch"
+                  value={form.branchId}
+                  onChange={(e) => setForm((f) => ({ ...f, branchId: e.target.value }))}
+                  className="w-full h-9 rounded-md border px-3 text-sm bg-background"
+                >
+                  <option value="">— Select Branch —</option>
+                  {(branches ?? []).map((b) => (
+                    <option key={b.id} value={b.id}>{b.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDialog(false)}>Cancel</Button>
