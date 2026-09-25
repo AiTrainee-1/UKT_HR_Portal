@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { Menu, Eye } from "lucide-react";
 import { HrSidebar } from "@/components/ui/dashboard-sidebar";
+import PageRefreshBar from "@/components/PageRefreshBar";
+import { pageHasRefresh } from "@/lib/page-refresh";
 import { usePayrollSettings } from "@/lib/api-client/custom-hooks";
 import { useAuth, isRouteViewOnly } from "@/contexts/AuthContext";
 import { moduleForPath } from "@/lib/permission-modules";
@@ -190,6 +192,7 @@ export default function HrLayout({ children }: { children: React.ReactNode }) {
             hidden native <select>) anchored inside this scroll container -without
             it they anchor to <html> and stretch the whole document. */}
         <main ref={mainRef} className="relative flex-1 overflow-y-auto p-4 lg:p-6 print:static print:overflow-visible print:h-auto print:p-0">
+          {pageHasRefresh(location) && <PageRefreshBar />}
           {isViewOnly && (
             <div
               className="flex items-center gap-2 mb-4 px-3.5 py-2.5 rounded-xl text-sm font-semibold"

@@ -35,6 +35,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { exportPayrollToExcel } from "@/lib/payrollExcelExport";
 import { MONTH_NAMES, BreakdownDrawer, PayrollRow } from "@/components/payroll/BreakdownDrawer";
 import { customFetch } from "@/lib/api-client/custom-fetch";
+import { usePageRefresh } from "@/lib/page-refresh";
 import EmployeeSearchSelect from "@/components/EmployeeSearchSelect";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -684,6 +685,9 @@ function SalarySubTab() {
     setPage(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [empFilter, monthFilter, yearFilter, statusFilter]);
+
+  // This list is loaded by hand (not through TanStack Query), so the shared Refresh button reloads it.
+  usePageRefresh(() => fetchPayrolls());
 
   // Payroll generation lives in a root-level context (PayrollGenerationProvider)
   // so it keeps running -and stays visible via the pipeline/banner -even if
