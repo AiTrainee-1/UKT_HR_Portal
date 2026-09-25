@@ -10,8 +10,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "lint": "eslint src --max-warnings 105",
-    "format": "prettier --write src/lib src/pages/hr/settings src/components/ui/status-badge.tsx src/components/ui/sidebar-toggle.tsx e2e playwright.config.ts eslint.config.js vitest.config.ts",
-    "format:check": "prettier --check src/lib src/pages/hr/settings src/components/ui/status-badge.tsx src/components/ui/sidebar-toggle.tsx e2e playwright.config.ts eslint.config.js vitest.config.ts",
+    "format": "prettier --write src/lib src/pages/hr/settings src/pages/hr/whatsapp-control src/pages/hr/WhatsAppControl.tsx src/components/ui/status-badge.tsx src/components/ui/sidebar-toggle.tsx e2e playwright.config.ts eslint.config.js vitest.config.ts",
+    "format:check": "prettier --check src/lib src/pages/hr/settings src/pages/hr/whatsapp-control src/pages/hr/WhatsAppControl.tsx src/components/ui/status-badge.tsx src/components/ui/sidebar-toggle.tsx e2e playwright.config.ts eslint.config.js vitest.config.ts",
     "test:coverage": "vitest run --coverage",
     "e2e": "playwright test"
   },

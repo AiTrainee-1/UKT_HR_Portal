@@ -30,14 +30,29 @@ test.describe("HR login", () => {
 
 test.describe("employee tokens cannot reach HR data", () => {
   test("an employee can only see their own payroll and cannot open HR endpoints", async ({ request }) => {
-    // First-time password setup is open by design; this employee has none yet.
-    const set = await request.post("/api/auth/set-password", {
+    // A first password can't be set anonymously any more: the employee must confirm the code
+    // WhatsApped to their registered number (the fake WAClient in e2e/fake-waclient.mjs hands it to us).
+    const direct = await request.post("/api/auth/set-password", {
       data: { identifier: "E2E003", password: "employee-pass-1" },
     });
-    // 403 only when this same test already ran against a reused database and set it.
-    expect([200, 403]).toContain(set.status());
+    // 403 either way: activation needs a code, or (reused database) a password already exists.
+    expect(direct.status()).toBe(403);
 
-    // ...but once a password exists, it can no longer be overwritten anonymously.
+    await request.post("http://127.0.0.1:8190/reset");
+    const ask = await request.post("/api/auth/otp/request", { data: { employeeCode: "E2E003", purpose: "activate" } });
+    if (ask.status() === 200) {
+      const sent = await (await request.get("http://127.0.0.1:8190/messages")).json();
+      const code = sent[0].message.match(/\b(\d{6})\b/)![1];
+      const activate = await request.post("/api/auth/otp/activate", {
+        data: { employeeCode: "E2E003", otp: code, password: "employee-pass-1" },
+      });
+      expect(activate.status()).toBe(200);
+    } else {
+      // Only when this test already ran against a reused database and activated the account.
+      expect(ask.status()).toBe(409);
+    }
+
+    // Once a password exists, it can no longer be overwritten anonymously.
     const takeover = await request.post("/api/auth/set-password", {
       data: { identifier: "E2E003", password: "attacker-pass-1" },
     });

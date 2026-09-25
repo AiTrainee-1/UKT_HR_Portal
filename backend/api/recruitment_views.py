@@ -10,6 +10,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from . import whatsapp_approvals
 from .view_common import error_response as _error
 from .auth import get_token_employee_id, require_auth, require_hr
 from .user_settings import settings_for
@@ -364,6 +365,9 @@ def resignation_action(request: Request, pk: int) -> Response:
             type="resignation",
             message="Your resignation has been approved by HR. Your account has been deactivated.",
         )
+        whatsapp_approvals.notify_decision(
+            "resignation", r, "approved", approver=r.approved_by or "", role="hr", comment=hr_comment
+        )
     else:
         # HR can reject at any stage (pending or dept_approved)
         r.status = "rejected"
@@ -374,6 +378,9 @@ def resignation_action(request: Request, pk: int) -> Response:
             employee_id=r.employee_id,
             type="resignation",
             message="Your resignation request has been reviewed by HR and was not approved. Please contact HR for more information.",
+        )
+        whatsapp_approvals.notify_decision(
+            "resignation", r, "rejected", approver=request.jwt_user.get("name", ""), role="hr", comment=hr_comment
         )
 
     return Response(_resignation_json(r))
@@ -528,6 +535,11 @@ def manager_resignation_action(request: Request, pk: int) -> Response:
             employee_id=r.employee_id,
             type="resignation",
             message="Your resignation request has been rejected by your Department Head. Please contact them for more information.",
+        )
+        whatsapp_approvals.notify_decision(
+            "resignation", r, "rejected",
+            approver=f"{dept_head_emp.first_name} {dept_head_emp.last_name}".strip() if dept_head_emp else "",
+            role="dept_head", comment=comment,
         )
 
     return Response(_resignation_json(r))

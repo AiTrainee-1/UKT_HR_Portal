@@ -6,7 +6,7 @@ from django.test import RequestFactory, TestCase, override_settings
 
 from . import whatsapp_service as svc
 from .jwt_utils import sign_token
-from .models import Employee, HRUser, WhatsAppMediaAsset, WhatsAppMessageLog, WhatsAppMessageTemplate
+from .models import Employee, HRUser, WhatsAppMediaAsset, WhatsAppMessageTemplate
 
 CONFIG = dict(WACLIENT_INSTANCE_ID="INST1234", WACLIENT_ACCESS_TOKEN="tok-secret", WHATSAPP_DEFAULT_COUNTRY_CODE="91")
 
@@ -26,8 +26,28 @@ def _resp(status_code, body):
 class PhoneAndWordingTests(TestCase):
     @override_settings(**CONFIG)
     def test_phone_normalisation(self):
-        for raw in ("+918220015110", "918220015110", "8220015110", "82200 15110", "+91-82200-15110"):
+        for raw in (
+            "+918220015110",
+            "918220015110",
+            "8220015110",
+            "82200 15110",
+            "+91-82200-15110",
+            "08220015110",
+            "0091 82200 15110",
+        ):
             self.assertEqual(svc.normalize_phone(raw), "918220015110", raw)
+
+    @override_settings(**CONFIG)
+    def test_local_numbers_that_happen_to_start_with_the_country_code_get_it_added(self):
+        # Valid Indian mobiles can begin "91"; that is not the country code.
+        for raw, expected in (
+            ("9123456789", "919123456789"),
+            ("91234 56789", "919123456789"),
+            ("9111111111", "919111111111"),
+            ("919123456789", "919123456789"),
+            ("+91 91234 56789", "919123456789"),
+        ):
+            self.assertEqual(svc.normalize_phone(raw), expected, raw)
         self.assertIsNone(svc.normalize_phone(""))
         self.assertIsNone(svc.normalize_phone(None))
         self.assertIsNone(svc.normalize_phone("n/a"))
@@ -36,15 +56,39 @@ class PhoneAndWordingTests(TestCase):
         self.assertEqual(svc.render_message("Hi {{1}}, {{2}}!", ["Asha", "welcome"]), "Hi Asha, welcome!")
         self.assertEqual(svc.render_message("Hi {{ 1 }}{{3}}.", ["Asha"]), "Hi Asha.")
 
-    def test_every_document_type_has_default_wording_and_help(self):
-        for doc_type, _ in WhatsAppMessageLog.DOCUMENT_TYPES:
+    def test_named_placeholders_and_numbered_ones_mean_the_same_thing(self):
+        order = ["employee_name", "month_year"]
+        by_name = {"employee_name": "Asha", "month_year": "August"}
+        self.assertEqual(svc.render_message("{{employee_name}} / {{month_year}}", by_name, order), "Asha / August")
+        # Wording HR saved with numbers before names existed keeps working.
+        self.assertEqual(svc.render_message("{{1}} / {{2}}", by_name, order), "Asha / August")
+        self.assertEqual(svc.render_message("{{employee_name}} / {{2}}", ["Asha", "August"], order), "Asha / August")
+
+    def test_a_line_with_nothing_to_say_is_dropped_rather_than_left_empty(self):
+        body = "Hello {{name}},\n\nDate: {{date}}\nTime: {{time}}\nNote: {{note}}\n\nThanks"
+        text = svc.render_message(body, {"name": "Asha", "date": "25 Sep", "time": "", "note": "  "})
+        self.assertEqual(text, "Hello Asha,\n\nDate: 25 Sep\n\nThanks")
+        # A line that mixes text and an empty value still shows its label if any placeholder has a value.
+        self.assertEqual(svc.render_message("Approved by: {{a}}{{b}}", {"a": "HR", "b": ""}), "Approved by: HR")
+
+    def test_every_message_type_has_default_wording_and_help(self):
+        from . import whatsapp_catalog as catalog
+
+        for doc_type, spec in catalog.TYPES.items():
+            if not spec.has_wording:  # a contact card has no text to word
+                continue
             self.assertTrue(svc.DEFAULT_MESSAGES[doc_type], doc_type)
             self.assertTrue(svc.PLACEHOLDER_HELP[doc_type], doc_type)
+            # the default wording only uses variables the type declares, and renders cleanly with samples
+            used = set(svc._PLACEHOLDER.findall(spec.body))
+            self.assertTrue(used <= set(spec.variable_names) | {str(i) for i in range(1, 13)}, doc_type)
+            rendered = svc.render_message(spec.body, catalog.sample_params(doc_type), spec.variable_names)
+            self.assertNotIn("{{", rendered, doc_type)
 
     def test_custom_wording_wins_and_disabled_types_are_refused(self):
         self.assertEqual(
             svc._message_for("id_card", ["Asha"])[0],
-            "Hello Asha,\n\nYour employee ID card is attached.\n\nRegards,\nUK Textiles HR",
+            "🪪 *Employee ID Card*\n\nHello Asha,\n\nYour employee ID card is attached.\n\nRegards,\nUK Textiles HRMS",
         )
         WhatsAppMessageTemplate.objects.create(document_type="id_card", message_body="ID for {{1}}")
         self.assertEqual(svc._message_for("id_card", ["Asha"]), ("ID for Asha", None))
@@ -77,7 +121,7 @@ class SendTests(TestCase):
                 "number": "918220015110",
                 "type": "document",
                 "filename": "slip.pdf",
-                "message": "Hello Asha Kumar,\n\nYour salary slip for August 2026 is attached.\n\nRegards,\nUK Textiles HR",
+                "message": "💰 *Salary Slip*\n\nHello Asha Kumar,\n\nYour salary slip for *August 2026* is attached.\n\nRegards,\nUK Textiles HRMS",
                 "instance_id": "INST1234",
                 "access_token": "tok-secret",
             },
@@ -100,7 +144,8 @@ class SendTests(TestCase):
             log = svc.send_text(self.emp, "visitor_notification", ["Asha", "Ravi", "9000000000", "Meeting"])
         body = post.call_args.kwargs["json"]
         self.assertEqual((body["type"], body["number"]), ("text", "918220015110"))
-        self.assertIn("Ravi (9000000000)", body["message"])
+        for expected in ("Visitor: *Ravi*", "Contact: 9000000000", "Purpose: Meeting", "Hello Asha"):
+            self.assertIn(expected, body["message"])
         self.assertEqual(log.status, "sent")
 
     def test_api_errors_become_a_failed_log_with_the_reason(self):
@@ -172,10 +217,22 @@ class SettingsEndpointTests(TestCase):
 
     def test_templates_list_every_type_with_defaults_and_is_hr_only(self):
         rows = self.client.get("/api/whatsapp/templates", **self.hr).json()
-        self.assertEqual({r["documentType"] for r in rows}, {k for k, _ in WhatsAppMessageLog.DOCUMENT_TYPES})
+        # Settings -> WhatsApp edits the documents and the visitor message; the rest live on the Control page.
+        self.assertEqual(
+            {r["documentType"] for r in rows},
+            {
+                "salary_slip",
+                "id_card",
+                "offer_letter",
+                "experience_letter",
+                "resignation_letter",
+                "other",
+                "visitor_notification",
+            },
+        )
         salary = next(r for r in rows if r["documentType"] == "salary_slip")
         self.assertEqual((salary["messageBody"], salary["isEnabled"]), ("", True))
-        self.assertIn("{{2}}", salary["defaultMessage"])
+        self.assertIn("{{month_year}}", salary["defaultMessage"])
         self.assertEqual(self.client.get("/api/whatsapp/templates").status_code, 401)
 
     def test_update_saves_wording_and_the_off_switch(self):
@@ -189,6 +246,16 @@ class SettingsEndpointTests(TestCase):
         self.assertEqual((r.json()["messageBody"], r.json()["isEnabled"]), ("Slip for {{2}}", False))
         row = WhatsAppMessageTemplate.objects.get(document_type="salary_slip")
         self.assertEqual((row.message_body, row.is_enabled), ("Slip for {{2}}", False))
+
+    def test_a_typo_in_a_placeholder_is_rejected_instead_of_sending_blanks(self):
+        r = self.client.put(
+            "/api/whatsapp/templates/salary_slip",
+            {"messageBody": "Hi {{employe_name}}"},
+            content_type="application/json",
+            **self.hr,
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("employe_name", r.json()["error"])
 
     def test_unknown_document_type_is_rejected(self):
         r = self.client.put("/api/whatsapp/templates/bogus", {}, content_type="application/json", **self.hr)

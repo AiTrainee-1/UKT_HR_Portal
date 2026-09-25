@@ -5,6 +5,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from . import whatsapp_approvals
 from .auth import require_hr, require_auth, get_token_employee_id, is_hr
 from .clock import ist_today
 from .models import Advance, AdvanceRepayment, Employee
@@ -195,6 +196,7 @@ def advance_detail(request: Request, pk: int) -> Response:
     if request.method == "PUT":
         data = request.data
         was_approved = adv.status == "approved"
+        previous_status = adv.status
 
         for field, attr in [
             ("status", "status"),
@@ -213,9 +215,19 @@ def advance_detail(request: Request, pk: int) -> Response:
             adv.save()
             _auto_create_repayments(adv)
             adv.refresh_from_db()
+            if previous_status != "approved":
+                whatsapp_approvals.notify_decision(
+                    "advance", adv, "approved", approver=adv.approved_by or request.jwt_user.get("name", ""),
+                    role="hr", comment=adv.notes,
+                )
             return Response(advance_json(adv, include_repayments=True))
 
         adv.save()
+        if adv.status == "rejected" and previous_status != "rejected":
+            whatsapp_approvals.notify_decision(
+                "advance", adv, "rejected", approver=adv.approved_by or request.jwt_user.get("name", ""),
+                role="hr", comment=adv.notes,
+            )
         return Response(advance_json(adv, include_repayments=was_approved))
 
     # DELETE

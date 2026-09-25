@@ -4,6 +4,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from . import whatsapp_approvals
 from .auth import require_hr, require_auth, get_token_employee_id
 from .branch_scope import scope_to_branch
 from .models import (
@@ -658,6 +659,9 @@ def manager_update_leave_status(request: Request, pk: int) -> Response:
         type="leave",
         message=f"Your leave request ({leave.start_date} to {leave.end_date}) was {status}.",
     )
+    whatsapp_approvals.notify_decision(
+        "leave", leave, status, approver=leave.approved_by or "", role="dept_head", comment=request.data.get("comment")
+    )
     return Response(leave_request_json(leave))
 
 
@@ -719,6 +723,9 @@ def manager_update_permission_status(request: Request, pk: int) -> Response:
         employee=perm.employee,
         type="permission",
         message=f"Your permission request for {perm.date.isoformat()} was {status}.",
+    )
+    whatsapp_approvals.notify_decision(
+        "permission", perm, status, approver=perm.approved_by or "", role="dept_head", comment=request.data.get("comment")
     )
     return Response(_permission_json(perm))
 
@@ -850,6 +857,9 @@ def manager_update_attendance_status(request: Request, pk: int) -> Response:
         employee=req.employee,
         type="attendance",
         message=f"Your attendance correction request for {req.date} was {status_val}.",
+    )
+    whatsapp_approvals.notify_decision(
+        "attendance_correction", req, status_val, approver=reviewer_name, role="dept_head", comment=req.review_comment
     )
     return Response(_override_request_dict(req))
 

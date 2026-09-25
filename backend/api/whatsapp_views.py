@@ -25,14 +25,17 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import whatsapp_service
+from . import whatsapp_catalog, whatsapp_service
 from .view_common import error_response as _error
 from .auth import require_hr
 from .models import WhatsAppMediaAsset, WhatsAppMessageLog, WhatsAppMessageTemplate
 
 logger = logging.getLogger(__name__)
 
-DOCUMENT_TYPES = [key for key, _ in WhatsAppMessageLog.DOCUMENT_TYPES]
+# Settings -> WhatsApp edits the wording of the documents HR sends (and the visitor message);
+# every other message type is managed on the WhatsApp Control page.
+DOCUMENT_TYPES = list(whatsapp_catalog.types_in("documents")) + list(whatsapp_catalog.types_in("visitors"))
+DOCUMENT_TYPES = [key for key in DOCUMENT_TYPES if whatsapp_catalog.get(key).has_wording]
 
 
 @api_view(["GET"])
@@ -74,7 +77,13 @@ def whatsapp_template_update(request: Request, document_type: str) -> Response:
     if document_type not in DOCUMENT_TYPES:
         return _error(f"Unknown document type: {document_type}")
 
+    from .whatsapp_control_views import _wording_error
+
     data = request.data
+    if "messageBody" in data:
+        problem = _wording_error(document_type, (data.get("messageBody") or "").strip())
+        if problem:
+            return _error(problem)
     t, _ = WhatsAppMessageTemplate.objects.get_or_create(document_type=document_type)
     if "messageBody" in data:
         t.message_body = (data.get("messageBody") or "").strip()

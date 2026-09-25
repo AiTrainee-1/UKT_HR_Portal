@@ -32,6 +32,15 @@ export const REQUEST_STATUS_TONE: Record<string, Tone> = {
   rejected: "danger",
 };
 
+/** WhatsApp message lifecycle: pending -> sent -> delivered -> read, or failed. */
+export const WHATSAPP_STATUS_TONE: Record<string, Tone> = {
+  pending: "warning",
+  sent: "info",
+  delivered: "success",
+  read: "accent",
+  failed: "danger",
+};
+
 /** Tone classes for a status string in the given vocabulary; unknown -> neutral. */
 export function toneClass(map: Record<string, Tone>, status: string | null | undefined): string {
   return TONE[(status && map[status]) || "neutral"];
@@ -39,3 +48,5 @@ export function toneClass(map: Record<string, Tone>, status: string | null | und
 
 export const attendanceStatusClass = (status: string | null | undefined) => toneClass(ATTENDANCE_STATUS_TONE, status);
 export const requestStatusClass = (status: string | null | undefined) => toneClass(REQUEST_STATUS_TONE, status);
+
+export const whatsappStatusClass = (status: string | null | undefined) => toneClass(WHATSAPP_STATUS_TONE, status);

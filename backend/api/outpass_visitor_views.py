@@ -224,15 +224,16 @@ def _send_visitor_email(visit: VisitorVisit, emp: Employee) -> None:
 
 
 def _send_visitor_whatsapp(visit: VisitorVisit, emp: Employee) -> None:
-    from . import whatsapp_service
+    """The visitor message (name, contact, purpose, whom, department, date and time) plus the
+    visitor's contact card to tap and call. Delivered in the background so the visitor's check-in
+    never waits on WhatsApp; the Reception "notified" time is stamped once it is really delivered."""
+    from . import whatsapp_notifications
 
-    visitor = visit.visitor
-    emp_name = f"{emp.first_name} {emp.last_name}".strip()
-    body_params = [emp_name, visitor.name, visitor.phone, visit.purpose or "—"]
-    result = whatsapp_service.send_text(emp, "visitor_notification", body_params, document_ref_id=visit.id)
-    if result.status == "sent":
+    def mark_notified(_log) -> None:
         visit.notified_whatsapp_at = timezone.now()
         visit.save(update_fields=["notified_whatsapp_at"])
+
+    whatsapp_notifications.notify_visitor_arrival(visit, emp, on_sent=mark_notified)
 
 
 def _notify_employee_of_visitor(visit: VisitorVisit) -> None:
@@ -326,10 +327,14 @@ def outpass_gate_submit(request: Request, token: str) -> Response:
         return Response({"error": "Name, employee code and destination are all required."}, status=400)
 
     employee = Employee.objects.filter(employee_code__iexact=employee_code).first()
-    OutpassRecord.objects.create(
+    record = OutpassRecord.objects.create(
         branch=qr.branch, employee=employee,
         employee_name=name, employee_code=employee_code, destination=destination,
     )
+    if employee is not None:
+        from . import whatsapp_notifications
+
+        whatsapp_notifications.notify_gate_record(record)
     return Response({"submitted": True}, status=201)
 
 

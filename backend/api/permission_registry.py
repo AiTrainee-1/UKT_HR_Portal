@@ -64,6 +64,7 @@ MODULE_TREE: list[dict] = [
     # The URL_MODULE_MAP entry below stays as a second gate.
     {"key": "login_devices", "label": "Login Devices"},
     {"key": "mobile_app_login", "label": "Mobile App Login"},
+    {"key": "whatsapp_control", "label": "WhatsApp Control"},
     {"key": "chat", "label": "Chat"},
     {"key": "notifications", "label": "Notifications"},
     {"key": "geo_attendance", "label": "Geo Attendance"},
@@ -224,6 +225,8 @@ URL_MODULE_MAP: dict[str, str] = {
     "login-sessions": "login_devices",
 
     "mobile-app-logins": "mobile_app_login",
+
+    "whatsapp-control": "whatsapp_control",
 
     "chat": "chat",
 

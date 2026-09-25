@@ -9,15 +9,21 @@ import { defineConfig, devices } from "@playwright/test";
 const reuse = process.env.E2E_REUSE_SERVERS === "1";
 const API_PORT = 8180;
 const WEB_PORT = 5180;
+const FAKE_PORT = 8190;
 const backendEnv = {
   DB_NAME: process.env.E2E_DB_NAME ?? "uktex_e2e",
   DEBUG: "true",
   JWT_SECRET: "e2e-only-jwt-secret-at-least-32-bytes-long",
   DJANGO_SECRET_KEY: "e2e-only-django-secret",
   ALLOWED_HOSTS: "localhost,127.0.0.1",
-  // Never let a test run use the developer's live WhatsApp credentials from backend/.env.
-  WACLIENT_INSTANCE_ID: "",
-  WACLIENT_ACCESS_TOKEN: "",
+  // WhatsApp goes to a local fake (e2e/fake-waclient.mjs), never to WAClient: dummy credentials
+  // override whatever real ones backend/.env holds, and the API address can't leave the machine.
+  WACLIENT_INSTANCE_ID: "e2e-instance",
+  WACLIENT_ACCESS_TOKEN: "e2e-token",
+  WACLIENT_API_URL: `http://127.0.0.1:${FAKE_PORT}/send`,
+  WHATSAPP_SEND_DELAY_SECONDS: "0",
+  WHATSAPP_MIN_SEND_GAP_SECONDS: "0",
+  EMPLOYEE_PORTAL_URL: "https://portal.e2e.test",
 };
 
 export default defineConfig({
@@ -35,6 +41,13 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: [
+    {
+      command: "node e2e/fake-waclient.mjs",
+      url: `http://127.0.0.1:${FAKE_PORT}/health`,
+      reuseExistingServer: reuse,
+      timeout: 30_000,
+      env: { FAKE_WACLIENT_PORT: String(FAKE_PORT) },
+    },
     {
       command: `python e2e_setup.py && python manage.py runserver 127.0.0.1:${API_PORT} --noreload`,
       cwd: "../backend",

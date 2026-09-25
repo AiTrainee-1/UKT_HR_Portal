@@ -112,6 +112,12 @@ def hr_login(request: Request) -> Response:
 @throttle_classes([ScopedRateThrottle])
 def employee_login(request: Request) -> Response:
     request.throttle_scope = "employee_login"
+    from .models import WhatsAppSettings
+    from .whatsapp_service import is_configured as whatsapp_configured
+
+    wa = WhatsAppSettings.get()
+    if not wa.password_login_enabled and wa.otp_login_enabled and whatsapp_configured():
+        return _error("Password sign-in is turned off. Please sign in with a WhatsApp code.", 403)
     identifier = request.data.get("identifier")
     password = request.data.get("password")
     if not identifier or not password:
@@ -158,18 +164,30 @@ def set_password(request: Request) -> Response:
     ).first()
     if not employee:
         return _error("Employee not found. Please contact HR.", 404)
-    # First-time setup (no password yet) is open, because the employee has no
-    # way to sign in. Once a password exists this is a *change*, and only that
-    # employee's own logged-in session may do it -otherwise anyone who knows a
-    # colleague's employee code could take over their account.
-    if employee.password_hash:
-        token = get_bearer_token(request)
-        try:
-            claims = verify_token(token) if token else {}
-        except Exception:
-            claims = {}
-        if claims.get("role") != "employee" or claims.get("employeeId") != employee.id:
+    # Only that employee's own signed-in session may set or change their password
+    # here -otherwise anyone who knows a colleague's employee code could take over
+    # their account. A signed-in employee with no password yet (they came in by
+    # WhatsApp code) is covered by the same rule.
+    token = get_bearer_token(request)
+    try:
+        claims = verify_token(token) if token else {}
+    except Exception:
+        claims = {}
+    own_session = claims.get("role") == "employee" and claims.get("employeeId") == employee.id
+    if not own_session:
+        if employee.password_hash:
             return _error("Sign in to change your password.", 403)
+        # First-time setup by someone not signed in: they must confirm the WhatsApp
+        # code sent to their registered number first (otp_views.otp_activate). Only
+        # when that can't work (switched off / WhatsApp not configured) does the old
+        # open setup remain, so no new employee is locked out.
+        from .otp_service import activation_required
+
+        if activation_required():
+            return _error(
+                "Please confirm the code we send to your registered WhatsApp number to set your password.",
+                403,
+            )
     employee.password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=10)).decode()
     employee.password_updated_at = timezone.now()
     employee.save(update_fields=["password_hash", "password_updated_at", "updated_at"])

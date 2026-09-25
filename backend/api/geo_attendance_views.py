@@ -64,6 +64,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from . import whatsapp_notifications
 from .view_common import error_response as _error
 from .auth import get_token_employee_id, is_hr, require_auth, require_hr
 from .biometric_sync import _ingest_punches
@@ -477,6 +478,9 @@ def resolve_on_duty_session_hod(session: OnDutySession, decision: str, reviewer_
         if voided:
             message += f" The {voided} punch(es) you recorded under it are not valid and have not been counted."
     Notification.objects.create(employee=session.employee, type="on_duty", message=message)
+    if decision == "rejected":
+        # An approval at this stage only passes the request on to HR; a rejection is final.
+        whatsapp_notifications.notify_geo_session_rejected(session, reviewer_name, "dept_head", comment, voided)
 
 
 def resolve_on_duty_session_hr(session: OnDutySession, decision: str, reviewer_name: str, comment: str | None) -> None:
@@ -521,11 +525,13 @@ def resolve_on_duty_session_hr(session: OnDutySession, decision: str, reviewer_n
             f" Your {approved} recorded punch(es) have been accepted as attendance."
             if approved else " You can now begin."
         )
+        whatsapp_notifications.notify_geo_session_approved(session, reviewer_name, comment)
     else:
         voided = _void_session_punches(session, reviewer_name, "HR")
         message = f"Your On-Duty request for {session.destination} was rejected by HR."
         if voided:
             message += f" The {voided} punch(es) you recorded under it are not valid and have not been counted."
+        whatsapp_notifications.notify_geo_session_rejected(session, reviewer_name, "hr", comment, voided)
     Notification.objects.create(employee=session.employee, type="on_duty", message=message)
 
 
@@ -560,6 +566,10 @@ def resolve_on_duty_punch_hr(
     v.save()
 
     if notify:
+        if decision == "approved":
+            whatsapp_notifications.notify_geo_punch_approved(v, reviewer_name, comment)
+        else:
+            whatsapp_notifications.notify_geo_punch_rejected(v, reviewer_name, comment)
         # Suppressed for bulk runs -the caller sends one summary notification
         # for the whole request instead of four near-identical pings.
         punch_label = "Check-In" if v.punch_type == AttendanceLog.PUNCH_IN else "Check-Out"
@@ -1160,6 +1170,7 @@ def on_duty_session_punches_hr_status(request: Request, pk: int) -> Response:
     else:
         count = _void_session_punches(session, reviewer_name, "HR")
     if count:
+        whatsapp_notifications.notify_geo_punches_decided(session, status_val, count, reviewer_name, request.data.get("comment"))
         Notification.objects.create(
             employee=session.employee, type="on_duty",
             message=(

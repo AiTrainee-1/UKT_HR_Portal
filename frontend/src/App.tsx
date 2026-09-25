@@ -77,6 +77,7 @@ const AccountManagementMaster = lazy(() => import("@/pages/hr/AccountManagementM
 const ActivityLogs = lazy(() => import("@/pages/hr/ActivityLogs"));
 const LoginDevices = lazy(() => import("@/pages/hr/LoginDevices"));
 const MobileAppLogin = lazy(() => import("@/pages/hr/MobileAppLogin"));
+const WhatsAppControl = lazy(() => import("@/pages/hr/WhatsAppControl"));
 const Settings = lazy(() => import("@/pages/hr/Settings"));
 const Promotion = lazy(() => import("@/pages/hr/Promotion"));
 const Increment = lazy(() => import("@/pages/hr/Increment"));
@@ -373,6 +374,9 @@ function Router() {
       </Route>
       <Route path="/hr/mobile-app-login">
         {() => <ProtectedRoute component={MobileAppLogin} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/whatsapp-control">
+        {() => <ProtectedRoute component={WhatsAppControl} allowedRoles={["hr"]} />}
       </Route>
       <Route path="/hr/settings">
         {() => <ProtectedRoute component={Settings} allowedRoles={["hr"]} />}

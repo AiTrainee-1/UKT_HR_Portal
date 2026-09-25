@@ -20,6 +20,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from . import whatsapp_approvals
 from .auth import get_hr_display_name, get_token_employee_id, require_auth, require_hr
 from .branch_scope import scope_to_branch
 from .jwt_utils import sign_token
@@ -138,6 +139,9 @@ def resolve_outpass_request(
         type="outpass",
         message=f"Your Outpass request for {req.destination} was "
                 f"{'Approved' if decision == 'approved' else 'Not Approved'}.",
+    )
+    whatsapp_approvals.notify_decision(
+        "outpass", req, decision, approver=reviewer_name, role=approver_role, comment=comment
     )
 
 

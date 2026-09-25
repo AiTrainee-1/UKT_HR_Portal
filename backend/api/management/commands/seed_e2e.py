@@ -54,13 +54,14 @@ class Command(BaseCommand):
         )
         dept, _ = Department.objects.get_or_create(name="Stitching", branch=branch)
 
-        def employee(code, first, last, salary):
+        def employee(code, first, last, salary, phone):
             emp, _ = Employee.objects.update_or_create(
                 employee_code=code,
                 defaults={
                     "first_name": first,
                     "last_name": last,
                     "employment_type": "staff",
+                    "phone": phone,
                     "status": "active",
                     "salary_type": "monthly",
                     "salary_amount": salary,
@@ -70,9 +71,9 @@ class Command(BaseCommand):
             )
             return emp
 
-        asha = employee("E2E001", "Asha", "Kumar", "24000.00")
-        ravi = employee("E2E002", "Ravi", "Nair", "30000.00")
-        employee("E2E003", "Meena", "Nosalary", None)
+        asha = employee("E2E001", "Asha", "Kumar", "24000.00", "9000000001")
+        ravi = employee("E2E002", "Ravi", "Nair", "30000.00", "9000000002")
+        employee("E2E003", "Meena", "Nosalary", None, "9000000003")
 
         days = _working_days()
         for emp, present in ((asha, days), (ravi, days[:12])):

@@ -20,6 +20,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from . import whatsapp_approvals
 from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name
 from .branch_scope import scope_to_branch
 from .clock import ist_today
@@ -139,6 +140,9 @@ def apply_cl_decision(cl: CasualLeaveRequest, status: str, reviewer: str,
         employee=cl.employee,
         type="casual_leave",
         message=f"Your Casual Leave request for {cl.date.isoformat()} was {status}.",
+    )
+    whatsapp_approvals.notify_decision(
+        "casual_leave", cl, status, approver=reviewer, role=reviewer_role, comment=comment
     )
     return cl
 

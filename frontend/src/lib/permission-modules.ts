@@ -53,6 +53,7 @@ export const MODULE_TREE: ModuleNode[] = [
   // isSuperAdmin guard in App.tsx and @require_super_admin on the API.
   { key: "login_devices", label: "Login Devices" },
   { key: "mobile_app_login", label: "Mobile App Login" },
+  { key: "whatsapp_control", label: "WhatsApp Control" },
   { key: "chat", label: "Chat" },
   { key: "notifications", label: "Notifications" },
   { key: "geo_attendance", label: "Geo Attendance" },
@@ -167,6 +168,7 @@ export const ROUTE_MODULE_MAP: Record<string, string> = {
   "/hr/activity-logs": "activity_logs",
   "/hr/login-devices": "login_devices",
   "/hr/mobile-app-login": "mobile_app_login",
+  "/hr/whatsapp-control": "whatsapp_control",
   "/hr/chat": "chat",
   "/hr/notifications": "notifications",
   "/hr/geo-attendance": "geo_attendance",

@@ -1,5 +1,6 @@
 """Leave requests: list/create, approve/reject, delete."""
 
+from . import whatsapp_approvals
 from .auth import get_hr_display_name, get_token_employee_id, require_auth, require_hr
 from .branch_scope import scope_to_branch
 from .clock import ist_today
@@ -163,12 +164,18 @@ def update_leave_status(request: Request, pk: int) -> Response:
             type="leave",
             message=f"Your leave request ({record.start_date} → {record.end_date}) has been approved.",
         )
+        whatsapp_approvals.notify_decision(
+            "leave", record, "approved", approver=record.approved_by or "", role="hr", comment=record.hr_comment
+        )
 
     elif new_status == "rejected" and old_status != "rejected":
         Notification.objects.create(
             employee_id=record.employee_id,
             type="leave",
             message=f"Your leave request ({record.start_date} → {record.end_date}) has been rejected.",
+        )
+        whatsapp_approvals.notify_decision(
+            "leave", record, "rejected", approver=record.approved_by or "", role="hr", comment=record.hr_comment
         )
 
     return Response(_leave_with_name(record))

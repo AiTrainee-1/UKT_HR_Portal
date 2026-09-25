@@ -70,7 +70,13 @@ class ApiConfig(AppConfig):
         if watcher_process:
             return
 
-        from . import auto_sync, backup_scheduler, screening_cleanup_scheduler, on_duty_day_end_scheduler
+        from . import (
+            auto_sync,
+            backup_scheduler,
+            on_duty_day_end_scheduler,
+            screening_cleanup_scheduler,
+            whatsapp_alert_scheduler,
+        )
 
         if not auto_sync.is_available():
             logger.warning("APScheduler not installed -Auto Sync disabled. Run: pip install apscheduler")
@@ -99,3 +105,8 @@ class ApiConfig(AppConfig):
             on_duty_day_end_scheduler.start_scheduler_if_needed()
         except Exception as e:
             logger.warning("On-Duty day-end scheduler bootstrap skipped: %s", e)
+
+        try:
+            whatsapp_alert_scheduler.start_scheduler_if_needed()
+        except Exception as e:
+            logger.warning("WhatsApp attendance alert scheduler bootstrap skipped: %s", e)

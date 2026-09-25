@@ -105,9 +105,11 @@ from .chat import (
     ChatReaction,
 )
 from .whatsapp import (
+    EmployeeOtp,
+    WhatsAppMediaAsset,
     WhatsAppMessageLog,
     WhatsAppMessageTemplate,
-    WhatsAppMediaAsset,
+    WhatsAppSettings,
 )
 from .gate import (
     GateQRCode,

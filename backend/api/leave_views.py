@@ -4,6 +4,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from . import whatsapp_approvals
 from .auth import require_hr, require_auth, get_token_employee_id, is_hr, get_hr_display_name
 from .branch_scope import scope_to_branch
 from .models import LeaveType, LeaveBalance, Holiday, Employee, Notification, EmployeePermission
@@ -323,6 +324,11 @@ def employee_request_action(request: Request, pk: int) -> Response:
             type="employee_request",
             message=f"Your request '{er.subject}' is now {er.status.replace('_', ' ')}.",
         )
+        if er.status in ("approved", "rejected"):
+            whatsapp_approvals.notify_decision(
+                "request", er, er.status, approver=er.handled_by or request.jwt_user.get("name", ""), role="hr",
+                comment=er.hr_notes,
+            )
     return Response({"id": er.id, "status": er.status})
 
 
@@ -501,5 +507,8 @@ def employee_permission_detail(request: Request, pk: int) -> Response:
             employee=p.employee,
             type="permission",
             message=f"Your permission request for {p.date.isoformat()} was {p.status}.",
+        )
+        whatsapp_approvals.notify_decision(
+            "permission", p, p.status, approver=p.approved_by or "", role="hr", comment=p.hr_comment
         )
     return Response(_permission_json(p))

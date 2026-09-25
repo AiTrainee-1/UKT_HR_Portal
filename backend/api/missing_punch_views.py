@@ -28,6 +28,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from . import whatsapp_approvals
 from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name
 from .branch_scope import scope_to_branch
 from .models import AttendanceLog, DepartmentManager, Employee, MissingPunchRequest, Notification
@@ -94,6 +95,11 @@ def resolve_missing_punch_hod(req: MissingPunchRequest, decision: str, reviewer_
     else:
         message = f"Your Missing Punch request for {req.date.isoformat()} was rejected by your Department Head."
     Notification.objects.create(employee=req.employee, type="missing_punch", message=message)
+    if decision == "rejected":
+        # An approval here only passes the request on to HR, so it stays quiet until HR decides.
+        whatsapp_approvals.notify_decision(
+            "missing_punch", req, "rejected", approver=reviewer_name, role="dept_head", comment=comment
+        )
 
 
 def resolve_missing_punch_hr(req: MissingPunchRequest, decision: str, reviewer_name: str, comment: str | None) -> None:
@@ -118,6 +124,7 @@ def resolve_missing_punch_hr(req: MissingPunchRequest, decision: str, reviewer_n
     else:
         message = f"Your Missing Punch request for {req.date.isoformat()} was rejected by HR."
     Notification.objects.create(employee=req.employee, type="missing_punch", message=message)
+    whatsapp_approvals.notify_decision("missing_punch", req, decision, approver=reviewer_name, role="hr", comment=comment)
 
 
 # ── List / submit ────────────────────────────────────────────────────────────

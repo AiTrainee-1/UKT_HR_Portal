@@ -23,6 +23,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 
+from . import whatsapp_notifications
 from .auth import get_hr_display_name, require_gate_device, require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
 from .clock import FACTORY_TZ
@@ -211,6 +212,7 @@ def _resolve_exit_scan(gate: GateDevice, req: OutpassRequest) -> tuple[dict, int
         gate=gate, outpass_request=req, employee=req.employee, scan_type=OutpassGateScan.SCAN_TYPE_EXIT,
         result=OutpassGateScan.RESULT_SUCCESS, message=message,
     )
+    whatsapp_notifications.notify_gate_out(req)
     return {"result": "success", "scanType": "exit", "message": message, **_gate_scan_employee_payload(req)}, 200
 
 
@@ -256,6 +258,7 @@ def _resolve_return_scan(gate: GateDevice, req: OutpassRequest, generated_at_cla
         gate=gate, outpass_request=req, employee=req.employee, scan_type=OutpassGateScan.SCAN_TYPE_ENTRY,
         result=OutpassGateScan.RESULT_SUCCESS, message=message,
     )
+    whatsapp_notifications.notify_gate_in(req)
     return {"result": "success", "scanType": "entry", "message": message, **_gate_scan_employee_payload(req)}, 200
 
 

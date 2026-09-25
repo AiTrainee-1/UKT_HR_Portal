@@ -249,6 +249,10 @@ REST_FRAMEWORK = {
         # Employee sign-in / set-password. Looser than "login" because a whole
         # shop floor can sit behind one NAT'd IP at shift start.
         "employee_login": "120/min",
+        # WhatsApp OTP: asking for a code sends a message, so keep that tighter than
+        # verifying one. Per-employee limits live in otp_service.py.
+        "otp_request": "20/min",
+        "otp_verify": "60/min",
         # Outpass/Visitor gate forms (outpass_visitor_views.py) -anonymous,
         # unauthenticated writes, one of which (visitor "new") accepts an
         # Aadhaar number, so worth rate-limiting per IP even though nothing
@@ -283,6 +287,11 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "").strip()
 WACLIENT_INSTANCE_ID = os.environ.get("WACLIENT_INSTANCE_ID", "").strip()
 WACLIENT_ACCESS_TOKEN = os.environ.get("WACLIENT_ACCESS_TOKEN", "").strip()
 WACLIENT_API_URL = os.environ.get("WACLIENT_API_URL", "https://api.waclient.com/send").strip()
+# Contact cards (the visitor's "tap to call" card) go to a sibling endpoint of /send.
+WACLIENT_CONTACT_API_URL = (
+    os.environ.get("WACLIENT_CONTACT_API_URL", "").strip()
+    or (WACLIENT_API_URL[: -len("/send")] if WACLIENT_API_URL.endswith("/send") else WACLIENT_API_URL) + "/send_contact"
+)
 # `manage.py test` must never send a real WhatsApp message: a developer's .env
 # holds live credentials, and several tests create employees with real-looking
 # phone numbers and exercise the notification paths. Blank credentials make every
@@ -296,6 +305,23 @@ WHATSAPP_DEFAULT_COUNTRY_CODE = os.environ.get("WHATSAPP_DEFAULT_COUNTRY_CODE", 
 WHATSAPP_SEND_DELAY_SECONDS = float(os.environ.get("WHATSAPP_SEND_DELAY_SECONDS", "2") or 0)
 # Optional shared secret for the WAClient webhook URL (?token=...). Empty = open.
 WHATSAPP_WEBHOOK_TOKEN = os.environ.get("WHATSAPP_WEBHOOK_TOKEN", "").strip()
+
+# Approval, visitor and gate messages are handed to a background worker so the person
+# pressing Approve never waits on WhatsApp (and a WhatsApp outage can never slow or break
+# the approval). Codes and the attendance job send inline. `manage.py test` sends inline too,
+# so tests can check the result straight away.
+WHATSAPP_ASYNC_SEND = os.environ.get("WHATSAPP_ASYNC_SEND", "true").strip().lower() not in ("0", "false", "no")
+if len(sys.argv) > 1 and sys.argv[1] == "test":
+    WHATSAPP_ASYNC_SEND = False
+# Minimum pause between two messages leaving the background worker (a burst of approvals
+# is spread out rather than blasted, which is what gets a linked number flagged).
+WHATSAPP_MIN_SEND_GAP_SECONDS = float(os.environ.get("WHATSAPP_MIN_SEND_GAP_SECONDS", "1") or 0)
+# Where the Employee Web App lives (e.g. https://employee.uktextiles.in). When set, approval
+# messages carry a "View request" link to the right page; blank = no link.
+EMPLOYEE_PORTAL_URL = os.environ.get("EMPLOYEE_PORTAL_URL", "").strip().rstrip("/")
+# Send a message with a link as WAClient's "link" type (a preview card). If that is refused
+# the message is sent as plain text instead, so this can only ever add polish.
+WHATSAPP_LINK_PREVIEW = os.environ.get("WHATSAPP_LINK_PREVIEW", "true").strip().lower() not in ("0", "false", "no")
 
 # Optional override for the public origin WAClient's servers use to fetch a
 # document/image media asset (whatsapp_service._media_url) -only needed if

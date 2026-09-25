@@ -12,7 +12,26 @@ export type WhatsAppDocumentType =
   | "experience_letter"
   | "resignation_letter"
   | "other"
-  | "visitor_notification";
+  | "visitor_notification"
+  | "otp_login"
+  | "otp_reset"
+  | "otp_activate"
+  | "absent_alert"
+  | "late_alert"
+  | "four_punch_alert"
+  | "missing_punch_alert"
+  | "geo_approval"
+  | "geo_rejection"
+  | "geo_punch_approval"
+  | "geo_punch_rejection"
+  | "on_duty_punch_reminder"
+  | "approval_approved"
+  | "approval_rejected"
+  | "outpass_gate_out"
+  | "outpass_gate_in"
+  | "visitor_contact"
+  // The server's message catalog is the source of truth; a type added there just works here.
+  | (string & {});
 
 export type WhatsAppStatus = { configured: boolean; instanceId: string | null };
 
@@ -145,4 +164,227 @@ export const usePayrollBreakdown = (id: number | null) =>
     queryKey: getPayrollBreakdownQueryKey(id ?? 0),
     queryFn: () => customFetch<PayrollBreakdownResponse>(`/api/payroll/${id}/breakdown`),
     enabled: !!id,
+  });
+
+// ── WhatsApp Control page (/hr/whatsapp-control) ───────────────────────────
+
+export type WhatsAppMessageStatus = "pending" | "sent" | "delivered" | "read" | "failed";
+/** A module key from the server's catalog: documents, otp, attendance, approvals, geo, visitors, outpass, other. */
+export type WhatsAppCategory = string;
+
+export type WhatsAppCounts = Record<WhatsAppMessageStatus, number> & { total: number; accepted: number };
+
+export type WhatsAppConfig = {
+  provider: string;
+  configured: boolean;
+  instanceId: string | null;
+  apiUrl: string;
+  defaultCountryCode: string;
+  sendDelaySeconds: number;
+  publicBaseUrl: string;
+  webhookUrl: string;
+  webhookTokenSet: boolean;
+  employeePortalUrl: string;
+  /** Approval, visitor and gate messages are delivered by a background worker. */
+  backgroundSending: boolean;
+  linkPreview: boolean;
+};
+
+export type WhatsAppMessage = {
+  id: number;
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  phone: string;
+  documentType: WhatsAppDocumentType;
+  typeLabel: string;
+  category: WhatsAppCategory;
+  categoryLabel: string;
+  /** The workflow behind it ("leave", "on_duty", ...) when one message type serves several. */
+  relatedModule: string;
+  /** "Approvals - Leave": the HRMS module this message belongs to. */
+  relatedLabel: string;
+  status: WhatsAppMessageStatus;
+  error: string;
+  messageText: string;
+  providerMessageId: string;
+  referenceId: number | null;
+  sentBy: string | null;
+  automatic: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+export type WhatsAppOverview = {
+  days: number;
+  config: WhatsAppConfig;
+  totals: WhatsAppCounts;
+  /** Today's and this month's counts, whatever the selected range. */
+  today: WhatsAppCounts;
+  thisMonth: WhatsAppCounts;
+  categories: { key: WhatsAppCategory; label: string }[];
+  /** The HRMS workflows a message can come from (Leave, On-Duty request, ...), for the Workflow filter. */
+  relatedModules: { key: string; label: string }[];
+  byCategory: Record<WhatsAppCategory, WhatsAppCounts>;
+  byType: {
+    documentType: WhatsAppDocumentType;
+    label: string;
+    category: WhatsAppCategory;
+    total: number;
+    failed: number;
+  }[];
+  daily: { date: string; total: number; failed: number }[];
+  recentFailures: WhatsAppMessage[];
+  stalePending: number;
+};
+
+export const useWhatsAppOverview = (days: number) =>
+  useQuery<WhatsAppOverview>({
+    queryKey: ["/api/whatsapp-control/overview", days],
+    queryFn: () => customFetch<WhatsAppOverview>(`/api/whatsapp-control/overview?days=${days}`),
+    refetchInterval: 30_000,
+  });
+
+export type Paged<T> = { items: T[]; total: number; page: number; pageSize: number };
+
+export type WhatsAppMessageFilters = {
+  status?: WhatsAppMessageStatus | "";
+  category?: WhatsAppCategory | "";
+  /** One HRMS workflow, e.g. "leave" (Approvals). */
+  related?: string;
+  type?: string;
+  employeeId?: number;
+  search?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  page: number;
+  pageSize: number;
+};
+
+function query(params: Record<string, string | number | undefined>): string {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== "") qs.set(k, String(v));
+  return qs.toString();
+}
+
+export const useWhatsAppMessages = (filters: WhatsAppMessageFilters, enabled = true) =>
+  useQuery<Paged<WhatsAppMessage>>({
+    queryKey: ["/api/whatsapp-control/messages", filters],
+    queryFn: () => customFetch<Paged<WhatsAppMessage>>(`/api/whatsapp-control/messages?${query(filters)}`),
+    enabled,
+    refetchInterval: 30_000,
+  });
+
+export type WhatsAppEmployeeRow = {
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  phone: string;
+  department: string | null;
+  total: number;
+  failed: number;
+  lastMessageAt: string | null;
+};
+
+export const useWhatsAppEmployees = (params: { search?: string; page: number; pageSize: number }) =>
+  useQuery<Paged<WhatsAppEmployeeRow>>({
+    queryKey: ["/api/whatsapp-control/employees", params],
+    queryFn: () => customFetch<Paged<WhatsAppEmployeeRow>>(`/api/whatsapp-control/employees?${query(params)}`),
+  });
+
+export type WhatsAppFeature = { key: string; label: string; description: string; group: string; enabled: boolean };
+export type WhatsAppFeatureGroup = { key: string; title: string; blurb: string };
+export type WhatsAppTiming = { key: string; label: string; value: number; min: number; max: number };
+export type WhatsAppControlSettings = {
+  groups: WhatsAppFeatureGroup[];
+  features: WhatsAppFeature[];
+  timings: WhatsAppTiming[];
+  config: WhatsAppConfig;
+  updatedAt: string | null;
+};
+
+export const useWhatsAppControlSettings = () =>
+  useQuery<WhatsAppControlSettings>({
+    queryKey: ["/api/whatsapp-control/settings"],
+    queryFn: () => customFetch<WhatsAppControlSettings>("/api/whatsapp-control/settings"),
+  });
+
+export const useUpdateWhatsAppControlSettings = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, boolean | number>) =>
+      customFetch<WhatsAppControlSettings>("/api/whatsapp-control/settings", {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["/api/whatsapp-control/settings"], data);
+      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp-control/templates"] });
+    },
+  });
+};
+
+export type WhatsAppTemplateVariable = { name: string; help: string; sample: string };
+
+export type WhatsAppControlTemplate = {
+  documentType: WhatsAppDocumentType;
+  label: string;
+  description: string;
+  category: WhatsAppCategory;
+  categoryLabel: string;
+  /** False for messages with no text to word (a contact card). */
+  hasWording: boolean;
+  messageBody: string;
+  defaultMessage: string;
+  placeholders: string;
+  variables: WhatsAppTemplateVariable[];
+  /** The current wording rendered with sample values. */
+  preview: string;
+  isEnabled: boolean;
+  /** This message's own switch (Feature Controls); null when it has none. */
+  featureEnabled: boolean | null;
+  /** The switch for the message's whole module; null when the module has none. */
+  moduleEnabled: boolean | null;
+  customised: boolean;
+  updatedAt: string | null;
+  total: number;
+  failed: number;
+  lastSentAt: string | null;
+};
+
+export const useWhatsAppControlTemplates = () =>
+  useQuery<WhatsAppControlTemplate[]>({
+    queryKey: ["/api/whatsapp-control/templates"],
+    queryFn: () => customFetch<WhatsAppControlTemplate[]>("/api/whatsapp-control/templates"),
+  });
+
+export const useUpdateWhatsAppControlTemplate = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      documentType,
+      data,
+    }: {
+      documentType: WhatsAppDocumentType;
+      data: { messageBody?: string; isEnabled?: boolean };
+    }) =>
+      customFetch<WhatsAppControlTemplate>(`/api/whatsapp-control/templates/${documentType}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp-control/templates"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/templates"] });
+    },
+  });
+};
+
+/** Renders unsaved wording with sample values, so HR sees how a message will look. */
+export const useWhatsAppTemplatePreview = () =>
+  useMutation({
+    mutationFn: ({ documentType, messageBody }: { documentType: WhatsAppDocumentType; messageBody: string }) =>
+      customFetch<{ preview: string; error: string | null }>(
+        `/api/whatsapp-control/templates/${documentType}/preview`,
+        { method: "POST", body: JSON.stringify({ messageBody }) },
+      ),
   });

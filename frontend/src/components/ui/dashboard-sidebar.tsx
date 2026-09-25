@@ -136,6 +136,7 @@ const navGroups: NavGroupData[] = [
       { path: '/hr/notifications', label: 'Notifications', icon: Bell },
       { path: '/hr/login-devices', label: 'Login Devices', icon: MonitorSmartphone },
       { path: '/hr/mobile-app-login', label: 'Mobile App Login', icon: Smartphone },
+      { path: '/hr/whatsapp-control', label: 'WhatsApp Control', icon: MessageCircle },
       { path: '/hr/settings', label: 'Settings', icon: Settings },
     ],
   },

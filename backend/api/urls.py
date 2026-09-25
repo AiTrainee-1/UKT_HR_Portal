@@ -50,6 +50,12 @@ from .company_documents_views import (
     offer_letter_pdf, offer_letter_email, experience_letter_pdf, salary_slip_pdf,
     offer_letter_whatsapp, experience_letter_whatsapp,
 )
+from .otp_views import login_options, otp_activate, otp_login, otp_request, otp_reset_password
+from .whatsapp_control_views import (
+    whatsapp_control_settings, whatsapp_control_template_preview, whatsapp_control_template_update,
+    whatsapp_control_templates,
+    whatsapp_employees, whatsapp_messages, whatsapp_overview,
+)
 from .whatsapp_views import (
     whatsapp_status, whatsapp_templates, whatsapp_template_update, whatsapp_media, whatsapp_webhook,
 )
@@ -187,6 +193,11 @@ urlpatterns = [
     path("auth/hr-login", views.hr_login),
     path("auth/employee-login", views.employee_login),
     path("auth/set-password", views.set_password),
+    path("auth/login-options", login_options),
+    path("auth/otp/request", otp_request),
+    path("auth/otp/login", otp_login),
+    path("auth/otp/reset-password", otp_reset_password),
+    path("auth/otp/activate", otp_activate),
     path("auth/me", views.auth_me),
     path("auth/logout", views.logout),
 
@@ -449,6 +460,15 @@ urlpatterns = [
     # cannot redirect a POST.
     path("whatsapp/webhook", whatsapp_webhook),
     path("whatsapp/webhook/", whatsapp_webhook),
+
+    # ── WhatsApp Control page (HR portal) ────────────────────────────────────
+    path("whatsapp-control/overview", whatsapp_overview),
+    path("whatsapp-control/messages", whatsapp_messages),
+    path("whatsapp-control/employees", whatsapp_employees),
+    path("whatsapp-control/settings", whatsapp_control_settings),
+    path("whatsapp-control/templates", whatsapp_control_templates),
+    path("whatsapp-control/templates/<str:document_type>/preview", whatsapp_control_template_preview),
+    path("whatsapp-control/templates/<str:document_type>", whatsapp_control_template_update),
     path("verify-employee/<str:code>", verify_employee),
 
     # ── Biometric Device Management ─────────────────────────────────────────

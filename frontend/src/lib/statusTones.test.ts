@@ -4,6 +4,7 @@ import {
   REQUEST_STATUS_TONE,
   TONE,
   attendanceStatusClass,
+  whatsappStatusClass,
   requestStatusClass,
   toneClass,
 } from "./statusTones";
@@ -37,6 +38,15 @@ describe("statusTones", () => {
     expect(requestStatusClass("pending")).toBe(TONE.warning);
     expect(requestStatusClass("approved")).toBe(TONE.success);
     expect(requestStatusClass("rejected")).toBe(TONE.danger);
+  });
+
+  it("colours every WhatsApp message state", () => {
+    expect(whatsappStatusClass("pending")).toBe(TONE.warning);
+    expect(whatsappStatusClass("sent")).toBe(TONE.info);
+    expect(whatsappStatusClass("delivered")).toBe(TONE.success);
+    expect(whatsappStatusClass("read")).toBe(TONE.accent);
+    expect(whatsappStatusClass("failed")).toBe(TONE.danger);
+    expect(whatsappStatusClass("mystery")).toBe(TONE.neutral);
   });
 
   it("falls back to neutral for unknown, empty or missing statuses", () => {
