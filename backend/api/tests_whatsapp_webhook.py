@@ -1,19 +1,15 @@
-"""Gupshup webhook: must always answer 200 (URL validation) and fold delivery events into the log."""
+"""WAClient webhook: must always answer 200 and fold delivery events into the log."""
 
 from django.test import TestCase, override_settings
 
 from .models import Employee, WhatsAppMessageLog
 
 
-def _event(kind, gs_id="GS-1", **detail):
-    return {"app": "x", "type": "message-event", "payload": {"gsId": gs_id, "id": "wa-1", "type": kind, "payload": detail}}
-
-
 class WebhookTests(TestCase):
     def setUp(self):
         emp = Employee.objects.create(employee_code="WH1", first_name="W", last_name="H")
         self.log = WhatsAppMessageLog.objects.create(
-            employee=emp, document_type="salary_slip", phone_number="919999999999", gupshup_message_id="GS-1"
+            employee=emp, document_type="salary_slip", phone_number="919999999999", provider_message_id="ABC123"
         )
 
     def _post(self, body, path="/api/whatsapp/webhook/", **kw):
@@ -23,80 +19,60 @@ class WebhookTests(TestCase):
         self.log.refresh_from_db()
         return self.log.status
 
-    def test_validation_probes_get_200_without_auth(self):
+    def test_probes_get_200_without_auth(self):
         for path in ("/api/whatsapp/webhook/", "/api/whatsapp/webhook"):
             self.assertEqual(self.client.get(path).json(), {"status": "ok"})
             self.assertEqual(self._post({}, path).status_code, 200)
             self.assertEqual(self.client.head(path).status_code, 200)
 
-    def test_empty_and_non_json_bodies_still_get_200(self):
+    def test_empty_form_and_malformed_bodies_still_get_200(self):
         self.assertEqual(self.client.post("/api/whatsapp/webhook/").status_code, 200)
         self.assertEqual(self.client.post("/api/whatsapp/webhook/", "a=b", content_type="text/plain").status_code, 200)
-        self.assertEqual(self.client.post("/api/whatsapp/webhook/", "{bad", content_type="application/json").status_code, 200)
-        self.assertEqual(self._post({"payload": "not-a-dict", "type": "message-event"}).status_code, 200)
+        self.assertEqual(
+            self.client.post("/api/whatsapp/webhook/", "{bad", content_type="application/json").status_code, 200
+        )
+        self.assertEqual(self._post([1, 2, "x", None]).status_code, 200)
+        self.assertEqual(self._post({"key": "not-a-dict", "status": {"a": 1}}).status_code, 200)
 
-    def test_delivered_then_read_advance_the_status(self):
-        self._post(_event("delivered"))
+    def test_baileys_style_update_advances_the_status(self):
+        # {"key": {"id"}, "update": {"status": N}}: 3 = delivered, 4 = read
+        self._post({"event": "messages.update", "data": [{"key": {"id": "ABC123"}, "update": {"status": 3}}]})
         self.assertEqual(self._status(), "delivered")
-        self._post(_event("read"))
+        self._post({"data": [{"key": {"id": "ABC123"}, "update": {"status": 4}}]})
+        self.assertEqual(self._status(), "read")
+
+    def test_named_statuses_and_flat_payloads(self):
+        self._post({"id": "ABC123", "status": "DELIVERY_ACK"})
+        self.assertEqual(self._status(), "delivered")
+        self._post({"message_id": "ABC123", "status": "read"})
         self.assertEqual(self._status(), "read")
 
     def test_late_or_duplicate_events_never_go_backwards(self):
-        self._post(_event("read"))
-        self._post(_event("delivered"))
-        self._post(_event("sent"))
+        self._post({"key": {"id": "ABC123"}, "status": "READ"})
+        self._post({"key": {"id": "ABC123"}, "status": "DELIVERY_ACK"})
+        self._post({"key": {"id": "ABC123"}, "status": "SERVER_ACK"})
         self.assertEqual(self._status(), "read")
 
-    def test_failed_records_the_reason(self):
-        self._post(_event("failed", code=131026, reason="Message undeliverable"))
+    def test_error_status_marks_the_message_failed(self):
+        self._post({"key": {"id": "ABC123"}, "update": {"status": 0}})
         self.log.refresh_from_db()
-        self.assertEqual((self.log.status, self.log.error_message), ("failed", "Message undeliverable"))
+        self.assertEqual((self.log.status, self.log.error_message), ("failed", "Delivery failed"))
 
-    def test_unknown_message_ids_are_ignored(self):
-        self.assertEqual(self._post(_event("delivered", gs_id="nope")).status_code, 200)
+    def test_unknown_ids_and_other_events_are_ignored(self):
+        self.assertEqual(self._post({"key": {"id": "nope"}, "status": "READ"}).status_code, 200)
+        self._post({"event": "messages.upsert", "data": {"key": {"id": "ABC123"}, "message": {"conversation": "hi"}}})
         self.assertEqual(self._status(), "sent")
 
-    def test_non_message_events_are_ignored(self):
-        self._post({"type": "user-event", "payload": {"gsId": "GS-1", "type": "delivered"}})
-        self.assertEqual(self._status(), "sent")
+    def test_form_encoded_bodies_are_accepted(self):
+        r = self.client.post("/api/whatsapp/webhook/", {"id": "ABC123", "status": "delivered"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self._status(), "delivered")
 
     @override_settings(WHATSAPP_WEBHOOK_TOKEN="s3cret")
     def test_optional_token_gate(self):
-        self.assertEqual(self._post(_event("delivered")).status_code, 403)
+        body = {"key": {"id": "ABC123"}, "status": "READ"}
+        self.assertEqual(self._post(body).status_code, 403)
         self.assertEqual(self._status(), "sent")
-        self.assertEqual(self._post(_event("delivered"), "/api/whatsapp/webhook/?token=wrong").status_code, 403)
-        self.assertEqual(self._post(_event("delivered"), "/api/whatsapp/webhook/?token=s3cret").status_code, 200)
-        self.assertEqual(self._status(), "delivered")
-
-
-def _meta_event(status, gs_id="GS-1", **extra):
-    st = {"id": "wamid.ABC", "gs_id": gs_id, "status": status, "recipient_id": "919999999999", **extra}
-    return {"object": "whatsapp_business_account", "entry": [{"id": "1", "changes": [{"field": "messages", "value": {"statuses": [st]}}]}]}
-
-
-class MetaFormatV3Tests(WebhookTests):
-    """Gupshup's console defaults to the Meta (v3) payload format."""
-
-    def test_v3_delivered_then_read(self):
-        self._post(_meta_event("delivered"))
-        self.assertEqual(self._status(), "delivered")
-        self._post(_meta_event("read"))
+        self.assertEqual(self._post(body, "/api/whatsapp/webhook/?token=wrong").status_code, 403)
+        self.assertEqual(self._post(body, "/api/whatsapp/webhook/?token=s3cret").status_code, 200)
         self.assertEqual(self._status(), "read")
-        self._post(_meta_event("delivered"))
-        self.assertEqual(self._status(), "read")
-
-    def test_v3_failed_records_the_error(self):
-        self._post(_meta_event("failed", errors=[{"code": 131026, "title": "Undeliverable", "message": "Message undeliverable"}]))
-        self.log.refresh_from_db()
-        self.assertEqual((self.log.status, self.log.error_message), ("failed", "Message undeliverable"))
-
-    def test_v3_matches_on_the_whatsapp_id_too(self):
-        self.log.gupshup_message_id = "wamid.ABC"
-        self.log.save()
-        self._post(_meta_event("delivered", gs_id="other"))
-        self.assertEqual(self._status(), "delivered")
-
-    def test_v3_inbound_messages_without_statuses_are_ignored(self):
-        body = {"object": "whatsapp_business_account", "entry": [{"changes": [{"value": {"messages": [{"id": "x"}]}}]}]}
-        self.assertEqual(self._post(body).status_code, 200)
-        self.assertEqual(self._status(), "sent")

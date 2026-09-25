@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -274,21 +275,29 @@ if not JWT_SECRET:
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "").strip()
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "").strip()
 
-# Gupshup WhatsApp API credentials -.env only, same rule as ADMIN_* above:
-# never stored in the database, never editable from the UI. See
-# api/whatsapp_service.py for how these are consumed. GUPSHUP_SOURCE_NUMBER
-# is the WhatsApp Business number connected to the Gupshup app (Meta
-# Embedded Signup happens once, on Gupshup's dashboard, when the app is
-# created -see docs/GUPSHUP_WHATSAPP_SETUP.md).
-GUPSHUP_API_KEY = os.environ.get("GUPSHUP_API_KEY", "").strip()
-GUPSHUP_APP_NAME = os.environ.get("GUPSHUP_APP_NAME", "").strip()
-GUPSHUP_SOURCE_NUMBER = os.environ.get("GUPSHUP_SOURCE_NUMBER", "").strip()
+# WAClient (WhatsApp Web API) credentials -.env only, same rule as ADMIN_*
+# above: never stored in the database, never editable from the UI. See
+# api/whatsapp_service.py for how these are consumed. The instance ID and
+# access token come from the WAClient dashboard (app.waclient.com); the
+# instance is the WhatsApp number linked there by QR code.
+WACLIENT_INSTANCE_ID = os.environ.get("WACLIENT_INSTANCE_ID", "").strip()
+WACLIENT_ACCESS_TOKEN = os.environ.get("WACLIENT_ACCESS_TOKEN", "").strip()
+WACLIENT_API_URL = os.environ.get("WACLIENT_API_URL", "https://api.waclient.com/send").strip()
+# `manage.py test` must never send a real WhatsApp message: a developer's .env
+# holds live credentials, and several tests create employees with real-looking
+# phone numbers and exercise the notification paths. Blank credentials make every
+# send fail as "not configured" (the tests that need the API mock it explicitly).
+if len(sys.argv) > 1 and sys.argv[1] == "test":
+    WACLIENT_INSTANCE_ID = ""
+    WACLIENT_ACCESS_TOKEN = ""
 WHATSAPP_DEFAULT_COUNTRY_CODE = os.environ.get("WHATSAPP_DEFAULT_COUNTRY_CODE", "91").strip()
-# Optional shared secret for the Gupshup callback URL (?token=...). Empty = open,
-# which is what Gupshup's own URL validation needs until you choose to set one.
+# Seconds to wait between messages in a bulk send. Blasting messages out of a
+# linked WhatsApp session back to back is what gets numbers flagged; 0 disables.
+WHATSAPP_SEND_DELAY_SECONDS = float(os.environ.get("WHATSAPP_SEND_DELAY_SECONDS", "2") or 0)
+# Optional shared secret for the WAClient webhook URL (?token=...). Empty = open.
 WHATSAPP_WEBHOOK_TOKEN = os.environ.get("WHATSAPP_WEBHOOK_TOKEN", "").strip()
 
-# Optional override for the public origin Gupshup's servers use to fetch a
+# Optional override for the public origin WAClient's servers use to fetch a
 # document/image media asset (whatsapp_service._media_url) -only needed if
 # the backend sits behind a proxy/tunnel where the request's own Host header
 # isn't the real public one. Mirrors FRONTEND_URL's identical fallback

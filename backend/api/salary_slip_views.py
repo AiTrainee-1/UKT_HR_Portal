@@ -292,7 +292,7 @@ def _send_slip_whatsapp(request: Request, s: SalarySlip, sent_by_id: int | None 
     """Shared by the single-send and bulk-send endpoints -mirrors
     _send_slip_email's role but for WhatsApp. Always returns a
     WhatsAppMessageLog row (see whatsapp_service.send_document). Needs
-    `request` to build the public media URL Gupshup fetches the PDF from."""
+    `request` to build the public media URL WAClient fetches the PDF from."""
     from . import whatsapp_service
     from .company_documents_views import build_salary_slip_pdf
 
@@ -309,11 +309,11 @@ def _send_slip_whatsapp(request: Request, s: SalarySlip, sent_by_id: int | None 
 @api_view(["POST"])
 @require_hr
 def whatsapp_salary_slip(request: Request, pk: int) -> Response:
-    """Send a salary slip via WhatsApp using the configured Gupshup template."""
+    """Send a salary slip via WhatsApp (WAClient) with the configured message wording."""
     from . import whatsapp_service
 
     if not whatsapp_service.is_configured():
-        logger.warning("Salary slip %s WhatsApp refused: GUPSHUP_API_KEY / APP_NAME / SOURCE_NUMBER not set", pk)
+        logger.warning("Salary slip %s WhatsApp refused: WACLIENT_INSTANCE_ID / WACLIENT_ACCESS_TOKEN not set", pk)
         return Response({"error": "WhatsApp is not configured on this server (missing credentials in .env)."}, status=400)
 
     try:
@@ -357,7 +357,9 @@ def salary_slip_bulk_whatsapp(request: Request) -> Response:
     sent_by_id = request.jwt_user.get("hrUserId")
     progress.start(len(slips), "salary_slip")
     sent, failed = 0, 0
-    for s in slips:
+    for i, s in enumerate(slips):
+        if i:
+            whatsapp_service.pace()
         emp_name = f"{s.employee.first_name} {s.employee.last_name}".strip()
         log = _send_slip_whatsapp(request, s, sent_by_id=sent_by_id)
         ok = log.status == "sent"

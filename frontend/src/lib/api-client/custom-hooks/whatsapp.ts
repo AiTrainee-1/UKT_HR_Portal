@@ -14,7 +14,7 @@ export type WhatsAppDocumentType =
   | "other"
   | "visitor_notification";
 
-export type WhatsAppStatus = { configured: boolean; sourceNumber: string | null; appName: string | null };
+export type WhatsAppStatus = { configured: boolean; instanceId: string | null };
 
 export const useWhatsAppStatus = () =>
   useQuery<WhatsAppStatus>({
@@ -24,8 +24,11 @@ export const useWhatsAppStatus = () =>
 
 export type WhatsAppTemplate = {
   documentType: WhatsAppDocumentType;
-  gupshupTemplateId: string;
-  variableNote: string;
+  /** HR's own wording; empty means the built-in default is sent. */
+  messageBody: string;
+  defaultMessage: string;
+  /** What each {{n}} placeholder is filled with for this document type. */
+  placeholders: string;
   isEnabled: boolean;
 };
 

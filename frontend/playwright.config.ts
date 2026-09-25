@@ -15,6 +15,9 @@ const backendEnv = {
   JWT_SECRET: "e2e-only-jwt-secret-at-least-32-bytes-long",
   DJANGO_SECRET_KEY: "e2e-only-django-secret",
   ALLOWED_HOSTS: "localhost,127.0.0.1",
+  // Never let a test run use the developer's live WhatsApp credentials from backend/.env.
+  WACLIENT_INSTANCE_ID: "",
+  WACLIENT_ACCESS_TOKEN: "",
 };
 
 export default defineConfig({

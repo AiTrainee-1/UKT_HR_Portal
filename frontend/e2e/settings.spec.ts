@@ -16,7 +16,7 @@ const TAB_HEADINGS: Record<string, string> = {
   "Production Payroll": "Period Configuration",
   "Salary Slip": "Salary Slip Settings",
   "SMTP / Email": "SMTP / Email Configuration",
-  WhatsApp: "Gupshup WhatsApp API",
+  WhatsApp: "WAClient WhatsApp API",
   Backup: "Scheduled Backup",
   Themes: "Themes",
 };

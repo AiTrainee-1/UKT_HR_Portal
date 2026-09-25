@@ -445,7 +445,7 @@ urlpatterns = [
     path("whatsapp/templates", whatsapp_templates),
     path("whatsapp/templates/<str:document_type>", whatsapp_template_update),
     path("whatsapp/media/<str:token>", whatsapp_media),
-    # Both spellings: Gupshup is given the trailing-slash form, and APPEND_SLASH
+    # Both spellings: the webhook URL is registered with the trailing-slash form, and APPEND_SLASH
     # cannot redirect a POST.
     path("whatsapp/webhook", whatsapp_webhook),
     path("whatsapp/webhook/", whatsapp_webhook),

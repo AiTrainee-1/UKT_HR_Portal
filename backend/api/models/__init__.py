@@ -11,7 +11,7 @@ Modules (each only imports from ones listed before it):
   recruitment  Jobs, applicants, resignations, headcount, resume screening and employee documents.
   system       Document/ID-card settings, stored files and backups.
   chat         Chat channels, messages and reactions.
-  whatsapp     WhatsApp (Gupshup) send log, templates and media assets.
+  whatsapp     WhatsApp (WAClient) send log, message wording and media assets.
   gate         Outpass, gate scanners, visitors, reception and tea break.
 """
 

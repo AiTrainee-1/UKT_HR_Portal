@@ -1,4 +1,4 @@
-"""WhatsApp (Gupshup) send log, templates and media assets."""
+"""WhatsApp (WAClient) send log, message wording and media assets."""
 
 from django.db import models
 
@@ -40,7 +40,8 @@ class WhatsAppMessageLog(models.Model):
     document_ref_id = models.IntegerField(null=True, blank=True, db_column="document_ref_id")
     phone_number = models.TextField(db_column="phone_number")
     status = models.TextField(default="sent", db_column="status")  # "sent" | "failed"
-    gupshup_message_id = models.TextField(blank=True, default="", db_column="gupshup_message_id")
+    # WhatsApp's own id for the message; delivery/read webhooks refer to it.
+    provider_message_id = models.TextField(blank=True, default="", db_column="provider_message_id")
     error_message = models.TextField(blank=True, default="", db_column="error_message")
     sent_by = models.ForeignKey(
         HRUser, null=True, blank=True, on_delete=models.SET_NULL,
@@ -58,26 +59,19 @@ class WhatsAppMessageLog(models.Model):
 
 class WhatsAppMessageTemplate(models.Model):
     """
-    Per-document-type Gupshup message template configuration, editable from
-    Settings -> WhatsApp. This is business configuration, not a secret (the
-    actual API credentials stay .env-only, see settings.GUPSHUP_*) -it just
-    records which pre-approved Gupshup template ID to use for each document
-    type, since WhatsApp requires every business-initiated message to use a
-    template that has already been reviewed and approved -the template's
-    wording itself can't be freely edited here, only which approved template
-    gets used and a human-readable note on what its {{n}} variables mean,
-    for HR's reference. No language field: unlike Meta's Cloud API (one
-    template name shared across language variants, language picked at send
-    time), a Gupshup template ID already refers to one specific approved
-    language variant.
+    Per-document-type message wording, editable from Settings -> WhatsApp.
+    This is business configuration, not a secret (the API credentials stay
+    .env-only, see settings.WACLIENT_*). WAClient's Web API sends over a
+    linked WhatsApp session, so there are no Meta templates to approve: the
+    text is free-form, with {{1}}, {{2}} ... placeholders filled in order
+    from what each send endpoint passes (see whatsapp_service.PLACEHOLDER_HELP).
+    A document type with no row, or a blank message_body, sends the built-in
+    default wording (whatsapp_service.DEFAULT_MESSAGES); is_enabled=False is
+    HR's per-type off switch.
     """
     document_type = models.TextField(unique=True, db_column="document_type")
-    gupshup_template_id = models.TextField(blank=True, default="", db_column="gupshup_template_id")
-    variable_note = models.TextField(
-        blank=True, default="", db_column="variable_note",
-        help_text="Human-readable note on what each {{n}} in the template maps to, e.g. '{{1}}=employee name, {{2}}=month/year'.",
-    )
-    is_enabled = models.BooleanField(default=False, db_column="is_enabled")
+    message_body = models.TextField(blank=True, default="", db_column="message_body")
+    is_enabled = models.BooleanField(default=True, db_column="is_enabled")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
     class Meta:
@@ -87,12 +81,11 @@ class WhatsAppMessageTemplate(models.Model):
 class WhatsAppMediaAsset(models.Model):
     """
     Short-lived, token-addressed blob store so a document/image WhatsApp
-    template message can be sent via Gupshup. Unlike Meta's Cloud API (which
-    accepts a direct media upload and hands back a media_id), Gupshup's
-    Access API only accepts a *public URL* it fetches the file from -see
+    message can be sent via WAClient. WAClient's /send only accepts a
+    *public URL* it fetches the file from (no direct upload) -see
     whatsapp_service.send_document. Every generated PDF/PNG is written here
     just before sending, exposed read-only at GET /api/whatsapp/media/<token>
-    (whatsapp_views.whatsapp_media, no auth -Gupshup's servers fetch it),
+    (whatsapp_views.whatsapp_media, no auth -WAClient's servers fetch it),
     and pruned lazily (expired rows deleted whenever a new one is created --
     no separate scheduled job needed given the low daily volume of sends).
     """
