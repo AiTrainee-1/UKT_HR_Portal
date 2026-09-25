@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useLocation } from "wouter";
 import QRCode from "qrcode";
 import HrLayout from "@/components/HrLayout";
+import { RefreshButton } from "@/components/PageRefreshBar";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1398,23 +1399,26 @@ export default function OutpassVisitors() {
   return (
     <HrLayout>
       <div className="space-y-5">
-        <div>
-          <h2 className="text-2xl font-black flex items-center gap-2">
-            {tab === "outpass" ? (
-              <><DoorOpen size={20} className="text-teal-600" /> Outpass</>
-            ) : tab === "visitors" ? (
-              <><UserRound size={20} className="text-teal-600" /> Visitors</>
-            ) : (
-              <><Coffee size={20} className="text-teal-600" /> Tea Break</>
-            )}
-          </h2>
-          <p className="text-muted-foreground text-sm mt-0.5">
-            {tab === "outpass"
-              ? "Gate exit logs and Outpass requests, collected via a permanent per-branch QR code -no attendance or payroll impact."
-              : tab === "visitors"
-              ? "Front-desk visitor logs, collected via a permanent per-branch QR code."
-              : "Employee tea-break Out/In timings, scanned at the gate -no approval, purely for tracking."}
-          </p>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h2 className="text-2xl font-black flex items-center gap-2">
+              {tab === "outpass" ? (
+                <><DoorOpen size={20} className="text-teal-600" /> Outpass</>
+              ) : tab === "visitors" ? (
+                <><UserRound size={20} className="text-teal-600" /> Visitors</>
+              ) : (
+                <><Coffee size={20} className="text-teal-600" /> Tea Break</>
+              )}
+            </h2>
+            <p className="text-muted-foreground text-sm mt-0.5">
+              {tab === "outpass"
+                ? "Gate exit logs and Outpass requests, collected via a permanent per-branch QR code -no attendance or payroll impact."
+                : tab === "visitors"
+                ? "Front-desk visitor logs, collected via a permanent per-branch QR code."
+                : "Employee tea-break Out/In timings, scanned at the gate -no approval, purely for tracking."}
+            </p>
+          </div>
+          <RefreshButton />
         </div>
 
         {tab === "outpass" ? (

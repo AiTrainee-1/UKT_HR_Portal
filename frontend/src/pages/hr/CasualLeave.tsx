@@ -2,6 +2,7 @@ import { useState } from "react";
 import { TONE, REQUEST_STATUS_TONE } from "@/lib/statusTones";
 import { StatusBadge } from "@/components/ui/status-badge";
 import HrLayout from "@/components/HrLayout";
+import { RefreshButton } from "@/components/PageRefreshBar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,19 +14,19 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { CircleLoader } from "@/components/ui/CircleLoader";
 import {
-  useListCasualLeaves, useCasualLeaveEligibility, useCreateCasualLeave,
-  useDecideCasualLeave, useDeleteCasualLeave,
+  useListCasualLeaves,
+  useCasualLeaveEligibility,
+  useCreateCasualLeave,
+  useDecideCasualLeave,
+  useDeleteCasualLeave,
   type CasualLeaveItem,
 } from "@/lib/api-client/custom-hooks";
-import {
-  CalendarHeart, CheckCircle2, XCircle, Hourglass, Users, Plus,
-  Trash2, ShieldCheck, Info,
-} from "lucide-react";
+import { CalendarHeart, CheckCircle2, XCircle, Hourglass, Users, Plus, Trash2, ShieldCheck, Info } from "lucide-react";
 
-const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 const STATUS_BADGE: Record<string, string> = {
-  pending:  TONE.warning,
+  pending: TONE.warning,
   approved: TONE.success,
   rejected: TONE.danger,
 };
@@ -40,7 +41,12 @@ export default function CasualLeave() {
   // "Apply on behalf" dialog -carries the eligibility reason so HR sees
   // immediately why an employee can't get another CL, instead of finding out
   // only after clicking Submit.
-  const [applyFor, setApplyFor] = useState<{ employeeId: number; name: string; eligible: boolean; reason?: string | null } | null>(null);
+  const [applyFor, setApplyFor] = useState<{
+    employeeId: number;
+    name: string;
+    eligible: boolean;
+    reason?: string | null;
+  } | null>(null);
   const [applyDate, setApplyDate] = useState(now.toISOString().slice(0, 10));
   const [applyReason, setApplyReason] = useState("");
 
@@ -51,20 +57,21 @@ export default function CasualLeave() {
   const deleteMutation = useDeleteCasualLeave();
 
   const all = leaves ?? [];
-  const pending  = all.filter(l => l.status === "pending");
-  const approved = all.filter(l => l.status === "approved");
-  const rejected = all.filter(l => l.status === "rejected");
-  const eligibleCount = (eligibility?.employees ?? []).filter(e => e.eligible).length;
-  const usedThisMonthCount = (eligibility?.employees ?? []).filter(e => e.usedThisMonth).length;
+  const pending = all.filter((l) => l.status === "pending");
+  const approved = all.filter((l) => l.status === "approved");
+  const rejected = all.filter((l) => l.status === "rejected");
+  const eligibleCount = (eligibility?.employees ?? []).filter((e) => e.eligible).length;
+  const usedThisMonthCount = (eligibility?.employees ?? []).filter((e) => e.usedThisMonth).length;
 
   const decide = async (l: CasualLeaveItem, status: "approved" | "rejected") => {
     try {
       await decideMutation.mutateAsync({ id: l.id, status });
       toast({
         title: `Casual leave ${status}`,
-        description: status === "approved"
-          ? `${l.employeeName}'s attendance for ${l.date} is now marked Present (paid full day).`
-          : `${l.employeeName}'s attendance for ${l.date} is marked as Leave.`,
+        description:
+          status === "approved"
+            ? `${l.employeeName}'s attendance for ${l.date} is now marked Present (paid full day).`
+            : `${l.employeeName}'s attendance for ${l.date} is marked as Leave.`,
       });
     } catch (err: any) {
       toast({ title: err?.message ?? "Failed to update", variant: "destructive" });
@@ -111,18 +118,28 @@ export default function CasualLeave() {
           </p>
         )}
       </div>
-      <StatusBadge tone={REQUEST_STATUS_TONE[l.status] ?? "neutral"} className="text-xs font-semibold shrink-0 capitalize">{l.status}</StatusBadge>
+      <StatusBadge
+        tone={REQUEST_STATUS_TONE[l.status] ?? "neutral"}
+        className="text-xs font-semibold shrink-0 capitalize"
+      >
+        {l.status}
+      </StatusBadge>
       {showActions && l.status === "pending" && (
         <div className="flex items-center gap-1.5 shrink-0">
           <Button
-            size="sm" className="h-8 gap-1 bg-green-600 hover:bg-green-700 text-xs"
-            onClick={() => decide(l, "approved")} disabled={decideMutation.isPending}
+            size="sm"
+            className="h-8 gap-1 bg-green-600 hover:bg-green-700 text-xs"
+            onClick={() => decide(l, "approved")}
+            disabled={decideMutation.isPending}
           >
             <CheckCircle2 size={12} /> Approve
           </Button>
           <Button
-            size="sm" variant="outline" className="h-8 gap-1 text-red-500 border-red-200 text-xs"
-            onClick={() => decide(l, "rejected")} disabled={decideMutation.isPending}
+            size="sm"
+            variant="outline"
+            className="h-8 gap-1 text-red-500 border-red-200 text-xs"
+            onClick={() => decide(l, "rejected")}
+            disabled={decideMutation.isPending}
           >
             <XCircle size={12} /> Reject
           </Button>
@@ -134,7 +151,9 @@ export default function CasualLeave() {
             try {
               await deleteMutation.mutateAsync(l.id);
               toast({ title: "Record deleted" });
-            } catch { toast({ title: "Delete failed", variant: "destructive" }); }
+            } catch {
+              toast({ title: "Delete failed", variant: "destructive" });
+            }
           }}
           className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 shrink-0"
           title="Delete record"
@@ -157,17 +176,24 @@ export default function CasualLeave() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <RefreshButton />
             <select
               value={month}
-              onChange={e => setMonth(Number(e.target.value))}
+              onChange={(e) => setMonth(Number(e.target.value))}
               className="h-9 rounded-md border px-2 text-sm bg-background"
             >
-              {MONTH_NAMES.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+              {MONTH_NAMES.map((m, i) => (
+                <option key={i} value={i + 1}>
+                  {m}
+                </option>
+              ))}
             </select>
             <Input
-              type="number" min={2020} max={2035}
+              type="number"
+              min={2020}
+              max={2035}
               value={year}
-              onChange={e => setYear(Number(e.target.value))}
+              onChange={(e) => setYear(Number(e.target.value))}
               className="w-24 h-9"
             />
           </div>
@@ -176,11 +202,35 @@ export default function CasualLeave() {
         {/* Stat cards */}
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
           {[
-            { label: "Pending Requests", value: pending.length, icon: Hourglass, cls: "text-amber-700", iconCls: "bg-amber-500" },
-            { label: "Approved", value: approved.length, icon: CheckCircle2, cls: "text-green-700", iconCls: "bg-green-600" },
+            {
+              label: "Pending Requests",
+              value: pending.length,
+              icon: Hourglass,
+              cls: "text-amber-700",
+              iconCls: "bg-amber-500",
+            },
+            {
+              label: "Approved",
+              value: approved.length,
+              icon: CheckCircle2,
+              cls: "text-green-700",
+              iconCls: "bg-green-600",
+            },
             { label: "Rejected", value: rejected.length, icon: XCircle, cls: "text-red-600", iconCls: "bg-red-500" },
-            { label: "Eligible Employees", value: eligLoading ? "…" : eligibleCount, icon: Users, cls: "text-blue-700", iconCls: "bg-blue-600" },
-            { label: "Used This Month", value: eligLoading ? "…" : usedThisMonthCount, icon: CalendarHeart, cls: "text-pink-700", iconCls: "bg-pink-500" },
+            {
+              label: "Eligible Employees",
+              value: eligLoading ? "…" : eligibleCount,
+              icon: Users,
+              cls: "text-blue-700",
+              iconCls: "bg-blue-600",
+            },
+            {
+              label: "Used This Month",
+              value: eligLoading ? "…" : usedThisMonthCount,
+              icon: CalendarHeart,
+              cls: "text-pink-700",
+              iconCls: "bg-pink-500",
+            },
           ].map(({ label, value, icon: Icon, cls, iconCls }) => (
             <Card key={label} className="border">
               <CardContent className="p-5">
@@ -220,7 +270,7 @@ export default function CasualLeave() {
             onChange={(v) => setTab(v)}
           />
 
-          {(["pending", "approved", "rejected"] as const).map(t => (
+          {(["pending", "approved", "rejected"] as const).map((t) => (
             <TabsContent key={t} value={t} className="mt-4 space-y-2">
               {isLoading ? (
                 <CircleLoader texts={["UK Textiles", "Casual Leave", "Loading"]} />
@@ -229,7 +279,7 @@ export default function CasualLeave() {
                   No {t} casual leave requests for {MONTH_NAMES[month - 1]} {year}.
                 </div>
               ) : (
-                (t === "pending" ? pending : t === "approved" ? approved : rejected).map(l => (
+                (t === "pending" ? pending : t === "approved" ? approved : rejected).map((l) => (
                   <CLRow key={l.id} l={l} showActions={t === "pending"} />
                 ))
               )}
@@ -252,21 +302,31 @@ export default function CasualLeave() {
               <CardContent className="p-0">
                 {eligLoading ? (
                   <div className="p-4 space-y-2">
-                    {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-10" />)}
+                    {Array.from({ length: 4 }).map((_, i) => (
+                      <Skeleton key={i} className="h-10" />
+                    ))}
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead className="bg-gray-50 border-t border-b">
                         <tr>
-                          {["Employee", "Department", "Joined", "Service", "This Month", "Status", ""].map(h => (
-                            <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
+                          {["Employee", "Department", "Joined", "Service", "This Month", "Status", ""].map((h) => (
+                            <th
+                              key={h}
+                              className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap"
+                            >
+                              {h}
+                            </th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
-                        {(eligibility?.employees ?? []).map(e => (
-                          <tr key={e.employeeId} className={`border-b hover:bg-gray-50 ${e.eligible ? "" : "opacity-60"}`}>
+                        {(eligibility?.employees ?? []).map((e) => (
+                          <tr
+                            key={e.employeeId}
+                            className={`border-b hover:bg-gray-50 ${e.eligible ? "" : "opacity-60"}`}
+                          >
                             <td className="px-4 py-2.5">
                               <p className="font-semibold text-gray-900">{e.employeeName}</p>
                               <p className="text-[11px] font-mono text-gray-400">{e.employeeCode}</p>
@@ -281,22 +341,34 @@ export default function CasualLeave() {
                                 <span className="text-gray-600">
                                   CL {e.usedStatus} · <span className="font-mono">{e.usedDate}</span>
                                 </span>
-                              ) : <span className="text-gray-300">—</span>}
+                              ) : (
+                                <span className="text-gray-300">—</span>
+                              )}
                             </td>
                             <td className="px-4 py-2.5">
                               {e.eligible ? (
-                                <StatusBadge tone="success" className="text-xs font-semibold">Eligible</StatusBadge>
+                                <StatusBadge tone="success" className="text-xs font-semibold">
+                                  Eligible
+                                </StatusBadge>
                               ) : (
-                                <span className="text-xs text-gray-400">{e.reason ?? (e.usedThisMonth ? "Already used" : "Not eligible")}</span>
+                                <span className="text-xs text-gray-400">
+                                  {e.reason ?? (e.usedThisMonth ? "Already used" : "Not eligible")}
+                                </span>
                               )}
                             </td>
                             <td className="px-4 py-2.5 text-right">
                               <Button
-                                size="sm" variant="outline" className="h-7 gap-1 text-xs"
-                                onClick={() => setApplyFor({
-                                  employeeId: e.employeeId, name: e.employeeName,
-                                  eligible: e.eligible, reason: e.reason,
-                                })}
+                                size="sm"
+                                variant="outline"
+                                className="h-7 gap-1 text-xs"
+                                onClick={() =>
+                                  setApplyFor({
+                                    employeeId: e.employeeId,
+                                    name: e.employeeName,
+                                    eligible: e.eligible,
+                                    reason: e.reason,
+                                  })
+                                }
                               >
                                 <Plus size={11} /> Apply CL
                               </Button>
@@ -314,7 +386,12 @@ export default function CasualLeave() {
       </div>
 
       {/* Apply-on-behalf dialog */}
-      <Dialog open={!!applyFor} onOpenChange={open => { if (!open) setApplyFor(null); }}>
+      <Dialog
+        open={!!applyFor}
+        onOpenChange={(open) => {
+          if (!open) setApplyFor(null);
+        }}
+      >
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>Apply Casual Leave -{applyFor?.name}</DialogTitle>
@@ -324,33 +401,44 @@ export default function CasualLeave() {
               <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
                 <XCircle size={14} className="shrink-0 mt-0.5" />
                 <span>
-                  <strong>Not eligible for Casual Leave.</strong> {applyFor.reason ?? "This employee does not currently qualify."}
+                  <strong>Not eligible for Casual Leave.</strong>{" "}
+                  {applyFor.reason ?? "This employee does not currently qualify."}
                 </span>
               </div>
             )}
             <div className="space-y-1.5">
               <Label className="text-xs">CL Date</Label>
-              <Input type="date" value={applyDate} onChange={e => setApplyDate(e.target.value)} disabled={!applyFor?.eligible} />
+              <Input
+                type="date"
+                value={applyDate}
+                onChange={(e) => setApplyDate(e.target.value)}
+                disabled={!applyFor?.eligible}
+              />
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs">Reason (optional)</Label>
               <Input
-                placeholder="e.g. Family function" value={applyReason}
-                onChange={e => setApplyReason(e.target.value)} disabled={!applyFor?.eligible}
+                placeholder="e.g. Family function"
+                value={applyReason}
+                onChange={(e) => setApplyReason(e.target.value)}
+                disabled={!applyFor?.eligible}
               />
             </div>
             <div className="flex gap-3">
-              <Button variant="outline" className="flex-1" onClick={() => setApplyFor(null)}>Cancel</Button>
+              <Button variant="outline" className="flex-1" onClick={() => setApplyFor(null)}>
+                Cancel
+              </Button>
               <Button
-                className="flex-1" onClick={submitOnBehalf}
+                className="flex-1"
+                onClick={submitOnBehalf}
                 disabled={createMutation.isPending || !applyFor?.eligible}
               >
                 {createMutation.isPending ? "Submitting…" : "Submit Request"}
               </Button>
             </div>
             <p className="text-[10px] text-muted-foreground -mt-1">
-              The request starts as Pending -approve it from the Pending tab (or the Department Head
-              can approve it on mobile).
+              The request starts as Pending -approve it from the Pending tab (or the Department Head can approve it on
+              mobile).
             </p>
           </div>
         </DialogContent>

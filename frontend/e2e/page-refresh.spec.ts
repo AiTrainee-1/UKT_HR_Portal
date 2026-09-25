@@ -47,8 +47,9 @@ test("Refresh also reloads a page that loads its data by hand (Staff Payroll)", 
 test("the button is on data pages and left off the pages that don't need it", async ({ page }) => {
   await loginAsHr(page);
 
-  for (const path of ["/hr/dashboard", "/hr/leave", "/hr/departments", "/hr/attendance/staff", "/hr/geo-attendance"]) {
+  for (const path of ["/hr/dashboard", "/hr/departments", "/hr/attendance/staff"]) {
     await page.goto(path);
+    await expect(page.getByTestId("page-refresh-bar"), path).toBeVisible();
     await expect(page.getByTestId("button-page-refresh"), path).toBeVisible();
   }
 
@@ -60,9 +61,45 @@ test("the button is on data pages and left off the pages that don't need it", as
   }
 
   // Pages with their own Refresh keep exactly one.
-  for (const path of ["/hr/requests", "/hr/whatsapp-control"]) {
+  for (const path of ["/hr/requests", "/hr/whatsapp-control", "/hr/attendance/search"]) {
     await page.goto(path);
-    await expect(page.getByRole("button", { name: /^\s*Refresh\s*$/ }), path).toHaveCount(1);
+    await expect(page.getByRole("button", { name: /^\s*Refresh( this page)?\s*$/ }), path).toHaveCount(1);
     await expect(page.getByTestId("page-refresh-bar"), path).toHaveCount(0);
+  }
+});
+
+test("the pages you asked for have Refresh in the title row, once", async ({ page }) => {
+  await loginAsHr(page);
+  const pages = [
+    "/hr/recruitment/dashboard",
+    "/hr/recruitment/new-joinees",
+    "/hr/recruitment/resignations",
+    "/hr/recruitment/required-roles",
+    "/hr/casual-leave",
+    "/hr/leave",
+    "/hr/shifts",
+    "/hr/outpass-visitors/outpass",
+    "/hr/outpass-visitors/visitors",
+    "/hr/geo-attendance",
+    "/hr/missing-punch",
+  ];
+  for (const path of pages) {
+    const calls = countRequests(page, "/api/");
+    await page.goto(path);
+    const button = page.getByRole("button", { name: /^\s*Refresh( this page)?\s*$/ });
+    await expect(button, path).toHaveCount(1);
+    await expect(page.getByTestId("page-refresh-bar"), path).toHaveCount(0);
+
+    // It sits on the same row as the page title, not above it.
+    const title = await page.locator("main h1, main h2").first().boundingBox();
+    const box = await button.boundingBox();
+    expect(title && box && Math.abs(box.y - title.y) < 45, `${path}: button beside the title`).toBe(true);
+
+    // ...and really reloads the page's data.
+    await page.waitForTimeout(1000);
+    const before = calls();
+    await button.click();
+    await expect.poll(calls, { message: path }).toBeGreaterThan(before);
+    page.removeAllListeners("request");
   }
 });

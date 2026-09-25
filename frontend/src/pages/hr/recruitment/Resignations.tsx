@@ -1,5 +1,6 @@
 import { useState } from "react";
 import HrLayout from "@/components/HrLayout";
+import { RefreshButton } from "@/components/PageRefreshBar";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -7,28 +8,43 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { PillTabs } from "@/components/ui/pill-tabs";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table";
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
-  useListResignations, useResignationAction, useResignationEmail, useWhatsAppResignation,
-  useDeleteResignation, downloadResignationPdf,
-  getListResignationsQueryKey, type ResignationRequest,
+  useListResignations,
+  useResignationAction,
+  useResignationEmail,
+  useWhatsAppResignation,
+  useDeleteResignation,
+  downloadResignationPdf,
+  getListResignationsQueryKey,
+  type ResignationRequest,
 } from "@/lib/api-client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { CircleLoader } from "@/components/ui/CircleLoader";
 import {
-  Clock, CheckCircle2, XCircle, Eye, FileDown, Mail,
-  CheckCircle, AlertTriangle, Trash2, MessageCircle,
+  Clock,
+  CheckCircle2,
+  XCircle,
+  Eye,
+  FileDown,
+  Mail,
+  CheckCircle,
+  AlertTriangle,
+  Trash2,
+  MessageCircle,
 } from "lucide-react";
 
 // ── Survey Questions ─────────────────────────────────────────────────────────
@@ -44,22 +60,33 @@ const SURVEY_QUESTIONS = [
 type StepState = "done" | "active" | "rejected" | "waiting";
 
 function Step({
-  label, state, sublabel, last,
+  label,
+  state,
+  sublabel,
+  last,
 }: {
-  label: string; state: StepState; sublabel?: string; last?: boolean;
+  label: string;
+  state: StepState;
+  sublabel?: string;
+  last?: boolean;
 }) {
   const colors: Record<StepState, { bg: string; text: string; border: string }> = {
-    done:     { bg: "#059669", text: "white", border: "#059669" },
-    active:   { bg: "#d97706", text: "white", border: "#d97706" },
+    done: { bg: "#059669", text: "white", border: "#059669" },
+    active: { bg: "#d97706", text: "white", border: "#d97706" },
     rejected: { bg: "#dc2626", text: "white", border: "#dc2626" },
-    waiting:  { bg: "#f0f4f8", text: "#94a3b8", border: "#cbd5e1" },
+    waiting: { bg: "#f0f4f8", text: "#94a3b8", border: "#cbd5e1" },
   };
   const c = colors[state];
   const icon =
-    state === "done"     ? <CheckCircle2 className="w-3 h-3" /> :
-    state === "active"   ? <Clock className="w-3 h-3" /> :
-    state === "rejected" ? <XCircle className="w-3 h-3" /> :
-    <span className="w-2 h-2 rounded-full bg-slate-300 inline-block" />;
+    state === "done" ? (
+      <CheckCircle2 className="w-3 h-3" />
+    ) : state === "active" ? (
+      <Clock className="w-3 h-3" />
+    ) : state === "rejected" ? (
+      <XCircle className="w-3 h-3" />
+    ) : (
+      <span className="w-2 h-2 rounded-full bg-slate-300 inline-block" />
+    );
 
   return (
     <div className="flex items-center gap-1.5">
@@ -70,7 +97,10 @@ function Step({
         >
           {icon}
         </div>
-        <span className="text-[9px] font-semibold text-center leading-tight" style={{ color: c.border, maxWidth: "56px" }}>
+        <span
+          className="text-[9px] font-semibold text-center leading-tight"
+          style={{ color: c.border, maxWidth: "56px" }}
+        >
           {label}
         </span>
         {sublabel && (
@@ -95,12 +125,14 @@ function ResignationProgress({ r }: { r: ResignationRequest }) {
   let step2State: StepState;
   let step2Sub: string | undefined;
   if (r.status === "pending") {
-    step2State = "active"; step2Sub = "Pending";
+    step2State = "active";
+    step2Sub = "Pending";
   } else if (r.status === "dept_approved" || r.status === "approved") {
     step2State = "done";
     step2Sub = r.deptHeadName ? `By ${r.deptHeadName.split(" ")[0]}` : undefined;
   } else if (r.status === "rejected" && r.rejectedBy === "dept_head") {
-    step2State = "rejected"; step2Sub = "Rejected";
+    step2State = "rejected";
+    step2Sub = "Rejected";
   } else {
     step2State = "done";
   }
@@ -108,16 +140,20 @@ function ResignationProgress({ r }: { r: ResignationRequest }) {
   let step3State: StepState;
   let step3Sub: string | undefined;
   if (r.status === "pending") {
-    step3State = "waiting"; step3Sub = "Not reached";
+    step3State = "waiting";
+    step3Sub = "Not reached";
   } else if (r.status === "dept_approved") {
-    step3State = "active"; step3Sub = "Pending";
+    step3State = "active";
+    step3Sub = "Pending";
   } else if (r.status === "approved") {
     step3State = "done";
     step3Sub = r.approvedBy ? `By ${r.approvedBy.split(" ")[0]}` : undefined;
   } else if (r.status === "rejected" && r.rejectedBy === "hr") {
-    step3State = "rejected"; step3Sub = "Rejected";
+    step3State = "rejected";
+    step3Sub = "Rejected";
   } else if (r.status === "rejected" && r.rejectedBy === "dept_head") {
-    step3State = "waiting"; step3Sub = "Not reached";
+    step3State = "waiting";
+    step3Sub = "Not reached";
   } else {
     step3State = "waiting";
   }
@@ -146,9 +182,20 @@ function statusBadge(status: string) {
 // ── Resignation Table ─────────────────────────────────────────────────────────
 
 function ResignationTable({
-  rows, isLoading, emptyLabel, showApproveReject,
-  onView, onApprove, onReject, onPdf, onEmail, onWhatsApp, onDelete,
-  pdfLoading, emailLoading, whatsappLoading,
+  rows,
+  isLoading,
+  emptyLabel,
+  showApproveReject,
+  onView,
+  onApprove,
+  onReject,
+  onPdf,
+  onEmail,
+  onWhatsApp,
+  onDelete,
+  pdfLoading,
+  emailLoading,
+  whatsappLoading,
 }: {
   rows: ResignationRequest[];
   isLoading: boolean;
@@ -172,8 +219,7 @@ function ResignationTable({
       </div>
     );
 
-  if (rows.length === 0)
-    return <div className="py-14 text-center text-[#006496]/40 text-sm">{emptyLabel}</div>;
+  if (rows.length === 0) return <div className="py-14 text-center text-[#006496]/40 text-sm">{emptyLabel}</div>;
 
   return (
     <Table>
@@ -197,7 +243,9 @@ function ResignationTable({
               </div>
             </TableCell>
             <TableCell className="text-sm text-[#1a3a4a]">{r.departmentName ?? "—"}</TableCell>
-            <TableCell><ResignationProgress r={r} /></TableCell>
+            <TableCell>
+              <ResignationProgress r={r} />
+            </TableCell>
             <TableCell className="text-sm text-[#1a3a4a]">{r.lastWorkingDate ?? "—"}</TableCell>
             <TableCell className="text-sm text-[#006496]/60">
               {r.createdAt ? new Date(r.createdAt).toLocaleDateString() : "—"}
@@ -205,36 +253,46 @@ function ResignationTable({
             <TableCell>
               <div className="flex items-center gap-1.5 flex-wrap">
                 <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => onView(r)}>
-                  <Eye className="w-3 h-3 mr-1" />View
+                  <Eye className="w-3 h-3 mr-1" />
+                  View
                 </Button>
 
                 {r.status === "approved" && (
                   <Button
-                    size="sm" variant="outline"
+                    size="sm"
+                    variant="outline"
                     className="h-7 px-2 text-xs border-blue-200 text-blue-700 hover:bg-blue-50"
-                    onClick={() => onPdf(r)} disabled={pdfLoading === r.id}
+                    onClick={() => onPdf(r)}
+                    disabled={pdfLoading === r.id}
                   >
-                    <FileDown className="w-3 h-3 mr-1" />{pdfLoading === r.id ? "…" : "PDF"}
+                    <FileDown className="w-3 h-3 mr-1" />
+                    {pdfLoading === r.id ? "…" : "PDF"}
                   </Button>
                 )}
 
                 {r.status === "approved" && (
                   <Button
-                    size="sm" variant="outline"
+                    size="sm"
+                    variant="outline"
                     className="h-7 px-2 text-xs border-emerald-200 text-emerald-700 hover:bg-emerald-50"
-                    onClick={() => onEmail(r)} disabled={emailLoading === r.id}
+                    onClick={() => onEmail(r)}
+                    disabled={emailLoading === r.id}
                   >
-                    <Mail className="w-3 h-3 mr-1" />{emailLoading === r.id ? "…" : "Email"}
+                    <Mail className="w-3 h-3 mr-1" />
+                    {emailLoading === r.id ? "…" : "Email"}
                   </Button>
                 )}
 
                 {r.status === "approved" && (
                   <Button
-                    size="sm" variant="outline"
+                    size="sm"
+                    variant="outline"
                     className="h-7 px-2 text-xs border-teal-200 text-teal-700 hover:bg-teal-50"
-                    onClick={() => onWhatsApp(r)} disabled={whatsappLoading === r.id}
+                    onClick={() => onWhatsApp(r)}
+                    disabled={whatsappLoading === r.id}
                   >
-                    <MessageCircle className="w-3 h-3 mr-1" />{whatsappLoading === r.id ? "…" : "WhatsApp"}
+                    <MessageCircle className="w-3 h-3 mr-1" />
+                    {whatsappLoading === r.id ? "…" : "WhatsApp"}
                   </Button>
                 )}
 
@@ -244,7 +302,8 @@ function ResignationTable({
                     className="h-7 px-2 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
                     onClick={() => onApprove(r)}
                   >
-                    <CheckCircle className="w-3 h-3 mr-1" />Approve
+                    <CheckCircle className="w-3 h-3 mr-1" />
+                    Approve
                   </Button>
                 )}
                 {showApproveReject && (r.status === "pending" || r.status === "dept_approved") && (
@@ -254,7 +313,8 @@ function ResignationTable({
                 )}
 
                 <Button
-                  size="sm" variant="ghost"
+                  size="sm"
+                  variant="ghost"
                   className="h-7 px-2 text-xs text-red-500 hover:bg-red-50 hover:text-red-600"
                   onClick={() => onDelete(r)}
                 >
@@ -299,13 +359,13 @@ export default function Resignations() {
     queryClient.invalidateQueries({ queryKey: ["/api/recruitment/dashboard"] });
   };
 
-  const all      = allData ?? [];
-  const active   = all.filter((r) => r.status === "pending" || r.status === "dept_approved");
+  const all = allData ?? [];
+  const active = all.filter((r) => r.status === "pending" || r.status === "dept_approved");
   const approved = all.filter((r) => r.status === "approved");
   const rejected = all.filter((r) => r.status === "rejected");
 
-  const pendingCount  = all.filter((r) => r.status === "pending").length;
-  const deptApproved  = all.filter((r) => r.status === "dept_approved").length;
+  const pendingCount = all.filter((r) => r.status === "pending").length;
+  const deptApproved = all.filter((r) => r.status === "dept_approved").length;
 
   const handleAction = () => {
     if (!selected || !actionType) return;
@@ -338,7 +398,10 @@ export default function Resignations() {
     if (!deleteTarget) return;
     deleteMutation.mutate(deleteTarget.id, {
       onSuccess: () => {
-        toast({ title: "Deleted", description: `${deleteTarget.employeeName}'s resignation request has been removed.` });
+        toast({
+          title: "Deleted",
+          description: `${deleteTarget.employeeName}'s resignation request has been removed.`,
+        });
         setDeleteTarget(null);
         refresh();
       },
@@ -397,8 +460,16 @@ export default function Resignations() {
   const tableProps = {
     isLoading,
     onView: setSelected,
-    onApprove: (r: ResignationRequest) => { setSelected(r); setActionType("approve"); setConfirmOpen(true); },
-    onReject:  (r: ResignationRequest) => { setSelected(r); setActionType("reject");  setConfirmOpen(true); },
+    onApprove: (r: ResignationRequest) => {
+      setSelected(r);
+      setActionType("approve");
+      setConfirmOpen(true);
+    },
+    onReject: (r: ResignationRequest) => {
+      setSelected(r);
+      setActionType("reject");
+      setConfirmOpen(true);
+    },
     onPdf: handlePdf,
     onEmail: handleEmail,
     onWhatsApp: handleWhatsApp,
@@ -412,20 +483,29 @@ export default function Resignations() {
     <HrLayout>
       <div className="max-w-6xl mx-auto space-y-6">
         {/* Header */}
-        <div>
-          <h1 className="text-2xl font-black text-[#1a3a4a] tracking-tight">Resignations</h1>
-          <p className="text-sm text-[#006496]/60 mt-0.5">
-            Three-stage workflow: Employee submits → Department Head reviews → HR gives final approval.
-          </p>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-black text-[#1a3a4a] tracking-tight">Resignations</h1>
+            <p className="text-sm text-[#006496]/60 mt-0.5">
+              Three-stage workflow: Employee submits → Department Head reviews → HR gives final approval.
+            </p>
+          </div>
+          <RefreshButton />
         </div>
 
         {/* Stats */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
-            { label: "Dept Head Review", value: pendingCount,      icon: Clock,         color: "#d97706", urgent: pendingCount > 0 },
-            { label: "Awaiting HR",      value: deptApproved,      icon: AlertTriangle, color: "#0891b2", urgent: deptApproved > 0 },
-            { label: "Approved",         value: approved.length,   icon: CheckCircle2,  color: "#059669" },
-            { label: "Rejected",         value: rejected.length,   icon: XCircle,       color: "#dc2626" },
+            { label: "Dept Head Review", value: pendingCount, icon: Clock, color: "#d97706", urgent: pendingCount > 0 },
+            {
+              label: "Awaiting HR",
+              value: deptApproved,
+              icon: AlertTriangle,
+              color: "#0891b2",
+              urgent: deptApproved > 0,
+            },
+            { label: "Approved", value: approved.length, icon: CheckCircle2, color: "#059669" },
+            { label: "Rejected", value: rejected.length, icon: XCircle, color: "#dc2626" },
           ].map(({ label, value, icon: Icon, color, urgent }) => (
             <Card
               key={label}
@@ -441,7 +521,9 @@ export default function Resignations() {
                   <Icon className="w-4 h-4" style={{ color }} strokeWidth={1.8} />
                 </div>
                 <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-widest text-[#006496]/50 leading-none">{label}</p>
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-[#006496]/50 leading-none">
+                    {label}
+                  </p>
                   <p className="text-xl font-black text-[#1a3a4a]">{value}</p>
                 </div>
               </CardContent>
@@ -450,17 +532,25 @@ export default function Resignations() {
         </div>
 
         {/* Workflow reminder */}
-        <div className="rounded-2xl px-4 py-3 flex items-start gap-4"
-          style={{ background: "rgba(0,100,150,0.04)", border: "1px solid rgba(0,100,150,0.1)" }}>
+        <div
+          className="rounded-2xl px-4 py-3 flex items-start gap-4"
+          style={{ background: "rgba(0,100,150,0.04)", border: "1px solid rgba(0,100,150,0.1)" }}
+        >
           <div className="flex items-center gap-1.5 pt-0.5 shrink-0">
             <Step label="Employee" state="done" />
             <Step label="Dept Head" state="active" />
             <Step label="HR Final" state="waiting" last />
           </div>
           <div className="text-xs text-[#006496]/70 leading-relaxed">
-            <p><strong>Pending</strong> -Waiting for Department Head to review.</p>
-            <p><strong>Dept Approved</strong> -Dept Head approved, HR can now give final decision.</p>
-            <p><strong>HR can reject at any stage.</strong> HR can only approve after Dept Head approves.</p>
+            <p>
+              <strong>Pending</strong> -Waiting for Department Head to review.
+            </p>
+            <p>
+              <strong>Dept Approved</strong> -Dept Head approved, HR can now give final decision.
+            </p>
+            <p>
+              <strong>HR can reject at any stage.</strong> HR can only approve after Dept Head approves.
+            </p>
           </div>
         </div>
 
@@ -488,15 +578,30 @@ export default function Resignations() {
             </div>
 
             <TabsContent value="active" className="mt-0">
-              <ResignationTable {...tableProps} rows={active} emptyLabel="No active resignation requests." showApproveReject />
+              <ResignationTable
+                {...tableProps}
+                rows={active}
+                emptyLabel="No active resignation requests."
+                showApproveReject
+              />
             </TabsContent>
 
             <TabsContent value="approved" className="mt-0">
-              <ResignationTable {...tableProps} rows={approved} emptyLabel="No approved resignations." showApproveReject={false} />
+              <ResignationTable
+                {...tableProps}
+                rows={approved}
+                emptyLabel="No approved resignations."
+                showApproveReject={false}
+              />
             </TabsContent>
 
             <TabsContent value="rejected" className="mt-0">
-              <ResignationTable {...tableProps} rows={rejected} emptyLabel="No rejected resignations." showApproveReject={false} />
+              <ResignationTable
+                {...tableProps}
+                rows={rejected}
+                emptyLabel="No rejected resignations."
+                showApproveReject={false}
+              />
             </TabsContent>
           </Tabs>
         </Card>
@@ -511,22 +616,30 @@ export default function Resignations() {
           {selected && (
             <div className="space-y-4">
               <div className="bg-[#f0f4f8] rounded-xl p-3">
-                <p className="text-[10px] font-bold text-[#006496]/50 uppercase tracking-wider mb-2">Approval Progress</p>
+                <p className="text-[10px] font-bold text-[#006496]/50 uppercase tracking-wider mb-2">
+                  Approval Progress
+                </p>
                 <ResignationProgress r={selected} />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <p className="text-[10px] text-[#006496]/50 uppercase tracking-wider font-semibold mb-0.5">Employee</p>
+                  <p className="text-[10px] text-[#006496]/50 uppercase tracking-wider font-semibold mb-0.5">
+                    Employee
+                  </p>
                   <p className="text-sm font-bold text-[#1a3a4a]">{selected.employeeName}</p>
                   <p className="text-[11px] text-[#006496]/50">{selected.employeeCode}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] text-[#006496]/50 uppercase tracking-wider font-semibold mb-0.5">Department</p>
+                  <p className="text-[10px] text-[#006496]/50 uppercase tracking-wider font-semibold mb-0.5">
+                    Department
+                  </p>
                   <p className="text-sm text-[#1a3a4a]">{selected.departmentName ?? "—"}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] text-[#006496]/50 uppercase tracking-wider font-semibold mb-0.5">Last Working Day</p>
+                  <p className="text-[10px] text-[#006496]/50 uppercase tracking-wider font-semibold mb-0.5">
+                    Last Working Day
+                  </p>
                   <p className="text-sm text-[#1a3a4a]">{selected.lastWorkingDate ?? "Not specified"}</p>
                 </div>
                 <div>
@@ -544,7 +657,9 @@ export default function Resignations() {
 
               {(selected.surveyQ1Answer || selected.surveyQ2Answer || selected.surveyQ3Answer) && (
                 <div>
-                  <p className="text-[10px] text-[#006496]/50 uppercase tracking-wider font-semibold mb-2">Exit Survey</p>
+                  <p className="text-[10px] text-[#006496]/50 uppercase tracking-wider font-semibold mb-2">
+                    Exit Survey
+                  </p>
                   <div className="space-y-2">
                     {SURVEY_QUESTIONS.map((q, i) => {
                       const ans = [selected.surveyQ1Answer, selected.surveyQ2Answer, selected.surveyQ3Answer][i];
@@ -561,22 +676,30 @@ export default function Resignations() {
               )}
 
               {selected.deptHeadStatus && (
-                <div className={`rounded-xl p-3 ${selected.deptHeadStatus === "approved" ? "bg-blue-50 border border-blue-100" : "bg-red-50 border border-red-100"}`}>
-                  <p className="text-[10px] font-bold uppercase tracking-wider mb-1"
-                    style={{ color: selected.deptHeadStatus === "approved" ? "#1d4ed8" : "#dc2626" }}>
+                <div
+                  className={`rounded-xl p-3 ${selected.deptHeadStatus === "approved" ? "bg-blue-50 border border-blue-100" : "bg-red-50 border border-red-100"}`}
+                >
+                  <p
+                    className="text-[10px] font-bold uppercase tracking-wider mb-1"
+                    style={{ color: selected.deptHeadStatus === "approved" ? "#1d4ed8" : "#dc2626" }}
+                  >
                     Department Head -{selected.deptHeadStatus === "approved" ? "Approved" : "Rejected"}
                   </p>
                   {selected.deptHeadName && <p className="text-xs text-[#1a3a4a] mb-1">By: {selected.deptHeadName}</p>}
                   {selected.deptHeadComment && <p className="text-sm text-[#1a3a4a]">{selected.deptHeadComment}</p>}
                   {selected.deptHeadApprovedAt && (
-                    <p className="text-[10px] text-[#006496]/50 mt-1">{new Date(selected.deptHeadApprovedAt).toLocaleString()}</p>
+                    <p className="text-[10px] text-[#006496]/50 mt-1">
+                      {new Date(selected.deptHeadApprovedAt).toLocaleString()}
+                    </p>
                   )}
                 </div>
               )}
 
               {selected.hrComment && (
                 <div>
-                  <p className="text-[10px] text-[#006496]/50 uppercase tracking-wider font-semibold mb-1">HR Comment</p>
+                  <p className="text-[10px] text-[#006496]/50 uppercase tracking-wider font-semibold mb-1">
+                    HR Comment
+                  </p>
                   <p className="text-sm text-[#1a3a4a] bg-[#f0f4f8] rounded-xl p-3">{selected.hrComment}</p>
                 </div>
               )}
@@ -593,14 +716,21 @@ export default function Resignations() {
                   {selected.status === "dept_approved" && (
                     <Button
                       className="flex-1 bg-emerald-600 hover:bg-emerald-700"
-                      onClick={() => { setActionType("approve"); setConfirmOpen(true); }}
+                      onClick={() => {
+                        setActionType("approve");
+                        setConfirmOpen(true);
+                      }}
                     >
                       Final Approve
                     </Button>
                   )}
                   <Button
-                    variant="destructive" className="flex-1"
-                    onClick={() => { setActionType("reject"); setConfirmOpen(true); }}
+                    variant="destructive"
+                    className="flex-1"
+                    onClick={() => {
+                      setActionType("reject");
+                      setConfirmOpen(true);
+                    }}
                   >
                     Reject
                   </Button>
@@ -610,22 +740,28 @@ export default function Resignations() {
               {selected.status === "approved" && (
                 <div className="flex gap-2 pt-1">
                   <Button
-                    variant="outline" className="flex-1 border-blue-200 text-blue-700 hover:bg-blue-50"
-                    onClick={() => handlePdf(selected)} disabled={pdfLoading === selected.id}
+                    variant="outline"
+                    className="flex-1 border-blue-200 text-blue-700 hover:bg-blue-50"
+                    onClick={() => handlePdf(selected)}
+                    disabled={pdfLoading === selected.id}
                   >
                     <FileDown className="w-4 h-4 mr-1.5" />
                     {pdfLoading === selected.id ? "Generating…" : "Download PDF"}
                   </Button>
                   <Button
-                    variant="outline" className="flex-1 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
-                    onClick={() => handleEmail(selected)} disabled={emailLoading === selected.id}
+                    variant="outline"
+                    className="flex-1 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                    onClick={() => handleEmail(selected)}
+                    disabled={emailLoading === selected.id}
                   >
                     <Mail className="w-4 h-4 mr-1.5" />
                     {emailLoading === selected.id ? "Sending…" : "Send Email"}
                   </Button>
                   <Button
-                    variant="outline" className="flex-1 border-teal-200 text-teal-700 hover:bg-teal-50"
-                    onClick={() => handleWhatsApp(selected)} disabled={whatsappLoading === selected.id}
+                    variant="outline"
+                    className="flex-1 border-teal-200 text-teal-700 hover:bg-teal-50"
+                    onClick={() => handleWhatsApp(selected)}
+                    disabled={whatsappLoading === selected.id}
                   >
                     <MessageCircle className="w-4 h-4 mr-1.5" />
                     {whatsappLoading === selected.id ? "Sending…" : "Send via WhatsApp"}
@@ -638,7 +774,15 @@ export default function Resignations() {
       </Dialog>
 
       {/* ── Confirm HR Action ── */}
-      <AlertDialog open={confirmOpen} onOpenChange={(o) => { if (!o) { setConfirmOpen(false); setHrComment(""); } }}>
+      <AlertDialog
+        open={confirmOpen}
+        onOpenChange={(o) => {
+          if (!o) {
+            setConfirmOpen(false);
+            setHrComment("");
+          }
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
@@ -646,11 +790,15 @@ export default function Resignations() {
             </AlertDialogTitle>
             <AlertDialogDescription>
               {actionType === "approve" ? (
-                <>This will give <strong>HR final approval</strong> for <strong>{selected?.employeeName}</strong>'s resignation.
-                Their account will be set to <strong>Inactive</strong> immediately.</>
+                <>
+                  This will give <strong>HR final approval</strong> for <strong>{selected?.employeeName}</strong>'s
+                  resignation. Their account will be set to <strong>Inactive</strong> immediately.
+                </>
               ) : (
-                <>This will reject <strong>{selected?.employeeName}</strong>'s resignation
-                {selected?.status === "dept_approved" ? " (overriding the Department Head's approval)" : ""}.</>
+                <>
+                  This will reject <strong>{selected?.employeeName}</strong>'s resignation
+                  {selected?.status === "dept_approved" ? " (overriding the Department Head's approval)" : ""}.
+                </>
               )}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -658,15 +806,26 @@ export default function Resignations() {
             <p className="text-xs font-semibold text-[#006496]/60 mb-1">HR Comment (optional)</p>
             <Textarea
               placeholder="Add a comment for the employee..."
-              value={hrComment} onChange={(e) => setHrComment(e.target.value)}
-              className="text-sm" rows={3}
+              value={hrComment}
+              onChange={(e) => setHrComment(e.target.value)}
+              className="text-sm"
+              rows={3}
             />
           </div>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => { setConfirmOpen(false); setHrComment(""); }}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel
+              onClick={() => {
+                setConfirmOpen(false);
+                setHrComment("");
+              }}
+            >
+              Cancel
+            </AlertDialogCancel>
             <AlertDialogAction
               onClick={handleAction}
-              className={actionType === "approve" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-red-600 hover:bg-red-700"}
+              className={
+                actionType === "approve" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-red-600 hover:bg-red-700"
+              }
               disabled={actionMutation.isPending}
             >
               {actionMutation.isPending ? "Processing…" : actionType === "approve" ? "Yes, Approve" : "Yes, Reject"}
@@ -676,13 +835,18 @@ export default function Resignations() {
       </AlertDialog>
 
       {/* ── Confirm Delete ── */}
-      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}>
+      <AlertDialog
+        open={!!deleteTarget}
+        onOpenChange={(o) => {
+          if (!o) setDeleteTarget(null);
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Resignation Record?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete <strong>{deleteTarget?.employeeName}</strong>'s resignation request.
-              This action cannot be undone.
+              This will permanently delete <strong>{deleteTarget?.employeeName}</strong>'s resignation request. This
+              action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

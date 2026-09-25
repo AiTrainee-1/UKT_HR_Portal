@@ -15,12 +15,11 @@ function useLastUpdated(): number {
   );
 }
 
-/**
- * The Refresh button every HR page gets (HrLayout shows it, except on the pages listed in
- * lib/page-refresh.ts). It reloads all the data on the page in place -filters, tabs and open
- * dialogs stay as they are- and says when the data was last loaded.
- */
-export default function PageRefreshBar() {
+const clock = (ms: number) =>
+  new Date(ms).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", second: "2-digit" });
+
+/** Reloads everything on the page in place; `busy` is true while it does. */
+function useRefreshAction() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);
@@ -48,25 +47,46 @@ export default function PageRefreshBar() {
     }
   };
 
+  return { refresh, busy, lastUpdated };
+}
+
+/**
+ * The Refresh button itself. Put it in a page's title row (right side, beside the page's other
+ * actions) and add that page to the skip list in lib/page-refresh.ts so the layout doesn't show a
+ * second one. Filters, tabs and open dialogs stay as they are; hovering says when the data loaded.
+ */
+export function RefreshButton({ className = "" }: { className?: string }) {
+  const { refresh, busy, lastUpdated } = useRefreshAction();
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      className={`gap-2 ${className}`}
+      onClick={refresh}
+      disabled={busy}
+      aria-label="Refresh this page"
+      title={lastUpdated ? `Data last loaded at ${clock(lastUpdated)}` : "Reload the data on this page"}
+      data-testid="button-page-refresh"
+    >
+      <RefreshCw size={14} className={busy ? "animate-spin" : ""} /> Refresh
+    </Button>
+  );
+}
+
+/**
+ * The strip HrLayout shows at the top of every HR page that doesn't put its own RefreshButton in its
+ * title row (see lib/page-refresh.ts): "Updated 3:47:23 pm" and the button.
+ */
+export default function PageRefreshBar() {
+  const { lastUpdated } = useRefreshAction();
   return (
     <div className="mb-3 flex items-center justify-end gap-3 print:hidden" data-testid="page-refresh-bar">
       {lastUpdated > 0 && (
         <span className="text-[11px] tabular-nums text-gray-400" data-testid="page-last-updated">
-          Updated{" "}
-          {new Date(lastUpdated).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", second: "2-digit" })}
+          Updated {clock(lastUpdated)}
         </span>
       )}
-      <Button
-        variant="outline"
-        size="sm"
-        className="gap-2"
-        onClick={refresh}
-        disabled={busy}
-        aria-label="Refresh this page"
-        data-testid="button-page-refresh"
-      >
-        <RefreshCw size={14} className={busy ? "animate-spin" : ""} /> Refresh
-      </Button>
+      <RefreshButton />
     </div>
   );
 }

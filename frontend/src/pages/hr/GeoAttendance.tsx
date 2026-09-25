@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle } from "react-leaflet";
 import L from "leaflet";
 import HrLayout from "@/components/HrLayout";
+import { RefreshButton } from "@/components/PageRefreshBar";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1218,11 +1219,14 @@ export default function GeoAttendance() {
   return (
     <HrLayout>
       <div className="space-y-5">
-        <div>
-          <h2 className="text-2xl font-black text-gray-900">Geo Attendance</h2>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Office Geo Punch, On-Duty approvals, punch verification, live tracking, and travel routes for employees working on and off premises.
-          </p>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h2 className="text-2xl font-black text-gray-900">Geo Attendance</h2>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              Office Geo Punch, On-Duty approvals, punch verification, live tracking, and travel routes for employees working on and off premises.
+            </p>
+          </div>
+          <RefreshButton />
         </div>
 
         <PillTabs

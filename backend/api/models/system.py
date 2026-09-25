@@ -156,3 +156,39 @@ class BackupDriveConfig(models.Model):
     def get(cls) -> "BackupDriveConfig":
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+
+class MobileAppVersion(models.Model):
+    """One released build of the employee mobile app, published by HR.
+
+    HR exports the APK, uploads it somewhere it can be downloaded from (a Google
+    Drive share link is the usual choice) and records the version and link here.
+    The app asks GET /api/mobile-app/latest-version on start-up and whenever it
+    returns to the foreground, and shows a "New Version Available" prompt when
+    the newest active version here is higher than the build it is running.
+
+    The APK itself is deliberately NOT stored in this database: builds are tens
+    of megabytes, the API host can have a disk that is wiped on every deploy,
+    and a plain link works with whatever HR already uses to share files.
+
+    `version` is a dotted number ("3.0.0"), compared numerically -see
+    api.mobile_app_version_views.parse_version. `is_mandatory` makes the prompt
+    impossible to dismiss; `is_active` is HR's way to withdraw a build without
+    deleting its record.
+    """
+
+    platform = models.TextField(default="android", db_column="platform")
+    version = models.TextField(db_column="version")
+    download_url = models.TextField(db_column="download_url")
+    release_notes = models.TextField(blank=True, default="", db_column="release_notes")
+    is_mandatory = models.BooleanField(default=True, db_column="is_mandatory")
+    is_active = models.BooleanField(default=True, db_column="is_active")
+    created_by = models.TextField(null=True, blank=True, db_column="created_by")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "mobile_app_versions"
+        constraints = [
+            models.UniqueConstraint(fields=["platform", "version"], name="uniq_mobile_app_version_per_platform"),
+        ]

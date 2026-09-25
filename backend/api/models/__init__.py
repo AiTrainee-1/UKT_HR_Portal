@@ -98,6 +98,7 @@ from .system import (
     CompanyDocumentSettings,
     BackupSchedule,
     BackupDriveConfig,
+    MobileAppVersion,
 )
 from .chat import (
     ChatChannel,

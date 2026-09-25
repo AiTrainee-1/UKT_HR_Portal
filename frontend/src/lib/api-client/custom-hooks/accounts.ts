@@ -353,3 +353,67 @@ export const useResetMobileAppPassword = () => {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/mobile-app-logins"] }),
   });
 };
+
+// ── Mobile App Login → New Version ────────────────────────────────────────────
+
+export type MobileAppVersionEntry = {
+  id: number;
+  platform: "android";
+  /** Dotted number, e.g. "3.0.0". */
+  version: string;
+  downloadUrl: string;
+  releaseNotes: string;
+  /** The employee can't dismiss the "New Version Available" prompt until they update. */
+  isMandatory: boolean;
+  /** Off = withdrawn: the app is no longer told about it. */
+  isActive: boolean;
+  /** The build the app is currently offering (highest active version). */
+  isLatest: boolean;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MobileAppVersionInput = {
+  version: string;
+  downloadUrl: string;
+  releaseNotes?: string;
+  isMandatory?: boolean;
+};
+
+export const MOBILE_APP_VERSIONS_KEY = ["/api/mobile-app/versions"] as const;
+
+export const useMobileAppVersions = () =>
+  useQuery<MobileAppVersionEntry[]>({
+    queryKey: MOBILE_APP_VERSIONS_KEY,
+    queryFn: () => customFetch<MobileAppVersionEntry[]>("/api/mobile-app/versions"),
+  });
+
+export const usePublishMobileAppVersion = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: MobileAppVersionInput) =>
+      customFetch<MobileAppVersionEntry>("/api/mobile-app/versions", { method: "POST", body: JSON.stringify(input) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: MOBILE_APP_VERSIONS_KEY }),
+  });
+};
+
+export const useUpdateMobileAppVersion = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...changes }: { id: number } & Partial<MobileAppVersionInput & { isActive: boolean }>) =>
+      customFetch<MobileAppVersionEntry>(`/api/mobile-app/versions/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(changes),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: MOBILE_APP_VERSIONS_KEY }),
+  });
+};
+
+export const useDeleteMobileAppVersion = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => customFetch<void>(`/api/mobile-app/versions/${id}`, { method: "DELETE" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: MOBILE_APP_VERSIONS_KEY }),
+  });
+};

@@ -225,6 +225,9 @@ URL_MODULE_MAP: dict[str, str] = {
     "login-sessions": "login_devices",
 
     "mobile-app-logins": "mobile_app_login",
+    # New Version tab of the same page. "mobile-app/latest-version" is deliberately
+    # absent: the employee app reads it with no login at all.
+    "mobile-app/versions": "mobile_app_login",
 
     "whatsapp-control": "whatsapp_control",
 

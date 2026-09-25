@@ -11,12 +11,9 @@ describe("pageHasRefresh", () => {
       "/hr/employees/42",
       "/hr/attendance",
       "/hr/attendance/staff",
-      "/hr/leave",
-      "/hr/casual-leave",
-      "/hr/geo-attendance",
       "/hr/payroll",
       "/hr/user-management/7",
-      "/hr/recruitment/resignations",
+      "/hr/recruitment/resume-screening",
       "/hr/notifications",
     ]) {
       expect(pageHasRefresh(path), path).toBe(true);
@@ -37,13 +34,27 @@ describe("pageHasRefresh", () => {
     }
   });
 
-  it("skips pages that already have their own Refresh button", () => {
+  it("skips pages that put their own Refresh button in the title row", () => {
     for (const path of [
       "/hr/requests",
       "/hr/activity-logs",
       "/hr/login-devices",
       "/hr/mobile-app-login",
       "/hr/whatsapp-control",
+      "/hr/recruitment/dashboard",
+      "/hr/recruitment/new-joinees",
+      "/hr/recruitment/resignations",
+      "/hr/recruitment/required-roles",
+      "/hr/casual-leave",
+      "/hr/leave",
+      "/hr/shifts",
+      "/hr/outpass-visitors",
+      "/hr/outpass-visitors/outpass",
+      "/hr/outpass-visitors/visitors",
+      "/hr/outpass-visitors/tea-break",
+      "/hr/geo-attendance",
+      "/hr/missing-punch",
+      "/hr/attendance/search",
     ]) {
       expect(pageHasRefresh(path), path).toBe(false);
     }

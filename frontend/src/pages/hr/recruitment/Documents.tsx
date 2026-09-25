@@ -7,24 +7,57 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Button } from "@/components/ui/button";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import {
-  Pagination, PaginationContent, PaginationItem, PaginationLink,
-  PaginationNext, PaginationPrevious,
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
 } from "@/components/ui/pagination";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { useListEmployees } from "@/lib/api-client";
 import { CircleLoader } from "@/components/ui/CircleLoader";
 import {
-  useEmployeeDocuments, useUploadEmployeeDocument, useDeleteEmployeeDocument,
-  useListResignations, useDocumentCompletionStats, previewDocumentPdf, downloadDocumentPdf,
-  useWhatsAppExperienceLetter, useWhatsAppEmployeeDocument,
+  useEmployeeDocuments,
+  useUploadEmployeeDocument,
+  useDeleteEmployeeDocument,
+  useListResignations,
+  useDocumentCompletionStats,
+  previewDocumentPdf,
+  downloadDocumentPdf,
+  useWhatsAppExperienceLetter,
+  useWhatsAppEmployeeDocument,
   EMPLOYEE_DOCUMENT_CATEGORIES,
-  type EmployeeDocumentCategory, type EmployeeDocumentItem,
+  type EmployeeDocumentCategory,
+  type EmployeeDocumentItem,
 } from "@/lib/api-client/custom-hooks";
 import {
-  FolderOpen, Search, Users, ChevronLeft, ChevronRight, Upload, Eye, Download, Trash2, Loader2,
-  CreditCard, Fingerprint, GraduationCap, Vote, Wallet, FileSignature, FileClock,
-  FileMinus, FileBadge, Factory, CheckCircle2, AlertTriangle, X, MessageCircle, type LucideIcon,
+  FolderOpen,
+  Search,
+  Users,
+  ChevronLeft,
+  ChevronRight,
+  Upload,
+  Eye,
+  Download,
+  Trash2,
+  Loader2,
+  CreditCard,
+  Fingerprint,
+  GraduationCap,
+  Vote,
+  Wallet,
+  FileSignature,
+  FileClock,
+  FileMinus,
+  FileBadge,
+  Factory,
+  CheckCircle2,
+  AlertTriangle,
+  X,
+  MessageCircle,
+  type LucideIcon,
 } from "lucide-react";
 
 const CATEGORY_ICONS: Record<EmployeeDocumentCategory, LucideIcon> = {
@@ -45,13 +78,15 @@ const CATEGORY_ICONS: Record<EmployeeDocumentCategory, LucideIcon> = {
 // manual copies of them here. Extra Documents keeps only the categories that
 // have no generator: ID proofs and scanned/signed paperwork.
 const EXTRA_DOCUMENT_CATEGORIES = EMPLOYEE_DOCUMENT_CATEGORIES.filter(
-  c => c.value !== "offer_letter" && c.value !== "experience_letter" && c.value !== "resignation_letter",
+  (c) => c.value !== "offer_letter" && c.value !== "experience_letter" && c.value !== "resignation_letter",
 );
 
 const PAGE_SIZE = 8;
 
 function ListPagination({
-  page, totalCount, onChange,
+  page,
+  totalCount,
+  onChange,
 }: {
   page: number;
   totalCount: number;
@@ -69,12 +104,22 @@ function ListPagination({
         <PaginationPrevious
           href="#"
           className={page === 1 ? "pointer-events-none opacity-50" : undefined}
-          onClick={(e) => { e.preventDefault(); if (page > 1) onChange(page - 1); }}
+          onClick={(e) => {
+            e.preventDefault();
+            if (page > 1) onChange(page - 1);
+          }}
         />
         <PaginationContent>
-          {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
+          {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
             <PaginationItem key={p}>
-              <PaginationLink href="#" isActive={p === page} onClick={(e) => { e.preventDefault(); onChange(p); }}>
+              <PaginationLink
+                href="#"
+                isActive={p === page}
+                onClick={(e) => {
+                  e.preventDefault();
+                  onChange(p);
+                }}
+              >
                 {p}
               </PaginationLink>
             </PaginationItem>
@@ -83,7 +128,10 @@ function ListPagination({
         <PaginationNext
           href="#"
           className={page === totalPages ? "pointer-events-none opacity-50" : undefined}
-          onClick={(e) => { e.preventDefault(); if (page < totalPages) onChange(page + 1); }}
+          onClick={(e) => {
+            e.preventDefault();
+            if (page < totalPages) onChange(page + 1);
+          }}
         />
       </Pagination>
     </div>
@@ -106,19 +154,30 @@ export default function Documents() {
   const { data: employees, isLoading: employeesLoading } = useListEmployees(
     search.trim() ? { search: search.trim() } : undefined,
   );
-  const matchingEmployees = (employees ?? []).filter(e => {
+  const matchingEmployees = (employees ?? []).filter((e) => {
     const isProduction = e.employmentType === "production";
     return tab === "production" ? isProduction : !isProduction;
   });
   const pagedMatchingEmployees = matchingEmployees.slice((searchPage - 1) * PAGE_SIZE, searchPage * PAGE_SIZE);
-  const selectedEmployee = employees?.find(e => e.id === selectedEmployeeId) ?? null;
+  const selectedEmployee = employees?.find((e) => e.id === selectedEmployeeId) ?? null;
 
   const { data: stats } = useDocumentCompletionStats(tab);
-  const pagedPendingEmployees = (stats?.pendingEmployees ?? []).slice((pendingPage - 1) * PAGE_SIZE, pendingPage * PAGE_SIZE);
-  const pagedUploadedEmployees = (stats?.uploadedEmployees ?? []).slice((uploadedPage - 1) * PAGE_SIZE, uploadedPage * PAGE_SIZE);
+  const pagedPendingEmployees = (stats?.pendingEmployees ?? []).slice(
+    (pendingPage - 1) * PAGE_SIZE,
+    pendingPage * PAGE_SIZE,
+  );
+  const pagedUploadedEmployees = (stats?.uploadedEmployees ?? []).slice(
+    (uploadedPage - 1) * PAGE_SIZE,
+    uploadedPage * PAGE_SIZE,
+  );
 
-  useEffect(() => { setSearchPage(1); }, [search, tab]);
-  useEffect(() => { setPendingPage(1); setUploadedPage(1); }, [tab]);
+  useEffect(() => {
+    setSearchPage(1);
+  }, [search, tab]);
+  useEffect(() => {
+    setPendingPage(1);
+    setUploadedPage(1);
+  }, [tab]);
 
   function openEmployee(employeeId: number, initialDocTab: "letters" | "extra" = "letters") {
     setSelectedEmployeeId(employeeId);
@@ -156,7 +215,10 @@ export default function Documents() {
                   { value: "production", label: "Production" },
                 ]}
                 value={tab}
-                onChange={(v) => { setTab(v as "staff" | "production"); setPanel("search"); }}
+                onChange={(v) => {
+                  setTab(v as "staff" | "production");
+                  setPanel("search");
+                }}
               />
               <div className="relative ml-auto">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -170,8 +232,10 @@ export default function Documents() {
             </div>
 
             <div className="grid grid-cols-2 gap-3">
-              <button onClick={() => setPanel(v => v === "uploaded" ? "search" : "uploaded")} className="text-left">
-                <Card className={`border-0 shadow-sm hover:shadow-md transition-shadow ${panel === "uploaded" ? "ring-2 ring-emerald-400" : ""}`}>
+              <button onClick={() => setPanel((v) => (v === "uploaded" ? "search" : "uploaded"))} className="text-left">
+                <Card
+                  className={`border-0 shadow-sm hover:shadow-md transition-shadow ${panel === "uploaded" ? "ring-2 ring-emerald-400" : ""}`}
+                >
                   <CardContent className="p-4 flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center shrink-0">
                       <CheckCircle2 size={18} className="text-emerald-600" />
@@ -180,12 +244,17 @@ export default function Documents() {
                       <p className="text-2xl font-black text-gray-900 leading-none">{stats?.uploadedCount ?? "—"}</p>
                       <p className="text-xs text-gray-500 mt-1">Documents Uploaded</p>
                     </div>
-                    <ChevronRight size={16} className={`text-gray-300 transition-transform ${panel === "uploaded" ? "rotate-90" : ""}`} />
+                    <ChevronRight
+                      size={16}
+                      className={`text-gray-300 transition-transform ${panel === "uploaded" ? "rotate-90" : ""}`}
+                    />
                   </CardContent>
                 </Card>
               </button>
-              <button onClick={() => setPanel(v => v === "pending" ? "search" : "pending")} className="text-left">
-                <Card className={`border-0 shadow-sm hover:shadow-md transition-shadow ${panel === "pending" ? "ring-2 ring-amber-400" : ""}`}>
+              <button onClick={() => setPanel((v) => (v === "pending" ? "search" : "pending"))} className="text-left">
+                <Card
+                  className={`border-0 shadow-sm hover:shadow-md transition-shadow ${panel === "pending" ? "ring-2 ring-amber-400" : ""}`}
+                >
                   <CardContent className="p-4 flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center shrink-0">
                       <AlertTriangle size={18} className="text-amber-600" />
@@ -194,7 +263,10 @@ export default function Documents() {
                       <p className="text-2xl font-black text-gray-900 leading-none">{stats?.pendingCount ?? "—"}</p>
                       <p className="text-xs text-gray-500 mt-1">Documents Pending</p>
                     </div>
-                    <ChevronRight size={16} className={`text-gray-300 transition-transform ${panel === "pending" ? "rotate-90" : ""}`} />
+                    <ChevronRight
+                      size={16}
+                      className={`text-gray-300 transition-transform ${panel === "pending" ? "rotate-90" : ""}`}
+                    />
                   </CardContent>
                 </Card>
               </button>
@@ -205,9 +277,13 @@ export default function Documents() {
                 <CardContent className="p-0">
                   <div className="flex items-center justify-between px-5 py-3 border-b border-gray-50">
                     <p className="text-sm font-semibold text-gray-700">
-                      {stats?.uploadedCount ?? 0} {tab} employee{stats?.uploadedCount === 1 ? "" : "s"} with all documents on file
+                      {stats?.uploadedCount ?? 0} {tab} employee{stats?.uploadedCount === 1 ? "" : "s"} with all
+                      documents on file
                     </p>
-                    <button onClick={() => setPanel("search")} className="p-1 rounded-md text-gray-400 hover:bg-gray-100">
+                    <button
+                      onClick={() => setPanel("search")}
+                      className="p-1 rounded-md text-gray-400 hover:bg-gray-100"
+                    >
                       <X size={14} />
                     </button>
                   </div>
@@ -219,7 +295,7 @@ export default function Documents() {
                   ) : (
                     <>
                       <div className="divide-y divide-gray-50">
-                        {pagedUploadedEmployees.map(emp => (
+                        {pagedUploadedEmployees.map((emp) => (
                           <button
                             key={emp.id}
                             onClick={() => openEmployee(emp.id, "extra")}
@@ -230,13 +306,22 @@ export default function Documents() {
                             </div>
                             <div className="flex-1 min-w-0">
                               <p className="text-sm font-semibold text-gray-900">{emp.name}</p>
-                              <p className="text-xs text-gray-400">{emp.employeeCode}{emp.departmentName ? ` · ${emp.departmentName}` : ""}</p>
+                              <p className="text-xs text-gray-400">
+                                {emp.employeeCode}
+                                {emp.departmentName ? ` · ${emp.departmentName}` : ""}
+                              </p>
                             </div>
-                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700">Complete</span>
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700">
+                              Complete
+                            </span>
                           </button>
                         ))}
                       </div>
-                      <ListPagination page={uploadedPage} totalCount={stats?.uploadedEmployees.length ?? 0} onChange={setUploadedPage} />
+                      <ListPagination
+                        page={uploadedPage}
+                        totalCount={stats?.uploadedEmployees.length ?? 0}
+                        onChange={setUploadedPage}
+                      />
                     </>
                   )}
                 </CardContent>
@@ -246,9 +331,13 @@ export default function Documents() {
                 <CardContent className="p-0">
                   <div className="flex items-center justify-between px-5 py-3 border-b border-gray-50">
                     <p className="text-sm font-semibold text-gray-700">
-                      {stats?.pendingCount ?? 0} {tab} employee{stats?.pendingCount === 1 ? "" : "s"} with missing documents
+                      {stats?.pendingCount ?? 0} {tab} employee{stats?.pendingCount === 1 ? "" : "s"} with missing
+                      documents
                     </p>
-                    <button onClick={() => setPanel("search")} className="p-1 rounded-md text-gray-400 hover:bg-gray-100">
+                    <button
+                      onClick={() => setPanel("search")}
+                      className="p-1 rounded-md text-gray-400 hover:bg-gray-100"
+                    >
                       <X size={14} />
                     </button>
                   </div>
@@ -260,7 +349,7 @@ export default function Documents() {
                   ) : (
                     <>
                       <div className="divide-y divide-gray-50">
-                        {pagedPendingEmployees.map(emp => (
+                        {pagedPendingEmployees.map((emp) => (
                           <button
                             key={emp.id}
                             onClick={() => openEmployee(emp.id, "extra")}
@@ -271,11 +360,17 @@ export default function Documents() {
                             </div>
                             <div className="flex-1 min-w-0">
                               <p className="text-sm font-semibold text-gray-900">{emp.name}</p>
-                              <p className="text-xs text-gray-400">{emp.employeeCode}{emp.departmentName ? ` · ${emp.departmentName}` : ""}</p>
+                              <p className="text-xs text-gray-400">
+                                {emp.employeeCode}
+                                {emp.departmentName ? ` · ${emp.departmentName}` : ""}
+                              </p>
                             </div>
                             <div className="flex flex-wrap gap-1 justify-end max-w-[45%]">
-                              {emp.missingCategories.slice(0, 2).map(c => (
-                                <span key={c.value} className="text-[10px] font-medium px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700">
+                              {emp.missingCategories.slice(0, 2).map((c) => (
+                                <span
+                                  key={c.value}
+                                  className="text-[10px] font-medium px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700"
+                                >
                                   {c.label}
                                 </span>
                               ))}
@@ -288,7 +383,11 @@ export default function Documents() {
                           </button>
                         ))}
                       </div>
-                      <ListPagination page={pendingPage} totalCount={stats?.pendingEmployees.length ?? 0} onChange={setPendingPage} />
+                      <ListPagination
+                        page={pendingPage}
+                        totalCount={stats?.pendingEmployees.length ?? 0}
+                        onChange={setPendingPage}
+                      />
                     </>
                   )}
                 </CardContent>
@@ -305,12 +404,14 @@ export default function Documents() {
                     </div>
                   ) : matchingEmployees.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-16 text-gray-400">
-                      <p className="text-sm">No {tab} employees match "{search}".</p>
+                      <p className="text-sm">
+                        No {tab} employees match "{search}".
+                      </p>
                     </div>
                   ) : (
                     <>
                       <div className="divide-y divide-gray-50">
-                        {pagedMatchingEmployees.map(emp => (
+                        {pagedMatchingEmployees.map((emp) => (
                           <button
                             key={emp.id}
                             onClick={() => openEmployee(emp.id!)}
@@ -320,13 +421,22 @@ export default function Documents() {
                               {emp.firstName?.charAt(0)}
                             </div>
                             <div className="flex-1 min-w-0">
-                              <p className="text-sm font-semibold text-gray-900">{emp.firstName} {emp.lastName}</p>
-                              <p className="text-xs text-gray-400">{emp.employeeCode}{emp.departmentName ? ` · ${emp.departmentName}` : ""}</p>
+                              <p className="text-sm font-semibold text-gray-900">
+                                {emp.firstName} {emp.lastName}
+                              </p>
+                              <p className="text-xs text-gray-400">
+                                {emp.employeeCode}
+                                {emp.departmentName ? ` · ${emp.departmentName}` : ""}
+                              </p>
                             </div>
                           </button>
                         ))}
                       </div>
-                      <ListPagination page={searchPage} totalCount={matchingEmployees.length} onChange={setSearchPage} />
+                      <ListPagination
+                        page={searchPage}
+                        totalCount={matchingEmployees.length}
+                        onChange={setSearchPage}
+                      />
                     </>
                   )}
                 </CardContent>
@@ -346,7 +456,9 @@ export default function Documents() {
                 {selectedEmployee.firstName?.charAt(0)}
               </div>
               <div>
-                <p className="text-sm font-bold text-gray-900">{selectedEmployee.firstName} {selectedEmployee.lastName}</p>
+                <p className="text-sm font-bold text-gray-900">
+                  {selectedEmployee.firstName} {selectedEmployee.lastName}
+                </p>
                 <p className="text-xs text-gray-400">
                   {selectedEmployee.employeeCode}
                   {selectedEmployee.departmentName ? ` · ${selectedEmployee.departmentName}` : ""}
@@ -396,7 +508,7 @@ export default function Documents() {
           <CategoryDialog
             employeeId={selectedEmployee.id!}
             category={activeCategory}
-            documents={(documents ?? []).filter(d => d.category === activeCategory)}
+            documents={(documents ?? []).filter((d) => d.category === activeCategory)}
             token={token}
             onClose={() => setActiveCategory(null)}
             toast={toast}
@@ -408,7 +520,9 @@ export default function Documents() {
 }
 
 function LettersTab({
-  employeeId, token, toast,
+  employeeId,
+  token,
+  toast,
 }: {
   employeeId: number;
   token: string | null;
@@ -422,7 +536,7 @@ function LettersTab({
   const whatsappExperienceMutation = useWhatsAppExperienceLetter();
 
   const { data: approvedResignations } = useListResignations("approved");
-  const resignation = (approvedResignations ?? []).find(r => r.employeeId === employeeId) ?? null;
+  const resignation = (approvedResignations ?? []).find((r) => r.employeeId === employeeId) ?? null;
 
   const handleOfferLetter = async (mode: "preview" | "download") => {
     setOfferBusy(mode);
@@ -456,7 +570,11 @@ function LettersTab({
       const result = await whatsappExperienceMutation.mutateAsync({ employeeId, lastWorkingDate: lastWorkingDay });
       toast({ title: "Experience letter sent", description: `Delivered to ${result.sentTo} via WhatsApp.` });
     } catch (err: any) {
-      toast({ title: "Failed to send via WhatsApp", description: err?.response?.data?.error || err?.message, variant: "destructive" });
+      toast({
+        title: "Failed to send via WhatsApp",
+        description: err?.response?.data?.error || err?.message,
+        variant: "destructive",
+      });
     } finally {
       setExperienceWhatsAppBusy(false);
     }
@@ -488,11 +606,24 @@ function LettersTab({
             <p className="text-xs text-gray-400 mt-0.5">Generated from current designation, department, and salary.</p>
           </div>
           <div className="flex items-center gap-2 mt-auto pt-1">
-            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => handleOfferLetter("preview")} disabled={offerBusy !== null}>
-              <Eye size={14} />{offerBusy === "preview" ? "Generating…" : "Preview"}
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5"
+              onClick={() => handleOfferLetter("preview")}
+              disabled={offerBusy !== null}
+            >
+              <Eye size={14} />
+              {offerBusy === "preview" ? "Generating…" : "Preview"}
             </Button>
-            <Button size="sm" className="gap-1.5" onClick={() => handleOfferLetter("download")} disabled={offerBusy !== null}>
-              <Download size={14} />{offerBusy === "download" ? "Generating…" : "Download"}
+            <Button
+              size="sm"
+              className="gap-1.5"
+              onClick={() => handleOfferLetter("download")}
+              disabled={offerBusy !== null}
+            >
+              <Download size={14} />
+              {offerBusy === "download" ? "Generating…" : "Download"}
             </Button>
           </div>
         </CardContent>
@@ -507,21 +638,43 @@ function LettersTab({
             <p className="text-sm font-semibold text-gray-800">Experience Letter</p>
             <div className="space-y-1 mt-2">
               <Label className="text-xs">Last Working Day</Label>
-              <Input type="date" className="h-8" value={lastWorkingDay} onChange={(e) => setLastWorkingDay(e.target.value)} />
+              <Input
+                type="date"
+                className="h-8"
+                value={lastWorkingDay}
+                onChange={(e) => setLastWorkingDay(e.target.value)}
+              />
             </div>
           </div>
           <div className="flex items-center gap-2 mt-auto pt-1 flex-wrap">
-            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => handleExperienceLetter("preview")} disabled={experienceBusy !== null}>
-              <Eye size={14} />{experienceBusy === "preview" ? "Generating…" : "Preview"}
-            </Button>
-            <Button size="sm" className="gap-1.5" onClick={() => handleExperienceLetter("download")} disabled={experienceBusy !== null}>
-              <Download size={14} />{experienceBusy === "download" ? "Generating…" : "Download"}
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5"
+              onClick={() => handleExperienceLetter("preview")}
+              disabled={experienceBusy !== null}
+            >
+              <Eye size={14} />
+              {experienceBusy === "preview" ? "Generating…" : "Preview"}
             </Button>
             <Button
-              size="sm" variant="outline" className="gap-1.5 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
-              onClick={handleExperienceLetterWhatsApp} disabled={experienceWhatsAppBusy}
+              size="sm"
+              className="gap-1.5"
+              onClick={() => handleExperienceLetter("download")}
+              disabled={experienceBusy !== null}
             >
-              <MessageCircle size={14} />{experienceWhatsAppBusy ? "Sending…" : "WhatsApp"}
+              <Download size={14} />
+              {experienceBusy === "download" ? "Generating…" : "Download"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+              onClick={handleExperienceLetterWhatsApp}
+              disabled={experienceWhatsAppBusy}
+            >
+              <MessageCircle size={14} />
+              {experienceWhatsAppBusy ? "Sending…" : "WhatsApp"}
             </Button>
           </div>
         </CardContent>
@@ -541,11 +694,24 @@ function LettersTab({
             </p>
           </div>
           <div className="flex items-center gap-2 mt-auto pt-1">
-            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => handleResignationLetter("preview")} disabled={!resignation || resignationBusy !== null}>
-              <Eye size={14} />{resignationBusy === "preview" ? "Generating…" : "Preview"}
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5"
+              onClick={() => handleResignationLetter("preview")}
+              disabled={!resignation || resignationBusy !== null}
+            >
+              <Eye size={14} />
+              {resignationBusy === "preview" ? "Generating…" : "Preview"}
             </Button>
-            <Button size="sm" className="gap-1.5" onClick={() => handleResignationLetter("download")} disabled={!resignation || resignationBusy !== null}>
-              <Download size={14} />{resignationBusy === "download" ? "Generating…" : "Download"}
+            <Button
+              size="sm"
+              className="gap-1.5"
+              onClick={() => handleResignationLetter("download")}
+              disabled={!resignation || resignationBusy !== null}
+            >
+              <Download size={14} />
+              {resignationBusy === "download" ? "Generating…" : "Download"}
             </Button>
           </div>
         </CardContent>
@@ -555,7 +721,12 @@ function LettersTab({
 }
 
 function CategoryDialog({
-  employeeId, category, documents, token, onClose, toast,
+  employeeId,
+  category,
+  documents,
+  token,
+  onClose,
+  toast,
 }: {
   employeeId: number;
   category: EmployeeDocumentCategory;
@@ -571,7 +742,7 @@ function CategoryDialog({
   const uploadMutation = useUploadEmployeeDocument();
   const deleteMutation = useDeleteEmployeeDocument();
   const whatsappMutation = useWhatsAppEmployeeDocument();
-  const label = EMPLOYEE_DOCUMENT_CATEGORIES.find(c => c.value === category)?.label ?? category;
+  const label = EMPLOYEE_DOCUMENT_CATEGORIES.find((c) => c.value === category)?.label ?? category;
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -641,13 +812,21 @@ function CategoryDialog({
           {documents.length === 0 ? (
             <p className="text-sm text-gray-400 py-4 text-center">No files uploaded yet.</p>
           ) : (
-            documents.map(doc => (
+            documents.map((doc) => (
               <div key={doc.id} className="flex items-center gap-2 px-3 py-2 rounded-lg border text-sm">
                 <span className="flex-1 truncate">{doc.originalFilename}</span>
-                <button onClick={() => handleView(doc)} className="p-1.5 rounded-md text-gray-500 hover:bg-gray-100" title="View">
+                <button
+                  onClick={() => handleView(doc)}
+                  className="p-1.5 rounded-md text-gray-500 hover:bg-gray-100"
+                  title="View"
+                >
                   <Eye size={14} />
                 </button>
-                <button onClick={() => handleDownload(doc)} className="p-1.5 rounded-md text-gray-500 hover:bg-gray-100" title="Download">
+                <button
+                  onClick={() => handleDownload(doc)}
+                  className="p-1.5 rounded-md text-gray-500 hover:bg-gray-100"
+                  title="Download"
+                >
                   <Download size={14} />
                 </button>
                 <button
@@ -656,7 +835,11 @@ function CategoryDialog({
                   className="p-1.5 rounded-md text-emerald-600 hover:bg-emerald-50 disabled:opacity-40"
                   title="Send via WhatsApp"
                 >
-                  {whatsappBusyId === doc.id ? <Loader2 size={14} className="animate-spin" /> : <MessageCircle size={14} />}
+                  {whatsappBusyId === doc.id ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <MessageCircle size={14} />
+                  )}
                 </button>
                 <button
                   onClick={() => handleDelete(doc)}

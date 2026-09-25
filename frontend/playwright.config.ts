@@ -12,6 +12,10 @@ const WEB_PORT = 5180;
 const FAKE_PORT = 8190;
 const backendEnv = {
   DB_NAME: process.env.E2E_DB_NAME ?? "uktex_e2e",
+  // runserver opens a thread (and a database connection) per request, and Django keeps each one for 60s by default.
+  // A page that fires a burst of API calls then piles up past Postgres's connection limit, shared with the dev
+  // database, and random tests get a 503 "database unavailable". Close each connection when its request ends.
+  DB_CONN_MAX_AGE: "0",
   DEBUG: "true",
   JWT_SECRET: "e2e-only-jwt-secret-at-least-32-bytes-long",
   DJANGO_SECRET_KEY: "e2e-only-django-secret",

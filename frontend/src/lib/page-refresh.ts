@@ -15,12 +15,26 @@ const PAGES_WITHOUT_REFRESH: (string | RegExp)[] = [
   // The report builder has its own full-height layout, and chat is live already.
   "/hr/reports",
   "/hr/chat",
-  // These already have a Refresh button in their own header.
+  // These put their own Refresh button in the title row (RefreshButton, or an older one of their own).
   "/hr/requests",
   "/hr/activity-logs",
   "/hr/login-devices",
   "/hr/mobile-app-login",
   "/hr/whatsapp-control",
+  "/hr/recruitment/dashboard",
+  "/hr/recruitment/new-joinees",
+  "/hr/recruitment/resignations",
+  "/hr/recruitment/required-roles",
+  "/hr/casual-leave",
+  "/hr/leave",
+  "/hr/shifts",
+  "/hr/outpass-visitors",
+  "/hr/outpass-visitors/outpass",
+  "/hr/outpass-visitors/visitors",
+  "/hr/outpass-visitors/tea-break",
+  "/hr/geo-attendance",
+  "/hr/missing-punch",
+  "/hr/attendance/search",
 ];
 
 export function pageHasRefresh(pathname: string): boolean {

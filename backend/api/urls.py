@@ -26,6 +26,9 @@ from .settlement_views import (
     advances, advance_detail, advance_repayments,
 )
 from .login_sessions_views import login_sessions, revoke_login_session
+from .mobile_app_version_views import (
+    mobile_app_latest_version, mobile_app_version_detail, mobile_app_versions,
+)
 from .mobile_login_views import (
     mobile_app_logins, mobile_app_logins_export, mobile_app_reset_password,
 )
@@ -582,6 +585,10 @@ urlpatterns = [
     path("mobile-app-logins", mobile_app_logins),
     path("mobile-app-logins/export", mobile_app_logins_export),
     path("mobile-app-logins/<int:employee_id>/reset-password", mobile_app_reset_password),
+    # New Version tab: HR publishes builds; the employee app reads latest-version (public).
+    path("mobile-app/versions", mobile_app_versions),
+    path("mobile-app/versions/<int:pk>", mobile_app_version_detail),
+    path("mobile-app/latest-version", mobile_app_latest_version),
     path("theme-settings", theme_settings),
     path("theme-settings/update", update_theme_settings),
 

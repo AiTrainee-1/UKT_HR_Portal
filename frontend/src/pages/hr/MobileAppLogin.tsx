@@ -1,5 +1,7 @@
 import { useState } from "react";
 import HrLayout from "@/components/HrLayout";
+import { RefreshButton } from "@/components/PageRefreshBar";
+import NewVersionTab from "./mobile-app/NewVersionTab";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -12,8 +14,8 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  Smartphone, RefreshCw, Search, KeyRound, ShieldCheck, ShieldAlert,
-  UserX, Users, Eye, EyeOff, Info, Trash2, Wand2, FileSpreadsheet,
+  Smartphone, Search, KeyRound, ShieldCheck, ShieldAlert,
+  UserX, Users, Eye, EyeOff, Info, Trash2, Wand2, FileSpreadsheet, Rocket,
 } from "lucide-react";
 import {
   useMobileAppLogins, useResetMobileAppPassword, downloadMobileAppLoginsExcel,
@@ -196,8 +198,9 @@ export default function MobileAppLogin() {
   const [search, setSearch] = useState("");
   const [resetTarget, setResetTarget] = useState<MobileAppLoginEntry | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [view, setView] = useState<"logins" | "version">("logins");
 
-  const { data, isLoading, refetch, isFetching } = useMobileAppLogins({ access, status, search });
+  const { data, isLoading } = useMobileAppLogins({ access, status, search });
 
   const rows = data?.results ?? [];
   const s = data?.summary;
@@ -226,159 +229,175 @@ export default function MobileAppLogin() {
           <div>
             <h2 className="text-2xl font-black text-gray-900">Mobile App Login</h2>
             <p className="text-muted-foreground text-sm mt-0.5">
-              Staff who can get into the employee app, who hasn't set it up yet, and password resets
+              {view === "version"
+                ? "Publish a new version of the employee app and employees are asked to install it"
+                : "Staff who can get into the employee app, who hasn't set it up yet, and password resets"}
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline" size="sm" className="gap-1.5 text-xs"
-              onClick={handleExport}
-              disabled={exporting || isLoading || rows.length === 0}
-            >
-              <FileSpreadsheet size={13} />
-              {exporting ? "Exporting…" : `Export to Excel${rows.length ? ` (${rows.length})` : ""}`}
-            </Button>
-            <Button
-              variant="outline" size="sm" className="gap-1.5 text-xs"
-              onClick={() => refetch()} disabled={isFetching}
-            >
-              <RefreshCw size={13} className={isFetching ? "animate-spin" : ""} /> Refresh
-            </Button>
+            {view === "logins" && (
+              <Button
+                variant="outline" size="sm" className="gap-1.5 text-xs"
+                onClick={handleExport}
+                disabled={exporting || isLoading || rows.length === 0}
+              >
+                <FileSpreadsheet size={13} />
+                {exporting ? "Exporting…" : `Export to Excel${rows.length ? ` (${rows.length})` : ""}`}
+              </Button>
+            )}
+            <RefreshButton />
           </div>
         </div>
 
-        {/* ── Stats ──────────────────────────────────────────────────────── */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <StatCard
-            label="Staff" value={s?.total ?? "—"}
-            sub="in the current filter" icon={Users} color="bg-slate-100 text-slate-800"
-          />
-          <StatCard
-            label="Has App Access" value={s?.hasAccess ?? "—"}
-            sub="password set up" icon={ShieldCheck} color="bg-green-50 text-green-800"
-          />
-          <StatCard
-            label="Never Set Up" value={s?.noAccess ?? "—"}
-            sub={s ? `${s.activeNoAccess} of them active` : undefined}
-            icon={UserX} color="bg-amber-50 text-amber-800"
-          />
-          <StatCard
-            label="Signed In" value={s?.signedIn ?? "—"}
-            sub="login recorded" icon={Smartphone} color="bg-blue-50 text-blue-800"
-          />
-        </div>
+        <PillTabs
+          items={[
+            { value: "logins", label: "Login Status", icon: <Smartphone size={12} /> },
+            { value: "version", label: "New Version", icon: <Rocket size={12} /> },
+          ]}
+          value={view}
+          onChange={(v) => setView(v as "logins" | "version")}
+          size="sm"
+        />
 
-        <div className="flex gap-2 items-start rounded-lg bg-slate-50 border text-slate-600 p-2.5 text-[11px] leading-relaxed">
-          <Info size={13} className="mt-0.5 shrink-0" />
-          <span>
-            This page covers <b>staff only</b> — production employees aren't listed or counted here,
-            so these totals won't match the Employees page.
-            <b className="ml-1">Has App Access</b> means the employee has created a password, so they can log in.
-            <b className="ml-1">Signed In</b> counts logins recorded since login tracking was added —
-            someone with access but no recorded login simply hasn't signed in since then.
-            Passwords themselves are stored as one-way hashes and can't be displayed; use
-            <b> Reset</b> to give someone a new one.
-          </span>
-        </div>
-
-        {/* ── Filters ────────────────────────────────────────────────────── */}
-        <div className="flex items-center gap-3 flex-wrap">
-          <PillTabs
-            items={ACCESS_TABS.map((t) => ({ value: t.value, label: t.label }))}
-            value={access ?? "all"}
-            onChange={(v) => setAccess(v as MobileAppLoginFilters["access"])}
-            size="sm"
-          />
-          <PillTabs
-            items={[
-              { value: "all", label: "All" },
-              { value: "active", label: "Active" },
-              { value: "inactive", label: "Inactive" },
-            ]}
-            value={status ?? "all"}
-            onChange={(v) => setStatus(v as MobileAppLoginFilters["status"])}
-            size="sm"
-          />
-          <form
-            className="relative ml-auto"
-            onSubmit={(e) => { e.preventDefault(); setSearch(searchInput.trim()); }}
-          >
-            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-            <Input
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              onBlur={() => setSearch(searchInput.trim())}
-              placeholder="Search code, name, phone…"
-              className="h-9 pl-8 text-sm w-56"
-            />
-          </form>
-        </div>
-
-        {/* ── List ───────────────────────────────────────────────────────── */}
-        {isLoading ? (
-          <div className="space-y-2">
-            <CircleLoader texts={["UK Textiles", "Mobile App Login", "Loading"]} />
-          </div>
-        ) : rows.length === 0 ? (
-          <Card className="border-0 shadow-sm">
-            <CardContent className="py-14 text-center">
-              <Smartphone size={32} className="text-gray-200 mx-auto mb-3" />
-              <p className="text-sm text-gray-500">No employees match this filter.</p>
-            </CardContent>
-          </Card>
+        {view === "version" ? (
+          <NewVersionTab />
         ) : (
-          <div className="grid gap-2">
-            {rows.map((e) => {
-              const lastLogin = fmtTime(e.lastMobileLoginAt);
-              return (
-                <Card key={e.id} className="border-0 shadow-sm">
-                  <CardContent className="p-3.5 flex items-center gap-4 flex-wrap">
-                    <div className="flex-1 min-w-[220px]">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="font-bold text-gray-900">{e.name}</p>
-                        <span className="text-[11px] font-mono text-gray-400">({e.employeeCode})</span>
-                        <Badge
-                          variant="outline"
-                          className={e.status === "active"
-                            ? "text-[10px] border-green-200 bg-green-50 text-green-700"
-                            : "text-[10px] border-gray-200 bg-gray-50 text-gray-500"}
+          <>
+
+            {/* ── Stats ──────────────────────────────────────────────────────── */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <StatCard
+                label="Staff" value={s?.total ?? "—"}
+                sub="in the current filter" icon={Users} color="bg-slate-100 text-slate-800"
+              />
+              <StatCard
+                label="Has App Access" value={s?.hasAccess ?? "—"}
+                sub="password set up" icon={ShieldCheck} color="bg-green-50 text-green-800"
+              />
+              <StatCard
+                label="Never Set Up" value={s?.noAccess ?? "—"}
+                sub={s ? `${s.activeNoAccess} of them active` : undefined}
+                icon={UserX} color="bg-amber-50 text-amber-800"
+              />
+              <StatCard
+                label="Signed In" value={s?.signedIn ?? "—"}
+                sub="login recorded" icon={Smartphone} color="bg-blue-50 text-blue-800"
+              />
+            </div>
+
+            <div className="flex gap-2 items-start rounded-lg bg-slate-50 border text-slate-600 p-2.5 text-[11px] leading-relaxed">
+              <Info size={13} className="mt-0.5 shrink-0" />
+              <span>
+                This page covers <b>staff only</b> — production employees aren't listed or counted here,
+                so these totals won't match the Employees page.
+                <b className="ml-1">Has App Access</b> means the employee has created a password, so they can log in.
+                <b className="ml-1">Signed In</b> counts logins recorded since login tracking was added —
+                someone with access but no recorded login simply hasn't signed in since then.
+                Passwords themselves are stored as one-way hashes and can't be displayed; use
+                <b> Reset</b> to give someone a new one.
+              </span>
+            </div>
+
+            {/* ── Filters ────────────────────────────────────────────────────── */}
+            <div className="flex items-center gap-3 flex-wrap">
+              <PillTabs
+                items={ACCESS_TABS.map((t) => ({ value: t.value, label: t.label }))}
+                value={access ?? "all"}
+                onChange={(v) => setAccess(v as MobileAppLoginFilters["access"])}
+                size="sm"
+              />
+              <PillTabs
+                items={[
+                  { value: "all", label: "All" },
+                  { value: "active", label: "Active" },
+                  { value: "inactive", label: "Inactive" },
+                ]}
+                value={status ?? "all"}
+                onChange={(v) => setStatus(v as MobileAppLoginFilters["status"])}
+                size="sm"
+              />
+              <form
+                className="relative ml-auto"
+                onSubmit={(e) => { e.preventDefault(); setSearch(searchInput.trim()); }}
+              >
+                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Input
+                  value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)}
+                  onBlur={() => setSearch(searchInput.trim())}
+                  placeholder="Search code, name, phone…"
+                  className="h-9 pl-8 text-sm w-56"
+                />
+              </form>
+            </div>
+
+            {/* ── List ───────────────────────────────────────────────────────── */}
+            {isLoading ? (
+              <div className="space-y-2">
+                <CircleLoader texts={["UK Textiles", "Mobile App Login", "Loading"]} />
+              </div>
+            ) : rows.length === 0 ? (
+              <Card className="border-0 shadow-sm">
+                <CardContent className="py-14 text-center">
+                  <Smartphone size={32} className="text-gray-200 mx-auto mb-3" />
+                  <p className="text-sm text-gray-500">No employees match this filter.</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid gap-2">
+                {rows.map((e) => {
+                  const lastLogin = fmtTime(e.lastMobileLoginAt);
+                  return (
+                    <Card key={e.id} className="border-0 shadow-sm">
+                      <CardContent className="p-3.5 flex items-center gap-4 flex-wrap">
+                        <div className="flex-1 min-w-[220px]">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-bold text-gray-900">{e.name}</p>
+                            <span className="text-[11px] font-mono text-gray-400">({e.employeeCode})</span>
+                            <Badge
+                              variant="outline"
+                              className={e.status === "active"
+                                ? "text-[10px] border-green-200 bg-green-50 text-green-700"
+                                : "text-[10px] border-gray-200 bg-gray-50 text-gray-500"}
+                            >
+                              {e.status === "active" ? "Active" : "Inactive"}
+                            </Badge>
+                            {e.hasPassword ? (
+                              <span className="flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-green-50 text-green-700">
+                                <ShieldCheck size={10} /> Has access
+                              </span>
+                            ) : (
+                              <span className="flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">
+                                <ShieldAlert size={10} /> Never set up
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-gray-500 mt-1">
+                            {[e.department, e.designation].filter(Boolean).join(" · ") || "—"}
+                            {e.phone ? ` · ${e.phone}` : ""}
+                          </p>
+                          <p className="text-[11px] text-gray-400 mt-1">
+                            {lastLogin
+                              ? `Last signed in ${lastLogin}`
+                              : e.hasPassword
+                              ? "No sign-in recorded yet"
+                              : "Has not set a password — cannot log in"}
+                            {e.deviceCount > 0 && ` · ${e.deviceCount} device${e.deviceCount === 1 ? "" : "s"}`}
+                          </p>
+                        </div>
+                        <Button
+                          size="sm" variant="outline" className="gap-1.5 h-8 text-xs shrink-0"
+                          onClick={() => setResetTarget(e)}
                         >
-                          {e.status === "active" ? "Active" : "Inactive"}
-                        </Badge>
-                        {e.hasPassword ? (
-                          <span className="flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-green-50 text-green-700">
-                            <ShieldCheck size={10} /> Has access
-                          </span>
-                        ) : (
-                          <span className="flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">
-                            <ShieldAlert size={10} /> Never set up
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-gray-500 mt-1">
-                        {[e.department, e.designation].filter(Boolean).join(" · ") || "—"}
-                        {e.phone ? ` · ${e.phone}` : ""}
-                      </p>
-                      <p className="text-[11px] text-gray-400 mt-1">
-                        {lastLogin
-                          ? `Last signed in ${lastLogin}`
-                          : e.hasPassword
-                          ? "No sign-in recorded yet"
-                          : "Has not set a password — cannot log in"}
-                        {e.deviceCount > 0 && ` · ${e.deviceCount} device${e.deviceCount === 1 ? "" : "s"}`}
-                      </p>
-                    </div>
-                    <Button
-                      size="sm" variant="outline" className="gap-1.5 h-8 text-xs shrink-0"
-                      onClick={() => setResetTarget(e)}
-                    >
-                      <KeyRound size={12} /> {e.hasPassword ? "Reset password" : "Set password"}
-                    </Button>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
+                          <KeyRound size={12} /> {e.hasPassword ? "Reset password" : "Set password"}
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </>
         )}
       </div>
 

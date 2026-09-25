@@ -1,16 +1,19 @@
 import { useState } from "react";
 import HrLayout from "@/components/HrLayout";
+import { RefreshButton } from "@/components/PageRefreshBar";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import {
-  useListNewJoinees, useSendOfferLetterEmail, useWhatsAppOfferLetter,
-  previewDocumentPdf, downloadDocumentPdf, type NewJoineeItem,
+  useListNewJoinees,
+  useSendOfferLetterEmail,
+  useWhatsAppOfferLetter,
+  previewDocumentPdf,
+  downloadDocumentPdf,
+  type NewJoineeItem,
 } from "@/lib/api-client/custom-hooks";
 import EmployeeAvatar from "@/components/EmployeeAvatar";
 import { UserPlus, Eye, Download, Mail, Loader2, MessageCircle } from "lucide-react";
@@ -49,13 +52,20 @@ export default function NewJoinees() {
 
   const handleEmail = async (j: NewJoineeItem) => {
     if (!j.email) {
-      toast({ title: "No email on file", description: `${j.name} has no email address in their profile.`, variant: "destructive" });
+      toast({
+        title: "No email on file",
+        description: `${j.name} has no email address in their profile.`,
+        variant: "destructive",
+      });
       return;
     }
     setBusy({ id: j.id, action: "email" });
     try {
       const result = await sendEmail.mutateAsync({ employeeId: j.id });
-      toast({ title: `Offer letter emailed to ${j.name}`, description: `Sent to ${result.sentTo} with the PDF attached.` });
+      toast({
+        title: `Offer letter emailed to ${j.name}`,
+        description: `Sent to ${result.sentTo} with the PDF attached.`,
+      });
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.message || "Unknown error";
       toast({ title: "Failed to send offer letter", description: msg, variant: "destructive" });
@@ -80,14 +90,17 @@ export default function NewJoinees() {
   return (
     <HrLayout>
       <div className="space-y-5">
-        <div>
-          <h2 className="text-2xl font-black text-gray-900 flex items-center gap-2">
-            <UserPlus size={22} className="text-emerald-600" />
-            New Joinees
-          </h2>
-          <p className="text-muted-foreground text-sm mt-0.5">
-            Employees who joined in the last 30 days -view, download, or email their Offer Letter.
-          </p>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h2 className="text-2xl font-black text-gray-900 flex items-center gap-2">
+              <UserPlus size={22} className="text-emerald-600" />
+              New Joinees
+            </h2>
+            <p className="text-muted-foreground text-sm mt-0.5">
+              Employees who joined in the last 30 days -view, download, or email their Offer Letter.
+            </p>
+          </div>
+          <RefreshButton />
         </div>
 
         <Card className="border-0 shadow-sm">
@@ -114,7 +127,7 @@ export default function NewJoinees() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {joinees.map(j => (
+                  {joinees.map((j) => (
                     <TableRow key={j.id}>
                       <TableCell>
                         <div className="flex items-center gap-3">
@@ -129,8 +142,12 @@ export default function NewJoinees() {
                       <TableCell className="text-sm">{j.designation ?? "—"}</TableCell>
                       <TableCell>
                         {j.branchName ? (
-                          <Badge variant="outline" className="text-teal-700 border-teal-200 bg-teal-50">{j.branchName}</Badge>
-                        ) : "—"}
+                          <Badge variant="outline" className="text-teal-700 border-teal-200 bg-teal-50">
+                            {j.branchName}
+                          </Badge>
+                        ) : (
+                          "—"
+                        )}
                       </TableCell>
                       <TableCell className="text-sm">
                         {j.joinDate ? new Date(j.joinDate).toLocaleDateString("en-IN") : "—"}
@@ -138,28 +155,52 @@ export default function NewJoinees() {
                       <TableCell>
                         <div className="flex items-center justify-end gap-1.5">
                           <RowActionBtn
-                            icon={busy?.id === j.id && busy.action === "preview" ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}
+                            icon={
+                              busy?.id === j.id && busy.action === "preview" ? (
+                                <Loader2 size={13} className="animate-spin" />
+                              ) : (
+                                <Eye size={13} />
+                              )
+                            }
                             label="View"
                             onClick={() => handlePreview(j)}
                             disabled={busy !== null}
                             color="gray"
                           />
                           <RowActionBtn
-                            icon={busy?.id === j.id && busy.action === "download" ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+                            icon={
+                              busy?.id === j.id && busy.action === "download" ? (
+                                <Loader2 size={13} className="animate-spin" />
+                              ) : (
+                                <Download size={13} />
+                              )
+                            }
                             label="Download"
                             onClick={() => handleDownload(j)}
                             disabled={busy !== null}
                             color="green"
                           />
                           <RowActionBtn
-                            icon={busy?.id === j.id && busy.action === "email" ? <Loader2 size={13} className="animate-spin" /> : <Mail size={13} />}
+                            icon={
+                              busy?.id === j.id && busy.action === "email" ? (
+                                <Loader2 size={13} className="animate-spin" />
+                              ) : (
+                                <Mail size={13} />
+                              )
+                            }
                             label="Email"
                             onClick={() => handleEmail(j)}
                             disabled={busy !== null}
                             color="purple"
                           />
                           <RowActionBtn
-                            icon={busy?.id === j.id && busy.action === "whatsapp" ? <Loader2 size={13} className="animate-spin" /> : <MessageCircle size={13} />}
+                            icon={
+                              busy?.id === j.id && busy.action === "whatsapp" ? (
+                                <Loader2 size={13} className="animate-spin" />
+                              ) : (
+                                <MessageCircle size={13} />
+                              )
+                            }
                             label="WhatsApp"
                             onClick={() => handleWhatsApp(j)}
                             disabled={busy !== null}
@@ -177,8 +218,8 @@ export default function NewJoinees() {
 
         {joinees && joinees.length > 0 && (
           <p className="text-xs text-gray-400">
-            {joinees.length} new joinee{joinees.length !== 1 ? "s" : ""} in the last 30 days.
-            Emailing automatically attaches the Offer Letter PDF.
+            {joinees.length} new joinee{joinees.length !== 1 ? "s" : ""} in the last 30 days. Emailing automatically
+            attaches the Offer Letter PDF.
           </p>
         )}
       </div>
@@ -187,7 +228,11 @@ export default function NewJoinees() {
 }
 
 function RowActionBtn({
-  icon, label, onClick, disabled = false, color,
+  icon,
+  label,
+  onClick,
+  disabled = false,
+  color,
 }: {
   icon: React.ReactNode;
   label: string;
@@ -196,9 +241,9 @@ function RowActionBtn({
   color: "gray" | "green" | "purple" | "emerald";
 }) {
   const colors = {
-    gray:    "border-gray-200 text-gray-600 hover:bg-gray-50",
-    green:   "border-green-200 text-green-700 hover:bg-green-50",
-    purple:  "border-purple-200 text-purple-700 hover:bg-purple-50",
+    gray: "border-gray-200 text-gray-600 hover:bg-gray-50",
+    green: "border-green-200 text-green-700 hover:bg-green-50",
+    purple: "border-purple-200 text-purple-700 hover:bg-purple-50",
     emerald: "border-emerald-200 text-emerald-700 hover:bg-emerald-50",
   };
   return (

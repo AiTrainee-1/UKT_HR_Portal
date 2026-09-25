@@ -40,3 +40,5 @@ api/whatsapp_format.py
 api/whatsapp_approvals.py
 api/tests_whatsapp_approvals.py
 api/tests_whatsapp_events.py
+api/mobile_app_version_views.py
+api/tests_mobile_app_versions.py

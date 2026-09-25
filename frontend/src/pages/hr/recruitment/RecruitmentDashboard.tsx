@@ -1,23 +1,12 @@
 import { useState } from "react";
 import HrLayout from "@/components/HrLayout";
+import { RefreshButton } from "@/components/PageRefreshBar";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CircleLoader } from "@/components/ui/CircleLoader";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   useGetRecruitmentDashboard,
   type DeptAnalysisItem,
@@ -65,10 +54,7 @@ function StatCard({
   urgent?: boolean;
 }) {
   return (
-    <button
-      onClick={onClick}
-      className="text-left w-full"
-    >
+    <button onClick={onClick} className="text-left w-full">
       <Card
         className="rounded-2xl transition-all duration-200 hover:-translate-y-1 hover:shadow-lg cursor-pointer"
         style={{
@@ -78,10 +64,7 @@ function StatCard({
         }}
       >
         <CardContent className="p-4 flex items-start gap-3">
-          <div
-            className="p-2.5 rounded-xl shrink-0"
-            style={{ background: color + "18" }}
-          >
+          <div className="p-2.5 rounded-xl shrink-0" style={{ background: color + "18" }}>
             <Icon className="w-5 h-5" style={{ color }} strokeWidth={1.8} />
           </div>
           <div className="min-w-0 flex-1">
@@ -91,9 +74,7 @@ function StatCard({
             <p className="text-2xl font-black leading-tight" style={{ color: urgent ? "#ef4444" : "#1a3a4a" }}>
               {value}
             </p>
-            {subLabel && (
-              <p className="text-[11px] text-[#006496]/40 mt-0.5">{subLabel}</p>
-            )}
+            {subLabel && <p className="text-[11px] text-[#006496]/40 mt-0.5">{subLabel}</p>}
           </div>
           {urgent && value > 0 && (
             <span className="flex h-2 w-2 mt-1 shrink-0">
@@ -108,9 +89,7 @@ function StatCard({
 }
 
 function LoadingCards() {
-  return (
-    <CircleLoader texts={["UK Textiles", "Recruitment", "Loading"]} />
-  );
+  return <CircleLoader texts={["UK Textiles", "Recruitment", "Loading"]} />;
 }
 
 export default function RecruitmentDashboard() {
@@ -125,11 +104,14 @@ export default function RecruitmentDashboard() {
     <HrLayout>
       <div className="max-w-6xl mx-auto space-y-6">
         {/* Header */}
-        <div>
-          <h1 className="text-2xl font-black text-[#1a3a4a] tracking-tight">Recruitment Dashboard</h1>
-          <p className="text-sm text-[#006496]/60 mt-0.5">
-            Staff headcount, vacancies, new joinees, and recruitment activity at a glance.
-          </p>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-black text-[#1a3a4a] tracking-tight">Recruitment Dashboard</h1>
+            <p className="text-sm text-[#006496]/60 mt-0.5">
+              Staff headcount, vacancies, new joinees, and recruitment activity at a glance.
+            </p>
+          </div>
+          <RefreshButton />
         </div>
 
         {/* KPI Cards */}
@@ -211,7 +193,9 @@ export default function RecruitmentDashboard() {
           >
             {isLoading ? (
               <div className="p-4 space-y-2">
-                {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-10 rounded-xl" />)}
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <Skeleton key={i} className="h-10 rounded-xl" />
+                ))}
               </div>
             ) : dept.length === 0 ? (
               <div className="p-8 text-center text-[#006496]/40 text-sm">No department data available.</div>
@@ -219,11 +203,21 @@ export default function RecruitmentDashboard() {
               <Table>
                 <TableHeader>
                   <TableRow style={{ borderColor: "rgba(0,100,150,0.07)" }}>
-                    <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50">Department</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50 text-center">Current</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50 text-center">Required</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50 text-center">Vacancy</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50">Status</TableHead>
+                    <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50">
+                      Department
+                    </TableHead>
+                    <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50 text-center">
+                      Current
+                    </TableHead>
+                    <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50 text-center">
+                      Required
+                    </TableHead>
+                    <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50 text-center">
+                      Vacancy
+                    </TableHead>
+                    <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50">
+                      Status
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -247,11 +241,17 @@ export default function RecruitmentDashboard() {
                       </TableCell>
                       <TableCell>
                         {d.requiredCount === 0 ? (
-                          <Badge variant="outline" className="text-[10px] text-[#006496]/50 border-[#006496]/20">Not set</Badge>
+                          <Badge variant="outline" className="text-[10px] text-[#006496]/50 border-[#006496]/20">
+                            Not set
+                          </Badge>
                         ) : d.vacancy > 0 ? (
-                          <Badge className="text-[10px] bg-red-50 text-red-600 border-red-200 border">Needs Hiring</Badge>
+                          <Badge className="text-[10px] bg-red-50 text-red-600 border-red-200 border">
+                            Needs Hiring
+                          </Badge>
                         ) : (
-                          <Badge className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200 border">Fully Staffed</Badge>
+                          <Badge className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200 border">
+                            Fully Staffed
+                          </Badge>
                         )}
                       </TableCell>
                     </TableRow>
@@ -292,9 +292,7 @@ export default function RecruitmentDashboard() {
                       <p className="text-[11px] text-[#006496]/50 truncate">
                         {e.designation ?? e.department ?? e.employeeCode}
                       </p>
-                      <p className="text-[10px] text-emerald-600 font-medium mt-0.5">
-                        Joined {e.joinDate ?? "—"}
-                      </p>
+                      <p className="text-[10px] text-emerald-600 font-medium mt-0.5">Joined {e.joinDate ?? "—"}</p>
                     </div>
                   </CardContent>
                 </Card>
@@ -307,7 +305,10 @@ export default function RecruitmentDashboard() {
       {/* ── Detail Modals ── */}
 
       {/* Department Analysis Modal */}
-      <Dialog open={modal?.type === "staff" || modal?.type === "departments" || modal?.type === "vacancies"} onOpenChange={() => setModal(null)}>
+      <Dialog
+        open={modal?.type === "staff" || modal?.type === "departments" || modal?.type === "vacancies"}
+        onOpenChange={() => setModal(null)}
+      >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>
@@ -328,7 +329,7 @@ export default function RecruitmentDashboard() {
               </TableHeader>
               <TableBody>
                 {dept
-                  .filter((d) => modal?.type === "vacancies" ? d.vacancy > 0 : true)
+                  .filter((d) => (modal?.type === "vacancies" ? d.vacancy > 0 : true))
                   .map((d) => (
                     <TableRow key={d.departmentId}>
                       <TableCell className="font-medium">{d.departmentName}</TableCell>
@@ -416,15 +417,17 @@ export default function RecruitmentDashboard() {
                         </div>
                       </TableCell>
                       <TableCell className="text-sm capitalize">{l.type}</TableCell>
-                      <TableCell className="text-sm">{l.startDate} → {l.endDate}</TableCell>
+                      <TableCell className="text-sm">
+                        {l.startDate} → {l.endDate}
+                      </TableCell>
                       <TableCell>
                         <Badge
                           className={
                             l.status === "approved"
                               ? "bg-emerald-50 text-emerald-700 border-emerald-200 border text-[10px]"
                               : l.status === "rejected"
-                              ? "bg-red-50 text-red-600 border-red-200 border text-[10px]"
-                              : "bg-amber-50 text-amber-700 border-amber-200 border text-[10px]"
+                                ? "bg-red-50 text-red-600 border-red-200 border text-[10px]"
+                                : "bg-amber-50 text-amber-700 border-amber-200 border text-[10px]"
                           }
                         >
                           {l.status}
@@ -446,8 +449,8 @@ export default function RecruitmentDashboard() {
             <DialogTitle>Open Job Roles</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-[#006496]/60 py-2">
-            There are currently <strong>{data?.openRoles ?? 0}</strong> open job postings.
-            Go to the <em>Required Roles</em> section to manage department headcount and job vacancies.
+            There are currently <strong>{data?.openRoles ?? 0}</strong> open job postings. Go to the{" "}
+            <em>Required Roles</em> section to manage department headcount and job vacancies.
           </p>
         </DialogContent>
       </Dialog>
@@ -458,8 +461,8 @@ export default function RecruitmentDashboard() {
             <DialogTitle>Pending Resignations</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-[#006496]/60 py-2">
-            There are <strong className="text-red-600">{data?.pendingResignations ?? 0}</strong> pending resignation requests awaiting review.
-            Go to the <em>Resignations</em> section to approve or reject them.
+            There are <strong className="text-red-600">{data?.pendingResignations ?? 0}</strong> pending resignation
+            requests awaiting review. Go to the <em>Resignations</em> section to approve or reject them.
           </p>
         </DialogContent>
       </Dialog>

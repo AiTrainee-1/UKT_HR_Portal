@@ -1,5 +1,6 @@
 import { useState } from "react";
 import HrLayout from "@/components/HrLayout";
+import { RefreshButton } from "@/components/PageRefreshBar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1128,7 +1129,10 @@ export default function ManageShift() {
             <h2 className="text-2xl font-black text-gray-900">Manage Shifts</h2>
             <p className="text-muted-foreground text-sm mt-0.5">Configure shift templates and assign them to employees</p>
           </div>
-          <Button onClick={openCreate} className="gap-2"><Plus size={16} /> New Shift</Button>
+          <div className="flex items-center gap-2">
+            <RefreshButton />
+            <Button onClick={openCreate} className="gap-2"><Plus size={16} /> New Shift</Button>
+          </div>
         </div>
 
         {isLoading ? (

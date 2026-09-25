@@ -1,26 +1,14 @@
 import { useState } from "react";
 import HrLayout from "@/components/HrLayout";
+import { RefreshButton } from "@/components/PageRefreshBar";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   useListDepartmentHeadcount,
   useSetDepartmentHeadcount,
@@ -31,14 +19,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { CircleLoader } from "@/components/ui/CircleLoader";
-import {
-  Building2,
-  AlertTriangle,
-  CheckCircle2,
-  Pencil,
-  Users,
-  TrendingUp,
-} from "lucide-react";
+import { Building2, AlertTriangle, CheckCircle2, Pencil, Users, TrendingUp } from "lucide-react";
 
 export default function RequiredRoles() {
   const queryClient = useQueryClient();
@@ -57,8 +38,7 @@ export default function RequiredRoles() {
   const fullyStaffed = all.filter((d) => d.requiredCount > 0 && d.vacancy === 0);
   const notConfigured = all.filter((d) => d.requiredCount === 0);
 
-  const refresh = () =>
-    queryClient.invalidateQueries({ queryKey: getListDepartmentHeadcountQueryKey() });
+  const refresh = () => queryClient.invalidateQueries({ queryKey: getListDepartmentHeadcountQueryKey() });
 
   const openEdit = (dept: DepartmentHeadcountItem) => {
     setEditTarget(dept);
@@ -86,7 +66,7 @@ export default function RequiredRoles() {
             refresh();
           },
           onError: () => toast({ title: "Update failed", variant: "destructive" }),
-        }
+        },
       );
     } else {
       setHeadcount.mutate(
@@ -98,7 +78,7 @@ export default function RequiredRoles() {
             refresh();
           },
           onError: () => toast({ title: "Save failed", variant: "destructive" }),
-        }
+        },
       );
     }
   };
@@ -107,11 +87,14 @@ export default function RequiredRoles() {
     <HrLayout>
       <div className="max-w-5xl mx-auto space-y-6">
         {/* Header */}
-        <div>
-          <h1 className="text-2xl font-black text-[#1a3a4a] tracking-tight">Required Roles</h1>
-          <p className="text-sm text-[#006496]/60 mt-0.5">
-            Set required headcount per department and track vacancies that need to be filled.
-          </p>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-black text-[#1a3a4a] tracking-tight">Required Roles</h1>
+            <p className="text-sm text-[#006496]/60 mt-0.5">
+              Set required headcount per department and track vacancies that need to be filled.
+            </p>
+          </div>
+          <RefreshButton />
         </div>
 
         {/* Summary Cards */}
@@ -152,7 +135,9 @@ export default function RequiredRoles() {
                 </div>
                 <div>
                   <p className="text-[11px] font-semibold uppercase tracking-widest text-[#006496]/50">{label}</p>
-                  <p className="text-2xl font-black" style={{ color: urgent ? "#ea580c" : "#1a3a4a" }}>{value}</p>
+                  <p className="text-2xl font-black" style={{ color: urgent ? "#ea580c" : "#1a3a4a" }}>
+                    {value}
+                  </p>
                 </div>
               </CardContent>
             </Card>
@@ -171,7 +156,8 @@ export default function RequiredRoles() {
             <div className="flex items-center gap-2 mb-3">
               <AlertTriangle className="w-4 h-4 text-orange-600" strokeWidth={2} />
               <span className="font-bold text-sm text-orange-800">
-                Urgent: {withVacancy.length} department{withVacancy.length > 1 ? "s" : ""} need{withVacancy.length === 1 ? "s" : ""} recruitment
+                Urgent: {withVacancy.length} department{withVacancy.length > 1 ? "s" : ""} need
+                {withVacancy.length === 1 ? "s" : ""} recruitment
               </span>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -210,24 +196,32 @@ export default function RequiredRoles() {
               <CircleLoader texts={["UK Textiles", "Required Roles", "Loading"]} />
             </div>
           ) : all.length === 0 ? (
-            <div className="py-16 text-center text-[#006496]/40 text-sm">
-              No departments found.
-            </div>
+            <div className="py-16 text-center text-[#006496]/40 text-sm">No departments found.</div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow style={{ borderColor: "rgba(0,100,150,0.07)" }}>
-                  <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50">Department</TableHead>
+                  <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50">
+                    Department
+                  </TableHead>
                   <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50 text-center">
                     <div className="flex items-center justify-center gap-1">
                       <Users className="w-3 h-3" />
                       Current Staff
                     </div>
                   </TableHead>
-                  <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50 text-center">Required</TableHead>
-                  <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50 text-center">Vacancy</TableHead>
-                  <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50">Status</TableHead>
-                  <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50">Notes</TableHead>
+                  <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50 text-center">
+                    Required
+                  </TableHead>
+                  <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50 text-center">
+                    Vacancy
+                  </TableHead>
+                  <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50">
+                    Status
+                  </TableHead>
+                  <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50">
+                    Notes
+                  </TableHead>
                   <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/50"></TableHead>
                 </TableRow>
               </TableHeader>
@@ -273,9 +267,7 @@ export default function RequiredRoles() {
                           Not configured
                         </Badge>
                       ) : dept.vacancy > 0 ? (
-                        <Badge className="text-[10px] bg-red-50 text-red-600 border border-red-200">
-                          Needs Hiring
-                        </Badge>
+                        <Badge className="text-[10px] bg-red-50 text-red-600 border border-red-200">Needs Hiring</Badge>
                       ) : (
                         <Badge className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200">
                           Fully Staffed
@@ -286,12 +278,7 @@ export default function RequiredRoles() {
                       {dept.notes ?? <span className="italic text-[#006496]/25">—</span>}
                     </TableCell>
                     <TableCell>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-7 px-2 text-xs"
-                        onClick={() => openEdit(dept)}
-                      >
+                      <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => openEdit(dept)}>
                         <Pencil className="w-3 h-3 mr-1" />
                         {dept.id ? "Edit" : "Set"}
                       </Button>
@@ -305,12 +292,15 @@ export default function RequiredRoles() {
       </div>
 
       {/* Edit Dialog */}
-      <Dialog open={!!editTarget} onOpenChange={(o) => { if (!o) setEditTarget(null); }}>
+      <Dialog
+        open={!!editTarget}
+        onOpenChange={(o) => {
+          if (!o) setEditTarget(null);
+        }}
+      >
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>
-              Set Required Headcount -{editTarget?.departmentName}
-            </DialogTitle>
+            <DialogTitle>Set Required Headcount -{editTarget?.departmentName}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-1">
             <div>
@@ -328,7 +318,8 @@ export default function RequiredRoles() {
               />
               {parseInt(editCount, 10) > 0 && parseInt(editCount, 10) > (editTarget?.currentCount ?? 0) && (
                 <p className="text-[11px] text-orange-600 mt-1">
-                  This will create {parseInt(editCount, 10) - (editTarget?.currentCount ?? 0)} vacancy{parseInt(editCount, 10) - (editTarget?.currentCount ?? 0) > 1 ? "ies" : ""}.
+                  This will create {parseInt(editCount, 10) - (editTarget?.currentCount ?? 0)} vacancy
+                  {parseInt(editCount, 10) - (editTarget?.currentCount ?? 0) > 1 ? "ies" : ""}.
                 </p>
               )}
             </div>
@@ -344,13 +335,15 @@ export default function RequiredRoles() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEditTarget(null)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setEditTarget(null)}>
+              Cancel
+            </Button>
             <Button
               onClick={handleSave}
               disabled={setHeadcount.isPending || updateHeadcount.isPending}
               style={{ background: "#006496" }}
             >
-              {(setHeadcount.isPending || updateHeadcount.isPending) ? "Saving..." : "Save"}
+              {setHeadcount.isPending || updateHeadcount.isPending ? "Saving..." : "Save"}
             </Button>
           </DialogFooter>
         </DialogContent>

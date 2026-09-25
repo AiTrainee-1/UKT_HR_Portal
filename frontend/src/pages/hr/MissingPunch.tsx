@@ -1,5 +1,6 @@
 import { useState } from "react";
 import HrLayout from "@/components/HrLayout";
+import { RefreshButton } from "@/components/PageRefreshBar";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
@@ -135,11 +136,14 @@ export default function MissingPunch() {
   return (
     <HrLayout>
       <div className="space-y-5">
-        <div>
-          <h2 className="text-2xl font-black text-gray-900">Missing Punch</h2>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Employee-reported forgotten punches -Department Head approves first, then HR gives final approval.
-          </p>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h2 className="text-2xl font-black text-gray-900">Missing Punch</h2>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              Employee-reported forgotten punches -Department Head approves first, then HR gives final approval.
+            </p>
+          </div>
+          <RefreshButton />
         </div>
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

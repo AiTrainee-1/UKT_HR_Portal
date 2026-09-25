@@ -17,19 +17,49 @@ import ResumeScreeningPipeline from "@/components/ResumeScreeningPipeline";
 import { CircleLoader } from "@/components/ui/CircleLoader";
 import {
   useListDepartments,
-  useListHiringRuleSets, useCreateHiringRuleSet, useUpdateHiringRuleSet, useDeleteHiringRuleSet,
-  useUploadSingleResume, useShortlistCandidate,
-  useListScreeningCandidates, useUpdateCandidateStatus, useDeleteScreeningCandidate,
-  useSendRejectionEmailsAll, useSendInterviewInvite, useSendInterviewInviteBulk,
-  getListHiringRuleSetsQueryKey, getListScreeningCandidatesQueryKey,
+  useListHiringRuleSets,
+  useCreateHiringRuleSet,
+  useUpdateHiringRuleSet,
+  useDeleteHiringRuleSet,
+  useUploadSingleResume,
+  useShortlistCandidate,
+  useListScreeningCandidates,
+  useUpdateCandidateStatus,
+  useDeleteScreeningCandidate,
+  useSendRejectionEmailsAll,
+  useSendInterviewInvite,
+  useSendInterviewInviteBulk,
+  getListHiringRuleSetsQueryKey,
+  getListScreeningCandidatesQueryKey,
   EDUCATION_LEVEL_OPTIONS,
-  type HiringRuleSetItem, type ScreeningCandidateItem, type ScreeningCandidateStatus,
+  type HiringRuleSetItem,
+  type ScreeningCandidateItem,
+  type ScreeningCandidateStatus,
 } from "@/lib/api-client";
 import {
-  UserSearch, FileText, Files, ClipboardList, Plus, Trash2, Edit, X,
-  UploadCloud, CheckCircle2, XCircle, Mail, CalendarClock, Star,
-  Briefcase, GraduationCap, MapPin, Phone, AtSign, Loader2, ArrowUpRight,
-  Info, HeartHandshake,
+  UserSearch,
+  FileText,
+  Files,
+  ClipboardList,
+  Plus,
+  Trash2,
+  Edit,
+  X,
+  UploadCloud,
+  CheckCircle2,
+  XCircle,
+  Mail,
+  CalendarClock,
+  Star,
+  Briefcase,
+  GraduationCap,
+  MapPin,
+  Phone,
+  AtSign,
+  Loader2,
+  ArrowUpRight,
+  Info,
+  HeartHandshake,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -45,10 +75,9 @@ function describeFailures(failed: { name: string | null; error: string }[]): str
 
 async function openResume(candidateId: number, onError?: (message: string) => void) {
   try {
-    const blob = await customFetch<Blob>(
-      `/api/recruitment/resume-screening/candidates/${candidateId}/resume`,
-      { responseType: "blob" },
-    );
+    const blob = await customFetch<Blob>(`/api/recruitment/resume-screening/candidates/${candidateId}/resume`, {
+      responseType: "blob",
+    });
     const url = URL.createObjectURL(blob);
     window.open(url, "_blank");
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
@@ -59,7 +88,12 @@ async function openResume(candidateId: number, onError?: (message: string) => vo
 
 function ScoreBadge({ score }: { score: number | null }) {
   if (score == null) return null;
-  const tone = score >= 75 ? "bg-emerald-100 text-emerald-700" : score >= 50 ? "bg-amber-100 text-amber-700" : "bg-rose-100 text-rose-700";
+  const tone =
+    score >= 75
+      ? "bg-emerald-100 text-emerald-700"
+      : score >= 50
+        ? "bg-amber-100 text-amber-700"
+        : "bg-rose-100 text-rose-700";
   return (
     <span className={`inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full ${tone}`}>
       <Star size={11} /> {score.toFixed(0)}/100
@@ -70,20 +104,54 @@ function ScoreBadge({ score }: { score: number | null }) {
 function ScoreBreakdownBars({ breakdown }: { breakdown: ScreeningCandidateItem["scoreBreakdown"] }) {
   if (!breakdown) return null;
   const rows: { label: string; score: number; weight: number; icon: React.ReactNode }[] = [
-    { label: "Skills Match", score: breakdown.components.skills.score, weight: breakdown.components.skills.weight, icon: <Briefcase size={12} /> },
-    { label: "Soft Skills", score: breakdown.components.softSkills.score, weight: breakdown.components.softSkills.weight, icon: <HeartHandshake size={12} /> },
-    { label: "Overall Fit", score: breakdown.components.similarity.score, weight: breakdown.components.similarity.weight, icon: <ClipboardList size={12} /> },
-    { label: "Experience", score: breakdown.components.experience.score, weight: breakdown.components.experience.weight, icon: <Briefcase size={12} /> },
-    { label: "Education", score: breakdown.components.education.score, weight: breakdown.components.education.weight, icon: <GraduationCap size={12} /> },
-    { label: "Location", score: breakdown.components.location.score, weight: breakdown.components.location.weight, icon: <MapPin size={12} /> },
+    {
+      label: "Skills Match",
+      score: breakdown.components.skills.score,
+      weight: breakdown.components.skills.weight,
+      icon: <Briefcase size={12} />,
+    },
+    {
+      label: "Soft Skills",
+      score: breakdown.components.softSkills.score,
+      weight: breakdown.components.softSkills.weight,
+      icon: <HeartHandshake size={12} />,
+    },
+    {
+      label: "Overall Fit",
+      score: breakdown.components.similarity.score,
+      weight: breakdown.components.similarity.weight,
+      icon: <ClipboardList size={12} />,
+    },
+    {
+      label: "Experience",
+      score: breakdown.components.experience.score,
+      weight: breakdown.components.experience.weight,
+      icon: <Briefcase size={12} />,
+    },
+    {
+      label: "Education",
+      score: breakdown.components.education.score,
+      weight: breakdown.components.education.weight,
+      icon: <GraduationCap size={12} />,
+    },
+    {
+      label: "Location",
+      score: breakdown.components.location.score,
+      weight: breakdown.components.location.weight,
+      icon: <MapPin size={12} />,
+    },
   ];
   return (
     <div className="space-y-2">
-      {rows.map(r => (
+      {rows.map((r) => (
         <div key={r.label}>
           <div className="flex items-center justify-between text-[11px] text-gray-500 mb-0.5">
-            <span className="flex items-center gap-1">{r.icon} {r.label}</span>
-            <span>{r.score.toFixed(1)} / {r.weight}</span>
+            <span className="flex items-center gap-1">
+              {r.icon} {r.label}
+            </span>
+            <span>
+              {r.score.toFixed(1)} / {r.weight}
+            </span>
           </div>
           <div className="h-1.5 w-full rounded-full bg-gray-100 overflow-hidden">
             <div
@@ -120,7 +188,7 @@ function buildReasonNarrative(candidate: ScreeningCandidateItem): string[] {
     lines.push(
       sk.missing.length === 0
         ? `Required skills: matched all ${sk.matched.length} required skill(s) -${sk.matched.join(", ")}.`
-        : `Required skills: matched ${sk.matched.length} of ${totalSkills} (${sk.matched.join(", ") || "none"}). Missing: ${sk.missing.join(", ")}.`
+        : `Required skills: matched ${sk.matched.length} of ${totalSkills} (${sk.matched.join(", ") || "none"}). Missing: ${sk.missing.join(", ")}.`,
     );
   }
 
@@ -130,17 +198,21 @@ function buildReasonNarrative(candidate: ScreeningCandidateItem): string[] {
     lines.push(
       soft.matched.length > 0
         ? `Soft skills: found ${soft.matched.join(", ")} mentioned in the resume.`
-        : `Soft skills: none of the configured soft skills (${soft.missing.join(", ")}) were found in the resume.`
+        : `Soft skills: none of the configured soft skills (${soft.missing.join(", ")}) were found in the resume.`,
     );
   }
 
   const exp = b.components.experience;
   if (exp.extracted == null) {
-    lines.push(`Experience: could not detect years of experience from the resume${exp.required > 0 ? ` (required: ${exp.required}+ years).` : "."}`);
+    lines.push(
+      `Experience: could not detect years of experience from the resume${exp.required > 0 ? ` (required: ${exp.required}+ years).` : "."}`,
+    );
   } else if (exp.required <= 0) {
     lines.push(`Experience: candidate has ${exp.extracted} year(s) -no minimum was required for this rule set.`);
   } else if (exp.extracted >= exp.required) {
-    lines.push(`Experience: candidate has ${exp.extracted} year(s), meeting or exceeding the required ${exp.required}+ years.`);
+    lines.push(
+      `Experience: candidate has ${exp.extracted} year(s), meeting or exceeding the required ${exp.required}+ years.`,
+    );
   } else {
     lines.push(`Experience: candidate has ${exp.extracted} year(s), below the required ${exp.required}+ years.`);
   }
@@ -150,7 +222,7 @@ function buildReasonNarrative(candidate: ScreeningCandidateItem): string[] {
     lines.push(
       edu.meets
         ? `Education: candidate's qualification${edu.extracted ? ` (${edu.extracted})` : ""} meets the required "${edu.required}".`
-        : `Education: candidate's qualification${edu.extracted ? ` (${edu.extracted})` : " could not be detected"} does not clearly meet the required "${edu.required}".`
+        : `Education: candidate's qualification${edu.extracted ? ` (${edu.extracted})` : " could not be detected"} does not clearly meet the required "${edu.required}".`,
     );
   }
 
@@ -159,7 +231,7 @@ function buildReasonNarrative(candidate: ScreeningCandidateItem): string[] {
     lines.push(
       loc.meets
         ? `Location: candidate is based in ${loc.extracted ?? "a matching city"}, matching the preferred city (${loc.preferred}).`
-        : `Location: candidate's city${loc.extracted ? ` (${loc.extracted})` : " could not be detected"} does not match the preferred city (${loc.preferred}).`
+        : `Location: candidate's city${loc.extracted ? ` (${loc.extracted})` : " could not be detected"} does not match the preferred city (${loc.preferred}).`,
     );
   }
 
@@ -167,13 +239,13 @@ function buildReasonNarrative(candidate: ScreeningCandidateItem): string[] {
     lines.push(
       candidate.rankInBatch != null
         ? `Shortlisted: ranked #${candidate.rankInBatch} by match score in this batch, within the requested shortlist size.`
-        : "Shortlisted: added to the shortlist."
+        : "Shortlisted: added to the shortlist.",
     );
   } else if (candidate.status === "not_shortlisted") {
     lines.push(
       candidate.rankInBatch != null
         ? `Not shortlisted: ranked #${candidate.rankInBatch} by match score -outside the requested shortlist size for this batch.`
-        : "Not shortlisted."
+        : "Not shortlisted.",
     );
   } else if (candidate.status === "selected") {
     lines.push("Selected: HR has moved this candidate forward for an interview.");
@@ -199,17 +271,23 @@ function CandidateReasonDialog({ candidate, onClose }: { candidate: ScreeningCan
         <div className="space-y-3 py-2">
           <div className="flex items-center justify-between">
             <ScoreBadge score={candidate.matchScore} />
-            <Badge variant="outline" className="capitalize text-[10px]">{statusLabel}</Badge>
+            <Badge variant="outline" className="capitalize text-[10px]">
+              {statusLabel}
+            </Badge>
           </div>
           <ScoreBreakdownBars breakdown={candidate.scoreBreakdown} />
           <div className="rounded-lg bg-gray-50 border p-3 space-y-1.5">
             {lines.map((line, i) => (
-              <p key={i} className="text-xs text-gray-600 leading-relaxed">{line}</p>
+              <p key={i} className="text-xs text-gray-600 leading-relaxed">
+                {line}
+              </p>
             ))}
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Close</Button>
+          <Button variant="outline" onClick={onClose}>
+            Close
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -278,7 +356,11 @@ function RuleSetDialog({ ruleSet, onClose }: { ruleSet: HiringRuleSetItem | null
       queryClient.invalidateQueries({ queryKey: getListHiringRuleSetsQueryKey() });
       onClose();
     } catch (err) {
-      toast({ title: "Failed to save rule set", description: err instanceof Error ? err.message : undefined, variant: "destructive" });
+      toast({
+        title: "Failed to save rule set",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
     }
   };
 
@@ -291,15 +373,23 @@ function RuleSetDialog({ ruleSet, onClose }: { ruleSet: HiringRuleSetItem | null
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
             <Label className="text-xs">Rule Set Name</Label>
-            <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Stitching Operator -Unit 1" />
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Stitching Operator -Unit 1"
+            />
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">Department</Label>
             <Select value={departmentId} onValueChange={setDepartmentId}>
-              <SelectTrigger><SelectValue placeholder="Select department" /></SelectTrigger>
+              <SelectTrigger>
+                <SelectValue placeholder="Select department" />
+              </SelectTrigger>
               <SelectContent>
-                {(departments ?? []).map(d => (
-                  <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>
+                {(departments ?? []).map((d) => (
+                  <SelectItem key={d.id} value={String(d.id)}>
+                    {d.name}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -308,39 +398,61 @@ function RuleSetDialog({ ruleSet, onClose }: { ruleSet: HiringRuleSetItem | null
             <Label className="text-xs">Required Skills</Label>
             <div className="flex gap-2">
               <Input
-                value={skillInput} onChange={e => setSkillInput(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addSkill(); } }}
+                value={skillInput}
+                onChange={(e) => setSkillInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addSkill();
+                  }
+                }}
                 placeholder="Type a skill and press Enter"
               />
-              <Button type="button" variant="outline" onClick={addSkill}><Plus size={14} /></Button>
+              <Button type="button" variant="outline" onClick={addSkill}>
+                <Plus size={14} />
+              </Button>
             </div>
             {skills.length > 0 && (
               <div className="flex flex-wrap gap-1.5 pt-1">
-                {skills.map(s => (
+                {skills.map((s) => (
                   <Badge key={s} variant="secondary" className="gap-1">
                     {s}
-                    <button onClick={() => setSkills(skills.filter(x => x !== s))}><X size={11} /></button>
+                    <button onClick={() => setSkills(skills.filter((x) => x !== s))}>
+                      <X size={11} />
+                    </button>
                   </Badge>
                 ))}
               </div>
             )}
           </div>
           <div className="space-y-1.5">
-            <Label className="text-xs flex items-center gap-1"><HeartHandshake size={12} /> Soft Skills</Label>
+            <Label className="text-xs flex items-center gap-1">
+              <HeartHandshake size={12} /> Soft Skills
+            </Label>
             <div className="flex gap-2">
               <Input
-                value={softSkillInput} onChange={e => setSoftSkillInput(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addSoftSkill(); } }}
+                value={softSkillInput}
+                onChange={(e) => setSoftSkillInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addSoftSkill();
+                  }
+                }}
                 placeholder="e.g. Communication, Teamwork -press Enter"
               />
-              <Button type="button" variant="outline" onClick={addSoftSkill}><Plus size={14} /></Button>
+              <Button type="button" variant="outline" onClick={addSoftSkill}>
+                <Plus size={14} />
+              </Button>
             </div>
             {softSkills.length > 0 && (
               <div className="flex flex-wrap gap-1.5 pt-1">
-                {softSkills.map(s => (
+                {softSkills.map((s) => (
                   <Badge key={s} variant="secondary" className="gap-1 bg-violet-50 text-violet-700 border-violet-100">
                     {s}
-                    <button onClick={() => setSoftSkills(softSkills.filter(x => x !== s))}><X size={11} /></button>
+                    <button onClick={() => setSoftSkills(softSkills.filter((x) => x !== s))}>
+                      <X size={11} />
+                    </button>
                   </Badge>
                 ))}
               </div>
@@ -349,32 +461,55 @@ function RuleSetDialog({ ruleSet, onClose }: { ruleSet: HiringRuleSetItem | null
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label className="text-xs">Min. Experience (years)</Label>
-              <Input type="number" min={0} step={0.5} value={minExperience} onChange={e => setMinExperience(e.target.value)} />
+              <Input
+                type="number"
+                min={0}
+                step={0.5}
+                value={minExperience}
+                onChange={(e) => setMinExperience(e.target.value)}
+              />
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs">Preferred City</Label>
-              <Input value={preferredCity} onChange={e => setPreferredCity(e.target.value)} placeholder="e.g. Tirupur" />
+              <Input
+                value={preferredCity}
+                onChange={(e) => setPreferredCity(e.target.value)}
+                placeholder="e.g. Tirupur"
+              />
             </div>
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">Educational Qualification</Label>
             <Select value={education} onValueChange={setEducation}>
-              <SelectTrigger><SelectValue placeholder="Select minimum qualification" /></SelectTrigger>
+              <SelectTrigger>
+                <SelectValue placeholder="Select minimum qualification" />
+              </SelectTrigger>
               <SelectContent>
-                {EDUCATION_LEVEL_OPTIONS.map(opt => (
-                  <SelectItem key={opt} value={opt}>{opt}</SelectItem>
+                {EDUCATION_LEVEL_OPTIONS.map((opt) => (
+                  <SelectItem key={opt} value={opt}>
+                    {opt}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">Other Requirements</Label>
-            <Textarea value={otherRequirements} onChange={e => setOtherRequirements(e.target.value)} rows={3} placeholder="Any other hiring requirements..." />
+            <Textarea
+              value={otherRequirements}
+              onChange={(e) => setOtherRequirements(e.target.value)}
+              rows={3}
+              placeholder="Any other hiring requirements..."
+            />
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleSave} disabled={isPending}>{isPending ? "Saving…" : "Save Rule Set"}</Button>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={handleSave} disabled={isPending}>
+            {isPending ? "Saving…" : "Save Rule Set"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -398,7 +533,8 @@ function RulesTab() {
     } catch (err) {
       toast({
         title: "Couldn't delete this rule set",
-        description: err instanceof Error ? err.message : "It may already have screened candidates -try deactivating instead.",
+        description:
+          err instanceof Error ? err.message : "It may already have screened candidates -try deactivating instead.",
         variant: "destructive",
       });
     }
@@ -422,13 +558,15 @@ function RulesTab() {
 
       {isLoading && <CircleLoader texts={["UK Textiles", "Resume Screening", "Loading"]} />}
       {!isLoading && (ruleSets ?? []).length === 0 && (
-        <Card><CardContent className="p-8 text-center text-sm text-muted-foreground">
-          No hiring rule sets yet. Create one to start screening resumes.
-        </CardContent></Card>
+        <Card>
+          <CardContent className="p-8 text-center text-sm text-muted-foreground">
+            No hiring rule sets yet. Create one to start screening resumes.
+          </CardContent>
+        </Card>
       )}
 
       <div className="grid gap-3 sm:grid-cols-2">
-        {(ruleSets ?? []).map(rs => (
+        {(ruleSets ?? []).map((rs) => (
           <Card key={rs.id} className={!rs.isActive ? "opacity-60" : ""}>
             <CardContent className="p-4 space-y-2">
               <div className="flex items-start justify-between">
@@ -437,22 +575,44 @@ function RulesTab() {
                   <p className="text-xs text-muted-foreground">{rs.departmentName}</p>
                 </div>
                 <div className="flex items-center gap-1">
-                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setEditing(rs)}><Edit size={13} /></Button>
-                  <Button size="icon" variant="ghost" className="h-7 w-7 text-red-500" onClick={() => handleDelete(rs)}><Trash2 size={13} /></Button>
+                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setEditing(rs)}>
+                    <Edit size={13} />
+                  </Button>
+                  <Button size="icon" variant="ghost" className="h-7 w-7 text-red-500" onClick={() => handleDelete(rs)}>
+                    <Trash2 size={13} />
+                  </Button>
                 </div>
               </div>
               {rs.requiredSkills.length > 0 && (
                 <div className="flex flex-wrap gap-1">
-                  {rs.requiredSkills.slice(0, 5).map(s => <Badge key={s} variant="outline" className="text-[10px]">{s}</Badge>)}
-                  {rs.requiredSkills.length > 5 && <Badge variant="outline" className="text-[10px]">+{rs.requiredSkills.length - 5} more</Badge>}
+                  {rs.requiredSkills.slice(0, 5).map((s) => (
+                    <Badge key={s} variant="outline" className="text-[10px]">
+                      {s}
+                    </Badge>
+                  ))}
+                  {rs.requiredSkills.length > 5 && (
+                    <Badge variant="outline" className="text-[10px]">
+                      +{rs.requiredSkills.length - 5} more
+                    </Badge>
+                  )}
                 </div>
               )}
               {rs.softSkills.length > 0 && (
                 <div className="flex flex-wrap gap-1">
-                  {rs.softSkills.slice(0, 5).map(s => (
-                    <Badge key={s} variant="outline" className="text-[10px] bg-violet-50 text-violet-700 border-violet-100">{s}</Badge>
+                  {rs.softSkills.slice(0, 5).map((s) => (
+                    <Badge
+                      key={s}
+                      variant="outline"
+                      className="text-[10px] bg-violet-50 text-violet-700 border-violet-100"
+                    >
+                      {s}
+                    </Badge>
                   ))}
-                  {rs.softSkills.length > 5 && <Badge variant="outline" className="text-[10px]">+{rs.softSkills.length - 5} more</Badge>}
+                  {rs.softSkills.length > 5 && (
+                    <Badge variant="outline" className="text-[10px]">
+                      +{rs.softSkills.length - 5} more
+                    </Badge>
+                  )}
                 </div>
               )}
               <div className="text-xs text-muted-foreground space-y-0.5">
@@ -500,7 +660,11 @@ function UploadResumeTab() {
       const candidate = await uploadMutation.mutateAsync({ file, ruleSetId: Number(ruleSetId) });
       setResult(candidate);
     } catch (err) {
-      toast({ title: "Screening failed", description: err instanceof Error ? err.message : undefined, variant: "destructive" });
+      toast({
+        title: "Screening failed",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
     }
   };
 
@@ -508,7 +672,10 @@ function UploadResumeTab() {
     if (!result) return;
     await shortlistMutation.mutateAsync(result.id);
     toast({ title: `${result.candidateName ?? "Candidate"} added to Shortlisted` });
-    queryClient.invalidateQueries({ predicate: q => typeof q.queryKey[0] === "string" && q.queryKey[0].startsWith("/api/recruitment/resume-screening/candidates") });
+    queryClient.invalidateQueries({
+      predicate: (q) =>
+        typeof q.queryKey[0] === "string" && q.queryKey[0].startsWith("/api/recruitment/resume-screening/candidates"),
+    });
     setResult(null);
     setFile(null);
     setRuleSetId("");
@@ -517,25 +684,39 @@ function UploadResumeTab() {
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       <Card>
-        <CardHeader><CardTitle className="text-base">Screen a Single Resume</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle className="text-base">Screen a Single Resume</CardTitle>
+        </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-1.5">
             <Label className="text-xs">Resume File (.pdf or .docx)</Label>
-            <Input type="file" accept=".pdf,.docx" onChange={e => setFile(e.target.files?.[0] ?? null)} />
+            <Input type="file" accept=".pdf,.docx" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">Hiring Rule Set</Label>
             <Select value={ruleSetId} onValueChange={setRuleSetId}>
-              <SelectTrigger><SelectValue placeholder="Select rule set" /></SelectTrigger>
+              <SelectTrigger>
+                <SelectValue placeholder="Select rule set" />
+              </SelectTrigger>
               <SelectContent>
-                {(ruleSets ?? []).map(rs => (
-                  <SelectItem key={rs.id} value={String(rs.id)}>{rs.name} -{rs.departmentName}</SelectItem>
+                {(ruleSets ?? []).map((rs) => (
+                  <SelectItem key={rs.id} value={String(rs.id)}>
+                    {rs.name} -{rs.departmentName}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
           <Button className="w-full gap-1.5" disabled={uploadMutation.isPending} onClick={handleScreen}>
-            {uploadMutation.isPending ? <><Loader2 size={14} className="animate-spin" /> Screening…</> : <><UserSearch size={14} /> Screen Resume</>}
+            {uploadMutation.isPending ? (
+              <>
+                <Loader2 size={14} className="animate-spin" /> Screening…
+              </>
+            ) : (
+              <>
+                <UserSearch size={14} /> Screen Resume
+              </>
+            )}
           </Button>
         </CardContent>
       </Card>
@@ -548,22 +729,45 @@ function UploadResumeTab() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="text-xs text-muted-foreground space-y-1">
-              {result.email && <p className="flex items-center gap-1.5"><AtSign size={12} /> {result.email}</p>}
-              {result.phone && <p className="flex items-center gap-1.5"><Phone size={12} /> {result.phone}</p>}
-              {result.city && <p className="flex items-center gap-1.5"><MapPin size={12} /> {result.city}</p>}
+              {result.email && (
+                <p className="flex items-center gap-1.5">
+                  <AtSign size={12} /> {result.email}
+                </p>
+              )}
+              {result.phone && (
+                <p className="flex items-center gap-1.5">
+                  <Phone size={12} /> {result.phone}
+                </p>
+              )}
+              {result.city && (
+                <p className="flex items-center gap-1.5">
+                  <MapPin size={12} /> {result.city}
+                </p>
+              )}
             </div>
             <ScoreBreakdownBars breakdown={result.scoreBreakdown} />
             <div className="flex gap-2 flex-wrap">
               <Button
-                variant="outline" size="sm" className="gap-1.5"
-                onClick={() => openResume(result.id, msg => toast({ title: "Couldn't open resume", description: msg, variant: "destructive" }))}
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={() =>
+                  openResume(result.id, (msg) =>
+                    toast({ title: "Couldn't open resume", description: msg, variant: "destructive" }),
+                  )
+                }
               >
                 <FileText size={13} /> View Resume
               </Button>
               <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setShowReason(true)}>
                 <Info size={13} /> Reason
               </Button>
-              <Button size="sm" className="gap-1.5 ml-auto" onClick={handleShortlist} disabled={shortlistMutation.isPending}>
+              <Button
+                size="sm"
+                className="gap-1.5 ml-auto"
+                onClick={handleShortlist}
+                disabled={shortlistMutation.isPending}
+              >
                 <CheckCircle2 size={13} /> Add to Shortlist
               </Button>
             </div>
@@ -586,27 +790,32 @@ function HowItWorksCard() {
     },
     {
       title: "2. The system reads and scores it",
-      description: "Name, email, phone, city, skills, education and experience are extracted automatically, then compared against the rule set's requirements -matched skills, education level, experience years, and location are each scored and combined into one overall match score.",
+      description:
+        "Name, email, phone, city, skills, education and experience are extracted automatically, then compared against the rule set's requirements -matched skills, education level, experience years, and location are each scored and combined into one overall match score.",
       icon: <UserSearch size={16} />,
     },
     {
       title: "3. Review the breakdown",
-      description: "Every score comes with a full breakdown -click \"Reason\" on any candidate at any time to see exactly what matched, what's missing, and why they were shortlisted, selected, or rejected.",
+      description:
+        'Every score comes with a full breakdown -click "Reason" on any candidate at any time to see exactly what matched, what\'s missing, and why they were shortlisted, selected, or rejected.',
       icon: <Info size={16} />,
     },
     {
       title: "4. Add to Shortlist",
-      description: "If the candidate looks like a good fit, add them to the Shortlisted list -from there you can mark them Selected (and send an interview invite) or Rejected (and send a rejection email) in the Candidate Pipeline tab.",
+      description:
+        "If the candidate looks like a good fit, add them to the Shortlisted list -from there you can mark them Selected (and send an interview invite) or Rejected (and send a rejection email) in the Candidate Pipeline tab.",
       icon: <CheckCircle2 size={16} />,
     },
   ];
   return (
     <Card className="bg-gradient-to-br from-violet-50/60 via-white to-fuchsia-50/40 border-violet-100">
       <CardHeader>
-        <CardTitle className="text-base flex items-center gap-2"><Info size={16} className="text-violet-600" /> How Resume Screening Works</CardTitle>
+        <CardTitle className="text-base flex items-center gap-2">
+          <Info size={16} className="text-violet-600" /> How Resume Screening Works
+        </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {steps.map(s => (
+        {steps.map((s) => (
           <div key={s.title} className="flex gap-3">
             <div className="w-8 h-8 rounded-full bg-violet-100 text-violet-700 flex items-center justify-center shrink-0">
               {s.icon}
@@ -618,7 +827,8 @@ function HowItWorksCard() {
           </div>
         ))}
         <p className="text-xs text-muted-foreground pt-2 border-t border-violet-100/70">
-          For screening many resumes at once, use the <strong>Bulk Resume Upload</strong> tab -you'll be able to set how many top candidates to automatically shortlist.
+          For screening many resumes at once, use the <strong>Bulk Resume Upload</strong> tab -you'll be able to set how
+          many top candidates to automatically shortlist.
         </p>
       </CardContent>
     </Card>
@@ -641,8 +851,8 @@ function BulkUploadTab() {
 
   const addFiles = (list: FileList | null) => {
     if (!list) return;
-    const valid = Array.from(list).filter(f => /\.(pdf|docx)$/i.test(f.name));
-    setFiles(prev => [...prev, ...valid]);
+    const valid = Array.from(list).filter((f) => /\.(pdf|docx)$/i.test(f.name));
+    setFiles((prev) => [...prev, ...valid]);
   };
 
   const handleRun = async () => {
@@ -657,23 +867,38 @@ function BulkUploadTab() {
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader><CardTitle className="text-base">Bulk Resume Upload</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle className="text-base">Bulk Resume Upload</CardTitle>
+        </CardHeader>
         <CardContent className="space-y-4">
           <label
             htmlFor="bulk-resume-file"
-            onDragOver={e => { e.preventDefault(); setDragActive(true); }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragActive(true);
+            }}
             onDragLeave={() => setDragActive(false)}
-            onDrop={e => { e.preventDefault(); setDragActive(false); addFiles(e.dataTransfer.files); }}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragActive(false);
+              addFiles(e.dataTransfer.files);
+            }}
             className={`relative border-2 border-dashed transition-all rounded-xl p-7 flex flex-col items-center gap-2 text-center cursor-pointer block ${
               dragActive ? "border-violet-500 bg-violet-50" : "border-gray-200 hover:border-violet-400 bg-gray-50/50"
             }`}
           >
             <input
-              ref={inputRef} id="bulk-resume-file" type="file" multiple accept=".pdf,.docx"
-              onChange={e => addFiles(e.target.files)}
+              ref={inputRef}
+              id="bulk-resume-file"
+              type="file"
+              multiple
+              accept=".pdf,.docx"
+              onChange={(e) => addFiles(e.target.files)}
               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
             />
-            <div className={`w-12 h-12 rounded-full flex items-center justify-center transition-colors ${dragActive ? "bg-violet-600" : "bg-violet-600/10"}`}>
+            <div
+              className={`w-12 h-12 rounded-full flex items-center justify-center transition-colors ${dragActive ? "bg-violet-600" : "bg-violet-600/10"}`}
+            >
               <UploadCloud size={22} className={dragActive ? "text-white" : "text-violet-600"} />
             </div>
             <span className="text-sm font-semibold text-gray-700">
@@ -687,7 +912,9 @@ function BulkUploadTab() {
               {files.map((f, i) => (
                 <Badge key={`${f.name}-${i}`} variant="secondary" className="gap-1">
                   <Files size={11} /> {f.name}
-                  <button onClick={() => setFiles(files.filter((_, idx) => idx !== i))}><X size={11} /></button>
+                  <button onClick={() => setFiles(files.filter((_, idx) => idx !== i))}>
+                    <X size={11} />
+                  </button>
                 </Badge>
               ))}
             </div>
@@ -697,22 +924,34 @@ function BulkUploadTab() {
             <div className="space-y-1.5">
               <Label className="text-xs">Hiring Rule Set</Label>
               <Select value={ruleSetId} onValueChange={setRuleSetId}>
-                <SelectTrigger><SelectValue placeholder="Select rule set" /></SelectTrigger>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select rule set" />
+                </SelectTrigger>
                 <SelectContent>
-                  {(ruleSets ?? []).map(rs => (
-                    <SelectItem key={rs.id} value={String(rs.id)}>{rs.name} -{rs.departmentName}</SelectItem>
+                  {(ruleSets ?? []).map((rs) => (
+                    <SelectItem key={rs.id} value={String(rs.id)}>
+                      {rs.name} -{rs.departmentName}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs">Shortlist Top N Candidates</Label>
-              <Input type="number" min={1} value={topN} onChange={e => setTopN(e.target.value)} />
+              <Input type="number" min={1} value={topN} onChange={(e) => setTopN(e.target.value)} />
             </div>
           </div>
 
           <Button className="w-full gap-1.5" disabled={isScreening} onClick={handleRun}>
-            {isScreening ? <><Loader2 size={14} className="animate-spin" /> Screening in progress…</> : <><UserSearch size={14} /> Run Screening</>}
+            {isScreening ? (
+              <>
+                <Loader2 size={14} className="animate-spin" /> Screening in progress…
+              </>
+            ) : (
+              <>
+                <UserSearch size={14} /> Run Screening
+              </>
+            )}
           </Button>
         </CardContent>
       </Card>
@@ -726,7 +965,11 @@ function BulkUploadTab() {
 //  Interview invite dialog (single or bulk)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function InterviewInviteDialog({ mode, onClose, onSent }: {
+function InterviewInviteDialog({
+  mode,
+  onClose,
+  onSent,
+}: {
   mode: { type: "single"; candidate: ScreeningCandidateItem } | { type: "bulk" };
   onClose: () => void;
   onSent: (result: { sent: number; failed: unknown[] } | ScreeningCandidateItem) => void;
@@ -759,7 +1002,11 @@ function InterviewInviteDialog({ mode, onClose, onSent }: {
       }
       onClose();
     } catch (err) {
-      toast({ title: "Failed to send invite", description: err instanceof Error ? err.message : undefined, variant: "destructive" });
+      toast({
+        title: "Failed to send invite",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
     }
   };
 
@@ -769,12 +1016,14 @@ function InterviewInviteDialog({ mode, onClose, onSent }: {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <CalendarClock size={16} className="text-indigo-600" />
-            {mode.type === "single" ? `Schedule Interview -${mode.candidate.candidateName ?? "Candidate"}` : "Schedule Interviews for All Selected"}
+            {mode.type === "single"
+              ? `Schedule Interview -${mode.candidate.candidateName ?? "Candidate"}`
+              : "Schedule Interviews for All Selected"}
           </DialogTitle>
         </DialogHeader>
         <div className="py-2 space-y-2">
           <Label className="text-xs">Interview Date &amp; Time</Label>
-          <Input type="datetime-local" value={when} onChange={e => setWhen(e.target.value)} />
+          <Input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
           {mode.type === "bulk" && (
             <p className="text-xs text-muted-foreground">
               This date and time will be sent to every currently Selected candidate who hasn't been invited yet.
@@ -782,9 +1031,17 @@ function InterviewInviteDialog({ mode, onClose, onSent }: {
           )}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
           <Button onClick={handleSend} disabled={isPending} className="gap-1.5">
-            {isPending ? "Sending…" : <><Mail size={13} /> Send Invite</>}
+            {isPending ? (
+              "Sending…"
+            ) : (
+              <>
+                <Mail size={13} /> Send Invite
+              </>
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -805,25 +1062,48 @@ function CandidateCard({ candidate, actions }: { candidate: ScreeningCandidateIt
         <div className="flex items-start justify-between gap-2">
           <div>
             <p className="font-bold text-sm">{candidate.candidateName ?? candidate.originalFilename}</p>
-            <p className="text-xs text-muted-foreground">{candidate.ruleSetName} -{candidate.departmentName}</p>
+            <p className="text-xs text-muted-foreground">
+              {candidate.ruleSetName} -{candidate.departmentName}
+            </p>
           </div>
           <ScoreBadge score={candidate.matchScore} />
         </div>
         <div className="text-xs text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5">
-          {candidate.email && <span className="flex items-center gap-1"><AtSign size={11} /> {candidate.email}</span>}
-          {candidate.phone && <span className="flex items-center gap-1"><Phone size={11} /> {candidate.phone}</span>}
-          {candidate.city && <span className="flex items-center gap-1"><MapPin size={11} /> {candidate.city}</span>}
+          {candidate.email && (
+            <span className="flex items-center gap-1">
+              <AtSign size={11} /> {candidate.email}
+            </span>
+          )}
+          {candidate.phone && (
+            <span className="flex items-center gap-1">
+              <Phone size={11} /> {candidate.phone}
+            </span>
+          )}
+          {candidate.city && (
+            <span className="flex items-center gap-1">
+              <MapPin size={11} /> {candidate.city}
+            </span>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2 pt-1">
           {candidate.hasResume ? (
             <Button
-              variant="outline" size="sm" className="h-7 gap-1 text-xs"
-              onClick={() => openResume(candidate.id, msg => toast({ title: "Couldn't open resume", description: msg, variant: "destructive" }))}
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1 text-xs"
+              onClick={() =>
+                openResume(candidate.id, (msg) =>
+                  toast({ title: "Couldn't open resume", description: msg, variant: "destructive" }),
+                )
+              }
             >
               <FileText size={12} /> Resume <ArrowUpRight size={10} />
             </Button>
           ) : (
-            <span className="h-7 inline-flex items-center gap-1 text-[11px] text-muted-foreground px-2" title="Resume file was removed after this candidate was rejected">
+            <span
+              className="h-7 inline-flex items-center gap-1 text-[11px] text-muted-foreground px-2"
+              title="Resume file was removed after this candidate was rejected"
+            >
               <FileText size={12} /> Resume removed
             </span>
           )}
@@ -846,11 +1126,15 @@ function CandidatePipelinePanel() {
   const updateStatus = useUpdateCandidateStatus();
   const shortlistMutation = useShortlistCandidate();
   const rejectAllMutation = useSendRejectionEmailsAll();
-  const [inviteFor, setInviteFor] = useState<{ type: "single"; candidate: ScreeningCandidateItem } | { type: "bulk" } | null>(null);
+  const [inviteFor, setInviteFor] = useState<
+    { type: "single"; candidate: ScreeningCandidateItem } | { type: "bulk" } | null
+  >(null);
 
-  const invalidateAll = () => queryClient.invalidateQueries({
-    predicate: q => typeof q.queryKey[0] === "string" && q.queryKey[0].startsWith("/api/recruitment/resume-screening/candidates"),
-  });
+  const invalidateAll = () =>
+    queryClient.invalidateQueries({
+      predicate: (q) =>
+        typeof q.queryKey[0] === "string" && q.queryKey[0].startsWith("/api/recruitment/resume-screening/candidates"),
+    });
 
   const setStatus = async (id: number, status: ScreeningCandidateStatus, label: string) => {
     await updateStatus.mutateAsync({ id, data: { status } });
@@ -868,16 +1152,20 @@ function CandidatePipelinePanel() {
     invalidateAll();
   };
 
-  const pendingRejectionCount = (candidates ?? []).filter(c => c.status === "rejected" && !c.rejectionEmailedAt).length;
+  const pendingRejectionCount = (candidates ?? []).filter(
+    (c) => c.status === "rejected" && !c.rejectionEmailedAt,
+  ).length;
 
   return (
     <Card>
       <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <CardTitle className="text-base flex items-center gap-2"><ClipboardList size={16} /> Review candidates by status</CardTitle>
+        <CardTitle className="text-base flex items-center gap-2">
+          <ClipboardList size={16} /> Review candidates by status
+        </CardTitle>
         <PillTabs
           size="sm"
           value={tab}
-          onChange={v => setTab(v as ScreeningCandidateStatus)}
+          onChange={(v) => setTab(v as ScreeningCandidateStatus)}
           items={[
             { value: "shortlisted", label: "Shortlisted" },
             { value: "selected", label: "Selected" },
@@ -897,11 +1185,13 @@ function CandidatePipelinePanel() {
         {tab === "rejected" && (
           <div className="flex justify-end">
             <Button
-              size="sm" className="gap-1.5 bg-rose-600 hover:bg-rose-700"
+              size="sm"
+              className="gap-1.5 bg-rose-600 hover:bg-rose-700"
               disabled={pendingRejectionCount === 0 || rejectAllMutation.isPending}
               onClick={handleRejectAll}
             >
-              <Mail size={13} /> {rejectAllMutation.isPending ? "Sending…" : `Send Email to Everyone (${pendingRejectionCount})`}
+              <Mail size={13} />{" "}
+              {rejectAllMutation.isPending ? "Sending…" : `Send Email to Everyone (${pendingRejectionCount})`}
             </Button>
           </div>
         )}
@@ -912,23 +1202,37 @@ function CandidatePipelinePanel() {
         )}
 
         <div className="grid gap-3 sm:grid-cols-2">
-          {(candidates ?? []).map(c => (
+          {(candidates ?? []).map((c) => (
             <CandidateCard
               key={c.id}
               candidate={c}
               actions={
                 tab === "shortlisted" ? (
                   <>
-                    <Button size="sm" className="h-7 text-xs gap-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => setStatus(c.id, "selected", `${c.candidateName ?? "Candidate"} marked Selected`)}>
+                    <Button
+                      size="sm"
+                      className="h-7 text-xs gap-1 bg-emerald-600 hover:bg-emerald-700"
+                      onClick={() => setStatus(c.id, "selected", `${c.candidateName ?? "Candidate"} marked Selected`)}
+                    >
                       <CheckCircle2 size={12} /> Mark Selected
                     </Button>
-                    <Button size="sm" variant="outline" className="h-7 text-xs gap-1 text-rose-600 border-rose-200" onClick={() => setStatus(c.id, "rejected", `${c.candidateName ?? "Candidate"} marked Rejected`)}>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs gap-1 text-rose-600 border-rose-200"
+                      onClick={() => setStatus(c.id, "rejected", `${c.candidateName ?? "Candidate"} marked Rejected`)}
+                    >
                       <XCircle size={12} /> Mark Rejected
                     </Button>
                   </>
                 ) : tab === "selected" ? (
                   <>
-                    <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => setInviteFor({ type: "single", candidate: c })}>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs gap-1"
+                      onClick={() => setInviteFor({ type: "single", candidate: c })}
+                    >
                       <CalendarClock size={12} /> {c.interviewInvitedAt ? "Re-send Invite" : "Send Interview Invite"}
                     </Button>
                     {c.interviewInvitedAt && (
@@ -936,18 +1240,34 @@ function CandidatePipelinePanel() {
                         Invited for {c.interviewDatetime ? new Date(c.interviewDatetime).toLocaleString() : "—"}
                       </Badge>
                     )}
-                    <Button size="sm" variant="outline" className="h-7 text-xs gap-1 text-rose-600 border-rose-200 ml-auto" onClick={() => setStatus(c.id, "rejected", `${c.candidateName ?? "Candidate"} marked Rejected`)}>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs gap-1 text-rose-600 border-rose-200 ml-auto"
+                      onClick={() => setStatus(c.id, "rejected", `${c.candidateName ?? "Candidate"} marked Rejected`)}
+                    >
                       <XCircle size={12} /> Reject
                     </Button>
                   </>
                 ) : tab === "rejected" ? (
                   c.rejectionEmailedAt ? (
-                    <Badge variant="secondary" className="text-[10px] gap-1"><CheckCircle2 size={10} /> Emailed</Badge>
+                    <Badge variant="secondary" className="text-[10px] gap-1">
+                      <CheckCircle2 size={10} /> Emailed
+                    </Badge>
                   ) : (
                     <span className="text-[11px] text-muted-foreground">Not yet emailed</span>
                   )
                 ) : (
-                  <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={async () => { await shortlistMutation.mutateAsync(c.id); toast({ title: `${c.candidateName ?? "Candidate"} moved to Shortlisted` }); invalidateAll(); }}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs gap-1"
+                    onClick={async () => {
+                      await shortlistMutation.mutateAsync(c.id);
+                      toast({ title: `${c.candidateName ?? "Candidate"} moved to Shortlisted` });
+                      invalidateAll();
+                    }}
+                  >
                     <ArrowUpRight size={12} /> Move to Shortlist
                   </Button>
                 )
@@ -985,7 +1305,7 @@ export default function ResumeScreening() {
 
         <PillTabs
           value={tab}
-          onChange={v => setTab(v as typeof tab)}
+          onChange={(v) => setTab(v as typeof tab)}
           items={[
             { value: "upload", label: "Upload Resume", icon: <FileText size={14} /> },
             { value: "bulk", label: "Bulk Resume Upload", icon: <Files size={14} /> },
