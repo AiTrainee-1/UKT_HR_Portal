@@ -76,3 +76,91 @@ class WebhookTests(TestCase):
         self.assertEqual(self._post(body, "/api/whatsapp/webhook/?token=wrong").status_code, 403)
         self.assertEqual(self._post(body, "/api/whatsapp/webhook/?token=s3cret").status_code, 200)
         self.assertEqual(self._status(), "read")
+
+
+class WebhookLoggingTests(TestCase):
+    """The webhook body holds employees' phone numbers and the text of messages sent to them.
+    None of it may reach the logs, only a description of what arrived."""
+
+    LOGGER = "api.whatsapp_views"
+    # The shape of a real WhatsApp message echo, with made-up people.
+    ECHO = {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "id": "1770760234235498",
+                "changes": [
+                    {
+                        "field": "smb_message_echoes",
+                        "value": {
+                            "messaging_product": "whatsapp",
+                            "metadata": {"display_phone_number": "918000000001", "phone_number_id": "1366514856543744"},
+                            "message_echoes": [
+                                {
+                                    "from": "918000000001",
+                                    "to": "917000000002",
+                                    "id": "wamid.HBgTSU4uMjYzMzkzMzUxMDM3NjU0",
+                                    "timestamp": "1790394553",
+                                    "type": "text",
+                                    "text": {"body": "Punch Reminder. Hello ASHA KUMAR, please punch now."},
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+    PRIVATE = ("918000000001", "917000000002", "ASHA", "KUMAR", "Punch Reminder", "wamid", "1366514856543744")
+
+    def _post(self, body):
+        return self.client.post("/api/whatsapp/webhook/", body, content_type="application/json")
+
+    def _logged(self, body, level="INFO"):
+        with self.assertLogs(self.LOGGER, level=level) as captured:
+            self.assertEqual(self._post(body).status_code, 200)
+        return "\n".join(captured.output)
+
+    def test_a_message_echo_is_described_without_any_of_its_data(self):
+        text = self._logged(self.ECHO)
+        self.assertIn("fields=smb_message_echoes", text)
+        self.assertIn("message_echoes=1", text)
+        self.assertIn("types=text", text)
+        for private in self.PRIVATE:
+            self.assertNotIn(private, text)
+        self.assertNotIn("webhook body", text)
+
+    def test_delivery_statuses_are_named(self):
+        text = self._logged({"data": [{"key": {"id": "ABC123"}, "update": {"status": 3}}]})
+        self.assertIn("statuses=delivered", text)
+        summary = next(line for line in text.splitlines() if "WhatsApp webhook:" in line)
+        self.assertNotIn("ABC123", summary)  # the message id is not part of the summary
+
+    def test_a_recognised_event_is_quiet_by_default(self):
+        # Recognised events are INFO, which production does not print: nothing at WARNING.
+        with self.assertNoLogs(self.LOGGER, level="WARNING"):
+            self._post(self.ECHO)
+
+    def test_an_unrecognised_body_warns_with_key_names_only(self):
+        body = {"customer_phone": "918000000001", "note": "salary is 50000", "nested": {"secret": "hunter2"}}
+        text = self._logged(body, level="WARNING")
+        self.assertIn("unrecognised shape", text)
+        self.assertIn("customer_phone", text)  # the key names say what WAClient started sending
+        self.assertIn("note", text)
+        for private in ("918000000001", "salary is 50000", "hunter2", "secret"):
+            self.assertNotIn(private, text)
+
+    def test_odd_keys_and_odd_bodies_are_not_printed(self):
+        text = self._logged({"hello world, my phone is 918000000001": 1, "ok_key": 2}, level="WARNING")
+        self.assertIn("ok_key", text)
+        self.assertNotIn("918000000001", text)
+        text = self._logged([{"a": "918000000001"}, "918000000001"], level="WARNING")
+        self.assertIn("body_type=list", text)
+        self.assertNotIn("918000000001", text)
+
+    def test_a_form_encoded_body_is_never_printed_either(self):
+        with self.assertLogs(self.LOGGER, level="WARNING") as captured:
+            self.client.post("/api/whatsapp/webhook/", {"phone": "918000000001", "message": "hello"})
+        text = "\n".join(captured.output)
+        self.assertNotIn("918000000001", text)
+        self.assertNotIn("hello", text)

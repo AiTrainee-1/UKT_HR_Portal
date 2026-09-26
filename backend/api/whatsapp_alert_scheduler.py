@@ -1,10 +1,10 @@
 """
-WhatsApp attendance alert scheduler -one interval job, every 5 minutes.
+WhatsApp attendance alert scheduler -one interval job, every minute.
 
 Same shape as on_duty_day_end_scheduler.py (module-singleton BackgroundScheduler
 on its own thread). Unlike that job it has HR-facing on/off switches, but they are
 checked inside whatsapp_alerts.run_attendance_alerts on every run -so flipping a
-toggle on the WhatsApp Control page takes effect within five minutes with no
+toggle on the WhatsApp Control page takes effect within a minute with no
 restart, and the job itself is always registered.
 
 apps.py starts this once at boot via start_scheduler_if_needed().
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 _scheduler = None
 _JOB_ID = "whatsapp_attendance_alerts"
-_INTERVAL_MINUTES = 5
+_INTERVAL_MINUTES = 1
 
 
 def is_available() -> bool:

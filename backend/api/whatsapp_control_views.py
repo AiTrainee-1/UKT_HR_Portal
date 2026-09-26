@@ -50,7 +50,7 @@ GROUPS = [
     (
         "attendance",
         "Attendance alerts (automatic)",
-        "Checked every 5 minutes for staff on today's shift. Nobody is messaged on Sundays, holidays, approved leave, "
+        "Checked every minute against each staff member's own shift. Nobody is messaged on Sundays, holidays, approved leave, "
         "or when HR has already set their day. Each alert is sent once per employee per day.",
     ),
     (
@@ -188,16 +188,16 @@ TIMINGS = [
         (0, 240),
     ),
     (
-        "fourPunchWaitMinutes",
-        "four_punch_wait_minutes",
-        "Wait before a punch reminder, after the punch is due (minutes)",
-        (0, 120),
+        "fourPunchLeadMinutes",
+        "four_punch_lead_minutes",
+        "Send a punch reminder this long before the punch is due (minutes)",
+        (1, 60),
     ),
     (
         "missingPunchAfterMinutes",
         "missing_punch_after_minutes",
-        "Wait after shift end before Missing Punch (minutes)",
-        (0, 480),
+        "Send a Missing Punch alert this long after the punch was due (minutes)",
+        (0, 240),
     ),
 ]
 

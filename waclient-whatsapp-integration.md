@@ -42,7 +42,7 @@ No module talks to WAClient itself. To add a notification: add one entry to `wha
 | `backend/api/whatsapp_views.py` | Settings → WhatsApp endpoints (status, message wording), the public media link, and the delivery-status webhook. |
 | `backend/api/models/whatsapp.py` | `WhatsAppMessageLog`, `WhatsAppMessageTemplate` (per-type wording + on/off switch), `WhatsAppMediaAsset`, `WhatsAppSettings` (feature switches + timings), `EmployeeOtp`. |
 | `backend/api/otp_service.py`, `otp_views.py` | WhatsApp OTP: issue, verify, expire, rate-limit; the `auth/login-options` and `auth/otp/*` endpoints used by the Employee Web App and the mobile app. |
-| `backend/api/whatsapp_alerts.py`, `whatsapp_alert_scheduler.py` | Automatic attendance alerts (a 5-minute background job). |
+| `backend/api/whatsapp_alerts.py`, `whatsapp_alert_scheduler.py` | Automatic attendance alerts (a background job every minute). |
 | `backend/api/whatsapp_notifications.py` | Geo Attendance / punch decisions, gate IN/OUT and visitor arrivals. |
 | `backend/api/whatsapp_control_views.py` | The `/api/whatsapp-control/*` endpoints behind the **WhatsApp Control** HR page. |
 | `frontend/src/pages/hr/WhatsAppControl.tsx` (+ `whatsapp-control/`) | The WhatsApp Control page. |
@@ -83,9 +83,9 @@ No module talks to WAClient itself. To add a notification: add one entry to `wha
 | Documents | Salary Slip, ID Card, Offer / Experience / Resignation Letter, Other Document | HR sends the document (the file is attached; the wording is its caption) | `employee_name`, `month_year` / `designation` / `last_working_day` / `document_category` |
 | OTP & Login | Login OTP, Password Reset OTP, Account Activation OTP | An employee asks for a code | `code` (**must stay in the text**), `minutes` |
 | Attendance | Absent Alert | No punch within the punctuality window after the shift starts | `employee_name`, `date`, `shift_start`, `cutoff_time`, `status` |
-| Attendance | Late Attendance Alert | First punch after start + grace | `shift_start`, `first_punch`, `late_by`, `status` |
-| Attendance | Punch Reminder / On-Duty Punch Reminder | A punch of the day is due and missing | `punch_name`, `punch_number` ("2 of 4"), `hint`, `destination` |
-| Attendance | Missing Punch Alert | End of day with punches missing | `recorded`, `missing` |
+| Attendance | Late Attendance Alert | First punch after start + the shift's grace | `shift_start`, `first_punch`, `late_by`, `status`, `grace_minutes`, `grace_period` |
+| Attendance | Punch Reminder / On-Duty Punch Reminder | 5 minutes before a punch is expected, and it is still missing | `punch_name`, `punch_number` ("2 of 4"), `expected_time`, `greeting`, `action`, `quote`, `closing`, `minutes_left`, `destination` |
+| Attendance | Missing Punch Alert | A punch is still missing 20 minutes after it was expected | `punch_name`, `expected_time`, `status`, `intro` (plus `recorded`, `missing`) |
 | Approvals | Approval - Approved / Rejected | Any request below is decided | `request_type`, `date`, `time`, `details`, `approver`, `comment`, `link` |
 | Geo Attendance | Geo Attendance Approved / Rejected | The request gets HR's final approval, or is rejected by anyone | `destination`, `requested_on`, `approved_by` / `rejected_by`, `comment`, `punches_note` |
 | Geo Attendance | Geo Punch Approved / Rejected | One captured punch is decided | `punch_name`, `date`, `time`, `location`, `comment` |
@@ -145,17 +145,23 @@ An employee **without a phone number on file cannot activate** - the app tells t
 
 ## Automatic attendance alerts and punch reminders
 
-A background job (every 5 minutes, `Asia/Kolkata`) looks at **today** for staff employees and sends, each **at most once per employee per day** (the log row is reserved before sending, so restarts and overlapping runs can't double-send):
+A background job (every minute, `Asia/Kolkata`) looks at **today** for staff employees and sends, each **at most once per employee per day** (the log row is reserved before sending, so restarts and overlapping runs can't double-send). Everything is judged against **the employee's own assigned shift** (start, end, grace, lunch times), never one company-wide time.
 
 | Message | When |
 |---|---|
-| Absent | No punch once shift start + the **punctuality window** has passed (Settings → Attendance, "maximum first punch allowed", 60 minutes by default: the same "wait an hour, then Absent" rule the attendance engine uses) plus any extra minutes HR adds, and the shift hasn't ended. Says "You have been marked as Absent for today" with the day's details. |
-| Late | The first punch came after shift start + the shift's grace. Says the employee, date, shift start, actual punch time, **how late**, and the **status**: Late (still a full shift), Late - automatic Permission, or Late - Half Shift. |
-| Punch reminder | A friendly reminder for each of the day's punches that is still missing: morning check-in (start + wait), lunch-out, lunch-in, evening check-out (end + wait); two punches in simple mode. Never after the moment has passed (the check-in reminder stops when the absent cutoff arrives). |
+| Absent | No punch once shift start + the **punctuality window** has passed (Settings → Attendance, "maximum first punch allowed", 60 minutes by default: the same "wait an hour, then Absent" rule the attendance engine uses) plus any extra minutes HR adds, and the shift hasn't ended. A polite "we haven't received your punch yet; are you absent, or did you forget to punch in?". |
+| Late | As soon as the first punch is seen to be after shift start + **that shift's grace** (compared to the second, as the attendance engine does). Says the shift start, the grace, the first punch, **how late** (counted from the end of the grace period, in whole minutes) and the **status**: Late (still a full shift), Late - automatic Permission, or Late - Half Shift. |
+| Punch reminder | A friendly heads-up **5 minutes before** each expected punch (HR can change the 5), only if that punch is still missing: check-in at the shift start, lunch-out at the shift's first-half end, lunch-in one lunch duration later, check-out at the shift end (two punches in simple mode). Greeting by time of day, wording per punch, and a short motivational line. |
 | On-Duty punch reminder | The same, for employees with an On-Duty (Geo Punch) request today, counting punches they have submitted even before HR approves them, worded to ask for their Geo Punch. |
-| Missing punch | End of day: fewer punches than expected (4 in strict mode, 2 in simple mode), sent after shift end + HR's wait. |
+| Missing punch | A punch is still missing **20 minutes after it was expected** (HR can change the 20): "Expected Punch 9:00 AM, Current Status: Punch Not Recorded". One message per missing punch, per day. It lapses when the next punch's heads-up begins (the check-out one, a few hours after the shift ends). |
 
-Nobody is messaged on Sundays, holidays, Saturday-off, approved leave (full or half day), when HR already set that day by hand, or on a Compensation Day. An employee with an On-Duty request today gets only the punch reminders (not absent / late / missing). A permission covering the employee excuses the late alert. Employees with no shift, or a shift that crosses midnight, are skipped. The late status uses the attendance engine's own zone rule; the alert itself is decided by start + grace.
+A person owes a punch only in order: the check-in first, then lunch-out, lunch-in and check-out (the check-out is owed to anyone still clocked in even if they skipped lunch). Two taps on the device within 5 minutes count as one punch, so a double-press can't skip someone ahead to the next punch.
+
+Nobody is messaged on Sundays, holidays, Saturday-off, approved leave (full or half day), when HR already set that day by hand, or on a Compensation Day. "HR already set the day" means a day record written by hand (an HR override or an approved casual leave), or someone HR marked present who has no punches at all; the presence row the punch ingest writes for everyone who punches does **not** count (treating it as a decision is what once silenced every alert for anyone who had punched). An employee with an On-Duty request today gets only the punch reminders (not absent / late / missing). A permission covering the employee excuses the late alert. Employees with no shift, or a shift that crosses midnight, are skipped. Only active **staff** are checked (not production employees).
+
+**Why didn't employee X get a message?** Run `python manage.py whatsapp_alert_trace 30020` (optionally `--at 09:25`). It runs the scheduler's own decision code for today and prints the shift, the punches and, for every alert, whether it is due and exactly why not. It sends nothing. **Point it at the database you mean:** it reads whatever `DATABASE_URL` says.
+
+Wording HR has saved on the Messages page replaces the defaults above; a saved wording written for the old rules keeps working (`recorded` and `missing` are still filled in), but only the new default carries the new lines.
 
 ## Approval and rejection messages
 

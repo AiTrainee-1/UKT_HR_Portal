@@ -66,7 +66,15 @@ class ApiConfig(AppConfig):
         # every job twice. Any other entrypoint (--noreload, gunicorn/waitress
         # in production, where RUN_MAIN is never set at all) starts normally.
         import sys
-        watcher_process = "runserver" in sys.argv and "--noreload" not in sys.argv and os.environ.get("RUN_MAIN") != "true"
+
+        # Never under the test runner: a job that fires mid-test (the WhatsApp alert job runs every
+        # minute) would act on the test database while tests hold global mocks and settings overrides,
+        # and its open connection would block dropping the test database afterwards.
+        if len(sys.argv) > 1 and sys.argv[1] == "test":
+            return
+        watcher_process = (
+            "runserver" in sys.argv and "--noreload" not in sys.argv and os.environ.get("RUN_MAIN") != "true"
+        )
         if watcher_process:
             return
 

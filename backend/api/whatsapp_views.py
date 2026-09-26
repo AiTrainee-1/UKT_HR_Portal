@@ -14,8 +14,8 @@ WAClient calls with delivery/read receipts -see whatsapp_service.send_document
 / WhatsAppMediaAsset.
 """
 
-import json
 import logging
+import re
 
 from django.conf import settings as dj_settings
 from django.http import HttpResponse
@@ -199,6 +199,67 @@ def _apply_message_event(payload) -> None:
             log.save(update_fields=["status", "error_message"])
 
 
+# Lists inside a webhook body that hold one entry per message.
+_MESSAGE_LISTS = ("message_echoes", "messages", "statuses")
+_SAFE_WORD = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
+
+
+def _walk(node):
+    """Every dict anywhere inside a JSON value."""
+    if isinstance(node, dict):
+        yield node
+        for value in node.values():
+            yield from _walk(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _walk(value)
+
+
+def _webhook_summary(payload) -> tuple[str, bool]:
+    """A one-line description of a webhook body that contains none of its data, and whether its
+    shape was recognised.
+
+    Webhook bodies carry employees' phone numbers and the full text of the messages sent to them,
+    so the body itself must never reach the logs. Only things from a fixed vocabulary are printed:
+    the event field name, how many messages of each kind it holds, their type (text, image...) and
+    delivery statuses. An unrecognised body is described by the names of its top-level keys, never
+    their values, which is enough to tell what WAClient started sending.
+    """
+    fields, counts, types = set(), {}, set()
+    for node in _walk(payload):
+        field = node.get("field")
+        if isinstance(field, str) and _SAFE_WORD.match(field):
+            fields.add(field)
+        for kind in _MESSAGE_LISTS:
+            items = node.get(kind)
+            if not isinstance(items, list):
+                continue
+            counts[kind] = counts.get(kind, 0) + len(items)
+            for item in items:
+                kind_of_message = item.get("type") if isinstance(item, dict) else None
+                if isinstance(kind_of_message, str) and _SAFE_WORD.match(kind_of_message):
+                    types.add(kind_of_message)
+    statuses = {status for _, status in _status_updates(payload)}
+
+    parts = []
+    if fields:
+        parts.append("fields=" + ",".join(sorted(fields)))
+    parts += [f"{kind}={count}" for kind, count in sorted(counts.items())]
+    if types:
+        parts.append("types=" + ",".join(sorted(types)))
+    if statuses:
+        parts.append("statuses=" + ",".join(sorted(statuses)))
+    if parts:
+        return " ".join(parts), True
+
+    keys = (
+        sorted(k for k in payload if isinstance(k, str) and _SAFE_WORD.match(k))[:10]
+        if isinstance(payload, dict)
+        else []
+    )
+    return f"body_type={type(payload).__name__} keys={','.join(keys) or '-'}", False
+
+
 @api_view(["GET", "POST", "HEAD", "OPTIONS"])
 @parser_classes([JSONParser, FormParser, MultiPartParser])
 def whatsapp_webhook(request: Request) -> Response:
@@ -209,9 +270,9 @@ def whatsapp_webhook(request: Request) -> Response:
     or disables the callback. If WHATSAPP_WEBHOOK_TOKEN is set, the URL must
     carry it as ?token=...; a wrong token is a 403.
 
-    The raw body of every POST is logged (truncated) at WARNING: WAClient's
-    payload format isn't publicly documented, so the first real events are
-    the reference for tuning _status_updates.
+    What is logged is a summary with no personal data (see _webhook_summary), never the body.
+    A recognised event is logged at INFO, so it stays quiet in production; a body whose shape is
+    not recognised is a WARNING, since it may mean WAClient changed its format.
     """
     expected = dj_settings.WHATSAPP_WEBHOOK_TOKEN
     if expected and request.query_params.get("token") != expected:
@@ -221,7 +282,11 @@ def whatsapp_webhook(request: Request) -> Response:
         try:
             # Reading the body can itself raise (non-JSON content type, bad JSON).
             body = request.data
-            logger.warning("WhatsApp webhook body: %s", json.dumps(body, default=str)[:1500])
+            summary, recognised = _webhook_summary(body)
+            if recognised:
+                logger.info("WhatsApp webhook: %s", summary)
+            else:
+                logger.warning("WhatsApp webhook in an unrecognised shape: %s", summary)
             _apply_message_event(body)
         except Exception:
             logger.exception("WAClient webhook event could not be processed")

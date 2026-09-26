@@ -491,7 +491,7 @@ class CentralControlTests(ControlBase):
             content_type="application/json",
             **self.hr,
         )
-        self.assertEqual(r.json(), {"preview": "Asha Kumar was late by 35 minutes", "error": None})
+        self.assertEqual(r.json(), {"preview": "Asha Kumar was late by 15 minutes", "error": None})
         self.assertFalse(WhatsAppMessageTemplate.objects.filter(document_type="late_alert").exists())
         bad = self.client.post(
             f"{BASE}/templates/late_alert/preview",

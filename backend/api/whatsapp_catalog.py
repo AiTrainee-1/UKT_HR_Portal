@@ -207,23 +207,22 @@ _add(
     variables=_CODE_VARS,
 )
 
-# ── Attendance alerts and punch reminders (automatic, checked every 5 minutes) ─
+# ── Attendance alerts and punch reminders (automatic, checked every minute) ────
 
 _add(
     key="absent_alert",
     label="Absent Alert",
     module="attendance",
-    description="Sent when no punch has been recorded within the permitted time after the shift starts.",
+    description="Sent when no punch has been recorded within the permitted time after the employee's shift starts.",
     switch="absent_alert_enabled",
     body=(
-        "🚫 *Marked Absent*\n\n"
-        "Hello {{employee_name}},\n\n"
-        "Your attendance has not been recorded within the permitted time. You have been marked as *Absent* for today.\n\n"
+        "🕐 *Attendance Check*\n\n"
+        "Hi {{employee_name}}, we haven't received your attendance punch for today yet.\n\n"
+        "Are you absent today, or did you forget to punch in? Please update your attendance or contact HR if there is an issue.\n\n"
         "📅 Date: {{date}}\n"
         "🕐 Shift start: {{shift_start}}\n"
         "⏳ Punch allowed until: {{cutoff_time}}\n"
         "📋 Status: {{status}}\n\n"
-        "If you are at work, please punch now and inform HR. If you are on leave or something is wrong, please contact HR.\n\n"
         f"{SIGN}"
     ),
     variables=(
@@ -231,7 +230,7 @@ _add(
         V("date", "Today's date", "25 Sep 2026"),
         V("shift_start", "Shift start time", "8:30 AM"),
         V("cutoff_time", "Last time a punch was still accepted", "9:30 AM"),
-        V("status", "Attendance status", "Absent"),
+        V("status", "Attendance status", "No punch recorded yet"),
         V("shift_end", "Shift end time", "5:30 PM"),
         V("wait_minutes", "Minutes allowed after the shift starts", "60"),
     ),
@@ -240,99 +239,122 @@ _add(
     key="late_alert",
     label="Late Attendance Alert",
     module="attendance",
-    description="Sent when the first punch of the day came after the shift's grace period.",
+    description="Sent as soon as the first punch of the day is seen to be after the shift start plus the shift's own grace period.",
     switch="late_alert_enabled",
     body=(
         "⏰ *Late Attendance*\n\n"
-        "Hello {{employee_name}},\n\n"
-        "You were marked *late* today.\n\n"
+        "Hi {{employee_name}}, your attendance has been marked as *Late* today.\n\n"
         "📅 Date: {{date}}\n"
-        "🕐 Shift start: {{shift_start}}\n"
-        "✅ Your punch: {{first_punch}}\n"
-        "⏱ Late by: {{late_by}}\n"
+        "🕐 Shift Start: {{shift_start}}\n"
+        "⏳ Grace Period: {{grace_period}}\n"
+        "✅ Your First Punch: {{first_punch}}\n"
+        "⏱ Late By: {{late_by}}\n"
         "📋 Status: {{status}}\n\n"
-        "Please reach on time. If you had a valid reason, please tell HR.\n\n"
+        "Please try to arrive on time and maintain punctuality. Every minute contributes to a productive workday. Have a great day!\n\n"
         f"{SIGN}"
     ),
     variables=(
         V("employee_name", "Employee name", "Asha Kumar"),
         V("date", "Today's date", "25 Sep 2026"),
-        V("shift_start", "Shift start time", "8:30 AM"),
-        V("first_punch", "Time of the first punch", "9:05 AM"),
-        V("late_by", "How late, from the shift start", "35 minutes"),
+        V("shift_start", "Shift start time", "9:00 AM"),
+        V("first_punch", "Time of the first punch", "9:25 AM"),
+        V("late_by", "How late, counted from the end of the grace period", "15 minutes"),
         V("status", "Attendance status", "Late"),
-        V("grace_minutes", "The shift's grace period in minutes", "10"),
+        V("grace_minutes", "The shift's grace period in minutes (number only)", "10"),
+        V("grace_period", "The shift's grace period, worded", "10 minutes"),
     ),
 )
 _add(
     key="four_punch_alert",
     label="Punch Reminder",
     module="attendance",
-    description="A friendly reminder for each of the four daily punches (check-in, lunch-out, lunch-in, check-out) that is still missing.",
+    description="A friendly heads-up a few minutes before each of the day's punches (check-in, lunch-out, lunch-in, check-out) is expected, if it is still missing. Includes a short motivational line.",
     switch="four_punch_alert_enabled",
     body=(
-        "⏰ *Punch Reminder*\n\n"
-        "Hello {{employee_name}},\n\n"
-        "Friendly reminder: please don't forget to complete your attendance punch.\n\n"
-        "🔔 Punch due: *{{punch_name}}* ({{punch_number}})\n"
-        "📅 Date: {{date}}\n"
-        "🕐 {{hint}}\n\n"
-        "Please punch now, or raise a Missing Punch request in the app if you already did.\n\n"
+        "{{greeting}}, {{employee_name}} 🌟\n\n"
+        "Just a friendly reminder: {{action}}\n\n"
+        "🔔 {{punch_name}} ({{punch_number}}), expected at {{expected_time}}\n"
+        "📅 Date: {{date}}\n\n"
+        "💡 “{{quote}}”\n\n"
+        "{{closing}}\n\n"
         f"{SIGN}"
     ),
     variables=(
         V("employee_name", "Employee name", "Asha Kumar"),
         V("date", "Today's date", "25 Sep 2026"),
-        V("punch_name", "Which punch is due", "Lunch-out"),
-        V("hint", "When it was due", "It was due around 12:30 PM."),
+        V("punch_name", "Which punch is coming up", "Lunch-out"),
+        V("hint", "When it is expected", "Expected at 1:00 PM."),
         V("punch_number", "Which of the day's punches", "2 of 4"),
+        V("greeting", "Good morning / afternoon / evening", "Good afternoon"),
+        V(
+            "action",
+            "What to do and how soon, worded for this punch",
+            "your lunch break is coming up in 5 minutes. Please remember to punch out when you leave for lunch.",
+        ),
+        V("expected_time", "When the punch is expected", "1:00 PM"),
+        V("minutes_left", "How long until then", "5 minutes"),
+        V(
+            "quote",
+            "A short motivational line",
+            "Great teams are built by people who show up, stay committed, and give their best every day.",
+        ),
+        V("closing", "A friendly sign-off for this punch", "Enjoy your break, you've earned it! 🍽️"),
     ),
 )
 _add(
     key="on_duty_punch_reminder",
     label="On-Duty Punch Reminder",
     module="attendance",
-    description="The same reminder for employees working On-Duty, asking them to complete their Geo Punch.",
+    description="The same heads-up for employees working On-Duty, asking them to complete their Geo Punch.",
     switch="four_punch_alert_enabled",
     body=(
         "📍 *On-Duty Punch Reminder*\n\n"
-        "Hello {{employee_name}},\n\n"
-        "Friendly reminder: you are on duty today, so please don't forget to complete your Geo Punch in the app.\n\n"
-        "🔔 Punch due: *{{punch_name}}* ({{punch_number}})\n"
+        "{{greeting}}, {{employee_name}} 🌟\n\n"
+        "Just a friendly reminder: you are on duty today, so your Geo Punch for *{{punch_name}}* ({{punch_number}}) is coming up in {{minutes_left}}. Please complete it in the app.\n\n"
         "📍 On-Duty at: {{destination}}\n"
-        "📅 Date: {{date}}\n"
-        "🕐 {{hint}}\n\n"
+        "🕐 Expected at: {{expected_time}}\n"
+        "📅 Date: {{date}}\n\n"
+        "💡 “{{quote}}”\n\n"
         f"{SIGN}"
     ),
     variables=(
         V("employee_name", "Employee name", "Asha Kumar"),
         V("date", "Today's date", "25 Sep 2026"),
-        V("punch_name", "Which punch is due", "Lunch-in"),
-        V("hint", "When it was due", "It was due around 1:45 PM."),
+        V("punch_name", "Which punch is coming up", "Lunch-in"),
+        V("hint", "When it is expected", "Expected at 2:00 PM."),
         V("punch_number", "Which of the day's punches", "3 of 4"),
         V("destination", "The On-Duty destination", "Tirupur Dyeing Unit"),
+        V("greeting", "Good morning / afternoon / evening", "Good afternoon"),
+        V("expected_time", "When the punch is expected", "2:00 PM"),
+        V("minutes_left", "How long until then", "5 minutes"),
+        V("quote", "A short motivational line", "Every stitch counts, and so does every person on this team."),
     ),
 )
 _add(
     key="missing_punch_alert",
     label="Missing Punch Alert",
     module="attendance",
-    description="Sent after the shift ends when the day is still missing punches.",
+    description="Sent when a punch is still missing a set time after it was expected (20 minutes by default). One message per missing punch.",
     switch="missing_punch_alert_enabled",
     body=(
         "📝 *Missing Punch*\n\n"
-        "Hello {{employee_name}},\n\n"
-        "Your attendance for *{{date}}* is incomplete.\n\n"
-        "✅ Recorded: {{recorded}}\n"
-        "❗ Missing: {{missing}}\n\n"
-        "Please raise a Missing Punch request in the app so your day is counted correctly.\n\n"
+        "Hi {{employee_name}}, we noticed that {{intro}}\n\n"
+        "🔔 Punch: {{punch_name}}\n"
+        "🕐 Expected Punch: {{expected_time}}\n"
+        "📋 Current Status: {{status}}\n"
+        "📅 Date: {{date}}\n\n"
+        "Please complete your attendance punch as soon as possible. If you have already punched and the system has not updated your attendance, please contact HR.\n\n"
         f"{SIGN}"
     ),
     variables=(
         V("employee_name", "Employee name", "Asha Kumar"),
         V("date", "Date", "25 Sep 2026"),
-        V("recorded", "Punches recorded", "2 of 4"),
-        V("missing", "Which punches are missing", "Lunch-in, Evening check-out"),
+        V("recorded", "Punches recorded so far", "1 of 4"),
+        V("missing", "Punches still to come", "Lunch-out, Lunch-in, Evening check-out"),
+        V("punch_name", "Which punch is missing", "Morning check-in"),
+        V("expected_time", "When it was expected", "9:00 AM"),
+        V("status", "Where it stands", "Punch Not Recorded"),
+        V("intro", "Which punch is missing, worded for it", "your attendance punch is still missing."),
     ),
 )
 

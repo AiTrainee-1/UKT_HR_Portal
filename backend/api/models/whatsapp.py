@@ -114,12 +114,13 @@ class WhatsAppSettings(models.Model):
     missing_punch_alert_enabled = models.BooleanField(default=False, db_column="missing_punch_alert_enabled")
     geo_approval_enabled = models.BooleanField(default=False, db_column="geo_approval_enabled")
 
-    # Extra minutes to wait after the shift's own grace before calling someone
-    # absent / a lunch punch missing, and how long after the shift ends before
-    # the end-of-day missing-punch message goes out.
+    # Attendance alert timing (whatsapp_alerts.py). Extra minutes to wait after the punctuality window
+    # before an Absent alert; how many minutes BEFORE a punch is expected its friendly reminder goes
+    # out; and how many minutes AFTER a punch was expected, with it still missing, the Missing Punch
+    # alert goes out.
     absent_extra_minutes = models.IntegerField(default=0, db_column="absent_extra_minutes")
-    four_punch_wait_minutes = models.IntegerField(default=10, db_column="four_punch_wait_minutes")
-    missing_punch_after_minutes = models.IntegerField(default=30, db_column="missing_punch_after_minutes")
+    four_punch_lead_minutes = models.IntegerField(default=5, db_column="four_punch_lead_minutes")
+    missing_punch_after_minutes = models.IntegerField(default=20, db_column="missing_punch_after_minutes")
 
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 

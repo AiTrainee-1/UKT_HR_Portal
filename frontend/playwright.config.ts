@@ -12,6 +12,9 @@ const WEB_PORT = 5180;
 const FAKE_PORT = 8190;
 const backendEnv = {
   DB_NAME: process.env.E2E_DB_NAME ?? "uktex_e2e",
+  // backend/.env may point DATABASE_URL at a real (even production) database, and a set DATABASE_URL wins over
+  // DB_NAME. Blank it so the e2e stack can only ever use its own throwaway database.
+  DATABASE_URL: "",
   // runserver opens a thread (and a database connection) per request, and Django keeps each one for 60s by default.
   // A page that fires a burst of API calls then piles up past Postgres's connection limit, shared with the dev
   // database, and random tests get a 503 "database unavailable". Close each connection when its request ends.
