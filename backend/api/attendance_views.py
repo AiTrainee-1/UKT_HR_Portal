@@ -116,7 +116,8 @@ def _late_count(d: date_type, allowed_ids: set[int] | None = None) -> int:
         if asgn and asgn.shift.start_time:
             grace = asgn.shift.grace_period_minutes or 0
             deadline = datetime.combine(d, asgn.shift.start_time) + timedelta(minutes=grace)
-            if datetime.combine(d, pt) > deadline:
+            # Whole minutes: a punch at 9:10:20 against a 9:10 limit is on time, as everywhere else.
+            if datetime.combine(d, pt.replace(second=0, microsecond=0)) > deadline:
                 late += 1
     return late
 

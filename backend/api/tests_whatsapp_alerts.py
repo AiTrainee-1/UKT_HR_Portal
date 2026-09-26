@@ -220,9 +220,17 @@ class HelperTests(SimpleTestCase):
             [s.expected_s for s in slots], [8 * 3600 + 1800, 12 * 3600 + 1800, 13 * 3600 + 15 * 60, 17 * 3600 + 1800]
         )
 
-    def test_simple_mode_or_no_lunch_or_a_lunch_that_doesnt_fit_expects_two(self):
+    def test_simple_mode_still_expects_the_lunch_punches_but_only_chases_the_others(self):
+        # Simple mode ignores lunch punches when working out the day, but people still make them and are
+        # reminded; a missing lunch punch just isn't worth an alert there.
+        for strict, lunch_required in ((True, True), (False, False)):
+            slots = expected_slots(self.shift(), strict)
+            self.assertEqual([s.position for s in slots], ["1 of 4", "2 of 4", "3 of 4", "4 of 4"])
+            self.assertEqual([s.required for s in slots], [True, lunch_required, lunch_required, True])
+
+    def test_no_lunch_or_a_lunch_that_doesnt_fit_expects_two(self):
         for shift, strict in (
-            (self.shift(), False),
+            (self.shift(first_half_end=None), False),
             (self.shift(first_half_end=None), True),
             (self.shift(first_half_end=time(8, 0)), True),  # lunch before the shift starts
             (self.shift(first_half_end=time(17, 30)), True),  # lunch ends after the shift
@@ -286,13 +294,54 @@ class ThirtyZeroTwentyRegressionTests(AlertBase):
             "Shift Start: 9:00 AM",
             "Grace Period: 11 minutes",
             "Your First Punch: 9:14 AM",
-            "Late By: 4 minutes",  # 9:14:23 is 3 min 23 s after 9:11: counted up to whole minutes
+            "Late By: 3 minutes",  # 9:14:23 counts as 9:14, three minutes past the allowed 9:11 (seconds are ignored)
             "maintain punctuality",
         ):
             self.assertIn(expected, text)
         log = self.logs("late_alert").get()
         self.assertEqual((log.employee_id, log.status, log.phone_number), (self.surya.id, "sent", "919344859103"))
         self.assertEqual(log.dedupe_key, f"late:{SAT.isoformat()}:{self.surya.id}")
+
+    def test_the_lunch_reminder_goes_out_before_lunch_in_simple_mode_too(self):
+        """Lunch at 13:30 for everyone on this shift. At 13:27 a reminder is due, though the attendance mode is
+        simple (which doesn't count lunch punches for the day but doesn't stop people making them)."""
+        self.punch(self.surya, SAT, "09:14:23")
+        self.run_at(SAT, 13, 24)
+        self.assertFalse(self.logs("four_punch_alert").filter(employee=self.surya).exists())  # 13:25 is when it starts
+        self.run_at(SAT, 13, 27)
+        log = self.logs("four_punch_alert").get(employee=self.surya)
+        for expected in (
+            "Good afternoon, SURYA M",
+            "Lunch-out (2 of 4)",
+            "expected at 1:30 PM",
+            "lunch break is coming up in 3 minutes",
+        ):
+            self.assertIn(expected, log.message_text)
+        self.assertEqual(log.dedupe_key, f"four2:{SAT.isoformat()}:{self.surya.id}")
+        self.run_at(SAT, 13, 28)
+        self.run_at(SAT, 13, 29)
+        self.assertEqual(self.logs("four_punch_alert").filter(employee=self.surya).count(), 1)
+
+    def test_it_is_for_everyone_whose_lunch_punch_is_still_missing_and_no_one_else(self):
+        regular = ShiftTemplate.objects.get(name="Regular shift mens")
+        forgetful = self.make_employee("F1", "Forgetful", "One", phone="9000000011", shift=regular)
+        punctual = self.make_employee("P1", "Punctual", "Two", phone="9000000012", shift=regular)
+        for emp in (self.surya, forgetful, punctual):
+            self.punch(emp, SAT, "09:05")
+        self.punch(punctual, SAT, "13:20")  # already went for lunch
+        self.run_at(SAT, 13, 27)
+        reminded = set(self.logs("four_punch_alert").values_list("employee__employee_code", flat=True))
+        self.assertEqual(reminded, {"30020", "F1"})
+
+    def test_the_lunch_return_reminder_follows_and_the_check_in_is_still_the_only_chased_punch(self):
+        self.punch(self.surya, SAT, "09:14", "13:31")
+        self.run_at(SAT, 14, 25)  # back at 14:30
+        log = self.logs("four_punch_alert").get(employee=self.surya)
+        self.assertIn("Lunch-in (3 of 4)", log.message_text)
+        self.assertIn("lunch break ends in 5 minutes", log.message_text)
+        # a missing LUNCH punch is not chased by a Missing Punch alert in simple mode
+        self.run_at(SAT, 14, 55)
+        self.assertFalse(self.logs("missing_punch_alert").filter(employee=self.surya).exists())
 
     def test_it_is_not_repeated_by_the_minute_by_minute_job(self):
         self.punch(self.surya, SAT, "09:14:23")
@@ -303,13 +352,20 @@ class ThirtyZeroTwentyRegressionTests(AlertBase):
         self.assertEqual(self.logs("late_alert").count(), 1)
 
     def test_a_punch_within_his_grace_is_not_late(self):
-        self.punch(self.surya, SAT, "09:10:59")
-        self.run_at(SAT, 9, 12)
-        self.assertFalse(self.logs("late_alert").exists())
-        self.assertIn(
-            "within the allowed time",
-            self.trace("30020", 9, 12),
-        )
+        # his limit is 09:11, so through 09:11:59 he is on time: seconds don't count
+        for punch in ("09:10:59", "09:11:00", "09:11:59"):
+            AttendanceLog.objects.all().delete()
+            Attendance.objects.all().delete()
+            self.punch(self.surya, SAT, punch)
+            self.run_at(SAT, 9, 30)
+            self.assertFalse(self.logs("late_alert").exists(), punch)
+        self.assertIn("within the allowed time", self.trace("30020", 9, 30))
+        # 09:12 is the first late minute
+        AttendanceLog.objects.all().delete()
+        Attendance.objects.all().delete()
+        self.punch(self.surya, SAT, "09:12:05")
+        self.assertEqual(self.run_at(SAT, 9, 30), {"late_alert": 1})
+        self.assertIn("Late By: 1 minute\n", self.logs("late_alert").get().message_text + "\n")
 
     def trace(self, code, h, m):
         out = StringIO()
@@ -324,7 +380,7 @@ class ThirtyZeroTwentyRegressionTests(AlertBase):
             "SURYA M",
             "grace 11 min (latest on-time punch 9:11 AM)",
             "Punches recorded today: 1 (9:14 AM)",
-            "DUE: Late alert (first punch 9:14 AM, 4 minutes after 9:11 AM)",
+            "DUE: Late alert (first punch 9:14 AM, 3 minutes after 9:11 AM)",
             "Due right now: late_alert (late)",
         ):
             self.assertIn(expected, text)
@@ -522,9 +578,15 @@ class LateAlertTests(AlertBase):
         self.punch(self.emp, WED, "09:40")
         self.assertEqual(self.run_at(WED, 9, 40), {"late_alert": 1})
 
-    def test_the_grace_boundary_to_the_second(self):
-        # 9:00 + 15 minutes grace: 9:15:00 is on time, 9:15:01 is late by a minute
-        for punch, late in (("09:14:59", False), ("09:15:00", False), ("09:15:01", True), ("09:16:00", True)):
+    def test_the_grace_boundary_is_judged_in_whole_minutes(self):
+        # 9:00 + 15 minutes grace: anything through 9:15:59 is on time; the first late minute is 9:16
+        for punch, late in (
+            ("09:14:59", False),
+            ("09:15:00", False),
+            ("09:15:59", False),
+            ("09:16:00", True),
+            ("09:16:30", True),
+        ):
             WhatsAppMessageLog.objects.all().delete()
             AttendanceLog.objects.all().delete()
             Attendance.objects.all().delete()
@@ -727,11 +789,26 @@ class PunchReminderTests(AlertBase):
         self.assertEqual(self.run_at(WED, 12, 55), {"four_punch_alert": 1})
         self.assertIn("Lunch-out", self.sent_texts()[0])  # not skipped ahead to lunch-in
 
-    def test_simple_mode_reminds_for_two_punches_only(self):
+    def test_simple_mode_reminds_for_all_four_punches_when_the_shift_has_a_lunch(self):
         ps = PayrollSettings.get()
         ps.attendance_mode = "simple"
         ps.save()
         self.assertEqual(self.run_at(WED, 8, 55), {"four_punch_alert": 1})
+        self.punch(self.emp, WED, "09:00")
+        self.assertEqual(self.run_at(WED, 12, 55), {"four_punch_alert": 1})
+        self.assertIn("Lunch-out (2 of 4)", self.sent_texts()[-1])
+        self.punch(self.emp, WED, "13:01")
+        self.assertEqual(self.run_at(WED, 13, 55), {"four_punch_alert": 1})
+        self.assertIn("Lunch-in (3 of 4)", self.sent_texts()[-1])
+        self.punch(self.emp, WED, "14:00")
+        self.assertEqual(self.run_at(WED, 17, 55), {"four_punch_alert": 1})
+        self.assertIn("Evening check-out (4 of 4)", self.sent_texts()[-1])
+
+    def test_simple_mode_without_a_lunch_break_reminds_for_two(self):
+        ps = PayrollSettings.get()
+        ps.attendance_mode = "simple"
+        ps.save()
+        ShiftTemplate.objects.filter(pk=self.shift.pk).update(first_half_end=None)
         self.punch(self.emp, WED, "09:00")
         for h, m in ((12, 55), (13, 55)):
             self.assertEqual(self.run_at(WED, h, m), {})
@@ -907,12 +984,12 @@ class MissingPunchAlertTests(AlertBase):
         self.assertEqual(self.logs("missing_punch_alert").get().employee.employee_code, "E1")
         self.assertIn("Expected Punch: 6:00 AM", self.sent_texts()[0])
 
-    def test_simple_mode_expects_two_punches(self):
+    def test_simple_mode_only_chases_check_in_and_check_out(self):
         ps = PayrollSettings.get()
         ps.attendance_mode = "simple"
         ps.save()
         self.punch(self.emp, WED, "09:00")
-        self.assertEqual(self.run_at(WED, 13, 20), {})  # no lunch punches in simple mode
+        self.assertEqual(self.run_at(WED, 13, 20), {})  # lunch punches don't count in simple mode
         self.assertEqual(self.run_at(WED, 18, 20), {"missing_punch_alert": 1})
         self.assertIn("check-out", self.sent_texts()[0])
 

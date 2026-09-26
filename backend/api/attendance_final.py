@@ -48,7 +48,7 @@ from .models import (
     LeaveRequest, PayrollSettings, ProductionShiftConfig, ProductionShiftSegment,
 )
 from .shift_engine import (
-    _get_shift_for_date, _t2s, _s2t, NEW_ATTENDANCE_RULE_CUTOVER,
+    _get_shift_for_date, _t2s, _t2s_minute, _s2t, NEW_ATTENDANCE_RULE_CUTOVER,
     _punctuality_ok, _punctuality_window_minutes, resolve_day_punch_logs,
     _is_after_half_shift_late_reference,
     _permission_covers_late_in, _permission_covers_early_out,
@@ -329,7 +329,7 @@ def _compute_staff_simple(emp, d, punch_times, settings, shift, legacy_rule: boo
     if shift:
         grace = (shift.grace_period_minutes if shift.grace_period_minutes is not None else 0) * 60
         shift_start_secs = _t2s(shift.start_time)
-        delta = max(0, _t2s(first) - shift_start_secs)
+        delta = max(0, _t2s_minute(first) - shift_start_secs)
         zone = _classify_zone(delta, grace, window_minutes * 60, permission_window_min * 60)
         if zone == ZONE_LATE:
             is_late = True

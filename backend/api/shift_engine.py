@@ -120,6 +120,16 @@ def _s2t(s: int) -> time_type:
     return time_type(s // 3600, (s % 3600) // 60, s % 60)
 
 
+def _t2s_minute(t: time_type) -> int:
+    """Seconds-since-midnight with the seconds dropped: a punch counts as the minute it was made in.
+
+    Used for every ARRIVAL check against a whole-minute limit (start + grace, the punctuality and
+    permission windows, the lunch return). With a 9:10 limit a punch at 9:10:20 is a 9:10 punch, on time;
+    the first late minute is 9:11. Same rule as _is_after_half_shift_late_reference. Departure checks
+    don't need it: their limits are whole minutes too, so dropping the seconds can't change the answer."""
+    return t.hour * 3600 + t.minute * 60
+
+
 def _punctuality_window_minutes(shift, settings=None) -> int:
     """
     How many minutes of lateness/early-leave a first/last punch gets before
@@ -238,7 +248,7 @@ def _punctuality_ok(punch1, punch4, shift, window_minutes: int, permission_windo
     if not shift or not punch1:
         return True
     total_secs = (window_minutes + permission_window_minutes) * 60
-    if _t2s(punch1) > _t2s(shift.start_time) + total_secs:
+    if _t2s_minute(punch1) > _t2s(shift.start_time) + total_secs:
         return False
     if punch4 and _t2s(punch4) < _t2s(shift.end_time) - total_secs:
         return False
@@ -680,7 +690,7 @@ def compute_daily_shift_log(emp, d: date_type, punches: list, assignments=None, 
             # window+permission check to get this far).
             grace_secs = (shift.grace_period_minutes or 0) * 60
             shift_start_secs = _t2s(shift.start_time)
-            delta = max(0, _t2s(punch1) - shift_start_secs)
+            delta = max(0, _t2s_minute(punch1) - shift_start_secs)
             zone = _classify_zone(delta, grace_secs, window_minutes * 60, permission_window_min * 60)
             if zone == ZONE_LATE:
                 late_morning = True
@@ -720,8 +730,8 @@ def compute_daily_shift_log(emp, d: date_type, punches: list, assignments=None, 
         afternoon_late_window_min = _afternoon_late_window_minutes(settings=settings)
         afternoon_permission_window_min = _afternoon_permission_window_minutes(settings=settings)
         lunch_dur_secs = (shift.lunch_duration_minutes or 60) * 60
-        return_deadline_secs = _t2s(punch2) + lunch_dur_secs
-        delta = max(0, _t2s(punch3) - return_deadline_secs)
+        return_deadline_secs = _t2s_minute(punch2) + lunch_dur_secs
+        delta = max(0, _t2s_minute(punch3) - return_deadline_secs)
         zone = _classify_zone(delta, 0, afternoon_late_window_min * 60, afternoon_permission_window_min * 60)
         deadline_t = _s2t(return_deadline_secs)
         if zone == ZONE_LATE:

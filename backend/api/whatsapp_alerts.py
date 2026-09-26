@@ -20,7 +20,8 @@ Control page (plus one for attendance as a whole):
                       how many minutes past the allowed time it was.
   four_punch_alert    A friendly reminder a few minutes (HR sets it, 5 by default) BEFORE each of the
                       day's punches is expected: check-in at the shift start, lunch-out, lunch-in and
-                      check-out at the shift end (two punches in simple mode) - and only if that punch
+                      check-out at the shift end (just check-in and check-out for a shift with no lunch
+                      break; the attendance mode makes no difference) - and only if that punch
                       is still missing. Carries a short motivational line. On-Duty employees get the same
                       reminder worded for their Geo Punch (on_duty_punch_reminder).
   missing_punch_alert A punch is still missing a set time (HR sets it, 20 minutes by default) AFTER it
@@ -178,22 +179,27 @@ class Slot:
     expected_s: int  # seconds since midnight
     position: str  # "2 of 4"
     role: str  # in | lunch_out | lunch_in | out
+    # Whether a missing punch is worth a Missing Punch alert. Check-in and check-out always; the lunch
+    # punches only when the attendance mode counts them (strict). They are always worth a heads-up.
+    required: bool = True
 
 
 def expected_slots(shift, strict: bool) -> list[Slot]:
-    """The punches this shift expects and when: check-in at the start, then (strict mode, when the
-    shift has a lunch break) lunch-out at the shift's first-half end and lunch-in one lunch
-    duration later, then check-out at the end. A lunch that doesn't fit inside the shift is ignored
-    rather than guessed at, leaving check-in and check-out."""
+    """The punches this shift expects and when: check-in at the start, then, when the shift has a lunch
+    break, lunch-out at the shift's first-half end and lunch-in one lunch duration later, then
+    check-out at the end. That is every mode: simple attendance mode only ignores the lunch punches
+    when working out the day's pay, people still make them and are still reminded (`strict` decides
+    only whether a missing lunch punch is worth a Missing Punch alert). A lunch that doesn't fit
+    inside the shift is ignored rather than guessed at, leaving check-in and check-out."""
     start_s, end_s = _t2s(shift.start_time), _t2s(shift.end_time)
-    if strict and shift.first_half_end is not None:
+    if shift.first_half_end is not None:
         out_s = _t2s(shift.first_half_end)
         back_s = out_s + (shift.lunch_duration_minutes or 0) * 60
         if start_s < out_s < back_s < end_s:
             return [
                 Slot(1, STRICT_PUNCH_NAMES[0], start_s, "1 of 4", "in"),
-                Slot(2, STRICT_PUNCH_NAMES[1], out_s, "2 of 4", "lunch_out"),
-                Slot(3, STRICT_PUNCH_NAMES[2], back_s, "3 of 4", "lunch_in"),
+                Slot(2, STRICT_PUNCH_NAMES[1], out_s, "2 of 4", "lunch_out", required=strict),
+                Slot(3, STRICT_PUNCH_NAMES[2], back_s, "3 of 4", "lunch_in", required=strict),
                 Slot(4, STRICT_PUNCH_NAMES[3], end_s, "4 of 4", "out"),
             ]
     return [
@@ -239,8 +245,10 @@ def due_reminder_slot(slots: list[Slot], n: int, now_s: int, lead_s: int) -> Slo
 
 
 def due_missing_slot(slots: list[Slot], n: int, now_s: int, wait_s: int, lead_s: int, end_s: int) -> Slot | None:
-    """The punch to say is missing right now, or None."""
+    """The punch to say is missing right now, or None. Only punches worth chasing (see Slot.required)."""
     for slot in slots:
+        if not slot.required:
+            continue
         lo, hi = missing_window(slot, slots, wait_s, lead_s, end_s)
         if lo <= now_s < hi and slot_is_pending(slot, slots, n):
             return slot
@@ -496,16 +504,18 @@ def evaluate(emp, day: DayData, trace: list | None = None) -> list[Due]:
         say("DUE: Absent alert.")
 
     # 2. Late arrival (needs an approved permission to be excused). The allowed time is the shift
-    # start plus THIS shift's grace; the first punch is compared in seconds, exactly as the
-    # attendance engine does.
+    # start plus THIS shift's grace. Seconds don't count: the first punch is the minute it was made in,
+    # exactly as the attendance engine judges it, so with a 9:10 limit a punch at 9:10:40 is on time and
+    # the first late minute is 9:11.
     allowed_s = start_s + grace_s
+    first_minute_s = times[0] // 60 * 60 if times else None
     if not sw.late_alert_enabled:
         say("Late alert: switch is OFF.")
     elif n == 0:
         say("Late alert: not due, no punch yet.")
-    elif not times[0] > allowed_s:
+    elif not first_minute_s > allowed_s:
         say(
-            f"Late alert: not due, first punch {_fmt_time(times[0])} is within the allowed time {_fmt_time(allowed_s)}."
+            f"Late alert: not due, first punch {_fmt_time(times[0])} is within the allowed time {_fmt_time(allowed_s)} (seconds are ignored)."
         )
     elif times[0] > end_s:
         say("Late alert: not due, the first punch came after the shift ended.")
@@ -516,7 +526,7 @@ def evaluate(emp, day: DayData, trace: list | None = None) -> list[Due]:
     elif tag_sent("late"):
         say("Late alert: already sent today.")
     else:
-        past_allowed_s = math.ceil((times[0] - allowed_s) / 60) * 60  # whole minutes, never "0 minutes"
+        past_allowed_s = first_minute_s - allowed_s  # whole minutes past the allowed time, at least one
         due.append(
             Due(
                 "late_alert",
@@ -527,7 +537,7 @@ def evaluate(emp, day: DayData, trace: list | None = None) -> list[Due]:
                     "shift_start": _fmt_time(shift.start_time),
                     "first_punch": _fmt_time(times[0]),
                     "late_by": duration_str(past_allowed_s),
-                    "status": _late_status(times[0] - start_s, grace_s, window_s, day.permission_window_s),
+                    "status": _late_status(first_minute_s - start_s, grace_s, window_s, day.permission_window_s),
                     "grace_minutes": str(shift.grace_period_minutes or 0),
                     "grace_period": _plural(shift.grace_period_minutes or 0, "minute"),
                 },
