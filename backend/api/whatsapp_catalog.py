@@ -289,10 +289,10 @@ _add(
         V(
             "action",
             "What to do and how soon, worded for this punch",
-            "your lunch break is coming up in 5 minutes. Please remember to punch out when you leave for lunch.",
+            "your lunch break is coming up in 15 minutes. Please remember to punch out when you leave for lunch.",
         ),
         V("expected_time", "When the punch is expected", "1:00 PM"),
-        V("minutes_left", "How long until then", "5 minutes"),
+        V("minutes_left", "How long until then", "15 minutes"),
         V(
             "quote",
             "A short motivational line",
@@ -326,7 +326,7 @@ _add(
         V("destination", "The On-Duty destination", "Tirupur Dyeing Unit"),
         V("greeting", "Good morning / afternoon / evening", "Good afternoon"),
         V("expected_time", "When the punch is expected", "2:00 PM"),
-        V("minutes_left", "How long until then", "5 minutes"),
+        V("minutes_left", "How long until then", "15 minutes"),
         V("quote", "A short motivational line", "Every stitch counts, and so does every person on this team."),
     ),
 )

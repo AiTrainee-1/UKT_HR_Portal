@@ -9,6 +9,7 @@ due and, if not, exactly why. It never sends anything. `--at` asks "what would b
 today?", handy for checking a rule without waiting for the clock.
 """
 
+from django.conf import settings as dj_settings
 from django.core.management.base import BaseCommand, CommandError
 
 from api import whatsapp_alerts, whatsapp_service
@@ -54,10 +55,19 @@ class Command(BaseCommand):
             f"{switches.missing_punch_after_minutes} min after | extra wait before Absent {switches.absent_extra_minutes} min"
         )
         blocked = []
+        reason_blocked = whatsapp_service.sending_block_reason()
+        if reason_blocked:
+            blocked.append(reason_blocked.rstrip("."))
+        hour_sent, day_sent = whatsapp_alerts._recently_sent()
+        out(
+            f"Sent so far: {hour_sent} alert(s) in the last hour, {day_sent} today | limits: "
+            f"{dj_settings.WHATSAPP_ALERTS_MAX_PER_RUN}/run, {dj_settings.WHATSAPP_ALERTS_MAX_PER_HOUR}/hour, "
+            f"{dj_settings.WHATSAPP_ALERTS_MAX_PER_DAY}/day (0 = no limit)"
+        )
+        if whatsapp_alerts.provider_is_failing():
+            blocked.append("the provider has been refusing alerts, so the job is paused")
         if not switches.attendance_alerts_enabled:
             blocked.append("the master 'Attendance Alerts (All)' switch is OFF")
-        if not whatsapp_service.is_configured():
-            blocked.append("WhatsApp (WAClient) is not configured on this server")
         reason = whatsapp_alerts.non_working_reason(now.date())
         if reason:
             blocked.append(f"today is {reason}")

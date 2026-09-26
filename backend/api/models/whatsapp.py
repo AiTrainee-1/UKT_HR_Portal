@@ -119,7 +119,7 @@ class WhatsAppSettings(models.Model):
     # out; and how many minutes AFTER a punch was expected, with it still missing, the Missing Punch
     # alert goes out.
     absent_extra_minutes = models.IntegerField(default=0, db_column="absent_extra_minutes")
-    four_punch_lead_minutes = models.IntegerField(default=5, db_column="four_punch_lead_minutes")
+    four_punch_lead_minutes = models.IntegerField(default=15, db_column="four_punch_lead_minutes")
     missing_punch_after_minutes = models.IntegerField(default=20, db_column="missing_punch_after_minutes")
 
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")

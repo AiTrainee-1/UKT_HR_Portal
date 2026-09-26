@@ -6,12 +6,14 @@ that create AttendanceLog rows by hand miss that row, and missed the bug where i
 who had punched as "HR already decided their day" and message nobody who had punched at all.
 """
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from io import StringIO
 from unittest import mock
 
+from django.conf import settings
 from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase, override_settings
+from django.utils import timezone
 
 from . import whatsapp_service
 from .attendance_final import _holiday_dates_for_month
@@ -79,6 +81,8 @@ def _switches(**kw):
         late_alert_enabled=True,
         four_punch_alert_enabled=True,
         missing_punch_alert_enabled=True,
+        # The mechanism is tested with a 5-minute lead; the default a fresh install gets (15) has its own tests.
+        four_punch_lead_minutes=5,
     )
     defaults.update(kw)
     WhatsAppSettings.objects.update_or_create(pk=1, defaults=defaults)
@@ -259,9 +263,13 @@ class HelperTests(SimpleTestCase):
         self.assertIsNone(due_reminder_slot(slots, 1, nine - 300, lead))  # they have already punched
         self.assertIsNone(due_missing_slot(slots, 0, nine + wait - 1, wait, lead, end_s))
         self.assertEqual(due_missing_slot(slots, 0, nine + wait, wait, lead, end_s).number, 1)  # 9:20
-        # the check-in alert lapses when the lunch-out heads-up begins
-        self.assertIsNotNone(due_missing_slot(slots, 0, 12 * 3600 + 54 * 60, wait, lead, end_s))
-        self.assertIsNone(due_missing_slot(slots, 0, 12 * 3600 + 55 * 60, wait, lead, end_s))
+        # ...and is only worth sending for an hour after that, even though the day hasn't moved on
+        self.assertIsNotNone(due_missing_slot(slots, 0, nine + wait + 3600 - 1, wait, lead, end_s))
+        self.assertIsNone(due_missing_slot(slots, 0, nine + wait + 3600, wait, lead, end_s))
+        # a shorter gap between punches ends it sooner: it lapses when the next heads-up begins
+        tight = expected_slots(self.shift(first_half_end=time(9, 50), lunch_duration_minutes=30), strict=True)
+        self.assertIsNotNone(due_missing_slot(tight, 0, 9 * 3600 + 44 * 60, wait, lead, end_s))
+        self.assertIsNone(due_missing_slot(tight, 0, 9 * 3600 + 45 * 60, wait, lead, end_s))
         # the check-out alert runs for a few hours after the shift ends, then stops
         self.assertEqual(due_missing_slot(slots, 1, end_s + wait, wait, lead, end_s).number, 4)
         self.assertIsNone(due_missing_slot(slots, 1, end_s + 4 * 3600, wait, lead, end_s))
@@ -591,7 +599,7 @@ class LateAlertTests(AlertBase):
             AttendanceLog.objects.all().delete()
             Attendance.objects.all().delete()
             self.punch(self.emp, WED, punch)
-            self.run_at(WED, 10)
+            self.run_at(WED, 9, 20)
             self.assertEqual(self.logs("late_alert").exists(), late, punch)
         self.assertIn("Late By: 1 minute\n", self.logs("late_alert").get().message_text + "\n")
 
@@ -629,7 +637,7 @@ class LateAlertTests(AlertBase):
             AttendanceLog.objects.all().delete()
             Attendance.objects.all().delete()
             self.punch(self.emp, WED, punch)
-            self.run_at(WED, 12)
+            self.run_at(WED, *(int(part) for part in punch.split(":")))  # as it is seen, an alert must be fresh
             self.assertIn(status, self.logs("late_alert").get().message_text + "\n", punch)
 
     def test_sent_once(self):
@@ -640,7 +648,9 @@ class LateAlertTests(AlertBase):
         self.assertEqual(self.logs("late_alert").count(), 1)
 
     def test_a_later_punch_does_not_change_who_was_late(self):
-        self.punch(self.emp, WED, "09:40", "13:00", "14:00", "18:00")
+        self.punch(self.emp, WED, "09:40")
+        self.run_at(WED, 9, 41)  # sent as soon as it was seen
+        self.punch(self.emp, WED, "13:00", "14:00", "18:00")
         self.run_at(WED, 18, 30)
         self.assertEqual(self.logs("late_alert").count(), 1)
         self.assertIn("9:40 AM", self.logs("late_alert").get().message_text)
@@ -958,10 +968,12 @@ class MissingPunchAlertTests(AlertBase):
             self.run_at(WED, h, 15)
         self.assertEqual(self.tags_sent(), ["missing1"])
 
-    def test_it_stops_when_the_day_has_moved_on(self):
-        # the lunch-out heads-up starts at 12:55, so a check-in alert then would be stale
-        self.assertEqual(self.run_at(WED, 12, 56), {})
-        self.assertEqual(self.run_at(WED, 12, 54), {"missing_punch_alert": 1})
+    def test_it_is_only_worth_sending_for_an_hour(self):
+        # due from 9:20; an hour later it would arrive stale, so it is dropped rather than sent
+        self.assertEqual(self.run_at(WED, 10, 19), {"missing_punch_alert": 1})
+        WhatsAppMessageLog.objects.all().delete()
+        self.assertEqual(self.run_at(WED, 10, 20), {})
+        self.assertEqual(self.run_at(WED, 12, 54), {})
 
     def test_the_check_out_alert_lapses_hours_after_the_shift(self):
         self.punch(self.emp, WED, "09:00", "13:00", "14:00")
@@ -1101,6 +1113,252 @@ class FullDaySimulationTests(AlertBase):
         self.assertEqual(mine[0], ("08:55", "four1"))
         self.assertEqual(theirs[0], ("05:55", "four1"))
         self.assertEqual(len(sent), len(set((code, tag) for _, code, tag in sent)))  # nothing ever repeated
+
+
+class EnvironmentGuardTests(AlertBase):
+    """A development machine, even one wired to the live database and live WhatsApp number, must never send."""
+
+    @override_settings(WHATSAPP_ALLOW_SENDING=None, DEBUG=True)
+    def test_a_development_machine_never_sends(self):
+        self.assertFalse(whatsapp_service.sending_allowed())
+        self.assertFalse(whatsapp_service.is_configured())
+        self.assertIn("development setup", whatsapp_service.sending_block_reason())
+        self.assertEqual(self.run_at(WED, 10), {})
+        self.post.assert_not_called()
+        self.assertFalse(self.logs().exists())
+
+    @override_settings(WHATSAPP_ALLOW_SENDING=None, DEBUG=False)
+    def test_a_real_server_sends(self):
+        self.assertTrue(whatsapp_service.sending_allowed())
+        self.assertIsNone(whatsapp_service.sending_block_reason())
+        self.assertTrue(self.run_at(WED, 10))
+        self.assertTrue(self.post.called)
+
+    @override_settings(WHATSAPP_ALLOW_SENDING=None, DEBUG=False)
+    def test_running_under_runserver_counts_as_development(self):
+        with mock.patch("api.whatsapp_service.sys.argv", ["manage.py", "runserver"]):
+            self.assertFalse(whatsapp_service.sending_allowed())
+            self.assertEqual(self.run_at(WED, 10), {})
+        self.post.assert_not_called()
+
+    def test_it_can_be_forced_either_way(self):
+        with override_settings(WHATSAPP_ALLOW_SENDING=True, DEBUG=True):
+            self.assertTrue(whatsapp_service.sending_allowed())
+        with override_settings(WHATSAPP_ALLOW_SENDING=False, DEBUG=False):
+            self.assertFalse(whatsapp_service.sending_allowed())
+            self.assertEqual(self.run_at(WED, 10), {})
+
+    @override_settings(WHATSAPP_ALLOW_SENDING=None, DEBUG=True)
+    def test_even_a_direct_send_is_refused_at_the_last_step(self):
+        with self.assertRaises(whatsapp_service.WhatsAppServiceError):
+            whatsapp_service._post_send({"type": "text", "number": "919000000001", "message": "hi"})
+        self.post.assert_not_called()
+
+    @override_settings(WHATSAPP_ALLOW_SENDING=None, DEBUG=True)
+    def test_a_person_sending_by_hand_is_told_why_it_didnt_go(self):
+        _phone, text, failed = whatsapp_service._precheck(self.emp, "absent_alert", None, None, {})
+        self.assertIsNone(text)
+        self.assertIn("development setup", failed.error_message)
+        self.post.assert_not_called()
+
+    @override_settings(WACLIENT_INSTANCE_ID="", WACLIENT_ACCESS_TOKEN="")
+    def test_missing_credentials_still_say_so(self):
+        self.assertIn("not configured", whatsapp_service.sending_block_reason())
+
+
+class FreshnessTests(AlertBase):
+    """An alert is about NOW. Once it is old it is dropped, never sent late: a message about the morning arriving
+    at lunchtime is spam, and a backlog released all at once is the burst that gets a number restricted."""
+
+    def setUp(self):
+        super().setUp()
+        _switches(four_punch_alert_enabled=False)
+
+    def test_a_late_alert_is_only_sent_within_half_an_hour_of_the_punch(self):
+        self.punch(self.emp, WED, "09:40")
+        self.assertEqual(self.run_at(WED, 10, 10), {"late_alert": 1})  # 30 minutes on: still fresh
+        WhatsAppMessageLog.objects.all().delete()
+        self.assertEqual(self.run_at(WED, 10, 11), {})  # 31 minutes on: stale
+
+    def test_a_backlog_is_not_flushed_when_something_is_fixed_hours_later(self):
+        for i in range(12):
+            emp = self.make_employee(f"L{i}", "Late", f"Person{i}", phone=f"90000001{i:02d}")
+            self.punch(emp, WED, "09:30")
+        self.assertEqual(self.run_at(WED, 12, 35), {})  # nobody is told about their morning at 12:35
+        self.assertFalse(self.logs("late_alert").exists())
+
+    def test_an_absent_alert_is_dropped_an_hour_after_it_became_due(self):
+        _switches(four_punch_alert_enabled=False, missing_punch_alert_enabled=False)
+        self.assertEqual(self.run_at(WED, 10, 59), {"absent_alert": 1})
+        WhatsAppMessageLog.objects.all().delete()
+        self.assertEqual(self.run_at(WED, 11, 0), {})
+        self.assertEqual(self.run_at(WED, 12, 35), {})
+
+    def test_the_trace_says_why_it_was_dropped(self):
+        self.punch(self.emp, WED, "09:40")
+        out = StringIO()
+        with mock.patch("api.management.commands.whatsapp_alert_trace.ist_now", return_value=at(WED, 12, 35)):
+            call_command("whatsapp_alert_trace", "A1", stdout=out)
+        self.assertIn("would arrive stale", out.getvalue())
+
+
+class SendLimitTests(AlertBase):
+    """A burst guard for the automatic alerts: over a limit they are held back, not queued."""
+
+    def setUp(self):
+        super().setUp()
+        _switches(absent_alert_enabled=False, late_alert_enabled=False, missing_punch_alert_enabled=False)
+        for i in range(24):  # 25 people in all, every one due a check-in reminder at 8:55
+            self.make_employee(f"R{i}", "Reminder", f"Person{i}", phone=f"90000002{i:02d}")
+
+    @override_settings(WHATSAPP_ALERTS_MAX_PER_RUN=10, WHATSAPP_ALERTS_MAX_PER_HOUR=0, WHATSAPP_ALERTS_MAX_PER_DAY=0)
+    def test_a_run_sends_at_most_its_limit_and_the_rest_follow_while_still_fresh(self):
+        self.assertEqual(self.run_at(WED, 8, 55), {"four_punch_alert": 10})
+        self.assertEqual(self.run_at(WED, 8, 56), {"four_punch_alert": 10})
+        self.assertEqual(self.run_at(WED, 8, 57), {"four_punch_alert": 5})
+        self.assertEqual(self.run_at(WED, 8, 58), {})
+        self.assertEqual(self.logs("four_punch_alert").count(), 25)  # each exactly once
+        self.assertEqual(len(set(self.logs().values_list("employee_id", flat=True))), 25)
+
+    @override_settings(WHATSAPP_ALERTS_MAX_PER_RUN=0, WHATSAPP_ALERTS_MAX_PER_HOUR=12, WHATSAPP_ALERTS_MAX_PER_DAY=0)
+    def test_the_hourly_limit_holds_across_runs(self):
+        self.assertEqual(self.run_at(WED, 8, 55), {"four_punch_alert": 12})
+        self.assertEqual(self.run_at(WED, 8, 56), {})
+        self.assertEqual(self.run_at(WED, 8, 57), {})
+
+    @override_settings(WHATSAPP_ALERTS_MAX_PER_RUN=0, WHATSAPP_ALERTS_MAX_PER_HOUR=0, WHATSAPP_ALERTS_MAX_PER_DAY=7)
+    def test_the_daily_limit_holds_across_runs(self):
+        self.assertEqual(self.run_at(WED, 8, 55), {"four_punch_alert": 7})
+        self.assertEqual(self.run_at(WED, 8, 56), {})
+
+    @override_settings(WHATSAPP_ALERTS_MAX_PER_RUN=0, WHATSAPP_ALERTS_MAX_PER_HOUR=0, WHATSAPP_ALERTS_MAX_PER_DAY=0)
+    def test_zero_switches_a_limit_off(self):
+        self.assertEqual(self.run_at(WED, 8, 55), {"four_punch_alert": 25})
+
+    @override_settings(WHATSAPP_ALERTS_MAX_PER_RUN=10, WHATSAPP_ALERTS_MAX_PER_HOUR=0, WHATSAPP_ALERTS_MAX_PER_DAY=0)
+    def test_what_is_held_back_and_has_gone_stale_is_dropped_not_flushed(self):
+        # only late alerts, which are stale 30 minutes on
+        _switches(four_punch_alert_enabled=False, absent_alert_enabled=False, missing_punch_alert_enabled=False)
+        for emp in Employee.objects.exclude(pk=self.emp.pk):
+            self.punch(emp, WED, "09:30")
+        self.assertEqual(self.run_at(WED, 9, 31), {"late_alert": 10})
+        self.assertEqual(self.run_at(WED, 9, 32), {"late_alert": 10})
+        self.assertEqual(self.run_at(WED, 10, 1), {})  # the last four are 31 minutes old: gone, not released now
+        self.assertEqual(self.logs("late_alert").count(), 20)
+
+    @override_settings(WHATSAPP_ALERTS_MAX_PER_RUN=10)
+    def test_a_limit_is_reported_in_the_log(self):
+        with self.assertLogs("api.whatsapp_alerts", level="WARNING") as captured:
+            self.run_at(WED, 8, 55)
+        self.assertIn("held back by the send limits", "\n".join(captured.output))
+
+
+class ProviderFailureBreakerTests(AlertBase):
+    """If the provider keeps refusing alerts (a disconnected or restricted number), stop rather than hammer it."""
+
+    def setUp(self):
+        super().setUp()
+        _switches(four_punch_alert_enabled=False, missing_punch_alert_enabled=False, late_alert_enabled=False)
+
+    def failed(self, count, error="Send failed: instance not connected", kind="late_alert"):
+        for _ in range(count):
+            WhatsAppMessageLog.objects.create(
+                employee=self.emp, document_type=kind, phone_number="919000000001", status="failed", error_message=error
+            )
+
+    def test_three_recent_provider_failures_pause_the_alerts(self):
+        self.failed(3)
+        with self.assertLogs("api.whatsapp_alerts", level="WARNING") as captured:
+            self.assertEqual(self.run_at(WED, 10), {})
+        self.assertIn("paused", "\n".join(captured.output))
+        self.post.assert_not_called()
+
+    def test_two_are_not_enough(self):
+        self.failed(2)
+        self.assertEqual(self.run_at(WED, 10), {"absent_alert": 1})
+
+    def test_a_missing_phone_number_is_the_employees_problem_not_the_providers(self):
+        self.failed(5, error="No phone number on file for this employee.")
+        self.assertEqual(self.run_at(WED, 10), {"absent_alert": 1})
+
+    def test_only_alert_failures_count(self):
+        self.failed(5, kind="salary_slip")
+        self.assertEqual(self.run_at(WED, 10), {"absent_alert": 1})
+
+    def test_old_failures_are_forgotten_so_it_resumes_by_itself(self):
+        self.failed(3)
+        self.assertEqual(self.run_at(WED, 10), {})
+        WhatsAppMessageLog.objects.update(created_at=timezone.now() - timedelta(minutes=31))
+        self.assertEqual(self.run_at(WED, 10), {"absent_alert": 1})
+
+
+class FifteenMinuteLeadTests(AlertBase):
+    """Reminders start 15 minutes before a punch, so a crowd due at the same moment is spread over a quarter of an
+    hour by the per-minute limit instead of landing together."""
+
+    def setUp(self):
+        super().setUp()
+        # a fresh install's settings: the defaults, with only the reminder switched on
+        WhatsAppSettings.objects.all().delete()
+        WhatsAppSettings.objects.create(pk=1, four_punch_alert_enabled=True)
+
+    def test_a_fresh_install_reminds_fifteen_minutes_ahead_and_chases_after_twenty(self):
+        sw = WhatsAppSettings.get()
+        self.assertEqual((sw.four_punch_lead_minutes, sw.missing_punch_after_minutes), (15, 20))
+
+    def test_the_reminder_window_opens_fifteen_minutes_before_and_closes_at_the_punch(self):
+        self.assertEqual(self.run_at(WED, 8, 44), {})
+        self.assertEqual(self.run_at(WED, 8, 45), {"four_punch_alert": 1})
+        self.assertIn("coming up in 15 minutes", self.sent_texts()[0])
+        for m in range(46, 60):
+            self.run_at(WED, 8, m)
+        self.assertEqual(self.post.call_count, 1)  # once, however many minutes the window lasts
+        self.assertEqual(self.run_at(WED, 9, 0), {})
+
+    def test_the_lunch_reminder_starts_a_quarter_of_an_hour_ahead_too(self):
+        self.punch(self.emp, WED, "09:00")
+        self.assertEqual(self.run_at(WED, 12, 44), {})
+        self.assertEqual(self.run_at(WED, 12, 45), {"four_punch_alert": 1})
+        self.assertIn("Lunch-out (2 of 4)", self.sent_texts()[0])
+
+    def test_someone_who_punches_within_the_window_is_not_reminded_after(self):
+        self.assertEqual(self.run_at(WED, 8, 45), {"four_punch_alert": 1})
+        WhatsAppMessageLog.objects.all().delete()
+        self.punch(self.emp, WED, "08:50")
+        self.assertEqual(self.run_at(WED, 8, 51), {})
+
+    @override_settings(WHATSAPP_ALERTS_MAX_PER_RUN=10, WHATSAPP_ALERTS_MAX_PER_HOUR=0, WHATSAPP_ALERTS_MAX_PER_DAY=0)
+    def test_a_crowd_is_drained_at_the_per_minute_limit_across_the_window(self):
+        for i in range(39):  # 40 people in all, all due at 8:45
+            self.make_employee(f"C{i}", "Crowd", f"Person{i}", phone=f"90000003{i:02d}")
+        counts = [self.run_at(WED, 8, m).get("four_punch_alert", 0) for m in range(45, 60)]
+        self.assertEqual(counts, [10, 10, 10, 10] + [0] * 11)  # 40 people take four minutes, one send per person
+        self.assertEqual(len(set(self.logs("four_punch_alert").values_list("employee_id", flat=True))), 40)
+
+    @override_settings(WHATSAPP_ALERTS_MAX_PER_RUN=10, WHATSAPP_ALERTS_MAX_PER_HOUR=0, WHATSAPP_ALERTS_MAX_PER_DAY=0)
+    def test_the_windows_capacity_is_the_per_minute_limit_times_its_minutes(self):
+        """10 a minute for 15 minutes is 150: anyone beyond that is dropped when the window closes, not sent late."""
+        for i in range(159):  # 160 people all due at 8:45
+            self.make_employee(f"K{i}", "Crowd", f"Person{i}", phone=f"90000004{i:03d}"[:10])
+        for m in range(45, 60):
+            self.run_at(WED, 8, m)
+        self.assertEqual(self.logs("four_punch_alert").count(), 150)
+        self.run_at(WED, 9, 0)
+        self.assertEqual(self.logs("four_punch_alert").count(), 150)  # the other 10 lapsed with the window
+
+    def test_the_default_limits_remind_a_hundred_people_on_one_shift_inside_the_window(self):
+        """The real shape of the workforce: about a hundred people share the 9:00 shift. At the shipped limits
+        (no override here) every one of them is reminded once, never more than the per-minute limit in a minute,
+        and the hourly and daily backstops don't cut the crowd short."""
+        for i in range(99):
+            self.make_employee(f"D{i}", "Shift", f"Person{i}", phone=f"90000005{i:02d}")
+        per_run = settings.WHATSAPP_ALERTS_MAX_PER_RUN
+        counts = [self.run_at(WED, 8, m).get("four_punch_alert", 0) for m in range(45, 60)]
+        self.assertLessEqual(max(counts), per_run)
+        self.assertEqual(sum(counts), 100)
+        self.assertEqual(len(set(self.logs("four_punch_alert").values_list("employee_id", flat=True))), 100)
+        active = [c for c in counts if c]
+        self.assertEqual(set(active[:-1]), {per_run})  # a steady stream at the limit, only the last minute is short
 
 
 class DeliveryAndLoggingTests(AlertBase):

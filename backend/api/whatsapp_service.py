@@ -34,6 +34,7 @@ import ipaddress
 import logging
 import re
 import secrets
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -63,8 +64,36 @@ class WhatsAppServiceError(Exception):
     pass
 
 
-def is_configured() -> bool:
+def has_credentials() -> bool:
     return bool(dj_settings.WACLIENT_INSTANCE_ID and dj_settings.WACLIENT_ACCESS_TOKEN)
+
+
+def sending_allowed() -> bool:
+    """May this machine send WhatsApp messages? On a real server yes; on a development machine no, unless
+    WHATSAPP_ALLOW_SENDING=true says otherwise (see config/settings.py for why)."""
+    forced = getattr(dj_settings, "WHATSAPP_ALLOW_SENDING", None)
+    if forced is not None:
+        return bool(forced)
+    return not dj_settings.DEBUG and "runserver" not in sys.argv
+
+
+def sending_block_reason() -> str | None:
+    """Why nothing can be sent from here, or None when it can."""
+    if not has_credentials():
+        return (
+            "WhatsApp is not configured on this server (missing WACLIENT_INSTANCE_ID / WACLIENT_ACCESS_TOKEN in .env)."
+        )
+    if not sending_allowed():
+        return (
+            "WhatsApp sending is switched off on this machine because it is a development setup (DEBUG on or "
+            "runserver), so it can't message employees from the live number. Set WHATSAPP_ALLOW_SENDING=true to override."
+        )
+    return None
+
+
+def is_configured() -> bool:
+    """Credentials present AND this machine is allowed to send."""
+    return sending_block_reason() is None
 
 
 def normalize_phone(raw: str | None) -> str | None:
@@ -223,6 +252,9 @@ def _require_public_base_url(request) -> None:
 def _post_send(payload: dict, url: str | None = None) -> dict:
     """POST one message to WAClient (JSON body, credentials included in the body). Returns
     the parsed response; raises WhatsAppServiceError with WAClient's own message on any failure."""
+    blocked = sending_block_reason()
+    if blocked:
+        raise WhatsAppServiceError(blocked)
     body = {
         **payload,
         "instance_id": dj_settings.WACLIENT_INSTANCE_ID,
@@ -374,14 +406,9 @@ def _precheck(employee, document_type, document_ref_id, sent_by_id, params):
             sent_by_id=sent_by_id,
         )
 
-    if not is_configured():
-        return (
-            phone,
-            None,
-            fail(
-                "WhatsApp is not configured on this server (missing WACLIENT_INSTANCE_ID / WACLIENT_ACCESS_TOKEN in .env)."
-            ),
-        )
+    blocked = sending_block_reason()
+    if blocked:
+        return phone, None, fail(blocked)
     if not phone:
         return phone, None, fail("No phone number on file for this employee.")
     off = switch_off_reason(document_type)

@@ -256,6 +256,8 @@ def _config(request: Request) -> dict:
     return {
         "provider": "WAClient (WhatsApp Web API)",
         "configured": whatsapp_service.is_configured(),
+        # Why nothing can be sent from this server (no credentials, or a development machine), else null.
+        "sendingBlockedReason": whatsapp_service.sending_block_reason(),
         "instanceId": f"…{instance[-4:]}" if instance else None,
         "apiUrl": dj_settings.WACLIENT_API_URL,
         "defaultCountryCode": dj_settings.WHATSAPP_DEFAULT_COUNTRY_CODE,

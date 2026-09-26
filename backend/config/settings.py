@@ -303,6 +303,22 @@ WHATSAPP_DEFAULT_COUNTRY_CODE = os.environ.get("WHATSAPP_DEFAULT_COUNTRY_CODE", 
 # Seconds to wait between messages in a bulk send. Blasting messages out of a
 # linked WhatsApp session back to back is what gets numbers flagged; 0 disables.
 WHATSAPP_SEND_DELAY_SECONDS = float(os.environ.get("WHATSAPP_SEND_DELAY_SECONDS", "2") or 0)
+# Whether this machine may send WhatsApp messages at all. Blank (the default) decides automatically:
+# allowed on a real server (DEBUG off), never on a development machine (DEBUG on, or running under
+# `runserver`). A developer's laptop connected to the live database and the live WhatsApp number must
+# not message employees, and once did. Set WHATSAPP_ALLOW_SENDING=true or false to force it either way.
+_allow_sending = os.environ.get("WHATSAPP_ALLOW_SENDING", "").strip().lower()
+WHATSAPP_ALLOW_SENDING = (_allow_sending in ("1", "true", "yes")) if _allow_sending else None
+# Limits on the AUTOMATIC attendance alerts. A crowd who share a punch time (a hundred people on the same
+# shift) is reminded over the reminder window (15 minutes by default) instead of in one burst: each minute's
+# run sends at most PER_RUN, the rest are picked up by the following runs while still inside their window.
+# Sized so a crowd fits: PER_RUN x the window must be at least the crowd (8 x 15 = 120 people). The hourly
+# and daily limits are runaway backstops (a bug, a shift change that makes everyone due at once), set above a
+# normal day (about four reminders per person), so they never cut a normal day short. An alert over a limit is
+# skipped, not queued, and re-checked next minute only while it is still fresh. 0 turns a limit off.
+WHATSAPP_ALERTS_MAX_PER_RUN = int(os.environ.get("WHATSAPP_ALERTS_MAX_PER_RUN", "8") or 0)
+WHATSAPP_ALERTS_MAX_PER_HOUR = int(os.environ.get("WHATSAPP_ALERTS_MAX_PER_HOUR", "200") or 0)
+WHATSAPP_ALERTS_MAX_PER_DAY = int(os.environ.get("WHATSAPP_ALERTS_MAX_PER_DAY", "700") or 0)
 # Optional shared secret for the WAClient webhook URL (?token=...). Empty = open.
 WHATSAPP_WEBHOOK_TOKEN = os.environ.get("WHATSAPP_WEBHOOK_TOKEN", "").strip()
 

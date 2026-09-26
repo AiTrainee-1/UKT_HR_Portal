@@ -25,6 +25,8 @@ const backendEnv = {
   ALLOWED_HOSTS: "localhost,127.0.0.1",
   // WhatsApp goes to a local fake (e2e/fake-waclient.mjs), never to WAClient: dummy credentials
   // override whatever real ones backend/.env holds, and the API address can't leave the machine.
+  // A dev-mode backend (DEBUG) refuses to send WhatsApp unless told otherwise; here it sends only to the local fake.
+  WHATSAPP_ALLOW_SENDING: "true",
   WACLIENT_INSTANCE_ID: "e2e-instance",
   WACLIENT_ACCESS_TOKEN: "e2e-token",
   WACLIENT_API_URL: `http://127.0.0.1:${FAKE_PORT}/send`,
