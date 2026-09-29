@@ -4,9 +4,12 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from django.db import transaction
+
 from . import whatsapp_approvals
 from .auth import require_hr, require_auth, get_token_employee_id
 from .branch_scope import scope_to_branch
+from .hod_scope import coverage, department_conflicts, managed_employee_ids
 from .models import (
     Employee, Department,
     DepartmentManager, ManagerDepartmentAssignment, ManagerEmployeeAssignment,
@@ -26,18 +29,14 @@ def _manager_json(m, include_assignments=False):
     # An HOD covers employees two ways -a whole assigned DEPARTMENT (every
     # employee in it, automatically) and/or individually assigned employees
     # (ManagerEmployeeAssignment, for cross-department reports). Both count
-    # toward this manager's real headcount -matches _get_manager_employee_ids
-    # / manager_pending_requests, the actual approval-routing logic, which
-    # already ORs both together. Previously this only counted direct
-    # assignments, so an employee covered purely via their department showed
-    # up as "Unassigned" on the User Management page and employeeCount
-    # silently undercounted -this line brings the two back in sync.
-    dept_ids = [da.department_id for da in dept_assignments]
-    direct_employee_ids = {ea.employee_id for ea in emp_assignments}
-    dept_employee_ids = set(
-        Employee.objects.filter(department_id__in=dept_ids).values_list("id", flat=True)
-    ) if dept_ids else set()
-    all_assigned_employee_ids = sorted(direct_employee_ids | dept_employee_ids)
+    # toward this manager's real headcount, but an employee reports to exactly
+    # ONE HOD (hod_scope.py: an individual assignment beats department coverage,
+    # earliest wins among equals), so anyone listed here who really belongs to a
+    # different active HOD is NOT counted or approved for here -they are returned
+    # separately as `overlaps` so HR can see why the numbers differ from the
+    # department headcount and move them if that is what they want. This is the
+    # same rule manager_pending_requests and every other approval screen apply.
+    all_assigned_employee_ids, overridden = coverage(m)
     data = {
         "id": m.id,
         "employeeId": emp.id,
@@ -62,8 +61,33 @@ def _manager_json(m, include_assignments=False):
         # subtracting the union of every manager's assignments. Includes both
         # department-covered and directly-assigned employees (see above).
         "assignedEmployeeIds": all_assigned_employee_ids,
+        # Listed against this HOD but reporting to a different one -see the comment above.
+        "overlapCount": len(overridden),
     }
     if include_assignments:
+        owners = {
+            o.id: o
+            for o in DepartmentManager.objects.select_related("employee").filter(pk__in=set(overridden.values()))
+        }
+        direct_pairs = set(
+            ManagerEmployeeAssignment.objects.filter(
+                employee_id__in=list(overridden), manager_id__in=list(owners)
+            ).values_list("employee_id", "manager_id")
+        )
+        data["overlaps"] = [
+            {
+                "employeeId": e.id,
+                "employeeCode": e.employee_code,
+                "name": f"{e.first_name} {e.last_name}",
+                "department": e.department.name if e.department_id and e.department else None,
+                "currentManager": _conflict_manager_json(owners[overridden[e.id]]),
+                "via": "direct" if (e.id, overridden[e.id]) in direct_pairs else "department",
+            }
+            for e in Employee.objects.select_related("department")
+            .filter(id__in=list(overridden))
+            .order_by("first_name", "last_name")
+            if overridden[e.id] in owners
+        ]
         data["assignedDepartments"] = [
             {
                 "id": da.department.id,
@@ -87,10 +111,16 @@ def _manager_json(m, include_assignments=False):
 
 
 def _get_manager_employee_ids(m):
-    """Return all employee IDs that this manager oversees (dept-based + direct)."""
-    dept_ids = [da.department_id for da in m.department_assignments.all()]
-    direct_ids = [ea.employee_id for ea in m.employee_assignments.all()]
-    return dept_ids, direct_ids
+    """(dept_ids, direct_ids) for building an approval filter: the employees this manager REALLY
+    oversees, under the one-HOD-per-employee rule (see hod_scope.py).
+
+    Both coverage paths are resolved down to one explicit employee list, so `dept_ids` is always
+    empty: matching `employee__department_id__in=dept_ids` would sweep in people an individual
+    assignment has given to another HOD. Every caller already builds
+    `Q(employee_id__in=direct_ids)` and only adds the department clause `if dept_ids`, so they all
+    pick this up unchanged (and new department members appear automatically, because the list is
+    computed fresh on every request)."""
+    return [], managed_employee_ids(m)
 
 
 # ─── HR-only: CRUD for department managers ────────────────────────────────────
@@ -204,6 +234,84 @@ def department_manager_detail(request: Request, pk: int) -> Response:
 
 # ─── Department assignments ───────────────────────────────────────────────────
 
+def _department_conflict_payload(m, dept, conflicts, holders) -> dict:
+    """The 409 body the assignment screen turns into its "already assigned to another HOD" dialog."""
+    m_name = f"{m.employee.first_name} {m.employee.last_name}"
+    n = len(conflicts)
+    parts = []
+    if n:
+        parts.append(
+            f"{n} employee{'s' if n != 1 else ''} in {dept.name} already "
+            f"{'report' if n != 1 else 'reports'} to another HOD."
+        )
+    if holders:
+        names = ", ".join(f"{h.employee.first_name} {h.employee.last_name}" for h in holders)
+        parts.append(f"The whole {dept.name} department is already assigned to {names}.")
+    parts.append(f"Reassign them to {m_name}, or keep the existing assignments unchanged.")
+    return {
+        "conflict": True,
+        "conflictType": "department",
+        "department": {"id": dept.id, "name": dept.name},
+        "error": " ".join(parts),
+        "holders": [_conflict_manager_json(h) for h in holders],
+        "conflicts": [
+            {
+                "employeeId": c.employee.id,
+                "employeeCode": c.employee.employee_code,
+                "name": f"{c.employee.first_name} {c.employee.last_name}",
+                "via": c.via,
+                "manager": _conflict_manager_json(c.manager),
+            }
+            for c in conflicts
+        ],
+        "conflictCount": n,
+    }
+
+
+def _apply_department_assignment(m, dept, conflicts, holders, move_whole_department: bool, reassign_ids: set) -> Response:
+    """Give `dept` to `m`, honouring HR's choice for each employee who already has an HOD.
+
+    reassign_ids:  the conflicting employees HR chose to move to `m`; every other conflicting
+                   employee is KEPT with the HOD they have today.
+    Other HODs' department rows are only moved when at least one employee is being reassigned (or
+    HR said "all"); if HR keeps everyone, nothing changes. All-or-nothing in one transaction."""
+    with transaction.atomic():
+        if holders:
+            if not reassign_ids and not move_whole_department:
+                return Response({
+                    "message": f"Kept the existing assignments; '{dept.name}' was not assigned to this HOD.",
+                    "assigned": False, "reassigned": 0, "kept": len(conflicts),
+                }, status=200)
+            # The department is moving away from its current holder(s). Anyone HR chose to KEEP with
+            # them only belongs to them through that department, so pin those people to their HOD
+            # individually first -otherwise moving the department would move them too.
+            for c in conflicts:
+                if c.via == "department" and c.employee.id not in reassign_ids:
+                    ManagerEmployeeAssignment.objects.get_or_create(manager=c.manager, employee=c.employee)
+            ManagerDepartmentAssignment.objects.filter(
+                department=dept, manager__in=[h.pk for h in holders]
+            ).delete()
+
+        # Employees moving here from an individual assignment elsewhere: drop the old rows (they then
+        # fall under this department). Everyone kept keeps their individual row, which -under the
+        # one-HOD rule- keeps them out of this HOD's coverage.
+        moving = [c.employee.id for c in conflicts if c.employee.id in reassign_ids and c.via == "direct"]
+        if moving:
+            ManagerEmployeeAssignment.objects.filter(
+                employee_id__in=moving, manager__is_active=True,
+            ).exclude(manager=m).delete()
+
+        ManagerDepartmentAssignment.objects.get_or_create(manager=m, department=dept)
+
+    kept = len([c for c in conflicts if c.employee.id not in reassign_ids])
+    message = f"Department '{dept.name}' assigned"
+    if conflicts:
+        message += f": {len(reassign_ids)} reassigned to this HOD, {kept} left with their current HOD"
+    return Response({
+        "message": message, "assigned": True, "reassigned": len(reassign_ids), "kept": kept,
+    }, status=201)
+
+
 @api_view(["POST", "DELETE"])
 @require_hr
 def manager_department_assignments(request: Request, pk: int) -> Response:
@@ -222,10 +330,31 @@ def manager_department_assignments(request: Request, pk: int) -> Response:
             dept = scope_to_branch(Department.objects, request).get(pk=dept_id)
         except Department.DoesNotExist:
             return Response({"error": "Department not found"}, status=404)
-        _, created = ManagerDepartmentAssignment.objects.get_or_create(manager=m, department=dept)
-        if not created:
+        if ManagerDepartmentAssignment.objects.filter(manager=m, department=dept).exists():
             return Response({"error": "Department already assigned to this manager"}, status=400)
-        return Response({"message": f"Department '{dept.name}' assigned"}, status=201)
+
+        # An employee reports to ONE HOD. Giving a whole department to this HOD would silently
+        # take on (or double up with) everyone in it who already reports to another HOD, so ask
+        # first: HR either reassigns those employees here or leaves them where they are.
+        conflicts, holders = department_conflicts(m, dept)
+        reassign = request.data.get("reassign")
+        if (conflicts or holders) and reassign is None:
+            return Response(_department_conflict_payload(m, dept, conflicts, holders), status=409)
+
+        conflict_ids = {c.employee.id for c in conflicts}
+        if reassign is None or reassign == "none":
+            reassign_ids: set[int] = set()
+        elif reassign == "all":
+            reassign_ids = set(conflict_ids)
+        elif isinstance(reassign, list):
+            try:
+                reassign_ids = {int(i) for i in reassign} & conflict_ids
+            except (TypeError, ValueError):
+                return Response({"error": "reassign must be 'all', 'none' or a list of employee ids"}, status=400)
+        else:
+            return Response({"error": "reassign must be 'all', 'none' or a list of employee ids"}, status=400)
+
+        return _apply_department_assignment(m, dept, conflicts, holders, reassign == "all", reassign_ids)
 
     dept_id = request.data.get("departmentId")
     if not dept_id:
@@ -331,8 +460,9 @@ def manager_employee_assignments(request: Request, pk: int) -> Response:
                 message = f"{emp_name} is already assigned to {other_name}. Remove them from {other_name} and assign to this HOD instead?"
             else:
                 message = (
-                    f"{emp_name} is already covered under {other_name} via their department "
-                    f"({emp.department.name if emp.department else '—'}). Assign them individually to this HOD as well?"
+                    f"{emp_name} already reports to {other_name} through the "
+                    f"{emp.department.name if emp.department else '—'} department. Move them to this HOD? "
+                    f"They will then report only to this HOD, and {other_name} keeps the rest of the department."
                 )
             return Response({
                 "conflict": True,
@@ -344,9 +474,10 @@ def manager_employee_assignments(request: Request, pk: int) -> Response:
         if conflict_type == "direct" and force:
             # A clean swap -the employee only ever reports to one HOD via a
             # direct assignment, so moving them means removing the old row.
-            # A "department" conflict has no row to remove here (see
-            # _find_employee_assignment_conflict) -force just adds the new
-            # direct assignment alongside the existing department coverage.
+            # A "department" conflict has no row to remove: the new direct
+            # assignment below is what moves them, because an individual
+            # assignment beats department coverage (hod_scope.py) -the other
+            # HOD keeps the rest of the department, this employee reports only here.
             ManagerEmployeeAssignment.objects.filter(employee=emp).exclude(manager=m).delete()
 
         # Always a genuine create at this point -the "already assigned to
@@ -495,8 +626,15 @@ def manager_pending_requests(request: Request) -> Response:
         }
         return data
 
+    # One settings row and one query per employee-month for the whole list, not a settings read plus
+    # a COUNT for every single permission (this list is unpaginated with status=all).
+    from .leave_views import _CapStatusCache
+    from .models import PayrollSettings
+    _ps = PayrollSettings.get()
+    _cap_cache = _CapStatusCache(_ps.permission_monthly_cap)
+
     def _perm_with_emp(p):
-        data = _permission_json(p)
+        data = _permission_json(p, settings=_ps, cap_cache=_cap_cache)
         emp = p.employee
         data["employee"] = {
             "id": emp.id,

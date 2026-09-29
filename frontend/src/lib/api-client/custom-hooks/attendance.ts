@@ -5,6 +5,21 @@ import { SyncResult } from "./shared";
 
 // ── Attendance (enhanced) ─────────────────────────────────────────────────────
 
+/**
+ * The Late Detection / Permission flags every HR attendance endpoint attaches to a day (permission_flags_json in
+ * attendance_final.py). "Applied" = an Allowed (within the monthly cap) Morning Late-In / Evening Early-Out
+ * permission shifted that edge today; "Excess" = approved but beyond the cap, so it did NOT shift it. The API still
+ * emits the older permissionMorning / permissionDeparture / permissionZoneCount / permissionEscalatedToHalfShift keys
+ * for the installed mobile app; the HR portal deliberately ignores them.
+ */
+export type DayPermissionFlags = {
+  morningPermissionApplied?: boolean;
+  eveningPermissionApplied?: boolean;
+  morningPermissionExcess?: boolean;
+  eveningPermissionExcess?: boolean;
+  middlePermissionToday?: boolean;
+};
+
 export type AttendanceSummary = {
   date: string;
   totalEmployees: number;
@@ -62,18 +77,17 @@ export type AttendanceEmployeeHistory = {
   month: number;
   year: number;
   summary: { present: number; halfShift: number; absent: number; onLeave: number; late: number };
-  records: {
+  records: (DayPermissionFlags & {
     date: string;
     day: string;
     status: string;
     isLate: boolean;
+    isEarlyOut?: boolean;
     isHalfShift: boolean;
-    permissionMorning?: boolean;
-    permissionMorningWithRequest?: boolean;
+    // Plain-language reason for a Late / Early Out flag -not sent by this endpoint today, read if it ever is.
+    lateReason?: string | null;
     permissionAfternoon?: boolean;
     permissionAfternoonWithRequest?: boolean;
-    permissionDeparture?: boolean;
-    permissionDepartureWithRequest?: boolean;
     isCompensationDay?: boolean;
     isHalfDayLeave?: boolean;
     present: boolean;
@@ -86,7 +100,7 @@ export type AttendanceEmployeeHistory = {
     sourceLabel?: string | null;
     notes?: string | null;
     leaveType?: string | null;
-  }[];
+  })[];
   totalPresent: number;
   totalAbsent: number;
 };
@@ -185,7 +199,7 @@ export const useCreateManualAttendance = () =>
 
 // ── Report Log types ──────────────────────────────────────────────────────────
 
-export type ShiftLogEntry = {
+export type ShiftLogEntry = DayPermissionFlags & {
   employeeId: number;
   employeeCode: string;
   employeeName: string;
@@ -207,22 +221,19 @@ export type ShiftLogEntry = {
   lateAfternoon?: boolean;
   lateReturn: boolean;
   lateReason?: string | null;
-  // Auto-Permission zone (see shift_engine.py's ZONE_* / _classify_zone) -
-  // detected purely from punch timing, independent of the submitted-request
-  // `permission` field below. The *WithRequest flags label whether an
-  // approved request also covered that edge.
-  permissionMorning?: boolean;
-  permissionMorningWithRequest?: boolean;
+  // Strict mode's lunch-return zone -an untouched, informational axis; the
+  // Morning/Evening permission flags come from DayPermissionFlags above.
   permissionAfternoon?: boolean;
   permissionAfternoonWithRequest?: boolean;
-  permissionDeparture?: boolean;
-  permissionDepartureWithRequest?: boolean;
-  permissionZoneCount?: number;
-  permissionEscalatedToHalfShift?: boolean;
   isCompensationDay?: boolean;
   isHalfDayLeave?: boolean;
   casualLeave: { status: "pending" | "approved" | "rejected"; reason: string | null } | null;
-  permission: { status: "pending" | "approved" | "rejected"; time: string | null; reason: string | null } | null;
+  permission: {
+    status: "pending" | "approved" | "rejected";
+    type?: string | null;
+    time: string | null;
+    reason: string | null;
+  } | null;
   leave: { status: "pending" | "approved" | "rejected"; type: string | null; reason: string | null } | null;
   source: "auto" | "manual";
 };
@@ -273,7 +284,14 @@ export type LateSummaryEmployee = {
   department?: string | null;
   totalShifts: string;
   halfShiftDays: number;
+  // Morning Late-In days + Evening Early-Out days (the excess Permissions are counted separately, below).
   totalLateCount: number;
+  // The split of the above -not sent by every backend version; when present the report is on the pooled rules.
+  lateInCount?: number;
+  earlyOutCount?: number;
+  // Approved Permissions beyond the monthly cap -each is one more occurrence in the same late pool.
+  permissionOverageCount?: number;
+  // Occurrences absorbed by the free allowance (min(pool total, allowance)), despite the historical name.
   permissionsUsed: number;
   billableLateCount: number;
   shiftDeductions: string;
@@ -300,15 +318,23 @@ export type EmployeeShiftMonthlyStats = {
   totalLateCount: number;
   summary?: {
     totalShifts: string;
+    // Days flagged Late-In (NOT the pool total -that is lateInCount + earlyOutCount + excessPermissionCount).
     totalLateCount: number;
     billableLateCount: number;
     shiftDeductions: string;
     salaryDeductionAmount: string;
+    // Live late-pool split, staff only (Production keeps its own separate policy and reports 0 for the first two).
+    lateInCount?: number;
+    earlyOutCount?: number;
+    excessPermissionCount?: number;
+    permissionOverageCount?: number;
+    freeAllowance?: number;
+    permissionMonthlyCap?: number;
   } | null;
-  dailyLogs: {
+  dailyLogs: (DayPermissionFlags & {
     date: string;
     day: string;
-    status: "present" | "absent" | "on_leave" | "holiday" | "future";
+    status: "present" | "half_shift" | "absent" | "on_leave" | "holiday" | "future";
     firstPunch?: string | null;
     lastPunch?: string | null;
     totalPunches: number;
@@ -316,9 +342,15 @@ export type EmployeeShiftMonthlyStats = {
     leaveType?: string | null;
     shiftsCompleted?: string | null;
     isHalfShift: boolean;
+    isLate?: boolean;
+    isEarlyOut?: boolean;
     lateMorning: boolean;
     lateReturn: boolean;
-  }[];
+    lateAfternoon?: boolean;
+    permissionAfternoon?: boolean;
+    isCompensationDay?: boolean;
+    isHalfDayLeave?: boolean;
+  })[];
 };
 
 export type LateSummaryResponse = {
@@ -572,7 +604,7 @@ export const useAttendanceReportDetail = (params: ReportLogDetailParams, enabled
 // (Report Log page only -Late/Permission/On-Leave filtering, Informed
 // status, Excel/PDF/Image export.)
 
-export type ReportLogDailyRow = {
+export type ReportLogDailyRow = DayPermissionFlags & {
   employeeId: number;
   employeeCode: string;
   employeeName: string;
@@ -580,10 +612,9 @@ export type ReportLogDailyRow = {
   designation: string | null;
   status: "present" | "half_shift" | "absent" | "on_leave" | "holiday";
   isLate: boolean;
+  isEarlyOut?: boolean;
   lateAfternoon: boolean;
-  permissionMorning: boolean;
   permissionAfternoon: boolean;
-  permissionDeparture: boolean;
   isCompensationDay: boolean;
   isInformed: boolean | null;
 };
@@ -635,10 +666,13 @@ export type AttendanceSheetDayCell = {
   date: string;
   status: AttendanceSheetDayStatus;
   isLate?: boolean;
+  // Evening Early-Out -only ever true while that switch is on (Settings → Attendance).
+  isEarlyOut?: boolean;
   isHalfShift?: boolean;
   // Which half was actually worked, only meaningful when status is
   // "half_shift" -see attendance_report_log_sheet's half_day_period
-  // derivation (first punch vs. PayrollSettings.half_shift_late_reference_time).
+  // derivation (first punch vs. PayrollSettings.half_day_first_half_end_time).
+  // The Evening half is spelled "afternoon" here.
   halfDayPeriod?: "morning" | "afternoon" | null;
   firstPunch?: string | null;
   lastPunch?: string | null;
@@ -724,24 +758,25 @@ export const useAttendanceSearch = (query: string, date: string, enabled = true)
 // One employee's full day-by-day attendance across an arbitrary range —
 // same punch shape as attendance_search above, plus each day's computed
 // status/late flag and any approved Leave or Permission covering that date.
-export type AttendanceSearchDay = {
+export type AttendanceSearchDay = DayPermissionFlags & {
   date: string;
   status: "present" | "half_shift" | "absent" | "on_leave" | "holiday";
   isLate: boolean;
+  isEarlyOut?: boolean;
   isHalfShift: boolean;
   lateAfternoon?: boolean;
-  permissionMorning?: boolean;
+  // Plain-language reason for a Late / Early Out flag -not sent by this endpoint today, read if it ever is.
+  lateReason?: string | null;
   permissionAfternoon?: boolean;
-  permissionDeparture?: boolean;
-  permissionZoneCount?: number;
-  permissionEscalatedToHalfShift?: boolean;
   isCompensationDay?: boolean;
   isHalfDayLeave?: boolean;
   totalPunches: number;
   punches: AttendanceSearchPunch[];
   casualLeave: { status: string; reason: string | null } | null;
   leave: { status: string; type: string; reason: string | null } | null;
-  permission: { status: string; time: string | null; reason: string | null } | null;
+  // type is the stored spelling of the permission's type (canonical slug, or a pre-rewrite "Late In" / "Early Out" /
+  // "Short Leave", or null for an untyped request) -normalise with normalizePermissionType before comparing.
+  permission: { status: string; type?: string | null; time: string | null; reason: string | null } | null;
 };
 
 export type AttendanceSearchRangeResponse = {
@@ -840,21 +875,17 @@ export const useAttendanceTrendTyped = (year: number, month: number, employmentT
 //  Final Attendance (weekly search + manual overrides)
 // ═══════════════════════════════════════════════════════════════════════════
 
-export type FinalAttendanceDay = {
+export type FinalAttendanceDay = DayPermissionFlags & {
   date: string;
   day: string;
   status: "present" | "absent" | "half_shift" | "on_leave" | "holiday";
   isLate: boolean;
   isHalfShift: boolean;
+  // Evening Early-Out (this endpoint spells it earlyLeave; it is only ever set while that switch is on).
   earlyLeave: boolean;
   lateAfternoon?: boolean;
-  permissionMorning?: boolean;
-  permissionMorningWithRequest?: boolean;
   permissionAfternoon?: boolean;
   permissionAfternoonWithRequest?: boolean;
-  permissionDeparture?: boolean;
-  permissionDepartureWithRequest?: boolean;
-  permissionEscalatedToHalfShift?: boolean;
   isCompensationDay?: boolean;
   isHalfDayLeave?: boolean;
   shiftsEarned: string;
@@ -915,6 +946,21 @@ export const useEmployeeMonthlyAttendance = (code: string, month: number, year: 
     retry: false,
   });
 
+/** A day's verdict as snapshotted into an override request (previousValues) or asked for (requestedValues). */
+export type AttendanceOverrideValues = {
+  status?: string;
+  isLate?: boolean;
+  // Evening Early-Out. Absent on a request saved before Early-Out could be overridden, which the server reads as "no
+  // early-out" once such a request is approved.
+  isEarlyOut?: boolean;
+  isHalfShift?: boolean;
+  firstPunch?: string | null;
+  lastPunch?: string | null;
+  shiftsEarned?: string;
+  note?: string | null;
+  source?: string;
+};
+
 export type AttendanceOverrideRequest = {
   id: number;
   employeeId: number;
@@ -922,8 +968,8 @@ export type AttendanceOverrideRequest = {
   employeeName: string;
   department?: string | null;
   date: string;
-  previousValues: Record<string, unknown>;
-  requestedValues: Record<string, unknown>;
+  previousValues: AttendanceOverrideValues;
+  requestedValues: AttendanceOverrideValues;
   reason?: string | null;
   status: "pending" | "approved" | "rejected";
   requestedBy?: string | null;
@@ -947,6 +993,9 @@ export const useAttendanceOverride = () => {
       date: string;
       status?: string;
       isLate?: boolean;
+      // Evening Early-Out, sent exactly like isLate. Omitted, the server carries over the day's current flag; it
+      // forces both to false when the chosen status is absent / on leave / holiday.
+      isEarlyOut?: boolean;
       isHalfShift?: boolean;
       firstPunch?: string | null;
       lastPunch?: string | null;

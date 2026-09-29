@@ -71,8 +71,9 @@ from .biometric_sync import _ingest_punches
 from .branch_scope import scope_to_branch
 from .geo_utils import haversine_distance_m
 from .clock import ist_time, ist_today
+from .hod_scope import manager_may_act_on, managers_to_notify
 from .models import (
-    AttendanceLog, DepartmentManager, Employee, LiveLocationPing, Notification,
+    AttendanceLog, Employee, LiveLocationPing, Notification,
     OnDutyPunchVerification, OnDutySession, OutpassRequest,
 )
 
@@ -605,12 +606,8 @@ def _notify_hod_approvers(session: OnDutySession) -> None:
     via the Pending Approvals tab on the HR dashboard (no push needed there —
     HRUser accounts aren't push-token-registered, only employees are)."""
     emp = session.employee
-    managers = DepartmentManager.objects.select_related("employee").filter(
-        Q(employee_assignments__employee_id=emp.id) | Q(department_assignments__department_id=emp.department_id),
-        is_active=True,
-        can_approve_on_duty=True,
-    ).distinct()
-    for m in managers:
+    # The employee's ONE HOD (hod_scope.py), if allowed to act on on-duty requests.
+    for m in managers_to_notify(emp, "can_approve_on_duty"):
         Notification.objects.create(
             employee=m.employee,
             type="on_duty",
@@ -1198,14 +1195,8 @@ def on_duty_punch_verification_photo(request: Request, pk: int) -> Response:
     elif is_hr(request):
         allowed = scope_to_branch(Employee.objects, request).filter(pk=v.employee_id).exists()
     elif owner_employee_id:
-        scope = Q(employee_assignments__employee_id=v.employee_id)
-        # An employee with no department must not match "department IS NULL"
-        # on every manager who simply has no department assignments.
-        if v.employee.department_id:
-            scope |= Q(department_assignments__department_id=v.employee.department_id)
-        allowed = DepartmentManager.objects.filter(
-            scope, employee_id=owner_employee_id, is_active=True,
-        ).exists()
+        # Only the employee's ONE HOD may open their punch photo (hod_scope.py).
+        allowed = manager_may_act_on(owner_employee_id, v.employee)
     if not allowed:
         return _error("Access denied", 403)
 

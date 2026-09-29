@@ -64,14 +64,21 @@ async function mockEmployeeWeek(page: Page) {
         startDate: "2026-02-02",
         endDate: today(),
         days: [
+          // An Allowed Morning Late-In permission and a Middle One-Hour permission: on time, so no issue to report.
           day("2026-02-02", {
+            morningPermissionApplied: true,
+            middlePermissionToday: true,
             punches: [punch("08:32:00", "IN"), null, null, punch("17:37:00", "OUT")],
             totalPunches: 2,
           }),
+          // Late and early out, with an approved Morning permission that was beyond the monthly cap (Excess): it
+          // did not shift the shift start, so the day was judged against the plain start.
           day("2026-02-03", {
             isLate: true,
+            isEarlyOut: true,
             lateAfternoon: true,
-            permissionMorning: true,
+            lateReason: "Morning Late-In: first punch 09:20 is after 08:40 (shift start 08:30 + 10 min grace)",
+            morningPermissionExcess: true,
             permissionAfternoon: true,
             punches: [
               punch("09:20:00", "IN", "Geo Punch"),
@@ -81,7 +88,13 @@ async function mockEmployeeWeek(page: Page) {
             ],
             totalPunches: 4,
           }),
-          day("2026-02-04", { status: "half_shift", isHalfShift: true, permissionEscalatedToHalfShift: true }),
+          // Punches only in the Morning half (before 13:30): a Half Day worked in the morning.
+          day("2026-02-04", {
+            status: "half_shift",
+            isHalfShift: true,
+            punches: [punch("08:31:00", "IN"), null, null, punch("12:40:00", "OUT")],
+            totalPunches: 2,
+          }),
           day("2026-02-05", { status: "absent" }),
           day("2026-02-06", {
             status: "on_leave",
@@ -179,16 +192,26 @@ test("each day shows its punches, flags and reasons, and 'Issues only' narrows t
   await expect(steady).toContainText("08:32");
   await expect(steady).toContainText("17:37");
   await expect(steady).toContainText("9h 05m");
+  await expect(steady).toContainText("Allowed permission applied");
+  await expect(steady).toContainText("Middle One-Hour");
+  await expect(steady.getByTestId("day-flag-late")).toHaveCount(0);
 
   const late = page.locator("#day-2026-02-03");
-  await expect(late).toContainText("Late");
-  await expect(late).toContainText("after lunch");
-  await expect(late).toContainText("Auto permission");
-  await expect(late).toContainText("Morning + Afternoon");
+  await expect(late.getByTestId("day-flag-late")).toContainText("Late");
+  await expect(late.getByTestId("day-flag-earlyOut")).toContainText("Early Out");
+  await expect(late).toContainText("Late after lunch");
+  await expect(late).toContainText("Excess permission");
+  await expect(late).toContainText("did not protect the day");
+  await expect(late).toContainText("Lunch-return permission");
   await expect(late).toContainText("Geo Punch");
   await expect(late).toContainText("8h 40m");
+  // The reason the server gave is the Late badge's tooltip and also written out beneath the day.
+  await expect(late.getByTestId("day-flag-late")).toHaveAttribute("title", /first punch 09:20 is after 08:40/);
+  await expect(late).toContainText("Why flagged");
+  await expect(late.getByTestId("day-flag-permissionExcess")).toHaveAttribute("title", /beyond the monthly cap/);
 
-  await expect(page.locator("#day-2026-02-04")).toContainText("Permission limit reached");
+  // A Half Day names the half it was worked in.
+  await expect(page.locator("#day-2026-02-04")).toContainText("Morning half only");
   await expect(page.locator("#day-2026-02-05")).toContainText("No punches recorded");
   await expect(page.locator("#day-2026-02-06")).toContainText("Casual leave");
   await expect(page.locator("#day-2026-02-06")).toContainText("Family function");
@@ -200,6 +223,7 @@ test("each day shows its punches, flags and reasons, and 'Issues only' narrows t
 
   // Late, half shift and absent are the three days worth a second look.
   await expect(page.getByTestId("attendance-summary")).toContainText(/Late\s*1/);
+  await expect(page.getByTestId("attendance-summary")).toContainText(/Early out\s*1/);
   const issues = page.getByRole("button", { name: /Issues only/ });
   await expect(issues).toContainText("3");
   await issues.click();

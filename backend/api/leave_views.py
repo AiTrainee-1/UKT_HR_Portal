@@ -334,29 +334,61 @@ def employee_request_action(request: Request, pk: int) -> Response:
 
 # ── Employee Permissions ──────────────────────────────────────────────────────
 #
-# There is NO hard cap on how many permission requests an employee can
-# submit -MONTHLY_PERMISSION_LIMIT below is purely informational (shown in
-# the UI as "used X of 3 free"). Approved permissions beyond this number are
-# not blocked; they're picked up by the payroll deduction engine instead
-# (see shift_engine.compute_monthly_shift_summary), which treats each
-# approved permission past the first 3 as a late entry.
+# Exactly 3 canonical types (EmployeePermission.TYPE_CHOICES): Morning Late-
+# In / Evening Early-Out (each, when approved and still within
+# PayrollSettings.permission_monthly_cap that calendar month, shifts that
+# day's effective Late Detection boundary -see attendance_final.py) and
+# Middle One-Hour (never shifts anything, purely an excused mid-shift gap).
+# Every permission is a fixed 60 minutes now (EmployeePermission.
+# FIXED_DURATION_MINUTES) -the request no longer chooses a duration.
 #
-# Separately, PayrollSettings.max_permissions_per_day/_per_week (Settings ->
-# Late Detection -> Permission Policy) cap the AUTO-DETECTED Permission zone
-# (see attendance_final.py's _enforce_permission_caps), not this submission
-# form -submitting a request is still uncapped; only how many auto-detected
-# zone occurrences count as Permission (vs. escalate to Half Shift) is
-# capped. Surfaced here too so the employee-facing UI can show all three
-# limits together.
-
-MONTHLY_PERMISSION_LIMIT = 3
+# There is still no hard cap on SUBMITTING a request -HR can approve a 4th
+# (or later) one that month; it just stops being protective (see
+# capStatus/statusLabel below). monthlyLimit is the real, HR-editable
+# permission_monthly_cap now, not a hardcoded display number.
 
 
-def _permission_json(p, monthly_used=None, settings=None):
+class _CapStatusCache:
+    """within_cap / excess for many permissions with ONE query per employee-month instead of one
+    COUNT per row (an HR list can hold thousands). Same ordering rule as
+    attendance_final.permission_cap_status: earliest (date, id) first."""
+
+    def __init__(self, cap):
+        self.cap = max(0, int(cap or 0))
+        self._months = {}
+
+    def status(self, p):
+        if p.status != "approved":
+            return "not_applicable"
+        key = (p.employee_id, p.date.year, p.date.month)
+        position = self._months.get(key)
+        if position is None:
+            ids = EmployeePermission.objects.filter(
+                employee_id=p.employee_id, status="approved", date__year=p.date.year, date__month=p.date.month,
+            ).order_by("date", "id").values_list("id", flat=True)
+            position = self._months[key] = {pid: i for i, pid in enumerate(ids)}
+        return "within_cap" if position.get(p.id, len(position)) < self.cap else "excess"
+
+
+def _permission_json(p, monthly_used=None, settings=None, cap_cache=None):
     if settings is None:
         from .models import PayrollSettings
         settings = PayrollSettings.get()
+    from .attendance_final import permission_cap_status
     emp = p.employee
+    cap_status = (
+        cap_cache.status(p) if cap_cache is not None
+        else permission_cap_status(p, settings.permission_monthly_cap)
+    )
+    # Outcome shown to staff and HR, in the words the policy uses:
+    #   Allowed          -approved and within the monthly cap (it protects that day)
+    #   Not Allowed      -HR rejected it
+    #   Overdue / Excess -approved, but beyond the cap (it does NOT protect the day)
+    status_label = {
+        "pending": "Pending",
+        "rejected": "Not Allowed",
+    }.get(p.status) or ("Allowed" if cap_status == "within_cap" else "Overdue / Excess")
+    type_key = p.type_key
     return {
         "id": p.id,
         "employeeId": emp.id,
@@ -367,17 +399,26 @@ def _permission_json(p, monthly_used=None, settings=None):
         "date": p.date.isoformat() if p.date else None,
         "permissionTime": p.permission_time.strftime("%H:%M") if p.permission_time else None,
         "reason": p.reason,
-        "type": p.type,
+        # `type` keeps answering in the spelling the installed mobile app / deployed web app were
+        # built against ("Late In" / "Early Out" / "Short Leave") -new clients use typeKey/typeLabel.
+        "type": EmployeePermission.LEGACY_TYPE_LABELS.get(type_key, p.type) if type_key else p.type,
+        "typeKey": type_key,
+        "typeLabel": EmployeePermission.TYPE_LABELS.get(type_key) if type_key else None,
         "durationMinutes": p.duration_minutes,
         "status": p.status,
+        "capStatus": cap_status,
+        "statusLabel": status_label,
         "hrComment": p.hr_comment,
         "approvedBy": p.approved_by,
         "approverRole": p.approver_role,
         "createdAt": p.created_at.isoformat() if p.created_at else None,
         "monthlyUsed": monthly_used,
-        "monthlyLimit": MONTHLY_PERMISSION_LIMIT,
-        "dailyLimit": settings.max_permissions_per_day,
-        "weeklyLimit": settings.max_permissions_per_week,
+        "monthlyLimit": settings.permission_monthly_cap,
+        # DEPRECATED: the old per-day / per-week caps no longer exist (one monthly cap replaced
+        # them). Older clients still print "Max N/day - M/week" from these, so keep answering with
+        # the monthly cap -the loosest true upper bound- rather than a stale 1 / 2.
+        "dailyLimit": settings.permission_monthly_cap,
+        "weeklyLimit": settings.permission_monthly_cap,
     }
 
 
@@ -407,7 +448,8 @@ def employee_permissions(request: Request) -> Response:
             qs = qs.filter(date__year=year)
         from .models import PayrollSettings
         settings = PayrollSettings.get()
-        return paginate(request, qs, lambda p: _permission_json(p, settings=settings))
+        cap_cache = _CapStatusCache(settings.permission_monthly_cap)
+        return paginate(request, qs, lambda p: _permission_json(p, settings=settings, cap_cache=cap_cache))
 
     data = request.data
     # Accept employeeCode, camelCase, or snake_case
@@ -444,18 +486,32 @@ def employee_permissions(request: Request) -> Response:
         except Exception:
             return Response({"error": "Invalid permissionTime format (HH:MM)"}, status=400)
 
-    perm_type = data.get("type")
-    if perm_type and perm_type not in dict(EmployeePermission.TYPE_CHOICES):
-        return Response({"error": "Invalid permission type"}, status=400)
+    # Accept the canonical slug, its label, or the pre-rewrite spelling the installed mobile app
+    # still sends ("Late In" / "Early Out" / "Short Leave"). A value that names no type is rejected
+    # -but a request that names NONE (the deployed web app never sent one) is still accepted, with
+    # the type inferred from the requested time against that day's shift so the permission can do
+    # its job. If even that is not possible the request is saved untyped; HR can classify it in the
+    # approval step (PUT below).
+    raw_type = data.get("type")
+    perm_type = EmployeePermission.normalize_type(raw_type)
+    if raw_type not in (None, "") and perm_type is None:
+        return Response({
+            "error": "type must be one of: " + ", ".join(EmployeePermission.TYPE_LABELS.values()),
+        }, status=400)
+    if perm_type is None:
+        from .attendance_final import infer_permission_type
+        from .shift_engine import _get_shift_for_date
+        perm_type = infer_permission_type(perm_time, _get_shift_for_date(emp, parsed_date))
 
-    duration_minutes = data.get("durationMinutes") or data.get("duration_minutes")
-    if duration_minutes is not None:
-        try:
-            duration_minutes = int(duration_minutes)
-        except (TypeError, ValueError):
-            return Response({"error": "Invalid durationMinutes"}, status=400)
-        if duration_minutes not in dict(EmployeePermission.DURATION_CHOICES):
-            return Response({"error": "durationMinutes must be one of 30, 45, 60, 90"}, status=400)
+    # The same kind of permission twice for the same day would burn two of the month's allowed
+    # permissions for one absence -reject the duplicate instead of silently double-counting it.
+    if perm_type and EmployeePermission.objects.filter(
+        employee=emp, date=parsed_date, status__in=["pending", "approved"],
+        type__in=EmployeePermission.type_values(perm_type),
+    ).exists():
+        return Response({
+            "error": f"A {EmployeePermission.TYPE_LABELS[perm_type]} request already exists for {parsed_date.isoformat()}",
+        }, status=409)
 
     p = EmployeePermission.objects.create(
         employee=emp,
@@ -463,7 +519,10 @@ def employee_permissions(request: Request) -> Response:
         permission_time=perm_time,
         reason=data.get("reason"),
         type=perm_type,
-        duration_minutes=duration_minutes,
+        # Every permission is a fixed 60 minutes now -a client-supplied
+        # durationMinutes (if any, e.g. from an un-updated old client) is
+        # ignored, never trusted.
+        duration_minutes=EmployeePermission.FIXED_DURATION_MINUTES,
         # Only HR may create a permission that is already decided.
         status=data.get("status", "pending") if is_hr(request) else "pending",
     )
@@ -496,6 +555,28 @@ def employee_permission_detail(request: Request, pk: int) -> Response:
         p.status = data["status"]
     if "hrComment" in data:
         p.hr_comment = data["hrComment"]
+    # HR can classify a request that arrived untyped (older web-app submissions) or correct a
+    # mis-picked type -it decides whether an approved permission shifts a boundary at all.
+    if "type" in data:
+        new_type = EmployeePermission.normalize_type(data["type"])
+        if data["type"] not in (None, "") and new_type is None:
+            return Response({
+                "error": "type must be one of: " + ", ".join(EmployeePermission.TYPE_LABELS.values()),
+            }, status=400)
+        p.type = new_type
+    # Approving (or re-approving, or retyping) must not leave two live requests of the same kind on
+    # one day: each burns one of the month's allowed permissions and, if one is in-cap and the other
+    # excess, the day would be charged twice. Only checked when this request changes status or type,
+    # so an HR comment on a pre-existing duplicate is never blocked.
+    if (("status" in data and p.status != prev_status) or "type" in data) and p.status in ("pending", "approved"):
+        kind = p.type_key
+        if kind and EmployeePermission.objects.filter(
+            employee=p.employee, date=p.date, status__in=["pending", "approved"],
+            type__in=EmployeePermission.type_values(kind),
+        ).exclude(pk=p.pk).exists():
+            return Response({
+                "error": f"A {EmployeePermission.TYPE_LABELS[kind]} request already exists for {p.date.isoformat()}",
+            }, status=409)
     # approvedBy is always server-derived from the logged-in HR user -never
     # trust a client-supplied value here (a caller could spoof any name).
     if p.status != prev_status and p.status in ("approved", "rejected"):

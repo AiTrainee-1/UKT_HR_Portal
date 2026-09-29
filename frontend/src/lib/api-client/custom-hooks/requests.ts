@@ -186,20 +186,42 @@ export const useCreateAdvanceRepayment = () =>
 
 // ── Employee Permissions ───────────────────────────────────────────────────────
 
+// The 3 permission types the API knows, as the slugs it sends and accepts.
+export type PermissionType = "morning_late_in" | "evening_early_out" | "middle_permission";
+// The pre-rewrite spelling of the same 3 types. The rewritten backend accepts either spelling, an older backend
+// accepts only this one (a slug is a 400), and the two roll out at different moments -so requests send this spelling.
+export type PermissionWireType = "Late In" | "Early Out" | "Short Leave";
+// within_cap: an Allowed one (moves that day's boundary); excess: approved but beyond the monthly cap, so it does not.
+export type PermissionCapStatus = "within_cap" | "excess" | "not_applicable";
+
 export type PermissionItem = {
   id: number;
   employeeId: number;
   employeeName: string;
   employeeCode: string;
+  department?: string | null;
+  designation?: string | null;
   date: string;
   permissionTime?: string | null;
   reason?: string | null;
+  // DEPRECATED spelling ("Late In" / "Early Out" / "Short Leave", or null) kept for older clients -use typeKey/typeLabel.
+  type?: string | null;
+  // null = an untyped request (older web-app submissions) that HR has not classified yet.
+  typeKey?: PermissionType | null;
+  typeLabel?: string | null;
+  // Always 60 for a new request; an older row can hold its original 30/45/90.
+  durationMinutes?: number | null;
   status: string;
+  capStatus?: PermissionCapStatus;
+  // "Pending" | "Allowed" | "Not Allowed" | "Overdue / Excess"
+  statusLabel?: string;
   hrComment?: string | null;
   approvedBy?: string | null;
   approverRole?: string | null;
   createdAt?: string | null;
+  // Only on the response to creating one: pending + approved permissions that calendar month.
   monthlyUsed?: number | null;
+  // The HR-editable monthly cap (Settings → Late Detection → Permission Policy).
   monthlyLimit: number;
 };
 
@@ -229,9 +251,12 @@ export const useListPermissions = <TData = PermissionItem[]>(
 
 export const useCreatePermission = () =>
   useMutation({
+    // No duration: every permission is a fixed 60 minutes and the server ignores whatever is sent.
+    // type: the legacy spelling -see PermissionWireType (permissionTypeWire converts from the slug).
     mutationFn: (data: {
       employeeId: number;
       date: string;
+      type: PermissionWireType;
       permissionTime?: string;
       reason?: string;
       status?: string;
@@ -246,7 +271,15 @@ export const useUpdatePermissionStatus = () =>
   useMutation({
     // approvedBy is never client-sendable -it's always server-derived from
     // the logged-in HR user (a client-supplied name could be spoofed).
-    mutationFn: ({ id, data }: { id: number; data: { status: string; hrComment?: string } }) =>
+    // type lets HR classify an untyped request (or fix a mis-picked one) --
+    // it decides whether an approval can shift a shift boundary at all.
+    mutationFn: ({
+      id,
+      data,
+    }: {
+      id: number;
+      data: { status?: string; hrComment?: string; type?: PermissionWireType };
+    }) =>
       customFetch<PermissionItem>(`/api/permissions/${id}`, {
         method: "PUT",
         body: JSON.stringify(data),

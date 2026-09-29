@@ -296,6 +296,8 @@ def compensation_credit_redeem(request: Request, pk: int) -> Response:
     record.status = "present"
     record.shifts_earned = Decimal("1.00")
     record.is_late = False
+    record.early_leave = False  # a paid day carries no late/early-out mark -this row is never recomputed
+    record.late_reason = None
     record.is_half_shift = False
     record.override_note = "Compensation Alternative Day (paid) -redeemed"
     record.source = "manual"

@@ -176,7 +176,7 @@ class LeaveIsolationTests(_Base):
     def test_employee_cannot_self_approve_a_permission(self):
         r = self.client.post(
             "/api/permissions",
-            {"employeeId": self.alice.id, "date": "2026-03-03", "status": "approved"},
+            {"employeeId": self.alice.id, "date": "2026-03-03", "status": "approved", "type": "morning_late_in"},
             content_type="application/json",
             **_emp(self.alice.id),
         )
@@ -186,7 +186,7 @@ class LeaveIsolationTests(_Base):
     def test_hr_can_create_a_decided_permission(self):
         r = self.client.post(
             "/api/permissions",
-            {"employeeId": self.alice.id, "date": "2026-03-04", "status": "approved"},
+            {"employeeId": self.alice.id, "date": "2026-03-04", "status": "approved", "type": "morning_late_in"},
             content_type="application/json",
             **_hr(),
         )

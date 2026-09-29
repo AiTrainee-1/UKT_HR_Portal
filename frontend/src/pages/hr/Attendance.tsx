@@ -29,7 +29,10 @@ import {
   useListBiometricDevices, type SyncBiometricMode, type SyncDeviceId,
   useListAutoSyncRules, useCreateAutoSyncRule, useUpdateAutoSyncRule, useDeleteAutoSyncRule,
   type AutoSyncRuleItem, type AutoSyncRuleInput,
+  usePayrollSettings,
 } from "@/lib/api-client/custom-hooks";
+import { lateDetectionFlags } from "@/lib/late-detection";
+import { DayFlagBadges } from "@/components/DayFlagBadges";
 import { useBiometricSync } from "@/contexts/BiometricSyncContext";
 import { TimePicker12h } from "@/components/ui/time-picker-12h";
 import { MarbleSwitch } from "@/components/ui/marble-switch";
@@ -427,6 +430,12 @@ export default function AttendancePage() {
     detailEmpId, selectedMonth, selectedYear,
   );
   const createManual = useCreateManualAttendance();
+  // Half-Day times from Settings → Attendance, to say which half a Half Shift day was worked in.
+  const { data: attSettings } = usePayrollSettings();
+  const halfDayCutoffs = {
+    firstHalfEnd: attSettings?.halfDayFirstHalfEndTime,
+    secondHalfStart: attSettings?.halfDaySecondHalfStartTime,
+  };
 
   // Records for the active sub-section only
   const allRecords    = (dailyList ?? []).filter((r) => r.employmentType === view);
@@ -1068,6 +1077,7 @@ export default function AttendancePage() {
             const attendanceRate = elapsedWorkable > 0
               ? Math.round((empDetail.totalPresent / elapsedWorkable) * 100)
               : 0;
+            const earlyOutDays = empDetail.records.filter(r => r.isEarlyOut).length;
             return (
             <div className="flex flex-col gap-4 overflow-hidden">
               {/* ── Profile + month summary ── */}
@@ -1088,7 +1098,7 @@ export default function AttendancePage() {
                     </span>
                   </span>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
                   <div className="bg-white rounded-lg px-3 py-2 border border-green-100">
                     <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Present</p>
                     <p className="text-lg font-black text-green-700">{empDetail.totalPresent}</p>
@@ -1100,6 +1110,10 @@ export default function AttendancePage() {
                   <div className="bg-white rounded-lg px-3 py-2 border border-amber-100">
                     <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Late</p>
                     <p className="text-lg font-black text-amber-600">{empDetail.summary.late}</p>
+                  </div>
+                  <div className="bg-white rounded-lg px-3 py-2 border border-orange-100">
+                    <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Early Out</p>
+                    <p className="text-lg font-black text-orange-600">{earlyOutDays}</p>
                   </div>
                   <div className="bg-white rounded-lg px-3 py-2 border border-red-100">
                     <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Absent</p>
@@ -1151,11 +1165,7 @@ export default function AttendancePage() {
                               <Badge className={`text-xs border ${meta.cls}`}>
                                 {rec.status === "on_leave" && rec.leaveType ? `${rec.leaveType} Leave` : meta.label}
                               </Badge>
-                              {(rec.permissionMorning || rec.permissionAfternoon || rec.permissionDeparture) ? (
-                                <Badge className="text-xs border bg-emerald-50 text-emerald-700 border-emerald-200">Permission</Badge>
-                              ) : rec.isLate && (rec.status === "present" || rec.status === "half_shift") && (
-                                <Badge className="text-xs border bg-amber-50 text-amber-700 border-amber-200">Late</Badge>
-                              )}
+                              <DayFlagBadges flags={lateDetectionFlags(rec, halfDayCutoffs)} />
                               {rec.isCompensationDay && (
                                 <Badge className="text-xs border bg-purple-50 text-purple-700 border-purple-200">Comp Day</Badge>
                               )}

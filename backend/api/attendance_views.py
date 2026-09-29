@@ -14,6 +14,7 @@ from .auth import require_hr, require_auth, get_token_employee_id
 from .user_settings import settings_for
 from .branch_scope import get_branch_scope, scope_to_branch
 from .geo_attendance_views import source_label
+from .attendance_final import permission_flags_json
 from .clock import ist_today
 from .models import (
     Attendance, AttendanceLog, Employee, EmployeePermission, EmployeeShiftAssignment,
@@ -273,7 +274,7 @@ def attendance_company_summary(request: Request) -> Response:
     for p in EmployeePermission.objects.filter(
         employee_id__in=emp_ids, date=d, status="approved",
     ).order_by("updated_at"):
-        permissions_by_emp.setdefault(p.employee_id, {})[p.date] = p
+        permissions_by_emp.setdefault(p.employee_id, {}).setdefault(p.date, []).append(p)
 
     present = half_shift = absent = on_leave = late = 0
     total_shifts_earned = Decimal("0")
@@ -639,13 +640,13 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
             "day":          cur_date.strftime("%a"),
             "status":       status,
             "isLate":       bool(rec.is_late) if rec else False,
+            "isEarlyOut":   bool(rec.early_leave) if rec else False,
+            # Plain-language account of WHY the day was flagged (the exact deadline and how it was built).
+            "lateReason":   (rec.late_reason if rec else None),
             "isHalfShift":  bool(rec.is_half_shift) if rec else False,
-            "permissionMorning":    bool(rec.permission_morning) if rec else False,
-            "permissionMorningWithRequest": bool(rec.permission_morning_with_request) if rec else False,
+            **permission_flags_json(rec),
             "permissionAfternoon":  bool(rec.permission_afternoon) if rec else False,
             "permissionAfternoonWithRequest": bool(rec.permission_afternoon_with_request) if rec else False,
-            "permissionDeparture":  bool(rec.permission_departure) if rec else False,
-            "permissionDepartureWithRequest": bool(rec.permission_departure_with_request) if rec else False,
             "isCompensationDay": bool(rec.is_compensation_day) if rec else False,
             "isHalfDayLeave": bool(rec.is_half_day_leave) if rec else False,
             "present":      status in ("present", "half_shift"),
@@ -1109,24 +1110,21 @@ def _full_day_row(emp, rec, shift, dsl, cl, perm, leave=None) -> dict:
         "lateAfternoon": bool(rec.late_afternoon),
         "lateReturn": bool(late_return),
         "lateReason": late_reason,
-        # Auto-Permission zone (see shift_engine.py's ZONE_* / _classify_zone)
-        # -detected purely from punch timing, independent of any submitted
-        # EmployeePermission. The *_with_request flags label whether an
-        # approved request also covered that edge.
-        "permissionMorning": bool(rec.permission_morning),
-        "permissionMorningWithRequest": bool(rec.permission_morning_with_request),
+        # Morning Late-In / Evening Early-Out: whether an approved, in-cap
+        # Permission actually shifted today's effective boundary, or was
+        # approved but excess (over PayrollSettings.permission_monthly_cap)
+        # -see attendance_final.py. permissionAfternoon* is the untouched
+        # strict-mode lunch-return axis's own auto-detected zone.
+        **permission_flags_json(rec),
         "permissionAfternoon": bool(rec.permission_afternoon),
         "permissionAfternoonWithRequest": bool(rec.permission_afternoon_with_request),
-        "permissionDeparture": bool(rec.permission_departure),
-        "permissionDepartureWithRequest": bool(rec.permission_departure_with_request),
-        "permissionZoneCount": rec.permission_zone_count,
-        "permissionEscalatedToHalfShift": bool(rec.permission_escalated_to_half_shift),
         "isCompensationDay": bool(rec.is_compensation_day),
         "isHalfDayLeave": bool(rec.is_half_day_leave),
         "casualLeave": {"status": cl.status, "reason": cl.reason} if cl else None,
         "permission": (
             {
                 "status": perm.status,
+                "type": perm.type,
                 "time": perm.permission_time.strftime("%H:%M") if perm.permission_time else None,
                 "reason": perm.reason,
             }
@@ -1243,7 +1241,7 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
     for p in EmployeePermission.objects.filter(
         employee_id__in=emp_ids, date=d, status="approved",
     ).order_by("updated_at"):
-        permissions_by_emp.setdefault(p.employee_id, {})[p.date] = p
+        permissions_by_emp.setdefault(p.employee_id, {}).setdefault(p.date, []).append(p)
 
     rows = []
     for emp in employees:
@@ -1274,10 +1272,11 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
             "designation": emp.designation.title if emp.designation else None,
             "status": rec.status,
             "isLate": bool(rec.is_late),
+            "isEarlyOut": bool(rec.early_leave),
+            "lateReason": rec.late_reason,
             "lateAfternoon": bool(rec.late_afternoon),
-            "permissionMorning": bool(rec.permission_morning),
+            **permission_flags_json(rec),
             "permissionAfternoon": bool(rec.permission_afternoon),
-            "permissionDeparture": bool(rec.permission_departure),
             "isCompensationDay": bool(rec.is_compensation_day),
         "isHalfDayLeave": bool(rec.is_half_day_leave),
             "isInformed": rec.is_informed,
@@ -1474,7 +1473,6 @@ def attendance_report_log_sheet(request: Request) -> Response:
     drives it.
     """
     from .attendance_final import compute_range_records, month_summary_from_records
-    from .shift_engine import half_shift_late_reference
 
     date_from_param = request.query_params.get("dateFrom")
     date_to_param = request.query_params.get("dateTo")
@@ -1518,17 +1516,12 @@ def attendance_report_log_sheet(request: Request) -> Response:
 
     # Half Shift doesn't record which half was actually worked -only that
     # shifts_earned came out to 0.5 -so it's inferred here from first_punch
-    # against the same reference time shift_engine already uses to decide
-    # whether a late arrival is late enough to BECOME a half shift in the
-    # first place (PayrollSettings.half_shift_late_reference_time, default
-    # 14:30): arriving before it means the morning was worked and the
-    # afternoon wasn't (or vice versa is what caused the shortfall);
-    # arriving at/after it (or never punching in at all) means only the
-    # afternoon was worked. This covers both a punch-derived half shift and
-    # a half shift covered by approved Half-Day Leave identically, since
-    # either way the question is simply "which half do the real punches
-    # fall in."
-    half_shift_ref = half_shift_late_reference(settings=settings)
+    # against the SAME cutoff Half-Day Detection itself uses (see
+    # attendance_final._half_day_status): a punch before
+    # half_day_first_half_end_time is exactly what earns Morning Half
+    # credit, so a Half Shift day with a punch before that cutoff means the
+    # morning was worked and the evening wasn't; otherwise it's the reverse.
+    half_shift_ref = settings.half_day_first_half_end_time
 
     employees = []
     strength_by_date: dict = defaultdict(int)
@@ -1548,6 +1541,8 @@ def attendance_report_log_sheet(request: Request) -> Response:
                 "date": d.isoformat(),
                 "status": r.status,
                 "isLate": r.is_late,
+                "isEarlyOut": r.early_leave,
+                "lateReason": r.late_reason,
                 "isHalfShift": r.is_half_shift,
                 "halfDayPeriod": half_day_period,
                 "firstPunch": r.first_punch.strftime("%H:%M") if r.first_punch else None,
@@ -1801,13 +1796,12 @@ def attendance_search_range(request: Request) -> Response:
             "date": str(rec.date),
             "status": rec.status,
             "isLate": bool(rec.is_late),
+            "isEarlyOut": bool(rec.early_leave),
+            "lateReason": rec.late_reason,
             "isHalfShift": bool(rec.is_half_shift),
             "lateAfternoon": bool(rec.late_afternoon),
-            "permissionMorning": bool(rec.permission_morning),
+            **permission_flags_json(rec),
             "permissionAfternoon": bool(rec.permission_afternoon),
-            "permissionDeparture": bool(rec.permission_departure),
-            "permissionZoneCount": rec.permission_zone_count,
-            "permissionEscalatedToHalfShift": bool(rec.permission_escalated_to_half_shift),
             "isCompensationDay": bool(rec.is_compensation_day),
         "isHalfDayLeave": bool(rec.is_half_day_leave),
             "totalPunches": rec.total_punches,
@@ -1817,6 +1811,7 @@ def attendance_search_range(request: Request) -> Response:
             "permission": (
                 {
                     "status": perm.status,
+                    "type": perm.type,
                     "time": perm.permission_time.strftime("%H:%M") if perm.permission_time else None,
                     "reason": perm.reason,
                 }
@@ -1916,14 +1911,24 @@ def compute_shift_logs(request: Request) -> Response:
                 compute_daily_shift_log(emp, d, punches, legacy=d < NEW_ATTENDANCE_RULE_CUTOVER)
                 total_computed += 1
 
-        # Recompute monthly summaries
+        # Recompute monthly summaries -with payroll's own working days and daily rate, so the row
+        # this writes is the same one a payroll run would write (whichever ran last used to win,
+        # and this button used calendar days: Sunday/holiday lates entered the pool and the daily
+        # rate was salary / calendar days).
         from decimal import Decimal
+        from .payroll_views import staff_working_days
         for emp in emps:
             daily_rate = None
-            if emp.salary_amount:
+            counted = None
+            if emp.employment_type == "staff":
+                working = staff_working_days(emp, m, y)
+                counted = set(working)
+                if emp.salary_amount and working:
+                    daily_rate = Decimal(str(emp.salary_amount)) / len(working)
+            elif emp.salary_amount:
                 _, dm = cal.monthrange(y, m)
                 daily_rate = Decimal(str(emp.salary_amount)) / dm
-            compute_monthly_shift_summary(emp, y, m, daily_rate)
+            compute_monthly_shift_summary(emp, y, m, daily_rate, counted_dates=counted)
 
         return Response({
             "ok": True,
@@ -1956,11 +1961,15 @@ def attendance_late_summary(request: Request) -> Response:
         .order_by("employee__first_name")
     )
 
-    # Pre-compute half-shift counts from DailyShiftLog for all employees in one query
-    from decimal import Decimal as _D
+    # Half-day counts from the day records -the verdict Half-Day Detection writes (a summary row is
+    # only ever created by computing its employee's month, which persists these). DailyShiftLog's
+    # own 0.5 came from a different rule and can disagree with the halves actually attended.
+    from .models import AttendanceDayRecord
+
     half_shift_map: dict[int, int] = {}
-    for log in DailyShiftLog.objects.filter(date__year=y, date__month=m, shifts_completed=_D("0.50")).values("employee_id"):
-        eid = log["employee_id"]
+    for eid in AttendanceDayRecord.objects.filter(
+        date__year=y, date__month=m, status="half_shift",
+    ).values_list("employee_id", flat=True):
         half_shift_map[eid] = half_shift_map.get(eid, 0) + 1
 
     results = []
@@ -2109,7 +2118,11 @@ def employee_shift_monthly_stats(request: Request) -> Response:
         is_late = bool(rec.is_late) if rec else False
 
         sl = shift_logs.get(cur)
-        late_am = sl.late_morning if sl else is_late
+        # Morning lateness is the day record's own is_late -that is the verdict that already knows
+        # about an approved permission moving the start. DailyShiftLog.late_morning can be stale (the
+        # HR "compute shifts" button rewrites it against the plain shift), so it is only trusted for
+        # the lunch-return split it alone records.
+        late_am = is_late
         late_ret = sl.late_return if sl else False
 
         daily.append({
@@ -2125,13 +2138,13 @@ def employee_shift_monthly_stats(request: Request) -> Response:
             "shiftsCompleted": str(shifts_done) if rec else None,
             "isHalfShift": is_half,
             "isLate": is_late,
+            "isEarlyOut": bool(rec.early_leave) if rec else False,
+            "lateReason": rec.late_reason if rec else None,
             "lateMorning": late_am,
             "lateReturn": late_ret,
             "lateAfternoon": bool(rec.late_afternoon) if rec else False,
-            "permissionMorning": bool(rec.permission_morning) if rec else False,
+            **permission_flags_json(rec),
             "permissionAfternoon": bool(rec.permission_afternoon) if rec else False,
-            "permissionDeparture": bool(rec.permission_departure) if rec else False,
-            "permissionEscalatedToHalfShift": bool(rec.permission_escalated_to_half_shift) if rec else False,
             "isCompensationDay": bool(rec.is_compensation_day) if rec else False,
             "isHalfDayLeave": bool(rec.is_half_day_leave) if rec else False,
         })
@@ -2157,32 +2170,46 @@ def employee_shift_monthly_stats(request: Request) -> Response:
     #    block was `None` -and silently wrong before that, since it too
     #    read from DailyShiftLog-derived late counts -until the first
     #    payroll run of the month).
-    from .models import EmployeePermission
+    from .models import EmployeePermission, PayrollSettings
+    from .attendance_final import late_pool_summary
+    from .payroll_views import _d2, late_shift_deduction, staff_working_days
+
     approved_permissions = EmployeePermission.objects.filter(
         employee=emp, date__year=y, date__month=m, status="approved",
     ).count()
-    total_late_for_deduction = total_late + approved_permissions
-    free_permissions = 3
-    permissions_used = min(total_late_for_deduction, free_permissions)
-    billable_late = max(0, total_late_for_deduction - free_permissions)
-    shift_deductions = _D(str(billable_late // 3)) * _D("0.25")
-    permission_overage_count = max(0, approved_permissions - free_permissions)
-
+    ps_late = PayrollSettings.get()
+    late_in_count = early_out_count = 0
+    free_allowance = max(0, int(ps_late.late_free_allowance or 0))
+    permission_cap = max(0, int(ps_late.permission_monthly_cap or 0))
     salary_deduction_amount = _D("0")
-    if shift_deductions > 0 and emp.employment_type == "staff" and emp.salary_amount:
-        from .payroll_views import _build_working_days, _d2
-        from .models import Holiday
-        assignment = (
-            EmployeeShiftAssignment.objects.filter(employee=emp, effective_from__lte=month_end)
-            .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=month_start))
-            .order_by("-effective_from").first()
+
+    if emp.employment_type == "staff":
+        # Staff: EXACTLY payroll's late pool -the same working days, the same shared counting
+        # (attendance_final.late_pool_summary), the same configurable free allowance and slab
+        # table -so this preview can never disagree with the payslip it previews.
+        working_days_list = staff_working_days(emp, m, y)
+        pool = late_pool_summary(
+            list(day_records.values()),
+            approved_permissions,
+            ps_late,
+            counted_dates=set(working_days_list),
         )
-        saturday_off = bool(assignment.saturday_off) if assignment else False
-        holiday_dates = set(Holiday.objects.filter(date__year=y, date__month=m).values_list("date", flat=True))
-        working_days_list = _build_working_days(m, y, saturday_off, holiday_dates)
-        if working_days_list:
+        late_in_count, early_out_count = pool["late_in"], pool["early_out"]
+        permissions_used = pool["free_used"]
+        billable_late = pool["billable"]
+        permission_overage_count = pool["excess_permissions"]
+        shift_deductions = _D(str(late_shift_deduction(billable_late, ps_late)))
+        if shift_deductions > 0 and emp.salary_amount and working_days_list:
             daily_rate = _d2(emp.salary_amount / _D(str(len(working_days_list))))
             salary_deduction_amount = _d2(shift_deductions * daily_rate)
+    else:
+        # Production keeps its own separate late policy (see payroll_views' production engine);
+        # the generic preview below is unchanged for them.
+        total_late_for_deduction = total_late + approved_permissions
+        permissions_used = min(total_late_for_deduction, 3)
+        billable_late = max(0, total_late_for_deduction - 3)
+        shift_deductions = _D(str(billable_late // 3)) * _D("0.25")
+        permission_overage_count = max(0, approved_permissions - 3)
 
     summary_data = {
         "totalShifts": str(total_effective_shifts),
@@ -2192,6 +2219,12 @@ def employee_shift_monthly_stats(request: Request) -> Response:
         "billableLateCount": billable_late,
         "shiftDeductions": str(shift_deductions),
         "salaryDeductionAmount": str(salary_deduction_amount),
+        # Additive (new clients show the full breakdown; old ones ignore these).
+        "lateInCount": late_in_count,
+        "earlyOutCount": early_out_count,
+        "excessPermissionCount": permission_overage_count,
+        "freeAllowance": free_allowance,
+        "permissionMonthlyCap": permission_cap,
     }
 
     return Response({
@@ -2213,5 +2246,17 @@ def employee_shift_monthly_stats(request: Request) -> Response:
         "lateReturnDays": late_return_days,
         "totalLateCount": total_late,
         "summary": summary_data,
+        # The company-wide rules this employee's days were judged by, so the app can state the
+        # real half-day windows (they are NOT the shift template's first_half_end) and hide
+        # Early-Out wording when that detection is switched off. Read-only, nothing sensitive.
+        "policy": {
+            "morningLateInEnabled": bool(ps_late.morning_late_in_enabled),
+            "eveningEarlyOutEnabled": bool(ps_late.evening_early_out_enabled),
+            "halfDayFirstHalfEnd": str(ps_late.half_day_first_half_end_time)[:5],
+            "halfDaySecondHalfStart": str(ps_late.half_day_second_half_start_time)[:5],
+            "permissionMonthlyCap": permission_cap,
+            "freeAllowance": free_allowance,
+            "permissionDurationMinutes": 60,
+        },
         "dailyLogs": daily,
     })

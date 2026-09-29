@@ -18,6 +18,7 @@ import {
   useAttendanceReportSheet, usePayrollSettings,
   type AttendanceSheetDayCell, type AttendanceSheetDayStatus, type AttendanceSheetEmployeeRow,
 } from "@/lib/api-client/custom-hooks";
+import { normalizeHalf } from "@/lib/late-detection";
 import {
   ChevronLeft, ChevronRight, ClipboardList, Building2, Search,
   FileSpreadsheet, FileImage, Loader2,
@@ -92,23 +93,25 @@ const STATUS_META: Record<StatusKey, CellMeta> = {
 };
 
 const HALF_MORNING_META: CellMeta = { code: "½M", label: "Half Shift (Morning)", bg: "bg-amber-100", text: "text-amber-800", hex: "FFEB9C", accent: "D97706", Icon: Sunrise };
-const HALF_AFTERNOON_META: CellMeta = { code: "½A", label: "Half Shift (Afternoon)", bg: "bg-orange-100", text: "text-orange-800", hex: "FED7AA", accent: "EA580C", Icon: Sunset };
+const HALF_EVENING_META: CellMeta = { code: "½E", label: "Half Shift (Evening)", bg: "bg-orange-100", text: "text-orange-800", hex: "FED7AA", accent: "EA580C", Icon: Sunset };
 
 /** Which status "look" a cell should render as -half_shift splits into a
- *  morning/afternoon variant (different code + shade) once halfDayPeriod
- *  is known; every other status is a plain lookup. */
+ *  morning/evening variant (different code + shade) once halfDayPeriod
+ *  is known (the endpoint spells the evening half "afternoon"); every other
+ *  status is a plain lookup. */
 function cellDisplay(cell: AttendanceSheetDayCell): CellMeta | null {
   if (!cell.status) return null;
   if (cell.status === "half_shift") {
-    if (cell.halfDayPeriod === "morning") return HALF_MORNING_META;
-    if (cell.halfDayPeriod === "afternoon") return HALF_AFTERNOON_META;
+    const half = normalizeHalf(cell.halfDayPeriod);
+    if (half === "morning") return HALF_MORNING_META;
+    if (half === "evening") return HALF_EVENING_META;
     return STATUS_META.half_shift;
   }
   return STATUS_META[cell.status];
 }
 
 const LEGEND_ITEMS: CellMeta[] = [
-  STATUS_META.present, HALF_MORNING_META, HALF_AFTERNOON_META,
+  STATUS_META.present, HALF_MORNING_META, HALF_EVENING_META,
   STATUS_META.absent, STATUS_META.on_leave, STATUS_META.holiday,
 ];
 
@@ -467,6 +470,9 @@ export function AttendanceSheetContent() {
                 <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-gray-500">
                   <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" /> Late arrival
                 </span>
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-gray-500">
+                  <span className="w-1.5 h-1.5 rounded-full bg-orange-500 inline-block" /> Early out
+                </span>
                 <span className="text-[11px] text-gray-400 ml-auto">Hover any cell for full details</span>
               </div>
             </CardContent>
@@ -607,9 +613,14 @@ function CellDetails({ cell, meta }: { cell: AttendanceSheetDayCell; meta: CellM
           <meta.Icon size={13} strokeWidth={2.5} />
           {meta.label}
         </span>
-        {cell.isLate && (
-          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-red-50 text-red-600">Late</span>
-        )}
+        <span className="flex items-center gap-1">
+          {cell.isLate && (
+            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-red-50 text-red-600">Late</span>
+          )}
+          {cell.isEarlyOut && (
+            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-orange-50 text-orange-600">Early Out</span>
+          )}
+        </span>
       </div>
       <div className="px-3 py-2 space-y-1 text-[11px]">
         {row("Date", fmtLong(cell.date))}
@@ -654,9 +665,14 @@ function DayCell({ cell, isWide }: { cell: AttendanceSheetDayCell; isWide: boole
       <td className={`border px-2 py-1.5 ${meta.bg} ${meta.text}`}>
         <div className="flex items-center justify-between gap-2">
           <span className="font-bold text-xs">{meta.label}</span>
-          {cell.isLate && (
-            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-red-100 text-red-700">Late</span>
-          )}
+          <span className="flex items-center gap-1">
+            {cell.isLate && (
+              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-red-100 text-red-700">Late</span>
+            )}
+            {cell.isEarlyOut && (
+              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700">Early Out</span>
+            )}
+          </span>
         </div>
         {(cell.firstPunch || cell.lastPunch) && (
           <p className="text-[10px] font-mono opacity-80 mt-0.5">
@@ -675,6 +691,7 @@ function DayCell({ cell, isWide }: { cell: AttendanceSheetDayCell; isWide: boole
           <div className={`relative text-center py-2 cursor-pointer transition-[filter,box-shadow] duration-100 hover:brightness-90 hover:ring-2 hover:ring-inset hover:ring-black/30 ${meta.bg} ${meta.text}`}>
             <span className="text-xs font-bold">{meta.code}</span>
             {cell.isLate && <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-red-500" />}
+            {cell.isEarlyOut && <span className="absolute bottom-1 right-1 w-1.5 h-1.5 rounded-full bg-orange-500" />}
           </div>
         </TooltipTrigger>
         <AttTooltipContent meta={meta}>

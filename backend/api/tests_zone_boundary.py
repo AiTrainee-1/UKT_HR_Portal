@@ -1,12 +1,12 @@
 """
-Throwaway boundary-verification tests for the attendance zone-chain redesign
-(Morning/Night Late, auto-Permission zone, daily/weekly caps). Not meant to
-be a permanent part of the test suite -run once via:
-    python manage.py test api.tests_zone_boundary -v 2
-then delete this file (or keep it if the team wants ongoing regression
-coverage; not decided here).
+Boundary-verification tests for the Late Detection / Permission / Half-Day
+Detection rewrite: the fixed Half-Day cutoffs (13:30/14:30 by default), the
+two independent Morning Late-In / Evening Early-Out checks, and the
+Permission boundary-shift + monthly-cap mechanism. Also covers the
+Compensation Day and OT/Compensation-feature interactions with all of the
+above.
 """
-from datetime import date, time, timedelta
+from datetime import date, time
 from decimal import Decimal
 
 from django.test import TestCase
@@ -22,17 +22,19 @@ from .compensation_views import _compensation_summary_data
 
 
 class ZoneBoundaryTests(TestCase):
+    """Shift 09:00-18:00, 15min grace, lunch out 13:30 for 60min. Half-Day
+    cutoffs at their defaults: First-Half-End 13:30, Second-Half-Start
+    14:30."""
+
     @classmethod
     def setUpTestData(cls):
         cls.settings = PayrollSettings.get()
         cls.settings.attendance_mode = "strict"
-        cls.settings.shift_punctuality_window_minutes = 60
-        cls.settings.permission_window_minutes = 60
+        cls.settings.morning_late_in_enabled = True
+        cls.settings.evening_early_out_enabled = True
         cls.settings.afternoon_late_window_minutes = 60
         cls.settings.afternoon_permission_window_minutes = 60
-        cls.settings.afternoon_late_can_cause_half_shift = True
-        cls.settings.max_permissions_per_day = 1
-        cls.settings.max_permissions_per_week = 2
+        cls.settings.permission_monthly_cap = 3
         cls.settings.save()
 
         cls.shift = ShiftTemplate.objects.create(
@@ -54,153 +56,148 @@ class ZoneBoundaryTests(TestCase):
         for t in times:
             AttendanceLog.objects.create(employee=emp, date=d, punch_time=t, punch_type="IN", source="test")
 
-    def _record(self, d):
-        return compute_day_record(self.emp, d, settings=PayrollSettings.get())
+    def _record(self, d, emp=None):
+        return compute_day_record(emp or self.emp, d, settings=PayrollSettings.get())
 
-    # ── Morning arrival edge: 09:00 start, 15min grace, 60min window, 60min permission ──
-    def test_morning_on_time_at_grace_boundary(self):
+    # ── Half-Day Detection: fixed 13:30/14:30 cutoffs, independent of lateness ──
+    def test_both_halves_attended_is_full_day_even_when_very_late(self):
         d = date(2026, 1, 5)  # Monday
+        self._punch(self.emp, d, time(13, 0), time(18, 0))  # first punch at 1pm: hours late, still < 13:30
+        r = self._record(d)
+        self.assertEqual(r.status, "present")
+        self.assertEqual(r.shifts_earned, Decimal("1.00"))
+        self.assertTrue(r.is_late)  # Late Detection still fires -orthogonal to Half-Day status
+
+    def test_missing_the_morning_half_is_half_day(self):
+        d = date(2026, 1, 6)
+        self._punch(self.emp, d, time(14, 0), time(18, 0))  # first punch at/after 13:30: morning missed
+        r = self._record(d)
+        self.assertEqual(r.status, "half_shift")
+        self.assertEqual(r.shifts_earned, Decimal("0.50"))
+
+    def test_missing_the_evening_half_is_half_day(self):
+        d = date(2026, 1, 7)
+        self._punch(self.emp, d, time(9, 0), time(14, 0))  # leaves before 14:30: evening missed
+        r = self._record(d)
+        self.assertEqual(r.status, "half_shift")
+
+    def test_a_lone_punch_inside_the_gap_attends_neither_half(self):
+        d = date(2026, 1, 8)
+        self._punch(self.emp, d, time(14, 0))  # 13:30-14:30 gap, no other punch
+        r = self._record(d)
+        self.assertEqual(r.status, "absent")
+
+    def test_exactly_at_the_first_half_end_no_longer_counts_as_morning(self):
+        d = date(2026, 1, 9)
+        self._punch(self.emp, d, time(13, 30), time(18, 0))  # at, not before, the cutoff
+        r = self._record(d)
+        self.assertEqual(r.status, "half_shift")  # only evening attended
+
+    def test_exactly_at_the_second_half_start_counts_as_evening(self):
+        d = date(2026, 1, 12)
+        self._punch(self.emp, d, time(9, 0), time(14, 30))
+        r = self._record(d)
+        self.assertEqual(r.status, "present")
+
+    # ── Late Detection: Morning Late-In / Evening Early-Out ──
+    def test_morning_on_time_at_grace_boundary(self):
+        d = date(2026, 1, 13)
         self._punch(self.emp, d, time(9, 15), time(18, 0))
         r = self._record(d)
-        self.assertEqual(r.status, "present")
         self.assertFalse(r.is_late)
-        self.assertFalse(r.permission_morning)
 
-    def test_morning_late_one_minute_into_late_zone(self):
-        d = date(2026, 1, 6)
+    def test_morning_late_one_minute_past_grace(self):
+        d = date(2026, 1, 14)
         self._punch(self.emp, d, time(9, 16), time(18, 0))
         r = self._record(d)
-        self.assertEqual(r.status, "present")
         self.assertTrue(r.is_late)
-        self.assertFalse(r.permission_morning)
 
-    def test_morning_late_at_window_boundary_still_late(self):
-        d = date(2026, 1, 7)
-        self._punch(self.emp, d, time(10, 0), time(18, 0))  # exactly +60min
-        r = self._record(d)
-        self.assertEqual(r.status, "present")
-        self.assertTrue(r.is_late)
-        self.assertFalse(r.permission_morning)
-
-    def test_morning_permission_one_minute_past_window(self):
-        d = date(2026, 1, 8)
-        self._punch(self.emp, d, time(10, 1), time(18, 0))
-        r = self._record(d)
-        self.assertEqual(r.status, "present")
-        self.assertTrue(r.permission_morning)
-        self.assertTrue(r.late_in_without_permission)  # no submitted request
-
-    def test_morning_permission_at_outer_boundary(self):
-        d = date(2026, 1, 9)
-        self._punch(self.emp, d, time(11, 0), time(18, 0))  # +120min exactly
-        r = self._record(d)
-        self.assertEqual(r.status, "present")
-        self.assertTrue(r.permission_morning)
-
-    def test_morning_half_shift_one_minute_past_permission_zone(self):
-        d = date(2026, 1, 12)
-        self._punch(self.emp, d, time(11, 1), time(18, 0))
-        r = self._record(d)
-        self.assertEqual(r.status, "half_shift")
-        self.assertFalse(r.permission_morning)
-
-    def test_morning_permission_with_request_when_covered(self):
-        d = date(2026, 1, 13)
-        EmployeePermission.objects.create(
-            employee=self.emp, date=d, permission_time=time(9, 30), status="approved",
-        )
-        self._punch(self.emp, d, time(10, 30), time(18, 0))
-        r = self._record(d)
-        self.assertTrue(r.permission_morning)
-        self.assertTrue(r.permission_morning_with_request)
-        self.assertFalse(r.late_in_without_permission)
-
-    # ── Departure edge: symmetric to arrival ──
-    def test_departure_permission_zone(self):
-        d = date(2026, 1, 14)
-        self._punch(self.emp, d, time(9, 0), time(16, 30))  # 90 min early
-        r = self._record(d)
-        self.assertEqual(r.status, "present")
-        self.assertTrue(r.permission_departure)
-
-    def test_departure_half_shift_beyond_permission_zone(self):
+    def test_evening_early_out_one_minute_before_grace(self):
         d = date(2026, 1, 15)
-        self._punch(self.emp, d, time(9, 0), time(15, 59))  # 121 min early
+        self._punch(self.emp, d, time(9, 0), time(17, 44))  # end 18:00 - 15 grace = 17:45 deadline
         r = self._record(d)
-        self.assertEqual(r.status, "half_shift")
+        self.assertTrue(r.early_leave)
 
-    # ── Afternoon (Night Late) edge: lunch out 12:30, back late ──
-    def test_afternoon_late_zone_no_half_shift_impact(self):
-        d = date(2026, 1, 16)
-        # arrive 09:00, lunch out 12:30, expected return 13:30, actual 14:00 (+30min late)
-        self._punch(self.emp, d, time(9, 0), time(12, 30), time(14, 0), time(18, 0))
-        r = self._record(d)
-        self.assertEqual(r.status, "present")
-        self.assertTrue(r.late_afternoon)
-        self.assertFalse(r.permission_afternoon)
-
-    def test_afternoon_permission_zone(self):
-        d = date(2026, 1, 19)
-        # expected return 13:30 (+60 late window) -> permission zone starts 14:30, ends 15:30
-        self._punch(self.emp, d, time(9, 0), time(12, 30), time(15, 0), time(18, 0))
-        r = self._record(d)
-        self.assertEqual(r.status, "present")
-        self.assertTrue(r.permission_afternoon)
-
-    def test_afternoon_half_shift_when_enabled(self):
-        d = date(2026, 1, 20)
-        # beyond 13:30 + 60 (late) + 60 (permission) = 15:30 -> half shift
-        self._punch(self.emp, d, time(9, 0), time(12, 30), time(15, 31), time(18, 0))
-        r = self._record(d)
-        self.assertEqual(r.status, "half_shift")
-        self.assertTrue(r.late_afternoon)
-
-    def test_afternoon_toggle_off_never_causes_half_shift(self):
-        self.settings.afternoon_late_can_cause_half_shift = False
+    def test_evening_early_out_disabled_by_default_setting(self):
+        self.settings.evening_early_out_enabled = False
         self.settings.save()
         try:
-            d = date(2026, 1, 21)
-            self._punch(self.emp, d, time(9, 0), time(12, 30), time(15, 31), time(18, 0))
+            d = date(2026, 1, 16)
+            self._punch(self.emp, d, time(9, 0), time(17, 0))  # an hour early
             r = self._record(d)
-            self.assertEqual(r.status, "present")
-            self.assertTrue(r.late_afternoon)
+            self.assertFalse(r.early_leave)
         finally:
-            self.settings.afternoon_late_can_cause_half_shift = True
+            self.settings.evening_early_out_enabled = True
             self.settings.save()
 
-    # ── Daily cap: max_permissions_per_day = 1 ──
-    def test_daily_cap_escalates_second_edge_to_half_shift(self):
-        d = date(2026, 1, 26)  # Monday, fresh week
-        # Morning permission zone (+90min) AND departure permission zone (90 min early)
-        self._punch(self.emp, d, time(10, 30), time(16, 30))
+    # ── Afternoon (Night Late) lunch-return axis: untouched, never demotes ──
+    def test_afternoon_late_zone_never_demotes_the_day(self):
+        d = date(2026, 1, 19)
+        # arrive 09:00, lunch out 12:30, expected return 13:30, actual 15:31 (deep into the old zone)
+        self._punch(self.emp, d, time(9, 0), time(12, 30), time(15, 31), time(18, 0))
         r = self._record(d)
-        self.assertTrue(r.permission_morning)
-        self.assertFalse(r.permission_departure)  # escalated -daily cap = 1, morning wins priority
-        self.assertTrue(r.permission_escalated_to_half_shift)
-        self.assertEqual(r.status, "half_shift")
-        self.assertEqual(r.permission_zone_count, 1)
+        self.assertEqual(r.status, "present")  # both Half-Day halves still attended
+        self.assertTrue(r.late_afternoon)
 
-    # ── Weekly cap: max_permissions_per_week = 2 ──
-    def test_weekly_cap_escalates_third_permission_day(self):
-        monday = date(2026, 2, 2)
-        # Day 1: morning permission (uses 1 of week budget 2)
-        self._punch(self.emp, monday, time(10, 30), time(18, 0))
-        r1 = self._record(monday)
-        self.assertTrue(r1.permission_morning)
-        self.assertFalse(r1.permission_escalated_to_half_shift)
+    # ── Permission: boundary shift, in-cap vs excess, cap counted per calendar month ──
+    def test_in_cap_morning_late_in_permission_shifts_the_effective_start(self):
+        d = date(2026, 2, 2)  # Monday, fresh month
+        EmployeePermission.objects.create(
+            employee=self.emp, date=d, type=EmployeePermission.TYPE_MORNING_LATE_IN, status="approved",
+        )
+        self._punch(self.emp, d, time(10, 10), time(18, 0))  # 70 min late against the real 9:00 start
+        r = self._record(d)
+        self.assertFalse(r.is_late)  # covered: effective start becomes 10:00 + 15 grace = 10:15
+        self.assertTrue(r.morning_permission_applied)
+        self.assertFalse(r.morning_permission_excess)
+        self.assertEqual(r.status, "present")  # Half-Day boundary itself never moves
 
-        tuesday = monday + timedelta(days=1)
-        self._punch(self.emp, tuesday, time(10, 30), time(18, 0))
-        r2 = self._record(tuesday)
-        self.assertTrue(r2.permission_morning)
-        self.assertFalse(r2.permission_escalated_to_half_shift)
+    def test_in_cap_evening_early_out_permission_shifts_the_effective_end(self):
+        d = date(2026, 2, 3)
+        EmployeePermission.objects.create(
+            employee=self.emp, date=d, type=EmployeePermission.TYPE_EVENING_EARLY_OUT, status="approved",
+        )
+        self._punch(self.emp, d, time(9, 0), time(17, 10))  # 50 min early against the real 18:00 end
+        r = self._record(d)
+        self.assertFalse(r.early_leave)  # covered: effective end becomes 17:00 - 15 grace = 16:45
+        self.assertTrue(r.evening_permission_applied)
 
-        wednesday = monday + timedelta(days=2)
-        self._punch(self.emp, wednesday, time(10, 30), time(18, 0))
-        r3 = self._record(wednesday)
-        self.assertFalse(r3.permission_morning)  # weekly budget exhausted
-        self.assertTrue(r3.permission_escalated_to_half_shift)
-        self.assertEqual(r3.status, "half_shift")
+    def test_middle_permission_never_shifts_any_boundary(self):
+        d = date(2026, 2, 4)
+        EmployeePermission.objects.create(
+            employee=self.emp, date=d, type=EmployeePermission.TYPE_MIDDLE_PERMISSION, status="approved",
+        )
+        self._punch(self.emp, d, time(10, 10), time(18, 0))  # still 70 min late
+        r = self._record(d)
+        self.assertTrue(r.is_late)  # not covered -middle permission doesn't touch morning/evening at all
+        self.assertFalse(r.morning_permission_applied)
+        self.assertTrue(r.middle_permission_today)
+
+    def test_a_pending_permission_never_shifts_the_boundary(self):
+        d = date(2026, 2, 5)
+        EmployeePermission.objects.create(
+            employee=self.emp, date=d, type=EmployeePermission.TYPE_MORNING_LATE_IN, status="pending",
+        )
+        self._punch(self.emp, d, time(10, 10), time(18, 0))
+        r = self._record(d)
+        self.assertTrue(r.is_late)
+        self.assertFalse(r.morning_permission_applied)
+
+    def test_the_fourth_approved_permission_that_month_is_excess(self):
+        month_days = [date(2026, 3, d) for d in (2, 3, 4, 5)]  # cap is 3
+        for d in month_days:
+            EmployeePermission.objects.create(
+                employee=self.emp, date=d, type=EmployeePermission.TYPE_MORNING_LATE_IN, status="approved",
+            )
+        results = []
+        for d in month_days:
+            self._punch(self.emp, d, time(10, 10), time(18, 0))
+            results.append(self._record(d))
+        applied = [r.morning_permission_applied for r in results]
+        excess = [r.morning_permission_excess for r in results]
+        self.assertEqual(applied, [True, True, True, False])
+        self.assertEqual(excess, [False, False, False, True])
+        self.assertTrue(results[3].is_late)  # the 4th day's lateness is judged against the real start
 
 
 class CompensationDayTests(TestCase):
@@ -214,8 +211,6 @@ class CompensationDayTests(TestCase):
     def setUpTestData(cls):
         cls.settings = PayrollSettings.get()
         cls.settings.attendance_mode = "strict"
-        cls.settings.shift_punctuality_window_minutes = 60
-        cls.settings.permission_window_minutes = 60
         cls.settings.save()
 
         cls.shift = ShiftTemplate.objects.create(
@@ -241,10 +236,9 @@ class CompensationDayTests(TestCase):
         return compute_day_record(self.emp, d, settings=PayrollSettings.get())
 
     def test_normal_day_would_be_half_shift_and_flagged(self):
-        # Sanity baseline: without an announcement, arriving hours late is
-        # Half Shift (and, closer in, would carry Late/Permission flags).
+        # Sanity baseline: without an announcement, missing the whole morning half is Half Shift.
         d = date(2026, 3, 2)
-        self._punch(d, time(13, 0), time(18, 0))
+        self._punch(d, time(14, 0), time(18, 0))
         r = self._record(d)
         self.assertEqual(r.status, "half_shift")
         self.assertFalse(r.is_compensation_day)
@@ -253,12 +247,12 @@ class CompensationDayTests(TestCase):
         d = date(2026, 3, 3)
         CompensationDayAnnouncement.objects.create(date=d, reason="Festival").employees.add(self.emp)
         # Only afternoon attendance -still genuinely a Half Shift day.
-        self._punch(d, time(13, 0), time(18, 0))
+        self._punch(d, time(14, 0), time(18, 0))
         r = self._record(d)
         self.assertTrue(r.is_compensation_day)
         self.assertEqual(r.status, "half_shift")  # never auto-granted Full Day
         self.assertFalse(r.is_late)
-        self.assertFalse(r.permission_morning)
+        self.assertFalse(r.morning_permission_applied)
 
     def test_leave_until_time_full_day_when_present_through_it(self):
         d = date(2026, 3, 4)
@@ -275,7 +269,7 @@ class CompensationDayTests(TestCase):
         d = date(2026, 3, 5)
         ann = CompensationDayAnnouncement.objects.create(date=d, leave_until_time=time(15, 0), reason="Half day")
         ann.employees.add(self.emp)
-        # Left more than 2 hours before the announced 15:00 cutoff.
+        # Left more than 2 hours before the announced 15:00 cutoff -the release isn't a blanket exemption.
         self._punch(d, time(9, 0), time(12, 30))
         r = self._record(d)
         self.assertTrue(r.is_compensation_day)
@@ -525,7 +519,7 @@ class CompensationMasterSwitchTests(TestCase):
     def test_compensation_day_exemption_does_not_apply_when_disabled(self):
         d = date(2026, 7, 7)
         CompensationDayAnnouncement.objects.create(date=d, reason="Festival").employees.add(self.emp)
-        self._punch(d, time(13, 0), time(18, 0))  # afternoon-only arrival
+        self._punch(d, time(14, 0), time(18, 0))  # afternoon-only arrival: Half Day either way
         record = compute_day_record(self.emp, d, settings=self.settings)
         self.assertFalse(record.is_compensation_day)
         self.assertEqual(record.status, "half_shift")

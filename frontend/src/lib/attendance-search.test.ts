@@ -163,18 +163,57 @@ describe("a day's flags", () => {
     const flags = dayFlags(
       day({
         isLate: true,
+        isEarlyOut: true,
         lateAfternoon: true,
-        permissionMorning: true,
-        permissionDeparture: true,
-        permission: { status: "approved", time: "10:30", reason: "Bank" },
+        morningPermissionApplied: true,
+        eveningPermissionExcess: true,
+        middlePermissionToday: true,
+        permissionAfternoon: true,
+        permission: { status: "approved", type: "Late In", time: "10:30", reason: "Bank" },
         casualLeave: { status: "approved", reason: "Family" },
         isCompensationDay: true,
       }),
     );
-    expect(flags.map((f) => f.key)).toEqual(["late", "auto", "perm", "cl", "comp"]);
-    expect(flags[0].detail).toBe("after lunch");
-    expect(flags[1].detail).toBe("Morning + Departure");
-    expect(flags[2].detail).toBe("10:30");
+    expect(flags.map((f) => f.key)).toEqual([
+      "late",
+      "earlyOut",
+      "lateAfternoon",
+      "permApplied",
+      "permExcess",
+      "permMiddle",
+      "permAfternoon",
+      "perm",
+      "cl",
+      "comp",
+    ]);
+    expect(flags.find((f) => f.key === "permApplied")).toMatchObject({
+      tone: "permissionApplied",
+      label: "Allowed permission applied",
+      detail: "Morning",
+    });
+    expect(flags.find((f) => f.key === "permExcess")).toMatchObject({
+      tone: "permissionExcess",
+      label: "Excess permission",
+      detail: "did not protect the day",
+    });
+    // A pre-rewrite "Late In" request still reads as its canonical type.
+    expect(flags.find((f) => f.key === "perm")?.detail).toBe("Morning Late-In");
+  });
+
+  it("ignores the deprecated permission keys the server still sends for older apps", () => {
+    const legacy: AttendanceSearchDay = {
+      ...day(),
+      permissionMorning: true,
+      permissionDeparture: true,
+      permissionZoneCount: 2,
+      permissionEscalatedToHalfShift: true,
+    } as AttendanceSearchDay;
+    expect(dayFlags(legacy)).toEqual([]);
+  });
+
+  it("a permission request without a type falls back to its time", () => {
+    const [flag] = dayFlags(day({ permission: { status: "approved", time: "10:30", reason: null } }));
+    expect(flag).toMatchObject({ key: "perm", detail: "10:30" });
   });
 
   it("names a leave by its type", () => {
@@ -189,9 +228,30 @@ describe("a day's flags", () => {
     expect(dayFlags(day({ status: "present", isHalfShift: true })).map((f) => f.key)).toEqual(["half"]);
   });
 
-  it("explains a half shift caused by the permission limit", () => {
-    const [flag] = dayFlags(day({ status: "half_shift", isHalfShift: true, permissionEscalatedToHalfShift: true }));
-    expect(flag.label).toBe("Permission limit reached");
+  it("says which half a Half Day was worked, from the first punch and the Half-Day cutoff", () => {
+    const morning = dayFlags(
+      day({ status: "half_shift", isHalfShift: true, punches: [punch("08:32:00"), null, null, null] }),
+    );
+    expect(morning.map((f) => f.label)).toEqual(["Morning half only"]);
+    const evening = dayFlags(
+      day({
+        status: "half_shift",
+        isHalfShift: true,
+        punches: [punch("14:05:00"), null, null, punch("18:00:00", "OUT")],
+      }),
+    );
+    expect(evening.map((f) => f.label)).toEqual(["Evening half only"]);
+    // A first punch inside the lunch gap is not the Morning half, whatever Second Half Start says.
+    const custom = dayFlags(
+      day({ status: "half_shift", isHalfShift: true, punches: [punch("12:40:00"), null, null, null] }),
+      { firstHalfEnd: "12:30", secondHalfStart: "13:30" },
+    );
+    expect(custom.map((f) => f.label)).toEqual(["Evening half only"]);
+  });
+
+  it("explains why a day was flagged when the server says", () => {
+    const [flag] = dayFlags(day({ isLate: true, lateReason: "Morning Late-In: 09:40 is after 09:15" }));
+    expect(flag.title).toBe("Morning Late-In: 09:40 is after 09:15");
   });
 
   it("keeps the reasons people gave and drops blank ones", () => {
@@ -203,6 +263,11 @@ describe("a day's flags", () => {
       }),
     );
     expect(notes).toEqual([{ key: "cl", label: "Casual leave", text: "Family function" }]);
+  });
+
+  it("puts the server's late reason first among a day's notes", () => {
+    const notes = dayNotes(day({ isLate: true, lateReason: " Morning Late-In: 09:40 ", leave: null }));
+    expect(notes).toEqual([{ key: "why", label: "Why flagged", text: "Morning Late-In: 09:40" }]);
   });
 });
 
@@ -225,6 +290,7 @@ describe("a period's summary", () => {
       onLeave: 1,
       holiday: 1,
       late: 1,
+      earlyOut: 0,
       permission: 1,
       issues: 3,
     });
@@ -233,5 +299,11 @@ describe("a period's summary", () => {
   it("an issue is an absence, a half shift or a late mark, not leave or a holiday", () => {
     expect(days.map(isIssueDay)).toEqual([false, true, true, true, false, false]);
     expect(summarize([]).total).toBe(0);
+  });
+
+  it("an early out is an issue too, and is counted separately from late", () => {
+    const early = day({ status: "present", isEarlyOut: true });
+    expect(isIssueDay(early)).toBe(true);
+    expect(summarize([early, day()])).toMatchObject({ late: 0, earlyOut: 1, issues: 1 });
   });
 });

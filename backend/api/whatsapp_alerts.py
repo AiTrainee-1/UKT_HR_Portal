@@ -54,7 +54,12 @@ from django.db.models import Q
 from django.utils import timezone
 
 from . import whatsapp_service
-from .attendance_final import _compensation_day_for, _holiday_dates_for_month
+from .attendance_final import (
+    _compensation_day_for,
+    _holiday_dates_for_month,
+    bulk_permission_cap_status,
+    infer_permission_type,
+)
 from .clock import FACTORY_TZ, ist_now
 from .models import (
     Attendance,
@@ -70,15 +75,16 @@ from .models import (
     WhatsAppSettings,
 )
 from .shift_engine import (
-    ZONE_HALF_SHIFT,
-    ZONE_PERMISSION,
-    _classify_zone,
     _get_assignment_for_date,
     _get_shift_for_date,
-    _permission_window_minutes,
-    _punctuality_window_minutes,
     _t2s,
 )
+
+# The WhatsApp Absent alert's own "how long to wait after shift start before nudging" -independent
+# of PayrollSettings now that shift_punctuality_window_minutes was retired with the Late Detection/
+# Permission/Half-Day rewrite (that setting decided the OLD auto-escalation Half-Shift rule, which
+# no longer exists). Kept at the same 60 minutes so this alert's own timing doesn't change.
+ABSENT_ALERT_WINDOW_MINUTES = 60
 from .whatsapp_format import date_str, duration_str, full_name, time_str
 
 logger = logging.getLogger(__name__)
@@ -284,12 +290,11 @@ class DayData:
     strict: bool
     payroll: object
     switches: object
-    permission_window_s: int
     assignments: dict
     punches: dict
     on_leave: set
     decided: set
-    permitted: set
+    permitted: dict  # employee id -> extra seconds an approved in-cap Morning Late-In moves today's start
     on_duty: dict
     already: set = field(default_factory=set)
 
@@ -348,9 +353,28 @@ def load_day(now: datetime, switches=None) -> DayData:
     decided = set(
         AttendanceDayRecord.objects.filter(date=today, source="manual").values_list("employee_id", flat=True)
     ) | (marked_present - set(punches))
-    permitted = set(
-        EmployeePermission.objects.filter(date=today, status="approved").values_list("employee_id", flat=True)
+    # Whose allowed arrival time an approved Morning Late-In permission moves today: one that is still
+    # within PayrollSettings.permission_monthly_cap for that employee's month -matching exactly what
+    # the real attendance engine treats as protective (see attendance_final._permissions_for_day):
+    # the type is matched in either stored spelling and an untyped legacy row is inferred from its
+    # time, exactly as the engine does. The permission moves the allowed time by its fixed 60 minutes
+    # (it does not excuse the whole day: arriving later than that is still Late, as the engine judges
+    # it). An approved-but-excess permission moves nothing, since the attendance engine won't excuse
+    # the actual lateness either.
+    cap = max(0, int(payroll.permission_monthly_cap or 0))
+    todays_permissions = list(
+        EmployeePermission.objects.filter(date=today, status="approved").select_related("employee")
     )
+    cap_status = bulk_permission_cap_status(todays_permissions, cap)
+    permitted = {}
+    for p in todays_permissions:
+        if cap_status.get(p.id) != "within_cap":
+            continue
+        kind = p.type_key or infer_permission_type(
+            p.permission_time, _get_shift_for_date(p.employee, today, assignments=assignments.get(p.employee_id, []))
+        )
+        if kind == EmployeePermission.TYPE_MORNING_LATE_IN:
+            permitted[p.employee_id] = EmployeePermission.FIXED_DURATION_MINUTES * 60
     # employee -> where they are on duty today (an On-Duty request awaiting approval or approved).
     on_duty = {}
     for emp_id, destination in (
@@ -376,7 +400,6 @@ def load_day(now: datetime, switches=None) -> DayData:
         strict=payroll.attendance_mode != "simple",
         payroll=payroll,
         switches=switches or WhatsAppSettings.get(),
-        permission_window_s=_permission_window_minutes(payroll) * 60,
         assignments=assignments,
         punches=punches,
         on_leave=on_leave,
@@ -387,12 +410,11 @@ def load_day(now: datetime, switches=None) -> DayData:
     )
 
 
-def _late_status(delta_s: int, grace_s: int, window_s: int, permission_window_s: int) -> str:
-    zone = _classify_zone(delta_s, grace_s, window_s, permission_window_s)
-    if zone == ZONE_HALF_SHIFT:
-        return "Late - Half Shift"
-    if zone == ZONE_PERMISSION:
-        return "Late - counted as an automatic Permission"
+def _late_status() -> str:
+    # The old auto-detected "counted as Permission"/"Half Shift" zone wording is retired along with
+    # that system -a lateness is either excused by an actual approved, in-cap Permission (which
+    # suppresses this alert entirely -see day.permitted below) or it's just Late. Kept as a function
+    # (rather than inlining the literal) so the call site below still reads as a deliberate choice.
     return "Late"
 
 
@@ -434,7 +456,7 @@ def evaluate(emp, day: DayData, trace: list | None = None) -> list[Due]:
         return due
 
     grace_s = (shift.grace_period_minutes or 0) * 60
-    window_s = _punctuality_window_minutes(shift, day.payroll) * 60
+    window_s = ABSENT_ALERT_WINDOW_MINUTES * 60
     absent_cutoff_s = start_s + window_s + sw.absent_extra_minutes * 60
     lead_s = sw.four_punch_lead_minutes * 60
     wait_s = sw.missing_punch_after_minutes * 60
@@ -527,22 +549,27 @@ def evaluate(emp, day: DayData, trace: list | None = None) -> list[Due]:
     # start plus THIS shift's grace. Seconds don't count: the first punch is the minute it was made in,
     # exactly as the attendance engine judges it, so with a 9:10 limit a punch at 9:10:40 is on time and
     # the first late minute is 9:11.
-    allowed_s = start_s + grace_s
+    # An approved in-cap Morning Late-In permission moves the allowed time later by its 60 minutes -the
+    # same deadline the attendance engine judges the day by, so this alert can never fire for a
+    # day the engine calls on time, nor stay silent for one it calls late.
+    permission_extra_s = day.permitted.get(emp.id, 0)
+    allowed_s = start_s + grace_s + permission_extra_s
     first_minute_s = times[0] // 60 * 60 if times else None
     if not sw.late_alert_enabled:
         say("Late alert: switch is OFF.")
+    elif not day.payroll.morning_late_in_enabled:
+        say("Late alert: not sent, Morning Late-In detection is switched off in Settings.")
     elif n == 0:
         say("Late alert: not due, no punch yet.")
     elif not first_minute_s > allowed_s:
+        via = " (moved later by an approved permission)" if permission_extra_s else ""
         say(
-            f"Late alert: not due, first punch {_fmt_time(times[0])} is within the allowed time {_fmt_time(allowed_s)} (seconds are ignored)."
+            f"Late alert: not due, first punch {_fmt_time(times[0])} is within the allowed time {_fmt_time(allowed_s)}{via} (seconds are ignored)."
         )
     elif times[0] > end_s:
         say("Late alert: not due, the first punch came after the shift ended.")
     elif now_s - first_minute_s > LATE_FRESH_S:
         say("Late alert: not sent, the punch was more than 30 minutes ago and the message would arrive stale.")
-    elif emp.id in day.permitted:
-        say("Late alert: not due, an approved permission covers today.")
     elif excused():
         pass
     elif tag_sent("late"):
@@ -559,7 +586,7 @@ def evaluate(emp, day: DayData, trace: list | None = None) -> list[Due]:
                     "shift_start": _fmt_time(shift.start_time),
                     "first_punch": _fmt_time(times[0]),
                     "late_by": duration_str(past_allowed_s),
-                    "status": _late_status(first_minute_s - start_s, grace_s, window_s, day.permission_window_s),
+                    "status": _late_status(),
                     "grace_minutes": str(shift.grace_period_minutes or 0),
                     "grace_period": _plural(shift.grace_period_minutes or 0, "minute"),
                 },

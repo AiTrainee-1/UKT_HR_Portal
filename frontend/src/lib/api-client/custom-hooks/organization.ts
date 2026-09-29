@@ -433,6 +433,19 @@ export type AssignedEmployee = {
   assignedAt?: string | null;
 };
 
+// An employee is listed against this HOD (individually or through one of its departments) but
+// reports to a DIFFERENT active HOD: an individual assignment beats department coverage, and the
+// earliest assignment wins among equals. Shown so HR can see why a department headcount is lower
+// than its size, and move the employee here if that is what they want.
+export type ManagerOverlap = {
+  employeeId: number;
+  employeeCode: string;
+  name: string;
+  department?: string | null;
+  currentManager: { id: number; employeeId: number; employeeName: string; employeeCode: string };
+  via: "direct" | "department";
+};
+
 export type DepartmentManagerItem = {
   id: number;
   employeeId: number;
@@ -456,6 +469,10 @@ export type DepartmentManagerItem = {
   assignedEmployeeIds?: number[];
   assignedDepartments?: AssignedDepartment[];
   assignedEmployees?: AssignedEmployee[];
+  /** How many employees listed against this HOD really report to another one. */
+  overlapCount?: number;
+  /** The employees themselves (detail view only). */
+  overlaps?: ManagerOverlap[];
   // mobile-only fields
   isManager?: boolean;
   canSubmitLeave?: boolean;
@@ -543,14 +560,51 @@ export const useDeleteDepartmentManager = () => {
   });
 };
 
+// Thrown by manager_department_assignments as a 409 (see ApiError.data) when assigning the
+// department would take on, or double up with, employees who already report to another HOD.
+// Not an error to just toast: the caller shows the list and re-POSTs with `reassign` to say what
+// to do with them -or leaves everything as it is.
+export type DepartmentAssignmentConflict = {
+  conflict: true;
+  conflictType: "department";
+  department: { id: number; name: string };
+  error: string;
+  /** Other active HODs who hold this WHOLE department. */
+  holders: { id: number; employeeId: number; employeeName: string; employeeCode: string }[];
+  conflicts: {
+    employeeId: number;
+    employeeCode: string;
+    name: string;
+    /** "direct": assigned to that HOD individually; "department": covered by their department. */
+    via: "direct" | "department";
+    manager: { id: number; employeeId: number; employeeName: string; employeeCode: string };
+  }[];
+  conflictCount: number;
+};
+
+/** What to do with the employees who already have an HOD: move all of them here, keep all of them
+ *  where they are, or move exactly the listed employee ids (everyone else is kept). */
+export type DepartmentReassign = "all" | "none" | number[];
+
 export const useAssignDepartmentToManager = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ managerId, departmentId }: { managerId: number; departmentId: number }) =>
-      customFetch(`/api/department-managers/${managerId}/departments`, {
-        method: "POST",
-        body: JSON.stringify({ departmentId }),
-      }),
+    mutationFn: ({
+      managerId,
+      departmentId,
+      reassign,
+    }: {
+      managerId: number;
+      departmentId: number;
+      reassign?: DepartmentReassign;
+    }) =>
+      customFetch<{ message: string; assigned?: boolean; reassigned?: number; kept?: number }>(
+        `/api/department-managers/${managerId}/departments`,
+        {
+          method: "POST",
+          body: JSON.stringify(reassign === undefined ? { departmentId } : { departmentId, reassign }),
+        },
+      ),
     onSuccess: (_r, { managerId }) => {
       queryClient.invalidateQueries({ queryKey: getDepartmentManagerQueryKey(managerId) });
       queryClient.invalidateQueries({ queryKey: getDepartmentManagersQueryKey() });

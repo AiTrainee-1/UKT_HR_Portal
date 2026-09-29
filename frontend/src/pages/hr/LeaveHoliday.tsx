@@ -22,9 +22,19 @@ import {
   useCreatePermission,
   useUpdatePermissionStatus,
   useDeletePermission,
-  getListPermissionsQueryKey,
   useListEmployees,
+  usePayrollSettings,
+  type PermissionItem,
+  type PermissionType,
 } from "@/lib/api-client";
+import {
+  PERMISSION_MINUTES,
+  PERMISSION_TYPES,
+  permissionOutcome,
+  permissionTypeKey,
+  permissionTypeLabel,
+  permissionTypeWire,
+} from "@/lib/late-detection";
 import {
   useListLeaveRequests,
   useUpdateLeaveStatus,
@@ -68,7 +78,9 @@ export default function LeaveHoliday() {
   const [activeTab, setActiveTab] = useState(defaultTab);
   const [showHolidayDialog, setShowHolidayDialog] = useState(false);
   const [selectedLeave, setSelectedLeave] = useState<any | null>(null);
-  const [selectedPerm, setSelectedPerm] = useState<any | null>(null);
+  const [selectedPerm, setSelectedPerm] = useState<PermissionItem | null>(null);
+  // The type HR has picked in the details dialog ("" = the request has none yet and none is picked).
+  const [permTypeDraft, setPermTypeDraft] = useState<PermissionType | "">("");
   const [holidayForm, setHolidayForm] = useState({ name: "", date: "", holidayType: "national", description: "" });
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
@@ -80,9 +92,19 @@ export default function LeaveHoliday() {
   const [showPermDialog, setShowPermDialog] = useState(false);
 
   const { data: employees } = useListEmployees({ status: "active" });
-  const [permForm, setPermForm] = useState({
+  // The HR-editable monthly cap (Settings → Late Detection → Permission Policy), for the copy below.
+  const { data: payrollSettings } = usePayrollSettings();
+  const permissionCap = payrollSettings?.permissionMonthlyCap ?? 3;
+  const [permForm, setPermForm] = useState<{
+    employeeId: string;
+    date: string;
+    type: PermissionType | "";
+    permissionTime: string;
+    reason: string;
+  }>({
     employeeId: "",
     date: new Date().toISOString().slice(0, 10),
+    type: "",
     permissionTime: "",
     reason: "",
   });
@@ -98,14 +120,19 @@ export default function LeaveHoliday() {
     query: { refetchInterval: 30_000 },
   } as any);
   const { data: holidays, isLoading: holidaysLoading } = useListHolidays({ year: filterYear });
-  const { data: permissions, isLoading: permissionsLoading } = useListPermissions(
+  // "Overdue / Excess" is not a status the server can filter on: it is the approved requests whose capStatus is
+  // excess, so ask for the approved ones and narrow client-side.
+  const { data: allPermissions, isLoading: permissionsLoading } = useListPermissions(
     {
-      ...(permFilterStatus !== "all" ? { status: permFilterStatus } : {}),
+      ...(permFilterStatus !== "all" ? { status: permFilterStatus === "excess" ? "approved" : permFilterStatus } : {}),
       ...(permFilterMonth !== "all" ? { month: permFilterMonth } : {}),
       year: permFilterYear,
     },
     { refetchInterval: 30_000 } as any,
   );
+  const permissions = permFilterStatus === "excess" ? allPermissions?.filter((p) => p.capStatus === "excess") : allPermissions;
+  // Whether the backend reports a cap status at all (the rewritten one sends it on every request, an older one never).
+  const capReported = (permissions ?? []).some((p) => p.capStatus != null);
   const updateLeaveMutation = useUpdateLeaveStatus();
   const deleteLeaveMutation = useDeleteLeaveRequest();
   const createHolidayMutation = useCreateHoliday();
@@ -179,21 +206,33 @@ export default function LeaveHoliday() {
     queryClient.invalidateQueries({ queryKey: getListHolidaysQueryKey({ year: filterYear }) });
   };
 
-  const permQueryKey = getListPermissionsQueryKey({
-    ...(permFilterStatus !== "all" ? { status: permFilterStatus } : {}),
-    ...(permFilterMonth !== "all" ? { month: permFilterMonth as number } : {}),
-    year: permFilterYear,
-  });
+  // Every permission list, whatever its filters: deciding one request can flip a later one that month between
+  // Allowed and Overdue / Excess (the cap counts earliest date first), so a single filtered key is not enough.
+  const refreshPermissions = () => queryClient.invalidateQueries({ queryKey: ["/api/permissions"] });
+
+  // The open request's canonical type (typeKey, else the legacy `type` an older backend sends), null if it has none.
+  const selectedKey = selectedPerm ? permissionTypeKey(selectedPerm) : null;
+
+  const openPerm = (p: PermissionItem) => {
+    setSelectedPerm(p);
+    setPermTypeDraft(permissionTypeKey(p) ?? "");
+  };
 
   const addPermission = async () => {
     if (!permForm.employeeId || !permForm.date) {
       toast({ title: "Please select an employee and date", variant: "destructive" });
       return;
     }
+    if (!permForm.type) {
+      toast({ title: "Please choose the permission type", variant: "destructive" });
+      return;
+    }
+    let created: PermissionItem;
     try {
-      await createPermMutation.mutateAsync({
+      created = await createPermMutation.mutateAsync({
         employeeId: Number(permForm.employeeId),
         date: permForm.date,
+        type: permissionTypeWire(permForm.type),
         permissionTime: permForm.permissionTime || undefined,
         reason: permForm.reason || undefined,
       });
@@ -202,21 +241,48 @@ export default function LeaveHoliday() {
       toast({ title: msg, variant: "destructive" });
       return;
     }
-    toast({ title: "Permission added" });
-    setPermForm({ employeeId: "", date: new Date().toISOString().slice(0, 10), permissionTime: "", reason: "" });
+    toast({
+      title: `${permissionTypeLabel(created) ?? "Permission"} added`,
+      description:
+        created.monthlyUsed != null
+          ? `${created.monthlyUsed} pending or approved permission${created.monthlyUsed === 1 ? "" : "s"} this month. Only the first ${created.monthlyLimit} approved are Allowed.`
+          : undefined,
+    });
+    setPermForm({ employeeId: "", date: new Date().toISOString().slice(0, 10), type: "", permissionTime: "", reason: "" });
     setShowPermDialog(false);
-    queryClient.invalidateQueries({ queryKey: permQueryKey });
+    refreshPermissions();
   };
 
-  const updatePermStatus = async (id: number, status: string) => {
+  // `type` classifies the request as it is decided (HR can set it on an untyped one, or correct a mis-picked one).
+  const updatePermStatus = async (id: number, status: string, type?: PermissionType) => {
     try {
-      await updatePermMutation.mutateAsync({ id, data: { status } });
+      await updatePermMutation.mutateAsync({ id, data: { status, ...(type ? { type: permissionTypeWire(type) } : {}) } });
     } catch {
       toast({ title: "Failed to update permission", variant: "destructive" });
       return;
     }
     toast({ title: `Permission ${status}` });
-    queryClient.invalidateQueries({ queryKey: permQueryKey });
+    refreshPermissions();
+  };
+
+  // Re-classify a request without deciding it (the detail dialog's "Save type").
+  const savePermType = async (p: PermissionItem, type: PermissionType) => {
+    let updated: PermissionItem;
+    try {
+      updated = await updatePermMutation.mutateAsync({ id: p.id, data: { type: permissionTypeWire(type) } });
+    } catch {
+      toast({ title: "Failed to update permission type", variant: "destructive" });
+      return;
+    }
+    setSelectedPerm(updated);
+    setPermTypeDraft(permissionTypeKey(updated) ?? "");
+    refreshPermissions();
+    // An older backend ignores the type on update: say so instead of announcing a change that did not happen.
+    if (permissionTypeKey(updated) !== type) {
+      toast({ title: "The server did not change the permission type", variant: "destructive" });
+      return;
+    }
+    toast({ title: "Permission type updated" });
   };
 
   const deletePermission = async (id: number) => {
@@ -227,7 +293,7 @@ export default function LeaveHoliday() {
       return;
     }
     toast({ title: "Permission deleted" });
-    queryClient.invalidateQueries({ queryKey: permQueryKey });
+    refreshPermissions();
   };
 
   return (
@@ -269,20 +335,30 @@ export default function LeaveHoliday() {
                     value: (permissions ?? []).filter((p) => p.status === "pending").length,
                     color: "text-amber-700 bg-amber-50 border-amber-100",
                   },
+                  // "Allowed" is the server's word for approved-within-the-cap; a backend that does not report the
+                  // cap (no capStatus on any approved request) just has "Approved", counted as such.
+                  capReported
+                    ? {
+                        label: "Allowed",
+                        value: (permissions ?? []).filter((p) => p.status === "approved" && p.capStatus === "within_cap")
+                          .length,
+                        color: "text-green-700 bg-green-50 border-green-100",
+                      }
+                    : {
+                        label: "Approved",
+                        value: (permissions ?? []).filter((p) => p.status === "approved").length,
+                        color: "text-green-700 bg-green-50 border-green-100",
+                      },
                   {
-                    label: "Approved",
-                    value: (permissions ?? []).filter((p) => p.status === "approved").length,
-                    color: "text-green-700 bg-green-50 border-green-100",
+                    label: "Overdue / Excess",
+                    value: (permissions ?? []).filter((p) => p.status === "approved" && p.capStatus === "excess")
+                      .length,
+                    color: "text-orange-700 bg-orange-50 border-orange-100",
                   },
                   {
-                    label: "Rejected",
+                    label: "Not Allowed",
                     value: (permissions ?? []).filter((p) => p.status === "rejected").length,
                     color: "text-red-700 bg-red-50 border-red-100",
-                  },
-                  {
-                    label: "Total",
-                    value: (permissions ?? []).length,
-                    color: "text-gray-700 bg-gray-50 border-gray-100",
                   },
                 ]
               : activeTab === "holidays"
@@ -564,10 +640,13 @@ export default function LeaveHoliday() {
             <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
               <div className="flex items-center gap-2 flex-wrap">
                 <PillTabs
-                  items={["all", "pending", "approved", "rejected"].map((s) => ({
-                    value: s,
-                    label: s.charAt(0).toUpperCase() + s.slice(1),
-                  }))}
+                  items={[
+                    { value: "all", label: "All" },
+                    { value: "pending", label: "Pending" },
+                    { value: "approved", label: "Approved" },
+                    { value: "excess", label: "Overdue / Excess" },
+                    { value: "rejected", label: "Not Allowed" },
+                  ]}
                   value={permFilterStatus}
                   onChange={setPermFilterStatus}
                   size="sm"
@@ -618,12 +697,15 @@ export default function LeaveHoliday() {
             ) : (
               <div className="space-y-3">
                 {(permissions ?? []).map((p) => {
-                  const cfg = STATUS_CONFIG[p.status] ?? STATUS_CONFIG.pending;
+                  const outcome = permissionOutcome(p);
+                  const typeLabel = permissionTypeLabel(p);
+                  const typed = permissionTypeKey(p) != null;
                   return (
                     <Card
                       key={p.id}
+                      data-testid={`permission-${p.id}`}
                       className="border hover:shadow-sm transition-shadow cursor-pointer"
-                      onClick={() => setSelectedPerm(p)}
+                      onClick={() => openPerm(p)}
                     >
                       <CardContent className="p-4">
                         <div className="flex items-start justify-between gap-3">
@@ -631,7 +713,22 @@ export default function LeaveHoliday() {
                             <div className="flex items-center gap-2 flex-wrap mb-1">
                               <p className="font-bold text-sm text-gray-900">{p.employeeName}</p>
                               <span className="text-xs text-gray-400">{p.employeeCode}</span>
-                              <Badge className={`text-xs border ${cfg.className}`}>{cfg.label}</Badge>
+                              <Badge className={`text-xs border ${outcome.className}`} title={outcome.explanation || undefined}>
+                                {outcome.label}
+                              </Badge>
+                              {typeLabel ? (
+                                <Badge variant="outline" className="text-xs">
+                                  {typeLabel}
+                                </Badge>
+                              ) : (
+                                <Badge
+                                  className={`text-xs border ${TONE.warning}`}
+                                  title="This request has no type, so approving it cannot move a shift boundary until HR sets one."
+                                >
+                                  Type not set
+                                </Badge>
+                              )}
+                              <span className="text-xs text-gray-400">{p.durationMinutes ?? PERMISSION_MINUTES} min</span>
                             </div>
                             <p className="text-xs text-gray-500">
                               {new Date(p.date).toLocaleDateString("en-IN", {
@@ -642,6 +739,13 @@ export default function LeaveHoliday() {
                               })}
                               {p.permissionTime && <span className="ml-2">at {p.permissionTime}</span>}
                             </p>
+                            {p.status !== "rejected" && outcome.explanation && (
+                              <p
+                                className={`text-[11px] mt-0.5 ${p.capStatus === "excess" ? "text-orange-700" : "text-gray-500"}`}
+                              >
+                                {outcome.explanation}
+                              </p>
+                            )}
                             {p.reason && <p className="text-xs text-gray-400 mt-0.5 truncate">{p.reason}</p>}
                             {p.hrComment && <p className="text-xs text-blue-600 mt-0.5 italic">HR: {p.hrComment}</p>}
                             {p.approvedBy && (
@@ -673,10 +777,13 @@ export default function LeaveHoliday() {
                                   size="sm"
                                   variant="outline"
                                   className="h-8 gap-1 text-green-700 border-green-200 hover:bg-green-50"
-                                  onClick={() => updatePermStatus(p.id, "approved")}
+                                  // A request with no type at all (not merely no typeKey: an older backend sends the
+                                  // type only in the legacy field) cannot move any boundary, so it opens the details
+                                  // where HR can pick one -and still approve without.
+                                  onClick={() => (typed ? updatePermStatus(p.id, "approved") : openPerm(p))}
                                   disabled={updatePermMutation.isPending}
                                 >
-                                  <CheckCircle size={13} /> Approve
+                                  <CheckCircle size={13} /> {typed ? "Approve" : "Set type & approve"}
                                 </Button>
                                 <Button
                                   size="sm"
@@ -708,13 +815,19 @@ export default function LeaveHoliday() {
             )}
 
             <Dialog open={showPermDialog} onOpenChange={setShowPermDialog}>
-              <DialogContent className="max-w-md">
+              <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle>Add Permission</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-4 py-2">
-                  <p className="text-xs text-muted-foreground">
-                    Each employee is allowed up to 3 permissions per month (1 hour each).
+                  <p className="text-xs text-muted-foreground" data-testid="permission-cap-copy">
+                    Every permission is exactly {PERMISSION_MINUTES} minutes. Only the first {permissionCap} approved
+                    permissions per employee each calendar month (earliest date first) are <strong>Allowed</strong>: an
+                    Allowed Morning Late-In moves that day's shift start {PERMISSION_MINUTES} minutes later, an Allowed
+                    Evening Early-Out moves that day's shift end {PERMISSION_MINUTES} minutes earlier, and Middle
+                    One-Hour never moves either. An approved permission beyond that cap is{" "}
+                    <strong>Overdue / Excess</strong>: it moves nothing and counts as one occurrence in the monthly
+                    late pool.
                   </p>
                   <div className="space-y-1.5">
                     <Label>Employee</Label>
@@ -723,6 +836,32 @@ export default function LeaveHoliday() {
                       value={permForm.employeeId}
                       onChange={(v) => setPermForm((f) => ({ ...f, employeeId: v }))}
                     />
+                  </div>
+                  <div className="space-y-1.5" role="radiogroup" aria-label="Permission type">
+                    <Label>
+                      Type <span className="text-red-500">*</span>
+                    </Label>
+                    {PERMISSION_TYPES.map((t) => {
+                      const selected = permForm.type === t.key;
+                      return (
+                        <button
+                          key={t.key}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          data-testid={`permission-type-${t.key}`}
+                          onClick={() => setPermForm((f) => ({ ...f, type: t.key }))}
+                          className={`w-full text-left rounded-lg border px-3 py-2 transition-colors ${
+                            selected
+                              ? "border-cyan-400 bg-cyan-50/60 ring-1 ring-cyan-300"
+                              : "border-gray-200 bg-white hover:border-gray-300"
+                          }`}
+                        >
+                          <span className="block text-sm font-semibold text-gray-900">{t.label}</span>
+                          <span className="block text-[11px] text-gray-500">{t.hint}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1.5">
@@ -733,12 +872,18 @@ export default function LeaveHoliday() {
                         onChange={(e) => setPermForm((f) => ({ ...f, date: e.target.value }))}
                       />
                     </div>
-                    <TimePicker12h
-                      label="Time (optional)"
-                      value={permForm.permissionTime}
-                      onChange={(v) => setPermForm((f) => ({ ...f, permissionTime: v }))}
-                    />
+                    <div className="space-y-1.5">
+                      <Label>Duration</Label>
+                      <p className="flex h-9 items-center rounded-md border bg-gray-50 px-3 text-sm font-medium text-gray-700">
+                        {PERMISSION_MINUTES} minutes
+                      </p>
+                    </div>
                   </div>
+                  <TimePicker12h
+                    label="Requested time (optional)"
+                    value={permForm.permissionTime}
+                    onChange={(v) => setPermForm((f) => ({ ...f, permissionTime: v }))}
+                  />
                   <div className="space-y-1.5">
                     <Label>Reason (optional)</Label>
                     <Input
@@ -1143,22 +1288,26 @@ export default function LeaveHoliday() {
                       </p>
                     </div>
                     <div>
-                      <p className="text-xs text-gray-400">Status</p>
-                      <Badge
-                        className={`text-xs border ${(STATUS_CONFIG[selectedPerm.status] ?? STATUS_CONFIG.pending).className}`}
-                      >
-                        {(STATUS_CONFIG[selectedPerm.status] ?? STATUS_CONFIG.pending).label}
+                      <p className="text-xs text-gray-400">Outcome</p>
+                      <Badge className={`text-xs border ${permissionOutcome(selectedPerm).className}`}>
+                        {permissionOutcome(selectedPerm).label}
                       </Badge>
                     </div>
                     <div>
-                      <p className="text-xs text-gray-400">Monthly Usage</p>
-                      {selectedPerm.monthlyUsed != null ? (
+                      <p className="text-xs text-gray-400">Duration</p>
+                      <p className="text-sm font-semibold text-gray-900">
+                        {selectedPerm.durationMinutes ?? PERMISSION_MINUTES} minutes
+                      </p>
+                    </div>
+                    {selectedPerm.monthlyUsed != null && (
+                      <div className="col-span-2">
+                        <p className="text-xs text-gray-400">Monthly Usage</p>
                         <div className="flex items-center gap-2 mt-1">
                           <div className="flex gap-0.5">
-                            {Array.from({ length: selectedPerm.monthlyLimit }).map((_: any, i: number) => (
+                            {Array.from({ length: selectedPerm.monthlyLimit }).map((_, i) => (
                               <div
                                 key={i}
-                                className={`w-4 h-1.5 rounded-full ${i < selectedPerm.monthlyUsed ? "bg-amber-400" : "bg-gray-200"}`}
+                                className={`w-4 h-1.5 rounded-full ${i < (selectedPerm.monthlyUsed ?? 0) ? "bg-amber-400" : "bg-gray-200"}`}
                               />
                             ))}
                           </div>
@@ -1166,10 +1315,64 @@ export default function LeaveHoliday() {
                             {selectedPerm.monthlyUsed}/{selectedPerm.monthlyLimit}
                           </span>
                         </div>
-                      ) : (
-                        <p className="text-sm font-semibold text-gray-900">—</p>
+                      </div>
+                    )}
+                  </div>
+                  {selectedPerm.status !== "rejected" && permissionOutcome(selectedPerm).explanation && (
+                    <p
+                      className={`text-xs rounded-lg border p-2 ${
+                        selectedPerm.capStatus === "excess"
+                          ? "text-orange-800 bg-orange-50 border-orange-100"
+                          : "text-gray-600 bg-gray-50"
+                      }`}
+                    >
+                      {permissionOutcome(selectedPerm).explanation}
+                    </p>
+                  )}
+
+                  {/* Type -HR can classify an untyped request or correct a mis-picked one; it decides whether an
+                      approval can shift a shift boundary at all. */}
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-gray-400" htmlFor="permission-type-select">
+                      Type
+                    </Label>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <select
+                        id="permission-type-select"
+                        data-testid="permission-type-select"
+                        value={permTypeDraft}
+                        onChange={(e) => setPermTypeDraft(e.target.value as PermissionType | "")}
+                        className="h-9 rounded-md border px-2 text-sm bg-background"
+                      >
+                        {!selectedKey && (
+                          <option value="" disabled>
+                            Not set -choose a type
+                          </option>
+                        )}
+                        {PERMISSION_TYPES.map((t) => (
+                          <option key={t.key} value={t.key}>
+                            {t.label}
+                          </option>
+                        ))}
+                      </select>
+                      {selectedPerm.status !== "pending" && permTypeDraft && permTypeDraft !== selectedKey && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => savePermType(selectedPerm, permTypeDraft)}
+                          disabled={updatePermMutation.isPending}
+                        >
+                          Save type
+                        </Button>
                       )}
                     </div>
+                    {!selectedKey && (
+                      <p className="text-[11px] text-amber-700">
+                        This request was submitted without a type (older web-app submissions have none), so it cannot
+                        move a shift boundary until one is set. Pick the type that matches what the employee asked for;
+                        you can also approve without one.
+                      </p>
+                    )}
                   </div>
                   {selectedPerm.reason && (
                     <div>
@@ -1203,7 +1406,12 @@ export default function LeaveHoliday() {
                     <Button
                       className="flex-1 gap-1 bg-green-600 hover:bg-green-700"
                       onClick={() => {
-                        updatePermStatus(selectedPerm.id, "approved");
+                        // Sent only when HR picked or changed it; an untouched, already-typed request is not re-typed.
+                        updatePermStatus(
+                          selectedPerm.id,
+                          "approved",
+                          permTypeDraft && permTypeDraft !== selectedKey ? permTypeDraft : undefined,
+                        );
                         setSelectedPerm(null);
                       }}
                       disabled={updatePermMutation.isPending}

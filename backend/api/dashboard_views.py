@@ -198,11 +198,9 @@ def employee_dashboard_summary(request: Request) -> Response:
     is_manager = manager_profile is not None
     pending_approvals_count = 0
     if is_manager:
-        dept_ids = [da.department_id for da in manager_profile.department_assignments.all()]
-        direct_ids = [ea.employee_id for ea in manager_profile.employee_assignments.all()]
-        emp_filter = DQ(employee_id__in=direct_ids)
-        if dept_ids:
-            emp_filter |= DQ(employee__department_id__in=dept_ids)
+        # The employees this HOD REALLY oversees: one HOD per employee (hod_scope.py).
+        from .hod_scope import managed_employee_ids
+        emp_filter = DQ(employee_id__in=managed_employee_ids(manager_profile))
         pending_approvals_count = (
             LeaveRequest.objects.filter(emp_filter, status="pending").count()
             + EmployeePermission.objects.filter(emp_filter, status="pending").count()

@@ -113,14 +113,17 @@ def _leave(r) -> Summary:
 
 @register("permission", "/employee/permissions")
 def _permission(p) -> Summary:
+    from .models import EmployeePermission
+
     length = f"{p.duration_minutes} min" if p.duration_minutes else ""
+    type_label = EmployeePermission.TYPE_LABELS.get(p.type_key, p.type)
     return Summary(
         p.employee,
         "Permission",
         p.id,
         date=_date(p.date),
         time=_time(p.permission_time),
-        details=_join(p.type, length, p.reason),
+        details=_join(type_label, length, p.reason),
         reason=p.reason or "",
         requested_on=_stamp(p.created_at),
     )

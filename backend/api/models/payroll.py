@@ -535,87 +535,90 @@ class PayrollSettings(models.Model):
 
     # ── Attendance calculation mode ───────────────────────────────────────
     # strict = existing 4-punch engine (lunch delays, return-late detection)
-    # simple = morning punch + evening punch only; first punch after the
-    #          half-shift cutoff = half shift; no lunch tracking
+    # simple = morning punch + evening punch only; no lunch tracking
+    # Late Detection, Permission and Half-Day Detection are IDENTICAL in both.
     attendance_mode = models.TextField(default="strict", db_column="attendance_mode")
+    # DEPRECATED -NOT READ BY ANY ENGINE ANY MORE. Simple mode used to call a first
+    # punch after this time a half shift; Half-Day Detection (half_day_first_half_end_time /
+    # half_day_second_half_start_time below) now decides Full/Half/Absent for both modes.
+    # Kept only so existing rows, the settings API and old payroll breakdowns stay valid.
     simple_half_shift_cutoff = models.TimeField(
         default="13:30", db_column="simple_half_shift_cutoff",
         help_text="Simple mode: first punch after this time = half shift."
     )
-    shift_punctuality_window_minutes = models.IntegerField(
-        default=60, db_column="shift_punctuality_window_minutes",
-        help_text=(
-            "Staff only. Even with a first+last punch pair, Full Shift also "
-            "requires the first punch within this many minutes of the "
-            "employee's assigned shift start time, and the last punch "
-            "within the same window of the assigned shift end time -"
-            "otherwise the day moves into the Permission zone (see "
-            "permission_window_minutes) or, past that, is capped at Half "
-            "Shift. Employees with no assigned shift have no reference to "
-            "check against, so this never applies to them."
-        ),
+    # ── Late Detection (staff): Morning Late-In / Evening Early-Out ───────
+    # Two independently toggleable checks, both judged against the
+    # employee's assigned shift start/end time (or, on a day with an
+    # approved in-cap Permission, that day's permission-shifted effective
+    # boundary -see attendance_final.py). Morning Late-In ships on since
+    # every company wants it; Evening Early-Out ships off since not every
+    # company checks departure time.
+    #
+    # db_default on every column added by this rewrite: an OLD backend
+    # instance keeps running for a while during a rolling deploy (and after a
+    # rollback), and it does not know these columns exist -without a
+    # database-level default its INSERTs would fail once the migration ran.
+    morning_late_in_enabled = models.BooleanField(
+        default=True, db_default=True, db_column="morning_late_in_enabled",
+        help_text="Staff only. Flag a punch after (shift start + grace) as Morning Late-In.",
+    )
+    evening_early_out_enabled = models.BooleanField(
+        default=False, db_default=False, db_column="evening_early_out_enabled",
+        help_text="Staff only. Flag a punch before (shift end - grace) as Evening Early-Out. Off by default.",
     )
 
-    # ── Auto-Permission zone (staff, arrival + departure) ─────────────────
-    # Inserted between the existing Late/Half-Shift boundary
-    # (shift_punctuality_window_minutes) and a new, farther-out Half-Shift
-    # boundary: a first/last punch landing past the punctuality window but
-    # still within this many EXTRA minutes is auto-detected as "Permission"
-    # (not Half Shift) -purely from punch timing, independent of whether an
-    # EmployeePermission was ever submitted (see permission_*_with_request
-    # on AttendanceDayRecord for that separate axis). Past this extra window,
-    # the day is Half Shift, same as before this feature existed.
-    permission_window_minutes = models.IntegerField(
-        default=60, db_column="permission_window_minutes",
-        help_text=(
-            "Staff only. Extra minutes past shift_punctuality_window_minutes "
-            "(on either the arrival or departure edge) during which a punch "
-            "is auto-detected as Permission instead of Half Shift. Past "
-            "this window too, the day is Half Shift."
-        ),
+    # ── Half-Day Detection (staff) ─────────────────────────────────────────
+    # Replaces the old punctuality-window escalation entirely: Full/Half/
+    # Absent is now decided purely by whether the employee has a punch in
+    # each half's window, at these two fixed, company-wide clock times (the
+    # same for every shift -not a per-shift setting, since the question
+    # "did they show up at all that half" doesn't depend on their exact
+    # shift timing the way lateness does). Any punch before
+    # half_day_first_half_end_time counts as the whole Morning Half
+    # attended (lateness within it is judged separately, by Late Detection
+    # above -it never costs the half by itself); symmetrically, any punch
+    # at/after half_day_second_half_start_time counts as the whole Evening
+    # Half attended. Both halves attended = Full Day; one = Half Day;
+    # neither = Absent. See attendance_final.py's half-day decision.
+    half_day_first_half_end_time = models.TimeField(
+        default="13:30", db_default=time(13, 30), db_column="half_day_first_half_end_time",
+        help_text="Staff only. A punch before this time counts as the Morning Half attended.",
     )
-    max_permissions_per_day = models.IntegerField(
-        default=1, db_column="max_permissions_per_day",
-        help_text=(
-            "Staff only. Maximum shift edges (morning arrival, lunch return, "
-            "departure) per day that may resolve to Permission status. Any "
-            "edge beyond this on the same day escalates to Half Shift."
-        ),
-    )
-    max_permissions_per_week = models.IntegerField(
-        default=2, db_column="max_permissions_per_week",
-        help_text=(
-            "Staff only. Maximum Permission-zone edges per ISO week (Mon-Sun) "
-            "across all days. Once exhausted, further edges that week "
-            "escalate to Half Shift even if under the daily cap."
-        ),
+    half_day_second_half_start_time = models.TimeField(
+        default="14:30", db_default=time(14, 30), db_column="half_day_second_half_start_time",
+        help_text="Staff only. A punch at or after this time counts as the Evening Half attended.",
     )
 
-    # ── Half Shift late reference (staff) ─────────────────────────────────
-    # A day capped at Half Shift is only additionally flagged Late when the
-    # first punch is strictly AFTER this time -an afternoon half-shift that
-    # starts on time is not "late", it's just a half day. Was a hardcoded
-    # 14:30 constant in shift_engine.py before this became configurable;
-    # the default preserves that exact behavior.
-    half_shift_late_reference_time = models.TimeField(
-        default="14:30", db_column="half_shift_late_reference_time",
-        help_text=(
-            "Staff only. On a Half Shift day, the first punch is flagged Late "
-            "only if it is strictly after this time. Compared at minute "
-            "granularity (seconds ignored)."
-        ),
+    # ── Permission policy (staff) ──────────────────────────────────────────
+    # Exactly 3 Permission types (Morning Late-In, Evening Early-Out,
+    # Middle One-Hour -see EmployeePermission.TYPE_CHOICES), each a fixed
+    # 60 minutes. A request is never blocked by this cap -HR can still
+    # approve a 4th (or later) one that month; it just stops being
+    # protective: attendance_final.py only shifts that day's effective
+    # boundary for an approved permission that is still within this cap
+    # (counted in date order, earliest first). Beyond the cap, an approved
+    # Morning-Late-In/Evening-Early-Out permission has no effect -the day
+    # is judged against the plain shift time, and if that lands it in Late
+    # Detection, it joins the same late_free_allowance/late_deduction_slabs
+    # pool below as an ordinary unexcused occurrence. A Middle One-Hour
+    # permission never shifts any boundary at all, in or out of the cap.
+    permission_monthly_cap = models.IntegerField(
+        default=3, db_default=3, db_column="permission_monthly_cap",
+        help_text="Staff only. Approved permissions per employee per calendar month that actually protect that day.",
     )
 
-    # ── Late Detection policy (staff payroll) ─────────────────────────────
-    # Lates and approved Permissions share ONE combined monthly pool. The
+    # ── Late Detection deduction policy (staff payroll) ────────────────────
+    # One combined monthly pool: Morning Late-In occurrences, Evening
+    # Early-Out occurrences (when enabled), and excess Permissions (approved
+    # but beyond permission_monthly_cap) all draw on this same count. The
     # first `late_free_allowance` of that pool are free; everything beyond
     # it is "billable" and priced by the slab table below.
     late_free_allowance = models.IntegerField(
         default=3, db_column="late_free_allowance",
         help_text=(
-            "Free lates + permissions allowed per employee per month before "
-            "any shift deduction applies. Lates and approved Permission "
-            "requests draw on this same shared pool."
+            "Free lates/early-outs/excess-permissions allowed per employee "
+            "per month before any shift deduction applies. All three draw "
+            "on this same shared pool."
         ),
     )
     # Ordered threshold table: [{"fromLates": N, "deductionShifts": D}, ...]
@@ -634,65 +637,30 @@ class PayrollSettings(models.Model):
         ),
     )
 
-    # ── Without Permission policy (staff payroll) -separate pool ─────────
-    # Counts auto-detected Permission-zone edges (morning arrival, lunch
-    # return, departure) that had NO approved EmployeePermission covering
-    # them (see AttendanceDayRecord.permission_*_with_request). Independent
-    # from the Late Attendance pool above -an occurrence here does not also
-    # draw down late_free_allowance, and vice versa. Ships with an empty
-    # slab table (zero deduction) so this detection is purely informational
-    # until HR deliberately opts in here.
-    without_permission_free_allowance = models.IntegerField(
-        default=0, db_column="without_permission_free_allowance",
-        help_text=(
-            "Free Permission-zone-without-a-submitted-request occurrences "
-            "allowed per employee per month before any shift deduction "
-            "applies."
-        ),
-    )
-    without_permission_deduction_slabs = models.JSONField(
-        default=list, blank=True,
-        db_column="without_permission_deduction_slabs",
-        help_text=(
-            "Same shape/semantics as late_deduction_slabs, applied to the "
-            "Without Permission pool instead. Empty by default -no "
-            "deduction until HR configures rows here."
-        ),
-    )
-
     # ── Afternoon (Night) Late / lunch-return zone (staff, strict mode) ───
     # Strict mode only -simple mode has no punch2/punch3 (lunch) concept.
-    # Mirrors the arrival/departure zone chain above but anchored to
-    # (punch2 + lunch_duration_minutes) instead of a fixed shift edge, since
-    # the lunch window is a DURATION, not a time-of-day. Widths are kept
-    # independent of the arrival/departure window so HR can tune the lunch
-    # policy separately.
+    # A different axis from Morning Late-In/Evening Early-Out above: this is
+    # about a slow return from lunch specifically, anchored to
+    # (punch2 + lunch_duration_minutes) rather than a shift edge, since the
+    # lunch window is a DURATION, not a time-of-day. Purely informational
+    # (late_afternoon flag) -it can no longer demote a day to Half Shift;
+    # only the fixed Half-Day rule above decides that now.
     afternoon_late_window_minutes = models.IntegerField(
         default=60, db_column="afternoon_late_window_minutes",
         help_text=(
             "Strict mode only. Minutes past the lunch-return deadline "
             "(punch2 + lunch_duration_minutes) during which a late return "
-            "is flagged Night Late but does not affect shift value. Beyond "
-            "this, the afternoon Permission zone begins."
+            "is flagged Night Late. Informational only -see Half-Day "
+            "Detection above for what actually decides shift value."
         ),
     )
     afternoon_permission_window_minutes = models.IntegerField(
         default=60, db_column="afternoon_permission_window_minutes",
         help_text=(
             "Strict mode only. Extra minutes past afternoon_late_window_"
-            "minutes during which a late lunch return is auto-detected as "
-            "Permission. Beyond this window, see "
-            "afternoon_late_can_cause_half_shift."
-        ),
-    )
-    afternoon_late_can_cause_half_shift = models.BooleanField(
-        default=True, db_column="afternoon_late_can_cause_half_shift",
-        help_text=(
-            "Strict mode only. When on, a lunch return beyond the afternoon "
-            "Late + Permission windows caps the day at Half Shift, the same "
-            "way an arrival/departure edge already can. When off, a late "
-            "lunch return is only ever flagged (never demotes shift value) "
-            "-matches behavior before this feature existed."
+            "minutes during which a late lunch return is still just flagged "
+            "Night Late (kept for the deadline math; no longer changes "
+            "shift value at any point)."
         ),
     )
 
@@ -838,7 +806,7 @@ class PayrollSettings(models.Model):
             # a first-ever singleton row (a brand-new install, or a test's
             # rolled-back-clean DB) would otherwise get a raw string and
             # crash the first time that value reaches a time-arithmetic call
-            # (e.g. half_shift_late_reference_time in shift_engine.py).
+            # (e.g. half_day_first_half_end_time in attendance_final.py).
             obj.refresh_from_db()
         return obj
 

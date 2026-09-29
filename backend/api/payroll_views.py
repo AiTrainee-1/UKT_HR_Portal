@@ -19,6 +19,7 @@ class PayrollSkip(Exception):
 
 
 import calendar
+import re
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -135,6 +136,19 @@ def _build_working_days(month: int, year: int, saturday_off: bool, holiday_dates
     return days
 
 
+def staff_working_days(emp: Employee, month: int, year: int) -> list[date]:
+    """
+    The working days payroll pays a staff employee for in this month -built exactly as the payroll
+    engine builds them (the shift assignment in force on the 15th decides Saturday-off, plus the
+    company holidays). Every screen that previews or stores a late deduction uses THIS, so the
+    number can never differ from the payslip it previews.
+    """
+    assignment = _get_active_assignment(emp, date(year, month, 15))
+    saturday_off = _effective_shift_times(assignment)[3] if assignment else False
+    holiday_dates = set(Holiday.objects.filter(date__year=year, date__month=month).values_list("date", flat=True))
+    return _build_working_days(month, year, saturday_off, holiday_dates)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Per-day attendance status -sourced entirely from attendance_final's
 #  compute_month_records (see _generate_staff_payroll below). This used to
@@ -173,9 +187,11 @@ def late_shift_deduction(billable_late: int, settings, slabs_field: str = "late_
     """
     Shifts deducted for `billable_late` chargeable occurrences, per an
     HR-editable slab table (Settings → Late Detection). `slabs_field` picks
-    which PayrollSettings JSON field to read -defaults to the original Late
-    Attendance pool; pass "without_permission_deduction_slabs" for the
-    separate Without Permission pool instead. Same shape/semantics either way.
+    which PayrollSettings JSON field to read -defaults to the staff Late
+    Detection pool (Morning Late-In + Evening Early-Out + excess
+    Permissions, combined); pass "prod_late_deduction_slabs" for the
+    separate Production Late Detection pool instead. Same shape/semantics
+    either way.
 
     Each slab row is {"fromLates": N, "deductionShifts": D} -"once the
     billable count reaches N, deduct D shifts". Rows are evaluated in
@@ -183,10 +199,10 @@ def late_shift_deduction(billable_late: int, settings, slabs_field: str = "late_
     holds for any count beyond it. An empty table means no deduction at all,
     which is how HR switches a pool's penalty off entirely.
 
-    The shipped default for the Late Attendance pool (see
-    _default_late_deduction_slabs in models.py) reproduces the formula this
-    replaced -every 3 billable lates costs a quarter shift -so existing
-    payroll math is unchanged. The Without Permission pool ships empty.
+    The shipped default for the staff pool (see _default_late_deduction_slabs
+    in models.py) reproduces the formula this replaced -every 3 billable
+    lates costs a quarter shift -so existing payroll math is unchanged out
+    of the box. The Production pool ships empty.
     """
     rows: list[tuple[int, Decimal]] = []
     for row in (getattr(settings, slabs_field, None) or []):
@@ -352,7 +368,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
     unpaid_leave_count = 0
     absent_count = 0
     late_count = 0
-    without_permission_count = 0
+    early_out_count = 0
     half_shift_count = 0
     full_shift_count = 0
     effective_present = Decimal("0")  # accumulates 0.5 or 1.0 per present day
@@ -381,7 +397,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             info = {
                 "status": status,
                 "is_late": fr.is_late,
-                "without_permission": bool(fr.late_in_without_permission or fr.early_out_without_permission),
+                "is_early_out": fr.early_leave,
                 "late_reason": fr.late_reason,
                 "first_in": fr.first_punch.strftime("%H:%M") if fr.first_punch else None,
                 "last_out": fr.last_punch.strftime("%H:%M") if fr.last_punch else None,
@@ -395,11 +411,12 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             # so simply absent for now; this in-progress-month preview gets
             # recalculated once those days actually elapse.
             status = "absent"
-            info = {"status": "absent", "is_late": False, "without_permission": False, "late_reason": None, "first_in": None, "last_out": None, "leave_type": None}
+            info = {"status": "absent", "is_late": False, "is_early_out": False, "late_reason": None, "first_in": None, "last_out": None, "leave_type": None}
             forced_shifts = Decimal("0")
             forced_half = False
 
         is_late = info["is_late"]
+        is_early_out = info["is_early_out"]
         is_half = False
         day_shifts = Decimal("1.00")
 
@@ -407,8 +424,8 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             present_count += 1
             if is_late:
                 late_count += 1
-            if info["without_permission"]:
-                without_permission_count += 1
+            if is_early_out:
+                early_out_count += 1
             day_shifts = forced_shifts if forced_shifts > 0 else Decimal("1.00")
             if forced_half or day_shifts == Decimal("0.50"):
                 is_half = True
@@ -428,7 +445,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             "day": DAY_NAMES[d.weekday()],
             "status": status,
             "isLate": is_late,
-            "withoutPermission": info["without_permission"],
+            "isEarlyOut": is_early_out,
             "lateReason": info["late_reason"],
             "firstIn": info["first_in"],
             "lastOut": info["last_out"],
@@ -508,55 +525,54 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
         pf_deduction = Decimal("0")
         esi_deduction = Decimal("0")
 
-    # 8. Late shift penalty -free allowance and deduction slabs are both
-    #    HR-editable (Settings → Late Detection); the shipped defaults are
-    #    the values this used to hardcode (3 free/month, every 3 billable
-    #    = ¼ shift), so out of the box nothing changes.
-    #    late_count comes from the day loop above, itself sourced entirely
-    #    from compute_month_records -one number regardless of attendance
-    #    mode, instead of the old two-formula split (simple: is_late flags /
-    #    strict: a separate DailyShiftLog-based MonthlyShiftSummary). All
-    #    approved permission requests this month count as late entries too,
-    #    merged into the same late-punch pool. ONE shared 3-free allowance
-    #    covers the combined raw total -permissions are NOT pre-filtered by
-    #    their own 3-free before merging, since that would double-discount
-    #    the free allowance.
+    # 8. Late Detection penalty -free allowance and deduction slabs are both
+    #    HR-editable (Settings → Late Detection). ONE combined monthly pool:
+    #    Morning Late-In occurrences (late_count), Evening Early-Out
+    #    occurrences when enabled (early_out_count -both from the day loop
+    #    above, sourced entirely from compute_month_records, so both modes
+    #    share one formula), and approved Permissions BEYOND
+    #    PayrollSettings.permission_monthly_cap that month (an in-cap
+    #    approved permission already prevented the underlying lateness by
+    #    shifting the boundary -see attendance_final.py -so only the excess
+    #    ones ever reach this pool, exactly like an ordinary unexcused
+    #    occurrence). The old separate "Without Permission" pool is retired
+    #    -there is nothing left for it to count that isn't already either an
+    #    excused (boundary-shifted, never flagged) or an ordinary billable
+    #    occurrence here.
+    #
+    #    The counting itself lives in attendance_final.late_pool_summary -the ONE
+    #    formula payroll, MonthlyShiftSummary and the employee shift-stats screen
+    #    share, so they can never disagree. It also counts a day that was late AND
+    #    carried an excess permission on the same edge as ONE occurrence (the
+    #    excess permission is that occurrence), not two.
     from .models import EmployeePermission
+    from .attendance_final import late_pool_summary
     approved_permissions = EmployeePermission.objects.filter(
         employee=emp, date__year=year, date__month=month, status="approved",
     ).count()
-
-    total_late = late_count + approved_permissions
-    free_permissions = max(0, int(getattr(_settings, "late_free_allowance", 3) or 0))
-    billable_late = max(0, total_late - free_permissions)
+    pool = late_pool_summary(
+        final_records, approved_permissions, _settings, counted_dates=set(working_days_list),
+    )
+    excess_permissions = pool["excess_permissions"]
+    total_late = pool["total"]
+    free_allowance = max(0, int(getattr(_settings, "late_free_allowance", 3) or 0))
+    billable_late = pool["billable"]
     shift_deductions = late_shift_deduction(billable_late, _settings)
     late_penalty = _d2(shift_deductions * daily_rate) if shift_deductions > 0 else Decimal("0")
     late_summary_data = {
-        "totalLateCount": late_count,
-        "permissionsUsed": min(total_late, free_permissions),
+        "lateInCount": pool["late_in"],
+        "earlyOutCount": pool["early_out"],
+        "excessPermissionCount": excess_permissions,
+        "totalLateCount": total_late,
+        "freeAllowanceUsed": pool["free_used"],
         "billableLateCount": billable_late,
         "shiftDeductions": float(shift_deductions),
-    }
-
-    # 8b. Without Permission penalty -a SEPARATE pool from Late Attendance
-    #    above (Settings → Late Detection → Without Permission). Counts
-    #    late-in/early-out occurrences inside the 1-hour permission window
-    #    that had no approved Permission covering them (see
-    #    AttendanceDayRecord.late_in_without_permission/early_out_without_
-    #    permission -sourced from the same day-loop as late_count, so no
-    #    extra query). Ships with an empty slab table by default, so this is
-    #    zero-impact until HR explicitly configures it.
-    wp_free_allowance = max(0, int(getattr(_settings, "without_permission_free_allowance", 0) or 0))
-    billable_without_permission = max(0, without_permission_count - wp_free_allowance)
-    wp_shift_deductions = late_shift_deduction(
-        billable_without_permission, _settings, slabs_field="without_permission_deduction_slabs",
-    )
-    without_permission_penalty = _d2(wp_shift_deductions * daily_rate) if wp_shift_deductions > 0 else Decimal("0")
-    without_permission_summary_data = {
-        "totalCount": without_permission_count,
-        "freeAllowanceUsed": min(without_permission_count, wp_free_allowance),
-        "billableCount": billable_without_permission,
-        "shiftDeductions": float(wp_shift_deductions),
+        # Flagged days, before the "excess permission already is the occurrence" de-duplication --
+        # so the breakdown can show why lateInCount/earlyOutCount may be lower than the days list.
+        "lateInDays": late_count,
+        "earlyOutDays": early_out_count,
+        "freeAllowance": free_allowance,
+        "permissionMonthlyCap": max(0, int(getattr(_settings, "permission_monthly_cap", 3) or 0)),
     }
 
     if not use_simple:
@@ -564,15 +580,19 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
         # refreshed here (mirrors what compute_month_records already did to
         # DailyShiftLog as a side effect of computing each day above) -the
         # mobile/web "My Shift" screens read MonthlyShiftSummary directly.
-        # Its return value is intentionally NOT used for late_penalty above;
-        # that always comes from the single day-loop-derived late_count now.
+        # It now shares this exact same combined-pool formula (see
+        # shift_engine.compute_monthly_shift_summary) rather than a second,
+        # separately-drifting one -passing `final_records` skips a repeat
+        # compute_month_records call for this employee/month.
         from .shift_engine import compute_monthly_shift_summary
-        compute_monthly_shift_summary(emp, year, month, daily_rate)
+        compute_monthly_shift_summary(
+            emp, year, month, daily_rate, records=final_records, counted_dates=set(working_days_list),
+        )
 
     # 9. Advances
     advance_total, advance_details = _pending_advance_repayments(emp, month, year)
 
-    total_deductions = _d2(pf_deduction + esi_deduction + advance_total + late_penalty + without_permission_penalty)
+    total_deductions = _d2(pf_deduction + esi_deduction + advance_total + late_penalty)
     net_salary = _d2(base_gross + ot_amount - total_deductions)
 
     # 9. Build breakdown JSON (full traceability)
@@ -580,7 +600,8 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
         "type": "staff",
         "attendanceMode": "simple" if use_simple else "strict",
         "simpleHalfShiftCutoff": str(_settings.simple_half_shift_cutoff)[:5] if use_simple else None,
-        "shiftPunctualityWindowMinutes": _settings.shift_punctuality_window_minutes,
+        "halfDayFirstHalfEndTime": str(_settings.half_day_first_half_end_time)[:5],
+        "halfDaySecondHalfStartTime": str(_settings.half_day_second_half_start_time)[:5],
         "shift": {
             "id": shift_id,
             "name": shift_name,
@@ -596,7 +617,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             "unpaidLeaveDays": unpaid_leave_count,
             "absentDays": absent_count,
             "lateDays": late_count,
-            "withoutPermissionDays": without_permission_count,
+            "earlyOutDays": early_out_count,
             "halfShiftDays": half_shift_count,
             "fullShiftDays": full_shift_count,
             "effectivePaidDays": float(effective_days),
@@ -622,8 +643,6 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             "advanceDetails": advance_details,
             "lateShiftPenalty": float(late_penalty),
             "lateSummary": late_summary_data,
-            "withoutPermissionPenalty": float(without_permission_penalty),
-            "withoutPermissionSummary": without_permission_summary_data,
             "total": float(total_deductions),
         },
         "netSalary": float(net_salary),
@@ -649,7 +668,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             notes=(
                 f"Staff monthly: {present_count} present + {paid_leave_count} paid leave "
                 f"= {float(effective_days)} effective days / {total_working_days} working days. "
-                f"Late: {late_count}. Without Permission: {without_permission_count}. "
+                f"Late: {late_count}. Early-Out: {early_out_count}. Excess permissions: {excess_permissions}. "
                 f"Absent: {absent_count}. Unpaid leave: {unpaid_leave_count}."
             ),
         ),
@@ -672,7 +691,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             pf_deduction=pf_deduction,
             esi_deduction=esi_deduction,
             advance_deduction=advance_total,
-            other_deductions=_d2(late_penalty + without_permission_penalty),
+            other_deductions=_d2(late_penalty),
             total_deductions=total_deductions,
             net_salary=net_salary,
             working_days=total_working_days,
@@ -1649,30 +1668,33 @@ def _ps_response(ps) -> dict:
         # Attendance calculation mode
         "attendanceMode": ps.attendance_mode,
         "simpleHalfShiftCutoff": str(ps.simple_half_shift_cutoff)[:5],
-        "shiftPunctualityWindowMinutes": ps.shift_punctuality_window_minutes,
         "lastPunchPostShiftGraceHours": float(ps.last_punch_post_shift_grace_hours),
         "firstPunchPreShiftBufferHours": float(ps.first_punch_pre_shift_buffer_hours),
-        "halfShiftLateReferenceTime": str(ps.half_shift_late_reference_time)[:5],
-        # Auto-Permission zone (arrival/departure) + afternoon (lunch-return)
-        # zone -see shift_engine.py's ZONE_* / _classify_zone.
-        "permissionWindowMinutes": ps.permission_window_minutes,
+        # Late Detection: Morning Late-In / Evening Early-Out
+        "morningLateInEnabled": ps.morning_late_in_enabled,
+        "eveningEarlyOutEnabled": ps.evening_early_out_enabled,
+        # Half-Day Detection
+        "halfDayFirstHalfEndTime": str(ps.half_day_first_half_end_time)[:5],
+        "halfDaySecondHalfStartTime": str(ps.half_day_second_half_start_time)[:5],
+        # Afternoon (lunch-return) zone -untouched axis, see shift_engine.py
         "afternoonLateWindowMinutes": ps.afternoon_late_window_minutes,
         "afternoonPermissionWindowMinutes": ps.afternoon_permission_window_minutes,
-        "afternoonLateCanCauseHalfShift": ps.afternoon_late_can_cause_half_shift,
         # Defaults pre-filled into a newly created shift (Manage Shift still
         # owns the real per-shift times)
         "defaultShiftGraceMinutes": ps.default_shift_grace_minutes,
         "defaultShiftFirstHalfEnd": str(ps.default_shift_first_half_end)[:5],
         "defaultShiftLunchDurationMinutes": ps.default_shift_lunch_duration_minutes,
         "defaultShiftLunchGraceMinutes": ps.default_shift_lunch_grace_minutes,
-        # Late Detection policy
+        # Late Detection deduction policy (combined Morning Late-In/Evening
+        # Early-Out/excess-Permission pool -see payroll_views.py)
         "lateFreeAllowance": ps.late_free_allowance,
         "lateDeductionSlabs": ps.late_deduction_slabs or [],
-        # Without Permission policy -separate pool, see late_shift_deduction()
-        "withoutPermissionFreeAllowance": ps.without_permission_free_allowance,
-        "withoutPermissionDeductionSlabs": ps.without_permission_deduction_slabs or [],
-        "maxPermissionsPerDay": ps.max_permissions_per_day,
-        "maxPermissionsPerWeek": ps.max_permissions_per_week,
+        # Permission policy
+        "permissionMonthlyCap": ps.permission_monthly_cap,
+        # False for a branch login: the Late Detection switches, Half-Day times and the Permission
+        # cap are company-wide rules (the attendance engine only ever reads the company row), so a
+        # branch login can see them but not change them -see COMPANY_WIDE_RULE_KEYS.
+        "companyWideRulesEditable": not isinstance(ps, _SettingsOverlay),
         # Production attendance windows (1.5-shift day)
         "prodFirstHalfStart": str(ps.prod_first_half_start)[:5],
         "prodFirstHalfEnd": str(ps.prod_first_half_end)[:5],
@@ -1705,6 +1727,16 @@ def _ps_response(ps) -> dict:
 # This maps each writable field to the settings.* group(s) that may write it —
 # a tuple because "companyLogo" has upload widgets on both the Company and
 # Salary Slip tabs, so edit access on either is sufficient for that one field.
+# Settings keys that only a company-wide (admin / branch-less) editor may change -see the guard in
+# payroll_settings_view. Keys, not model attributes, because they are what the request carries.
+COMPANY_WIDE_RULE_KEYS: tuple[str, ...] = (
+    "morningLateInEnabled",
+    "eveningEarlyOutEnabled",
+    "halfDayFirstHalfEndTime",
+    "halfDaySecondHalfStartTime",
+    "permissionMonthlyCap",
+)
+
 FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "companyName": ("settings.company",),
     "companyTagline": ("settings.company",),
@@ -1718,7 +1750,10 @@ FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "companyLogo": ("settings.company", "settings.salary_slip"),
     "attendanceMode": ("settings.attendance",),
     "simpleHalfShiftCutoff": ("settings.attendance",),
-    "shiftPunctualityWindowMinutes": ("settings.attendance",),
+    "morningLateInEnabled": ("settings.attendance",),
+    "eveningEarlyOutEnabled": ("settings.attendance",),
+    "halfDayFirstHalfEndTime": ("settings.attendance",),
+    "halfDaySecondHalfStartTime": ("settings.attendance",),
     "lastPunchPostShiftGraceHours": ("settings.attendance",),
     "firstPunchPreShiftBufferHours": ("settings.attendance",),
     "prodFirstHalfStart": ("settings.attendance",),
@@ -1728,24 +1763,18 @@ FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "prodExtraStart": ("settings.attendance",),
     "prodExtraEnd": ("settings.attendance",),
     "nightShiftEnabled": ("settings.attendance",),
-    "halfShiftLateReferenceTime": ("settings.attendance",),
     "defaultShiftGraceMinutes": ("settings.attendance",),
     "defaultShiftFirstHalfEnd": ("settings.attendance",),
     "defaultShiftLunchDurationMinutes": ("settings.attendance",),
     "defaultShiftLunchGraceMinutes": ("settings.attendance",),
-    "permissionWindowMinutes": ("settings.attendance",),
     "afternoonLateWindowMinutes": ("settings.attendance",),
     "afternoonPermissionWindowMinutes": ("settings.attendance",),
-    "afternoonLateCanCauseHalfShift": ("settings.attendance",),
     # Late Detection is its own Settings tab, so it gets its own permission
     # group -HR can be given the attendance timings without the power to
     # change what a late actually costs an employee.
     "lateFreeAllowance": ("settings.late_detection",),
     "lateDeductionSlabs": ("settings.late_detection",),
-    "withoutPermissionFreeAllowance": ("settings.late_detection",),
-    "withoutPermissionDeductionSlabs": ("settings.late_detection",),
-    "maxPermissionsPerDay": ("settings.late_detection",),
-    "maxPermissionsPerWeek": ("settings.late_detection",),
+    "permissionMonthlyCap": ("settings.late_detection",),
     "pfRate": ("settings.payroll",),
     "esiRate": ("settings.payroll",),
     "esiApplicableBelow": ("settings.payroll",),
@@ -1844,6 +1873,23 @@ def payroll_settings_view(request: Request) -> Response:
                 status=403,
             )
 
+    # These decide what counts as late, half-day or an allowed permission FOR EVERYONE. The
+    # attendance engine reads only the company-wide row, so a value saved into one branch's private
+    # overlay would be displayed on this page yet never applied -a rule nobody could justify to an
+    # employee. Refuse it up front instead of storing it.
+    if isinstance(ps, _SettingsOverlay) and any(k in data for k in COMPANY_WIDE_RULE_KEYS):
+        return Response(
+            {
+                "error": "company_wide_rule",
+                "message": (
+                    "Late Detection switches, Half-Day times and the Permission monthly cap are "
+                    "company-wide rules. Ask an administrator to change them."
+                ),
+                "fields": [k for k in COMPANY_WIDE_RULE_KEYS if k in data],
+            },
+            status=403,
+        )
+
     field_map = {
         "companyName": ("company_name", str),
         "companyTagline": ("company_tagline", str),
@@ -1892,7 +1938,6 @@ def payroll_settings_view(request: Request) -> Response:
         "smtpFromName": ("smtp_from_name", str),
         "attendanceMode": ("attendance_mode", str),
         "simpleHalfShiftCutoff": ("simple_half_shift_cutoff", str),
-        "shiftPunctualityWindowMinutes": ("shift_punctuality_window_minutes", int),
         "lastPunchPostShiftGraceHours": ("last_punch_post_shift_grace_hours", Decimal),
         "firstPunchPreShiftBufferHours": ("first_punch_pre_shift_buffer_hours", Decimal),
         "prodFirstHalfStart": ("prod_first_half_start", str),
@@ -1901,8 +1946,8 @@ def payroll_settings_view(request: Request) -> Response:
         "prodSecondHalfEnd": ("prod_second_half_end", str),
         "prodExtraStart": ("prod_extra_start", str),
         "prodExtraEnd": ("prod_extra_end", str),
-        "halfShiftLateReferenceTime": ("half_shift_late_reference_time", str),
-        "permissionWindowMinutes": ("permission_window_minutes", int),
+        "halfDayFirstHalfEndTime": ("half_day_first_half_end_time", str),
+        "halfDaySecondHalfStartTime": ("half_day_second_half_start_time", str),
         "afternoonLateWindowMinutes": ("afternoon_late_window_minutes", int),
         "afternoonPermissionWindowMinutes": ("afternoon_permission_window_minutes", int),
         "defaultShiftGraceMinutes": ("default_shift_grace_minutes", int),
@@ -1910,9 +1955,7 @@ def payroll_settings_view(request: Request) -> Response:
         "defaultShiftLunchDurationMinutes": ("default_shift_lunch_duration_minutes", int),
         "defaultShiftLunchGraceMinutes": ("default_shift_lunch_grace_minutes", int),
         "lateFreeAllowance": ("late_free_allowance", int),
-        "withoutPermissionFreeAllowance": ("without_permission_free_allowance", int),
-        "maxPermissionsPerDay": ("max_permissions_per_day", int),
-        "maxPermissionsPerWeek": ("max_permissions_per_week", int),
+        "permissionMonthlyCap": ("permission_monthly_cap", int),
     }
     # Image fields may legitimately be set to null (user removed the logo /
     # signature) -str(None) would store the literal string "None".
@@ -1926,7 +1969,37 @@ def payroll_settings_view(request: Request) -> Response:
             if val is None and attr in _nullable_text:
                 setattr(ps, attr, None)
             else:
-                setattr(ps, attr, Decimal(str(val)) if cast is Decimal else cast(val))
+                try:
+                    setattr(ps, attr, Decimal(str(val)) if cast is Decimal else cast(val))
+                except (TypeError, ValueError, ArithmeticError):
+                    # "abc" for an integer setting used to surface as a 500 -it is a bad request.
+                    return _error(f"Invalid value for {key}")
+    # Half-Day Detection / Permission policy: these decide Full vs Half vs Absent and who is charged
+    # for what, so a contradictory or nonsensical value is rejected at the door -nothing has been
+    # saved yet (the assignments above are in-memory only until ps.save() below).
+    if "halfDayFirstHalfEndTime" in data or "halfDaySecondHalfStartTime" in data:
+        def _minutes_of_day(value):
+            # Strictly HH:MM (or HH:MM:SS) -anything else ("13:30pm", "13:30:99") would sail through a
+            # lenient slice and only blow up as a 500 when the row is saved.
+            match = re.fullmatch(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", str(value).strip())
+            if not match:
+                return None
+            hh, mm, ss = int(match.group(1)), int(match.group(2)), int(match.group(3) or 0)
+            return hh * 60 + mm if 0 <= hh <= 23 and 0 <= mm <= 59 and 0 <= ss <= 59 else None
+
+        first_end = _minutes_of_day(ps.half_day_first_half_end_time)
+        second_start = _minutes_of_day(ps.half_day_second_half_start_time)
+        if first_end is None or second_start is None:
+            return _error("Half-Day times must be valid HH:MM clock times")
+        if first_end > second_start:
+            return _error(
+                "First Half End Time must not be later than Second Half Start Time "
+                "(the lunch gap between the two halves cannot be negative)"
+            )
+    if "permissionMonthlyCap" in data and not (0 <= int(ps.permission_monthly_cap) <= 31):
+        return _error("Permission monthly cap must be between 0 and 31")
+    if "lateFreeAllowance" in data and int(ps.late_free_allowance) < 0:
+        return _error("Free late allowance cannot be negative")
     if "prodPfEfRules" in data and isinstance(data["prodPfEfRules"], list):
         ps.prod_pf_ef_rules = data["prodPfEfRules"]
     if "lateDeductionSlabs" in data and isinstance(data["lateDeductionSlabs"], list):
@@ -1949,24 +2022,10 @@ def payroll_settings_view(request: Request) -> Response:
         ps.late_deduction_slabs = [
             {"fromLates": k, "deductionShifts": cleaned[k]} for k in sorted(cleaned)
         ]
-    if "withoutPermissionDeductionSlabs" in data and isinstance(data["withoutPermissionDeductionSlabs"], list):
-        # Same sanitize/sort/dedupe rules as lateDeductionSlabs above -this
-        # pool's rows drive real deductions too.
-        cleaned: dict[int, float] = {}
-        for row in data["withoutPermissionDeductionSlabs"]:
-            if not isinstance(row, dict):
-                continue
-            try:
-                from_count = int(row["fromLates"])
-                shifts = float(row["deductionShifts"])
-            except (KeyError, TypeError, ValueError):
-                return _error("Each Without Permission slab needs a numeric fromLates and deductionShifts")
-            if from_count < 0 or shifts < 0:
-                return _error("Without Permission slab values cannot be negative")
-            cleaned[from_count] = shifts
-        ps.without_permission_deduction_slabs = [
-            {"fromLates": k, "deductionShifts": cleaned[k]} for k in sorted(cleaned)
-        ]
+    if "morningLateInEnabled" in data:
+        ps.morning_late_in_enabled = bool(data["morningLateInEnabled"])
+    if "eveningEarlyOutEnabled" in data:
+        ps.evening_early_out_enabled = bool(data["eveningEarlyOutEnabled"])
     if "prodLateDetectionEnabled" in data:
         ps.prod_late_detection_enabled = bool(data["prodLateDetectionEnabled"])
     if "prodLateDeductionSlabs" in data and isinstance(data["prodLateDeductionSlabs"], list):
@@ -1993,8 +2052,6 @@ def payroll_settings_view(request: Request) -> Response:
         ps.staff_payroll_rules_enabled = bool(data["staffPayrollRulesEnabled"])
     if "prodPayrollRulesEnabled" in data:
         ps.prod_payroll_rules_enabled = bool(data["prodPayrollRulesEnabled"])
-    if "afternoonLateCanCauseHalfShift" in data:
-        ps.afternoon_late_can_cause_half_shift = bool(data["afternoonLateCanCauseHalfShift"])
     if "otDetectionEnabled" in data:
         ps.ot_detection_enabled = bool(data["otDetectionEnabled"])
     if "compensationFeatureEnabled" in data:

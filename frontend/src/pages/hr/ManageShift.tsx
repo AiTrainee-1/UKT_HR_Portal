@@ -29,7 +29,9 @@ import {
   useSyncProductionShifts,
   type ShiftAssignment,
 } from "@/lib/api-client";
-import { useEmployeeShiftMonthlyStats } from "@/lib/api-client/custom-hooks";
+import { useEmployeeShiftMonthlyStats, usePayrollSettings } from "@/lib/api-client/custom-hooks";
+import { lateDetectionFlags, latePoolView } from "@/lib/late-detection";
+import { DayFlagBadges } from "@/components/DayFlagBadges";
 import ProductionShiftConfigCard from "@/components/ProductionShiftConfigCard";
 import { useQueryClient } from "@tanstack/react-query";
 import { CircleLoader } from "@/components/ui/CircleLoader";
@@ -146,10 +148,38 @@ function EmployeeShiftStatsDialog({ employeeId, employeeName, onClose }: {
   const monthLabel = MONTH_NAMES_SHORT[month - 1] + " " + year;
 
   const { data, isLoading, isError } = useEmployeeShiftMonthlyStats(employeeId, month, year, true);
+  // Half-Day times from Settings → Attendance, to say which half a Half Shift day was worked in.
+  const { data: settings } = usePayrollSettings();
+  const halfDayCutoffs = {
+    firstHalfEnd: settings?.halfDayFirstHalfEndTime,
+    secondHalfStart: settings?.halfDaySecondHalfStartTime,
+  };
+
+  // Staff only: the late pool (Morning Late-In + Evening Early-Out + excess Permissions) exactly as payroll prices it.
+  // Built only when the server actually sent the split (lateInCount): an older backend has just the totals, and
+  // "Late-In 0 / Early-Out 0 / pool = excess only" beside its own billable figure would be a wrong picture, so it
+  // keeps the legacy layout. Production has its own separate late policy and always keeps the legacy layout too.
+  const summary = data?.summary;
+  const pool =
+    summary && summary.lateInCount != null && data?.employmentType === "staff"
+      ? latePoolView({
+          lateInCount: summary.lateInCount,
+          earlyOutCount: summary.earlyOutCount,
+          excessPermissionCount: summary.excessPermissionCount ?? summary.permissionOverageCount,
+          freeAllowance: summary.freeAllowance,
+          permissionMonthlyCap: summary.permissionMonthlyCap,
+          billableLateCount: summary.billableLateCount,
+          shiftDeductions: summary.shiftDeductions,
+        })
+      : null;
+  // Days the day-by-day log flagged. Different from the pool's counted figures (which are de-duplicated and limited to
+  // working days), so it is only ever labelled "flagged".
+  const earlyOutFlaggedDays = data ? data.dailyLogs.filter((l) => l.isEarlyOut).length : 0;
 
   const statusBadge = (status: string) => {
     switch (status) {
       case "present":    return <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-green-100 text-green-700">Present</span>;
+      case "half_shift": return <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-700">Half Shift</span>;
       case "absent":     return <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-100 text-red-700">Absent</span>;
       case "on_leave":   return <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 text-blue-700">Leave</span>;
       case "holiday":    return <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-500">Holiday</span>;
@@ -188,12 +218,19 @@ function EmployeeShiftStatsDialog({ employeeId, employeeName, onClose }: {
               <span className="text-green-700">{data.presentDays} Present</span>
               <span className="text-red-600">{data.absentDays} Absent</span>
               {data.leaveDays > 0 && <span className="text-blue-600">{data.leaveDays} On Leave</span>}
-              {data.totalLateCount > 0 && <span className="text-orange-600">{data.totalLateCount} Late</span>}
+              {data.totalLateCount > 0 && (
+                <span className="text-orange-600">
+                  {data.totalLateCount} {pool ? "late days flagged" : "Late"}
+                </span>
+              )}
+              {earlyOutFlaggedDays > 0 && (
+                <span className="text-orange-600">{earlyOutFlaggedDays} early-out days flagged</span>
+              )}
               {data.halfShiftDays > 0 && <span className="text-amber-600">{data.halfShiftDays} Half Shift</span>}
             </div>
 
             {/* ── Shift calculation summary ── */}
-            <div className="grid grid-cols-3 gap-2 text-xs">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
               <div className="rounded-lg border px-3 py-2 flex justify-between items-center">
                 <span className="text-muted-foreground">Full Shifts</span>
                 <span className="font-bold text-indigo-700">{data.fullShiftDays}</span>
@@ -206,17 +243,40 @@ function EmployeeShiftStatsDialog({ employeeId, employeeName, onClose }: {
                 <span className="text-muted-foreground">Effective Days</span>
                 <span className="font-bold text-gray-800">{parseFloat(data.totalEffectiveShifts).toFixed(2)}</span>
               </div>
-              <div className="rounded-lg border px-3 py-2 flex justify-between items-center">
-                <span className="text-muted-foreground">Late Morning</span>
-                <span className={`font-bold ${data.lateMorningDays > 0 ? "text-orange-600" : "text-gray-400"}`}>{data.lateMorningDays}</span>
-              </div>
-              <div className="rounded-lg border px-3 py-2 flex justify-between items-center">
+              {pool ? (
+                <>
+                  <div className="rounded-lg border px-3 py-2 flex justify-between items-center" title="Morning Late-In occurrences counted in the monthly late pool (a late day that also has an Excess permission counts once, as the permission)">
+                    <span className="text-muted-foreground">Late-In counted</span>
+                    <span className={`font-bold ${(pool.lateIn ?? 0) > 0 ? "text-orange-600" : "text-gray-400"}`}>{pool.lateIn ?? 0}</span>
+                  </div>
+                  <div className="rounded-lg border px-3 py-2 flex justify-between items-center" title="Evening Early-Out occurrences counted in the monthly late pool (only while Evening Early-Out is switched on)">
+                    <span className="text-muted-foreground">Early-Out counted</span>
+                    <span className={`font-bold ${(pool.earlyOut ?? 0) > 0 ? "text-orange-600" : "text-gray-400"}`}>{pool.earlyOut ?? 0}</span>
+                  </div>
+                  <div className="rounded-lg border px-3 py-2 flex justify-between items-center" title="Approved permissions beyond the monthly cap: they did not move any boundary and count as one late occurrence each">
+                    <span className="text-muted-foreground">Excess Permissions</span>
+                    <span className={`font-bold ${(pool.excess ?? 0) > 0 ? "text-red-700" : "text-gray-400"}`}>{pool.excess ?? 0}</span>
+                  </div>
+                  <div className="rounded-lg border px-3 py-2 flex justify-between items-center" title="Late-In + Early-Out + Excess Permissions: the shared monthly pool">
+                    <span className="text-muted-foreground">Late Pool Total</span>
+                    <span className={`font-bold ${pool.total > 0 ? "text-red-700" : "text-gray-400"}`}>{pool.total}</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="rounded-lg border px-3 py-2 flex justify-between items-center">
+                    <span className="text-muted-foreground">Late Morning</span>
+                    <span className={`font-bold ${data.lateMorningDays > 0 ? "text-orange-600" : "text-gray-400"}`}>{data.lateMorningDays}</span>
+                  </div>
+                  <div className="rounded-lg border px-3 py-2 flex justify-between items-center">
+                    <span className="text-muted-foreground">Total Late</span>
+                    <span className={`font-bold ${data.totalLateCount > 0 ? "text-red-700" : "text-gray-400"}`}>{data.totalLateCount}</span>
+                  </div>
+                </>
+              )}
+              <div className="rounded-lg border px-3 py-2 flex justify-between items-center" title="Strict mode only: informational, not part of the late pool">
                 <span className="text-muted-foreground">Late Return</span>
                 <span className={`font-bold ${data.lateReturnDays > 0 ? "text-orange-600" : "text-gray-400"}`}>{data.lateReturnDays}</span>
-              </div>
-              <div className="rounded-lg border px-3 py-2 flex justify-between items-center">
-                <span className="text-muted-foreground">Total Late</span>
-                <span className={`font-bold ${data.totalLateCount > 0 ? "text-red-700" : "text-gray-400"}`}>{data.totalLateCount}</span>
               </div>
             </div>
 
@@ -231,12 +291,46 @@ function EmployeeShiftStatsDialog({ employeeId, employeeName, onClose }: {
               </div>
             )}
 
-            {/* Payroll penalty */}
+            {/* Payroll penalty -with the split, a live preview of the same pool and formula payroll uses */}
             {data.summary && (
               <div className="rounded-lg border bg-orange-50/40 divide-y text-xs">
                 <div className="px-3 py-2 font-semibold text-gray-700 flex items-center gap-1.5">
-                  <TrendingDown size={12} className="text-orange-600" /> Payroll Penalty (last payroll run)
+                  <TrendingDown size={12} className="text-orange-600" />{" "}
+                  {pool ? "Late Penalty (live preview -same pool payroll uses)" : "Payroll Penalty (last payroll run)"}
                 </div>
+                {pool ? (
+                  <>
+                    <div className="px-3 py-2 flex justify-between">
+                      <span className="text-gray-600">Morning Late-In days</span>
+                      <span className="font-semibold text-gray-800">{pool.lateIn ?? 0}</span>
+                    </div>
+                    <div className="px-3 py-2 flex justify-between">
+                      <span className="text-gray-600">Evening Early-Out days</span>
+                      <span className="font-semibold text-gray-800">{pool.earlyOut ?? 0}</span>
+                    </div>
+                    <div className="px-3 py-2 flex justify-between">
+                      <span className="text-gray-600">
+                        Excess permissions
+                        {pool.permissionCap != null && (
+                          <span className="text-gray-400"> (approved beyond {pool.permissionCap} per month)</span>
+                        )}
+                      </span>
+                      <span className="font-semibold text-gray-800">{pool.excess ?? 0}</span>
+                    </div>
+                    <div className="px-3 py-2 flex justify-between bg-white/50">
+                      <span className="text-gray-700 font-medium">Late pool total</span>
+                      <span className="font-bold text-gray-900">{pool.total}</span>
+                    </div>
+                    {pool.freeAllowance != null && (
+                      <div className="px-3 py-2 flex justify-between">
+                        <span className="text-gray-600">Free allowance used</span>
+                        <span className="font-semibold text-green-700">
+                          {pool.freeUsed ?? 0} of {pool.freeAllowance}
+                        </span>
+                      </div>
+                    )}
+                  </>
+                ) : null}
                 <div className="px-3 py-2 flex justify-between">
                   <span className="text-gray-600">Billable lates</span>
                   <span className="font-semibold text-red-700">{data.summary.billableLateCount}</span>
@@ -283,10 +377,15 @@ function EmployeeShiftStatsDialog({ employeeId, employeeName, onClose }: {
                             : log.status === "holiday"
                             ? "bg-gray-50"
                             : "";
+                          const flags = lateDetectionFlags(
+                            { ...log, isLate: log.isLate ?? log.lateMorning },
+                            halfDayCutoffs,
+                          );
+                          // Strict mode's lunch-return lateness, when the day record itself did not already flag it.
+                          const lateReturnOnly = log.lateReturn && !log.lateAfternoon;
                           const notes: string[] = [];
-                          if (log.isHalfShift) notes.push("½ Shift");
-                          if (log.lateMorning) notes.push("Late AM");
-                          if (log.lateReturn)  notes.push("Late Ret");
+                          if (log.isHalfShift && !flags.some((f) => f.kind === "halfDay")) notes.push("½ Shift");
+                          if (lateReturnOnly) notes.push("Late Ret");
                           if (log.leaveType)   notes.push(log.leaveType);
                           return (
                             <tr key={log.date} className={`border-t ${rowBg}`}>
@@ -298,10 +397,15 @@ function EmployeeShiftStatsDialog({ employeeId, employeeName, onClose }: {
                               <td className="px-3 py-1.5 font-mono text-gray-600">{log.lastPunch ?? "—"}</td>
                               <td className="px-3 py-1.5 text-center text-gray-700 font-medium">{log.totalPunches || "—"}</td>
                               <td className="px-3 py-1.5">
-                                {notes.length > 0 ? (
-                                  <span className={`font-semibold ${log.isHalfShift ? "text-amber-700" : "text-orange-600"}`}>
-                                    {notes.join(", ")}
-                                  </span>
+                                {flags.length > 0 || notes.length > 0 ? (
+                                  <div className="flex items-center gap-1 flex-wrap">
+                                    <DayFlagBadges flags={flags} size="sm" />
+                                    {notes.length > 0 && (
+                                      <span className={`font-semibold ${log.isHalfShift ? "text-amber-700" : "text-orange-600"}`}>
+                                        {notes.join(", ")}
+                                      </span>
+                                    )}
+                                  </div>
                                 ) : log.status === "present" ? (
                                   <span className="text-green-600">✓</span>
                                 ) : null}
@@ -1311,6 +1415,13 @@ export default function ManageShift() {
               <div className="space-y-1.5">
                 <Label>Grace Period (minutes)</Label>
                 <Input type="number" value={form.gracePeriodMinutes} onChange={(e) => setForm((f) => ({ ...f, gracePeriodMinutes: Number(e.target.value) }))} min={0} max={60} />
+                {form.shiftType === "staff" && (
+                  <p className="text-xs text-muted-foreground">
+                    Morning Late-In is flagged after Start + grace, and Evening Early-Out (when switched on in Settings →
+                    Attendance) before End − grace. An Allowed permission moves that one day's boundary by 60 minutes;
+                    the shift times set here never change.
+                  </p>
+                )}
               </div>
 
               {form.shiftType === "staff" && (
@@ -1339,7 +1450,8 @@ export default function ManageShift() {
                   <div className="text-xs text-green-700 bg-white/60 rounded p-2 border border-green-100">
                     <strong>Example:</strong> First half ends 13:30, grace 10 min → employees can go for lunch until 13:40.
                     With 60 min lunch, they must return by <em>departure time + 60 min</em>.
-                    Late return = shift deduction after 3 free permissions/month.
+                    A late return from lunch is tracked in Strict mode for information only -it never changes Full/Half
+                    Day and is not part of the monthly late pool.
                   </div>
                 </div>
               )}

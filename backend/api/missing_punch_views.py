@@ -22,7 +22,6 @@ AttendanceLog already has unique_together on
 
 from datetime import date as date_type, time as time_type
 
-from django.db.models import Q
 from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
@@ -31,7 +30,8 @@ from rest_framework.response import Response
 from . import whatsapp_approvals
 from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name
 from .branch_scope import scope_to_branch
-from .models import AttendanceLog, DepartmentManager, Employee, MissingPunchRequest, Notification
+from .hod_scope import managers_to_notify
+from .models import AttendanceLog, Employee, MissingPunchRequest, Notification
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -68,12 +68,8 @@ def _notify_hod_approvers(req: MissingPunchRequest) -> None:
     HR always sees the request too via the HR portal's pending queue (no push
     needed there -HRUser accounts aren't push-token-registered)."""
     emp = req.employee
-    managers = DepartmentManager.objects.select_related("employee").filter(
-        Q(employee_assignments__employee_id=emp.id) | Q(department_assignments__department_id=emp.department_id),
-        is_active=True,
-        can_approve_missing_punch=True,
-    ).distinct()
-    for m in managers:
+    # The employee's ONE HOD (hod_scope.py), if allowed to act on missing-punch requests.
+    for m in managers_to_notify(emp, "can_approve_missing_punch"):
         Notification.objects.create(
             employee=m.employee,
             type="missing_punch",

@@ -10,9 +10,12 @@ import { AttendanceLoader } from "@/components/ui/AttendanceLoader";
 import { useToast } from "@/hooks/use-toast";
 import {
   useEmployeeMonthlyAttendance, useAttendanceOverride, useAttendanceOverrideRequests,
+  usePayrollSettings,
   type FinalAttendanceDay,
 } from "@/lib/api-client/custom-hooks";
 import { useListEmployees } from "@/lib/api-client";
+import { halfDayWorked, isEarlyOutDay, lateDetectionFlags } from "@/lib/late-detection";
+import { DayFlagBadges } from "@/components/DayFlagBadges";
 import {
   Search, User, RotateCcw, PenLine, X, Clock, Send, ShieldCheck, Hourglass, ShieldX, History,
 } from "lucide-react";
@@ -36,6 +39,7 @@ type EditForm = {
   firstPunch: string;
   lastPunch: string;
   isLate: boolean;
+  isEarlyOut: boolean;
   shiftType: "full" | "half";
   note: string;
 };
@@ -63,11 +67,17 @@ export default function AttendanceSearchSection({
   const [editDay, setEditDay] = useState<FinalAttendanceDay | null>(null);
   const [form, setForm] = useState<EditForm>({
     status: "present", firstPunch: "", lastPunch: "",
-    isLate: false, shiftType: "full", note: "",
+    isLate: false, isEarlyOut: false, shiftType: "full", note: "",
   });
 
   const { data: employees } = useListEmployees({ status: "active" });
   const { data, isLoading, isError } = useEmployeeMonthlyAttendance(searchCode, month, year);
+  // Half-Day times from Settings → Attendance, to say which half a Half Shift day was worked in.
+  const { data: settings } = usePayrollSettings();
+  const halfDayCutoffs = {
+    firstHalfEnd: settings?.halfDayFirstHalfEndTime,
+    secondHalfStart: settings?.halfDaySecondHalfStartTime,
+  };
   const overrideMutation = useAttendanceOverride();
   const { data: myRequests } = useAttendanceOverrideRequests(
     data ? { employeeId: data.employee.id } : undefined,
@@ -98,6 +108,7 @@ export default function AttendanceSearchSection({
       firstPunch: day.firstPunch ?? "",
       lastPunch: day.lastPunch ?? "",
       isLate: day.isLate,
+      isEarlyOut: isEarlyOutDay(day),
       shiftType: day.isHalfShift || day.status === "half_shift" ? "half" : "full",
       note: day.overrideNote ?? "",
     });
@@ -115,6 +126,7 @@ export default function AttendanceSearchSection({
         date: editDay.date,
         status,
         isLate: form.isLate,
+        isEarlyOut: form.isEarlyOut,
         isHalfShift: form.status === "present" ? form.shiftType === "half" : false,
         firstPunch: form.firstPunch || null,
         lastPunch: form.lastPunch || null,
@@ -263,6 +275,11 @@ export default function AttendanceSearchSection({
                     { label: "Half Shift", value: data.summary.halfShift, cls: "text-amber-700" },
                     { label: "Absent", value: data.summary.absent, cls: "text-red-600" },
                     { label: "Late", value: data.summary.late, cls: "text-orange-600" },
+                    {
+                      label: "Early Out",
+                      value: data.weeks.reduce((n, w) => n + w.days.filter(d => d.earlyLeave).length, 0),
+                      cls: "text-orange-600",
+                    },
                     { label: "Leave", value: data.summary.onLeave, cls: "text-purple-600" },
                     { label: "Effective", value: data.summary.effectiveDays, cls: "text-indigo-700" },
                   ].map(s => (
@@ -288,7 +305,10 @@ export default function AttendanceSearchSection({
                   <span className="text-gray-300">|</span>
                   <span className="text-gray-500">Grace Period:</span>
                   <strong className="text-gray-800">{data.assignedShift.gracePeriodMinutes} min</strong>
-                  <span className="text-gray-400">-all late/half-shift detection below uses only this shift's settings.</span>
+                  <span className="text-gray-400">
+                    -Late and Early Out below are judged against this shift's start/end + grace; Half Day uses the
+                    company-wide Half-Day times (Settings → Attendance).
+                  </span>
                 </div>
               ) : (
                 <div className="flex items-center gap-2 text-xs bg-amber-50 border border-amber-200 text-amber-700 rounded-lg px-3 py-2">
@@ -319,7 +339,7 @@ export default function AttendanceSearchSection({
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b">
-                        {["Date", "Day", "Status", "First IN", "Last OUT", "Shifts", "Late", "Half", "Source", ""].map(h => (
+                        {["Date", "Day", "Status", "First IN", "Last OUT", "Shifts", "Late / Permission", "Half", "Source", ""].map(h => (
                           <th key={h} className="text-left px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase whitespace-nowrap">{h}</th>
                         ))}
                       </tr>
@@ -327,6 +347,11 @@ export default function AttendanceSearchSection({
                     <tbody>
                       {week.days.map(day => {
                         const pending = pendingByDate.get(day.date);
+                        // The Half column already says "½ Morning/Evening", so that flag is not repeated beside Late.
+                        const allFlags = lateDetectionFlags(day, halfDayCutoffs);
+                        const flags = allFlags.filter(f => f.kind !== "halfDay");
+                        const halfFlag = allFlags.find(f => f.kind === "halfDay");
+                        const worked = day.isHalfShift ? halfDayWorked(day.firstPunch, halfDayCutoffs.firstHalfEnd) : null;
                         return (
                         <tr
                           key={day.date}
@@ -355,20 +380,27 @@ export default function AttendanceSearchSection({
                           <td className="px-3 py-2 font-mono text-xs text-gray-700">{day.lastPunch ?? "—"}</td>
                           <td className="px-3 py-2 text-xs font-bold text-gray-800">{day.shiftsEarned}</td>
                           <td className="px-3 py-2 text-xs">
-                            {(day.permissionMorning || day.permissionAfternoon || day.permissionDeparture) ? (
-                              <span className="text-emerald-700 font-semibold">
-                                Permission{(day.permissionMorningWithRequest || day.permissionAfternoonWithRequest || day.permissionDepartureWithRequest) ? "" : " (No Request)"}
-                              </span>
-                            ) : day.isLate ? (
-                              <span className="text-red-600 font-semibold">{day.lateAfternoon ? "Night Late" : "Late"}</span>
+                            {flags.length > 0 ? (
+                              <div className="flex items-center gap-1 flex-wrap">
+                                <DayFlagBadges flags={flags} size="sm" />
+                              </div>
                             ) : (
                               <span className="text-gray-300">—</span>
                             )}
                           </td>
                           <td className="px-3 py-2 text-xs">
-                            {day.isHalfShift
-                              ? <span className="text-amber-700 font-semibold">½</span>
-                              : <span className="text-gray-300">—</span>}
+                            {day.isHalfShift ? (
+                              <span className="text-amber-700 font-semibold" title={halfFlag?.title}>
+                                ½
+                                {worked && (
+                                  <span className="ml-1 text-[10px] font-medium">
+                                    {worked === "morning" ? "Morning" : "Evening"}
+                                  </span>
+                                )}
+                              </span>
+                            ) : (
+                              <span className="text-gray-300">—</span>
+                            )}
                           </td>
                           <td className="px-3 py-2 text-[10px]">
                             {pending ? (
@@ -558,6 +590,21 @@ export default function AttendanceSearchSection({
                   >
                     {form.isLate ? "⚠ Marked as Late -click to clear" : "Mark as Late"}
                   </button>
+
+                  {/* Early Out toggle -hidden only when the company's Evening Early-Out detection is known to be off
+                      AND this day is not flagged: a flagged day always shows it, so HR can always clear the flag. */}
+                  {(settings?.eveningEarlyOutEnabled !== false || isEarlyOutDay(editDay)) && (
+                    <button
+                      onClick={() => setForm(f => ({ ...f, isEarlyOut: !f.isEarlyOut }))}
+                      className={`w-full text-xs px-3 py-2 rounded-lg border font-semibold transition-colors ${
+                        form.isEarlyOut
+                          ? "bg-red-50 text-red-600 border-red-200"
+                          : "bg-white text-gray-600 hover:bg-gray-50"
+                      }`}
+                    >
+                      {form.isEarlyOut ? "⚠ Marked as Early Out -click to clear" : "Mark as Early Out"}
+                    </button>
+                  )}
                 </>
               )}
 

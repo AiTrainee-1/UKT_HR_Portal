@@ -31,7 +31,7 @@ from .models import (
     PayrollSettings, Promotion, SalaryIncrement, SalarySlip,
 )
 from .attendance_final import (
-    compute_month_records, compute_day_record, month_summary_from_records,
+    compute_month_records, compute_day_record, month_summary_from_records, permission_flags_json,
 )
 from .shift_engine import _get_shift_for_date
 
@@ -58,13 +58,9 @@ def _record_dict(r: AttendanceDayRecord) -> dict:
         "isHalfShift": r.is_half_shift,
         "earlyLeave": r.early_leave,
         "lateAfternoon": r.late_afternoon,
-        "permissionMorning": r.permission_morning,
-        "permissionMorningWithRequest": r.permission_morning_with_request,
+        **permission_flags_json(r),
         "permissionAfternoon": r.permission_afternoon,
         "permissionAfternoonWithRequest": r.permission_afternoon_with_request,
-        "permissionDeparture": r.permission_departure,
-        "permissionDepartureWithRequest": r.permission_departure_with_request,
-        "permissionEscalatedToHalfShift": r.permission_escalated_to_half_shift,
         "isCompensationDay": r.is_compensation_day,
         "shiftsEarned": str(r.shifts_earned),
         "firstPunch": r.first_punch.strftime("%H:%M") if r.first_punch else None,
@@ -155,6 +151,9 @@ def _resolve_override_fields(record: AttendanceDayRecord, emp: Employee, data: d
         raise ValueError(f"Invalid status '{status}'")
 
     is_late = bool(data.get("isLate", record.is_late))
+    # HR can waive (or set) the Evening Early-Out flag too: once a day is a manual override it is never
+    # recomputed, so a flag left behind here would keep billing in the late pool with nobody able to clear it.
+    is_early_out = bool(data.get("isEarlyOut", record.early_leave))
     is_half = bool(data.get("isHalfShift", record.is_half_shift))
 
     first_punch = record.first_punch
@@ -169,6 +168,7 @@ def _resolve_override_fields(record: AttendanceDayRecord, emp: Employee, data: d
     elif status in ("absent", "on_leave", "holiday"):
         is_half = False
         is_late = False
+        is_early_out = False
     elif status == "present" and is_half:
         status = "half_shift"
 
@@ -185,6 +185,7 @@ def _resolve_override_fields(record: AttendanceDayRecord, emp: Employee, data: d
     return {
         "status": status,
         "isLate": is_late,
+        "isEarlyOut": is_early_out,
         "isHalfShift": is_half,
         "firstPunch": first_punch.strftime("%H:%M") if first_punch else None,
         "lastPunch": last_punch.strftime("%H:%M") if last_punch else None,
@@ -197,6 +198,7 @@ def _snapshot_fields(record: AttendanceDayRecord) -> dict:
     return {
         "status": record.status,
         "isLate": record.is_late,
+        "isEarlyOut": record.early_leave,
         "isHalfShift": record.is_half_shift,
         "firstPunch": record.first_punch.strftime("%H:%M") if record.first_punch else None,
         "lastPunch": record.last_punch.strftime("%H:%M") if record.last_punch else None,
@@ -210,6 +212,11 @@ def apply_override_values(record: AttendanceDayRecord, values: dict, reviewer_na
     """Write resolved override values onto the record (called after approval)."""
     record.status = values["status"]
     record.is_late = values["isLate"]
+    # A request saved before Early-Out could be overridden has no key: an HR decision is final, so
+    # that means "no early-out", never "keep whatever the auto engine flagged".
+    record.early_leave = bool(values.get("isEarlyOut", False))
+    if not (record.is_late or record.early_leave):
+        record.late_reason = None  # the auto engine's explanation no longer describes this verdict
     record.is_half_shift = values["isHalfShift"]
     record.first_punch = _parse_time(values["firstPunch"]) if values.get("firstPunch") else None
     record.last_punch = _parse_time(values["lastPunch"]) if values.get("lastPunch") else None

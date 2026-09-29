@@ -24,8 +24,6 @@ from .models import (
     Employee,
     Job,
     LeaveRequest,
-    ManagerDepartmentAssignment,
-    ManagerEmployeeAssignment,
     Notification,
     ResignationRequest,
 )
@@ -96,24 +94,12 @@ def _notify_dept_heads(resignation: ResignationRequest) -> None:
     emp = resignation.employee
     if not emp:
         return
-    dept_id = emp.department_id
+    # Only the employee's ONE HOD (hod_scope.py), and only if allowed to act on resignations.
+    from .hod_scope import managers_to_notify
 
-    manager_ids_from_dept = set(
-        ManagerDepartmentAssignment.objects.filter(
-            department_id=dept_id, manager__is_active=True, manager__can_approve_resignations=True,
-        ).values_list("manager__employee_id", flat=True)
-    ) if dept_id else set()
-
-    manager_ids_direct = set(
-        ManagerEmployeeAssignment.objects.filter(
-            employee_id=emp.id, manager__is_active=True, manager__can_approve_resignations=True,
-        ).values_list("manager__employee_id", flat=True)
-    )
-
-    all_manager_emp_ids = manager_ids_from_dept | manager_ids_direct
-    for mgr_emp_id in all_manager_emp_ids:
+    for mgr in managers_to_notify(emp, "can_approve_resignations"):
         Notification.objects.create(
-            employee_id=mgr_emp_id,
+            employee_id=mgr.employee_id,
             type="resignation",
             message=f"{emp.first_name} {emp.last_name} has submitted a resignation request. Please review it.",
         )
@@ -483,11 +469,10 @@ def manager_resignation_action(request: Request, pk: int) -> Response:
             403,
         )
 
-    dept_ids = [da.department_id for da in m.department_assignments.all()]
-    direct_ids = [ea.employee_id for ea in m.employee_assignments.all()]
-    emp_filter = Q(employee_id__in=direct_ids)
-    if dept_ids:
-        emp_filter |= Q(employee__department_id__in=dept_ids)
+    # The employees this HOD REALLY oversees: one HOD per employee (hod_scope.py).
+    from .hod_scope import managed_employee_ids
+
+    emp_filter = Q(employee_id__in=managed_employee_ids(m))
     # A head never decides their own request.
     emp_filter &= ~Q(employee_id=token_emp_id)
 
@@ -563,11 +548,10 @@ def manager_pending_resignations(request: Request) -> Response:
     except DepartmentManager.DoesNotExist:
         return _error("Not a department manager", 403)
 
-    dept_ids = [da.department_id for da in m.department_assignments.all()]
-    direct_ids = [ea.employee_id for ea in m.employee_assignments.all()]
-    emp_filter = Q(employee_id__in=direct_ids)
-    if dept_ids:
-        emp_filter |= Q(employee__department_id__in=dept_ids)
+    # The employees this HOD REALLY oversees: one HOD per employee (hod_scope.py).
+    from .hod_scope import managed_employee_ids
+
+    emp_filter = Q(employee_id__in=managed_employee_ids(m))
 
     status_filter = request.query_params.get("status", "pending")
     qs = ResignationRequest.objects.select_related(

@@ -23,6 +23,9 @@ import {
   useRemoveEmployeeFromManager,
   useUpdateDepartmentManager,
   type EmployeeAssignmentConflict,
+  type DepartmentAssignmentConflict,
+  type DepartmentReassign,
+  type ManagerOverlap,
 } from "@/lib/api-client/custom-hooks";
 
 /**
@@ -51,6 +54,14 @@ export default function ManagerDetail() {
     employeeName: string;
     conflict: EmployeeAssignmentConflict;
   } | null>(null);
+  // Set when assigning a DEPARTMENT 409s (see manager_department_assignments): some of its employees
+  // already report to another HOD. `reassignIds` are the ones HR ticks to move here; everyone else
+  // stays with their current HOD -unticked is the safe default, nothing moves unless asked.
+  const [deptConflict, setDeptConflict] = useState<{
+    departmentId: number;
+    conflict: DepartmentAssignmentConflict;
+  } | null>(null);
+  const [reassignIds, setReassignIds] = useState<Set<number>>(new Set());
 
   const { data: manager, isLoading } = useGetDepartmentManager(managerId);
   const { data: departments = [] } = useListDepartments();
@@ -70,7 +81,54 @@ export default function ManagerDetail() {
       setNewDeptId("");
       toast({ title: "Department assigned" });
     } catch (e: any) {
+      const data = e instanceof ApiError ? (e.data as any) : null;
+      if (e instanceof ApiError && e.status === 409 && data?.conflict && data?.conflictType === "department") {
+        setReassignIds(new Set());
+        setDeptConflict({ departmentId: Number(newDeptId), conflict: data as DepartmentAssignmentConflict });
+        return;
+      }
       toast({ title: e?.message ?? "Already assigned", variant: "destructive" });
+    }
+  };
+
+  const confirmDeptAssign = async (reassign: DepartmentReassign) => {
+    if (!managerId || !deptConflict) return;
+    try {
+      const res = await assignDeptMutation.mutateAsync({
+        managerId,
+        departmentId: deptConflict.departmentId,
+        reassign,
+      });
+      setNewDeptId("");
+      toast({
+        title:
+          res.assigned === false
+            ? "Existing assignments kept -the department was not assigned"
+            : (res.message ?? "Department assigned"),
+      });
+    } catch (e: any) {
+      toast({ title: e?.message ?? "Failed to assign department", variant: "destructive" });
+    } finally {
+      setDeptConflict(null);
+    }
+  };
+
+  const toggleReassign = (employeeId: number) =>
+    setReassignIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(employeeId)) next.delete(employeeId);
+      else next.add(employeeId);
+      return next;
+    });
+
+  // An employee listed under this HOD who reports to another one: move them here.
+  const handleReassignOverlap = async (o: ManagerOverlap) => {
+    if (!managerId) return;
+    try {
+      await assignEmpMutation.mutateAsync({ managerId, employeeCode: o.employeeCode, force: true });
+      toast({ title: `${o.name} now reports to this HOD` });
+    } catch (e: any) {
+      toast({ title: e?.message ?? "Failed to reassign", variant: "destructive" });
     }
   };
 
@@ -319,6 +377,52 @@ export default function ManagerDetail() {
               </div>
             </div>
 
+            {/* Listed under this HOD but really reporting to another one. An employee reports to ONE
+                HOD (an individual assignment beats department coverage; the earliest wins among
+                equals), so these are not in this HOD's approvals or headcount -shown so the
+                department's headcount is explained, with a one-click way to move them here. */}
+            {(manager.overlaps ?? []).length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-1">
+                  Reporting to another HOD ({manager.overlaps?.length})
+                </p>
+                <p className="text-xs text-gray-500 mb-2">
+                  Each employee reports to one HOD only. These are in this HOD's departments (or listed here) but
+                  already report to someone else, so they are not counted or approved for here.
+                </p>
+                <div className="space-y-1.5">
+                  {(manager.overlaps ?? []).map((o) => (
+                    <div
+                      key={o.employeeId}
+                      className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 bg-amber-50 border border-amber-100 rounded-lg"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <code className="text-xs font-mono bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">
+                            {o.employeeCode}
+                          </code>
+                          <span className="text-sm font-medium truncate">{o.name}</span>
+                        </div>
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          Reports to <strong>{o.currentManager.employeeName}</strong>
+                          {o.via === "direct" ? " (assigned individually)" : ` (through the ${o.department ?? "department"} department)`}
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs shrink-0"
+                        onClick={() => handleReassignOverlap(o)}
+                        disabled={assignEmpMutation.isPending}
+                      >
+                        Reassign to this HOD
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {manager.notes && (
               <div className="text-xs text-gray-500 bg-amber-50 border border-amber-100 rounded-lg p-2.5">
                 <span className="font-semibold">Note:</span> {manager.notes}
@@ -353,7 +457,11 @@ export default function ManagerDetail() {
               onClick={confirmReassign}
               disabled={assignEmpMutation.isPending}
             >
-              {assignEmpMutation.isPending ? "Reassigning…" : `Remove from ${assignConflict?.conflict.existingManager.employeeName} and assign here`}
+              {assignEmpMutation.isPending
+                ? "Reassigning…"
+                : assignConflict?.conflict.conflictType === "department"
+                  ? "Move to this HOD"
+                  : `Remove from ${assignConflict?.conflict.existingManager.employeeName} and assign here`}
             </Button>
             <Button
               variant="outline"
@@ -362,6 +470,116 @@ export default function ManagerDetail() {
               disabled={assignEmpMutation.isPending}
             >
               Keep existing assignment
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* "Already assigned to another HOD" for a whole DEPARTMENT -see
+          manager_department_assignments' 409. Lists every employee who already reports to a
+          different HOD. Ticked employees are reassigned to this HOD; unticked ones stay exactly
+          where they are. Closing the dialog changes nothing. */}
+      <Dialog open={!!deptConflict} onOpenChange={(open) => !open && setDeptConflict(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <AlertTriangle size={16} className="text-amber-500" />
+              Already assigned to another HOD
+            </DialogTitle>
+            <DialogDescription className="pt-1 text-sm text-foreground">
+              {deptConflict?.conflict.error}
+            </DialogDescription>
+          </DialogHeader>
+
+          {deptConflict && deptConflict.conflict.conflicts.length > 0 && (
+            <div>
+              <div className="mb-1.5 flex items-center justify-between text-xs">
+                <span className="font-semibold text-gray-500 uppercase tracking-wide">
+                  Employees who already have an HOD ({deptConflict.conflict.conflicts.length})
+                </span>
+                <span className="space-x-2">
+                  <button
+                    type="button"
+                    className="text-blue-600 hover:underline"
+                    onClick={() =>
+                      setReassignIds(new Set(deptConflict.conflict.conflicts.map((c) => c.employeeId)))
+                    }
+                  >
+                    Select all
+                  </button>
+                  <button type="button" className="text-blue-600 hover:underline" onClick={() => setReassignIds(new Set())}>
+                    Select none
+                  </button>
+                </span>
+              </div>
+              <div className="max-h-64 space-y-1.5 overflow-y-auto pr-1">
+                {deptConflict.conflict.conflicts.map((c) => (
+                  <label
+                    key={c.employeeId}
+                    className="flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2 hover:bg-gray-50"
+                  >
+                    <input
+                      type="checkbox"
+                      className="mt-1 size-4 shrink-0 accent-blue-600"
+                      checked={reassignIds.has(c.employeeId)}
+                      onChange={() => toggleReassign(c.employeeId)}
+                    />
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-2">
+                        <code className="text-xs font-mono bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded">
+                          {c.employeeCode}
+                        </code>
+                        <span className="text-sm font-medium truncate">{c.name}</span>
+                      </span>
+                      <span className="block text-xs text-gray-500 mt-0.5">
+                        Already assigned to <strong>{c.manager.employeeName}</strong>
+                        {c.via === "direct"
+                          ? " individually"
+                          : ` through the ${deptConflict.conflict.department.name} department`}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-gray-500">
+                Ticked employees move to <strong>{manager?.employeeName}</strong>. Unticked employees stay with
+                their current HOD -nothing changes for them.
+              </p>
+            </div>
+          )}
+
+          <DialogFooter className="flex-col gap-2 sm:flex-col">
+            <Button
+              className="w-full"
+              onClick={() =>
+                confirmDeptAssign(
+                  reassignIds.size > 0 && reassignIds.size === deptConflict?.conflict.conflicts.length
+                    ? "all"
+                    : Array.from(reassignIds),
+                )
+              }
+              disabled={assignDeptMutation.isPending || reassignIds.size === 0}
+            >
+              {assignDeptMutation.isPending
+                ? "Assigning…"
+                : `Reassign ${reassignIds.size} selected & assign department`}
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => confirmDeptAssign("all")}
+              disabled={assignDeptMutation.isPending}
+            >
+              Reassign all {deptConflict?.conflict.conflictCount ?? 0} to this HOD
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => confirmDeptAssign("none")}
+              disabled={assignDeptMutation.isPending}
+            >
+              {(deptConflict?.conflict.holders.length ?? 0) > 0
+                ? "Keep existing assignments -don't assign this department"
+                : "Keep existing assignments -assign only the rest of the department"}
             </Button>
           </DialogFooter>
         </DialogContent>

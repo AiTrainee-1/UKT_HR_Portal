@@ -8,6 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { Clock, Info, Briefcase, Factory } from "lucide-react";
 import { usePayrollSettings, useUpdatePayrollSettings } from "@/lib/api-client/custom-hooks";
+import { validateHalfDayTimes } from "@/lib/late-detection";
 import ProductionShiftConfigCard from "@/components/ProductionShiftConfigCard";
 
 export default function AttendanceTab() {
@@ -19,11 +20,13 @@ export default function AttendanceTab() {
   const [attMode, setAttMode] = useState({
     attendanceMode: "strict" as "strict" | "simple",
     simpleHalfShiftCutoff: "13:30",
-    shiftPunctualityWindowMinutes: 60,
-    permissionWindowMinutes: 60,
+    // undefined = the server did not report the switch (unknown), which is different from reporting it off.
+    morningLateInEnabled: undefined as boolean | undefined,
+    eveningEarlyOutEnabled: undefined as boolean | undefined,
+    halfDayFirstHalfEndTime: "13:30",
+    halfDaySecondHalfStartTime: "14:30",
     afternoonLateWindowMinutes: 60,
     afternoonPermissionWindowMinutes: 60,
-    afternoonLateCanCauseHalfShift: true,
     lastPunchPostShiftGraceHours: 9,
     firstPunchPreShiftBufferHours: 2,
     prodFirstHalfStart: "08:30",
@@ -32,7 +35,6 @@ export default function AttendanceTab() {
     prodSecondHalfEnd: "17:30",
     prodExtraStart: "17:50",
     prodExtraEnd: "20:00",
-    halfShiftLateReferenceTime: "14:30",
     defaultShiftGraceMinutes: 15,
     defaultShiftFirstHalfEnd: "13:30",
     defaultShiftLunchDurationMinutes: 60,
@@ -40,20 +42,25 @@ export default function AttendanceTab() {
   });
 
   // Attendance tab is split Staff / Production -Strict/Simple mode, the
-  // punctuality window and the half-shift reference are all staff-only
+  // Half-Day times and the Late Detection switches are all staff-only
   // concepts, so they live under Staff.
   const [attSubTab, setAttSubTab] = useState<"staff" | "production">("staff");
+  // Which switches the user has actually flipped since the settings last loaded -only those are ever sent, so a save
+  // of some other field can never write a value the user did not choose (and never writes a guessed default).
+  const [switchTouched, setSwitchTouched] = useState({ morning: false, evening: false });
 
   useEffect(() => {
     if (!payrollSettingsData) return;
+    setSwitchTouched({ morning: false, evening: false });
     setAttMode({
       attendanceMode: (payrollSettingsData.attendanceMode as "strict" | "simple") || "strict",
       simpleHalfShiftCutoff: payrollSettingsData.simpleHalfShiftCutoff || "13:30",
-      shiftPunctualityWindowMinutes: payrollSettingsData.shiftPunctualityWindowMinutes ?? 60,
-      permissionWindowMinutes: payrollSettingsData.permissionWindowMinutes ?? 60,
+      morningLateInEnabled: payrollSettingsData.morningLateInEnabled,
+      eveningEarlyOutEnabled: payrollSettingsData.eveningEarlyOutEnabled,
+      halfDayFirstHalfEndTime: payrollSettingsData.halfDayFirstHalfEndTime || "13:30",
+      halfDaySecondHalfStartTime: payrollSettingsData.halfDaySecondHalfStartTime || "14:30",
       afternoonLateWindowMinutes: payrollSettingsData.afternoonLateWindowMinutes ?? 60,
       afternoonPermissionWindowMinutes: payrollSettingsData.afternoonPermissionWindowMinutes ?? 60,
-      afternoonLateCanCauseHalfShift: payrollSettingsData.afternoonLateCanCauseHalfShift ?? true,
       lastPunchPostShiftGraceHours: payrollSettingsData.lastPunchPostShiftGraceHours ?? 9,
       firstPunchPreShiftBufferHours: payrollSettingsData.firstPunchPreShiftBufferHours ?? 2,
       prodFirstHalfStart: payrollSettingsData.prodFirstHalfStart || "08:30",
@@ -62,7 +69,6 @@ export default function AttendanceTab() {
       prodSecondHalfEnd: payrollSettingsData.prodSecondHalfEnd || "17:30",
       prodExtraStart: payrollSettingsData.prodExtraStart || "17:50",
       prodExtraEnd: payrollSettingsData.prodExtraEnd || "20:00",
-      halfShiftLateReferenceTime: payrollSettingsData.halfShiftLateReferenceTime || "14:30",
       defaultShiftGraceMinutes: payrollSettingsData.defaultShiftGraceMinutes ?? 15,
       defaultShiftFirstHalfEnd: payrollSettingsData.defaultShiftFirstHalfEnd || "13:30",
       defaultShiftLunchDurationMinutes: payrollSettingsData.defaultShiftLunchDurationMinutes ?? 60,
@@ -70,16 +76,54 @@ export default function AttendanceTab() {
     });
   }, [payrollSettingsData]);
 
+  // The Late Detection switches and Half-Day times are company-wide rules: a branch-assigned login can see them but
+  // the server refuses (403) any save that carries them, so they are shown read-only and left out of the request.
+  // An older backend does not say, and is treated as editable.
+  const companyWideEditable = payrollSettingsData?.companyWideRulesEditable !== false;
+  const companyWideNote = "Company-wide rule - set by an administrator";
+
+  // A backend that does not send a setting cannot have it edited here: the control stays disabled and says so, and
+  // nothing is sent for it (the values in the boxes would only be this page's guesses).
+  const morningReported = payrollSettingsData?.morningLateInEnabled != null;
+  const eveningReported = payrollSettingsData?.eveningEarlyOutEnabled != null;
+  const halfDayReported =
+    payrollSettingsData?.halfDayFirstHalfEndTime != null && payrollSettingsData?.halfDaySecondHalfStartTime != null;
+  const notReportedNote = "Not reported by the server, so it cannot be changed here";
+
+  // Same rule the server enforces on save (First Half End must not be later than Second Half Start); checked here so
+  // the message shows next to the fields and nothing is sent while the pair is contradictory.
+  const halfDayError =
+    companyWideEditable && halfDayReported
+      ? validateHalfDayTimes(attMode.halfDayFirstHalfEndTime, attMode.halfDaySecondHalfStartTime)
+      : null;
+
   const saveAttendanceMode = async () => {
+    if (halfDayError) {
+      toast({ title: "Half-Day times are not valid", description: halfDayError, variant: "destructive" });
+      return;
+    }
     try {
       await updatePayrollSettings.mutateAsync({
         attendanceMode: attMode.attendanceMode,
         simpleHalfShiftCutoff: attMode.simpleHalfShiftCutoff,
-        shiftPunctualityWindowMinutes: attMode.shiftPunctualityWindowMinutes,
-        permissionWindowMinutes: attMode.permissionWindowMinutes,
+        ...(companyWideEditable
+          ? {
+              ...(switchTouched.morning && attMode.morningLateInEnabled !== undefined
+                ? { morningLateInEnabled: attMode.morningLateInEnabled }
+                : {}),
+              ...(switchTouched.evening && attMode.eveningEarlyOutEnabled !== undefined
+                ? { eveningEarlyOutEnabled: attMode.eveningEarlyOutEnabled }
+                : {}),
+              ...(halfDayReported
+                ? {
+                    halfDayFirstHalfEndTime: attMode.halfDayFirstHalfEndTime,
+                    halfDaySecondHalfStartTime: attMode.halfDaySecondHalfStartTime,
+                  }
+                : {}),
+            }
+          : {}),
         afternoonLateWindowMinutes: attMode.afternoonLateWindowMinutes,
         afternoonPermissionWindowMinutes: attMode.afternoonPermissionWindowMinutes,
-        afternoonLateCanCauseHalfShift: attMode.afternoonLateCanCauseHalfShift,
         lastPunchPostShiftGraceHours: attMode.lastPunchPostShiftGraceHours,
         firstPunchPreShiftBufferHours: attMode.firstPunchPreShiftBufferHours,
         prodFirstHalfStart: attMode.prodFirstHalfStart,
@@ -88,7 +132,6 @@ export default function AttendanceTab() {
         prodSecondHalfEnd: attMode.prodSecondHalfEnd,
         prodExtraStart: attMode.prodExtraStart,
         prodExtraEnd: attMode.prodExtraEnd,
-        halfShiftLateReferenceTime: attMode.halfShiftLateReferenceTime,
         defaultShiftGraceMinutes: attMode.defaultShiftGraceMinutes,
         defaultShiftFirstHalfEnd: attMode.defaultShiftFirstHalfEnd,
         defaultShiftLunchDurationMinutes: attMode.defaultShiftLunchDurationMinutes,
@@ -98,17 +141,21 @@ export default function AttendanceTab() {
         title: "Attendance settings saved",
         description: `Mode: ${attMode.attendanceMode === "simple" ? "Simple (morning + evening punch)" : "Strict (4-punch engine)"}. Applies to new calculations.`,
       });
-    } catch {
-      toast({ title: "Failed to save attendance settings", variant: "destructive" });
+    } catch (err) {
+      toast({
+        title: "Failed to save attendance settings",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
     }
   };
 
   return (
     <>
-      {/* Staff / Production split -Strict/Simple mode, the punctuality
-                window, night relaxation and the half-shift reference are all
-                staff-only concepts, so they live under Staff. Production has
-                its own segment-based engine with no mode switch. */}
+      {/* Staff / Production split -Strict/Simple mode, the Half-Day times and
+                the Late Detection switches are all staff-only concepts, so
+                they live under Staff. Production has its own segment-based
+                engine with no mode switch. */}
       <PillTabs
         items={[
           { value: "staff", label: "Staff", icon: <Briefcase size={13} /> },
@@ -131,42 +178,35 @@ export default function AttendanceTab() {
             </CardHeader>
             <CardContent className="space-y-3 text-xs text-slate-600 leading-relaxed">
               <div className="p-3 rounded-lg bg-white border border-slate-200">
-                <p className="font-bold text-slate-800 mb-1">Shared by both modes -the Full vs Half Shift decision</p>
+                <p className="font-bold text-slate-800 mb-1">Shared by both modes -three independent rules</p>
                 <p>
-                  A <strong>Full Shift</strong> needs a first punch <em>and</em> a distinct last punch, and both must
-                  fall within the <strong>Shift Punctuality Window</strong> (below) of the employee's assigned shift
-                  start/end time. Only one punch, or punching outside that window, caps the day at{" "}
-                  <strong>Half Shift</strong>. Shift start/end and the small grace period come from the shift assigned
-                  to each employee in <strong>Manage Shift</strong> — an employee with no assigned shift has no
-                  reference, so this never applies to them.
+                  <strong>Half-Day Detection</strong> decides Full Day vs Half Day vs Absent purely from whether the
+                  employee has a punch before the <strong>First-Half-End</strong> time and a punch at/after the{" "}
+                  <strong>Second-Half-Start</strong> time (both set below) -these two clock times are the same for every
+                  shift. <strong>Late Detection</strong> (Morning Late-In / Evening Early-Out) is judged separately,
+                  against the employee's own assigned shift start/end + grace from <strong>Manage Shift</strong> -a very
+                  late arrival that still beats the Half-Day cutoff is Full Day <em>and</em> Late, never auto-demoted.{" "}
+                  <strong>Permission</strong> (Settings → Late Detection) can shift that day's Late Detection boundary
+                  for an individual employee, but never moves the Half-Day cutoff itself.
                 </p>
               </div>
               <div className="grid sm:grid-cols-2 gap-3">
                 <div className="p-3 rounded-lg bg-white border border-amber-200">
                   <p className="font-bold text-amber-800 mb-1">Strict Mode</p>
                   <p>
-                    Expects all 4 punches -morning IN, lunch OUT, lunch return, evening OUT. On top of the shared
-                    decision above it <strong>additionally tracks lunch-return lateness</strong>. Choose this when you
-                    need to police the lunch break.
+                    Expects all 4 punches -morning IN, lunch OUT, lunch return, evening OUT. On top of the shared rules
+                    above it <strong>additionally tracks lunch-return lateness</strong> (Night Late, informational
+                    only). Choose this when you need to police the lunch break.
                   </p>
                 </div>
                 <div className="p-3 rounded-lg bg-white border border-green-200">
                   <p className="font-bold text-green-800 mb-1">Simple Mode</p>
                   <p>
-                    Only the first and last punch of the day matter -<strong>no lunch tracking at all</strong>.
-                    Everything else behaves exactly as in Strict Mode. Choose this when the lunch break isn't punched or
-                    isn't policed.
+                    Only the first and last punch of the day matter -<strong>no lunch tracking at all</strong>. Half-Day
+                    Detection and Late Detection behave exactly as in Strict Mode. Choose this when the lunch break
+                    isn't punched or isn't policed.
                   </p>
                 </div>
-              </div>
-              <div className="p-3 rounded-lg bg-white border border-indigo-200">
-                <p className="font-bold text-indigo-800 mb-1">Night Shift Relaxation</p>
-                <p>
-                  Not a timing rule -it's a <strong>feature switch</strong>. When on, the Night Shift page appears in
-                  the sidebar, where you grant relaxation to individual employees who worked late the previous night so
-                  their next-morning arrival isn't penalised. Turning it off only hides that page; it doesn't change any
-                  calculation on its own.
-                </p>
               </div>
             </CardContent>
           </Card>
@@ -198,8 +238,9 @@ export default function AttendanceTab() {
                     )}
                   </div>
                   <p className="text-xs text-gray-500 leading-relaxed">
-                    Tracks all 4 punches: morning IN, lunch OUT, lunch return, evening OUT. Half shift from missing
-                    punches, and applies the 3-free-late penalty rule.
+                    Tracks all 4 punches: morning IN, lunch OUT, lunch return, evening OUT. Full/Half/Absent and Late
+                    Detection work exactly as in Simple Mode; the only addition is informational lunch-return (Night
+                    Late) tracking.
                   </p>
                 </button>
                 {/* Simple */}
@@ -220,75 +261,159 @@ export default function AttendanceTab() {
                     )}
                   </div>
                   <p className="text-xs text-gray-500 leading-relaxed">
-                    Morning punch + evening last punch = full shift. No lunch-break tracking. Late = morning punch
-                    beyond grace period. Early leave is flagged.
+                    Only the first and last punch of the day matter. No lunch-break tracking. Full/Half/Absent comes
+                    from the Half-Day times below; Late and Early-Out from the Late Detection switches.
                   </p>
                 </button>
               </div>
 
-              {/* Both modes now share the same Full/Half Shift decision -a first
-                    AND a distinct last punch, both within the punctuality window
-                    below of the employee's assigned shift start/end time. Strict
-                    mode additionally tracks lunch-return lateness on top of this. */}
+              {/* Half-Day Detection -REPLACES the old punctuality-window
+                    escalation entirely. Full/Half/Absent is decided purely by
+                    whether the employee has a punch before First-Half-End and
+                    a punch at/after Second-Half-Start -the same two clock
+                    times for every shift, independent of Late Detection. */}
               <div className="grid sm:grid-cols-2 gap-4 p-3 bg-amber-50/50 border border-amber-100 rounded-lg">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Shift Punctuality Window -Maximum First Punch Allowed (minutes)</Label>
-                  <p className="text-[11px] text-gray-500 -mt-1">
-                    First punch must be within this many minutes of shift start (and last punch within the same window
-                    of shift end) to still count as Full Shift
+                <div className="sm:col-span-2">
+                  <Label className="text-xs font-semibold text-amber-900">Half-Day Detection</Label>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    <strong>Morning Half</strong> = any punch before First Half End. <strong>Evening Half</strong> = any
+                    punch at/after Second Half Start. Both halves = Full Day; one = Half Day; none = Absent. A punch
+                    between the two times attends neither half. Simple and Strict modes use the same rule, and the
+                    shift's own start/end never change it. Lateness within a half is judged separately, by Late
+                    Detection below -it never costs the half by itself.
                   </p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs" htmlFor="half-day-first-half-end">
+                    First Half End Time
+                  </Label>
+                  <p className="text-[11px] text-gray-500 -mt-1">A punch before this time attends the Morning Half</p>
                   <Input
-                    type="number"
-                    min={0}
-                    step={5}
-                    value={attMode.shiftPunctualityWindowMinutes}
-                    onChange={(e) =>
-                      setAttMode((a) => ({
-                        ...a,
-                        shiftPunctualityWindowMinutes: Math.max(0, Number(e.target.value) || 0),
-                      }))
-                    }
-                    className="max-w-[140px]"
+                    id="half-day-first-half-end"
+                    type="time"
+                    value={attMode.halfDayFirstHalfEndTime}
+                    onChange={(e) => setAttMode((a) => ({ ...a, halfDayFirstHalfEndTime: e.target.value }))}
+                    disabled={!companyWideEditable || !halfDayReported}
+                    aria-invalid={!!halfDayError}
+                    className={`max-w-[140px] ${halfDayError ? "border-red-400" : ""}`}
                   />
                 </div>
-                <div className="space-y-1.5 sm:col-span-2">
-                  <p className="text-[11px] text-gray-500">
-                    Applies to every employee, every day -arriving within this window still counts toward a Full Shift
-                    (though it's flagged <strong>Late</strong> once past the shift's own small Grace Period, set per
-                    shift in <strong>Manage Shift</strong>). Only arriving <strong>past this window</strong> caps the
-                    day at Half Shift. Applies to both calculation modes, staff only. Shift start/end times and grace
-                    period always come from the shift assigned to each employee -an employee with no shift assigned has
-                    no reference to check against, so this never applies to them.
-                  </p>
+                <div className="space-y-1.5">
+                  <Label className="text-xs" htmlFor="half-day-second-half-start">
+                    Second Half Start Time
+                  </Label>
+                  <p className="text-[11px] text-gray-500 -mt-1">A punch at/after this time attends the Evening Half</p>
+                  <Input
+                    id="half-day-second-half-start"
+                    type="time"
+                    value={attMode.halfDaySecondHalfStartTime}
+                    onChange={(e) => setAttMode((a) => ({ ...a, halfDaySecondHalfStartTime: e.target.value }))}
+                    disabled={!companyWideEditable || !halfDayReported}
+                    aria-invalid={!!halfDayError}
+                    className={`max-w-[140px] ${halfDayError ? "border-red-400" : ""}`}
+                  />
                 </div>
+                {halfDayError && (
+                  <p
+                    role="alert"
+                    data-testid="half-day-error"
+                    className="sm:col-span-2 text-[11px] font-medium text-red-600"
+                  >
+                    {halfDayError}
+                  </p>
+                )}
+                {!companyWideEditable && (
+                  <p
+                    data-testid="company-wide-note-half-day"
+                    className="sm:col-span-2 text-[11px] font-medium text-slate-500"
+                  >
+                    {companyWideNote}
+                  </p>
+                )}
+                {companyWideEditable && payrollSettingsData && !halfDayReported && (
+                  <p
+                    data-testid="half-day-not-reported"
+                    className="sm:col-span-2 text-[11px] font-medium text-slate-500"
+                  >
+                    {notReportedNote}
+                  </p>
+                )}
               </div>
 
-              {/* Auto-Permission zone -inserted between the punctuality window above
-                    and Half Shift. A first/last punch past the window but still inside
-                    this extra width is auto-detected Permission instead of Half Shift,
-                    purely from punch timing (see Late Detection tab for the daily/weekly
-                    caps and the With/Without Permission split). */}
-              <div className="grid sm:grid-cols-2 gap-4 p-3 bg-emerald-50/50 border border-emerald-100 rounded-lg">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Permission Zone Width -Morning/Departure (minutes)</Label>
-                  <p className="text-[11px] text-gray-500 -mt-1">
-                    Extra minutes past the punctuality window above during which a late arrival or early departure is
-                    auto-detected as <strong>Permission</strong> instead of Half Shift.
+              {/* Late Detection -Morning Late-In / Evening Early-Out, judged
+                    against the shift's own start/end + grace (Manage Shift),
+                    or that day's permission-shifted boundary. Independent
+                    toggles: Morning ships on, Evening ships off. */}
+              <div className="grid sm:grid-cols-2 gap-4 p-3 bg-sky-50/50 border border-sky-100 rounded-lg">
+                <div className="sm:col-span-2">
+                  <Label className="text-xs font-semibold text-sky-900">Late Detection switches</Label>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    Two independent checks, both judged against the employee's own shift start/end + grace from Manage
+                    Shift (moved 60 minutes on a day an Allowed permission applies). Occurrences share one monthly pool
+                    priced in Settings → Late Detection.
                   </p>
-                  <Input
-                    type="number"
-                    min={0}
-                    step={5}
-                    value={attMode.permissionWindowMinutes}
-                    onChange={(e) =>
-                      setAttMode((a) => ({ ...a, permissionWindowMinutes: Math.max(0, Number(e.target.value) || 0) }))
-                    }
-                    className="max-w-[140px]"
+                </div>
+                <div className="flex items-center justify-between bg-white rounded-lg border border-sky-100 p-3">
+                  <div>
+                    <Label className="text-xs">Morning Late-In</Label>
+                    <p className="text-[11px] text-gray-500">Flag a punch after shift start + grace.</p>
+                    {payrollSettingsData && !morningReported && (
+                      <p data-testid="morning-not-reported" className="text-[11px] font-medium text-slate-500">
+                        {notReportedNote}
+                      </p>
+                    )}
+                  </div>
+                  <Switch
+                    aria-label="Morning Late-In"
+                    checked={attMode.morningLateInEnabled === true}
+                    disabled={!companyWideEditable || !morningReported}
+                    onCheckedChange={(v) => {
+                      setAttMode((a) => ({ ...a, morningLateInEnabled: v }));
+                      setSwitchTouched((t) => ({ ...t, morning: true }));
+                    }}
                   />
                 </div>
-                <div className="space-y-1.5 sm:col-span-2 border-t border-emerald-200 pt-3">
+                <div className="flex items-center justify-between bg-white rounded-lg border border-sky-100 p-3">
+                  <div>
+                    <Label className="text-xs">Evening Early-Out</Label>
+                    <p className="text-[11px] text-gray-500">
+                      Flag a punch before shift end - grace.
+                      {eveningReported ? " Off by default." : ""}
+                    </p>
+                    {payrollSettingsData && !eveningReported && (
+                      <p data-testid="evening-not-reported" className="text-[11px] font-medium text-slate-500">
+                        {notReportedNote}
+                      </p>
+                    )}
+                  </div>
+                  <Switch
+                    aria-label="Evening Early-Out"
+                    checked={attMode.eveningEarlyOutEnabled === true}
+                    disabled={!companyWideEditable || !eveningReported}
+                    onCheckedChange={(v) => {
+                      setAttMode((a) => ({ ...a, eveningEarlyOutEnabled: v }));
+                      setSwitchTouched((t) => ({ ...t, evening: true }));
+                    }}
+                  />
+                </div>
+                {!companyWideEditable && (
+                  <p
+                    data-testid="company-wide-note-late"
+                    className="sm:col-span-2 text-[11px] font-medium text-slate-500"
+                  >
+                    {companyWideNote}
+                  </p>
+                )}
+              </div>
+
+              {/* Afternoon (Night Late) lunch-return zone -a different,
+                    untouched axis (strict mode only): a slow return from
+                    lunch is flagged but can never demote the day anymore -
+                    only Half-Day Detection above decides Full vs Half now. */}
+              <div className="grid sm:grid-cols-2 gap-4 p-3 bg-emerald-50/50 border border-emerald-100 rounded-lg">
+                <div className="space-y-1.5 sm:col-span-2">
                   <p className="text-[11px] font-semibold text-emerald-900">
-                    Afternoon (Night Late) -lunch return, strict mode only
+                    Afternoon (Night Late) -lunch return, strict mode only, informational
                   </p>
                 </div>
                 <div className="space-y-1.5">
@@ -321,19 +446,6 @@ export default function AttendanceTab() {
                       }))
                     }
                     className="max-w-[140px]"
-                  />
-                </div>
-                <div className="flex items-center justify-between sm:col-span-2 bg-white rounded-lg border border-emerald-100 p-3">
-                  <div>
-                    <Label className="text-xs">Night Late Can Cause Half Shift</Label>
-                    <p className="text-[11px] text-gray-500">
-                      When off, a very late lunch return is only ever flagged -it never demotes the day to Half Shift on
-                      its own.
-                    </p>
-                  </div>
-                  <Switch
-                    checked={attMode.afternoonLateCanCauseHalfShift}
-                    onCheckedChange={(v) => setAttMode((a) => ({ ...a, afternoonLateCanCauseHalfShift: v }))}
                   />
                 </div>
               </div>
@@ -399,8 +511,8 @@ export default function AttendanceTab() {
                   <div className="space-y-1.5">
                     <Label className="text-xs text-gray-400">Legacy Half-Shift Cutoff Time</Label>
                     <p className="text-[11px] text-gray-400 -mt-1">
-                      Historical only -no longer used for new calculations since the punctuality window above replaced
-                      it. Kept only for reference.
+                      Historical only -no longer used for new calculations since the Half-Day times above replaced it.
+                      Kept only for reference.
                     </p>
                     <Input
                       type="time"
@@ -411,32 +523,6 @@ export default function AttendanceTab() {
                   </div>
                 </div>
               )}
-
-              {/* Half Shift late reference -was a hardcoded 14:30 constant
-                    in the engine until it became configurable here. */}
-              <div className="grid sm:grid-cols-2 gap-4 p-3 bg-rose-50/50 border border-rose-100 rounded-lg">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Half Shift -Late Reference Time</Label>
-                  <p className="text-[11px] text-gray-500 -mt-1">
-                    On a day that already resolved to Half Shift, the arrival is flagged
-                    <strong> Late</strong> only if the first punch is strictly after this time. An afternoon half-shift
-                    that starts on time is a half day, not a late day.
-                  </p>
-                  <Input
-                    type="time"
-                    value={attMode.halfShiftLateReferenceTime}
-                    onChange={(e) => setAttMode((a) => ({ ...a, halfShiftLateReferenceTime: e.target.value }))}
-                    className="max-w-[140px]"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <p className="text-[11px] text-gray-500">
-                    Compared to the minute -a punch anywhere inside the reference minute counts as "on time", only the
-                    next minute onward is Late. Full Shift days never use this; they use the shift's own start time +
-                    grace period.
-                  </p>
-                </div>
-              </div>
 
               {/* Company-wide defaults for NEW shifts. Office start/end time
                     is deliberately NOT here -Manage Shift already owns that

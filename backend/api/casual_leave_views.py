@@ -113,12 +113,16 @@ def _write_attendance_for_cl(cl: CasualLeaveRequest, reviewer: str) -> None:
         record.status = "present"
         record.shifts_earned = Decimal("1.00")
         record.is_late = False
+        record.early_leave = False  # a paid day carries no late/early-out mark -this row is never recomputed
+        record.late_reason = None
         record.is_half_shift = False
         record.override_note = "Casual Leave (paid) -approved"
     else:  # rejected
         record.status = "on_leave"
         record.shifts_earned = Decimal("0")
         record.is_late = False
+        record.early_leave = False
+        record.late_reason = None
         record.is_half_shift = False
         record.override_note = "Casual Leave rejected -marked as leave"
     record.source = "manual"

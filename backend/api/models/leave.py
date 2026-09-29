@@ -228,16 +228,75 @@ class EmployeePermission(models.Model):
         (STATUS_REJECTED, "Rejected"),
     ]
 
-    TYPE_EARLY_OUT = "Early Out"
-    TYPE_LATE_IN = "Late In"
-    TYPE_SHORT_LEAVE = "Short Leave"
+    # The 3 canonical permission types. Morning Late-In and Evening
+    # Early-Out are the two types that can shift that day's effective shift
+    # boundary when approved and within the monthly cap (see
+    # attendance_final.py); Middle One-Hour never shifts anything -it's an
+    # excused mid-shift gap only.
+    #
+    # Canonical spelling is the slug below. Rows and clients from before the
+    # rewrite used "Late In" / "Early Out" / "Short Leave" (the deployed
+    # mobile app and any row saved by an older backend still do), and NO data
+    # migration relabels them: production must keep working while the old
+    # backend, the new backend and the already-installed apps all run at the
+    # same time. Every read/compare therefore goes through normalize_type() /
+    # type_values() instead of comparing against a single spelling, and the
+    # API keeps answering old clients in their own spelling (see
+    # legacy_type_label and leave_views._permission_json).
+    TYPE_MORNING_LATE_IN = "morning_late_in"
+    TYPE_EVENING_EARLY_OUT = "evening_early_out"
+    TYPE_MIDDLE_PERMISSION = "middle_permission"
     TYPE_CHOICES = [
-        (TYPE_EARLY_OUT, "Early Out"),
-        (TYPE_LATE_IN, "Late In"),
-        (TYPE_SHORT_LEAVE, "Short Leave"),
+        (TYPE_MORNING_LATE_IN, "Morning Late-In"),
+        (TYPE_EVENING_EARLY_OUT, "Evening Early-Out"),
+        (TYPE_MIDDLE_PERMISSION, "Middle One-Hour Permission"),
     ]
+    TYPE_LABELS = dict(TYPE_CHOICES)
+    # slug -> the spelling used before the rewrite (what old clients send and expect back).
+    LEGACY_TYPE_LABELS = {
+        TYPE_MORNING_LATE_IN: "Late In",
+        TYPE_EVENING_EARLY_OUT: "Early Out",
+        TYPE_MIDDLE_PERMISSION: "Short Leave",
+    }
+    # Every spelling that normalizes onto a slug, keyed by the lower-cased,
+    # underscore-joined form (so "Late In", "late-in" and "LATE_IN" all match).
+    _TYPE_ALIASES = {
+        "morning_late_in": TYPE_MORNING_LATE_IN,
+        "late_in": TYPE_MORNING_LATE_IN,
+        "evening_early_out": TYPE_EVENING_EARLY_OUT,
+        "early_out": TYPE_EVENING_EARLY_OUT,
+        "middle_permission": TYPE_MIDDLE_PERMISSION,
+        "middle_one_hour_permission": TYPE_MIDDLE_PERMISSION,
+        "middle_one_hour": TYPE_MIDDLE_PERMISSION,
+        "short_leave": TYPE_MIDDLE_PERMISSION,
+    }
 
+    @classmethod
+    def normalize_type(cls, raw):
+        """Any accepted spelling -> canonical slug, or None for blank/unknown."""
+        if raw is None:
+            return None
+        key = "_".join(str(raw).strip().lower().replace("-", " ").split())
+        return cls._TYPE_ALIASES.get(key)
+
+    @classmethod
+    def type_values(cls, slug):
+        """Every spelling a row of this canonical type may be stored under -for queryset filters
+        (``type__in=EmployeePermission.type_values(...)``) that must match old and new rows alike."""
+        return [slug, cls.LEGACY_TYPE_LABELS[slug]]
+
+    @property
+    def type_key(self):
+        """Canonical slug of this row's type, or None for an untyped (pre-rewrite web-app) row."""
+        return self.normalize_type(self.type)
+
+    # Every permission is now a fixed 60 minutes -kept as a choices field
+    # (rather than removed) purely so older rows recorded under the old
+    # variable-duration policy (30/45/90) keep displaying their real,
+    # historical value; new rows always get 60 regardless of client input
+    # (see leave_views.py's create endpoint).
     DURATION_CHOICES = [(30, "30 minutes"), (45, "45 minutes"), (60, "60 minutes"), (90, "90 minutes")]
+    FIXED_DURATION_MINUTES = 60
 
     employee = models.ForeignKey(
         Employee, on_delete=models.CASCADE,
@@ -247,13 +306,15 @@ class EmployeePermission(models.Model):
     permission_time = models.TimeField(null=True, blank=True, db_column="permission_time")
     reason = models.TextField(null=True, blank=True)
     status = models.TextField(choices=STATUS_CHOICES, default=STATUS_PENDING)
-    # What kind of permission this is (arriving late / leaving early / a
-    # short leave mid-shift) and how long the employee expects to be away —
-    # both purely descriptive, shown on the request and its approval card.
-    # Neither ever gates the monthly/daily/weekly count limits, which are
-    # counted per-request regardless of type or duration.
+    # Which of the 3 canonical types this is -see TYPE_CHOICES above. Drives
+    # whether an approved, in-cap request shifts a boundary (Morning Late-In /
+    # Evening Early-Out) or not (Middle One-Hour). duration_minutes is now
+    # always FIXED_DURATION_MINUTES for new requests; kept editable in the
+    # model only so historical rows retain their originally-recorded value.
     type = models.TextField(choices=TYPE_CHOICES, null=True, blank=True, db_column="type")
-    duration_minutes = models.IntegerField(choices=DURATION_CHOICES, null=True, blank=True, db_column="duration_minutes")
+    duration_minutes = models.IntegerField(
+        choices=DURATION_CHOICES, null=True, blank=True, default=FIXED_DURATION_MINUTES, db_column="duration_minutes"
+    )
     hr_comment = models.TextField(null=True, blank=True, db_column="hr_comment")
     approved_by = models.TextField(null=True, blank=True, db_column="approved_by")
     approver_role = models.TextField(null=True, blank=True, db_column="approver_role")  # "hr" | "dept_head"

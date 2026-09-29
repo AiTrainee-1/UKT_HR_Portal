@@ -1,4 +1,12 @@
 import type { AttendanceSearchDay, AttendanceSearchPunch } from "@/lib/api-client/custom-hooks";
+import {
+  isEarlyOutDay,
+  lateDetectionFlags,
+  lateReasonText,
+  permissionTypeLabel,
+  type HalfDayCutoffs,
+  type LateFlagKind,
+} from "@/lib/late-detection";
 
 export type ViewMode = "day" | "week" | "month" | "range";
 
@@ -179,37 +187,41 @@ export function initialsOf(name: string): string {
   return letters.toUpperCase() || "?";
 }
 
-export type FlagTone = "late" | "halfShift" | "casual" | "leave" | "permission" | "autoPermission" | "compensation";
+export type FlagTone = LateFlagKind | "casual" | "leave" | "permission" | "compensation";
 
-export type DayFlag = { key: string; tone: FlagTone; label: string; detail?: string };
+export type DayFlag = { key: string; tone: FlagTone; label: string; detail?: string; title?: string };
+
+/** The day's first punch of any kind -the range endpoint pads the punch list to four with nulls at the end. */
+export function firstPunchOf(punches: AttendanceSearchPunch[]): string | null {
+  return punches.find((p): p is NonNullable<AttendanceSearchPunch> => p !== null)?.time ?? null;
+}
 
 /**
- * The badges a day earns, in the order they read best. Only flags that are true are returned, so a
- * plain day has none. The day's own status (Present / Absent ...) is shown separately.
+ * The badges a day earns, in the order they read best: Late / Early Out / which half a Half Day worked / Allowed
+ * or Excess permission / Middle One-Hour first (lateDetectionFlags), then the request, leave and comp-day flags. Only
+ * flags that are true are returned, so a plain day has none. The day's own status (Present / Absent ...) is shown
+ * separately. `cutoffs` are the Half-Day times from Settings → Attendance, used to say which half was worked.
  */
-export function dayFlags(day: AttendanceSearchDay): DayFlag[] {
-  const flags: DayFlag[] = [];
-  if (day.isLate)
-    flags.push({ key: "late", tone: "late", label: "Late", detail: day.lateAfternoon ? "after lunch" : undefined });
-  // A half-shift day already says so in its status; only flag it separately when the status differs.
-  if (day.isHalfShift && day.status !== "half_shift")
-    flags.push({ key: "half", tone: "halfShift", label: "Half shift" });
-  if (day.permissionEscalatedToHalfShift)
+export function dayFlags(day: AttendanceSearchDay, cutoffs: HalfDayCutoffs = {}): DayFlag[] {
+  const flags: DayFlag[] = lateDetectionFlags({ ...day, firstPunch: firstPunchOf(day.punches) }, cutoffs).map((f) => ({
+    key: f.key,
+    tone: f.kind,
+    label: f.label,
+    detail: f.detail,
+    title: f.title,
+  }));
+  if (day.permission) {
+    const typeLabel = permissionTypeLabel({ type: day.permission.type });
     flags.push({
-      key: "escalated",
-      tone: "halfShift",
-      label: "Permission limit reached",
-      detail: "counted as half shift",
+      key: "perm",
+      tone: "permission",
+      label: "Permission",
+      detail: typeLabel ?? day.permission.time ?? undefined,
+      title: typeLabel
+        ? `Approved ${typeLabel} request${day.permission.time ? ` for ${day.permission.time}` : ""}.`
+        : "Approved permission request with no type set.",
     });
-  const zones = [
-    day.permissionMorning && "Morning",
-    day.permissionAfternoon && "Afternoon",
-    day.permissionDeparture && "Departure",
-  ].filter(Boolean);
-  if (zones.length)
-    flags.push({ key: "auto", tone: "autoPermission", label: "Auto permission", detail: zones.join(" + ") });
-  if (day.permission)
-    flags.push({ key: "perm", tone: "permission", label: "Permission", detail: day.permission.time ?? undefined });
+  }
   if (day.casualLeave) flags.push({ key: "cl", tone: "casual", label: "Casual leave" });
   if (day.leave) flags.push({ key: "leave", tone: "leave", label: day.leave.type || "Leave" });
   if (day.isHalfDayLeave) flags.push({ key: "halfleave", tone: "leave", label: "Half-day leave" });
@@ -217,9 +229,10 @@ export function dayFlags(day: AttendanceSearchDay): DayFlag[] {
   return flags;
 }
 
-/** The reasons people gave for a day's leave / casual leave / permission, blanks dropped. */
+/** The reasons people gave for a day's leave / casual leave / permission, plus why it was flagged; blanks dropped. */
 export function dayNotes(day: AttendanceSearchDay): { key: string; label: string; text: string }[] {
   const notes = [
+    { key: "why", label: "Why flagged", text: lateReasonText(day) },
     { key: "cl", label: "Casual leave", text: day.casualLeave?.reason },
     { key: "leave", label: day.leave?.type || "Leave", text: day.leave?.reason },
     { key: "perm", label: "Permission", text: day.permission?.reason },
@@ -227,9 +240,9 @@ export function dayNotes(day: AttendanceSearchDay): { key: string; label: string
   return notes.flatMap((n) => (n.text?.trim() ? [{ key: n.key, label: n.label, text: n.text.trim() }] : []));
 }
 
-/** A day worth a second look: absent, half shift, or late. */
+/** A day worth a second look: absent, half shift, late or an early out. */
 export const isIssueDay = (d: AttendanceSearchDay): boolean =>
-  d.status === "absent" || d.status === "half_shift" || d.isLate;
+  d.status === "absent" || d.status === "half_shift" || d.isLate || isEarlyOutDay(d);
 
 export type Summary = {
   total: number;
@@ -239,6 +252,7 @@ export type Summary = {
   onLeave: number;
   holiday: number;
   late: number;
+  earlyOut: number;
   permission: number;
   issues: number;
 };
@@ -253,6 +267,7 @@ export function summarize(days: AttendanceSearchDay[]): Summary {
     onLeave: count((d) => d.status === "on_leave"),
     holiday: count((d) => d.status === "holiday"),
     late: count((d) => d.isLate),
+    earlyOut: count(isEarlyOutDay),
     permission: count((d) => !!d.permission),
     issues: count(isIssueDay),
   };

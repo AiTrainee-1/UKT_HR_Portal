@@ -10,6 +10,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import {
   useAttendanceSearch,
   useAttendanceSearchRange,
+  usePayrollSettings,
   type AttendanceSearchDay,
   type AttendanceSearchResult,
 } from "@/lib/api-client/custom-hooks";
@@ -38,6 +39,7 @@ import {
   type Summary,
   type ViewMode,
 } from "@/lib/attendance-search";
+import { LATE_FLAG_CLASS, isEarlyOutDay, type HalfDayCutoffs } from "@/lib/late-detection";
 import { attendanceStatusClass, TONE } from "@/lib/statusTones";
 import { cn } from "@/lib/utils";
 import {
@@ -69,12 +71,10 @@ const statusMeta = (status: string) =>
   STATUS_META[status] ?? { label: status, cell: "bg-slate-200 text-slate-500", bar: "bg-slate-300" };
 
 const FLAG_STYLES: Record<FlagTone, string> = {
-  late: TONE.caution,
-  halfShift: TONE.warning,
+  ...LATE_FLAG_CLASS,
   casual: "bg-indigo-100 text-indigo-800 border-indigo-200",
   leave: TONE.info,
   permission: TONE.accent,
-  autoPermission: "bg-emerald-100 text-emerald-800 border-emerald-200",
   compensation: "bg-teal-100 text-teal-800 border-teal-200",
 };
 
@@ -125,7 +125,7 @@ function IntroPanel() {
     {
       icon: <AlertTriangle size={16} />,
       title: "What happened",
-      text: "Late marks, leave, permission and half shifts",
+      text: "Late marks, early outs, leave, permission and half shifts",
     },
   ];
   return (
@@ -218,7 +218,8 @@ function StatusBar({ summary }: { summary: Summary }) {
 }
 
 function DayCell({ day, onPick }: { day: AttendanceSearchDay; onPick: (date: string) => void }) {
-  const label = `${formatDisplayDate(day.date)} · ${statusMeta(day.status).label}${day.isLate ? " · late" : ""}`;
+  const earlyOut = isEarlyOutDay(day);
+  const label = `${formatDisplayDate(day.date)} · ${statusMeta(day.status).label}${day.isLate ? " · late" : ""}${earlyOut ? " · early out" : ""}`;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -229,7 +230,7 @@ function DayCell({ day, onPick }: { day: AttendanceSearchDay; onPick: (date: str
           className={cn(
             "flex h-7 w-7 items-center justify-center rounded-md text-[10px] font-bold tabular-nums transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-900",
             statusMeta(day.status).cell,
-            day.isLate && "ring-2 ring-orange-400 ring-offset-1",
+            (day.isLate || earlyOut) && "ring-2 ring-orange-400 ring-offset-1",
           )}
         >
           {parseYMD(day.date).getDate()}
@@ -243,6 +244,8 @@ function DayCell({ day, onPick }: { day: AttendanceSearchDay; onPick: (date: str
 function FlagBadge({ flag }: { flag: DayFlag }) {
   return (
     <span
+      title={flag.title}
+      data-testid={`day-flag-${flag.tone}`}
       className={cn(
         "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-bold",
         FLAG_STYLES[flag.tone],
@@ -254,10 +257,20 @@ function FlagBadge({ flag }: { flag: DayFlag }) {
   );
 }
 
-function DayRow({ day, isToday, flashing }: { day: AttendanceSearchDay; isToday: boolean; flashing: boolean }) {
+function DayRow({
+  day,
+  isToday,
+  flashing,
+  cutoffs,
+}: {
+  day: AttendanceSearchDay;
+  isToday: boolean;
+  flashing: boolean;
+  cutoffs: HalfDayCutoffs;
+}) {
   const punches = day.punches.filter((p): p is NonNullable<typeof p> => p !== null);
   const span = punchSpanMinutes(day.punches);
-  const flags = dayFlags(day);
+  const flags = dayFlags(day, cutoffs);
   const notes = dayNotes(day);
   const d = parseYMD(day.date);
   const tone = attendanceStatusClass(day.status);
@@ -418,6 +431,13 @@ export default function AttendancePunchSearch() {
   const days = rangeData?.days;
   const summary = useMemo(() => summarize(days ?? []), [days]);
 
+  // The Half-Day times from Settings → Attendance, to say which half a Half Shift day was worked in.
+  const { data: settings } = usePayrollSettings();
+  const halfDayCutoffs: HalfDayCutoffs = {
+    firstHalfEnd: settings?.halfDayFirstHalfEndTime,
+    secondHalfStart: settings?.halfDaySecondHalfStartTime,
+  };
+
   const today = todayStr();
   const chosenPreset = activePreset({ mode, date, weekAnchor, month, rangeStart, rangeEnd });
   const applyPreset = (key: PresetKey) => {
@@ -576,13 +596,14 @@ export default function AttendancePunchSearch() {
             {rangeData.days.length > 1 && (
               <div className="space-y-4 border-t bg-gray-50/70 p-4 sm:p-5" data-testid="attendance-summary">
                 <StatusBar summary={summary} />
-                <div className="grid grid-cols-2 gap-2 max-sm:[&>:last-child]:col-span-2 sm:grid-cols-4 lg:grid-cols-7">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">
                   <StatTile label="Present" value={summary.present} dot="bg-green-500" />
                   <StatTile label="Half shift" value={summary.halfShift} dot="bg-amber-400" />
                   <StatTile label="Absent" value={summary.absent} dot="bg-red-500" />
                   <StatTile label="On leave" value={summary.onLeave} dot="bg-blue-500" />
                   <StatTile label="Holiday" value={summary.holiday} dot="bg-slate-300" />
                   <StatTile label="Late" value={summary.late} dot="bg-orange-400" />
+                  <StatTile label="Early out" value={summary.earlyOut} dot="bg-orange-300" />
                   <StatTile label="Permission" value={summary.permission} dot="bg-purple-500" />
                 </div>
                 <div>
@@ -592,7 +613,7 @@ export default function AttendancePunchSearch() {
                     ))}
                   </div>
                   <p className="mt-2 text-[11px] text-gray-500">
-                    Select a day to jump to it. An orange outline marks a late arrival.
+                    Select a day to jump to it. An orange outline marks a late arrival or an early out.
                   </p>
                 </div>
               </div>
@@ -631,7 +652,13 @@ export default function AttendancePunchSearch() {
               <Panel icon={<CalendarDays size={24} />} title="No issues in this period" />
             ) : (
               shown.map((d) => (
-                <DayRow key={d.date} day={d} isToday={d.date === today} flashing={flash?.date === d.date} />
+                <DayRow
+                  key={d.date}
+                  day={d}
+                  isToday={d.date === today}
+                  flashing={flash?.date === d.date}
+                  cutoffs={halfDayCutoffs}
+                />
               ))
             )}
           </div>
@@ -649,8 +676,8 @@ export default function AttendancePunchSearch() {
             <RefreshButton />
           </div>
           <p className="mt-0.5 max-w-2xl text-sm text-muted-foreground">
-            Find an employee by code or name to see their shift, every punch, and any late, leave or permission, for a
-            day, a week, a month or any range.
+            Find an employee by code or name to see their shift, every punch, and any late, early out, leave or
+            permission, for a day, a week, a month or any range.
           </p>
         </div>
 

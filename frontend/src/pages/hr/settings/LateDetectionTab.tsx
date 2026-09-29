@@ -21,25 +21,33 @@ export default function LateDetectionTab() {
 
   const [lateSlabs, setLateSlabs] = useState<{ fromLates: number; deductionShifts: number }[]>([]);
 
-  // Without Permission -a separate pool from Late Attendance above.
-  const [wpFreeAllowance, setWpFreeAllowance] = useState(0);
-
-  const [wpSlabs, setWpSlabs] = useState<{ fromLates: number; deductionShifts: number }[]>([]);
-
-  // Daily/weekly caps on the auto-detected Permission zone.
-  const [maxPermissionsPerDay, setMaxPermissionsPerDay] = useState(1);
-
-  const [maxPermissionsPerWeek, setMaxPermissionsPerWeek] = useState(2);
+  // Permission monthly cap -the only cap now (replaces the old daily/weekly
+  // auto-detect caps and the separate Without Permission pool).
+  const [permissionMonthlyCap, setPermissionMonthlyCap] = useState(3);
 
   useEffect(() => {
     if (!payrollSettingsData) return;
     setLateFreeAllowance(payrollSettingsData.lateFreeAllowance ?? 3);
     setLateSlabs(payrollSettingsData.lateDeductionSlabs ?? []);
-    setWpFreeAllowance(payrollSettingsData.withoutPermissionFreeAllowance ?? 0);
-    setWpSlabs(payrollSettingsData.withoutPermissionDeductionSlabs ?? []);
-    setMaxPermissionsPerDay(payrollSettingsData.maxPermissionsPerDay ?? 1);
-    setMaxPermissionsPerWeek(payrollSettingsData.maxPermissionsPerWeek ?? 2);
+    setPermissionMonthlyCap(payrollSettingsData.permissionMonthlyCap ?? 3);
   }, [payrollSettingsData]);
+
+  // The two detection switches live on the Attendance tab (they belong to that tab's permission group, so saving
+  // them from here would be refused for anyone who can edit only this tab) -shown here read-only so it is clear
+  // what currently feeds the pool.
+  // undefined = the server did not report it (unknown), which is not the same as reporting it off.
+  const morningOn = payrollSettingsData?.morningLateInEnabled;
+  const eveningOn = payrollSettingsData?.eveningEarlyOutEnabled;
+  const switchWord = (on: boolean | undefined) => (on === undefined ? "not reported" : on ? "on" : "off");
+  const switchChip = (on: boolean | undefined) =>
+    on === true ? "bg-green-100 text-green-800 border-green-200" : "bg-slate-100 text-slate-500 border-slate-200";
+  // The cap is the same: an older backend has none, so the box would only show this page's default of 3.
+  const capReported = payrollSettingsData?.permissionMonthlyCap != null;
+
+  // The Permission monthly cap is a company-wide rule: a branch-assigned login can see it but the server refuses (403)
+  // any save that carries it, so it is shown read-only and never sent. An older backend does not say, and is treated
+  // as editable. lateFreeAllowance and the slab table are not company-wide rules and behave as before.
+  const companyWideEditable = payrollSettingsData?.companyWideRulesEditable !== false;
 
   const saveLateDetection = async () => {
     // Thresholds must be unique and ordered before saving -the backend
@@ -71,8 +79,12 @@ export default function LateDetectionTab() {
         title: "Late Detection policy saved",
         description: "Applies the next time payroll is generated. Already-generated payroll is untouched.",
       });
-    } catch {
-      toast({ title: "Failed to save Late Detection policy", variant: "destructive" });
+    } catch (err) {
+      toast({
+        title: "Failed to save Late Detection policy",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
     }
   };
 
@@ -88,48 +100,26 @@ export default function LateDetectionTab() {
     return d;
   };
 
-  const saveWithoutPermission = async () => {
-    const seen = new Set<number>();
-    for (const s of wpSlabs) {
-      if (
-        !Number.isFinite(s.fromLates) ||
-        s.fromLates < 0 ||
-        !Number.isFinite(s.deductionShifts) ||
-        s.deductionShifts < 0
-      ) {
-        toast({ title: "Every slab needs a non-negative count and deduction", variant: "destructive" });
-        return;
-      }
-      if (seen.has(s.fromLates)) {
-        toast({ title: `Duplicate threshold: ${s.fromLates} appears more than once`, variant: "destructive" });
-        return;
-      }
-      seen.add(s.fromLates);
+  const savePermissionPolicy = async () => {
+    if (!companyWideEditable || !capReported) return; // nothing on this sub-tab to save (the button is disabled too)
+    // The server refuses anything outside 0-31 (a month has at most 31 days); say so before sending.
+    if (!Number.isInteger(permissionMonthlyCap) || permissionMonthlyCap < 0 || permissionMonthlyCap > 31) {
+      toast({ title: "Permission monthly cap must be a whole number from 0 to 31", variant: "destructive" });
+      return;
     }
     try {
-      await updatePayrollSettings.mutateAsync({
-        withoutPermissionFreeAllowance: wpFreeAllowance,
-        withoutPermissionDeductionSlabs: [...wpSlabs].sort((a, b) => a.fromLates - b.fromLates),
-        maxPermissionsPerDay,
-        maxPermissionsPerWeek,
-      } as never);
+      await updatePayrollSettings.mutateAsync({ permissionMonthlyCap } as never);
       toast({
-        title: "Without Permission policy saved",
-        description: "Applies the next time payroll is generated. Already-generated payroll is untouched.",
+        title: "Permission policy saved",
+        description: "Applies the next time an attendance day is computed or payroll is generated.",
       });
-    } catch {
-      toast({ title: "Failed to save Without Permission policy", variant: "destructive" });
+    } catch (err) {
+      toast({
+        title: "Failed to save Permission policy",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
     }
-  };
-
-  const previewWpDeduction = (billable: number) => {
-    const sorted = [...wpSlabs].sort((a, b) => a.fromLates - b.fromLates);
-    let d = 0;
-    for (const s of sorted) {
-      if (billable >= s.fromLates) d = s.deductionShifts;
-      else break;
-    }
-    return d;
   };
 
   return (
@@ -154,10 +144,23 @@ export default function LateDetectionTab() {
             </CardHeader>
             <CardContent className="text-xs text-slate-600 leading-relaxed space-y-2">
               <p>
-                Every month, an employee's <strong>late arrivals</strong> and their{" "}
-                <strong>approved Permission requests</strong> are added into a single shared pool. The first few are
-                free (the allowance below). Everything past that is "billable", and the slab table decides how many
-                shifts get cut.
+                Every month, an employee's <strong>Morning Late-In</strong> occurrences,{" "}
+                <strong>Evening Early-Out</strong> occurrences (if that's enabled on the Attendance tab), and any
+                approved <strong>Permission</strong> beyond the monthly cap (Permission Policy tab) are added into a
+                single shared pool. An in-cap approved Permission never reaches this pool at all -it already shifted the
+                boundary and prevented the lateness. A day that is late <em>and</em> carries an Excess permission on
+                that same edge counts once, not twice. The first few in the pool are free (the allowance below);
+                everything past that is "billable", and the slab table decides how many shifts get cut.
+              </p>
+              <p className="flex flex-wrap items-center gap-2" data-testid="late-detection-switch-status">
+                <span className="font-semibold text-slate-700">Currently counting:</span>
+                <span className={`rounded-md border px-2 py-0.5 font-semibold ${switchChip(morningOn)}`}>
+                  Morning Late-In {switchWord(morningOn)}
+                </span>
+                <span className={`rounded-md border px-2 py-0.5 font-semibold ${switchChip(eveningOn)}`}>
+                  Evening Early-Out {switchWord(eveningOn)}
+                </span>
+                <span className="text-slate-500">Switch either on or off in Settings → Attendance.</span>
               </p>
               <p className="text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">
                 Changing these values affects <strong>future</strong> payroll generation only. Payroll already generated
@@ -175,10 +178,10 @@ export default function LateDetectionTab() {
             </CardHeader>
             <CardContent className="space-y-5">
               <div className="space-y-1.5 max-w-md">
-                <Label className="text-xs">Free Allowance -lates + permissions allowed per month</Label>
+                <Label className="text-xs">Free Allowance -occurrences allowed per month</Label>
                 <p className="text-[11px] text-gray-500 -mt-1">
-                  No deduction at all until an employee exceeds this many in a calendar month. This is also the monthly
-                  Permission limit, since both draw on the same pool.
+                  No deduction at all until an employee exceeds this many Morning Late-In / Evening Early-Out / excess-
+                  Permission occurrences, combined, in a calendar month.
                 </p>
                 <Input
                   type="number"
@@ -291,7 +294,7 @@ export default function LateDetectionTab() {
                     const cut = previewLateDeduction(billable);
                     return (
                       <div key={total} className="bg-white rounded border border-blue-100 p-2">
-                        <p className="text-[11px] text-gray-500">{total} lates + permissions</p>
+                        <p className="text-[11px] text-gray-500">{total} occurrences</p>
                         <p className="font-bold text-blue-900">
                           {cut > 0 ? `−${cut} shift${cut === 1 ? "" : "s"}` : "No deduction"}
                         </p>
@@ -312,26 +315,21 @@ export default function LateDetectionTab() {
 
       {lateDetectionSubTab === "permission" && (
         <>
-          {/* ── Without Permission -a separate pool ── */}
           <Card className="border-0 shadow-sm bg-slate-50/60">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-bold flex items-center gap-2">
-                <Info size={15} className="text-slate-500" /> How the Permission Zone Works
+                <Info size={15} className="text-slate-500" /> How Permission Works
               </CardTitle>
             </CardHeader>
             <CardContent className="text-xs text-slate-600 leading-relaxed space-y-2">
               <p>
-                Staff only. An arrival, lunch return, or departure that's past the ordinary Late window (see the
-                Attendance tab's Permission Zone Width) but still inside the extra Permission window is{" "}
-                <strong>auto-detected as Permission</strong> -purely from punch timing, whether or not a formal
-                Permission request was ever submitted. Only past both windows does the day become Half Shift.
-              </p>
-              <p>
-                Once an edge lands in the Permission zone, a submitted+approved <strong>Permission</strong>
-                request covering that time labels it <strong>With Permission</strong>; otherwise it's
-                <strong> Without Permission</strong> here, tracked separately from ordinary Late Attendance above. Every
-                employee may have at most Max-Permissions-Per-Day/Week edges land in this zone (set below) -beyond that,
-                the extra edge escalates to Half Shift instead.
+                Staff only. Exactly 3 types -<strong>Morning Late-In</strong>, <strong>Evening Early-Out</strong>, and{" "}
+                <strong>Middle One-Hour</strong> -each a fixed 60 minutes. An employee can submit as many as they like;
+                HR can approve a 4th (or later) one in a month, but only the first <em>N</em> approved that calendar
+                month (the cap below, earliest-first) actually shift that day's Late Detection boundary. Beyond the cap,
+                an approved Morning Late-In/Evening Early-Out permission has no effect -that day is judged against the
+                plain shift time, and if it's late/early, it joins the same pool as an ordinary unexcused occurrence
+                (Late Detection tab). Middle One-Hour never shifts anything, in or out of the cap.
               </p>
             </CardContent>
           </Card>
@@ -343,166 +341,40 @@ export default function LateDetectionTab() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-5">
-              <div className="grid sm:grid-cols-2 gap-4 p-3 bg-emerald-50/50 border border-emerald-100 rounded-lg max-w-lg">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Max Permissions Per Day</Label>
-                  <p className="text-[11px] text-gray-500 -mt-1">
-                    Edges (morning, afternoon, departure) that may resolve to Permission on the same day.
-                  </p>
-                  <Input
-                    type="number"
-                    min={0}
-                    className="max-w-[140px]"
-                    value={maxPermissionsPerDay}
-                    onChange={(e) => setMaxPermissionsPerDay(Math.max(0, Number(e.target.value) || 0))}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Max Permissions Per Week</Label>
-                  <p className="text-[11px] text-gray-500 -mt-1">
-                    Total Permission-zone edges allowed across an ISO week (Mon-Sun).
-                  </p>
-                  <Input
-                    type="number"
-                    min={0}
-                    className="max-w-[140px]"
-                    value={maxPermissionsPerWeek}
-                    onChange={(e) => setMaxPermissionsPerWeek(Math.max(0, Number(e.target.value) || 0))}
-                  />
-                </div>
-                <p className="text-[11px] text-gray-500 sm:col-span-2">
-                  Beyond either cap, the extra edge escalates from Permission to Half Shift for that day.
-                </p>
-              </div>
-
               <div className="space-y-1.5 max-w-md">
-                <Label className="text-xs">Free Allowance -occurrences allowed per month</Label>
+                <Label className="text-xs">Permission Monthly Cap</Label>
                 <p className="text-[11px] text-gray-500 -mt-1">
-                  No deduction at all until an employee exceeds this many Permission-zone-without-a-request occurrences
-                  in a calendar month. Ships at 0 -every occurrence is billable unless raised here.
+                  Approved permissions per employee per calendar month that actually protect that day. A request beyond
+                  this is still approvable -it just stops being protective.
                 </p>
                 <Input
                   type="number"
                   min={0}
+                  max={31}
                   className="max-w-[140px]"
-                  value={wpFreeAllowance}
-                  onChange={(e) => setWpFreeAllowance(Math.max(0, Number(e.target.value) || 0))}
+                  value={permissionMonthlyCap}
+                  disabled={!companyWideEditable || !capReported}
+                  onChange={(e) =>
+                    setPermissionMonthlyCap(Math.min(31, Math.max(0, Math.floor(Number(e.target.value)) || 0)))
+                  }
                 />
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <div>
-                    <Label className="text-xs">Deduction Slabs</Label>
-                    <p className="text-[11px] text-gray-500">
-                      Same rule as Late Attendance's table -highest matching row wins, last row holds beyond it. Empty
-                      by default, so this pool deducts nothing until rows are added here.
-                    </p>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="gap-1.5"
-                    onClick={() =>
-                      setWpSlabs((s) => [
-                        ...s,
-                        {
-                          fromLates: (s.length ? Math.max(...s.map((r) => r.fromLates)) : 0) + 1,
-                          deductionShifts: 0.25,
-                        },
-                      ])
-                    }
-                  >
-                    <Plus size={13} /> Add Slab
-                  </Button>
-                </div>
-
-                {wpSlabs.length === 0 ? (
-                  <div className="text-xs text-gray-500 border border-dashed rounded-lg p-4 text-center">
-                    No slabs -Without Permission occurrences currently cost nothing beyond being recorded.
-                  </div>
-                ) : (
-                  <div className="border rounded-lg overflow-hidden">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="bg-slate-50 text-left text-xs text-slate-600">
-                          <th className="px-3 py-2 font-semibold">From this many occurrences</th>
-                          <th className="px-3 py-2 font-semibold">Deduct this many shifts</th>
-                          <th className="px-3 py-2 font-semibold text-right">Remove</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y">
-                        {wpSlabs.map((slab, i) => (
-                          <tr key={i} className="hover:bg-slate-50/60">
-                            <td className="px-3 py-2">
-                              <Input
-                                type="number"
-                                min={0}
-                                className="h-8 max-w-[110px]"
-                                value={slab.fromLates}
-                                onChange={(e) =>
-                                  setWpSlabs((s) =>
-                                    s.map((r, j) =>
-                                      j === i ? { ...r, fromLates: Math.max(0, Number(e.target.value) || 0) } : r,
-                                    ),
-                                  )
-                                }
-                              />
-                            </td>
-                            <td className="px-3 py-2">
-                              <Input
-                                type="number"
-                                min={0}
-                                step={0.25}
-                                className="h-8 max-w-[110px]"
-                                value={slab.deductionShifts}
-                                onChange={(e) =>
-                                  setWpSlabs((s) =>
-                                    s.map((r, j) =>
-                                      j === i ? { ...r, deductionShifts: Math.max(0, Number(e.target.value) || 0) } : r,
-                                    ),
-                                  )
-                                }
-                              />
-                            </td>
-                            <td className="px-3 py-2 text-right">
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                className="h-8 w-8 text-rose-600 hover:text-rose-800"
-                                onClick={() => setWpSlabs((s) => s.filter((_, j) => j !== i))}
-                              >
-                                <Trash2 size={14} />
-                              </Button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                {!companyWideEditable && (
+                  <p data-testid="company-wide-note-cap" className="text-[11px] font-medium text-slate-500">
+                    Company-wide rule - set by an administrator
+                  </p>
+                )}
+                {companyWideEditable && payrollSettingsData && !capReported && (
+                  <p data-testid="cap-not-reported" className="text-[11px] font-medium text-slate-500">
+                    Not reported by the server, so it cannot be changed here
+                  </p>
                 )}
               </div>
 
-              <div className="p-3 bg-blue-50/60 border border-blue-100 rounded-lg">
-                <p className="text-xs font-bold text-blue-900 mb-2">Worked example -with the values above</p>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                  {[0, 1, 2, 3, 4, 6, 8, 10].map((total) => {
-                    const billable = Math.max(0, total - wpFreeAllowance);
-                    const cut = previewWpDeduction(billable);
-                    return (
-                      <div key={total} className="bg-white rounded border border-blue-100 p-2">
-                        <p className="text-[11px] text-gray-500">{total} occurrences</p>
-                        <p className="font-bold text-blue-900">
-                          {cut > 0 ? `−${cut} shift${cut === 1 ? "" : "s"}` : "No deduction"}
-                        </p>
-                        {billable > 0 && <p className="text-[10px] text-gray-400">{billable} billable</p>}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <Button size="sm" onClick={saveWithoutPermission} disabled={updatePayrollSettings.isPending}>
+              <Button
+                size="sm"
+                onClick={savePermissionPolicy}
+                disabled={updatePayrollSettings.isPending || !companyWideEditable || !capReported}
+              >
                 {updatePayrollSettings.isPending ? "Saving…" : "Save Permission Policy"}
               </Button>
             </CardContent>

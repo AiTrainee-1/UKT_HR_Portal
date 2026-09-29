@@ -73,13 +73,15 @@ export type PayrollBreakdownDay = {
   // staff-only fields
   status?: "present" | "absent" | "paid_leave" | "unpaid_leave";
   isLate?: boolean;
-  // Set only when isLate/half-shift-late is true — the specific rule and
-  // times that fired it, e.g. "Late morning (Without Permission): arrived
-  // 09:40, deadline 09:15". See AttendanceDayRecord.late_reason.
+  // Set only when isLate/isEarlyOut is true — the specific rule and times
+  // that fired it, e.g. "Morning Late-In: arrived 09:40, deadline 09:15".
+  // See AttendanceDayRecord.late_reason.
   lateReason?: string | null;
-  // True when the day's lateness is specifically a Without Permission
-  // occurrence (see Settings → Late Detection) rather than ordinary Late
-  // Attendance — lateReason explains which.
+  // Evening Early-Out (Settings → Attendance) — only ever true when that
+  // switch is on.
+  isEarlyOut?: boolean;
+  // Legacy: payrolls generated before the Late/Permission rewrite flagged a
+  // day "Without Permission" instead of ordinary Late. Never sent any more.
   withoutPermission?: boolean;
   isHalfShift?: boolean;
   shiftsCompleted?: number;
@@ -102,7 +104,8 @@ export type PayrollBreakdown = {
   // Which attendance calculation produced this payroll (strict | simple)
   attendanceMode?: "strict" | "simple" | null;
   simpleHalfShiftCutoff?: string | null;
-  shiftPunctualityWindowMinutes?: number | null;
+  halfDayFirstHalfEndTime?: string | null;
+  halfDaySecondHalfStartTime?: string | null;
   // staff
   shift?: {
     id?: number | null;
@@ -135,6 +138,8 @@ export type PayrollBreakdown = {
     unpaidLeaveDays?: number;
     absentDays?: number;
     lateDays?: number;
+    earlyOutDays?: number;
+    // Legacy (payrolls generated before the rewrite only).
     withoutPermissionDays?: number;
     halfShiftDays?: number;
     fullShiftDays?: number;
@@ -168,12 +173,31 @@ export type PayrollBreakdown = {
     advances: number;
     advanceDetails: { advanceId: number; repaymentId: number; amount: number; notes?: string | null }[];
     lateShiftPenalty?: number;
+    // Staff: combined Morning Late-In / Evening Early-Out / excess-Permission
+    // pool — see PayrollSettings.late_free_allowance / late_deduction_slabs.
+    // Only the first three fields below exist on a Production payroll (its own
+    // separate policy) and on a staff payroll generated before the rewrite
+    // (which also had permissionsUsed) — every other field may be absent, so
+    // read it through latePoolView() rather than directly.
     lateSummary?: {
       totalLateCount: number;
-      permissionsUsed: number;
       billableLateCount: number;
       shiftDeductions: number;
+      lateInCount?: number;
+      earlyOutCount?: number;
+      excessPermissionCount?: number;
+      freeAllowanceUsed?: number;
+      // Flagged days before the "a late day with an Excess permission counts once" de-duplication.
+      lateInDays?: number;
+      earlyOutDays?: number;
+      freeAllowance?: number;
+      permissionMonthlyCap?: number;
+      // Legacy (pre-rewrite staff payrolls only).
+      permissionsUsed?: number;
     } | null;
+    // Legacy: the separate "Without Permission" pool retired by the rewrite.
+    // A payroll generated before it still carries this deduction, so the
+    // drawer keeps showing it or the line items would not add up.
     withoutPermissionPenalty?: number;
     withoutPermissionSummary?: {
       totalCount: number;
@@ -607,7 +631,6 @@ export type PayrollSettingsItem = {
   attendanceMode: "strict" | "simple";
   simpleHalfShiftCutoff: string;
   simpleGraceMinutes: number;
-  shiftPunctualityWindowMinutes: number;
   lastPunchPostShiftGraceHours: number;
   firstPunchPreShiftBufferHours: number;
   // Production attendance windows (1.5-shift day)
@@ -617,17 +640,19 @@ export type PayrollSettingsItem = {
   prodSecondHalfEnd: string;
   prodExtraStart: string;
   prodExtraEnd: string;
-  // Half Shift late reference (staff) -a Half Shift day is only additionally
-  // flagged Late when the first punch is strictly after this time.
-  halfShiftLateReferenceTime?: string;
-  // Auto-Permission zone (arrival/departure) -extra minutes past
-  // shiftPunctualityWindowMinutes during which a punch is auto-detected as
-  // Permission instead of Half Shift.
-  permissionWindowMinutes?: number;
-  // Afternoon (Night Late) lunch-return zone -strict mode only.
+  // Late Detection: Morning Late-In / Evening Early-Out (staff) -judged
+  // against the shift's own start/end + grace, or that day's permission-
+  // shifted effective boundary. Morning ships on; Evening ships off.
+  morningLateInEnabled?: boolean;
+  eveningEarlyOutEnabled?: boolean;
+  // Half-Day Detection (staff) -a punch before this counts as the Morning
+  // Half attended; a punch at/after this counts as the Evening Half.
+  halfDayFirstHalfEndTime?: string;
+  halfDaySecondHalfStartTime?: string;
+  // Afternoon (Night Late) lunch-return zone -strict mode only, untouched
+  // axis, purely informational (can no longer demote the day).
   afternoonLateWindowMinutes?: number;
   afternoonPermissionWindowMinutes?: number;
-  afternoonLateCanCauseHalfShift?: boolean;
   // Defaults pre-filled into a NEW shift; Manage Shift still owns the real
   // per-shift times (including start/end), so these never retro-change
   // existing shifts.
@@ -635,16 +660,19 @@ export type PayrollSettingsItem = {
   defaultShiftFirstHalfEnd?: string;
   defaultShiftLunchDurationMinutes?: number;
   defaultShiftLunchGraceMinutes?: number;
-  // Late Detection policy -lates and approved permissions share one pool.
+  // Late Detection deduction policy -Morning Late-In, Evening Early-Out,
+  // and excess Permissions (beyond permissionMonthlyCap) share one pool.
   lateFreeAllowance?: number;
   lateDeductionSlabs?: { fromLates: number; deductionShifts: number }[];
-  // Permission policy -separate pool: Permission-zone edges (morning,
-  // afternoon, departure) with no approved request covering them.
-  withoutPermissionFreeAllowance?: number;
-  withoutPermissionDeductionSlabs?: { fromLates: number; deductionShifts: number }[];
-  // Daily/weekly caps on the auto-detected Permission zone.
-  maxPermissionsPerDay?: number;
-  maxPermissionsPerWeek?: number;
+  // Permission policy -approved permissions per employee per calendar month
+  // that actually protect that day (shift the Late Detection boundary).
+  permissionMonthlyCap?: number;
+  // False for a branch-assigned HR login: the Late Detection switches, the
+  // Half-Day times and permissionMonthlyCap are company-wide rules a branch
+  // login can see but not change (the server answers 403 company_wide_rule
+  // if any of them is sent). True for an admin / branch-less login; absent on
+  // an older backend, which is treated as editable.
+  companyWideRulesEditable?: boolean;
   prodPfEfEnabled?: boolean;
   prodPfEfRules: { label: string; minSalary: number; maxSalary: number; pfRate: number; efRate: number }[];
   // Feature toggles (Settings master switches)

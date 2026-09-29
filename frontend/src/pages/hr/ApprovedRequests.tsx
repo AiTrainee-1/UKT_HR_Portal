@@ -17,6 +17,7 @@ import {
   useListOutpassRequests, useUpdateOutpassRequestStatus,
   getListOutpassRequestsQueryKey,
 } from "@/lib/api-client";
+import { permissionOutcome, permissionTypeKey, permissionTypeLabel } from "@/lib/late-detection";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Calendar, Clock, CheckCircle, XCircle, RefreshCw, Bell, DoorOpen, MapPin, User, FileText, Building2, Briefcase } from "lucide-react";
@@ -30,10 +31,15 @@ const PERIOD_LABELS: Record<Period, string> = {
   all: "All",
 };
 
-type UnifiedItem =
-  | { kind: "leave";       id: number; employeeName: string; employeeId: number; createdAt: string; status: string; label: string; meta: string }
-  | { kind: "permission";  id: number; employeeName: string; employeeId: number; createdAt: string; status: string; label: string; meta: string }
-  | { kind: "outpass";     id: number; employeeName: string; employeeId: number; createdAt: string; status: string; label: string; meta: string };
+type UnifiedItem = {
+  kind: "leave" | "permission" | "outpass";
+  id: number; employeeName: string; employeeId: number; createdAt: string; status: string; label: string; meta: string;
+  // Permission only: the policy's own words for where the request stands (Pending / Allowed / Not Allowed /
+  // Overdue / Excess) in place of the raw status, and whether it still has no type (which HR must set before an
+  // approval can shift anything -done on the Permissions tab, not with the quick Approve button).
+  outcome?: { label: string; className: string };
+  needsType?: boolean;
+};
 
 const STATUS_CLS: Record<string, string> = {
   pending:  TONE.warning,
@@ -99,8 +105,10 @@ export default function ApprovedRequests() {
       employeeId:   p.employeeId,
       createdAt:    p.createdAt ?? "",
       status:       p.status,
-      label:        "Permission Request",
+      label:        `Permission · ${permissionTypeLabel(p) ?? "Type not set"}`,
       meta:         `${p.date}${p.permissionTime ? ` at ${p.permissionTime}` : ""}${p.reason ? ` · ${p.reason}` : ""}`,
+      outcome:      permissionOutcome(p),
+      needsType:    permissionTypeKey(p) == null,
     })),
     ...(outpasses ?? []).filter(o => o.source === "manual").map(o => ({
       kind:         "outpass" as const,
@@ -279,7 +287,9 @@ export default function ApprovedRequests() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <p className="font-bold text-sm text-gray-900">{item.employeeName}</p>
-                          <Badge className={`text-xs border ${statusCls}`}>{item.status}</Badge>
+                          <Badge className={`text-xs border ${item.outcome?.className ?? statusCls}`}>
+                            {item.outcome?.label ?? item.status}
+                          </Badge>
                           <span className="text-xs font-medium text-gray-500">{item.label}</span>
                         </div>
                         <p className="text-xs text-gray-500 mt-0.5 truncate">{item.meta}</p>
@@ -289,9 +299,11 @@ export default function ApprovedRequests() {
                         <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
                           <Button size="sm" variant="outline"
                             className="h-7 gap-1 text-green-700 border-green-200 hover:bg-green-50 text-xs px-2"
-                            onClick={() => item.kind === "leave" ? approveLeave(item.id) : item.kind === "permission" ? approvePerm(item.id) : approveOutpass(item.id)}
+                            onClick={() => item.kind === "leave" ? approveLeave(item.id)
+                              : item.kind === "permission" ? (item.needsType ? goToDetail(item) : approvePerm(item.id))
+                              : approveOutpass(item.id)}
                             disabled={updateLeaveMutation.isPending || updatePermMutation.isPending || updateOutpassMutation.isPending}>
-                            <CheckCircle size={12} /> Approve
+                            <CheckCircle size={12} /> {item.kind === "permission" && item.needsType ? "Set type & approve" : "Approve"}
                           </Button>
                           <Button size="sm" variant="outline"
                             className="h-7 gap-1 text-red-600 border-red-200 hover:bg-red-50 text-xs px-2"

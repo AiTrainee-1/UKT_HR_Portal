@@ -221,10 +221,10 @@ class LateDeductionSlabTests(TestCase):
     def test_slabs_field_selects_the_pool(self):
         s = SimpleNamespace(
             late_deduction_slabs=[{"fromLates": 1, "deductionShifts": 1}],
-            without_permission_deduction_slabs=[{"fromLates": 1, "deductionShifts": 3}],
+            prod_late_deduction_slabs=[{"fromLates": 1, "deductionShifts": 3}],
         )
         self.assertEqual(late_shift_deduction(1, s), Decimal("1"))
-        self.assertEqual(late_shift_deduction(1, s, slabs_field="without_permission_deduction_slabs"), Decimal("3"))
+        self.assertEqual(late_shift_deduction(1, s, slabs_field="prod_late_deduction_slabs"), Decimal("3"))
 
     def test_shipped_default_is_a_quarter_shift_per_three_lates(self):
         ps = PayrollSettings.get()
@@ -249,8 +249,7 @@ class StaffPayrollTests(TestCase):
             esi_applicable_below=Decimal("21000"),
             late_free_allowance=3,
             late_deduction_slabs=[],
-            without_permission_free_allowance=0,
-            without_permission_deduction_slabs=[],
+            permission_monthly_cap=3,
             attendance_mode="simple",
             compensation_feature_enabled=True,
         )
@@ -438,18 +437,35 @@ class StaffPayrollTests(TestCase):
         lateness = _breakdown(emp)["deductions"]["lateSummary"]
         self.assertEqual((lateness["totalLateCount"], lateness["billableLateCount"]), (5, 2))
 
-    def test_approved_permissions_join_the_same_late_pool(self):
-        _configure(late_free_allowance=3, late_deduction_slabs=[{"fromLates": 1, "deductionShifts": 0.5}])
+    def test_only_permissions_beyond_the_monthly_cap_join_the_late_pool(self):
+        # Cap is 3 (default) -6 approved permissions this month means 3 are
+        # excess; the other 3 are in-cap and protective, so they contribute
+        # nothing to the pool at all.
+        _configure(
+            late_free_allowance=3,
+            late_deduction_slabs=[{"fromLates": 1, "deductionShifts": 0.5}],
+            permission_monthly_cap=3,
+        )
         emp = _staff()
         self._late_days(emp, 2)
-        for day in (2, 3, 4):
+        for day in range(2, 8):
             EmployeePermission.objects.create(employee=emp, date=date(2026, 2, day), status="approved")
-        # A pending and a rejected permission must not count.
-        EmployeePermission.objects.create(employee=emp, date=date(2026, 2, 5), status="pending")
-        EmployeePermission.objects.create(employee=emp, date=date(2026, 2, 6), status="rejected")
+        # A pending and a rejected permission must not count, in-cap or not.
+        EmployeePermission.objects.create(employee=emp, date=date(2026, 2, 9), status="pending")
+        EmployeePermission.objects.create(employee=emp, date=date(2026, 2, 10), status="rejected")
         p = self._run(emp)["payroll"]
-        # 2 lates + 3 permissions = 5, minus 3 free = 2 billable -> 0.5 shift
+        # 2 lates + 3 excess permissions = 5, minus 3 free = 2 billable -> 0.5 shift
         self.assertEqual(p.deductions, Decimal("500.00"))
+        lateness = _breakdown(emp)["deductions"]["lateSummary"]
+        self.assertEqual(lateness["excessPermissionCount"], 3)
+
+    def test_in_cap_permissions_cost_nothing_at_all(self):
+        _configure(late_free_allowance=0, late_deduction_slabs=[{"fromLates": 1, "deductionShifts": 1}])
+        emp = _staff()
+        for day in (2, 3, 4):  # exactly the default cap of 3 -none excess
+            EmployeePermission.objects.create(employee=emp, date=date(2026, 2, day), status="approved")
+        p = self._run(emp)["payroll"]
+        self.assertEqual(p.deductions, Decimal("0.00"))
 
     def test_empty_slab_table_switches_the_penalty_off(self):
         _configure(late_free_allowance=0, late_deduction_slabs=[])
@@ -457,21 +473,20 @@ class StaffPayrollTests(TestCase):
         self._late_days(emp, 10)
         self.assertEqual(self._run(emp)["payroll"].deductions, Decimal("0.00"))
 
-    def test_without_permission_is_a_separate_pool(self):
-        _configure(
-            late_free_allowance=3,
-            late_deduction_slabs=[],
-            without_permission_free_allowance=0,
-            without_permission_deduction_slabs=[{"fromLates": 2, "deductionShifts": 1}],
-        )
+    def test_early_out_joins_the_same_pool_as_late_in(self):
+        # The old separate "Without Permission" pool is retired -Evening
+        # Early-Out occurrences now draw on the exact same combined pool as
+        # Morning Late-In.
+        _configure(late_free_allowance=0, late_deduction_slabs=[{"fromLates": 2, "deductionShifts": 1}])
         emp = _staff()
         for d in WORKING_DAYS[:2]:
-            _day(emp, d, is_late=True, late_in_without_permission=True)
+            _day(emp, d, is_late=False, early_leave=True)
         for d in WORKING_DAYS[2:]:
             _day(emp, d)
         p = self._run(emp)["payroll"]
         self.assertEqual(p.deductions, Decimal("1000.00"))
-        self.assertEqual(_breakdown(emp)["deductions"]["withoutPermissionPenalty"], 1000.0)
+        lateness = _breakdown(emp)["deductions"]["lateSummary"]
+        self.assertEqual(lateness["earlyOutCount"], 2)
 
     # ── advances ───────────────────────────────────────────────────────────
     def _advance(self, emp, amount, repayments):

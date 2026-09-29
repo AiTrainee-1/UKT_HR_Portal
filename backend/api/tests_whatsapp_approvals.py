@@ -119,7 +119,7 @@ class EveryWorkflowTests(ApprovalBase):
             employee=self.emp,
             date=THU,
             permission_time=time(10, 30),
-            type="Early Out",
+            type="evening_early_out",
             duration_minutes=30,
             reason="Doctor",
         )
@@ -130,7 +130,7 @@ class EveryWorkflowTests(ApprovalBase):
             "*Permission*",
             "24 Sep 2026",
             "10:30 AM",
-            "Early Out - 30 min - Doctor",
+            "Evening Early-Out - 30 min - Doctor",
             "Too many this month",
         )
 

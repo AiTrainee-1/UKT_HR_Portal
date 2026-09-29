@@ -433,8 +433,7 @@ class HrDecisionTests(AlertBase):
 
 
 class AbsentAlertTests(AlertBase):
-    """Absent = still no punch once the shift's punctuality window (60 minutes by default, Settings ->
-    Attendance) has passed: the same "waits an hour, then Absent" rule the attendance engine uses."""
+    """Absent = still no punch once the shift's start + a fixed 60-minute window has passed."""
 
     def setUp(self):
         super().setUp()
@@ -443,13 +442,6 @@ class AbsentAlertTests(AlertBase):
     def test_not_sent_until_the_punctuality_window_has_passed(self):
         self.assertEqual(self.run_at(WED, 9, 59), {})
         self.assertEqual(self.run_at(WED, 10, 0), {"absent_alert": 1})
-
-    def test_follows_the_punctuality_window_setting(self):
-        ps = PayrollSettings.get()
-        ps.shift_punctuality_window_minutes = 90
-        ps.save()
-        self.assertEqual(self.run_at(WED, 10, 29), {})
-        self.assertEqual(self.run_at(WED, 10, 30), {"absent_alert": 1})
 
     def test_it_asks_politely_and_carries_the_employees_details(self):
         self.run_at(WED, 10, 30)
@@ -624,21 +616,18 @@ class LateAlertTests(AlertBase):
         self.assertIn("Shift Start: 6:00 AM", text)
         self.assertIn("Late By: 20 minutes", text)
 
-    def test_the_status_says_what_it_does_to_the_day(self):
-        ps = PayrollSettings.get()
-        ps.permission_window_minutes = 60
-        ps.save()
-        for punch, status in (
-            ("09:40", "Late\n"),  # inside the 60 minute window: still a full shift
-            ("10:30", "counted as an automatic Permission"),  # the permission zone after it
-            ("11:30", "Half Shift"),  # beyond both
-        ):
+    def test_the_status_always_just_says_late(self):
+        # The old auto-detected "counted as Permission"/"Half Shift" zone wording is retired along
+        # with that system (see whatsapp_alerts._late_status) -a lateness is either excused by an
+        # actual approved, in-cap Permission (a separate check -see the "excuses" test) or it's Late,
+        # however late it is.
+        for punch in ("09:40", "10:30", "11:30"):
             WhatsAppMessageLog.objects.all().delete()
             AttendanceLog.objects.all().delete()
             Attendance.objects.all().delete()
             self.punch(self.emp, WED, punch)
             self.run_at(WED, *(int(part) for part in punch.split(":")))  # as it is seen, an alert must be fresh
-            self.assertIn(status, self.logs("late_alert").get().message_text + "\n", punch)
+            self.assertIn("Late\n", self.logs("late_alert").get().message_text + "\n", punch)
 
     def test_sent_once(self):
         self.punch(self.emp, WED, "09:40")
@@ -657,10 +646,67 @@ class LateAlertTests(AlertBase):
 
     def test_an_approved_permission_excuses_it_but_a_pending_one_does_not(self):
         self.punch(self.emp, WED, "09:40")
-        EmployeePermission.objects.create(employee=self.emp, date=WED, status="pending")
+        EmployeePermission.objects.create(
+            employee=self.emp,
+            date=WED,
+            type=EmployeePermission.TYPE_MORNING_LATE_IN,
+            status="pending",
+        )
         self.assertEqual(self.run_at(WED, 10), {"late_alert": 1})
         WhatsAppMessageLog.objects.all().delete()
         EmployeePermission.objects.update(status="approved")
+        self.assertEqual(self.run_at(WED, 10), {})
+
+    def test_an_approved_permission_of_the_wrong_type_does_not_excuse_it(self):
+        self.punch(self.emp, WED, "09:40")
+        EmployeePermission.objects.create(
+            employee=self.emp,
+            date=WED,
+            type=EmployeePermission.TYPE_MIDDLE_PERMISSION,
+            status="approved",
+        )
+        self.assertEqual(self.run_at(WED, 10), {"late_alert": 1})
+
+    def test_an_approved_permission_beyond_the_monthly_cap_does_not_excuse_it(self):
+        ps = PayrollSettings.get()
+        for day in range(1, ps.permission_monthly_cap + 1):
+            EmployeePermission.objects.create(
+                employee=self.emp,
+                date=date(WED.year, WED.month, day),
+                type=EmployeePermission.TYPE_MORNING_LATE_IN,
+                status="approved",
+            )
+        # The cap is already used up by earlier days this month -today's approved permission is excess.
+        EmployeePermission.objects.create(
+            employee=self.emp,
+            date=WED,
+            type=EmployeePermission.TYPE_MORNING_LATE_IN,
+            status="approved",
+        )
+        self.punch(self.emp, WED, "09:40")
+        self.assertEqual(self.run_at(WED, 10), {"late_alert": 1})
+
+    def _permit_morning(self):
+        # Shift 09:00 + 15 grace; an in-cap Morning Late-In moves the allowed time to 10:15, exactly the
+        # deadline the attendance engine judges the day by. "Late In" is the installed app's spelling.
+        EmployeePermission.objects.create(employee=self.emp, date=WED, type="Late In", status="approved")
+
+    def test_an_approved_permission_moves_the_allowed_time_by_its_hour(self):
+        self._permit_morning()
+        self.punch(self.emp, WED, "10:05")  # after the plain 09:15, inside the moved 10:15
+        self.assertEqual(self.run_at(WED, 10, 6), {})
+
+    def test_arriving_after_the_permission_moved_time_is_still_late(self):
+        self._permit_morning()
+        self.punch(self.emp, WED, "10:40")
+        self.assertEqual(self.run_at(WED, 10, 41), {"late_alert": 1})
+        self.assertIn("Late By: 25 minutes", self.sent_texts()[0])  # 10:40 - 10:15, not 10:40 - 09:15
+
+    def test_no_late_alert_while_morning_late_in_detection_is_switched_off(self):
+        ps = PayrollSettings.get()
+        ps.morning_late_in_enabled = False
+        ps.save()
+        self.punch(self.emp, WED, "09:40")
         self.assertEqual(self.run_at(WED, 10), {})
 
     def test_a_compensation_day_is_never_penalised(self):

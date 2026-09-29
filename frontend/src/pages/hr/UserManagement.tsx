@@ -369,10 +369,24 @@ export default function UserManagement() {
                             <Building2 size={11} />
                             {m.departmentCount} dept{m.departmentCount !== 1 ? "s" : ""}
                           </span>
-                          <span className="flex items-center gap-1 text-xs text-gray-400">
+                          <span
+                            className="flex items-center gap-1 text-xs text-gray-400"
+                            title="Employees who report to this HOD, individually or through a department"
+                          >
                             <Users size={11} />
-                            {m.employeeCount} individual
+                            {m.employeeCount} reporting
                           </span>
+                          {/* Listed under this HOD but reporting to another one (an employee has ONE
+                              HOD): explains a headcount lower than the department's size. */}
+                          {(m.overlapCount ?? 0) > 0 && (
+                            <span
+                              className="flex items-center gap-1 text-xs text-amber-600"
+                              title="Employees in this HOD's departments who already report to a different HOD. Open the HOD to see them and reassign."
+                            >
+                              <AlertTriangle size={11} />
+                              {m.overlapCount} report to another HOD
+                            </span>
+                          )}
                         </div>
                         {/* Permission badges */}
                         <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">

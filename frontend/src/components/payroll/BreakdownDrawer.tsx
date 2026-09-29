@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { usePayrollBreakdown, type PayrollRunItem } from "@/lib/api-client";
+import { halfDayWorked, latePoolView } from "@/lib/late-detection";
 import {
   IndianRupee, Lock, CheckCircle2, Clock, ChevronDown, ChevronUp,
   AlertCircle, Info, ArrowRight, AlertTriangle, CalendarDays, X,
@@ -39,10 +40,42 @@ export const STATUS_COLORS: Record<string, string> = {
   holiday:      TONE.neutral,
 };
 
+function PoolRow({
+  label, note, value, unit, strong,
+}: {
+  label: string;
+  note?: string;
+  value: number | string;
+  unit?: string;
+  strong?: boolean;
+}) {
+  return (
+    <div className={`flex justify-between px-3 py-2 ${strong ? "bg-orange-50/40 font-bold" : ""}`}>
+      <span className={strong ? "text-orange-900" : "text-gray-600"}>
+        {label}
+        {note && <span className="ml-1.5 text-xs font-normal text-muted-foreground">({note})</span>}
+      </span>
+      <span className={strong ? "text-orange-900" : "font-semibold"}>
+        {value}
+        {unit && typeof value === "number" && <span className="font-normal text-muted-foreground"> {unit}{value !== 1 ? "s" : ""}</span>}
+      </span>
+    </div>
+  );
+}
+
 export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onClose: () => void }) {
   const { data, isLoading } = usePayrollBreakdown(payrollId);
   const bd = data?.breakdown;
   const [showAllDays, setShowAllDays] = useState(false);
+  // The Half-Day times this payroll was generated with; absent on a payroll generated before that rule existed.
+  const halfDayRule =
+    bd?.halfDayFirstHalfEndTime && bd.halfDaySecondHalfStartTime
+      ? { firstHalfEnd: bd.halfDayFirstHalfEndTime, secondHalfStart: bd.halfDaySecondHalfStartTime }
+      : null;
+  // Read through latePoolView so a STAFF payroll generated before the late-in / early-out / excess split (which has
+  // only a total) shows its total instead of "undefined". A Production payroll has a different, separate late summary
+  // (totals only, by design) and is rendered by its own section below, never through the staff pool.
+  const pool = bd?.type === "staff" ? latePoolView(bd.deductions.lateSummary) : null;
 
   const displayDays = bd && !showAllDays ? bd.days.slice(0, 15) : bd?.days ?? [];
 
@@ -137,42 +170,52 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                           : "—"}
                       </strong></p>
                       <p>Days arrived after deadline: <strong>{bd.summary.lateDays}</strong></p>
+                      <p className="text-amber-700/80">On a day an Allowed Morning Late-In permission applied, the deadline was 60 minutes later.</p>
                       {bd.attendanceMode === "simple" && (
                         <p className="text-amber-700/80">Simple mode: only the morning punch is checked -lunch-return delays are ignored.</p>
                       )}
                     </div>
                   )}
+                  {(bd.summary.earlyOutDays ?? 0) > 0 && (
+                    <div className="mt-2 rounded-md bg-amber-50 border border-amber-100 px-3 py-2 text-xs text-amber-800 space-y-0.5">
+                      <p className="font-semibold flex items-center gap-1">
+                        <AlertTriangle size={11} /> Evening Early-Out Detection
+                      </p>
+                      <p><strong>{bd.summary.earlyOutDays}</strong> day{bd.summary.earlyOutDays !== 1 ? "s" : ""} left before shift end - grace this month.</p>
+                      <p className="text-amber-700/80">On a day an Allowed Evening Early-Out permission applied, the shift end was 60 minutes earlier.</p>
+                    </div>
+                  )}
                   {(bd.summary.withoutPermissionDays ?? 0) > 0 && (
+                    // Legacy: payrolls generated before the Late/Permission rewrite; no new payroll has this.
                     <div className="mt-2 rounded-md bg-rose-50 border border-rose-100 px-3 py-2 text-xs text-rose-800 space-y-0.5">
                       <p className="font-semibold flex items-center gap-1">
-                        <AlertTriangle size={11} /> Without Permission Detection
+                        <AlertTriangle size={11} /> Without Permission (earlier rule)
                       </p>
                       <p>
-                        Arriving late or leaving early inside a 1-hour window around the shift's start/end
-                        time with <strong>no approved Permission</strong> covering it. Each day's exact reason
-                        is shown in the Day-by-Day table below.
-                      </p>
-                      <p>
-                        <strong>{bd.summary.withoutPermissionDays}</strong> day{bd.summary.withoutPermissionDays !== 1 ? "s" : ""} flagged this month
-                        {(bd.deductions.withoutPermissionPenalty ?? 0) === 0 && (
-                          <span> — no deduction yet (Settings → Late Detection → Without Permission has no slabs configured).</span>
-                        )}
+                        This payroll was generated under the earlier rule that flagged late or early days with no
+                        approved Permission separately: <strong>{bd.summary.withoutPermissionDays}</strong> day
+                        {bd.summary.withoutPermissionDays !== 1 ? "s" : ""}. Re-generate it to price the month with the
+                        current Late Detection rules.
                       </p>
                     </div>
                   )}
                   {(bd.summary.halfShiftDays ?? 0) > 0 && (
                     <div className="mt-2 rounded-md bg-amber-50 border border-amber-100 px-3 py-2 text-xs text-amber-800 space-y-0.5">
                       <p className="font-semibold flex items-center gap-1">
-                        <AlertCircle size={11} /> Half-Shift Detection
+                        <AlertCircle size={11} /> Half-Day Detection
                       </p>
-                      {bd.attendanceMode === "simple" ? (
+                      {halfDayRule ? (
                         <p>
-                          A half-shift is recorded when the <strong>first punch is after{" "}
-                          {bd.simpleHalfShiftCutoff ?? "13:30"}</strong>, when only a single punch
-                          exists for the day, or when HR manually marks the day as half shift.
+                          A half day is recorded when the employee has a punch in only <strong>one</strong> of the two
+                          halves: the Morning half (a punch before <strong>{halfDayRule.firstHalfEnd}</strong>) or the
+                          Evening half (a punch at/after <strong>{halfDayRule.secondHalfStart}</strong>), or when HR
+                          manually marks the day as half shift.
                         </p>
                       ) : (
-                        <p>A half-shift is recorded when only <strong>2 punches</strong> are present (morning only: P1+P2, or afternoon only: P3+P4).</p>
+                        <p>
+                          Half-shift days as recorded when this payroll was generated (before the Morning/Evening
+                          half rule), or manually marked by HR.
+                        </p>
                       )}
                       <p>
                         <strong>{bd.summary.halfShiftDays}</strong> half-shift day{bd.summary.halfShiftDays !== 1 ? "s" : ""} &nbsp;×&nbsp; 0.5 &nbsp;=&nbsp;
@@ -256,9 +299,12 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                       <div className="flex justify-between px-3 py-2 bg-orange-50/40">
                         <span className="text-orange-800 font-medium">
                           Late Shift Penalty
-                          {bd.deductions.lateSummary && (
+                          {pool && (
                             <span className="ml-1.5 font-normal text-orange-600 text-xs">
-                              ({bd.deductions.lateSummary.totalLateCount} late · {bd.deductions.lateSummary.billableLateCount} billable · {bd.deductions.lateSummary.shiftDeductions} shift{bd.deductions.lateSummary.shiftDeductions !== 1 ? "s" : ""} deducted)
+                              ({pool.detailed
+                                ? `${pool.lateIn ?? 0} late-in · ${pool.earlyOut ?? 0} early-out · ${pool.excess ?? 0} excess permission · `
+                                : `${pool.total} late · `}
+                              {pool.billable} billable · {pool.shifts} shift{pool.shifts !== 1 ? "s" : ""} deducted)
                             </span>
                           )}
                         </span>
@@ -266,9 +312,10 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                       </div>
                     )}
                     {(bd.deductions.withoutPermissionPenalty ?? 0) > 0 && (
+                      // Legacy: the separate "Without Permission" pool of payrolls generated before the rewrite.
                       <div className="flex justify-between px-3 py-2 bg-rose-50/40">
                         <span className="text-rose-800 font-medium">
-                          Without Permission Penalty
+                          Without Permission Penalty (earlier rule)
                           {bd.deductions.withoutPermissionSummary && (
                             <span className="ml-1.5 font-normal text-rose-600 text-xs">
                               ({bd.deductions.withoutPermissionSummary.totalCount} occurrence{bd.deductions.withoutPermissionSummary.totalCount !== 1 ? "s" : ""} · {bd.deductions.withoutPermissionSummary.billableCount} billable · {bd.deductions.withoutPermissionSummary.shiftDeductions} shift{bd.deductions.withoutPermissionSummary.shiftDeductions !== 1 ? "s" : ""} deducted)
@@ -287,6 +334,45 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                     </div>
                   </div>
                 </div>
+
+                {/* Late Detection pool -line by line, so the Late Shift Penalty above can be explained to the employee */}
+                {pool && (pool.total > 0 || (bd.deductions.lateShiftPenalty ?? 0) > 0) && (
+                  <div data-testid="late-pool">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Late Detection Pool</p>
+                    <div className="rounded-lg border divide-y text-sm">
+                      {pool.detailed ? (
+                        <>
+                          <PoolRow label="Morning Late-In" value={pool.lateIn ?? 0} unit="day" />
+                          <PoolRow label="Evening Early-Out" value={pool.earlyOut ?? 0} unit="day" />
+                          <PoolRow
+                            label="Excess permissions"
+                            note={pool.permissionCap != null ? `approved beyond ${pool.permissionCap} per month` : undefined}
+                            value={pool.excess ?? 0}
+                          />
+                        </>
+                      ) : (
+                        <PoolRow label="Late occurrences" note="generated before the late-in / early-out split" value={pool.total} />
+                      )}
+                      <PoolRow label="Pool total" value={pool.total} strong />
+                      {pool.freeUsed != null && (
+                        <PoolRow
+                          label="Free allowance used"
+                          value={pool.freeAllowance != null ? `${pool.freeUsed} of ${pool.freeAllowance}` : pool.freeUsed}
+                        />
+                      )}
+                      <PoolRow label="Billable occurrences" value={pool.billable} strong />
+                      <PoolRow label="Shifts deducted" note="from the Late Detection slabs" value={pool.shifts} />
+                    </div>
+                    {pool.mergedIntoExcess && (
+                      <p className="mt-1.5 text-[11px] text-muted-foreground">
+                        {pool.lateInDays ?? 0} late-in and {pool.earlyOutDays ?? 0} early-out day
+                        {(pool.lateInDays ?? 0) + (pool.earlyOutDays ?? 0) !== 1 ? "s were" : " was"} flagged, but a day that
+                        was late and also had an Excess permission on the same edge counts once -the Excess permission is
+                        that occurrence.
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* Day-by-day table */}
                 <div>
@@ -319,16 +405,34 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                             <td className="px-3 py-1.5 font-mono text-green-700">{d.firstIn ?? "—"}</td>
                             <td className="px-3 py-1.5 font-mono text-blue-700">{d.lastOut ?? "—"}</td>
                             <td className="px-3 py-1.5">
-                              {d.isLate ? (
-                                d.withoutPermission ? (
-                                  <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 font-semibold whitespace-nowrap">Without Permission</span>
-                                ) : (
-                                  <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-semibold whitespace-nowrap">Late</span>
-                                )
-                              ) : <span className="text-gray-300">—</span>}
+                              {(() => {
+                                // Which half a Half Shift day was worked -only for a payroll generated with the
+                                // Morning/Evening half rule (it records the times), judged the same way the server does.
+                                const half = d.isHalfShift && halfDayRule ? halfDayWorked(d.firstIn, halfDayRule.firstHalfEnd) : null;
+                                return d.isLate || d.isEarlyOut || d.isHalfShift ? (
+                                  <span className="flex flex-wrap gap-1">
+                                    {d.isLate && (
+                                      d.withoutPermission ? (
+                                        // Legacy label of payrolls generated before the rewrite.
+                                        <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 font-semibold whitespace-nowrap">Without Permission</span>
+                                      ) : (
+                                        <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-semibold whitespace-nowrap">Late-In</span>
+                                      )
+                                    )}
+                                    {d.isEarlyOut && (
+                                      <span className="px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 font-semibold whitespace-nowrap">Early-Out</span>
+                                    )}
+                                    {d.isHalfShift && (
+                                      <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 font-semibold whitespace-nowrap">
+                                        Half Day{half ? ` · ${half === "morning" ? "Morning" : "Evening"} half` : ""}
+                                      </span>
+                                    )}
+                                  </span>
+                                ) : <span className="text-gray-300">—</span>;
+                              })()}
                             </td>
                             <td className="px-3 py-1.5 text-gray-500 max-w-[280px]">
-                              {d.isLate ? (d.lateReason ?? <span className="text-gray-300">—</span>) : null}
+                              {d.isLate || d.isEarlyOut ? (d.lateReason ?? <span className="text-gray-300">—</span>) : null}
                             </td>
                           </tr>
                         ))}

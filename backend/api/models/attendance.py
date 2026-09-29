@@ -131,44 +131,56 @@ class AttendanceDayRecord(models.Model):
     )
     date = models.DateField()
     status = models.TextField(choices=STATUS_CHOICES, default=STATUS_ABSENT)
+    # Morning Late-In: punch after (shift start + grace), or after the
+    # permission-shifted effective start when an in-cap Morning Late-In
+    # permission applies today (see morning_permission_applied below and
+    # attendance_final.py). Completely independent of is_half_shift/status
+    # -a very late arrival that still beats the Half-Day cutoff is Full Day
+    # AND Late, not automatically demoted.
     is_late = models.BooleanField(default=False, db_column="is_late")
     is_half_shift = models.BooleanField(default=False, db_column="is_half_shift")
+    # Evening Early-Out: punch before (shift end - grace), or before the
+    # permission-shifted effective end when an in-cap Evening Early-Out
+    # permission applies today. Only ever set when PayrollSettings.
+    # evening_early_out_enabled is on (off by default) -see attendance_final.py.
     early_leave = models.BooleanField(default=False, db_column="early_leave")
-    # Staff, Full-Shift days only. Set inside the 1-hour permission-eligible
-    # zone between the shift's own grace period and the wider punctuality
-    # window (see shift_engine.py::_punctuality_window_minutes) -an
-    # approved EmployeePermission covering that moment suppresses detection
-    # entirely (these stay False); without one, the employee is Late as
-    # before but tagged here so it can be reported/penalized separately from
-    # ordinary Late Attendance (Settings → Late Detection → Without
-    # Permission). early_out_without_permission is new detection -evening
-    # early departure was never flagged at all before this.
-    late_in_without_permission = models.BooleanField(default=False, db_column="late_in_without_permission")
-    early_out_without_permission = models.BooleanField(default=False, db_column="early_out_without_permission")
+    # An approved Morning Late-In / Evening Early-Out permission existed
+    # today but was EXCESS (this employee had already used
+    # PayrollSettings.permission_monthly_cap approved permissions earlier
+    # that month), so it did NOT shift the boundary -the day was judged
+    # against the plain shift time like an ordinary unexcused occurrence,
+    # and any resulting is_late/early_leave joins the same late-deduction
+    # pool as an unexcused late. Lets HR/an employee see exactly why a
+    # request that WAS approved still didn't protect that day.
+    # (db_default on the five permission columns: an old backend instance that
+    # is still running during a rolling deploy inserts day records without
+    # knowing these columns exist -see the matching note on PayrollSettings.)
+    morning_permission_excess = models.BooleanField(default=False, db_default=False, db_column="morning_permission_excess")
+    evening_permission_excess = models.BooleanField(default=False, db_default=False, db_column="evening_permission_excess")
     # Night Late: strict-mode lunch-return lateness (punch3 beyond punch2 +
     # lunch_duration_minutes, within the afternoon Late window -see
-    # PayrollSettings.afternoon_late_window_minutes). is_late/late_morning
-    # covers the morning arrival edge; this is its afternoon counterpart.
+    # PayrollSettings.afternoon_late_window_minutes). Informational only -
+    # can no longer demote the day; unrelated to Morning Late-In/Evening
+    # Early-Out above (a different axis the Late Detection rewrite left
+    # untouched).
     late_afternoon = models.BooleanField(default=False, db_column="late_afternoon")
-    # Auto-Permission zone per edge (see PayrollSettings.permission_window_
-    # minutes / afternoon_permission_window_minutes) -detected purely from
-    # punch timing, independent of any submitted EmployeePermission. The
-    # matching *_with_request flag is a secondary label: True when an
-    # approved EmployeePermission's own time also covers that edge.
-    permission_morning = models.BooleanField(default=False, db_column="permission_morning")
-    permission_morning_with_request = models.BooleanField(default=False, db_column="permission_morning_with_request")
+    # True when an approved, IN-CAP Morning Late-In / Evening Early-Out
+    # permission actually shifted today's effective boundary (see
+    # attendance_final.py's permission boundary-shift). False whenever no
+    # permission applied, including when one was approved but excess (see
+    # morning/evening_permission_excess above).
+    morning_permission_applied = models.BooleanField(default=False, db_default=False, db_column="morning_permission_applied")
+    evening_permission_applied = models.BooleanField(default=False, db_default=False, db_column="evening_permission_applied")
+    # An approved Middle One-Hour permission exists today -purely
+    # informational (it never shifts any boundary, in or out of the
+    # monthly cap), but still worth showing so HR/the employee can see it
+    # was accounted for.
+    middle_permission_today = models.BooleanField(default=False, db_default=False, db_column="middle_permission_today")
+    # Unchanged -the strict-mode lunch-return axis's own auto-detected
+    # Permission zone (see PayrollSettings.afternoon_permission_window_
+    # minutes), untouched by the Late Detection/Permission rewrite.
     permission_afternoon = models.BooleanField(default=False, db_column="permission_afternoon")
     permission_afternoon_with_request = models.BooleanField(default=False, db_column="permission_afternoon_with_request")
-    permission_departure = models.BooleanField(default=False, db_column="permission_departure")
-    permission_departure_with_request = models.BooleanField(default=False, db_column="permission_departure_with_request")
-    # How many edges resolved to Permission today, AFTER daily/weekly cap
-    # enforcement (PayrollSettings.max_permissions_per_day/_per_week) -used
-    # to roll the weekly cap forward day by day without re-deriving it from
-    # the three booleans above. permission_escalated_to_half_shift records
-    # that at least one edge WOULD have been Permission but was pushed to
-    # Half Shift by a cap, for HR auditability.
-    permission_zone_count = models.IntegerField(default=0, db_column="permission_zone_count")
-    permission_escalated_to_half_shift = models.BooleanField(default=False, db_column="permission_escalated_to_half_shift")
     # True when a CompensationDayAnnouncement covered this day -Late/Permission
     # detection was suppressed (see attendance_final.py's compensation-day
     # exemption). Display/audit only: Full vs Half is still decided from real

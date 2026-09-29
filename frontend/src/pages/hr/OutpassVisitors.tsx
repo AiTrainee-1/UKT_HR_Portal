@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useLocation } from "wouter";
 import QRCode from "qrcode";
 import HrLayout from "@/components/HrLayout";
@@ -41,6 +41,7 @@ import {
   CheckCircle2, XCircle, Inbox, Mail, MessageCircle, Coffee, Save, Filter,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { inGateRange } from "@/lib/gate-range";
 
 const PAGE_SIZE = 20;
 const RANGE_LABEL: Record<GateRange, string> = { today: "Today", week: "This Week", month: "This Month" };
@@ -705,10 +706,57 @@ function formatApprover(approverRole?: string | null, approvedBy?: string | null
   return approvedBy ?? "—";
 }
 
-function ApprovedPassesSection() {
+// A timestamp as date over time. Kept on two short lines that never wrap, so a column of them lines
+// up row after row instead of breaking into a four-line block ("25 / Sept, / 12:36 / pm").
+function DateTimeStack({ iso }: { iso?: string | null }) {
+  if (!iso) return <span className="text-muted-foreground">—</span>;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return <span className="whitespace-nowrap">{iso}</span>;
+  return (
+    <div className="leading-tight whitespace-nowrap">
+      <p className="font-medium">{d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}</p>
+      <p className="text-xs text-muted-foreground">
+        {d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+      </p>
+    </div>
+  );
+}
+
+// A pass normally expires the same day it was requested, so only the time is shown; the date is
+// added only when it is a different day.
+function ExpiryCell({ createdAt, expiresAt }: { createdAt: string; expiresAt?: string | null }) {
+  if (!expiresAt) return <span className="text-muted-foreground">—</span>;
+  const created = new Date(createdAt);
+  const expires = new Date(expiresAt);
+  if (isNaN(expires.getTime())) return <span className="whitespace-nowrap">{expiresAt}</span>;
+  if (!isNaN(created.getTime()) && created.toDateString() === expires.toDateString()) {
+    return (
+      <span className="whitespace-nowrap text-muted-foreground">
+        {expires.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+      </span>
+    );
+  }
+  return <DateTimeStack iso={expiresAt} />;
+}
+
+// Fixed column widths + one shared horizontal padding: every header sits exactly over its cells.
+const PASS_TH = "px-4 whitespace-nowrap";
+const PASS_TD = "px-4 py-3 align-middle";
+
+function ApprovedPassesSection({ range }: { range: GateRange }) {
   const [page, setPage] = useState(1);
   const { data: requests, isLoading } = useListOutpassRequests();
-  const rows: OutpassRequestItem[] = requests ?? [];
+  // The Today / This Week / This Month pills apply here too (the same Asia/Kolkata boundaries the
+  // server uses for the records table below) -this list comes flat from the API, so it is
+  // filtered here. Newest first, so today's passes are at the top.
+  const rows: OutpassRequestItem[] = useMemo(
+    () =>
+      (requests ?? [])
+        .filter((r) => inGateRange(r.createdAt, range))
+        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)),
+    [requests, range],
+  );
+  const totalEver = requests?.length ?? 0;
   // Client-side paging, same reasoning as OutpassRequestsSection below -this
   // endpoint also serves the Mobile/Web apps' own flat "my requests" array,
   // so it can't switch to a {items,total,page,pageSize} response shape
@@ -716,67 +764,109 @@ function ApprovedPassesSection() {
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const pageSafe = Math.min(page, pageCount);
   const pageRows = rows.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
+  const rangeText = RANGE_LABEL[range].toLowerCase();
 
   return (
     <Card>
       <CardContent className="p-0">
-        <div className="flex items-center justify-between px-4 pt-4 pb-2">
+        <div className="flex items-center justify-between gap-3 px-4 pt-4 pb-3">
           <div>
-            <p className="font-bold text-sm">Approved Passes</p>
-            <p className="text-xs text-muted-foreground">Every Outpass request, with live gate-scan/exit status.</p>
+            <p className="font-bold text-sm">Outpass Requests</p>
+            <p className="text-xs text-muted-foreground">
+              Passes that go through approval (HR, Department Head or On-Duty), with live gate-scan and exit
+              status. Showing {rangeText}.
+            </p>
           </div>
+          {!isLoading && (
+            <Badge variant="secondary" className="shrink-0 whitespace-nowrap">
+              {rows.length} {rows.length === 1 ? "pass" : "passes"}
+            </Badge>
+          )}
         </div>
-        <div className="overflow-x-auto">
-          <Table>
+        <div className="overflow-x-auto border-t">
+          <Table className="min-w-[1260px] table-fixed">
             <TableHeader>
-              <TableRow>
-                <TableHead>Employee</TableHead>
-                <TableHead>Department</TableHead>
-                <TableHead>Destination</TableHead>
-                <TableHead>Reason</TableHead>
-                <TableHead>Date / Time</TableHead>
-                <TableHead>Expiry</TableHead>
-                <TableHead>Approval</TableHead>
-                <TableHead>Approved By</TableHead>
-                <TableHead>Gate</TableHead>
-                <TableHead>Scan Status</TableHead>
-                <TableHead>Exit Time</TableHead>
+              <TableRow className="bg-muted/30 hover:bg-muted/30">
+                <TableHead className={`${PASS_TH} w-[210px]`}>Employee</TableHead>
+                <TableHead className={`${PASS_TH} w-[130px]`}>Department</TableHead>
+                <TableHead className={`${PASS_TH} w-[230px]`}>Destination / Reason</TableHead>
+                <TableHead className={`${PASS_TH} w-[90px]`}>Requested</TableHead>
+                <TableHead className={`${PASS_TH} w-[90px]`}>Expires</TableHead>
+                <TableHead className={`${PASS_TH} w-[150px]`}>Approval</TableHead>
+                <TableHead className={`${PASS_TH} w-[110px]`}>Gate</TableHead>
+                <TableHead className={`${PASS_TH} w-[160px]`}>Scan Status</TableHead>
+                <TableHead className={`${PASS_TH} w-[90px]`}>Exit Time</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={11} className="text-center py-10 text-muted-foreground">Loading…</TableCell></TableRow>
+                <TableRow>
+                  <TableCell colSpan={9} className="text-center py-10 text-muted-foreground">Loading…</TableCell>
+                </TableRow>
               ) : !rows.length ? (
-                <TableRow><TableCell colSpan={11} className="text-center py-10 text-muted-foreground">No outpass requests yet.</TableCell></TableRow>
+                <TableRow>
+                  <TableCell colSpan={9} className="text-center py-10 text-muted-foreground">
+                    No outpass requests for {rangeText}.
+                    {totalEver > 0 && " Try a wider range."}
+                  </TableCell>
+                </TableRow>
               ) : (
                 pageRows.map((r) => {
                   const scan = SCAN_STATUS_BADGE[r.scanStatus] ?? SCAN_STATUS_BADGE.not_applicable;
+                  const approver = formatApprover(r.approverRole, r.approvedBy);
+                  const showReason = !!r.reason && r.reason.trim() !== (r.destination ?? "").trim();
                   return (
                     <TableRow key={r.id}>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <Avatar className="size-7">
+                      <TableCell className={PASS_TD}>
+                        <div className="flex min-w-0 items-center gap-2.5">
+                          <Avatar className="size-8 shrink-0">
                             <AvatarImage src={r.employee?.photoUrl ?? undefined} />
                             <AvatarFallback className="text-[10px]">{r.employee?.name?.[0] ?? "?"}</AvatarFallback>
                           </Avatar>
-                          <div className="min-w-0">
-                            <p className="font-medium truncate">{r.employee?.name ?? `#${r.employeeId}`}</p>
-                            <p className="text-xs text-muted-foreground">{r.employee?.employeeCode}</p>
+                          <div className="min-w-0 leading-tight">
+                            <p className="font-medium truncate" title={r.employee?.name}>
+                              {r.employee?.name ?? `#${r.employeeId}`}
+                            </p>
+                            <p className="text-xs text-muted-foreground truncate">{r.employee?.employeeCode}</p>
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell className="text-muted-foreground">{r.employee?.department ?? "—"}</TableCell>
-                      <TableCell>{r.destination}</TableCell>
-                      <TableCell className="max-w-[160px] truncate" title={r.reason}>{r.reason}</TableCell>
-                      <TableCell className="text-muted-foreground">{fmtDateTime(r.createdAt)}</TableCell>
-                      <TableCell className="text-muted-foreground">{r.expiresAt ? fmtDateTime(r.expiresAt) : "—"}</TableCell>
-                      <TableCell>
-                        <Badge className={`text-xs border ${APPROVAL_STATUS_CLS[r.status] ?? APPROVAL_STATUS_CLS.pending}`}>{r.status}</Badge>
+                      <TableCell className={`${PASS_TD} text-muted-foreground`}>
+                        <p className="truncate" title={r.employee?.department ?? undefined}>
+                          {r.employee?.department ?? "—"}
+                        </p>
                       </TableCell>
-                      <TableCell className="text-muted-foreground">{formatApprover(r.approverRole, r.approvedBy)}</TableCell>
-                      <TableCell>{r.exitGateName ?? "—"}</TableCell>
-                      <TableCell><Badge className={`text-xs border ${scan.cls}`}>{scan.label}</Badge></TableCell>
-                      <TableCell className="text-muted-foreground">{r.exitedAt ? fmtDateTime(r.exitedAt) : "—"}</TableCell>
+                      <TableCell className={PASS_TD}>
+                        <div className="leading-tight">
+                          <p className="font-medium truncate" title={r.destination}>{r.destination}</p>
+                          {showReason && (
+                            <p className="text-xs text-muted-foreground truncate" title={r.reason}>{r.reason}</p>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className={PASS_TD}><DateTimeStack iso={r.createdAt} /></TableCell>
+                      <TableCell className={PASS_TD}><ExpiryCell createdAt={r.createdAt} expiresAt={r.expiresAt} /></TableCell>
+                      <TableCell className={PASS_TD}>
+                        <div className="flex min-w-0 flex-col items-start gap-1">
+                          <Badge
+                            className={`text-xs border capitalize whitespace-nowrap ${APPROVAL_STATUS_CLS[r.status] ?? APPROVAL_STATUS_CLS.pending}`}
+                          >
+                            {r.status}
+                          </Badge>
+                          {approver !== "—" && (
+                            <span className="max-w-full truncate text-xs text-muted-foreground" title={approver}>
+                              {approver}
+                            </span>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className={PASS_TD}>
+                        <p className="truncate" title={r.exitGateName ?? undefined}>{r.exitGateName ?? "—"}</p>
+                      </TableCell>
+                      <TableCell className={PASS_TD}>
+                        <Badge className={`text-xs border whitespace-nowrap ${scan.cls}`}>{scan.label}</Badge>
+                      </TableCell>
+                      <TableCell className={PASS_TD}><DateTimeStack iso={r.exitedAt} /></TableCell>
                     </TableRow>
                   );
                 })
@@ -1038,38 +1128,58 @@ function OutpassTab({ isBranchScoped }: { isBranchScoped: boolean }) {
             </div>
           </div>
 
-          <ApprovedPassesSection />
+          <ApprovedPassesSection key={range} range={range} />
 
           <Card>
             <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Employee</TableHead>
-                    <TableHead>Code</TableHead>
-                    <TableHead>Destination</TableHead>
-                    <TableHead>Branch</TableHead>
-                    <TableHead>Submitted</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {recordsLoading && !page_ ? (
-                    <TableRow><TableCell colSpan={5} className="text-center py-10 text-muted-foreground">Loading…</TableCell></TableRow>
-                  ) : !records.length ? (
-                    <TableRow><TableCell colSpan={5} className="text-center py-10 text-muted-foreground">No outpass records for {RANGE_LABEL[range].toLowerCase()}.</TableCell></TableRow>
-                  ) : (
-                    records.map((r) => (
-                      <TableRow key={r.id}>
-                        <TableCell className="font-medium">{r.employeeName}</TableCell>
-                        <TableCell>{r.employeeCode}</TableCell>
-                        <TableCell>{r.destination}</TableCell>
-                        <TableCell>{r.branchName ?? "—"}</TableCell>
-                        <TableCell className="text-muted-foreground">{fmtDateTime(r.submittedAt)}</TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
+              <div className="flex items-center justify-between gap-3 px-4 pt-4 pb-3">
+                <div>
+                  <p className="font-bold text-sm">Gate QR Submissions</p>
+                  <p className="text-xs text-muted-foreground">
+                    Exits logged through the branch QR form, with no approval step and no attendance or payroll
+                    impact. Showing {RANGE_LABEL[range].toLowerCase()}.
+                  </p>
+                </div>
+                {page_ && (
+                  <Badge variant="secondary" className="shrink-0 whitespace-nowrap">
+                    {page_.total} {page_.total === 1 ? "submission" : "submissions"}
+                  </Badge>
+                )}
+              </div>
+              <div className="overflow-x-auto border-t">
+                <Table className="min-w-[860px] table-fixed">
+                  <TableHeader>
+                    <TableRow className="bg-muted/30 hover:bg-muted/30">
+                      <TableHead className={`${PASS_TH} w-[230px]`}>Employee</TableHead>
+                      <TableHead className={`${PASS_TH} w-[110px]`}>Code</TableHead>
+                      <TableHead className={PASS_TH}>Destination</TableHead>
+                      <TableHead className={`${PASS_TH} w-[170px]`}>Branch</TableHead>
+                      <TableHead className={`${PASS_TH} w-[110px]`}>Submitted</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {recordsLoading && !page_ ? (
+                      <TableRow><TableCell colSpan={5} className="text-center py-10 text-muted-foreground">Loading…</TableCell></TableRow>
+                    ) : !records.length ? (
+                      <TableRow><TableCell colSpan={5} className="text-center py-10 text-muted-foreground">No gate QR submissions for {RANGE_LABEL[range].toLowerCase()}.</TableCell></TableRow>
+                    ) : (
+                      records.map((r) => (
+                        <TableRow key={r.id}>
+                          <TableCell className={`${PASS_TD} font-medium`}>
+                            <p className="truncate" title={r.employeeName}>{r.employeeName}</p>
+                          </TableCell>
+                          <TableCell className={`${PASS_TD} whitespace-nowrap`}>{r.employeeCode}</TableCell>
+                          <TableCell className={`${PASS_TD} break-words`}>{r.destination}</TableCell>
+                          <TableCell className={`${PASS_TD} whitespace-nowrap`}>
+                            <p className="truncate" title={r.branchName ?? undefined}>{r.branchName ?? "—"}</p>
+                          </TableCell>
+                          <TableCell className={PASS_TD}><DateTimeStack iso={r.submittedAt} /></TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
               {page_ && <RecordsPagination page={page_.page} total={page_.total} pageSize={page_.pageSize} onPageChange={setPage} />}
             </CardContent>
           </Card>

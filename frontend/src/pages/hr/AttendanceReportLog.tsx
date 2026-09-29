@@ -67,11 +67,18 @@ export default function AttendanceReportLog() {
   const { data: departments } = useListDepartments();
   const { data: settings } = usePayrollSettings();
   const simpleMode = settings?.attendanceMode === "simple";
+  const freeAllowance = settings?.lateFreeAllowance ?? 3;
 
   const [showLatePenalty, setShowLatePenalty] = useState(false);
   const [lateMonth, setLateMonth] = useState(currentMonth());
   const [lateYear, setLateYear] = useState(currentYear());
   const { data: lateData, isLoading: lateLoading } = useAttendanceLateSummary(lateMonth, lateYear, showLatePenalty);
+  // Late-in + early-out + excess-permission pooling (and so an "Excess Permissions" / "Pool Total" column) only exists
+  // on the rewritten backend: the report says so itself by carrying the split (lateInCount), and that backend also
+  // reports permissionMonthlyCap in Settings. On an older one the legacy columns are shown exactly as they were, since
+  // adding permissionOverageCount to its totalLateCount would give a pool total it never computed.
+  const pooledReport =
+    (lateData?.employees ?? []).some((row) => row.lateInCount != null) || settings?.permissionMonthlyCap != null;
 
   // ── Daily Report (Late/Permission/On-Leave filter + Informed + export) ──
   const todayIso = () => new Date().toISOString().slice(0, 10);
@@ -266,7 +273,9 @@ export default function AttendanceReportLog() {
             >
               {showLatePenalty ? <ChevronUp size={14} className="text-amber-600" /> : <ChevronDown size={14} className="text-amber-600" />}
               <span className="text-sm font-bold text-amber-700">Late-Penalty Breakdown</span>
-              <span className="text-xs text-muted-foreground">-who's over their 3 free lates this month</span>
+              <span className="text-xs text-muted-foreground">
+                -who's over their {freeAllowance} free late occurrences this month
+              </span>
             </button>
 
             {showLatePenalty && (
@@ -291,9 +300,12 @@ export default function AttendanceReportLog() {
                 <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-100 rounded-xl text-xs text-amber-800">
                   <AlertTriangle size={14} className="text-amber-600 shrink-0 mt-0.5" />
                   <span>
-                    <strong>Deduction Rule:</strong> Each employee gets 3 free lates per month.
-                    Every 3 billable lates beyond that = ¼ shift deducted from salary.
-                    These deductions are applied automatically when payroll is generated.
+                    <strong>Deduction Rule:</strong>{" "}
+                    {pooledReport
+                      ? "Morning Late-In days, Evening Early-Out days and approved Permissions beyond the monthly cap share one pool per employee."
+                      : "Late occurrences are counted per employee per month."}{" "}
+                    The first {freeAllowance} in a month are free; the rest are billable and priced by the slabs in
+                    Settings → Late Detection. These deductions are applied automatically when payroll is generated.
                   </span>
                 </div>
 
@@ -311,7 +323,15 @@ export default function AttendanceReportLog() {
                       <table className="w-full text-sm">
                         <thead className="border-b bg-gray-50">
                           <tr>
-                            {["Employee", "Department", "Total Late", "Free (3)", "Billable", "Shift Deductions", "Salary Deduction"].map((h) => (
+                            {[
+                              "Employee",
+                              "Department",
+                              ...(pooledReport ? ["Late-In + Early-Out", "Excess Permissions", "Pool Total"] : ["Total Late"]),
+                              `Free (${freeAllowance})`,
+                              "Billable",
+                              "Shift Deductions",
+                              "Salary Deduction",
+                            ].map((h) => (
                               <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
                             ))}
                           </tr>
@@ -327,7 +347,17 @@ export default function AttendanceReportLog() {
                               <td className="px-4 py-3">
                                 <span className={`font-bold text-sm ${row.totalLateCount > 0 ? "text-amber-700" : "text-gray-400"}`}>{row.totalLateCount}</span>
                               </td>
-                              <td className="px-4 py-3 text-sm text-gray-600">{row.permissionsUsed}/3</td>
+                              {pooledReport && (
+                                <>
+                                  <td className="px-4 py-3">
+                                    <span className={`font-bold text-sm ${(row.permissionOverageCount ?? 0) > 0 ? "text-orange-700" : "text-gray-400"}`}>{row.permissionOverageCount ?? 0}</span>
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <span className="font-bold text-sm text-gray-800">{row.totalLateCount + (row.permissionOverageCount ?? 0)}</span>
+                                  </td>
+                                </>
+                              )}
+                              <td className="px-4 py-3 text-sm text-gray-600">{row.permissionsUsed}/{freeAllowance}</td>
                               <td className="px-4 py-3">
                                 <span className={`font-bold text-sm ${row.billableLateCount > 0 ? "text-red-700" : "text-green-600"}`}>{row.billableLateCount}</span>
                               </td>

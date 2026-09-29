@@ -1,8 +1,10 @@
 """Lateness is judged in whole minutes: seconds don't count.
 
 Shift 9:00 with a 10-minute grace: a punch through 9:10:59 is on time and the first late minute is 9:11. The same
-goes for the other whole-minute limits (the punctuality window, the permission window, the lunch return). Before this,
-a punch at 9:10:20 was late because it was compared to the second.
+goes for the lunch return deadline. Before this, a punch at 9:10:20 was late because it was compared to the second.
+
+Morning Late-In is also fully decoupled from Half-Day status now: however late a punch is, it never by itself
+caps the day below Full Day -only missing an entire Half-Day window (see tests_zone_boundary.py) does that.
 """
 
 from datetime import date, time
@@ -29,8 +31,7 @@ class _Base(TestCase):
     def setUpTestData(cls):
         settings = PayrollSettings.get()
         settings.attendance_mode = cls.mode
-        settings.shift_punctuality_window_minutes = 60
-        settings.permission_window_minutes = 60
+        settings.morning_late_in_enabled = True
         settings.afternoon_late_window_minutes = 60
         settings.afternoon_permission_window_minutes = 60
         settings.save()
@@ -62,7 +63,7 @@ class MorningGraceTests(_Base):
             r = self.record(MON, punch, time(18, 0))
             self.assertEqual(r.status, "present", punch)
             self.assertFalse(r.is_late, punch)
-            self.assertFalse(r.permission_morning, punch)
+            self.assertFalse(r.morning_permission_applied, punch)
 
     def test_the_first_late_minute_is_one_past_the_grace(self):
         for punch in (time(9, 11, 0), time(9, 11, 1), time(9, 11, 40), time(9, 30)):
@@ -73,21 +74,15 @@ class MorningGraceTests(_Base):
         r = self.record(MON, time(9, 11, 5), time(18, 0))
         self.assertIn("deadline 09:10", r.late_reason)
 
-    def test_the_punctuality_window_is_judged_in_minutes_too(self):
-        # 9:00 + 10 grace... the Late zone runs to 9:00 + 60 minutes = 10:00, permission from 10:01
-        for punch, permission in ((time(10, 0, 59), False), (time(10, 1, 0), True)):
+    def test_no_punctuality_window_demotes_the_day_anymore(self):
+        """However late the arrival, it's Full Day + Late -never auto-capped at Half Shift the way the
+        old punctuality/permission-zone escalation used to. Only missing an entire Half-Day window does
+        that now (see tests_zone_boundary.py)."""
+        for punch in (time(10, 0), time(11, 0), time(13, 29)):  # all still before the 13:30 Half-Day cutoff
             r = self.record(MON, punch, time(18, 0))
             self.assertEqual(r.status, "present", punch)
-            self.assertEqual(r.permission_morning, permission, punch)
-            self.assertEqual(r.is_late, not permission, punch)
-
-    def test_the_permission_window_is_judged_in_minutes_too(self):
-        # the permission zone ends at 9:00 + 60 + 60 = 11:00; one minute later the day is a Half Shift
-        r = self.record(MON, time(11, 0, 59), time(18, 0))
-        self.assertEqual(r.status, "present")
-        self.assertTrue(r.permission_morning)
-        r = self.record(MON, time(11, 1, 0), time(18, 0))
-        self.assertEqual(r.status, "half_shift")
+            self.assertEqual(r.shifts_earned, 1, punch)
+            self.assertTrue(r.is_late, punch)
 
     def test_an_early_bird_is_unaffected(self):
         r = self.record(MON, time(8, 59, 59), time(18, 0))
