@@ -51,6 +51,8 @@ backend/media/
 backend/backup_staging/
 backend/backups/
 backend/media_pre_restore_*/
+# Progress marker the restore feature writes at runtime (backup_views.py)
+backend/restore_status.json
 
 # Local DB notes (contained a connection string)
 dbconfig.txt
