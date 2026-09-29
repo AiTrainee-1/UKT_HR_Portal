@@ -32,6 +32,33 @@ describe("isMutatingControl", () => {
   });
 });
 
+describe("data-view-safe opt-out", () => {
+  it("never locks a button inside a view-safe container, however it is named", () => {
+    const root = document.createElement("div");
+    root.setAttribute("data-view-safe", "");
+    const inner = document.createElement("div");
+    root.appendChild(inner);
+    const b = button("Export to Excel");
+    inner.appendChild(b);
+    expect(isMutatingControl(b)).toBe(false);
+    lockMutatingControls(root);
+    expect(b.disabled).toBe(false);
+  });
+
+  it("honours the attribute on the button itself", () => {
+    expect(isMutatingControl(button("Generate", { "data-view-safe": "" }))).toBe(false);
+  });
+
+  it("still locks the same button outside a view-safe container", () => {
+    expect(isMutatingControl(button("Export to Excel"))).toBe(true);
+    const other = document.createElement("div");
+    const b = button("Delete");
+    other.appendChild(b);
+    lockMutatingControls(other);
+    expect(b.disabled).toBe(true);
+  });
+});
+
 describe("lockMutatingControls", () => {
   it("disables only the mutating buttons and never touches inputs", () => {
     const root = document.createElement("div");

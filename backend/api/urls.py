@@ -117,6 +117,7 @@ from .reports_views import (
     employee_report, headcount_report,
     settlement_report, new_joinings_report,
 )
+from .reporting.views import reports_catalog, reports_run, reports_export, reports_options
 from .outpass_visitor_views import (
     outpass_qr, outpass_summary, outpass_records, outpass_gate_info, outpass_gate_submit,
     visitor_qr, visitor_summary, visitor_records, visitor_gate_info,
@@ -603,4 +604,10 @@ urlpatterns = [
     path("reports/headcount",           headcount_report),
     path("reports/settlement",          settlement_report),
     path("reports/new-joinings",        new_joinings_report),
+
+    # ── Report Center (registry-driven; see api/reporting/) ─────────────────
+    path("reports/catalog",                     reports_catalog),
+    path("reports/options/<str:source>",        reports_options),
+    path("reports/run/<str:report_id>",         reports_run),
+    path("reports/export/<str:report_id>",      reports_export),
 ]

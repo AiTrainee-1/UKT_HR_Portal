@@ -171,8 +171,14 @@ Template-driven generator (colors/fonts/corner style/logo, configurable in Setti
 ### 4.9 Promotions, Increments & Bonus
 Department/designation change history, salary increment tracking against each employee's initial-salary baseline, bonus tracking.
 
-### 4.10 Reports
-Attendance (log/summary/search), leave (report/balance), payroll, PF/ESI, employee/headcount, settlement, new joinings -CSV/Excel export throughout.
+### 4.10 Reports (Report Center)
+A registry-driven reporting system (`backend/api/reporting/`, developer guide in its `README.md`). Every report is one `ReportSpec` -metadata, filters, columns and a `run(ctx)` function -and the catalog, filter form, on-screen table, **Excel** and **PDF** export are all generated from it, so adding a report needs no frontend work. Categories: Payroll & Salary, Attendance, Leave & Requests, Gate & Visitors, Employees, Loans & Bonus, Administration.
+
+- **Endpoints (all GET, under `/api/reports/`, so a View Only role can use them):** `catalog` (what the user may run + department/designation/branch option lists), `run/<id>?<filters>` (rows, totals, summary cards), `export/<id>?fmt=xlsx|pdf&<filters>`, `options/employees?q=` (employee picker search). `fmt` (not `format`) because DRF reserves `?format=`.
+- **Access:** the middleware still gates `/api/reports/*` on the `reports` module; on top of that each report names the permission modules that own its data (`modules=`), and the user needs "view" on at least one -a role with Reports but not Payroll cannot read salary data here. Audit trail / user-account reports are super-admin only. Branch isolation is applied inside `ReportContext.emp_q()`. Every export is written to the audit log (`action=export, module=reports`).
+- **Exports:** Excel via openpyxl in streaming mode (typed cells, Indian digit grouping, frozen header, autofilter, print setup, text never becomes a formula); PDF via reportlab with the bundled DejaVu Sans (`reporting/fonts/`, so the ₹ sign prints on Railway too), letterhead from Company settings, KPI strip, repeating header, totals row, "Page X of Y". Limits: screen 10,000 rows, PDF 5,000, Excel 30,000 -an export over the limit is refused with a "narrow the filters" message, never silently truncated (Railway kills a request after 30 s).
+- **Rules for report authors:** reports are read-only (a GET never writes), use the values the payroll/attendance engines already stored, parse text-typed dates safely, convert aware datetimes to IST, and never leak Aadhaar (masked), password hashes or photos.
+- `reports_views.py` (the old ten endpoints) is deprecated and unused; delete it with its routes next release.
 
 ### 4.11 Account Management & RBAC
 **Account Management** creates HR users and assigns roles from a hierarchical module tree (a parent module cascades its permission level to children unless a child overrides it). **User Management** assigns employees as department-level approvers for the mobile app's Approvals tab (Leave/Permission/Casual Leave/Missing Punch/Resignation/On-Duty, independently toggled). Plus Activity Logs, Login Devices (active-session view + remote revoke), Chat, Notifications.
@@ -216,7 +222,8 @@ backend/
 │   ├── backup_service.py / backup_scheduler.py / backup_views.py / google_drive.py
 │   ├── maintenance_middleware.py       # Serves a maintenance page during restore
 │   ├── org_views.py / branch_scope.py  # Branches, designations, per-branch data scoping
-│   ├── reports_views.py / chat_views.py / growth_views.py
+│   ├── reporting/                      # Report Center: registry, filters, Excel/PDF exporters, definitions/ (one module per domain)
+│   ├── reports_views.py (deprecated) / chat_views.py / growth_views.py
 │   ├── audit_utils.py                  # Activity Logs
 │   ├── apps.py                         # APScheduler startup (biometric sync, backups, retention)
 │   ├── urls.py                         # All URL routing -source of truth for the full route list

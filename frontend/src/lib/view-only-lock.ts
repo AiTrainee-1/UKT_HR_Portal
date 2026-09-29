@@ -45,7 +45,16 @@ const MUTATING_KEYWORDS = new Set([
   "post",
 ]);
 
+/**
+ * Opt-out for pages that are READ-ONLY by nature (the Report Center: "Generate", "Export", "Run" only read
+ * and download). Put `data-view-safe` on the page's root (and on portaled popover content, which renders
+ * outside that root) and none of the buttons inside are locked, so a View Only role can still use them.
+ * Real data-changing buttons elsewhere stay locked - this never widens what the API allows.
+ */
+export const VIEW_SAFE_ATTR = "data-view-safe";
+
 export function isMutatingControl(el: HTMLButtonElement): boolean {
+  if (el.closest(`[${VIEW_SAFE_ATTR}]`)) return false;
   const accessibleName = [el.textContent, el.getAttribute("aria-label"), el.getAttribute("title")]
     .filter(Boolean)
     .join(" ")

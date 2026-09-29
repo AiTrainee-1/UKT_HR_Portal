@@ -54,7 +54,8 @@ frontend/src/
 │   │   ├── ManageShift.tsx / MissingPunch.tsx / ManualPunchImport.tsx / AttendancePunchSearch.tsx
 │   │   ├── LeaveHoliday.tsx / CasualLeave.tsx / Requests.tsx
 │   │   ├── StaffPayroll.tsx / ProductionPayroll.tsx / Settlement.tsx
-│   │   ├── IdCards.tsx / Promotion.tsx / Increment.tsx / Bonus.tsx / Reports.tsx
+│   │   ├── IdCards.tsx / Promotion.tsx / Increment.tsx / Bonus.tsx
+│   │   ├── Reports.tsx + report-center/   # Report Center: catalog, workspace, schema-driven filters, result table
 │   │   ├── recruitment/          # NewJoinees, Resignations, Interviews, ResumeScreening, Documents, ...
 │   │   ├── AccountManagement.tsx / ActivityLogs.tsx / LoginDevices.tsx
 │   │   └── Settings.tsx          # Every tab: Company/Attendance/Late Detection/Devices/Documents/

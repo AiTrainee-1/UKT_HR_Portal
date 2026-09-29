@@ -414,20 +414,15 @@ These four routes are registered in `config/urls.py` at the bare root (`/iclock/
 - **GET /api/dashboard/interview-summary** — `@require_hr`. Applicant funnel counts by status (attended/selected/rejected/pending=applied) across all applicants.
 - **GET /api/dashboard/salary-trends** — `@require_hr`. Last 12 months of total salary paid, preferring `Payroll.final_salary` sums and falling back to legacy `SalaryRecord.amount` sums if no payroll rows exist.
 
-## Reports (reports_views.py)
+## Reports (api/reporting/)
 
-All ten endpoints return `{ count, results, ... }` JSON and are branch-scoped via `scope_to_branch`; all are `@api_view(["GET"])` with `@require_hr`.
+The Report Center. All endpoints are `@api_view(["GET"])` + `@require_hr`, branch-scoped through `ReportContext.emp_q()`, and sit under `/api/reports/` (module `reports`).
 
-- **GET /api/reports/attendance-log** — Raw `AttendanceLog` punch rows (up to 2000), filterable by date range/department/employee/employment type, each tagged with a human-readable source label (Biometric/Geo Punch/On-Duty/Missing Punch/HR Entry).
-- **GET /api/reports/attendance-summary** — Per-employee monthly attendance + payroll snapshot for a month/year, preferring precomputed `SalarySlip` fields (present/absent/late/OT/gross/net) and falling back to a raw `AttendanceLog` IN-day count if no slip exists.
-- **GET /api/reports/leave** — Leave request history filterable by year/month/department/employee/status, including leave type name, dates, days, reason, status, and approver.
-- **GET /api/reports/leave-balance** — Per-employee, per-leave-type balance snapshot (allocated/used/remaining/carried-forward) for a given year, active employees only.
-- **GET /api/reports/payroll** — Salary register from `SalarySlip` for a month/year (filterable by dept/employee/employmentType/weekNumber), full breakdown of basic/HRA/allowances/OT/deductions/net plus bank details, with aggregate totals.
-- **GET /api/reports/pf-esi** — PF/ESI statutory compliance report: aggregates gross salary and PF/ESI deductions per employee across all their salary slips for a month/year, flags PF/ESI eligibility.
-- **GET /api/reports/employees** — Employee master list export (filterable by department/branch/employmentType/status/employeeId) with full personal/bank/statutory fields.
-- **GET /api/reports/headcount** — Headcount/strength breakdown by department (staff/production/gender split), overall by-type and by-gender totals, and a list of new joiners this calendar month.
-- **GET /api/reports/settlement** — Loan/advance register with computed overdue-months count per advance (comparing repayment schedule against actual `AdvanceRepayment` rows), filterable by status/type/department/employee/overdueOnly, with disbursed/repaid/outstanding totals.
-- **GET /api/reports/new-joinings** — Employees whose `join_date` falls in a given month/year, filterable by department/employmentType.
+- **GET /api/reports/catalog** — Every report the caller may run (id, title, description, category, icon, tags, family/variant, filters with resolved defaults, columns, export formats) plus the department/designation/branch option lists and the categories with counts. Reports whose owning modules the role lacks, and admin-only reports for non-super-admins, are omitted.
+- **GET /api/reports/run/\<id\>?\<filters\>** — Runs one report: `{ id, title, category, generatedAt, generatedBy, filters[] (echo), columns[], rows[], totals, summary[], notes[], rowCount, truncated, limit }`. Filter parameters: `period=YYYY-MM`, `year`, `dateFrom`/`dateTo`, `departmentIds`/`designationIds`/`branchIds`/`employeeIds` (comma lists), `employmentType`, `employeeStatus`, plus report-specific select/boolean/number/text filters. Errors: 400 `invalid_filter` (with `field`), 403 `report_forbidden`, 404 `not_found`, 500 `report_failed`.
+- **GET /api/reports/export/\<id\>?fmt=xlsx|pdf&\<filters\>** — The same data as a file (`Cache-Control: no-store`, audited). 413 `too_many_rows` when the result exceeds the format's limit (PDF 5,000, Excel 30,000).
+- **GET /api/reports/options/employees?q=&ids=&departmentIds=** — Employee picker search (max 40 hits; `ids` resolves chips). Refused for roles that can open no report with an employee filter.
+- **Legacy (deprecated, unused)** — `/api/reports/attendance-log`, `attendance-summary`, `leave`, `leave-balance`, `payroll`, `pf-esi`, `employees`, `headcount`, `settlement`, `new-joinings` (`reports_views.py`) remain for one release only.
 
 ---
 

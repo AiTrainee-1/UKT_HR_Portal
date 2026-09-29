@@ -234,8 +234,9 @@ CORS_ALLOWED_ORIGINS = [
     if o.strip()
 ]
 CORS_ALLOW_CREDENTIALS = True
-# Lets the browser clients see that a capped list was cut short (view_common.paginate).
-CORS_EXPOSE_HEADERS = ["X-Truncated"]
+# Lets the browser clients see that a capped list was cut short (view_common.paginate), and read the
+# server-chosen filename of a downloaded report/export (Vercel and Railway are different origins).
+CORS_EXPOSE_HEADERS = ["X-Truncated", "Content-Disposition"]
 
 REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],

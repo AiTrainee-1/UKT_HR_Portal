@@ -1,6 +1,12 @@
 """
-HR Reports -all endpoints return JSON { count, results }.
-Frontend handles table rendering and Excel export via exceljs.
+LEGACY HR report endpoints -all return JSON { count, results }.
+
+DEPRECATED: the Reports page no longer calls any of these; it uses the registry-driven Report Center in
+api/reporting/ (catalog / run / export, with server-side PDF + Excel). They are kept for one release so a
+browser tab still running the old page keeps working across a staggered Vercel/Railway deploy, and can be
+deleted next release together with their routes in urls.py (nothing else references them). Do NOT build new
+reports here: known problems -payroll splits staff/production on week_number (wrong for period-based
+production slips), the punch log silently truncates at 2000 rows, bad month/year parameters give a 500.
 """
 import calendar
 from collections import defaultdict

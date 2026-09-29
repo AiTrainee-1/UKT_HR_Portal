@@ -13,6 +13,7 @@ export * from "./growth";
 export * from "./organization";
 export * from "./payroll";
 export * from "./recruitment";
+export * from "./reports";
 export * from "./requests";
 export * from "./system";
 export * from "./whatsapp";
