@@ -195,6 +195,13 @@ class AttendanceDayRecord(models.Model):
     # touches keys present in that dict, and this one deliberately isn't, so
     # a later recompute of this day never clobbers HR's manual note here.
     is_informed = models.BooleanField(null=True, blank=True, default=None, db_column="is_informed")
+    # Where the first punch fell on the morning arrival timeline (attendance_final /
+    # arrival_rules.py): "on_time" | "late" | "excused" (an approved Morning Late-In permission
+    # covered it) | "quarter" (after the Late window: 0.25 shift deducted) | "second_half" (after
+    # the first-half limit: the morning half was missed). Blank for manual rows, employees with no
+    # shift, production and rows computed before this existed. It says which half a Half Day was
+    # worked and why a day earned 0.75 - shifts_earned, not this, is what payroll reads.
+    arrival_zone = models.CharField(max_length=12, default="", blank=True, db_default="", db_column="arrival_zone")
     # Display-only explanation of why is_late/is_half_shift ended up True this
     # day (e.g. "Late morning (Without Permission): arrived 09:40, deadline
     # 09:15"). Never read by any calculation — purely so Payroll/Attendance

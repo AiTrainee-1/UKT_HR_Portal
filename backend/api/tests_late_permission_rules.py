@@ -16,9 +16,11 @@ from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TestCase, TransactionTestCase
 
+from .arrival_rules import hhmm, limits_for as arrival_limits_for
 from .attendance_final import (
     compute_day_record,
     compute_range_records,
+    half_period,
     infer_permission_type,
     late_pool_summary,
     permission_flags_json,
@@ -34,7 +36,7 @@ from .models import (
     PayrollSettings,
     ShiftTemplate,
 )
-from .payroll_views import _generate_staff_payroll
+from .payroll_views import _generate_staff_payroll, staff_working_days
 
 
 def _bearer(payload: dict) -> dict:
@@ -128,61 +130,204 @@ class _RulesMixin:
         self._punch(d, time(12, 30), time(18, 0))  # first punch after the (moved) morning cutoff
         self.assertEqual(self._record(d).status, "half_shift")
 
-    # ── A Half Day arrival is not ALSO a Late-In ──
-    def test_arriving_after_the_morning_half_is_a_half_day_and_not_a_late_in(self):
-        d = date(2026, 4, 8)
-        self._punch(d, time(13, 40), time(18, 0))  # first punch after the 13:30 Morning Half cutoff
+    # ── The morning arrival timeline (shift 09:00, grace 15: on time to 09:15, Late to 10:15,
+    #    permission window to 11:15, first half to 11:35) ──
+    def test_the_arrival_timeline_for_a_nine_o_clock_shift(self):
+        cases = [
+            # first punch, status, shifts earned, is_late, zone
+            (time(9, 15), "present", "1.00", False, "on_time"),
+            (time(9, 16), "present", "1.00", True, "late"),
+            (time(10, 15), "present", "1.00", True, "late"),
+            (time(10, 16), "present", "0.75", False, "quarter"),
+            (time(11, 15), "present", "0.75", False, "quarter"),
+            (time(11, 35), "present", "0.75", False, "quarter"),
+            (time(11, 36), "half_shift", "0.50", False, "second_half"),
+            (time(13, 40), "half_shift", "0.50", False, "second_half"),
+        ]
+        for i, (first, status, shifts, late, zone) in enumerate(cases):
+            d = date(2026, 4, 1 + i)
+            self._punch(d, first, time(18, 0))
+            r = self._record(d)
+            self.assertEqual(
+                (r.status, str(r.shifts_earned), r.is_late, r.arrival_zone), (status, shifts, late, zone), first
+            )
+
+    def test_a_quarter_shift_arrival_is_not_also_a_late_in_and_says_why(self):
+        d = date(2026, 4, 20)
+        self._punch(d, time(11, 0), time(18, 0))
         r = self._record(d)
-        self.assertEqual((r.status, r.shifts_earned, r.is_half_shift), ("half_shift", Decimal("0.50"), True))
         self.assertFalse(r.is_late)
-        self.assertIn("Half Day arrival", r.late_reason)
-        self.assertIn("first punch 13:40", r.late_reason)
         self.assertNotIn("Morning Late-In", r.late_reason)
+        self.assertIn("Quarter-shift arrival", r.late_reason)
+        self.assertIn("first punch 11:00", r.late_reason)
+        self.assertIn("0.25 shift deducted", r.late_reason)
         # one cause, one consequence: the late pool is not charged for the same morning
         self.assertEqual(late_pool_summary([r], 0, PayrollSettings.get())["late_in"], 0)
 
-    def test_an_arrival_that_still_beats_the_cutoff_is_a_full_day_and_late_as_before(self):
-        d = date(2026, 4, 9)
-        self._punch(d, time(13, 29), time(18, 0))
+    def test_a_second_half_arrival_is_absent_until_a_second_half_punch(self):
+        d = date(2026, 4, 21)
+        self._punch(d, time(12, 30))  # 12:30 is after 11:35, and 14:30 has not come yet
         r = self._record(d)
-        self.assertEqual(r.status, "present")
-        self.assertTrue(r.is_late)
-        self.assertIn("Morning Late-In", r.late_reason)
-        self.assertEqual(late_pool_summary([r], 0, PayrollSettings.get())["late_in"], 1)
-
-    def test_the_cutoff_second_itself_is_on_the_half_day_side(self):
-        d = date(2026, 4, 10)
-        self._punch(d, time(13, 30, 0), time(18, 0))
+        self.assertEqual(
+            (r.status, r.shifts_earned, r.arrival_zone, r.is_late), ("absent", Decimal("0"), "second_half", False)
+        )
+        self.assertIn("Second-half arrival", r.late_reason)
+        self._punch(d, time(12, 30), time(14, 35))  # the second-half punch is in
         r = self._record(d)
-        self.assertEqual(r.status, "half_shift")
-        self.assertFalse(r.is_late)
+        self.assertEqual(
+            (r.status, r.shifts_earned, r.is_half_shift, r.is_late), ("half_shift", Decimal("0.50"), True, False)
+        )
+        self.assertEqual(half_period(r, PayrollSettings.get()), "evening")
 
-    def test_the_cutoff_comes_from_settings(self):
+    def test_a_quarter_shift_arrival_who_never_makes_a_second_half_punch_is_a_half_day_not_docked_twice(self):
+        d = date(2026, 4, 22)
+        self._punch(d, time(11, 0), time(13, 0))  # came in time for the first half, gone before the second
+        r = self._record(d)
+        self.assertEqual((r.status, r.shifts_earned, r.arrival_zone), ("half_shift", Decimal("0.50"), "quarter"))
+        self.assertEqual(half_period(r, PayrollSettings.get()), "morning")
+
+    def test_an_approved_permission_excuses_up_to_the_end_of_the_permission_window(self):
+        cases = [
+            (time(10, 40), "present", "1.00", "excused"),  # after the Late window: the permission covers it
+            (time(11, 15), "present", "1.00", "excused"),  # the last minute of the permission window
+            (time(11, 16), "present", "0.75", "quarter"),  # the extra minutes are never covered
+            (time(11, 36), "half_shift", "0.50", "second_half"),
+        ]
+        for i, (first, status, shifts, zone) in enumerate(cases):
+            d = date(2026, 5, 4 + i)
+            self._perm(d, EmployeePermission.TYPE_MORNING_LATE_IN)
+            self._punch(d, first, time(18, 0))
+            r = self._record(d)
+            self.assertEqual(
+                (r.status, str(r.shifts_earned), r.arrival_zone, r.is_late), (status, shifts, zone, False), first
+            )
+        excused = self._record(date(2026, 5, 4))
+        self.assertTrue(excused.morning_permission_applied)
+        self.assertIn("Approved Morning Late-In permission", excused.late_reason)
+        self.assertEqual(late_pool_summary([excused], 0, PayrollSettings.get())["late_in"], 0)
+
+    def test_a_permission_over_the_monthly_cap_excuses_nothing(self):
+        for dd in (5, 6, 7, 8):
+            self._perm(date(2026, 6, dd), EmployeePermission.TYPE_MORNING_LATE_IN)
+        d = date(2026, 6, 8)  # the 4th: approved but Excess
+        self._punch(d, time(10, 40), time(18, 0))
+        r = self._record(d)
+        self.assertTrue(r.morning_permission_excess)
+        self.assertEqual((r.arrival_zone, r.shifts_earned, r.is_late), ("quarter", Decimal("0.75"), False))
+
+    def test_every_window_and_the_deduction_come_from_settings(self):
         ps = PayrollSettings.get()
-        ps.half_day_first_half_end_time = time(12, 0)
-        ps.half_day_second_half_start_time = time(13, 0)
+        ps.arrival_late_window_minutes = 30  # Late to 09:45
+        ps.arrival_permission_window_minutes = 30  # permission window to 10:15
+        ps.arrival_extra_minutes = 10  # first half to 10:25
+        ps.arrival_quarter_deduction = Decimal("0.50")
         ps.save()
-        after, before = date(2026, 4, 13), date(2026, 4, 14)
-        self._punch(after, time(12, 30), time(18, 0))
-        self._punch(before, time(11, 59), time(18, 0))
-        self.assertEqual((self._record(after).status, self._record(after).is_late), ("half_shift", False))
-        self.assertEqual((self._record(before).status, self._record(before).is_late), ("present", True))
+        cases = [
+            (time(9, 45), "1.00", "late"),
+            (time(9, 46), "0.50", "quarter"),
+            (time(10, 25), "0.50", "quarter"),
+        ]
+        for i, (first, shifts, zone) in enumerate(cases):
+            d = date(2026, 6, 15 + i)
+            self._punch(d, first, time(18, 0))
+            r = self._record(d)
+            self.assertEqual((str(r.shifts_earned), r.arrival_zone), (shifts, zone), first)
+        d = date(2026, 6, 18)
+        self._punch(d, time(10, 26), time(18, 0))
+        self.assertEqual((self._record(d).status, self._record(d).arrival_zone), ("half_shift", "second_half"))
 
-    def test_a_lone_punch_in_the_gap_is_absent_and_not_late(self):
-        d = date(2026, 4, 15)
-        self._punch(d, time(13, 40))  # nothing yet in the evening half
-        r = self._record(d)
-        self.assertEqual(r.status, "absent")
-        self.assertFalse(r.is_late)
+    def test_the_windows_follow_each_shifts_own_start_and_grace(self):
+        late_shift = ShiftTemplate.objects.create(
+            name="Late",
+            shift_type="staff",
+            start_time=time(14, 0),
+            end_time=time(22, 0),
+            grace_period_minutes=5,
+            first_half_end=time(18, 0),
+            lunch_duration_minutes=30,
+            lunch_grace_minutes=5,
+        )
+        other = Employee.objects.create(
+            employee_code=f"{self.CODE}B",
+            first_name="Late",
+            last_name="Shift",
+            employment_type="staff",
+            status="active",
+        )
+        EmployeeShiftAssignment.objects.create(employee=other, shift=late_shift, effective_from=date(2020, 1, 1))
+        d = date(2026, 7, 13)
+        for first, zone in (
+            (time(14, 5), "on_time"),
+            (time(15, 5), "late"),
+            (time(16, 6), "quarter"),
+            (time(16, 26), "second_half"),
+        ):
+            AttendanceLog.objects.filter(employee=other, date=d).delete()
+            for tm in (first, time(21, 0)):
+                AttendanceLog.objects.create(employee=other, date=d, punch_time=tm, punch_type="IN", source="test")
+            self.assertEqual(compute_day_record(other, d, settings=PayrollSettings.get()).arrival_zone, zone, first)
 
-    def test_a_half_day_arrival_who_leaves_early_is_still_an_early_out(self):
-        d = date(2026, 4, 16)
-        self._punch(d, time(13, 40), time(16, 0))  # evening half attended, but well before 17:45
+    def test_switching_late_in_off_does_not_switch_the_quarter_rule_off(self):
+        ps = PayrollSettings.get()
+        ps.morning_late_in_enabled = False
+        ps.save()
+        late, quarter = date(2026, 7, 6), date(2026, 7, 7)
+        self._punch(late, time(9, 40), time(18, 0))
+        self._punch(quarter, time(11, 0), time(18, 0))
+        self.assertEqual((self._record(late).is_late, str(self._record(late).shifts_earned)), (False, "1.00"))
+        self.assertEqual(str(self._record(quarter).shifts_earned), "0.75")  # set the deduction to 0 to switch it off
+
+    def test_an_employee_with_no_shift_keeps_the_fixed_first_half_cutoff(self):
+        nobody = Employee.objects.create(
+            employee_code=f"{self.CODE}N", first_name="No", last_name="Shift", employment_type="staff", status="active"
+        )
+        for d, first, status in (
+            (date(2026, 7, 8), time(12, 0), "present"),
+            (date(2026, 7, 9), time(14, 0), "half_shift"),
+        ):
+            for tm in (first, time(18, 0)):
+                AttendanceLog.objects.create(employee=nobody, date=d, punch_time=tm, punch_type="IN", source="test")
+            r = compute_day_record(nobody, d, settings=PayrollSettings.get())
+            self.assertEqual((r.status, r.arrival_zone), (status, ""), first)
+
+    def test_payroll_pays_a_quarter_shift_day_as_three_quarters_of_a_day_and_not_as_late(self):
+        days = staff_working_days(self.emp, 8, 2026)
+        for d in days:
+            self._punch(d, time(9, 0), time(18, 0))
+        full = _generate_staff_payroll(self.emp, 8, 2026)["slip"].breakdown_details
+        self.assertEqual(full["summary"]["effectivePaidDays"], float(len(days)))
+        self._punch(days[3], time(11, 0), time(18, 0))  # one quarter-shift arrival
+        docked = _generate_staff_payroll(self.emp, 8, 2026)["slip"].breakdown_details
+        self.assertEqual(docked["summary"]["effectivePaidDays"], len(days) - 0.25)
+        self.assertEqual(docked["summary"]["lateDays"], 0)  # the quarter shift is not also a late
+        self.assertEqual(docked["deductions"]["lateSummary"]["lateInCount"], 0)
+        self.assertLess(docked["earnings"]["grossSalary"], full["earnings"]["grossSalary"])
+        self.assertAlmostEqual(
+            full["earnings"]["grossSalary"] - docked["earnings"]["grossSalary"],
+            26000 / len(days) * 0.25,
+            places=1,
+        )
+        # and the day is shown to HR as it was decided
+        day = next(x for x in docked["days"] if x["date"] == days[3].isoformat())
+        self.assertEqual((day["arrivalZone"], day["shiftsCompleted"], day["isLate"]), ("quarter", 0.75, False))
+
+    def test_a_quarter_zone_arrival_that_is_already_a_half_day_is_not_docked_twice_and_says_so(self):
+        d = date(2026, 4, 28)
+        self._punch(d, time(11, 0), time(13, 0))
         r = self._record(d)
-        self.assertEqual(r.status, "half_shift")
-        self.assertFalse(r.is_late)
-        self.assertTrue(r.early_leave)
-        self.assertIn("Evening Early-Out", r.late_reason)
+        self.assertEqual((r.status, r.shifts_earned), ("half_shift", Decimal("0.50")))
+        self.assertIn("nothing further is deducted", r.late_reason)
+        self.assertNotIn("0.25 shift deducted", r.late_reason)
+
+    def test_the_attendance_api_says_where_the_first_punch_fell(self):
+        d = date(2026, 4, 29)
+        self._punch(d, time(11, 0), time(18, 0))
+        hist = self.client.get(
+            f"/api/attendance/employee/{self.emp.id}?month=4&year=2026", **_emp_token(self.emp.id)
+        ).json()
+        day = next(r for r in hist["records"] if r["date"] == d.isoformat())
+        self.assertEqual((day["arrivalZone"], day["status"], day["isLate"]), ("quarter", "present", False))
+        self.assertIn("Quarter-shift arrival", day["lateReason"])
 
     # ── Late Detection: the two switches are independent ──
     def test_the_two_detections_can_be_switched_off_independently(self):
@@ -297,13 +442,11 @@ class _RulesMixin:
     # ── The explanation HR reads back to an employee ──
     def test_the_reason_spells_out_how_the_deadline_was_built(self):
         d = date(2026, 7, 6)
-        self._perm(d, EmployeePermission.TYPE_MORNING_LATE_IN)
-        self._punch(d, time(10, 20), time(18, 0))  # even with the permission: 10:15 is the limit
+        self._punch(d, time(9, 40), time(18, 0))
         r = self._record(d)
         self.assertTrue(r.is_late)
-        self.assertIn("deadline 10:15", r.late_reason)
+        self.assertIn("deadline 09:15", r.late_reason)
         self.assertIn("shift start 09:00", r.late_reason)
-        self.assertIn("60 min Morning Late-In permission", r.late_reason)
         self.assertIn("15 min grace", r.late_reason)
 
     def test_the_reason_says_when_an_approved_permission_was_excess(self):
@@ -443,8 +586,12 @@ class _RulesMixin:
             {
                 "morningLateInEnabled": True,
                 "eveningEarlyOutEnabled": True,
-                "halfDayFirstHalfEnd": "13:30",
+                "halfDayFirstHalfEnd": "13:30",  # retired fixed cut-off, still reported for the installed apps
                 "halfDaySecondHalfStart": "14:30",
+                "lateWindowMinutes": 60,
+                "permissionWindowMinutes": 60,
+                "arrivalExtraMinutes": 20,
+                "arrivalQuarterDeduction": 0.25,
                 "permissionMonthlyCap": 3,
                 "freeAllowance": 3,
                 "permissionDurationMinutes": 60,
@@ -722,6 +869,77 @@ class SettingsValidationTests(TestCase):
         self.assertEqual(self._put({"lateFreeAllowance": -1}).status_code, 400)
         self.assertEqual(self._put({"permissionMonthlyCap": 5, "lateFreeAllowance": 2}).status_code, 200)
 
+    def test_the_arrival_timeline_defaults_are_the_ones_agreed(self):
+        body = self.client.get("/api/payroll-settings", **_hr()).json()
+        self.assertEqual(
+            (
+                body["arrivalLateWindowMinutes"],
+                body["arrivalPermissionWindowMinutes"],
+                body["arrivalExtraMinutes"],
+                body["arrivalQuarterDeduction"],
+            ),
+            (60, 60, 20, 0.25),
+        )
+
+    def test_the_arrival_timeline_is_saved_and_reaches_the_engine(self):
+        r = self._put(
+            {
+                "arrivalLateWindowMinutes": 30,
+                "arrivalPermissionWindowMinutes": 45,
+                "arrivalExtraMinutes": 10,
+                "arrivalQuarterDeduction": 0.5,
+            }
+        )
+        self.assertEqual(r.status_code, 200, r.content)
+        body = r.json()
+        self.assertEqual(
+            (body["arrivalLateWindowMinutes"], body["arrivalPermissionWindowMinutes"], body["arrivalExtraMinutes"]),
+            (30, 45, 10),
+        )
+        self.assertEqual(body["arrivalQuarterDeduction"], 0.5)
+        shift = ShiftTemplate(start_time=time(9, 0), end_time=time(18, 0), grace_period_minutes=10)
+        limits = arrival_limits_for(shift, PayrollSettings.get())
+        # 09:10 on time, +30 Late, +45 permission, +10 extra
+        self.assertEqual(
+            [
+                hhmm(x)
+                for x in (limits.on_time_until, limits.late_until, limits.permission_until, limits.first_half_until)
+            ],
+            ["09:10", "09:40", "10:25", "10:35"],
+        )
+
+    def test_the_arrival_timeline_is_bounded(self):
+        for body in (
+            {"arrivalLateWindowMinutes": 241},
+            {"arrivalLateWindowMinutes": -1},
+            {"arrivalPermissionWindowMinutes": 500},
+            {"arrivalExtraMinutes": -5},
+            {"arrivalQuarterDeduction": 1.5},
+            {"arrivalQuarterDeduction": -0.25},
+            {"arrivalQuarterDeduction": 0.255},
+        ):
+            self.assertEqual(self._put(body).status_code, 400, body)
+        self.assertEqual(self._put({"arrivalLateWindowMinutes": "abc"}).status_code, 400)
+        ps = PayrollSettings.get()
+        self.assertEqual(
+            (ps.arrival_late_window_minutes, ps.arrival_permission_window_minutes, ps.arrival_extra_minutes),
+            (60, 60, 20),
+        )
+        self.assertEqual(ps.arrival_quarter_deduction, Decimal("0.25"))
+        # the edges are fine, and a zero deduction switches the quarter-shift rule off
+        self.assertEqual(
+            self._put(
+                {"arrivalLateWindowMinutes": 0, "arrivalExtraMinutes": 240, "arrivalQuarterDeduction": 0}
+            ).status_code,
+            200,
+        )
+
+    def test_saving_only_second_half_start_no_longer_trips_over_the_retired_first_half_end(self):
+        # the stored fixed First Half End is 13:30; the page no longer sends it, so an earlier Second Half Start alone is fine
+        r = self._put({"halfDaySecondHalfStartTime": "13:00"})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["halfDaySecondHalfStartTime"], "13:00")
+
     def test_the_two_detection_switches_round_trip(self):
         r = self._put({"morningLateInEnabled": False, "eveningEarlyOutEnabled": True})
         self.assertEqual(r.status_code, 200, r.content)
@@ -742,8 +960,13 @@ class RollingDeploySchemaTests(TestCase):
             "half_day_first_half_end_time",
             "half_day_second_half_start_time",
             "permission_monthly_cap",
+            "arrival_late_window_minutes",
+            "arrival_permission_window_minutes",
+            "arrival_extra_minutes",
+            "arrival_quarter_deduction",
         ],
         "attendance_day_records": [
+            "arrival_zone",
             "morning_permission_applied",
             "evening_permission_applied",
             "morning_permission_excess",
@@ -900,6 +1123,10 @@ class CompanyWideRuleGuardTests(TestCase):
             {"eveningEarlyOutEnabled": True},
             {"halfDayFirstHalfEndTime": "12:00"},
             {"halfDaySecondHalfStartTime": "15:00"},
+            {"arrivalLateWindowMinutes": 30},
+            {"arrivalPermissionWindowMinutes": 30},
+            {"arrivalExtraMinutes": 5},
+            {"arrivalQuarterDeduction": 0.5},
         ):
             r = self.client.put("/api/payroll-settings", body, content_type="application/json", **self._branch_token())
             self.assertEqual(r.status_code, 403, body)

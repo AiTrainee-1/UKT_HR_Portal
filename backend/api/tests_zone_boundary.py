@@ -59,14 +59,23 @@ class ZoneBoundaryTests(TestCase):
     def _record(self, d, emp=None):
         return compute_day_record(emp or self.emp, d, settings=PayrollSettings.get())
 
-    # ── Half-Day Detection: fixed 13:30/14:30 cutoffs, independent of lateness ──
-    def test_both_halves_attended_is_full_day_even_when_very_late(self):
+    # ── Half-Day Detection: the shift's own first-half limit (09:00 + 15 grace + 60 + 60 + 20 = 11:35) and the
+    #    fixed Second Half Start (14:30) ──
+    def test_both_halves_attended_is_full_day_when_the_first_punch_beats_the_first_half_limit(self):
         d = date(2026, 1, 5)  # Monday
-        self._punch(self.emp, d, time(13, 0), time(18, 0))  # first punch at 1pm: hours late, still < 13:30
+        self._punch(self.emp, d, time(10, 0), time(18, 0))  # inside the Late window: a Full Day AND Late
         r = self._record(d)
         self.assertEqual(r.status, "present")
         self.assertEqual(r.shifts_earned, Decimal("1.00"))
         self.assertTrue(r.is_late)  # Late Detection still fires -orthogonal to Half-Day status
+
+    def test_a_first_punch_after_the_first_half_limit_is_a_second_half_arrival_not_a_full_day(self):
+        d = date(2026, 1, 12)
+        self._punch(self.emp, d, time(13, 0), time(18, 0))  # 1pm: after 11:35, so the first half was missed
+        r = self._record(d)
+        self.assertEqual((r.status, r.shifts_earned), ("half_shift", Decimal("0.50")))
+        self.assertFalse(r.is_late)  # one cause, one consequence: not ALSO Late
+        self.assertEqual(r.arrival_zone, "second_half")
 
     def test_missing_the_morning_half_is_half_day(self):
         d = date(2026, 1, 6)

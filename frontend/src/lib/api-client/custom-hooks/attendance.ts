@@ -888,6 +888,8 @@ export type FinalAttendanceDay = DayPermissionFlags & {
   permissionAfternoonWithRequest?: boolean;
   isCompensationDay?: boolean;
   isHalfDayLeave?: boolean;
+  // Where the first punch fell on the morning arrival timeline: on_time | late | excused | quarter | second_half.
+  arrivalZone?: string | null;
   shiftsEarned: string;
   firstPunch?: string | null;
   lastPunch?: string | null;

@@ -19,7 +19,7 @@ from decimal import Decimal
 
 from django.db.models import Count
 
-from api.attendance_final import late_pool_summary
+from api.attendance_final import half_period, late_pool_summary
 from api.models import EmployeePermission, LeaveRequest
 from api.payroll_views import _d2, late_shift_deduction
 
@@ -836,7 +836,6 @@ def _half_run(ctx):
     d_from, d_to = ctx.date_from, ctx.date_to
     settings = payroll_settings()
     people_by_id = people(ctx)
-    first_end = settings.half_day_first_half_end_time
 
     qs = day_records(ctx, d_from, d_to, status="half_shift").order_by("date", "id")
     slots = {}
@@ -864,7 +863,7 @@ def _half_run(ctx):
         if is_prod or rec.first_punch is None:
             worked = None
         else:
-            worked = "morning" if rec.first_punch < first_end else "evening"
+            worked = half_period(rec, settings) or "evening"
         cause = _half_cause(rec, emp, worked)
         if want_worked and (worked or "unknown") != want_worked:
             continue
@@ -982,11 +981,13 @@ def _half_run(ctx):
         columns = list(_HALF_DETAIL_COLS)
 
     notes = [
-        "Half-day rule (identical for Simple and Strict mode): a punch before the first-half end "
-        f"({first_end:%H:%M}) counts as the morning half; a punch at or after the second-half start "
-        f"({settings.half_day_second_half_start_time:%H:%M}) counts as the evening half; both = full day, one = half day, "
-        "neither = absent. The cut-offs are company-wide settings, not the shift's own times.",
-        "Half worked is inferred from the first punch. Cause is derived from the stored day: HR override (manual record), half-day "
+        "Half-day rule (identical for Simple and Strict mode): a first punch within the shift's first-half limit (its start "
+        f"+ grace + {settings.arrival_late_window_minutes} min Late window + {settings.arrival_permission_window_minutes} min "
+        f"permission window + {settings.arrival_extra_minutes} min extra) counts as the morning half; a punch at or after the "
+        f"second-half start ({settings.half_day_second_half_start_time:%H:%M}) counts as the evening half; both = full day, "
+        "one = half day, neither = absent. The first-half limit follows each shift; the second-half start is a company-wide setting.",
+        "Half worked comes from the day record's arrival zone (older or manual records: from the first punch). Cause is derived "
+        "from the stored day: HR override (manual record), half-day "
         "leave, single punch (a lone punch is a half day by rule and is usually a missing punch), left early (morning only) or "
         "arrived late (evening only).",
         "For production employees a half day means the shift credit is at most half of the day's maximum; the morning / "

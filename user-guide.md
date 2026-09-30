@@ -290,7 +290,24 @@ Configured in **Settings → Late Detection**:
 - A **free allowance** of N lates per month before any deduction begins.
 - After that, **slabs** define how many days are deducted per additional late arrival (e.g., "after 3 lates, deduct 0.5 shifts per additional late").
 - This is automatically calculated during payroll generation.
-- **Late vs Half Day:** a first punch **before** the Morning Half cutoff (Settings → Late Detection, 1:30 PM by default) that is still after shift start + grace is a **Late** arrival. A first punch **at or after** the cutoff means the morning half was missed altogether, so the day is a **Half Day** only — it is *not* also counted as Late, and no "Late Attendance" WhatsApp alert is sent for it. (The evening half is then earned by a punch at or after the Evening Half start, 2:30 PM by default; leaving early is still judged as an Early-Out.)
+
+##### The arrival timeline (Settings → Attendance → Staff)
+
+Where an employee's **first punch** falls decides what the morning costs — once, and only once. Everything is measured from **that employee's own shift start and grace** (Manage Shift), so nothing is a fixed clock time. Example for a 09:00 shift with 10 minutes' grace and the default numbers:
+
+| First punch | What it is | What the day earns |
+|---|---|---|
+| up to 09:10 | On time | 1.00 |
+| 09:11 – 10:10 | **Late** (the *Late window*, 60 min) | 1.00, and one Late in the monthly late pool |
+| 10:11 – 11:10 | *Permission window* (60 min) | With an approved Morning Late-In permission: 1.00, no Late. Without one: **quarter shift**, 0.75 |
+| 11:11 – 11:30 | *Extra minutes* (20 min) | **Quarter shift**, 0.75 (a permission does not cover these) |
+| after 11:30 | The first half is missed | **Absent until a punch at/after Second Half Start** (2:30 PM by default), then a **Half Day** (0.50) |
+
+- **Quarter shift:** the employee came to work, so only a quarter of a shift is deducted (Settings → *Quarter-shift deduction*, 0.25; set 0 to switch it off) instead of losing a whole Half Day. It is *not* also counted as Late. If they never make a second-half punch the day is simply a Half Day; it is not docked twice.
+- **An approved Morning Late-In permission** (within the monthly cap) excuses an arrival up to the end of the permission window. An approved permission beyond the cap excuses nothing; it is one occurrence in the late pool, as before.
+- **The four numbers** — Late window, Permission window, Extra minutes, Quarter-shift deduction — are Settings, together with *Second Half Start*. The page shows a live table of the timeline for an example shift, so you can see the clock times behind the numbers. (The old fixed *First Half End Time* is retired: the limit for the first half is now each shift's start + grace + the three windows.)
+- **What HR sees:** each day's *reason* says which zone it fell in and why (for example "Quarter-shift arrival: first punch 11:00 is after the Late window ended (10:10) … 0.25 shift deducted"). Payroll pays the day by the shifts earned, so a quarter-shift day is paid at 0.75.
+- **WhatsApp:** the "Late Attendance" alert is sent only for the Late window. A quarter-shift or second-half arrival gets no Late alert.
 
 #### Without Permission (WP) Policy
 Similarly configured — if an employee is absent without a prior leave approval, it's tracked separately and may carry a different deduction slab.

@@ -622,8 +622,8 @@ class LateAlertTests(AlertBase):
         # The old auto-detected "counted as Permission"/"Half Shift" zone wording is retired along
         # with that system (see whatsapp_alerts._late_status) -a lateness is either excused by an
         # actual approved, in-cap Permission (a separate check -see the "excuses" test) or it's Late,
-        # however late it is.
-        for punch in ("09:40", "10:30", "11:30"):
+        # however far into the Late window (09:15 -> 10:15 for this shift) it is.
+        for punch in ("09:20", "09:40", "10:15"):
             WhatsAppMessageLog.objects.all().delete()
             AttendanceLog.objects.all().delete()
             Attendance.objects.all().delete()
@@ -689,55 +689,67 @@ class LateAlertTests(AlertBase):
         self.assertEqual(self.run_at(WED, 10), {"late_alert": 1})
 
     def _permit_morning(self):
-        # Shift 09:00 + 15 grace; an in-cap Morning Late-In moves the allowed time to 10:15, exactly the
-        # deadline the attendance engine judges the day by. "Late In" is the installed app's spelling.
+        # Shift 09:00 + 15 grace; an in-cap Morning Late-In excuses an arrival up to the end of the permission
+        # window (11:15), exactly what the attendance engine judges the day by. "Late In" is the installed app's spelling.
         EmployeePermission.objects.create(employee=self.emp, date=WED, type="Late In", status="approved")
 
-    def test_an_approved_permission_moves_the_allowed_time_by_its_hour(self):
+    def test_an_approved_permission_excuses_the_late_alert(self):
         self._permit_morning()
-        self.punch(self.emp, WED, "10:05")  # after the plain 09:15, inside the moved 10:15
+        self.punch(self.emp, WED, "10:05")  # after the plain 09:15
         self.assertEqual(self.run_at(WED, 10, 6), {})
 
-    def test_arriving_after_the_permission_moved_time_is_still_late(self):
+    def test_the_permission_covers_the_whole_permission_window_and_no_further_late_alert_after_it(self):
         self._permit_morning()
-        self.punch(self.emp, WED, "10:40")
-        self.assertEqual(self.run_at(WED, 10, 41), {"late_alert": 1})
-        self.assertIn("Late By: 25 minutes", self.sent_texts()[0])  # 10:40 - 10:15, not 10:40 - 09:15
-
-    def test_an_arrival_after_the_morning_half_is_a_half_day_not_a_late_alert(self):
-        # 13:40 is after the 13:30 Morning Half cutoff: the morning half was missed, which makes the day a
-        # Half Day - it is not also announced as "Late by 4 hr 25 min".
-        self.punch(self.emp, WED, "13:40")
-        self.assertEqual(self.run_at(WED, 13, 41), {})
+        self.punch(self.emp, WED, "10:40")  # after the Late window, inside the permission window (to 11:15)
+        self.assertEqual(self.run_at(WED, 10, 41), {})
+        # after the permission window it is a quarter-shift arrival: still not "Late"
+        emp2 = self.make_employee("A2", "Bala", "Kumar", phone="9000000002")
+        EmployeePermission.objects.create(employee=emp2, date=WED, type="Late In", status="approved")
+        self.punch(emp2, WED, "11:20")
+        self.assertEqual(self.run_at(WED, 11, 21), {})
         self.assertFalse(self.logs("late_alert").exists())
 
-    def test_the_morning_half_cutoff_second_and_the_minute_before(self):
-        for punch, late in (("13:29:59", True), ("13:30:00", False)):
+    def test_the_alert_is_only_for_the_late_window(self):
+        # shift 09:00, grace 15: Late is 09:16 -> 10:15; after that it is a quarter-shift arrival (to 11:35) and then a
+        # second-half arrival, neither of which the attendance engine marks Late - so neither gets a Late alert
+        for punch, late in (
+            ("09:15", False),
+            ("09:16", True),
+            ("10:15", True),
+            ("10:16", False),
+            ("11:35", False),
+            ("11:36", False),
+            ("13:40", False),
+        ):
             WhatsAppMessageLog.objects.all().delete()
             AttendanceLog.objects.all().delete()
             Attendance.objects.all().delete()
             self.punch(self.emp, WED, punch)
-            self.run_at(WED, 13, 31)
+            h, m = (int(x) for x in punch.split(":")[:2])
+            self.run_at(WED, h, m + 1)
             self.assertEqual(self.logs("late_alert").exists(), late, punch)
 
-    def test_the_cutoff_comes_from_settings(self):
+    def test_the_late_window_comes_from_settings(self):
         ps = PayrollSettings.get()
-        ps.half_day_first_half_end_time = time(12, 0)
-        ps.half_day_second_half_start_time = time(13, 0)
+        ps.arrival_late_window_minutes = 30  # Late is 09:16 -> 09:45
         ps.save()
-        self.punch(self.emp, WED, "12:30")
-        self.assertEqual(self.run_at(WED, 12, 31), {})
+        self.punch(self.emp, WED, "09:45")
+        self.assertEqual(self.run_at(WED, 9, 46), {"late_alert": 1})
         emp2 = self.make_employee("A2", "Bala", "Kumar", phone="9000000002")
-        self.punch(emp2, WED, "11:59")
-        self.assertEqual(self.run_at(WED, 12, 0), {"late_alert": 1})
-        self.assertEqual(self.logs("late_alert").get().employee.employee_code, "A2")
+        self.punch(emp2, WED, "09:46")
+        self.assertEqual(self.run_at(WED, 9, 47), {})  # a quarter-shift arrival now
 
-    def test_the_trace_explains_why_a_half_day_arrival_is_not_late(self):
-        self.punch(self.emp, WED, "13:40")
-        trace: list[str] = []
-        day = load_day(at(WED, 13, 41))
-        evaluate(self.emp, day, trace)
-        self.assertTrue(any("Half Day arrival, not a Late one" in line for line in trace), trace)
+    def test_the_trace_explains_why_a_later_arrival_is_not_late(self):
+        for punch, words in (
+            ("11:00", "quarter-shift arrival, not a Late one"),
+            ("13:40", "second-half arrival, not a Late one"),
+        ):
+            AttendanceLog.objects.all().delete()
+            Attendance.objects.all().delete()
+            self.punch(self.emp, WED, punch)
+            trace: list[str] = []
+            evaluate(self.emp, load_day(at(WED, 13, 41)), trace)
+            self.assertTrue(any(words in line for line in trace), (punch, trace))
 
     def test_no_late_alert_while_morning_late_in_detection_is_switched_off(self):
         ps = PayrollSettings.get()

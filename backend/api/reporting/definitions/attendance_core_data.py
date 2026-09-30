@@ -26,6 +26,7 @@ from typing import NamedTuple
 
 from django.db.models import F, Q
 
+from api.attendance_final import half_period
 from api.models import (
     AttendanceDayRecord,
     AttendanceLog,
@@ -575,16 +576,19 @@ def leave_type_text(lr) -> str | None:
     return (ref.code or ref.name) if ref is not None else ((lr.type or "").strip() or "Leave")
 
 
-def half_worked(rec, employee, half_ref: dt.time) -> str | None:
-    """Which half a staff half-day was worked (inferred: a first punch before the half-day cut-off is the morning);
-    production half-shifts are shift credit, not halves. None when the record has no first punch."""
+def half_worked(rec, employee, settings) -> str | None:
+    """Which half a staff half-day was worked: the day record says so itself (its arrival zone: a first punch inside
+    the shift's first-half limit is the morning, a later one the evening; older / manual rows fall back to the retired
+    fixed cut-off - see attendance_final.half_period). Production half-shifts are shift credit, not halves. "Half"
+    when the record has no first punch."""
     if rec is None or rec.status != "half_shift":
         return None
     if employee.employment_type == "production":
         return "Half"
-    if rec.first_punch is None:
+    period = half_period(rec, settings)
+    if period is None:
         return "Half"
-    return "Morning" if rec.first_punch < half_ref else "Evening"
+    return "Morning" if period == "morning" else "Evening"
 
 
 def late_minutes(rec, shift, employee, data: AttendanceData) -> int | None:
@@ -704,7 +708,7 @@ def build_day(data: AttendanceData, emp, d: dt.date, *, deduct_lunch: bool = Tru
     perms = data.permissions.get((emp.id, d), [])
     day.perm_min = sum((p.duration_minutes or 60) for p in perms) if perms else None
     day.perm_types = [EmployeePermission.TYPE_LABELS.get(p.type_key, "Permission") for p in perms]
-    day.half = half_worked(rec, emp, data.settings.half_day_first_half_end_time)
+    day.half = half_worked(rec, emp, data.settings)
 
     flags: list[str] = []
     if rec is not None:

@@ -138,13 +138,39 @@ describe("a day's flags", () => {
     expect(lateDetectionFlags({ status: "present", isHalfShift: true })[0]).toMatchObject({ label: "Half Day" });
   });
 
-  it("quotes the configured Half-Day times in the half's tooltip", () => {
+  it("quotes the configured Second Half Start in the half's tooltip", () => {
     const [flag] = lateDetectionFlags(
       { status: "half_shift", firstPunch: "08:45" },
       { firstHalfEnd: "13:00", secondHalfStart: "14:00" },
     );
-    expect(flag.title).toContain("before 13:00");
     expect(flag.title).toContain("at or after 14:00");
+  });
+
+  it("names the half from the day's arrival zone, before any clock time", () => {
+    // 12:30 is before the retired fixed 13:30 cut-off, but the day says the first half was missed
+    const [late] = lateDetectionFlags({ status: "half_shift", firstPunch: "12:30", arrivalZone: "second_half" });
+    expect(late.label).toBe("Evening half only");
+    expect(late.title).toContain("first-half limit");
+    const [early] = lateDetectionFlags({ status: "half_shift", firstPunch: "11:00", arrivalZone: "quarter" });
+    expect(early.label).toBe("Morning half only");
+    expect(halfDayWorked("12:30", "13:30", "second_half")).toBe("evening");
+    expect(halfDayWorked("12:30", "13:30", "on_time")).toBe("morning");
+    expect(halfDayWorked("12:30", "13:30")).toBe("morning"); // no zone: the retired fixed cut-off
+  });
+
+  it("flags a quarter-shift arrival, and never as Late", () => {
+    const flags = lateDetectionFlags({
+      status: "present",
+      isLate: false,
+      arrivalZone: "quarter",
+      lateReason: "Quarter-shift arrival: first punch 11:00 ...",
+    });
+    expect(flags.map((f) => f.kind)).toEqual(["quarterShift"]);
+    expect(flags[0]).toMatchObject({ label: "Quarter shift", detail: "late arrival" });
+    expect(flags[0].title).toContain("Quarter-shift arrival: first punch 11:00");
+    expect(lateDetectionFlags({ status: "present", arrivalZone: "late", isLate: true }).map((f) => f.kind)).toEqual([
+      "late",
+    ]);
   });
 
   it("shows an Allowed permission per edge, and both together", () => {
@@ -154,7 +180,7 @@ describe("a day's flags", () => {
       label: "Allowed permission applied",
       detail: "Morning",
     });
-    expect(morning.title).toContain("shift start 60 minutes later");
+    expect(morning.title).toContain("excused the arrival up to the end of the permission window");
     const [evening] = lateDetectionFlags({ eveningPermissionApplied: true });
     expect(evening.detail).toBe("Evening");
     expect(evening.title).toContain("shift end 60 minutes earlier");

@@ -8,6 +8,7 @@ caps the day below Full Day -only missing an entire Half-Day window (see tests_z
 """
 
 from datetime import date, time
+from decimal import Decimal
 
 from django.test import TestCase
 
@@ -74,15 +75,20 @@ class MorningGraceTests(_Base):
         r = self.record(MON, time(9, 11, 5), time(18, 0))
         self.assertIn("deadline 09:10", r.late_reason)
 
-    def test_no_punctuality_window_demotes_the_day_anymore(self):
-        """However late the arrival, it's Full Day + Late -never auto-capped at Half Shift the way the
-        old punctuality/permission-zone escalation used to. Only missing an entire Half-Day window does
-        that now (see tests_zone_boundary.py)."""
-        for punch in (time(10, 0), time(11, 0), time(13, 29)):  # all still before the 13:30 Half-Day cutoff
+    def test_the_late_window_is_full_day_and_late_then_the_quarter_shift_rule_takes_over(self):
+        """Late for the Late window after the grace (09:10 -> 10:10 here), a Full Day and a late mark. After it
+        the arrival is a quarter-shift day (0.75, and not ALSO late) until the first-half limit (11:30), and only
+        beyond that is the morning half missed (see tests_late_permission_rules.py for the whole timeline)."""
+        for punch in (time(9, 30), time(10, 0), time(10, 10)):
             r = self.record(MON, punch, time(18, 0))
             self.assertEqual(r.status, "present", punch)
             self.assertEqual(r.shifts_earned, 1, punch)
             self.assertTrue(r.is_late, punch)
+        for punch in (time(10, 11), time(11, 0), time(11, 30)):
+            r = self.record(MON, punch, time(18, 0))
+            self.assertEqual((r.status, r.shifts_earned, r.is_late), ("present", Decimal("0.75"), False), punch)
+        r = self.record(MON, time(11, 31), time(18, 0))
+        self.assertEqual((r.status, r.shifts_earned, r.is_late), ("half_shift", Decimal("0.50"), False))
 
     def test_an_early_bird_is_unaffected(self):
         r = self.record(MON, time(8, 59, 59), time(18, 0))

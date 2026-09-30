@@ -19,7 +19,7 @@ from decimal import Decimal
 
 from django.db.models import Count
 
-from api.attendance_final import month_summary_from_records
+from api.attendance_final import half_period, month_summary_from_records
 from api.models import CasualLeaveRequest, EmployeePermission
 from api.payroll_views import _build_working_days
 
@@ -68,7 +68,7 @@ def leave_code(lr) -> str:
     return f"L{code[:2]}" if code in PALETTE else code
 
 
-def cell_code(data: AttendanceData, emp, d: dt.date, *, leave_codes: bool, weekly_off: bool, half_ref) -> str | None:
+def cell_code(data: AttendanceData, emp, d: dt.date, *, leave_codes: bool, weekly_off: bool) -> str | None:
     """The Attendance Sheet's cell code for one employee-day; None (shown '-') when there is no record."""
     rec = data.record(emp.id, d)
     if rec is None:
@@ -85,9 +85,9 @@ def cell_code(data: AttendanceData, emp, d: dt.date, *, leave_codes: bool, weekl
     if s == "half_shift":
         if emp.employment_type == "production":
             return "½"
-        # the same inference as the legacy sheet: a first punch before the half-day cut-off means the morning was
-        # worked; otherwise (including a manual row with no first punch) the evening
-        return "½M" if rec.first_punch and rec.first_punch < half_ref else "½E"
+        # which half was worked is the day record's own verdict (attendance_final.half_period: a first punch inside
+        # the shift's first-half limit is the morning); a manual row with no first punch reads as the evening
+        return "½M" if half_period(rec, data.settings) == "morning" else "½E"
     if s == "on_leave":
         if leave_codes:
             lr = data.full_leave.get((emp.id, d))
@@ -110,7 +110,6 @@ def _run_muster(ctx) -> ReportResult:
     mask = bool(ctx.params.get("maskService"))
     data = AttendanceData(ctx, employees, ctx.date_from, ctx.date_to, leaves=leave_codes, service=mask)
     employees = drop_dormant(ctx, employees, data)
-    half_ref = data.settings.half_day_first_half_end_time
     today = ctx.today
 
     columns: list[ColumnSpec] = [
@@ -155,7 +154,7 @@ def _run_muster(ctx) -> ReportResult:
             if mask and not data.in_service(emp, d):
                 row[day_key(d)] = None
                 continue
-            code = cell_code(data, emp, d, leave_codes=leave_codes, weekly_off=weekly_off, half_ref=half_ref)
+            code = cell_code(data, emp, d, leave_codes=leave_codes, weekly_off=weekly_off)
             row[day_key(d)] = code
             rec = data.record(emp.id, d)
             if rec is None:

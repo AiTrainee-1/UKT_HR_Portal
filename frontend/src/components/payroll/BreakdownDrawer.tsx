@@ -7,8 +7,18 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { usePayrollBreakdown, type PayrollRunItem } from "@/lib/api-client";
 import { halfDayWorked, latePoolView } from "@/lib/late-detection";
 import {
-  IndianRupee, Lock, CheckCircle2, Clock, ChevronDown, ChevronUp,
-  AlertCircle, Info, ArrowRight, AlertTriangle, CalendarDays, X,
+  IndianRupee,
+  Lock,
+  CheckCircle2,
+  Clock,
+  ChevronDown,
+  ChevronUp,
+  AlertCircle,
+  Info,
+  ArrowRight,
+  AlertTriangle,
+  CalendarDays,
+  X,
 } from "lucide-react";
 
 // Shared across Payroll (Staff) and Production Payroll pages -a payroll
@@ -18,30 +28,44 @@ import {
 // vs legacy session-based production).
 
 export const MONTH_NAMES = [
-  "January","February","March","April","May","June",
-  "July","August","September","October","November","December",
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
 ];
-export const MONTH_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+export const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 export const STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
-  pending:  { label: "Pending",  cls: TONE.warning },
-  paid:     { label: "Paid",     cls: TONE.success },
-  draft:    { label: "Draft",    cls: TONE.neutral },
+  pending: { label: "Pending", cls: TONE.warning },
+  paid: { label: "Paid", cls: TONE.success },
+  draft: { label: "Draft", cls: TONE.neutral },
   approved: { label: "Approved", cls: TONE.info },
-  locked:   { label: "Locked",   cls: TONE.accent },
+  locked: { label: "Locked", cls: TONE.accent },
 };
 
 export const STATUS_COLORS: Record<string, string> = {
-  present:      TONE.success,
-  absent:       TONE.danger,
-  paid_leave:   TONE.info,
+  present: TONE.success,
+  absent: TONE.danger,
+  paid_leave: TONE.info,
   unpaid_leave: TONE.caution,
-  half_shift:   TONE.warning,
-  holiday:      TONE.neutral,
+  half_shift: TONE.warning,
+  holiday: TONE.neutral,
 };
 
 function PoolRow({
-  label, note, value, unit, strong,
+  label,
+  note,
+  value,
+  unit,
+  strong,
 }: {
   label: string;
   note?: string;
@@ -57,7 +81,13 @@ function PoolRow({
       </span>
       <span className={strong ? "text-orange-900" : "font-semibold"}>
         {value}
-        {unit && typeof value === "number" && <span className="font-normal text-muted-foreground"> {unit}{value !== 1 ? "s" : ""}</span>}
+        {unit && typeof value === "number" && (
+          <span className="font-normal text-muted-foreground">
+            {" "}
+            {unit}
+            {value !== 1 ? "s" : ""}
+          </span>
+        )}
       </span>
     </div>
   );
@@ -77,7 +107,7 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
   // (totals only, by design) and is rendered by its own section below, never through the staff pool.
   const pool = bd?.type === "staff" ? latePoolView(bd.deductions.lateSummary) : null;
 
-  const displayDays = bd && !showAllDays ? bd.days.slice(0, 15) : bd?.days ?? [];
+  const displayDays = bd && !showAllDays ? bd.days.slice(0, 15) : (bd?.days ?? []);
 
   return (
     <Dialog open onOpenChange={onClose}>
@@ -92,14 +122,17 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
               {data.periodStart && data.periodEnd
                 ? `${data.periodStart} – ${data.periodEnd}`
                 : `${MONTH_NAMES[(data.month ?? 1) - 1]} ${data.year}${data.weekNumber ? ` · Week ${data.weekNumber}` : ""}`}
-              {" · "}{data.employee.code} · {data.employee.department ?? ""}
+              {" · "}
+              {data.employee.code} · {data.employee.department ?? ""}
             </p>
           )}
         </DialogHeader>
 
         {isLoading ? (
           <div className="space-y-3 py-4">
-            {[1,2,3,4].map(i => <Skeleton key={i} className="h-12 w-full" />)}
+            {[1, 2, 3, 4].map((i) => (
+              <Skeleton key={i} className="h-12 w-full" />
+            ))}
           </div>
         ) : !bd ? (
           <div className="py-8 text-center text-muted-foreground">
@@ -108,20 +141,25 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
           </div>
         ) : (
           <div className="space-y-5 pb-2">
-
             {/* Summary cards */}
             <div className="grid grid-cols-3 gap-3">
               <div className="rounded-lg bg-blue-50 p-3 text-center">
                 <p className="text-xs text-blue-600 font-medium">Gross Salary</p>
-                <p className="text-lg font-black text-blue-800">₹{data!.summary.grossSalary.toLocaleString("en-IN", {maximumFractionDigits:0})}</p>
+                <p className="text-lg font-black text-blue-800">
+                  ₹{data!.summary.grossSalary.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+                </p>
               </div>
               <div className="rounded-lg bg-red-50 p-3 text-center">
                 <p className="text-xs text-red-600 font-medium">Deductions</p>
-                <p className="text-lg font-black text-red-800">₹{data!.summary.deductions.toLocaleString("en-IN", {maximumFractionDigits:0})}</p>
+                <p className="text-lg font-black text-red-800">
+                  ₹{data!.summary.deductions.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+                </p>
               </div>
               <div className="rounded-lg bg-green-50 p-3 text-center">
                 <p className="text-xs text-green-600 font-medium">Net Salary</p>
-                <p className="text-lg font-black text-green-800">₹{data!.summary.netSalary.toLocaleString("en-IN", {maximumFractionDigits:0})}</p>
+                <p className="text-lg font-black text-green-800">
+                  ₹{data!.summary.netSalary.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+                </p>
               </div>
             </div>
 
@@ -130,15 +168,23 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
               <>
                 {/* Attendance summary */}
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Attendance Summary</p>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                    Attendance Summary
+                  </p>
                   <div className={`grid gap-2 ${(bd.summary.halfShiftDays ?? 0) > 0 ? "grid-cols-5" : "grid-cols-4"}`}>
                     {[
                       { label: "Working Days", value: bd.summary.totalWorkingDays, color: "text-gray-800" },
                       { label: "Present", value: bd.summary.presentDays, color: "text-green-700" },
                       { label: "Paid Leave", value: bd.summary.paidLeaveDays, color: "text-blue-700" },
-                      { label: "Absent", value: (bd.summary.absentDays ?? 0) + (bd.summary.unpaidLeaveDays ?? 0), color: "text-red-700" },
-                      ...((bd.summary.halfShiftDays ?? 0) > 0 ? [{ label: "Half Shifts", value: bd.summary.halfShiftDays, color: "text-amber-700" }] : []),
-                    ].map(s => (
+                      {
+                        label: "Absent",
+                        value: (bd.summary.absentDays ?? 0) + (bd.summary.unpaidLeaveDays ?? 0),
+                        color: "text-red-700",
+                      },
+                      ...((bd.summary.halfShiftDays ?? 0) > 0
+                        ? [{ label: "Half Shifts", value: bd.summary.halfShiftDays, color: "text-amber-700" }]
+                        : []),
+                    ].map((s) => (
                       <div key={s.label} className="rounded-lg border p-2 text-center">
                         <p className={`text-xl font-black ${s.color}`}>{s.value}</p>
                         <p className="text-xs text-muted-foreground">{s.label}</p>
@@ -148,8 +194,7 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                   {/* Attendance mode used for this payroll */}
                   {bd.attendanceMode && (
                     <p className="mt-2 text-[11px] text-muted-foreground">
-                      Attendance calculated in{" "}
-                      <strong className="uppercase">{bd.attendanceMode} mode</strong>
+                      Attendance calculated in <strong className="uppercase">{bd.attendanceMode} mode</strong>
                       {bd.attendanceMode === "simple"
                         ? " -morning + evening punch model (configured in Settings → Attendance)."
                         : " -4-punch engine (configured in Settings → Attendance)."}
@@ -160,19 +205,29 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                       <p className="font-semibold flex items-center gap-1">
                         <Clock size={11} /> Late Arrival Detection
                       </p>
-                      <p>Shift starts: <strong>{bd.shift?.startTime ?? "—"}</strong> &nbsp;+&nbsp; Grace: <strong>{bd.shift?.gracePeriodMinutes ?? 0} min</strong> &nbsp;→&nbsp; Deadline: <strong>
-                        {bd.shift?.startTime && bd.shift?.gracePeriodMinutes != null
-                          ? (() => {
-                              const [h, m] = bd.shift.startTime.split(":").map(Number);
-                              const total = h * 60 + m + bd.shift.gracePeriodMinutes;
-                              return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
-                            })()
-                          : "—"}
-                      </strong></p>
-                      <p>Days arrived after deadline: <strong>{bd.summary.lateDays}</strong></p>
-                      <p className="text-amber-700/80">On a day an Allowed Morning Late-In permission applied, the deadline was 60 minutes later.</p>
+                      <p>
+                        Shift starts: <strong>{bd.shift?.startTime ?? "—"}</strong> &nbsp;+&nbsp; Grace:{" "}
+                        <strong>{bd.shift?.gracePeriodMinutes ?? 0} min</strong> &nbsp;→&nbsp; Deadline:{" "}
+                        <strong>
+                          {bd.shift?.startTime && bd.shift?.gracePeriodMinutes != null
+                            ? (() => {
+                                const [h, m] = bd.shift.startTime.split(":").map(Number);
+                                const total = h * 60 + m + bd.shift.gracePeriodMinutes;
+                                return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+                              })()
+                            : "—"}
+                        </strong>
+                      </p>
+                      <p>
+                        Days arrived after deadline: <strong>{bd.summary.lateDays}</strong>
+                      </p>
+                      <p className="text-amber-700/80">
+                        On a day an Allowed Morning Late-In permission applied, the deadline was 60 minutes later.
+                      </p>
                       {bd.attendanceMode === "simple" && (
-                        <p className="text-amber-700/80">Simple mode: only the morning punch is checked -lunch-return delays are ignored.</p>
+                        <p className="text-amber-700/80">
+                          Simple mode: only the morning punch is checked -lunch-return delays are ignored.
+                        </p>
                       )}
                     </div>
                   )}
@@ -181,8 +236,13 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                       <p className="font-semibold flex items-center gap-1">
                         <AlertTriangle size={11} /> Evening Early-Out Detection
                       </p>
-                      <p><strong>{bd.summary.earlyOutDays}</strong> day{bd.summary.earlyOutDays !== 1 ? "s" : ""} left before shift end - grace this month.</p>
-                      <p className="text-amber-700/80">On a day an Allowed Evening Early-Out permission applied, the shift end was 60 minutes earlier.</p>
+                      <p>
+                        <strong>{bd.summary.earlyOutDays}</strong> day{bd.summary.earlyOutDays !== 1 ? "s" : ""} left
+                        before shift end - grace this month.
+                      </p>
+                      <p className="text-amber-700/80">
+                        On a day an Allowed Evening Early-Out permission applied, the shift end was 60 minutes earlier.
+                      </p>
                     </div>
                   )}
                   {(bd.summary.withoutPermissionDays ?? 0) > 0 && (
@@ -207,29 +267,55 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                       {halfDayRule ? (
                         <p>
                           A half day is recorded when the employee has a punch in only <strong>one</strong> of the two
-                          halves: the Morning half (a punch before <strong>{halfDayRule.firstHalfEnd}</strong>) or the
-                          Evening half (a punch at/after <strong>{halfDayRule.secondHalfStart}</strong>), or when HR
-                          manually marks the day as half shift.
+                          halves: the Morning half (
+                          {bd?.arrivalTimeline ? (
+                            <>
+                              the first punch within the shift&apos;s first-half limit: its start + grace +{" "}
+                              {bd.arrivalTimeline.lateWindowMinutes +
+                                bd.arrivalTimeline.permissionWindowMinutes +
+                                bd.arrivalTimeline.extraMinutes}{" "}
+                              min
+                            </>
+                          ) : (
+                            <>
+                              a punch before <strong>{halfDayRule.firstHalfEnd}</strong>
+                            </>
+                          )}
+                          ) or the Evening half (a punch at/after <strong>{halfDayRule.secondHalfStart}</strong>), or
+                          when HR manually marks the day as half shift.
                         </p>
                       ) : (
                         <p>
-                          Half-shift days as recorded when this payroll was generated (before the Morning/Evening
-                          half rule), or manually marked by HR.
+                          Half-shift days as recorded when this payroll was generated (before the Morning/Evening half
+                          rule), or manually marked by HR.
                         </p>
                       )}
                       <p>
-                        <strong>{bd.summary.halfShiftDays}</strong> half-shift day{bd.summary.halfShiftDays !== 1 ? "s" : ""} &nbsp;×&nbsp; 0.5 &nbsp;=&nbsp;
+                        <strong>{bd.summary.halfShiftDays}</strong> half-shift day
+                        {bd.summary.halfShiftDays !== 1 ? "s" : ""} &nbsp;×&nbsp; 0.5 &nbsp;=&nbsp;
                         <strong> {((bd.summary.halfShiftDays ?? 0) * 0.5).toFixed(2)} effective days</strong>
                         &nbsp;(vs {bd.summary.halfShiftDays} if full shifts)
                       </p>
-                      <p>Salary impact: <strong>−₹{(((bd.summary.halfShiftDays ?? 0) * 0.5) * (bd.earnings?.dailyRate ?? 0)).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong> vs full attendance</p>
+                      <p>
+                        Salary impact:{" "}
+                        <strong>
+                          −₹
+                          {((bd.summary.halfShiftDays ?? 0) * 0.5 * (bd.earnings?.dailyRate ?? 0)).toLocaleString(
+                            "en-IN",
+                            { minimumFractionDigits: 2 },
+                          )}
+                        </strong>{" "}
+                        vs full attendance
+                      </p>
                     </div>
                   )}
                 </div>
 
                 {/* Earnings breakdown */}
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Earnings Calculation</p>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                    Earnings Calculation
+                  </p>
                   <div className="rounded-lg border divide-y text-sm">
                     <div className="flex justify-between px-3 py-2">
                       <span className="text-gray-600">Monthly Salary</span>
@@ -241,7 +327,9 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                     </div>
                     <div className="flex justify-between px-3 py-2">
                       <span className="text-gray-600">Daily Rate</span>
-                      <span className="font-semibold">₹{bd.earnings.dailyRate?.toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                      <span className="font-semibold">
+                        ₹{bd.earnings.dailyRate?.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                      </span>
                     </div>
                     <div className="flex justify-between px-3 py-2 bg-blue-50/40">
                       <span className="text-blue-800 font-medium">
@@ -256,43 +344,62 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                     </div>
                     <div className="flex justify-between px-3 py-2">
                       <span className="text-gray-600">Basic (50%)</span>
-                      <span className="font-semibold">₹{bd.earnings.basic?.toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                      <span className="font-semibold">
+                        ₹{bd.earnings.basic?.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                      </span>
                     </div>
                     <div className="flex justify-between px-3 py-2">
                       <span className="text-gray-600">HRA (20%)</span>
-                      <span className="font-semibold">₹{bd.earnings.hra?.toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                      <span className="font-semibold">
+                        ₹{bd.earnings.hra?.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                      </span>
                     </div>
                     <div className="flex justify-between px-3 py-2">
                       <span className="text-gray-600">Other Allowances</span>
-                      <span className="font-semibold">₹{bd.earnings.allowances?.toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                      <span className="font-semibold">
+                        ₹{bd.earnings.allowances?.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                      </span>
                     </div>
                     <div className="flex justify-between px-3 py-2 bg-green-50/40 font-bold">
                       <span className="text-green-800">Gross Salary</span>
-                      <span className="text-green-800">₹{bd.earnings.grossSalary.toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                      <span className="text-green-800">
+                        ₹{bd.earnings.grossSalary.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                      </span>
                     </div>
                   </div>
                 </div>
 
                 {/* Deductions */}
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Deductions</p>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                    Deductions
+                  </p>
                   <div className="rounded-lg border divide-y text-sm">
                     {(bd.deductions.pf ?? 0) > 0 && (
                       <div className="flex justify-between px-3 py-2">
                         <span className="text-gray-600">PF (12% of Basic)</span>
-                        <span className="font-semibold text-red-700">- ₹{bd.deductions.pf?.toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                        <span className="font-semibold text-red-700">
+                          - ₹{bd.deductions.pf?.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                        </span>
                       </div>
                     )}
                     {(bd.deductions.esi ?? 0) > 0 && (
                       <div className="flex justify-between px-3 py-2">
                         <span className="text-gray-600">ESI (0.75% of Gross)</span>
-                        <span className="font-semibold text-red-700">- ₹{bd.deductions.esi?.toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                        <span className="font-semibold text-red-700">
+                          - ₹{bd.deductions.esi?.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                        </span>
                       </div>
                     )}
                     {bd.deductions.advances > 0 && (
                       <div className="flex justify-between px-3 py-2">
-                        <span className="text-gray-600">Advance Recovery ({bd.deductions.advanceDetails.length} advance{bd.deductions.advanceDetails.length !== 1 ? "s" : ""})</span>
-                        <span className="font-semibold text-red-700">- ₹{bd.deductions.advances.toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                        <span className="text-gray-600">
+                          Advance Recovery ({bd.deductions.advanceDetails.length} advance
+                          {bd.deductions.advanceDetails.length !== 1 ? "s" : ""})
+                        </span>
+                        <span className="font-semibold text-red-700">
+                          - ₹{bd.deductions.advances.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                        </span>
                       </div>
                     )}
                     {(bd.deductions.lateShiftPenalty ?? 0) > 0 && (
@@ -301,14 +408,18 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                           Late Shift Penalty
                           {pool && (
                             <span className="ml-1.5 font-normal text-orange-600 text-xs">
-                              ({pool.detailed
+                              (
+                              {pool.detailed
                                 ? `${pool.lateIn ?? 0} late-in · ${pool.earlyOut ?? 0} early-out · ${pool.excess ?? 0} excess permission · `
                                 : `${pool.total} late · `}
                               {pool.billable} billable · {pool.shifts} shift{pool.shifts !== 1 ? "s" : ""} deducted)
                             </span>
                           )}
                         </span>
-                        <span className="font-semibold text-orange-700">- ₹{(bd.deductions.lateShiftPenalty ?? 0).toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                        <span className="font-semibold text-orange-700">
+                          - ₹
+                          {(bd.deductions.lateShiftPenalty ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                        </span>
                       </div>
                     )}
                     {(bd.deductions.withoutPermissionPenalty ?? 0) > 0 && (
@@ -318,11 +429,20 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                           Without Permission Penalty (earlier rule)
                           {bd.deductions.withoutPermissionSummary && (
                             <span className="ml-1.5 font-normal text-rose-600 text-xs">
-                              ({bd.deductions.withoutPermissionSummary.totalCount} occurrence{bd.deductions.withoutPermissionSummary.totalCount !== 1 ? "s" : ""} · {bd.deductions.withoutPermissionSummary.billableCount} billable · {bd.deductions.withoutPermissionSummary.shiftDeductions} shift{bd.deductions.withoutPermissionSummary.shiftDeductions !== 1 ? "s" : ""} deducted)
+                              ({bd.deductions.withoutPermissionSummary.totalCount} occurrence
+                              {bd.deductions.withoutPermissionSummary.totalCount !== 1 ? "s" : ""} ·{" "}
+                              {bd.deductions.withoutPermissionSummary.billableCount} billable ·{" "}
+                              {bd.deductions.withoutPermissionSummary.shiftDeductions} shift
+                              {bd.deductions.withoutPermissionSummary.shiftDeductions !== 1 ? "s" : ""} deducted)
                             </span>
                           )}
                         </span>
-                        <span className="font-semibold text-rose-700">- ₹{(bd.deductions.withoutPermissionPenalty ?? 0).toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                        <span className="font-semibold text-rose-700">
+                          - ₹
+                          {(bd.deductions.withoutPermissionPenalty ?? 0).toLocaleString("en-IN", {
+                            maximumFractionDigits: 2,
+                          })}
+                        </span>
                       </div>
                     )}
                     {bd.deductions.total === 0 && (
@@ -330,7 +450,9 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                     )}
                     <div className="flex justify-between px-3 py-2 bg-red-50/40 font-bold">
                       <span className="text-red-800">Total Deductions</span>
-                      <span className="text-red-800">- ₹{bd.deductions.total.toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                      <span className="text-red-800">
+                        - ₹{bd.deductions.total.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -338,7 +460,9 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                 {/* Late Detection pool -line by line, so the Late Shift Penalty above can be explained to the employee */}
                 {pool && (pool.total > 0 || (bd.deductions.lateShiftPenalty ?? 0) > 0) && (
                   <div data-testid="late-pool">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Late Detection Pool</p>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                      Late Detection Pool
+                    </p>
                     <div className="rounded-lg border divide-y text-sm">
                       {pool.detailed ? (
                         <>
@@ -346,18 +470,26 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                           <PoolRow label="Evening Early-Out" value={pool.earlyOut ?? 0} unit="day" />
                           <PoolRow
                             label="Excess permissions"
-                            note={pool.permissionCap != null ? `approved beyond ${pool.permissionCap} per month` : undefined}
+                            note={
+                              pool.permissionCap != null ? `approved beyond ${pool.permissionCap} per month` : undefined
+                            }
                             value={pool.excess ?? 0}
                           />
                         </>
                       ) : (
-                        <PoolRow label="Late occurrences" note="generated before the late-in / early-out split" value={pool.total} />
+                        <PoolRow
+                          label="Late occurrences"
+                          note="generated before the late-in / early-out split"
+                          value={pool.total}
+                        />
                       )}
                       <PoolRow label="Pool total" value={pool.total} strong />
                       {pool.freeUsed != null && (
                         <PoolRow
                           label="Free allowance used"
-                          value={pool.freeAllowance != null ? `${pool.freeUsed} of ${pool.freeAllowance}` : pool.freeUsed}
+                          value={
+                            pool.freeAllowance != null ? `${pool.freeUsed} of ${pool.freeAllowance}` : pool.freeUsed
+                          }
                         />
                       )}
                       <PoolRow label="Billable occurrences" value={pool.billable} strong />
@@ -366,9 +498,9 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                     {pool.mergedIntoExcess && (
                       <p className="mt-1.5 text-[11px] text-muted-foreground">
                         {pool.lateInDays ?? 0} late-in and {pool.earlyOutDays ?? 0} early-out day
-                        {(pool.lateInDays ?? 0) + (pool.earlyOutDays ?? 0) !== 1 ? "s were" : " was"} flagged, but a day that
-                        was late and also had an Excess permission on the same edge counts once -the Excess permission is
-                        that occurrence.
+                        {(pool.lateInDays ?? 0) + (pool.earlyOutDays ?? 0) !== 1 ? "s were" : " was"} flagged, but a day
+                        that was late and also had an Excess permission on the same edge counts once -the Excess
+                        permission is that occurrence.
                       </p>
                     )}
                   </div>
@@ -376,7 +508,9 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
 
                 {/* Day-by-day table */}
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Day-by-Day Attendance</p>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                    Day-by-Day Attendance
+                  </p>
                   <div className="rounded-lg border overflow-hidden">
                     <table className="w-full text-xs">
                       <thead className="bg-gray-50">
@@ -396,10 +530,14 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                             <td className="px-3 py-1.5 font-mono">{d.date}</td>
                             <td className="px-3 py-1.5 text-muted-foreground">{d.day}</td>
                             <td className="px-3 py-1.5">
-                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[d.status ?? "absent"] ?? TONE.neutral}`}>
-                                {d.status === "paid_leave" ? (d.leaveType ?? "Paid Leave")
-                                  : d.status === "unpaid_leave" ? "Unpaid Leave"
-                                  : d.status ?? "—"}
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[d.status ?? "absent"] ?? TONE.neutral}`}
+                              >
+                                {d.status === "paid_leave"
+                                  ? (d.leaveType ?? "Paid Leave")
+                                  : d.status === "unpaid_leave"
+                                    ? "Unpaid Leave"
+                                    : (d.status ?? "—")}
                               </span>
                             </td>
                             <td className="px-3 py-1.5 font-mono text-green-700">{d.firstIn ?? "—"}</td>
@@ -408,19 +546,27 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                               {(() => {
                                 // Which half a Half Shift day was worked -only for a payroll generated with the
                                 // Morning/Evening half rule (it records the times), judged the same way the server does.
-                                const half = d.isHalfShift && halfDayRule ? halfDayWorked(d.firstIn, halfDayRule.firstHalfEnd) : null;
+                                const half =
+                                  d.isHalfShift && halfDayRule
+                                    ? halfDayWorked(d.firstIn, halfDayRule.firstHalfEnd, d.arrivalZone)
+                                    : null;
                                 return d.isLate || d.isEarlyOut || d.isHalfShift ? (
                                   <span className="flex flex-wrap gap-1">
-                                    {d.isLate && (
-                                      d.withoutPermission ? (
+                                    {d.isLate &&
+                                      (d.withoutPermission ? (
                                         // Legacy label of payrolls generated before the rewrite.
-                                        <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 font-semibold whitespace-nowrap">Without Permission</span>
+                                        <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 font-semibold whitespace-nowrap">
+                                          Without Permission
+                                        </span>
                                       ) : (
-                                        <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-semibold whitespace-nowrap">Late-In</span>
-                                      )
-                                    )}
+                                        <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-semibold whitespace-nowrap">
+                                          Late-In
+                                        </span>
+                                      ))}
                                     {d.isEarlyOut && (
-                                      <span className="px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 font-semibold whitespace-nowrap">Early-Out</span>
+                                      <span className="px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 font-semibold whitespace-nowrap">
+                                        Early-Out
+                                      </span>
                                     )}
                                     {d.isHalfShift && (
                                       <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 font-semibold whitespace-nowrap">
@@ -428,11 +574,15 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                                       </span>
                                     )}
                                   </span>
-                                ) : <span className="text-gray-300">—</span>;
+                                ) : (
+                                  <span className="text-gray-300">—</span>
+                                );
                               })()}
                             </td>
                             <td className="px-3 py-1.5 text-gray-500 max-w-[280px]">
-                              {d.isLate || d.isEarlyOut ? (d.lateReason ?? <span className="text-gray-300">—</span>) : null}
+                              {d.isLate || d.isEarlyOut
+                                ? (d.lateReason ?? <span className="text-gray-300">—</span>)
+                                : null}
                             </td>
                           </tr>
                         ))}
@@ -442,9 +592,17 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                       <div className="border-t bg-gray-50 px-3 py-2 text-center">
                         <button
                           className="text-xs text-blue-600 hover:underline flex items-center gap-1 mx-auto"
-                          onClick={() => setShowAllDays(s => !s)}
+                          onClick={() => setShowAllDays((s) => !s)}
                         >
-                          {showAllDays ? <><ChevronUp size={12} /> Show fewer days</> : <><ChevronDown size={12} /> Show all {bd.days.length} days</>}
+                          {showAllDays ? (
+                            <>
+                              <ChevronUp size={12} /> Show fewer days
+                            </>
+                          ) : (
+                            <>
+                              <ChevronDown size={12} /> Show all {bd.days.length} days
+                            </>
+                          )}
                         </button>
                       </div>
                     )}
@@ -465,7 +623,7 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                       { label: "Days Worked", value: bd.summary.daysWorked, color: "text-green-700" },
                       { label: "Days Absent", value: bd.summary.daysAbsent, color: "text-red-700" },
                       { label: "Total Shifts", value: bd.summary.totalShifts, color: "text-blue-700" },
-                    ].map(s => (
+                    ].map((s) => (
                       <div key={s.label} className="rounded-lg border p-2 text-center">
                         <p className={`text-xl font-black ${s.color}`}>{s.value}</p>
                         <p className="text-xs text-muted-foreground">{s.label}</p>
@@ -480,12 +638,12 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                       <Clock size={11} /> Late Detection (Production)
                     </p>
                     <p>
-                      Checked against the employee's assigned Production shift (Manage Shift) start/end
-                      time + grace period, per the Attendance Mode configured in Settings → Payroll →
-                      Production.
+                      Checked against the employee's assigned Production shift (Manage Shift) start/end time + grace
+                      period, per the Attendance Mode configured in Settings → Payroll → Production.
                     </p>
                     <p>
-                      <strong>{bd.deductions.lateSummary.totalLateCount}</strong> late occurrence{bd.deductions.lateSummary.totalLateCount !== 1 ? "s" : ""} this period
+                      <strong>{bd.deductions.lateSummary.totalLateCount}</strong> late occurrence
+                      {bd.deductions.lateSummary.totalLateCount !== 1 ? "s" : ""} this period
                       {(bd.deductions.lateShiftPenalty ?? 0) === 0 && (
                         <span> — no deduction yet (within the Free Allowance, or no slabs configured).</span>
                       )}
@@ -506,12 +664,17 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                     </div>
                     <div className="flex justify-between px-3 py-2 font-bold bg-green-50/40">
                       <span className="text-green-800">Gross Salary</span>
-                      <span className="text-green-800">₹{bd.earnings.grossSalary.toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                      <span className="text-green-800">
+                        ₹{bd.earnings.grossSalary.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                      </span>
                     </div>
                   </div>
                 </div>
 
-                {((bd.deductions.pf ?? 0) > 0 || (bd.deductions.esi ?? 0) > 0 || bd.deductions.advances > 0 || (bd.deductions.lateShiftPenalty ?? 0) > 0) && (
+                {((bd.deductions.pf ?? 0) > 0 ||
+                  (bd.deductions.esi ?? 0) > 0 ||
+                  bd.deductions.advances > 0 ||
+                  (bd.deductions.lateShiftPenalty ?? 0) > 0) && (
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
                       Deductions
@@ -525,19 +688,27 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                       {(bd.deductions.pf ?? 0) > 0 && (
                         <div className="flex justify-between px-3 py-2">
                           <span className="text-gray-600">PF ({bd.deductions.pfRate}%)</span>
-                          <span className="font-semibold text-red-700">- ₹{(bd.deductions.pf ?? 0).toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                          <span className="font-semibold text-red-700">
+                            - ₹{(bd.deductions.pf ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                          </span>
                         </div>
                       )}
                       {(bd.deductions.esi ?? 0) > 0 && (
                         <div className="flex justify-between px-3 py-2">
-                          <span className="text-gray-600">{bd.deductions.pfEfRule ? "EF" : "ESI"} ({bd.deductions.esiRate}%)</span>
-                          <span className="font-semibold text-red-700">- ₹{(bd.deductions.esi ?? 0).toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                          <span className="text-gray-600">
+                            {bd.deductions.pfEfRule ? "EF" : "ESI"} ({bd.deductions.esiRate}%)
+                          </span>
+                          <span className="font-semibold text-red-700">
+                            - ₹{(bd.deductions.esi ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                          </span>
                         </div>
                       )}
                       {bd.deductions.advances > 0 && (
                         <div className="flex justify-between px-3 py-2">
                           <span className="text-gray-600">Advance Recovery</span>
-                          <span className="font-semibold text-red-700">- ₹{bd.deductions.advances.toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                          <span className="font-semibold text-red-700">
+                            - ₹{bd.deductions.advances.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                          </span>
                         </div>
                       )}
                       {(bd.deductions.lateShiftPenalty ?? 0) > 0 && (
@@ -546,11 +717,19 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                             Late Shift Penalty
                             {bd.deductions.lateSummary && (
                               <span className="ml-1.5 font-normal text-orange-600 text-xs">
-                                ({bd.deductions.lateSummary.totalLateCount} late · {bd.deductions.lateSummary.billableLateCount} billable · {bd.deductions.lateSummary.shiftDeductions} shift{bd.deductions.lateSummary.shiftDeductions !== 1 ? "s" : ""} deducted)
+                                ({bd.deductions.lateSummary.totalLateCount} late ·{" "}
+                                {bd.deductions.lateSummary.billableLateCount} billable ·{" "}
+                                {bd.deductions.lateSummary.shiftDeductions} shift
+                                {bd.deductions.lateSummary.shiftDeductions !== 1 ? "s" : ""} deducted)
                               </span>
                             )}
                           </span>
-                          <span className="font-semibold text-orange-700">- ₹{(bd.deductions.lateShiftPenalty ?? 0).toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                          <span className="font-semibold text-orange-700">
+                            - ₹
+                            {(bd.deductions.lateShiftPenalty ?? 0).toLocaleString("en-IN", {
+                              maximumFractionDigits: 2,
+                            })}
+                          </span>
                         </div>
                       )}
                     </div>
@@ -559,7 +738,9 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
 
                 {/* Day-by-day table */}
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Day-by-Day Shifts</p>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                    Day-by-Day Shifts
+                  </p>
                   <div className="rounded-lg border overflow-hidden">
                     <table className="w-full text-xs">
                       <thead className="bg-gray-50">
@@ -581,16 +762,21 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                             <td className="px-3 py-1.5 font-mono text-green-700">{d.firstPunch ?? "—"}</td>
                             <td className="px-3 py-1.5 font-mono text-blue-700">{d.lastPunch ?? "—"}</td>
                             <td className="px-3 py-1.5">
-                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[d.status ?? "absent"] ?? TONE.neutral}`}>
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[d.status ?? "absent"] ?? TONE.neutral}`}
+                              >
                                 {d.status ?? "—"}
                               </span>
                               {d.isLate && <span className="ml-1 text-amber-600 font-semibold text-xs">Late</span>}
                             </td>
                             <td className="px-3 py-1.5 text-right">
-                              {(d.shiftsEarned ?? 0) > 0
-                                ? <Badge className="text-xs bg-green-100 text-green-700 border-green-200">{d.shiftsEarned}</Badge>
-                                : <span className="text-gray-300">0</span>
-                              }
+                              {(d.shiftsEarned ?? 0) > 0 ? (
+                                <Badge className="text-xs bg-green-100 text-green-700 border-green-200">
+                                  {d.shiftsEarned}
+                                </Badge>
+                              ) : (
+                                <span className="text-gray-300">0</span>
+                              )}
                             </td>
                             <td className="px-3 py-1.5 text-gray-500 max-w-[240px]">
                               {d.isLate ? (d.lateReason ?? <span className="text-gray-300">—</span>) : null}
@@ -601,8 +787,19 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                     </table>
                     {bd.days.length > 15 && (
                       <div className="border-t bg-gray-50 px-3 py-2 text-center">
-                        <button className="text-xs text-blue-600 hover:underline flex items-center gap-1 mx-auto" onClick={() => setShowAllDays(s => !s)}>
-                          {showAllDays ? <><ChevronUp size={12} /> Show fewer</> : <><ChevronDown size={12} /> Show all {bd.days.length} days</>}
+                        <button
+                          className="text-xs text-blue-600 hover:underline flex items-center gap-1 mx-auto"
+                          onClick={() => setShowAllDays((s) => !s)}
+                        >
+                          {showAllDays ? (
+                            <>
+                              <ChevronUp size={12} /> Show fewer
+                            </>
+                          ) : (
+                            <>
+                              <ChevronDown size={12} /> Show all {bd.days.length} days
+                            </>
+                          )}
                         </button>
                       </div>
                     )}
@@ -615,13 +812,19 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
             {bd.type === "production" && bd.salaryPerShift == null && (
               <>
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Session Configuration</p>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                    Session Configuration
+                  </p>
                   <div className="grid sm:grid-cols-2 gap-2">
-                    {(bd.sessionConfigs ?? []).map(sc => (
+                    {(bd.sessionConfigs ?? []).map((sc) => (
                       <div key={sc.id} className="rounded-lg bg-amber-50 border border-amber-100 p-3">
                         <p className="font-semibold text-sm text-amber-900">{sc.name}</p>
-                        <p className="text-xs text-amber-700 mt-0.5">{sc.startTime} – {sc.endTime}</p>
-                        <p className="text-xs text-amber-600">Min checkout: <strong>{sc.minCheckout}</strong></p>
+                        <p className="text-xs text-amber-700 mt-0.5">
+                          {sc.startTime} – {sc.endTime}
+                        </p>
+                        <p className="text-xs text-amber-600">
+                          Min checkout: <strong>{sc.minCheckout}</strong>
+                        </p>
                         <p className="text-sm font-bold text-amber-800 mt-1">₹{sc.rate}/session</p>
                       </div>
                     ))}
@@ -637,7 +840,7 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                       { label: "Days Worked", value: bd.summary.daysWorked, color: "text-green-700" },
                       { label: "Days Absent", value: bd.summary.daysAbsent, color: "text-red-700" },
                       { label: "Total Sessions", value: bd.summary.totalSessions, color: "text-blue-700" },
-                    ].map(s => (
+                    ].map((s) => (
                       <div key={s.label} className="rounded-lg border p-2 text-center">
                         <p className={`text-xl font-black ${s.color}`}>{s.value}</p>
                         <p className="text-xs text-muted-foreground">{s.label}</p>
@@ -655,18 +858,24 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                     </div>
                     <div className="flex justify-between px-3 py-2 font-bold bg-green-50/40">
                       <span className="text-green-800">Gross Salary</span>
-                      <span className="text-green-800">₹{bd.earnings.grossSalary.toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                      <span className="text-green-800">
+                        ₹{bd.earnings.grossSalary.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                      </span>
                     </div>
                   </div>
                 </div>
 
                 {bd.deductions.advances > 0 && (
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Deductions</p>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                      Deductions
+                    </p>
                     <div className="rounded-lg border divide-y text-sm">
                       <div className="flex justify-between px-3 py-2">
                         <span className="text-gray-600">Advance Recovery</span>
-                        <span className="font-semibold text-red-700">- ₹{bd.deductions.advances.toLocaleString("en-IN", {maximumFractionDigits:2})}</span>
+                        <span className="font-semibold text-red-700">
+                          - ₹{bd.deductions.advances.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -674,7 +883,9 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
 
                 {/* Day-by-day table */}
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Day-by-Day Sessions</p>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                    Day-by-Day Sessions
+                  </p>
                   <div className="rounded-lg border overflow-hidden">
                     <table className="w-full text-xs">
                       <thead className="bg-gray-50">
@@ -695,10 +906,13 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                             <td className="px-3 py-1.5 font-mono text-green-700">{d.firstIn ?? "—"}</td>
                             <td className="px-3 py-1.5 font-mono text-blue-700">{d.lastOut ?? "—"}</td>
                             <td className="px-3 py-1.5 text-right">
-                              {d.totalSessions != null && d.totalSessions > 0
-                                ? <Badge className="text-xs bg-green-100 text-green-700 border-green-200">{d.totalSessions}</Badge>
-                                : <span className="text-gray-300">0</span>
-                              }
+                              {d.totalSessions != null && d.totalSessions > 0 ? (
+                                <Badge className="text-xs bg-green-100 text-green-700 border-green-200">
+                                  {d.totalSessions}
+                                </Badge>
+                              ) : (
+                                <span className="text-gray-300">0</span>
+                              )}
                             </td>
                             <td className="px-3 py-1.5 text-right font-semibold">
                               {(d.sessionAmount ?? 0) > 0 ? `₹${d.sessionAmount}` : "—"}
@@ -709,8 +923,19 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                     </table>
                     {bd.days.length > 15 && (
                       <div className="border-t bg-gray-50 px-3 py-2 text-center">
-                        <button className="text-xs text-blue-600 hover:underline flex items-center gap-1 mx-auto" onClick={() => setShowAllDays(s => !s)}>
-                          {showAllDays ? <><ChevronUp size={12} /> Show fewer</> : <><ChevronDown size={12} /> Show all {bd.days.length} days</>}
+                        <button
+                          className="text-xs text-blue-600 hover:underline flex items-center gap-1 mx-auto"
+                          onClick={() => setShowAllDays((s) => !s)}
+                        >
+                          {showAllDays ? (
+                            <>
+                              <ChevronUp size={12} /> Show fewer
+                            </>
+                          ) : (
+                            <>
+                              <ChevronDown size={12} /> Show all {bd.days.length} days
+                            </>
+                          )}
                         </button>
                       </div>
                     )}
@@ -724,7 +949,7 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
               <div>
                 <p className="text-xs text-green-600 font-medium">Net Salary Payable</p>
                 <p className="text-2xl font-black text-green-800">
-                  ₹{data!.summary.netSalary.toLocaleString("en-IN", {maximumFractionDigits:2})}
+                  ₹{data!.summary.netSalary.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
                 </p>
               </div>
               <Badge className={`text-sm ${STATUS_CONFIG[data!.status]?.cls ?? STATUS_CONFIG.pending.cls}`}>
@@ -735,14 +960,21 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
         )}
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}><X size={14} className="mr-1" />Close</Button>
+          <Button variant="outline" onClick={onClose}>
+            <X size={14} className="mr-1" />
+            Close
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
 
-export function PayrollRow({ run, onViewBreakdown, onMarkPaid }: {
+export function PayrollRow({
+  run,
+  onViewBreakdown,
+  onMarkPaid,
+}: {
   run: PayrollRunItem;
   onViewBreakdown: (id: number) => void;
   onMarkPaid: (run: PayrollRunItem) => void;
@@ -754,37 +986,67 @@ export function PayrollRow({ run, onViewBreakdown, onMarkPaid }: {
   return (
     <div className="flex items-center gap-3 py-3 px-4 rounded-xl border bg-white hover:shadow-sm transition-shadow">
       {/* Employee info */}
-      <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0 ${isProduction ? "bg-gradient-to-br from-amber-400 to-orange-500" : "bg-gradient-to-br from-blue-400 to-indigo-500"}`}>
+      <div
+        className={`w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0 ${isProduction ? "bg-gradient-to-br from-amber-400 to-orange-500" : "bg-gradient-to-br from-blue-400 to-indigo-500"}`}
+      >
         {(run.employeeName ?? "?").charAt(0).toUpperCase()}
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <p className="font-bold text-sm text-gray-900 truncate">{run.employeeName ?? run.employeeCode ?? `#${run.employeeId}`}</p>
+          <p className="font-bold text-sm text-gray-900 truncate">
+            {run.employeeName ?? run.employeeCode ?? `#${run.employeeId}`}
+          </p>
           <Badge className={`text-xs border ${s.cls}`}>{s.label}</Badge>
-          <Badge className={`text-xs ${isProduction ? "bg-amber-100 text-amber-700 border-amber-200" : "bg-green-100 text-green-700 border-green-200"}`}>
+          <Badge
+            className={`text-xs ${isProduction ? "bg-amber-100 text-amber-700 border-amber-200" : "bg-green-100 text-green-700 border-green-200"}`}
+          >
             {isProduction ? "Production" : "Staff"}
           </Badge>
-          {run.weekNumber && <Badge variant="outline" className="text-xs">Week {run.weekNumber}</Badge>}
+          {run.weekNumber && (
+            <Badge variant="outline" className="text-xs">
+              Week {run.weekNumber}
+            </Badge>
+          )}
           {run.periodStart && run.periodEnd && (
-            <Badge variant="outline" className="text-xs">{run.periodStart} – {run.periodEnd}</Badge>
+            <Badge variant="outline" className="text-xs">
+              {run.periodStart} – {run.periodEnd}
+            </Badge>
           )}
         </div>
         <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground flex-wrap">
           {isShiftMode ? (
-            <span className="flex items-center gap-1"><CalendarDays size={11} />{run.presentDays} shifts</span>
+            <span className="flex items-center gap-1">
+              <CalendarDays size={11} />
+              {run.presentDays} shifts
+            </span>
           ) : isProduction ? (
-            <span className="flex items-center gap-1"><CalendarDays size={11} />{run.completedSessions} sessions</span>
+            <span className="flex items-center gap-1">
+              <CalendarDays size={11} />
+              {run.completedSessions} sessions
+            </span>
           ) : (
-            <span className="flex items-center gap-1"><CalendarDays size={11} />{run.presentDays} / {run.totalWorkingDays} days</span>
+            <span className="flex items-center gap-1">
+              <CalendarDays size={11} />
+              {run.presentDays} / {run.totalWorkingDays} days
+            </span>
           )}
-          <span className="flex items-center gap-1"><ArrowRight size={11} />Gross ₹{run.grossSalary.toLocaleString("en-IN", {maximumFractionDigits:0})}</span>
-          {run.deductions > 0 && <span className="text-red-500">- ₹{run.deductions.toLocaleString("en-IN", {maximumFractionDigits:0})}</span>}
+          <span className="flex items-center gap-1">
+            <ArrowRight size={11} />
+            Gross ₹{run.grossSalary.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+          </span>
+          {run.deductions > 0 && (
+            <span className="text-red-500">
+              - ₹{run.deductions.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+            </span>
+          )}
         </div>
       </div>
 
       {/* Net salary */}
       <div className="text-right shrink-0">
-        <p className="text-sm font-black text-green-700">₹{run.finalSalary.toLocaleString("en-IN", {maximumFractionDigits:0})}</p>
+        <p className="text-sm font-black text-green-700">
+          ₹{run.finalSalary.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+        </p>
         <p className="text-xs text-muted-foreground">net</p>
       </div>
 
@@ -794,7 +1056,11 @@ export function PayrollRow({ run, onViewBreakdown, onMarkPaid }: {
           <Info size={11} /> Details
         </Button>
         {run.status === "pending" && (
-          <Button size="sm" className="h-7 text-xs gap-1 bg-green-700 hover:bg-green-800" onClick={() => onMarkPaid(run)}>
+          <Button
+            size="sm"
+            className="h-7 text-xs gap-1 bg-green-700 hover:bg-green-800"
+            onClick={() => onMarkPaid(run)}
+          >
             <CheckCircle2 size={11} /> Mark Paid
           </Button>
         )}

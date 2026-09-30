@@ -133,7 +133,7 @@ class HalfDayLeaveAttendanceTests(TestCase):
         to trip the engine's own existing half-shift lateness check must
         still come through as late, unlike the Morning-slot case above."""
         d = date(2026, 1, 7)
-        self._punch(d, time(15, 0))  # after the 14:30 half-shift reference
+        self._punch(d, time(9, 45))  # inside the Late window after the grace: the morning they still owe is late
         r = self._record(d, half_day_leave_dates={d: LeaveRequest.HALF_DAY_AFTERNOON})
         self.assertEqual(r.status, "half_shift")
         self.assertTrue(r.is_half_day_leave)

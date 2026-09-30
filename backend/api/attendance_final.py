@@ -14,8 +14,9 @@ additionally tracks a fourth, unrelated lunch-return axis -see
 shift_engine.py):
 
   • Half-Day Detection (REPLACES the old punctuality-window Full/Half/Absent
-    rule entirely) → any punch before PayrollSettings.half_day_first_half_
-    end_time (default 13:30) counts as the whole Morning Half attended; any
+    rule entirely) → a first punch within the shift's first-half limit
+    (shift start + grace + Late window + permission window + extra minutes,
+    see arrival_rules.py) counts as the whole Morning Half attended; any
     punch at/after half_day_second_half_start_time (default 14:30) counts as
     the whole Evening Half attended. Both halves → Full Day (1.00); one →
     Half Day (0.50); neither → Absent (0.00). See _half_day_status.
@@ -25,12 +26,13 @@ shift_engine.py):
     enabled), judged against the shift's own start/end + grace, OR that
     day's PERMISSION-SHIFTED effective boundary when an approved, in-cap
     Morning Late-In/Evening Early-Out permission applies -see
-    _permissions_for_day / _effective_shift_for_day. A very late arrival that
-    still beats the Half-Day cutoff is Full Day AND Late, never auto-demoted.
-    An arrival AT/AFTER the Morning Half cutoff is different: the morning
-    half was not attended at all, which is exactly what makes the day a Half
-    Day, so it is a Half Day arrival and NOT also a Morning Late-In (one
-    cause, one consequence -see _morning_half_missed).
+    _permissions_for_day / _effective_shift_for_day. Where the FIRST punch
+    falls on the morning arrival timeline (arrival_rules.py) decides what it
+    costs, once and only once: on time; Late (Full Day, counts in the late
+    pool); excused by an approved Late-In permission; after the Late window
+    the quarter-shift rule (Full Day minus arrival_quarter_deduction, NOT also
+    Late); or past the first-half limit, when the morning half was missed
+    (Half Day from a second-half punch, Absent until then, NOT also Late).
   • Permission: 3 canonical types (EmployeePermission.TYPE_CHOICES), capped
     at PayrollSettings.permission_monthly_cap (default 3) per calendar
     month, counted earliest-first. An approved permission beyond the cap is
@@ -55,6 +57,10 @@ from functools import lru_cache
 
 from django.db.models import Q
 
+from .arrival_rules import (
+    ZONE_EXCUSED, ZONE_LATE, ZONE_QUARTER, ZONE_SECOND_HALF,
+    explain as explain_arrival, limits_for as arrival_limits_for, zone_of as arrival_zone_of,
+)
 from .clock import ist_today
 from .models import (
     AttendanceDayRecord, AttendanceLog, Attendance, Holiday,
@@ -218,15 +224,22 @@ def _compensation_day_for(emp, d: date_type, settings=None, prefetched=None):
     return None
 
 
-def _half_day_status(punch_times: list, settings, second_half_start_override=None) -> tuple:
+def _half_day_status(
+    punch_times: list, settings, second_half_start_override=None, first_half_limit_s=None
+) -> tuple:
     """
     (status, shifts_earned, is_half_shift) from punch PRESENCE alone -the
     same rule for Simple and Strict mode, replacing the old punctuality-
-    window Full/Half/Absent decision entirely. Any punch strictly before
-    half_day_first_half_end_time counts as the whole Morning Half attended;
-    any punch at/after half_day_second_half_start_time counts as the whole
-    Evening Half attended (a lone punch that falls inside the gap between
-    the two, with no other punch, attends neither -Absent, not Half Day).
+    window Full/Half/Absent decision entirely. A first punch within
+    `first_half_limit_s` (the shift's own limit, see arrival_rules.limits_for:
+    shift start + grace + Late window + permission window + extra minutes,
+    inclusive, judged in whole minutes) counts as the whole Morning Half
+    attended; any punch at/after half_day_second_half_start_time counts as
+    the whole Evening Half attended (a lone punch that falls after the
+    first-half limit and before the second half, with no other punch,
+    attends neither -Absent until a second-half punch, not Half Day).
+    Without a limit (an employee with no shift) the retired fixed
+    half_day_first_half_end_time is used, exactly as before.
 
     `second_half_start_override` -a Compensation Day's `leave_until_time`
     replaces half_day_second_half_start_time as the Evening Half cutoff for
@@ -236,12 +249,15 @@ def _half_day_status(punch_times: list, settings, second_half_start_override=Non
     """
     if not punch_times:
         return "absent", Decimal("0"), False
-    first_end_s = _t2s(settings.half_day_first_half_end_time)
     second_start_s = _t2s(second_half_start_override or settings.half_day_second_half_start_time)
     # A punch is a clock time or, for one reattributed from the next calendar date (a 01:00 exit
     # is this working day's 25:00), already a count of seconds since this day's midnight.
     secs = [t if isinstance(t, int) else _t2s(t) for t in punch_times]
-    morning = any(s < first_end_s for s in secs)
+    if first_half_limit_s is None:
+        first_end_s = _t2s(settings.half_day_first_half_end_time)
+        morning = any(s < first_end_s for s in secs)
+    else:
+        morning = min(secs) // 60 * 60 <= first_half_limit_s
     evening = any(s >= second_start_s for s in secs)
     if morning and evening:
         return "present", Decimal("1.00"), False
@@ -250,14 +266,21 @@ def _half_day_status(punch_times: list, settings, second_half_start_override=Non
     return "absent", Decimal("0"), False
 
 
-def _morning_half_missed(punch_times: list, settings) -> bool:
-    """True when the day has punches but none falls before half_day_first_half_end_time: the Morning
-    Half was not attended at all (the employee arrived after it was over). Same seconds handling as
-    _half_day_status, so the two can never disagree about which side of the cutoff a punch is on."""
-    if not punch_times:
-        return False
-    first_end_s = _t2s(settings.half_day_first_half_end_time)
-    return not any((t if isinstance(t, int) else _t2s(t)) < first_end_s for t in punch_times)
+def half_period(rec, settings) -> str | None:
+    """Which half a Half Shift day was worked: "morning" (they came in time for the first half but no second-half
+    punch followed), "evening" (they arrived after the first-half limit), or None when it is not a half shift or the
+    record has no first punch. Records computed by the arrival timeline say so themselves (arrival_zone); a manual
+    or older record falls back to the retired fixed cut-off, as before."""
+    if rec is None or rec.status != AttendanceDayRecord.STATUS_HALF:
+        return None
+    zone = getattr(rec, "arrival_zone", "") or ""
+    if zone == ZONE_SECOND_HALF:
+        return "evening"
+    if zone:
+        return "morning"
+    if rec.first_punch is None:
+        return None
+    return "morning" if rec.first_punch < settings.half_day_first_half_end_time else "evening"
 
 
 def infer_permission_type(permission_time, shift):
@@ -801,6 +824,7 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         "permission_afternoon": False, "permission_afternoon_with_request": False,
         "is_compensation_day": False,
         "is_half_day_leave": False,
+        "arrival_zone": "",
         "late_reason": None,
         "first_punch": None, "last_punch": None,
     }
@@ -885,30 +909,46 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
             # rule for both modes. A Compensation Day's leave_until_time, if
             # set, replaces the Evening Half cutoff for the day.
             second_half_override = comp_day.leave_until_time if (comp_day and comp_day.leave_until_time) else None
+            # The morning arrival timeline: where the FIRST punch falls, measured from THIS shift's own start
+            # and grace (arrival_rules.py). An employee with no shift has no timeline (the fixed cut-off applies).
+            limits = arrival_limits_for(shift, settings)
             status, shifts_earned, is_half = _half_day_status(
                 day_secs, settings, second_half_start_override=second_half_override,
+                first_half_limit_s=limits.first_half_until if limits else None,
             )
             computed["status"] = status
             computed["shifts_earned"] = shifts_earned
             computed["is_half_shift"] = is_half
 
-            # Arriving after the Morning Half is over is what makes this a Half Day (or Absent, with no
-            # evening punch either): it is not ALSO a Morning Late-In, so the day is never charged twice
-            # (0.5 day AND a late-pool occurrence). Only an arrival that still beat the cutoff is Late.
-            # A day with an approved half-day LEAVE is left to the half-day-leave handling below: a morning
-            # leave already makes the arrival expected, and an afternoon leave only excuses the afternoon, so
-            # a late arrival for the morning the employee still owed stays Late.
-            if computed.get("is_late") and not half_day_slot and _morning_half_missed(day_secs, settings):
-                cutoff = settings.half_day_first_half_end_time.strftime("%H:%M")
-                computed["is_late"] = False
-                computed["late_reason"] = "; ".join(
-                    [
-                        f"Half Day arrival: first punch {_as_time(day_times[0]).strftime('%H:%M')} is after the "
-                        f"Morning Half cutoff {cutoff}, so the morning half was missed (counted as a Half Day, "
-                        "not as Late-In)"
-                    ]
-                    + [r for r in [_reason_without(computed.get("late_reason"), "Morning Late-In")] if r]
-                )
+            if limits is not None and day_secs:
+                zone = arrival_zone_of(day_secs[0], limits, permission_covers=applied_morning)
+                computed["arrival_zone"] = zone
+                if zone != ZONE_LATE:
+                    # Only an arrival inside the Late window (without a covering permission) is a Morning Late-In;
+                    # the Late-In check above judged it against the plain / permission-shifted start, so wherever
+                    # the timeline says otherwise (excused, quarter shift, second half) it is overruled here and
+                    # the day is never charged twice.
+                    computed["is_late"] = False
+                    computed["late_reason"] = _reason_without(computed.get("late_reason"), "Morning Late-In")
+                if zone in (ZONE_EXCUSED, ZONE_QUARTER, ZONE_SECOND_HALF) and not comp_day and not half_day_slot:
+                    note = explain_arrival(
+                        zone, day_secs[0], limits, applied_morning, settings.arrival_quarter_deduction,
+                        deducted=status == AttendanceDayRecord.STATUS_PRESENT,
+                    )
+                    computed["late_reason"] = "; ".join(
+                        [n for n in (note, computed.get("late_reason")) if n]
+                    )
+                if (
+                    zone == ZONE_QUARTER
+                    and status == AttendanceDayRecord.STATUS_PRESENT
+                    and not comp_day
+                    and not half_day_slot
+                ):
+                    # They came to work: a quarter shift comes off the day rather than a whole half. Only a day
+                    # that is otherwise a Full Day is reduced - one already cut to a Half Day (no second-half
+                    # punch) is not docked twice.
+                    deduction = max(Decimal("0"), min(Decimal("1"), Decimal(str(settings.arrival_quarter_deduction))))
+                    computed["shifts_earned"] = Decimal("1.00") - deduction
 
         if comp_day:
             # Suppress every Late/Permission flag -a compensation day is

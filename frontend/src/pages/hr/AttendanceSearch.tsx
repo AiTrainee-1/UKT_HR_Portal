@@ -351,7 +351,7 @@ export default function AttendanceSearchSection({
                         const allFlags = lateDetectionFlags(day, halfDayCutoffs);
                         const flags = allFlags.filter(f => f.kind !== "halfDay");
                         const halfFlag = allFlags.find(f => f.kind === "halfDay");
-                        const worked = day.isHalfShift ? halfDayWorked(day.firstPunch, halfDayCutoffs.firstHalfEnd) : null;
+                        const worked = day.isHalfShift ? halfDayWorked(day.firstPunch, halfDayCutoffs.firstHalfEnd, day.arrivalZone) : null;
                         return (
                         <tr
                           key={day.date}

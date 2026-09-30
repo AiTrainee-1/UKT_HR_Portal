@@ -400,6 +400,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
                 "is_late": fr.is_late,
                 "is_early_out": fr.early_leave,
                 "late_reason": fr.late_reason,
+                "arrival_zone": fr.arrival_zone or None,
                 "first_in": fr.first_punch.strftime("%H:%M") if fr.first_punch else None,
                 "last_out": fr.last_punch.strftime("%H:%M") if fr.last_punch else None,
                 "leave_type": None,
@@ -448,6 +449,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             "isLate": is_late,
             "isEarlyOut": is_early_out,
             "lateReason": info["late_reason"],
+            "arrivalZone": info.get("arrival_zone"),
             "firstIn": info["first_in"],
             "lastOut": info["last_out"],
             "leaveType": info["leave_type"],
@@ -603,6 +605,12 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
         "simpleHalfShiftCutoff": str(_settings.simple_half_shift_cutoff)[:5] if use_simple else None,
         "halfDayFirstHalfEndTime": str(_settings.half_day_first_half_end_time)[:5],
         "halfDaySecondHalfStartTime": str(_settings.half_day_second_half_start_time)[:5],
+        "arrivalTimeline": {
+            "lateWindowMinutes": _settings.arrival_late_window_minutes,
+            "permissionWindowMinutes": _settings.arrival_permission_window_minutes,
+            "extraMinutes": _settings.arrival_extra_minutes,
+            "quarterDeduction": float(_settings.arrival_quarter_deduction),
+        },
         "shift": {
             "id": shift_id,
             "name": shift_name,
@@ -1675,8 +1683,15 @@ def _ps_response(ps) -> dict:
         "morningLateInEnabled": ps.morning_late_in_enabled,
         "eveningEarlyOutEnabled": ps.evening_early_out_enabled,
         # Half-Day Detection
+        # The first-half limit is per shift now (shift start + grace + the windows below); this fixed time is
+        # retired but still returned for older clients and for employees with no shift.
         "halfDayFirstHalfEndTime": str(ps.half_day_first_half_end_time)[:5],
         "halfDaySecondHalfStartTime": str(ps.half_day_second_half_start_time)[:5],
+        # Arrival timeline (arrival_rules.py)
+        "arrivalLateWindowMinutes": ps.arrival_late_window_minutes,
+        "arrivalPermissionWindowMinutes": ps.arrival_permission_window_minutes,
+        "arrivalExtraMinutes": ps.arrival_extra_minutes,
+        "arrivalQuarterDeduction": float(ps.arrival_quarter_deduction),
         # Afternoon (lunch-return) zone -untouched axis, see shift_engine.py
         "afternoonLateWindowMinutes": ps.afternoon_late_window_minutes,
         "afternoonPermissionWindowMinutes": ps.afternoon_permission_window_minutes,
@@ -1738,6 +1753,10 @@ COMPANY_WIDE_RULE_KEYS: tuple[str, ...] = (
     "halfDayFirstHalfEndTime",
     "halfDaySecondHalfStartTime",
     "permissionMonthlyCap",
+    "arrivalLateWindowMinutes",
+    "arrivalPermissionWindowMinutes",
+    "arrivalExtraMinutes",
+    "arrivalQuarterDeduction",
 )
 
 FIELD_GROUPS: dict[str, tuple[str, ...]] = {
@@ -1757,6 +1776,10 @@ FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "eveningEarlyOutEnabled": ("settings.attendance",),
     "halfDayFirstHalfEndTime": ("settings.attendance",),
     "halfDaySecondHalfStartTime": ("settings.attendance",),
+    "arrivalLateWindowMinutes": ("settings.attendance",),
+    "arrivalPermissionWindowMinutes": ("settings.attendance",),
+    "arrivalExtraMinutes": ("settings.attendance",),
+    "arrivalQuarterDeduction": ("settings.attendance",),
     "lastPunchPostShiftGraceHours": ("settings.attendance",),
     "firstPunchPreShiftBufferHours": ("settings.attendance",),
     "prodFirstHalfStart": ("settings.attendance",),
@@ -1968,6 +1991,10 @@ def payroll_settings_view(request: Request) -> Response:
         "prodExtraEnd": ("prod_extra_end", str),
         "halfDayFirstHalfEndTime": ("half_day_first_half_end_time", str),
         "halfDaySecondHalfStartTime": ("half_day_second_half_start_time", str),
+        "arrivalLateWindowMinutes": ("arrival_late_window_minutes", int),
+        "arrivalPermissionWindowMinutes": ("arrival_permission_window_minutes", int),
+        "arrivalExtraMinutes": ("arrival_extra_minutes", int),
+        "arrivalQuarterDeduction": ("arrival_quarter_deduction", Decimal),
         "afternoonLateWindowMinutes": ("afternoon_late_window_minutes", int),
         "afternoonPermissionWindowMinutes": ("afternoon_permission_window_minutes", int),
         "defaultShiftGraceMinutes": ("default_shift_grace_minutes", int),
@@ -2011,11 +2038,25 @@ def payroll_settings_view(request: Request) -> Response:
         second_start = _minutes_of_day(ps.half_day_second_half_start_time)
         if first_end is None or second_start is None:
             return _error("Half-Day times must be valid HH:MM clock times")
-        if first_end > second_start:
+        # The fixed first-half end time is retired (each shift's own limit replaces it), so it only has to make
+        # sense when a client actually sends it - the Settings page no longer does.
+        if "halfDayFirstHalfEndTime" in data and first_end > second_start:
             return _error(
                 "First Half End Time must not be later than Second Half Start Time "
                 "(the lunch gap between the two halves cannot be negative)"
             )
+    # Arrival timeline: these decide what an arrival costs, so a nonsensical value is rejected at the door.
+    for key, attr, label in (
+        ("arrivalLateWindowMinutes", "arrival_late_window_minutes", "Late window"),
+        ("arrivalPermissionWindowMinutes", "arrival_permission_window_minutes", "Permission window"),
+        ("arrivalExtraMinutes", "arrival_extra_minutes", "Extra minutes"),
+    ):
+        if key in data and not (0 <= int(getattr(ps, attr)) <= 240):
+            return _error(f"{label} must be between 0 and 240 minutes")
+    if "arrivalQuarterDeduction" in data:
+        deduction = ps.arrival_quarter_deduction
+        if not (Decimal("0") <= deduction <= Decimal("1")) or deduction != deduction.quantize(Decimal("0.01")):
+            return _error("Quarter-shift deduction must be between 0 and 1 shift, with at most 2 decimals")
     if "permissionMonthlyCap" in data and not (0 <= int(ps.permission_monthly_cap) <= 31):
         return _error("Permission monthly cap must be between 0 and 31")
     if "lateFreeAllowance" in data and int(ps.late_free_allowance) < 0:

@@ -134,3 +134,5 @@ api/tests_compensation_page.py
 api/salary_split.py
 api/tests_salary_split.py
 api/ctc.py
+api/arrival_rules.py
+api/tests_arrival_rules.py

@@ -14,6 +14,7 @@ from .auth import require_hr, require_auth, get_token_employee_id
 from .user_settings import settings_for
 from .branch_scope import get_branch_scope, scope_to_branch
 from .geo_attendance_views import source_label
+from .arrival_rules import ZONE_LATE, limits_for as arrival_limits_for, zone_of as arrival_zone_of
 from .attendance_final import permission_flags_json
 from .clock import ist_today
 from .models import (
@@ -88,9 +89,10 @@ def _half_day_leave_slots(d: date_type) -> dict[int, str]:
 
 
 def _late_count(d: date_type, allowed_ids: set[int] | None = None) -> int:
-    """Employees who punched IN after their shift start + grace period. Someone whose first punch is at/after the
-    Morning Half cutoff missed the morning half: that is a Half Day arrival, not a Late one (see attendance_final)."""
-    morning_half_end = PayrollSettings.get().half_day_first_half_end_time
+    """Employees whose first punch fell in the Late window: after their shift start + grace, but not so late that
+    it is a quarter-shift or second-half arrival (those are not Late - see arrival_rules.py). Permissions are
+    not looked at here, as before; the day records themselves carry the exact verdict."""
+    settings = PayrollSettings.get()
     logs = (
         AttendanceLog.objects
         .filter(date=d, punch_type=AttendanceLog.PUNCH_IN)
@@ -117,12 +119,9 @@ def _late_count(d: date_type, allowed_ids: set[int] | None = None) -> int:
             .first()
         )
         if asgn and asgn.shift.start_time:
-            grace = asgn.shift.grace_period_minutes or 0
-            deadline = datetime.combine(d, asgn.shift.start_time) + timedelta(minutes=grace)
             # Whole minutes: a punch at 9:10:20 against a 9:10 limit is on time, as everywhere else.
-            if pt >= morning_half_end:
-                continue
-            if datetime.combine(d, pt.replace(second=0, microsecond=0)) > deadline:
+            limits = arrival_limits_for(asgn.shift, settings)
+            if arrival_zone_of(pt.hour * 3600 + pt.minute * 60 + pt.second, limits, False) == ZONE_LATE:
                 late += 1
     return late
 
@@ -647,6 +646,7 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
             "isEarlyOut":   bool(rec.early_leave) if rec else False,
             # Plain-language account of WHY the day was flagged (the exact deadline and how it was built).
             "lateReason":   (rec.late_reason if rec else None),
+            "arrivalZone":  ((rec.arrival_zone or None) if rec else None),
             "isHalfShift":  bool(rec.is_half_shift) if rec else False,
             **permission_flags_json(rec),
             "permissionAfternoon":  bool(rec.permission_afternoon) if rec else False,
@@ -1278,6 +1278,7 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
             "isLate": bool(rec.is_late),
             "isEarlyOut": bool(rec.early_leave),
             "lateReason": rec.late_reason,
+            "arrivalZone": rec.arrival_zone or None,
             "lateAfternoon": bool(rec.late_afternoon),
             **permission_flags_json(rec),
             "permissionAfternoon": bool(rec.permission_afternoon),
@@ -1476,7 +1477,7 @@ def attendance_report_log_sheet(request: Request) -> Response:
     at 31 days so the payload stays bounded regardless of how the frontend
     drives it.
     """
-    from .attendance_final import compute_range_records, month_summary_from_records
+    from .attendance_final import compute_range_records, half_period, month_summary_from_records
 
     date_from_param = request.query_params.get("dateFrom")
     date_to_param = request.query_params.get("dateTo")
@@ -1518,14 +1519,8 @@ def attendance_report_log_sheet(request: Request) -> Response:
         dates.append(d)
         d += timedelta(days=1)
 
-    # Half Shift doesn't record which half was actually worked -only that
-    # shifts_earned came out to 0.5 -so it's inferred here from first_punch
-    # against the SAME cutoff Half-Day Detection itself uses (see
-    # attendance_final._half_day_status): a punch before
-    # half_day_first_half_end_time is exactly what earns Morning Half
-    # credit, so a Half Shift day with a punch before that cutoff means the
-    # morning was worked and the evening wasn't; otherwise it's the reverse.
-    half_shift_ref = settings.half_day_first_half_end_time
+    # Which half a Half Shift day was worked comes from the day record itself (attendance_final.half_period):
+    # the arrival timeline says whether the first half was made (see arrival_rules.py).
 
     employees = []
     strength_by_date: dict = defaultdict(int)
@@ -1540,13 +1535,14 @@ def attendance_report_log_sheet(request: Request) -> Response:
                 continue
             half_day_period = None
             if r.status == "half_shift":
-                half_day_period = "morning" if (r.first_punch and r.first_punch < half_shift_ref) else "afternoon"
+                half_day_period = "morning" if half_period(r, settings) == "morning" else "afternoon"
             days.append({
                 "date": d.isoformat(),
                 "status": r.status,
                 "isLate": r.is_late,
                 "isEarlyOut": r.early_leave,
                 "lateReason": r.late_reason,
+                "arrivalZone": r.arrival_zone or None,
                 "isHalfShift": r.is_half_shift,
                 "halfDayPeriod": half_day_period,
                 "firstPunch": r.first_punch.strftime("%H:%M") if r.first_punch else None,
@@ -1802,6 +1798,7 @@ def attendance_search_range(request: Request) -> Response:
             "isLate": bool(rec.is_late),
             "isEarlyOut": bool(rec.early_leave),
             "lateReason": rec.late_reason,
+            "arrivalZone": rec.arrival_zone or None,
             "isHalfShift": bool(rec.is_half_shift),
             "lateAfternoon": bool(rec.late_afternoon),
             **permission_flags_json(rec),
@@ -2144,6 +2141,7 @@ def employee_shift_monthly_stats(request: Request) -> Response:
             "isLate": is_late,
             "isEarlyOut": bool(rec.early_leave) if rec else False,
             "lateReason": rec.late_reason if rec else None,
+            "arrivalZone": (rec.arrival_zone or None) if rec else None,
             "lateMorning": late_am,
             "lateReturn": late_ret,
             "lateAfternoon": bool(rec.late_afternoon) if rec else False,
@@ -2256,8 +2254,14 @@ def employee_shift_monthly_stats(request: Request) -> Response:
         "policy": {
             "morningLateInEnabled": bool(ps_late.morning_late_in_enabled),
             "eveningEarlyOutEnabled": bool(ps_late.evening_early_out_enabled),
+            # Retired fixed cut-off, still returned for the installed apps; the real limit is per shift now:
+            # shift start + grace + the three windows below (arrival_rules.py).
             "halfDayFirstHalfEnd": str(ps_late.half_day_first_half_end_time)[:5],
             "halfDaySecondHalfStart": str(ps_late.half_day_second_half_start_time)[:5],
+            "lateWindowMinutes": ps_late.arrival_late_window_minutes,
+            "permissionWindowMinutes": ps_late.arrival_permission_window_minutes,
+            "arrivalExtraMinutes": ps_late.arrival_extra_minutes,
+            "arrivalQuarterDeduction": float(ps_late.arrival_quarter_deduction),
             "permissionMonthlyCap": permission_cap,
             "freeAllowance": free_allowance,
             "permissionDurationMinutes": 60,

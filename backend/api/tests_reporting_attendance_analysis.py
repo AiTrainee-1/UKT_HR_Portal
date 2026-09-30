@@ -421,7 +421,8 @@ class FixtureTests(_Base):
         self.assertEqual((r.status, r.is_late, r.first_punch), ("present", True, t(9, 20)))
         r5, r6 = self.rec(self.e1, 5), self.rec(self.e1, 6)
         self.assertEqual((r5.is_late, r5.morning_permission_applied), (False, True))
-        self.assertEqual((r6.is_late, r6.morning_permission_applied), (True, True))
+        # 10:20 with an approved Late-In permission: inside the permission window (to 11:15), so excused, not late
+        self.assertEqual((r6.is_late, r6.morning_permission_applied, r6.arrival_zone), (False, True, "excused"))
         r9, r10, r11 = self.rec(self.e1, 9), self.rec(self.e1, 10), self.rec(self.e1, 11)
         self.assertEqual((r9.status, r9.early_leave, r9.is_late), ("half_shift", True, False))
         # 14:35 is after the 13:30 Morning Half cutoff: a Half Day arrival, which is not ALSO a Late-In
@@ -474,14 +475,13 @@ class LateDetailTests(_Base):
             [
                 ("AA001", iso(2)),
                 ("AA001", iso(3)),
-                ("AA001", iso(6)),
                 ("AA001", iso(7)),
                 ("AA001", iso(8)),
                 ("AA002", iso(9)),
                 ("AA008", iso(3)),
                 ("AA004", iso(2)),
             ],
-        )  # Mar 10 (14:35, after the Morning Half cutoff) is a Half Day arrival, not a late one
+        )  # Mar 10 (14:35) is a second-half arrival, and Mar 6 (10:20 with an approved permission) is excused: neither is late
         by = self.keyed(body, "employeeCode", "date")
         r = by[("AA001", iso(2))]
         self.assertEqual(
@@ -505,12 +505,8 @@ class LateDetailTests(_Base):
         self.assertEqual(
             (by[("AA001", iso(3))]["lateMinutes"], by[("AA001", iso(3))]["beyondGrace"]), (16, 1)
         )  # 09:16 is the first late minute
-        # in-cap Morning Late-In permission moves the start to 10:00: 10:20 is 20 late / 5 past the 10:15 deadline
-        r6 = by[("AA001", iso(6))]
-        self.assertEqual(
-            (r6["shiftStart"], r6["deadline"], r6["lateMinutes"], r6["beyondGrace"], r6["permission"]),
-            ("10:00", "10:15", 20, 5, "Applied"),
-        )
+        # 10:20 with an in-cap Morning Late-In permission is inside the permission window (to 11:15): excused, not late
+        self.assertNotIn(("AA001", iso(6)), by)
         self.assertEqual(
             (by[("AA001", iso(7))]["lateMinutes"], by[("AA001", iso(7))]["poolStatus"]), (45, "Counted")
         )  # working Saturday
@@ -532,15 +528,15 @@ class LateDetailTests(_Base):
 
     def test_summary_totals_and_subtotals(self):
         body = self.run_report("late-coming-detail", **self.P)
-        self.assertEqual(self.card(body, "Late occurrences"), 8)
+        self.assertEqual(self.card(body, "Late occurrences"), 7)
         self.assertEqual(self.card(body, "Employees affected"), 4)
-        self.assertEqual(self.card(body, "Average late (min)"), 31.4)  # 251 / 8
+        self.assertEqual(self.card(body, "Average late (min)"), 33.0)  # 231 / 7
         self.assertEqual(self.card(body, "Longest late (min)"), 50)
-        self.assertEqual(self.card(body, "Counted in late pool"), 6)
-        self.assertEqual(body["totals"]["lateMinutes"], 20 + 16 + 20 + 45 + 50 + 40 + 30 + 30)
-        self.assertEqual(body["totals"]["beyondGrace"], 5 + 1 + 5 + 30 + 35 + 25 + 15 + 15)
+        self.assertEqual(self.card(body, "Counted in late pool"), 5)
+        self.assertEqual(body["totals"]["lateMinutes"], 20 + 16 + 45 + 50 + 40 + 30 + 30)
+        self.assertEqual(body["totals"]["beyondGrace"], 5 + 1 + 30 + 35 + 25 + 15 + 15)
         subs = {s["employeeName"]: s for s in self.subtotals(body)}
-        self.assertEqual(subs["CUTTING total"]["lateMinutes"], 151 + 40 + 30)
+        self.assertEqual(subs["CUTTING total"]["lateMinutes"], 131 + 40 + 30)
         self.assertEqual(subs["PACKING total"]["lateMinutes"], 30)
         self.assertEqual(self.note_text(body).count("Data freshness"), 0)
 
@@ -557,11 +553,12 @@ class LateDetailTests(_Base):
         )
         self.assertEqual(keys(minLate="60"), [])  # the 335-minute half-day arrival is no longer a late
         self.assertEqual(keys(permissionEffect="excess"), [("AA002", iso(9))])
-        self.assertEqual(keys(permissionEffect="applied"), [("AA001", iso(6))])
+        # a day an approved permission covers is never flagged late any more, so no late row can say "Applied"
+        self.assertEqual(keys(permissionEffect="applied"), [])
         self.assertEqual(len(keys(permissionEffect="none")), 6)
-        self.assertEqual(len(keys(poolFilter="counted")), 6)
+        self.assertEqual(len(keys(poolFilter="counted")), 5)
         self.assertEqual(keys(poolFilter="not_counted"), [("AA001", iso(8)), ("AA002", iso(9))])
-        self.assertEqual(len(keys(shift="gener")), 8)
+        self.assertEqual(len(keys(shift="gener")), 7)
         self.assertEqual(keys(shift="night"), [])
         self.assertEqual(keys(employeeIds=str(self.e2.id)), [("AA002", iso(9))])
         self.assertEqual(keys(departmentIds=str(self.pack.id)), [("AA004", iso(2))])
@@ -625,7 +622,7 @@ class LateDetailTests(_Base):
     def test_branch_scoped_user_sees_only_own_branch_and_cannot_widen(self):
         body = self.run_report("late-coming-detail", self.b1_user, **self.P)
         self.assertEqual({r["employeeCode"] for r in self.data(body)}, {"AA001", "AA002", "AA008"})
-        self.assertEqual(len(self.data(body)), 7)
+        self.assertEqual(len(self.data(body)), 6)
         body = self.run_report("late-coming-detail", self.b1_user, **self.P, branchIds=str(self.b2.id))
         self.assertEqual(self.data(body), [])
         body = self.run_report("late-coming-detail", self.b1_user, **self.P, employeeIds=str(self.e4.id))
@@ -650,7 +647,7 @@ class LateDetailTests(_Base):
         PayrollSettings.objects.filter(pk=1).update(morning_late_in_enabled=False)
         body = self.run_report("late-coming-detail", **self.P)
         self.assertIn("switched off", self.note_text(body))
-        self.assertEqual(len(self.data(body)), 8)  # what was flagged earlier is not erased
+        self.assertEqual(len(self.data(body)), 7)  # what was flagged earlier is not erased
 
     def test_missing_records_are_reported_not_hidden(self):
         AttendanceDayRecord.objects.filter(employee=self.e1, date__in=[d(11), d(12)]).delete()
@@ -685,7 +682,22 @@ class LateCountsTests(_Base):
                 a["approvedPermissions"],
                 a["halfDays"],
             ),
-            ("General", 25, 5, 4, 1, 0, 5, 3, 2, 151, 30, 50, 2, 3),  # the 14:35 half-day arrival is no late
+            (
+                "General",
+                25,
+                4,
+                3,
+                1,
+                0,
+                4,
+                3,
+                1,
+                131,
+                33,
+                50,
+                2,
+                3,
+            ),  # 14:35 (second half) and 10:20 (excused) are no late
         )
         self.assertNotIn("nightLate", a)  # Simple mode: the strict-mode lunch-return flag has no column
         b = by[("AA002",)]
@@ -719,14 +731,14 @@ class LateCountsTests(_Base):
         body = self.run_report("late-summary-counts", **self.P)
         self.assertEqual(self.card(body, "Employees with lates"), 4)
         self.assertEqual(self.card(body, "Over the free allowance"), 1)
-        self.assertEqual(self.card(body, "Pool occurrences"), 9)
-        self.assertEqual(self.card(body, "Late minutes"), 251)
+        self.assertEqual(self.card(body, "Pool occurrences"), 8)
+        self.assertEqual(self.card(body, "Late minutes"), 231)
         self.assertEqual(self.card(body, "Free allowance / month"), 3)
         self.assertEqual(self.card(body, "Permission cap / month"), 3)
-        self.assertEqual(body["totals"]["poolTotal"], 9)
-        self.assertEqual(body["totals"]["lateDays"], 8)
+        self.assertEqual(body["totals"]["poolTotal"], 8)
+        self.assertEqual(body["totals"]["lateDays"], 7)
         subs = {s["employeeName"]: s for s in self.subtotals(body)}
-        self.assertEqual(subs["CUTTING total"]["poolTotal"], 5 + 2 + 0 + 1)
+        self.assertEqual(subs["CUTTING total"]["poolTotal"], 4 + 2 + 0 + 1)
         self.assertEqual(subs["SEWING total"]["poolTotal"], 0)
         text = self.note_text(body)
         self.assertIn("1 staff employee(s) have no shift assignment", text)
@@ -814,7 +826,7 @@ class LateCountsTests(_Base):
     def test_branch_isolation(self):
         body = self.run_report("late-summary-counts", self.b1_user, **self.P)
         self.assertNotIn("AA004", {r["employeeCode"] for r in self.data(body)})
-        self.assertEqual(self.card(body, "Pool occurrences"), 8)
+        self.assertEqual(self.card(body, "Pool occurrences"), 7)
         body = self.run_report("late-summary-counts", self.b1_user, **self.P, branchIds=str(self.b2.id))
         self.assertEqual(self.data(body), [])
 
@@ -824,9 +836,10 @@ class LatePenaltyTests(_Base):
 
     def setUp(self):
         super().setUp()
-        # AA001 has 5 pool occurrences now that its 14:35 half-day arrival is no longer also a Late-In. A free
-        # allowance of 2 keeps the money maths exercised: 3 billable = the "3+ billable = 0.25 shift" slab.
-        PayrollSettings.objects.filter(pk=1).update(late_free_allowance=2)
+        # AA001 has 4 pool occurrences now that its 14:35 second-half arrival and its permission-excused 10:20 are no
+        # longer Late-Ins. A free allowance of 1 keeps the money maths exercised: 3 billable = the
+        # "3+ billable = 0.25 shift" slab.
+        PayrollSettings.objects.filter(pk=1).update(late_free_allowance=1)
 
     def test_golden_rows_and_money(self):
         body = self.run_report("late-penalty-breakdown", **self.P)
@@ -846,7 +859,7 @@ class LatePenaltyTests(_Base):
                 a["shiftDeductions"],
                 a["salaryDeduction"],
             ),
-            (25, 5, 0, 5, 2, 3, 0.25, 260.0),  # 0.25 shift x 26000 / 25 working days
+            (25, 4, 0, 4, 1, 3, 0.25, 260.0),  # 0.25 shift x 26000 / 25 working days
         )
         b = by[("AA002",)]
         self.assertEqual(
@@ -859,7 +872,7 @@ class LatePenaltyTests(_Base):
                 b["shiftDeductions"],
                 b["salaryDeduction"],
             ),
-            (1, 1, 2, 2, 0, 0.0, 0.0),
+            (1, 1, 2, 1, 1, 0.0, 0.0),
         )
         self.assertEqual((by[("AA003",)]["workingDays"], by[("AA003",)]["salaryDeduction"]), (21, 0.0))
         self.assertEqual((by[("AA004",)]["poolTotal"], by[("AA004",)]["salaryDeduction"]), (1, 0.0))
@@ -868,17 +881,17 @@ class LatePenaltyTests(_Base):
     def test_summary_totals_and_subtotals(self):
         body = self.run_report("late-penalty-breakdown", **self.P)
         self.assertEqual(self.card(body, "Employees with a deduction"), 1)
-        self.assertEqual(self.card(body, "Pool occurrences"), 9)
-        self.assertEqual(self.card(body, "Billable occurrences"), 3)
+        self.assertEqual(self.card(body, "Pool occurrences"), 8)
+        self.assertEqual(self.card(body, "Billable occurrences"), 4)
         self.assertEqual(self.card(body, "Shifts deducted"), 0.25)
         self.assertEqual(self.card(body, "Salary deduction"), 260.0)
         self.assertEqual(body["totals"]["salaryDeduction"], 260.0)
-        self.assertEqual(body["totals"]["billable"], 3)
+        self.assertEqual(body["totals"]["billable"], 4)
         subs = {s["employeeName"]: s for s in self.subtotals(body)}
         self.assertEqual(subs["CUTTING total"]["salaryDeduction"], 260.0)
-        self.assertEqual(subs["CUTTING total"]["poolTotal"], 8)
+        self.assertEqual(subs["CUTTING total"]["poolTotal"], 7)
         text = self.note_text(body)
-        self.assertIn("Free allowance: 2 per month", text)
+        self.assertIn("Free allowance: 1 per month", text)
         self.assertIn("3+ billable = 0.25 shift", text)
 
     def test_reproduces_payroll_and_the_report_log_screen(self):
@@ -944,14 +957,14 @@ class LatePenaltyTests(_Base):
             return next(c["label"] for c in body["columns"] if c["key"] == "freeUsed")
 
         body = self.run_report("late-penalty-breakdown", **self.P, employeeIds=str(self.e1.id))
-        self.assertEqual(free_header(body), "Free (2)")
+        self.assertEqual(free_header(body), "Free (1)")
         PayrollSettings.objects.filter(pk=1).update(late_free_allowance=5)
         body = self.run_report("late-penalty-breakdown", **self.P, employeeIds=str(self.e1.id))
         self.assertEqual(free_header(body), "Free (5)")
         (a,) = self.data(body)
         self.assertEqual(
             (a["poolTotal"], a["freeUsed"], a["billable"], a["shiftDeductions"], a["salaryDeduction"]),
-            (5, 5, 0, 0.0, 0.0),
+            (4, 4, 0, 0.0, 0.0),
         )
         # the file carries the same header
         r = self.call("/api/reports/export/late-penalty-breakdown", fmt="xlsx", **self.P, employeeIds=str(self.e1.id))
@@ -1179,14 +1192,23 @@ class HalfDayTests(_Base):
         scoped = self.run_report("half-day", self.b1_user, **MONTH_RANGE, branchIds=str(self.b2.id))
         self.assertEqual(self.data(scoped), [])
 
-    def test_cutoffs_come_from_settings(self):
-        PayrollSettings.objects.filter(pk=1).update(half_day_first_half_end_time=t(9, 30))
+    def test_the_rule_in_the_notes_comes_from_settings(self):
+        PayrollSettings.objects.filter(pk=1).update(
+            arrival_late_window_minutes=30,
+            arrival_permission_window_minutes=0,
+            arrival_extra_minutes=5,
+            half_day_second_half_start_time=t(15, 0),
+        )
         body = self.run_report("half-day", **MONTH_RANGE, employmentType="staff", employeeIds=str(self.e1.id))
         by = self.keyed(body, "date")
-        # 08:55 is still before 09:30 (morning); 14:35 is after (evening)
+        # which half was worked is the stored day's own verdict: 08:55 made the first half, 14:35 arrived after it
         self.assertEqual(by[(iso(9),)]["halfWorked"], "Morning")
         self.assertEqual(by[(iso(10),)]["halfWorked"], "Evening")
-        self.assertIn("09:30", self.note_text(body))
+        text = self.note_text(body)
+        self.assertIn("30 min Late window", text)
+        self.assertIn("0 min permission window", text)
+        self.assertIn("5 min extra", text)
+        self.assertIn("(15:00)", text)
 
     def test_a_compensation_day_is_labelled(self):
         AttendanceDayRecord.objects.filter(employee=self.e1, date=d(9)).update(is_compensation_day=True)
@@ -2308,9 +2330,9 @@ class PerfectAndForm12Tests(_Base):
         e1 = by[("AA001",)]
         self.assertEqual(
             (e1["presentDays"], e1["halfDays"], e1["absentDays"], e1["lateCount"], e1["eligible"]),
-            (9, 3, 13, 5, "Not eligible"),
+            (9, 3, 13, 4, "Not eligible"),
         )
-        self.assertEqual(e1["reasonNot"], "13 absent; 3 half day; 5 late/early-out (allowed 0)")
+        self.assertEqual(e1["reasonNot"], "13 absent; 3 half day; 4 late/early-out (allowed 0)")
         e2 = by[("AA002",)]
         self.assertEqual((e2["halfDays"], e2["absentDays"], e2["lateCount"], e2["permissions"]), (1, 18, 2, 4))
         self.assertEqual(e2["reasonNot"], "18 absent; 1 half day; 2 late/early-out (allowed 0)")
@@ -2636,8 +2658,8 @@ class ContractTests(_Base):
                 self.assertIsInstance(body["rows"], list)
                 self.run_report(rid)  # and with the default filters
         half = self.run_report("half-day", **MONTH_RANGE)
-        self.assertIn("13:30", self.note_text(half))  # the model defaults, read without saving them
-        self.assertIn("14:30", self.note_text(half))
+        self.assertIn("60 min Late window", self.note_text(half))  # the model defaults, read without saving them
+        self.assertIn("(14:30)", self.note_text(half))
         self.assertEqual(PayrollSettings.objects.count(), 0)
         self.assertEqual(ProductionShiftConfig.objects.count(), 0)
 

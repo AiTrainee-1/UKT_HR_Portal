@@ -44,16 +44,18 @@ export function validateHalfDayTimes(
 export type HalfDayHalf = "morning" | "evening";
 
 /**
- * Which half a Half Day was worked in. A Half Day means a punch in exactly one half, so if the first punch of the day
- * is before First Half End the Morning half was worked (an Evening punch would only have made it a Full Day);
- * otherwise the Evening half. Judging by First Half End rather than Second Half Start matters for a first punch inside
- * the lunch gap (say 14:00 with the halves at 13:30 / 14:30): that day's only attended half is the Evening one.
+ * Which half a Half Day was worked in. The day itself knows: a day computed by the arrival timeline carries its
+ * `arrivalZone`, and "second_half" means the employee arrived after the first-half limit (the Evening half), any other
+ * zone that they made the first half (the Morning half). Without a zone (a manual override, an older record) it falls
+ * back to the retired fixed First Half End time: a first punch before it is the Morning half, otherwise the Evening one.
  * Null when there is no first punch to judge by (a manual override may have none).
  */
 export function halfDayWorked(
   firstPunch: string | null | undefined,
   firstHalfEnd: string | null | undefined = DEFAULT_FIRST_HALF_END,
+  arrivalZone?: string | null,
 ): HalfDayHalf | null {
+  if (arrivalZone) return arrivalZone === "second_half" ? "evening" : "morning";
   const first = clockMinutes(firstPunch);
   if (first === null) return null;
   const cutoff = clockMinutes(firstHalfEnd) ?? clockMinutes(DEFAULT_FIRST_HALF_END)!;
@@ -94,6 +96,8 @@ export type DayLateState = {
   firstPunch?: string | null;
   /** The Attendance Sheet's own answer to "which half" (morning | afternoon). Wins over the first-punch inference. */
   halfDayPeriod?: string | null;
+  /** Where the first punch fell on the morning arrival timeline: on_time | late | excused | quarter | second_half. */
+  arrivalZone?: string | null;
 };
 
 export type HalfDayCutoffs = { firstHalfEnd?: string | null; secondHalfStart?: string | null };
@@ -105,6 +109,7 @@ export type LateFlagKind =
   | "earlyOut"
   | "lateAfternoon"
   | "halfDay"
+  | "quarterShift"
   | "permissionApplied"
   | "permissionExcess"
   | "middlePermission"
@@ -116,6 +121,7 @@ export const LATE_FLAG_CLASS: Record<LateFlagKind, string> = {
   earlyOut: TONE.caution,
   lateAfternoon: TONE.caution,
   halfDay: TONE.warning,
+  quarterShift: TONE.warning,
   permissionApplied: TONE.success,
   permissionExcess: TONE.danger,
   middlePermission: TONE.info,
@@ -154,7 +160,19 @@ export function lateDetectionFlags(day: DayLateState, cutoffs: HalfDayCutoffs = 
       label: "Late",
       title:
         reason ??
-        "Morning Late-In: the first punch was after the shift start plus grace (moved 60 minutes later on a day an Allowed Morning Late-In permission applied).",
+        "Morning Late-In: the first punch was after the shift start plus grace, inside the Late window (Settings → Attendance).",
+    });
+  }
+  // Only a Full Day is docked; a quarter-zone arrival that is already a Half Day (no second-half punch) is not docked twice.
+  if (worked && day.arrivalZone === "quarter" && (day.status ?? "present") === "present") {
+    flags.push({
+      key: "quarterShift",
+      kind: "quarterShift",
+      label: "Quarter shift",
+      detail: "late arrival",
+      title:
+        reason ??
+        "The first punch was after the Late window: a quarter shift is deducted (a small deduction instead of a Half Day). It is not also counted as Late.",
     });
   }
   if (worked && isEarlyOutDay(day)) {
@@ -179,7 +197,7 @@ export function lateDetectionFlags(day: DayLateState, cutoffs: HalfDayCutoffs = 
 
   const isHalf = day.status === "half_shift" || !!day.isHalfShift;
   if (isHalf) {
-    const half = normalizeHalf(day.halfDayPeriod) ?? halfDayWorked(day.firstPunch, firstHalfEnd);
+    const half = normalizeHalf(day.halfDayPeriod) ?? halfDayWorked(day.firstPunch, firstHalfEnd, day.arrivalZone);
     // A Half Shift status already says "half" on every page -say something only when it adds which half, or when the
     // status is not itself half shift (a Full-status day flagged half is an oddity worth naming).
     if (half || day.status !== "half_shift") {
@@ -189,9 +207,11 @@ export function lateDetectionFlags(day: DayLateState, cutoffs: HalfDayCutoffs = 
         label: half ? `${halfLabel(half)} only` : "Half Day",
         title: half
           ? half === "morning"
-            ? `Half Day: punches only in the Morning half (before ${firstHalfEnd}), none at or after ${secondHalfStart}.`
-            : `Half Day: punches only in the Evening half (at or after ${secondHalfStart}), none before ${firstHalfEnd}.`
-          : `Half Day: punches in only one of the two halves (before ${firstHalfEnd}, or at/after ${secondHalfStart}).`,
+            ? `Half Day: came in for the Morning half, but no punch at or after ${secondHalfStart}.`
+            : day.arrivalZone === "second_half"
+              ? `Half Day: arrived after the first-half limit (shift start + grace + the arrival windows in Settings → Attendance), with a punch at or after ${secondHalfStart}.`
+              : `Half Day: punches only in the Evening half (at or after ${secondHalfStart}).`
+          : `Half Day: punches in only one of the two halves.`,
       });
     }
   }
@@ -200,7 +220,7 @@ export function lateDetectionFlags(day: DayLateState, cutoffs: HalfDayCutoffs = 
     const parts: string[] = [];
     if (day.morningPermissionApplied) {
       parts.push(
-        `An Allowed Morning Late-In permission moved today's shift start ${PERMISSION_MINUTES} minutes later.`,
+        "An Allowed Morning Late-In permission excused the arrival up to the end of the permission window (Settings → Attendance).",
       );
     }
     if (day.eveningPermissionApplied) {

@@ -8,7 +8,18 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { Clock, Info, Briefcase, Factory } from "lucide-react";
 import { usePayrollSettings, useUpdatePayrollSettings } from "@/lib/api-client/custom-hooks";
-import { validateHalfDayTimes } from "@/lib/late-detection";
+import { clockMinutes } from "@/lib/late-detection";
+import {
+  DEFAULT_ARRIVAL,
+  MAX_WINDOW_MINUTES,
+  arrivalLimits,
+  clock,
+  minutesOf,
+  shiftsFor,
+  validateArrival,
+  type ArrivalSettings,
+  type ArrivalZone,
+} from "@/lib/arrival-rules";
 import ProductionShiftConfigCard from "@/components/ProductionShiftConfigCard";
 
 export default function AttendanceTab() {
@@ -23,7 +34,6 @@ export default function AttendanceTab() {
     // undefined = the server did not report the switch (unknown), which is different from reporting it off.
     morningLateInEnabled: undefined as boolean | undefined,
     eveningEarlyOutEnabled: undefined as boolean | undefined,
-    halfDayFirstHalfEndTime: "13:30",
     halfDaySecondHalfStartTime: "14:30",
     afternoonLateWindowMinutes: 60,
     afternoonPermissionWindowMinutes: 60,
@@ -48,6 +58,10 @@ export default function AttendanceTab() {
   // Which switches the user has actually flipped since the settings last loaded -only those are ever sent, so a save
   // of some other field can never write a value the user did not choose (and never writes a guessed default).
   const [switchTouched, setSwitchTouched] = useState({ morning: false, evening: false });
+  // The arrival timeline (Late window, permission window, extra minutes, quarter-shift deduction), plus the example
+  // shift the preview table is drawn for (never saved: only the four settings are).
+  const [arrival, setArrival] = useState<ArrivalSettings>(DEFAULT_ARRIVAL);
+  const [sampleShift, setSampleShift] = useState({ start: "09:00", grace: 10 });
 
   useEffect(() => {
     if (!payrollSettingsData) return;
@@ -57,7 +71,6 @@ export default function AttendanceTab() {
       simpleHalfShiftCutoff: payrollSettingsData.simpleHalfShiftCutoff || "13:30",
       morningLateInEnabled: payrollSettingsData.morningLateInEnabled,
       eveningEarlyOutEnabled: payrollSettingsData.eveningEarlyOutEnabled,
-      halfDayFirstHalfEndTime: payrollSettingsData.halfDayFirstHalfEndTime || "13:30",
       halfDaySecondHalfStartTime: payrollSettingsData.halfDaySecondHalfStartTime || "14:30",
       afternoonLateWindowMinutes: payrollSettingsData.afternoonLateWindowMinutes ?? 60,
       afternoonPermissionWindowMinutes: payrollSettingsData.afternoonPermissionWindowMinutes ?? 60,
@@ -74,6 +87,13 @@ export default function AttendanceTab() {
       defaultShiftLunchDurationMinutes: payrollSettingsData.defaultShiftLunchDurationMinutes ?? 60,
       defaultShiftLunchGraceMinutes: payrollSettingsData.defaultShiftLunchGraceMinutes ?? 10,
     });
+    setArrival({
+      lateWindowMinutes: payrollSettingsData.arrivalLateWindowMinutes ?? DEFAULT_ARRIVAL.lateWindowMinutes,
+      permissionWindowMinutes:
+        payrollSettingsData.arrivalPermissionWindowMinutes ?? DEFAULT_ARRIVAL.permissionWindowMinutes,
+      extraMinutes: payrollSettingsData.arrivalExtraMinutes ?? DEFAULT_ARRIVAL.extraMinutes,
+      quarterDeduction: payrollSettingsData.arrivalQuarterDeduction ?? DEFAULT_ARRIVAL.quarterDeduction,
+    });
   }, [payrollSettingsData]);
 
   // The Late Detection switches and Half-Day times are company-wide rules: a branch-assigned login can see them but
@@ -86,20 +106,26 @@ export default function AttendanceTab() {
   // nothing is sent for it (the values in the boxes would only be this page's guesses).
   const morningReported = payrollSettingsData?.morningLateInEnabled != null;
   const eveningReported = payrollSettingsData?.eveningEarlyOutEnabled != null;
-  const halfDayReported =
-    payrollSettingsData?.halfDayFirstHalfEndTime != null && payrollSettingsData?.halfDaySecondHalfStartTime != null;
+  const halfDayReported = payrollSettingsData?.halfDaySecondHalfStartTime != null;
+  const arrivalReported = payrollSettingsData?.arrivalLateWindowMinutes != null;
   const notReportedNote = "Not reported by the server, so it cannot be changed here";
 
-  // Same rule the server enforces on save (First Half End must not be later than Second Half Start); checked here so
-  // the message shows next to the fields and nothing is sent while the pair is contradictory.
+  // The same checks the server makes on save, so the message shows next to the fields and nothing is sent while a
+  // value is contradictory. (The old fixed First Half End time is retired: each shift's own first-half limit, worked out
+  // from the arrival timeline below, replaces it.)
   const halfDayError =
-    companyWideEditable && halfDayReported
-      ? validateHalfDayTimes(attMode.halfDayFirstHalfEndTime, attMode.halfDaySecondHalfStartTime)
+    companyWideEditable && halfDayReported && clockMinutes(attMode.halfDaySecondHalfStartTime) === null
+      ? "Enter Second Half Start as a valid clock time."
       : null;
+  const arrivalError = companyWideEditable && arrivalReported ? validateArrival(arrival) : null;
 
   const saveAttendanceMode = async () => {
-    if (halfDayError) {
-      toast({ title: "Half-Day times are not valid", description: halfDayError, variant: "destructive" });
+    if (halfDayError || arrivalError) {
+      toast({
+        title: halfDayError ? "Half-Day times are not valid" : "Arrival timeline is not valid",
+        description: halfDayError ?? arrivalError ?? undefined,
+        variant: "destructive",
+      });
       return;
     }
     try {
@@ -114,10 +140,13 @@ export default function AttendanceTab() {
               ...(switchTouched.evening && attMode.eveningEarlyOutEnabled !== undefined
                 ? { eveningEarlyOutEnabled: attMode.eveningEarlyOutEnabled }
                 : {}),
-              ...(halfDayReported
+              ...(halfDayReported ? { halfDaySecondHalfStartTime: attMode.halfDaySecondHalfStartTime } : {}),
+              ...(arrivalReported
                 ? {
-                    halfDayFirstHalfEndTime: attMode.halfDayFirstHalfEndTime,
-                    halfDaySecondHalfStartTime: attMode.halfDaySecondHalfStartTime,
+                    arrivalLateWindowMinutes: arrival.lateWindowMinutes,
+                    arrivalPermissionWindowMinutes: arrival.permissionWindowMinutes,
+                    arrivalExtraMinutes: arrival.extraMinutes,
+                    arrivalQuarterDeduction: arrival.quarterDeduction,
                   }
                 : {}),
             }
@@ -178,18 +207,17 @@ export default function AttendanceTab() {
             </CardHeader>
             <CardContent className="space-y-3 text-xs text-slate-600 leading-relaxed">
               <div className="p-3 rounded-lg bg-white border border-slate-200">
-                <p className="font-bold text-slate-800 mb-1">Shared by both modes -three independent rules</p>
+                <p className="font-bold text-slate-800 mb-1">Shared by both modes</p>
                 <p>
-                  <strong>Half-Day Detection</strong> decides Full Day vs Half Day vs Absent purely from whether the
-                  employee has a punch before the <strong>First-Half-End</strong> time and a punch at/after the{" "}
-                  <strong>Second-Half-Start</strong> time (both set below) -these two clock times are the same for every
-                  shift. <strong>Late Detection</strong> (Morning Late-In / Evening Early-Out) is judged separately,
-                  against the employee's own assigned shift start/end + grace from <strong>Manage Shift</strong> -a very
-                  late arrival that still beats the Half-Day cutoff is Full Day <em>and</em> Late, never auto-demoted.
-                  An arrival <em>at or after</em> the First-Half-End time is different: the morning half was missed, so
-                  the day is a Half Day only and is <em>not</em> also counted as Late (no Late alert is sent either).{" "}
-                  <strong>Permission</strong> (Settings → Late Detection) can shift that day's Late Detection boundary
-                  for an individual employee, but never moves the Half-Day cutoff itself.
+                  The <strong>first punch</strong> is placed on an <strong>arrival timeline</strong> measured from the
+                  employee's own shift start and grace (<strong>Manage Shift</strong>): on time, then{" "}
+                  <strong>Late</strong> (Full Day, counted in the late pool), then a permission window, then a few extra
+                  minutes. An approved Morning Late-In permission excuses an arrival up to the end of the permission
+                  window; after the Late window it is a <strong>quarter-shift</strong> day (a small deduction, never
+                  also Late); after all of it the <strong>first half is missed</strong> -Absent until a punch at/after{" "}
+                  <strong>Second Half Start</strong>, then a Half Day. The four numbers are set below.{" "}
+                  <strong>Half-Day Detection</strong> decides Full vs Half vs Absent from those two facts: did the first
+                  punch make the first half, and is there a punch at/after Second Half Start.
                 </p>
               </div>
               <div className="grid sm:grid-cols-2 gap-3">
@@ -278,27 +306,12 @@ export default function AttendanceTab() {
                 <div className="sm:col-span-2">
                   <Label className="text-xs font-semibold text-amber-900">Half-Day Detection</Label>
                   <p className="text-[11px] text-gray-500 mt-0.5">
-                    <strong>Morning Half</strong> = any punch before First Half End. <strong>Evening Half</strong> = any
-                    punch at/after Second Half Start. Both halves = Full Day; one = Half Day; none = Absent. A punch
-                    between the two times attends neither half. Simple and Strict modes use the same rule, and the
-                    shift's own start/end never change it. Lateness within a half is judged separately, by Late
-                    Detection below -it never costs the half by itself.
+                    <strong>Morning Half</strong> = the first punch is within the shift's first-half limit (start +
+                    grace + the Arrival timeline windows below). <strong>Evening Half</strong> = any punch at/after
+                    Second Half Start. Both halves = Full Day; one = Half Day; none = Absent (a first punch after the
+                    first-half limit stays Absent until a second-half punch is recorded). Simple and Strict modes use
+                    the same rule.
                   </p>
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs" htmlFor="half-day-first-half-end">
-                    First Half End Time
-                  </Label>
-                  <p className="text-[11px] text-gray-500 -mt-1">A punch before this time attends the Morning Half</p>
-                  <Input
-                    id="half-day-first-half-end"
-                    type="time"
-                    value={attMode.halfDayFirstHalfEndTime}
-                    onChange={(e) => setAttMode((a) => ({ ...a, halfDayFirstHalfEndTime: e.target.value }))}
-                    disabled={!companyWideEditable || !halfDayReported}
-                    aria-invalid={!!halfDayError}
-                    className={`max-w-[140px] ${halfDayError ? "border-red-400" : ""}`}
-                  />
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs" htmlFor="half-day-second-half-start">
@@ -342,6 +355,109 @@ export default function AttendanceTab() {
                 )}
               </div>
 
+              {/* Arrival timeline -where a morning arrival falls, measured from each shift's own start and grace.
+                    Every step follows the one before it; all four numbers are settings. */}
+              <div
+                className="grid sm:grid-cols-2 gap-4 p-3 bg-violet-50/50 border border-violet-100 rounded-lg"
+                data-testid="arrival-timeline"
+              >
+                <div className="sm:col-span-2">
+                  <Label className="text-xs font-semibold text-violet-900">Arrival timeline</Label>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    Measured from each shift's own start time and grace (Manage Shift), one step after the other:{" "}
+                    <strong>on time</strong> until start + grace, then <strong>Late</strong> for the Late window, then
+                    the <strong>permission window</strong> (an approved Morning Late-In permission excuses an arrival up
+                    to its end), then the <strong>extra minutes</strong>. Arriving after the Late window with no
+                    covering permission is a <strong>quarter-shift</strong> day; arriving after all of it means the
+                    first half was missed (Absent until a second-half punch, then Half Day).
+                  </p>
+                </div>
+                {(
+                  [
+                    [
+                      "arrival-late-window",
+                      "Late window (minutes)",
+                      "Late for this long after the grace period",
+                      "lateWindowMinutes",
+                      5,
+                    ],
+                    [
+                      "arrival-permission-window",
+                      "Permission window (minutes)",
+                      "After the Late window: an approved Late-In permission still excuses",
+                      "permissionWindowMinutes",
+                      5,
+                    ],
+                    [
+                      "arrival-extra",
+                      "Extra minutes",
+                      "After the permission window: still the first half, quarter-shift rule",
+                      "extraMinutes",
+                      5,
+                    ],
+                    [
+                      "arrival-deduction",
+                      "Quarter-shift deduction (shifts)",
+                      "Taken off the day for a quarter-shift arrival; 0 = none",
+                      "quarterDeduction",
+                      0.05,
+                    ],
+                  ] as const
+                ).map(([id, label, hint, key, step]) => (
+                  <div key={id} className="space-y-1.5">
+                    <Label className="text-xs" htmlFor={id}>
+                      {label}
+                    </Label>
+                    <p className="text-[11px] text-gray-500 -mt-1">{hint}</p>
+                    <Input
+                      id={id}
+                      type="number"
+                      min={0}
+                      max={key === "quarterDeduction" ? 1 : MAX_WINDOW_MINUTES}
+                      step={step}
+                      value={arrival[key]}
+                      onChange={(e) =>
+                        setArrival((a) => ({ ...a, [key]: e.target.value === "" ? 0 : Number(e.target.value) }))
+                      }
+                      disabled={!companyWideEditable || !arrivalReported}
+                      aria-invalid={!!arrivalError}
+                      className={`max-w-[140px] ${arrivalError ? "border-red-400" : ""}`}
+                    />
+                  </div>
+                ))}
+                {arrivalError && (
+                  <p
+                    role="alert"
+                    data-testid="arrival-error"
+                    className="sm:col-span-2 text-[11px] font-medium text-red-600"
+                  >
+                    {arrivalError}
+                  </p>
+                )}
+                {!companyWideEditable && (
+                  <p
+                    data-testid="company-wide-note-arrival"
+                    className="sm:col-span-2 text-[11px] font-medium text-slate-500"
+                  >
+                    {companyWideNote}
+                  </p>
+                )}
+                {companyWideEditable && payrollSettingsData && !arrivalReported && (
+                  <p
+                    data-testid="arrival-not-reported"
+                    className="sm:col-span-2 text-[11px] font-medium text-slate-500"
+                  >
+                    {notReportedNote}
+                  </p>
+                )}
+                <ArrivalPreview
+                  arrival={arrival}
+                  sample={sampleShift}
+                  onSample={setSampleShift}
+                  secondHalfStart={attMode.halfDaySecondHalfStartTime}
+                />
+              </div>
+
               {/* Late Detection -Morning Late-In / Evening Early-Out, judged
                     against the shift's own start/end + grace (Manage Shift),
                     or that day's permission-shifted boundary. Independent
@@ -351,14 +467,17 @@ export default function AttendanceTab() {
                   <Label className="text-xs font-semibold text-sky-900">Late Detection switches</Label>
                   <p className="text-[11px] text-gray-500 mt-0.5">
                     Two independent checks, both judged against the employee's own shift start/end + grace from Manage
-                    Shift (moved 60 minutes on a day an Allowed permission applies). Occurrences share one monthly pool
-                    priced in Settings → Late Detection.
+                    Shift (an Allowed Morning Late-In permission excuses the arrival up to the end of the permission
+                    window; an Allowed Evening Early-Out moves that day's end 60 minutes earlier). Occurrences share one
+                    monthly pool priced in Settings → Late Detection.
                   </p>
                 </div>
                 <div className="flex items-center justify-between bg-white rounded-lg border border-sky-100 p-3">
                   <div>
                     <Label className="text-xs">Morning Late-In</Label>
-                    <p className="text-[11px] text-gray-500">Flag a punch after shift start + grace.</p>
+                    <p className="text-[11px] text-gray-500">
+                      Flag a first punch inside the Late window (after shift start + grace).
+                    </p>
                     {payrollSettingsData && !morningReported && (
                       <p data-testid="morning-not-reported" className="text-[11px] font-medium text-slate-500">
                         {notReportedNote}
@@ -629,5 +748,118 @@ export default function AttendanceTab() {
         </>
       )}
     </>
+  );
+}
+
+const ZONE_ROWS: { zone: ArrivalZone; label: string }[] = [
+  { zone: "on_time", label: "On time" },
+  { zone: "late", label: "Late: a Full Day, counted in the late pool" },
+  { zone: "excused", label: "Permission window: with an approved Late-In permission a Full Day and no Late mark" },
+  { zone: "quarter", label: "Quarter-shift arrival (a permission does not cover these)" },
+  { zone: "second_half", label: "First half missed: Absent until a second-half punch, then Half Day" },
+];
+
+/** What the arrival timeline means for one example shift, so HR can see the numbers they typed as clock times. */
+function ArrivalPreview({
+  arrival,
+  sample,
+  onSample,
+  secondHalfStart,
+}: {
+  arrival: ArrivalSettings;
+  sample: { start: string; grace: number };
+  onSample: (s: { start: string; grace: number }) => void;
+  secondHalfStart: string;
+}) {
+  const limits = arrivalLimits(sample.start, sample.grace, arrival);
+  const bad = validateArrival(arrival) !== null;
+  const secondStart = minutesOf(secondHalfStart);
+  const range = (zone: ArrivalZone): string => {
+    if (!limits) return "-";
+    const { onTimeUntil, lateUntil, permissionUntil, firstHalfUntil } = limits;
+    switch (zone) {
+      case "on_time":
+        return `up to ${clock(onTimeUntil)}`;
+      case "late":
+        return lateUntil > onTimeUntil ? `${clock(onTimeUntil + 1)} - ${clock(lateUntil)}` : "none";
+      case "excused":
+        return permissionUntil > lateUntil
+          ? `${clock(onTimeUntil + 1)} - ${clock(permissionUntil)} (with a permission)`
+          : lateUntil > onTimeUntil
+            ? `${clock(onTimeUntil + 1)} - ${clock(lateUntil)} (with a permission)`
+            : "none";
+      case "quarter":
+        return `${clock(lateUntil + 1)} - ${clock(firstHalfUntil)}`;
+      default:
+        return `after ${clock(firstHalfUntil)}`;
+    }
+  };
+  return (
+    <div className="sm:col-span-2 rounded-lg border border-violet-100 bg-white p-3" data-testid="arrival-preview">
+      <div className="flex flex-wrap items-end gap-3 mb-2">
+        <p className="text-[11px] font-semibold text-violet-900 mr-auto">What this means for an example shift</p>
+        <div className="space-y-1">
+          <Label className="text-[11px]" htmlFor="arrival-sample-start">
+            Shift start
+          </Label>
+          <Input
+            id="arrival-sample-start"
+            type="time"
+            value={sample.start}
+            onChange={(e) => onSample({ ...sample, start: e.target.value })}
+            className="h-8 w-[110px] text-xs"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[11px]" htmlFor="arrival-sample-grace">
+            Grace (min)
+          </Label>
+          <Input
+            id="arrival-sample-grace"
+            type="number"
+            min={0}
+            value={sample.grace}
+            onChange={(e) => onSample({ ...sample, grace: Math.max(0, Number(e.target.value) || 0) })}
+            className="h-8 w-[80px] text-xs"
+          />
+        </div>
+      </div>
+      {!limits || bad ? (
+        <p className="text-[11px] text-slate-500">
+          Enter a valid shift start and valid numbers above to see the timeline.
+        </p>
+      ) : (
+        <>
+          <table className="w-full text-[11px]">
+            <tbody>
+              {ZONE_ROWS.map(({ zone, label }) => (
+                <tr key={zone} data-testid={`arrival-preview-${zone}`} className="border-t border-violet-50">
+                  <td className="py-1 pr-3 font-mono whitespace-nowrap text-slate-800">{range(zone)}</td>
+                  <td className="py-1 text-slate-600">{label}</td>
+                  <td className="py-1 pl-3 text-right whitespace-nowrap font-semibold text-slate-800">
+                    {shiftsFor(zone, arrival.quarterDeduction).toFixed(2)} shift
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="mt-1.5 text-[11px] text-slate-500">
+            Shifts shown are for a day worked through to the evening; a first punch after {clock(limits.firstHalfUntil)}{" "}
+            earns the Half Day once a punch at/after Second Half Start ({secondHalfStart || "-"}) is recorded.
+          </p>
+          {secondStart !== null && limits.firstHalfUntil >= secondStart && (
+            <p
+              role="alert"
+              data-testid="arrival-preview-warning"
+              className="mt-1 text-[11px] font-medium text-amber-700"
+            >
+              For this shift the first-half limit ({clock(limits.firstHalfUntil)}) is not before Second Half Start (
+              {secondHalfStart}): a punch in between would count as both halves. Shorten a window or move Second Half
+              Start later.
+            </p>
+          )}
+        </>
+      )}
+    </div>
   );
 }

@@ -17,9 +17,11 @@ Control page (plus one for attendance as a whole):
                       you forget to punch?".
   late_alert          The first punch of the day came after shift start + THIS shift's grace. Sent as
                       soon as that punch is seen; says the shift start, the grace, the first punch and
-                      how many minutes past the allowed time it was. Not sent for an arrival at/after the
-                      Morning Half cutoff (Settings -> Late Detection, 1:30 PM by default): that morning
-                      half was missed, which makes the day a Half Day, not a Late one.
+                      how many minutes past the allowed time it was. Sent only while the arrival is
+                      inside the Late window (Settings -> Attendance, 60 minutes after the grace by
+                      default) - exactly the arrivals the attendance engine marks Late. Later than
+                      that it is a quarter-shift or second-half arrival, and an approved Morning
+                      Late-In permission excuses the arrival up to the end of its permission window.
   four_punch_alert    A friendly reminder a while (HR sets it, 15 minutes by default) BEFORE each of the
                       day's punches is expected: check-in at the shift start, lunch-out, lunch-in and
                       check-out at the shift end (just check-in and check-out for a shift with no lunch
@@ -56,6 +58,14 @@ from django.db.models import Q
 from django.utils import timezone
 
 from . import whatsapp_service
+from .arrival_rules import (
+    ZONE_EXCUSED,
+    ZONE_LATE,
+    ZONE_ON_TIME,
+    hhmm as _hhmm,
+    limits_for as arrival_limits_for,
+    zone_of,
+)
 from .attendance_final import (
     _compensation_day_for,
     _holiday_dates_for_month,
@@ -547,35 +557,42 @@ def evaluate(emp, day: DayData, trace: list | None = None) -> list[Due]:
         )
         say("DUE: Absent alert.")
 
-    # 2. Late arrival (needs an approved permission to be excused). The allowed time is the shift
-    # start plus THIS shift's grace. Seconds don't count: the first punch is the minute it was made in,
-    # exactly as the attendance engine judges it, so with a 9:10 limit a punch at 9:10:40 is on time and
-    # the first late minute is 9:11.
-    # An approved in-cap Morning Late-In permission moves the allowed time later by its 60 minutes -the
-    # same deadline the attendance engine judges the day by, so this alert can never fire for a
-    # day the engine calls on time, nor stay silent for one it calls late.
-    permission_extra_s = day.permitted.get(emp.id, 0)
-    allowed_s = start_s + grace_s + permission_extra_s
+    # 2. Late arrival. The arrival timeline (arrival_rules.py) decides, exactly as the attendance engine
+    # does, so this alert can never fire for a day the engine calls on time / excused, nor stay silent for
+    # one it calls Late: the allowed time is the shift start plus THIS shift's grace, and the alert is for
+    # the Late window after it. Seconds don't count: the first punch is the minute it was made in, so with a
+    # 9:10 limit a punch at 9:10:40 is on time and the first late minute is 9:11. An approved, in-cap Morning
+    # Late-In permission excuses the arrival up to the end of its permission window; after the Late window
+    # (and outside a permission) the day is a quarter-shift / second-half arrival, which is not "Late".
+    permission_covers = day.permitted.get(emp.id, 0) > 0
+    limits = arrival_limits_for(shift, day.payroll)
+    allowed_s = limits.on_time_until
     first_minute_s = times[0] // 60 * 60 if times else None
+    zone = zone_of(times[0], limits, permission_covers) if times else None
     if not sw.late_alert_enabled:
         say("Late alert: switch is OFF.")
     elif not day.payroll.morning_late_in_enabled:
         say("Late alert: not sent, Morning Late-In detection is switched off in Settings.")
     elif n == 0:
         say("Late alert: not due, no punch yet.")
-    elif not first_minute_s > allowed_s:
-        via = " (moved later by an approved permission)" if permission_extra_s else ""
+    elif zone == ZONE_ON_TIME:
         say(
-            f"Late alert: not due, first punch {_fmt_time(times[0])} is within the allowed time {_fmt_time(allowed_s)}{via} (seconds are ignored)."
+            f"Late alert: not due, first punch {_fmt_time(times[0])} is within the allowed time {_fmt_time(allowed_s)} (seconds are ignored)."
+        )
+    elif zone == ZONE_EXCUSED:
+        say(
+            f"Late alert: not due, an approved Morning Late-In permission covers a first punch up to {_hhmm(limits.permission_until)} "
+            f"(first punch {_fmt_time(times[0])})."
+        )
+    elif zone != ZONE_LATE:
+        say(
+            f"Late alert: not due, first punch {_fmt_time(times[0])} is after the Late window ({_hhmm(limits.late_until)}): the attendance "
+            f"engine treats it as a "
+            + ("quarter-shift" if times[0] // 60 * 60 <= limits.first_half_until else "second-half")
+            + " arrival, not a Late one."
         )
     elif times[0] > end_s:
         say("Late alert: not due, the first punch came after the shift ended.")
-    elif times[0] >= _t2s(day.payroll.half_day_first_half_end_time):
-        say(
-            f"Late alert: not due, the first punch {_fmt_time(times[0])} is at or after the Morning Half cutoff "
-            f"{_fmt_time(_t2s(day.payroll.half_day_first_half_end_time))}: the morning half was missed, so this is a "
-            "Half Day arrival, not a Late one."
-        )
     elif now_s - first_minute_s > LATE_FRESH_S:
         say("Late alert: not sent, the punch was more than 30 minutes ago and the message would arrive stale.")
     elif excused():

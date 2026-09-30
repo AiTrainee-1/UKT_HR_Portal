@@ -607,6 +607,43 @@ class PayrollSettings(models.Model):
         help_text="Staff only. Approved permissions per employee per calendar month that actually protect that day.",
     )
 
+    # ── Arrival timeline (staff) ───────────────────────────────────────────
+    # How a morning arrival is judged, measured from each shift's OWN start and
+    # grace (attendance_final / arrival_rules.py). Every step follows the one
+    # before it, so for a 09:00 shift with 10 min grace and the defaults below:
+    #   up to 09:10          on time
+    #   09:10 - 10:10        Late (arrival_late_window_minutes): full day, counts in the late pool
+    #   10:10 - 11:10        permission window (arrival_permission_window_minutes): an approved, in-cap
+    #                        Morning Late-In permission excuses an arrival up to here (and the
+    #                        Late window before it); without one the quarter-shift rule applies
+    #   11:10 - 11:30        arrival_extra_minutes: still first half, quarter-shift rule
+    #   after 11:30          the first half is missed: Absent until a punch at/after
+    #                        half_day_second_half_start_time, then Half Day
+    # The quarter-shift rule: arrival_quarter_deduction (0.25) is taken off the day, so the employee
+    # earns 0.75 rather than losing a whole Half Day - they did come to work. It replaces the Late
+    # count for that day (never both). The old fixed half_day_first_half_end_time is retired: the
+    # first-half limit is now shift start + grace + these three windows (the column is kept for
+    # employees with no shift, old rows and old clients).
+    # (db_default on all four: an old backend instance still running during a rolling deploy
+    # inserts PayrollSettings rows without knowing these columns exist - see the note above.)
+    arrival_late_window_minutes = models.IntegerField(
+        default=60, db_default=60, db_column="arrival_late_window_minutes",
+        help_text="Staff only. Minutes after the grace period that an arrival is plain Late.",
+    )
+    arrival_permission_window_minutes = models.IntegerField(
+        default=60, db_default=60, db_column="arrival_permission_window_minutes",
+        help_text="Staff only. Minutes after the Late window that an approved Morning Late-In permission still excuses.",
+    )
+    arrival_extra_minutes = models.IntegerField(
+        default=20, db_default=20, db_column="arrival_extra_minutes",
+        help_text="Staff only. Extra minutes after the permission window that still count as the first half.",
+    )
+    arrival_quarter_deduction = models.DecimalField(
+        max_digits=3, decimal_places=2, default=Decimal("0.25"), db_default=Decimal("0.25"),
+        db_column="arrival_quarter_deduction",
+        help_text="Staff only. Shift deducted for an arrival after the Late window that no permission covers (0 = none).",
+    )
+
     # ── Late Detection deduction policy (staff payroll) ────────────────────
     # One combined monthly pool: Morning Late-In occurrences, Evening
     # Early-Out occurrences (when enabled), and excess Permissions (approved

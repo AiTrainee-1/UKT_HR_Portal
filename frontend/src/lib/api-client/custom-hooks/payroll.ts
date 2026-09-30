@@ -84,6 +84,9 @@ export type PayrollBreakdownDay = {
   // day "Without Permission" instead of ordinary Late. Never sent any more.
   withoutPermission?: boolean;
   isHalfShift?: boolean;
+  // Where the first punch fell on the morning arrival timeline: on_time | late | excused | quarter | second_half.
+  // "quarter" is a 0.75-shift day (shiftsCompleted says so); "second_half" is a Half Day worked in the evening.
+  arrivalZone?: string | null;
   shiftsCompleted?: number;
   firstIn?: string | null;
   lastOut?: string | null;
@@ -106,6 +109,13 @@ export type PayrollBreakdown = {
   simpleHalfShiftCutoff?: string | null;
   halfDayFirstHalfEndTime?: string | null;
   halfDaySecondHalfStartTime?: string | null;
+  // The arrival timeline the days were judged by (absent on payrolls generated before it existed).
+  arrivalTimeline?: {
+    lateWindowMinutes: number;
+    permissionWindowMinutes: number;
+    extraMinutes: number;
+    quarterDeduction: number;
+  } | null;
   // staff
   shift?: {
     id?: number | null;
@@ -645,10 +655,18 @@ export type PayrollSettingsItem = {
   // shifted effective boundary. Morning ships on; Evening ships off.
   morningLateInEnabled?: boolean;
   eveningEarlyOutEnabled?: boolean;
-  // Half-Day Detection (staff) -a punch before this counts as the Morning
-  // Half attended; a punch at/after this counts as the Evening Half.
+  // Half-Day Detection (staff) -a punch at/after Second Half Start counts as the Evening Half. The fixed First Half
+  // End time is retired (each shift's own first-half limit, from the arrival timeline below, replaces it); it is
+  // still reported for older clients and for employees with no shift.
   halfDayFirstHalfEndTime?: string;
   halfDaySecondHalfStartTime?: string;
+  // Arrival timeline (staff): minutes after the grace period that a first punch is Late, then that an approved
+  // Morning Late-In permission still excuses, then the extra minutes that still count as the first half; and the
+  // shift taken off a quarter-shift arrival. See lib/arrival-rules.ts.
+  arrivalLateWindowMinutes?: number;
+  arrivalPermissionWindowMinutes?: number;
+  arrivalExtraMinutes?: number;
+  arrivalQuarterDeduction?: number;
   // Afternoon (Night Late) lunch-return zone -strict mode only, untouched
   // axis, purely informational (can no longer demote the day).
   afternoonLateWindowMinutes?: number;

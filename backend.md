@@ -213,6 +213,7 @@ backend/
 │   ├── email_catalog.py / email_service.py / email_control_views.py   # Every email goes through email_service; Gmail Control page (gmail-integration.md)
 │   ├── salary_split.py                 # The mandatory 50% + 50% salary split (Basic/DA/Retention | Other/Petrol/RHA/Special/CA); descriptive, payroll ignores it
 │   ├── ctc.py                          # Employer PF / ESI / annual CTC from the salary split; shared by the Compensation page and the Report Center CTC statement
+│   ├── arrival_rules.py                # The morning arrival timeline (on time / Late / excused / quarter shift / second half) from each shift's start + grace; pure, shared by the engine, the WhatsApp late alert and the Settings preview
 │   ├── settlement_views.py             # Advances and repayments
 │   ├── recruitment_views.py            # Jobs, applicants, new joinees, resignations
 │   ├── resume_screening_ml.py / resume_screening_views.py / screening_cleanup*.py
@@ -243,6 +244,8 @@ backend/
 ## 6. Attendance Engine In-Depth
 
 Lives in `shift_engine.py` and `attendance_final.py`; every threshold below is HR-editable in Settings → Attendance/Late Detection (`PayrollSettings` model) -none of it is hardcoded, so the same codebase serves any company's policy without a code change.
+
+**Current staff arrival rules (supersede the older punctuality-window text below where they differ):** the first punch is placed on the *arrival timeline* of the employee's own shift (`arrival_rules.py`): on time to start + grace, **Late** for `arrivalLateWindowMinutes` (60, Full Day + one late-pool occurrence), then the permission window (`arrivalPermissionWindowMinutes`, 60: an approved in-cap Morning Late-In permission excuses up to here, otherwise a **quarter shift**), then `arrivalExtraMinutes` (20: quarter shift, never covered by a permission), and after that the first half is missed: **Absent until a punch at/after Second Half Start, then Half Day**. A quarter-shift arrival earns `1 - arrivalQuarterDeduction` (0.75), is not also Late, and is not docked twice if the day is already a Half Day. All four numbers are Settings → Attendance; the fixed First Half End time is retired. See `attendance_final.compute_day_record`.
 
 **Full vs Half Shift (staff, both modes):** Full only when a first *and* distinct last punch both fall within the **Shift Punctuality Window** (`shiftPunctualityWindowMinutes`, default 60 min) of the assigned shift's start/end. Anything else with ≥1 punch is Half Shift; zero punches (and not on leave/holiday) is Absent. No assigned shift ⇒ no reference, so no late flag either.
 
