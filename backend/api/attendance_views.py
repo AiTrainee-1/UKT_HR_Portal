@@ -19,7 +19,7 @@ from .clock import ist_today
 from .models import (
     Attendance, AttendanceLog, Employee, EmployeePermission, EmployeeShiftAssignment,
     LeaveRequest, DailyShiftLog, MonthlyShiftSummary, Holiday,
-    ProductionShiftConfig, ProductionShiftSegment,
+    ProductionShiftConfig, ProductionShiftSegment, PayrollSettings,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,7 +88,9 @@ def _half_day_leave_slots(d: date_type) -> dict[int, str]:
 
 
 def _late_count(d: date_type, allowed_ids: set[int] | None = None) -> int:
-    """Employees who punched IN after their shift start + grace period."""
+    """Employees who punched IN after their shift start + grace period. Someone whose first punch is at/after the
+    Morning Half cutoff missed the morning half: that is a Half Day arrival, not a Late one (see attendance_final)."""
+    morning_half_end = PayrollSettings.get().half_day_first_half_end_time
     logs = (
         AttendanceLog.objects
         .filter(date=d, punch_type=AttendanceLog.PUNCH_IN)
@@ -118,6 +120,8 @@ def _late_count(d: date_type, allowed_ids: set[int] | None = None) -> int:
             grace = asgn.shift.grace_period_minutes or 0
             deadline = datetime.combine(d, asgn.shift.start_time) + timedelta(minutes=grace)
             # Whole minutes: a punch at 9:10:20 against a 9:10 limit is on time, as everywhere else.
+            if pt >= morning_half_end:
+                continue
             if datetime.combine(d, pt.replace(second=0, microsecond=0)) > deadline:
                 late += 1
     return late

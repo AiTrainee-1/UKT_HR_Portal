@@ -25,9 +25,12 @@ shift_engine.py):
     enabled), judged against the shift's own start/end + grace, OR that
     day's PERMISSION-SHIFTED effective boundary when an approved, in-cap
     Morning Late-In/Evening Early-Out permission applies -see
-    _permissions_for_day / _effective_shift_for_day. Completely orthogonal to
-    Half-Day status: a very late arrival that still beats the Half-Day
-    cutoff is Full Day AND Late, never auto-demoted.
+    _permissions_for_day / _effective_shift_for_day. A very late arrival that
+    still beats the Half-Day cutoff is Full Day AND Late, never auto-demoted.
+    An arrival AT/AFTER the Morning Half cutoff is different: the morning
+    half was not attended at all, which is exactly what makes the day a Half
+    Day, so it is a Half Day arrival and NOT also a Morning Late-In (one
+    cause, one consequence -see _morning_half_missed).
   • Permission: 3 canonical types (EmployeePermission.TYPE_CHOICES), capped
     at PayrollSettings.permission_monthly_cap (default 3) per calendar
     month, counted earliest-first. An approved permission beyond the cap is
@@ -245,6 +248,16 @@ def _half_day_status(punch_times: list, settings, second_half_start_override=Non
     if morning or evening:
         return "half_shift", Decimal("0.50"), True
     return "absent", Decimal("0"), False
+
+
+def _morning_half_missed(punch_times: list, settings) -> bool:
+    """True when the day has punches but none falls before half_day_first_half_end_time: the Morning
+    Half was not attended at all (the employee arrived after it was over). Same seconds handling as
+    _half_day_status, so the two can never disagree about which side of the cutoff a punch is on."""
+    if not punch_times:
+        return False
+    first_end_s = _t2s(settings.half_day_first_half_end_time)
+    return not any((t if isinstance(t, int) else _t2s(t)) < first_end_s for t in punch_times)
 
 
 def infer_permission_type(permission_time, shift):
@@ -878,6 +891,24 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
             computed["status"] = status
             computed["shifts_earned"] = shifts_earned
             computed["is_half_shift"] = is_half
+
+            # Arriving after the Morning Half is over is what makes this a Half Day (or Absent, with no
+            # evening punch either): it is not ALSO a Morning Late-In, so the day is never charged twice
+            # (0.5 day AND a late-pool occurrence). Only an arrival that still beat the cutoff is Late.
+            # A day with an approved half-day LEAVE is left to the half-day-leave handling below: a morning
+            # leave already makes the arrival expected, and an afternoon leave only excuses the afternoon, so
+            # a late arrival for the morning the employee still owed stays Late.
+            if computed.get("is_late") and not half_day_slot and _morning_half_missed(day_secs, settings):
+                cutoff = settings.half_day_first_half_end_time.strftime("%H:%M")
+                computed["is_late"] = False
+                computed["late_reason"] = "; ".join(
+                    [
+                        f"Half Day arrival: first punch {_as_time(day_times[0]).strftime('%H:%M')} is after the "
+                        f"Morning Half cutoff {cutoff}, so the morning half was missed (counted as a Half Day, "
+                        "not as Late-In)"
+                    ]
+                    + [r for r in [_reason_without(computed.get("late_reason"), "Morning Late-In")] if r]
+                )
 
         if comp_day:
             # Suppress every Late/Permission flag -a compensation day is

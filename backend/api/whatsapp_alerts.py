@@ -17,7 +17,9 @@ Control page (plus one for attendance as a whole):
                       you forget to punch?".
   late_alert          The first punch of the day came after shift start + THIS shift's grace. Sent as
                       soon as that punch is seen; says the shift start, the grace, the first punch and
-                      how many minutes past the allowed time it was.
+                      how many minutes past the allowed time it was. Not sent for an arrival at/after the
+                      Morning Half cutoff (Settings -> Late Detection, 1:30 PM by default): that morning
+                      half was missed, which makes the day a Half Day, not a Late one.
   four_punch_alert    A friendly reminder a while (HR sets it, 15 minutes by default) BEFORE each of the
                       day's punches is expected: check-in at the shift start, lunch-out, lunch-in and
                       check-out at the shift end (just check-in and check-out for a shift with no lunch
@@ -568,6 +570,12 @@ def evaluate(emp, day: DayData, trace: list | None = None) -> list[Due]:
         )
     elif times[0] > end_s:
         say("Late alert: not due, the first punch came after the shift ended.")
+    elif times[0] >= _t2s(day.payroll.half_day_first_half_end_time):
+        say(
+            f"Late alert: not due, the first punch {_fmt_time(times[0])} is at or after the Morning Half cutoff "
+            f"{_fmt_time(_t2s(day.payroll.half_day_first_half_end_time))}: the morning half was missed, so this is a "
+            "Half Day arrival, not a Late one."
+        )
     elif now_s - first_minute_s > LATE_FRESH_S:
         say("Late alert: not sent, the punch was more than 30 minutes ago and the message would arrive stale.")
     elif excused():

@@ -128,6 +128,62 @@ class _RulesMixin:
         self._punch(d, time(12, 30), time(18, 0))  # first punch after the (moved) morning cutoff
         self.assertEqual(self._record(d).status, "half_shift")
 
+    # ── A Half Day arrival is not ALSO a Late-In ──
+    def test_arriving_after_the_morning_half_is_a_half_day_and_not_a_late_in(self):
+        d = date(2026, 4, 8)
+        self._punch(d, time(13, 40), time(18, 0))  # first punch after the 13:30 Morning Half cutoff
+        r = self._record(d)
+        self.assertEqual((r.status, r.shifts_earned, r.is_half_shift), ("half_shift", Decimal("0.50"), True))
+        self.assertFalse(r.is_late)
+        self.assertIn("Half Day arrival", r.late_reason)
+        self.assertIn("first punch 13:40", r.late_reason)
+        self.assertNotIn("Morning Late-In", r.late_reason)
+        # one cause, one consequence: the late pool is not charged for the same morning
+        self.assertEqual(late_pool_summary([r], 0, PayrollSettings.get())["late_in"], 0)
+
+    def test_an_arrival_that_still_beats_the_cutoff_is_a_full_day_and_late_as_before(self):
+        d = date(2026, 4, 9)
+        self._punch(d, time(13, 29), time(18, 0))
+        r = self._record(d)
+        self.assertEqual(r.status, "present")
+        self.assertTrue(r.is_late)
+        self.assertIn("Morning Late-In", r.late_reason)
+        self.assertEqual(late_pool_summary([r], 0, PayrollSettings.get())["late_in"], 1)
+
+    def test_the_cutoff_second_itself_is_on_the_half_day_side(self):
+        d = date(2026, 4, 10)
+        self._punch(d, time(13, 30, 0), time(18, 0))
+        r = self._record(d)
+        self.assertEqual(r.status, "half_shift")
+        self.assertFalse(r.is_late)
+
+    def test_the_cutoff_comes_from_settings(self):
+        ps = PayrollSettings.get()
+        ps.half_day_first_half_end_time = time(12, 0)
+        ps.half_day_second_half_start_time = time(13, 0)
+        ps.save()
+        after, before = date(2026, 4, 13), date(2026, 4, 14)
+        self._punch(after, time(12, 30), time(18, 0))
+        self._punch(before, time(11, 59), time(18, 0))
+        self.assertEqual((self._record(after).status, self._record(after).is_late), ("half_shift", False))
+        self.assertEqual((self._record(before).status, self._record(before).is_late), ("present", True))
+
+    def test_a_lone_punch_in_the_gap_is_absent_and_not_late(self):
+        d = date(2026, 4, 15)
+        self._punch(d, time(13, 40))  # nothing yet in the evening half
+        r = self._record(d)
+        self.assertEqual(r.status, "absent")
+        self.assertFalse(r.is_late)
+
+    def test_a_half_day_arrival_who_leaves_early_is_still_an_early_out(self):
+        d = date(2026, 4, 16)
+        self._punch(d, time(13, 40), time(16, 0))  # evening half attended, but well before 17:45
+        r = self._record(d)
+        self.assertEqual(r.status, "half_shift")
+        self.assertFalse(r.is_late)
+        self.assertTrue(r.early_leave)
+        self.assertIn("Evening Early-Out", r.late_reason)
+
     # ── Late Detection: the two switches are independent ──
     def test_the_two_detections_can_be_switched_off_independently(self):
         d = date(2026, 4, 7)

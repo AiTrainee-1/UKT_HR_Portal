@@ -42,7 +42,9 @@ from .whatsapp_alerts import (
     collapse_taps,
     due_missing_slot,
     due_reminder_slot,
+    evaluate,
     expected_slots,
+    load_day,
     run_attendance_alerts,
     slot_is_pending,
 )
@@ -701,6 +703,41 @@ class LateAlertTests(AlertBase):
         self.punch(self.emp, WED, "10:40")
         self.assertEqual(self.run_at(WED, 10, 41), {"late_alert": 1})
         self.assertIn("Late By: 25 minutes", self.sent_texts()[0])  # 10:40 - 10:15, not 10:40 - 09:15
+
+    def test_an_arrival_after_the_morning_half_is_a_half_day_not_a_late_alert(self):
+        # 13:40 is after the 13:30 Morning Half cutoff: the morning half was missed, which makes the day a
+        # Half Day - it is not also announced as "Late by 4 hr 25 min".
+        self.punch(self.emp, WED, "13:40")
+        self.assertEqual(self.run_at(WED, 13, 41), {})
+        self.assertFalse(self.logs("late_alert").exists())
+
+    def test_the_morning_half_cutoff_second_and_the_minute_before(self):
+        for punch, late in (("13:29:59", True), ("13:30:00", False)):
+            WhatsAppMessageLog.objects.all().delete()
+            AttendanceLog.objects.all().delete()
+            Attendance.objects.all().delete()
+            self.punch(self.emp, WED, punch)
+            self.run_at(WED, 13, 31)
+            self.assertEqual(self.logs("late_alert").exists(), late, punch)
+
+    def test_the_cutoff_comes_from_settings(self):
+        ps = PayrollSettings.get()
+        ps.half_day_first_half_end_time = time(12, 0)
+        ps.half_day_second_half_start_time = time(13, 0)
+        ps.save()
+        self.punch(self.emp, WED, "12:30")
+        self.assertEqual(self.run_at(WED, 12, 31), {})
+        emp2 = self.make_employee("A2", "Bala", "Kumar", phone="9000000002")
+        self.punch(emp2, WED, "11:59")
+        self.assertEqual(self.run_at(WED, 12, 0), {"late_alert": 1})
+        self.assertEqual(self.logs("late_alert").get().employee.employee_code, "A2")
+
+    def test_the_trace_explains_why_a_half_day_arrival_is_not_late(self):
+        self.punch(self.emp, WED, "13:40")
+        trace: list[str] = []
+        day = load_day(at(WED, 13, 41))
+        evaluate(self.emp, day, trace)
+        self.assertTrue(any("Half Day arrival, not a Late one" in line for line in trace), trace)
 
     def test_no_late_alert_while_morning_late_in_detection_is_switched_off(self):
         ps = PayrollSettings.get()

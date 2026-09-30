@@ -480,8 +480,11 @@ class TimeCardTests(Kit):
         body = self.run_report("time-card", **PERIOD, employeeIds=f"{self.carol.id},{self.pat.id}")
         r = self.row(body, "AC003", "2026-08-04")
         self.assertEqual((r["earlyOutMinutes"], r["workedHours"], r["status"]), (180, 5.0, "Present"))  # 18:00 - 15:00
-        r = self.row(body, "AC003", "2026-08-07")  # only a 15:00 punch: evening half, and 360 min after the start
-        self.assertEqual((r["status"], r["halfDay"], r["lateMinutes"]), ("Half Day", "Evening", 360))
+        r = self.row(
+            body, "AC003", "2026-08-07"
+        )  # only a 15:00 punch: the evening half, after the morning half was over
+        # a Half Day arrival is not ALSO a late one, so there are no late minutes
+        self.assertEqual((r["status"], r["halfDay"], r["lateMinutes"]), ("Half Day", "Evening", None))
         r = self.row(body, "AC003", "2026-08-05")
         self.assertEqual(r["status"], "Leave")
         self.assertIn("Approved leave (SL)", r["remarks"])
@@ -531,7 +534,9 @@ class TimeCardTests(Kit):
             body = self.run_report("time-card", **{**PERIOD, **p})
             return {(r["employeeCode"], r["date"][-2:]) for r in self.data_rows(body)}
 
-        self.assertEqual(keys(dayStatus="late"), {("AC002", "03"), ("AC003", "07"), ("AC004", "04")})
+        self.assertEqual(
+            keys(dayStatus="late"), {("AC002", "03"), ("AC004", "04")}
+        )  # AC003's 15:00 is a Half Day arrival
         self.assertEqual(keys(dayStatus="early_out"), {("AC003", "04")})
         self.assertEqual(
             keys(dayStatus="exceptions"),
@@ -741,7 +746,7 @@ class DailyAttendanceTests(Kit):
         self.assertEqual({c for c, _ in keys(status="holiday")}, {"AC001", "AC002", "AC003", "AC004", "AC005"})
         self.assertEqual({day for _, day in keys(status="weekly_off")}, {"08", "09"})
         self.assertEqual(keys(status="unprocessed"), set())
-        self.assertEqual(keys(flag="late"), {("AC002", "03"), ("AC003", "07"), ("AC004", "04")})
+        self.assertEqual(keys(flag="late"), {("AC002", "03"), ("AC004", "04")})  # AC003's 15:00 is a Half Day arrival
         self.assertEqual(keys(flag="early_out"), {("AC003", "04")})
         self.assertEqual(keys(flag="half_day"), {("AC001", "04"), ("AC003", "07")})
         self.assertEqual(keys(flag="permission"), {("AC002", "10")})
@@ -970,7 +975,7 @@ class MusterSheetTests(Kit):
         c = rows["AC003"]
         self.assertEqual(
             (c["present"], c["half"], c["absent"], c["leave"], c["holiday"], c["late"], c["effective"]),
-            (2, 1, 2, 1, 2, 1, 2.5),
+            (2, 1, 2, 1, 2, 0, 2.5),  # the 15:00 half-day arrival is no late
         )
         strength = next(r for r in body["rows"] if r.get("_kind") == "total")
         self.assertEqual(strength["employeeName"], "Strength")
@@ -983,7 +988,7 @@ class MusterSheetTests(Kit):
                 "absent": 10,
                 "leave": 1,
                 "holiday": 8,
-                "late": 2,
+                "late": 1,
                 "effective": 12.0,
                 "shifts": 12.0,
             },
@@ -1164,7 +1169,7 @@ class MonthlySummaryTests(Kit):
             ),
             (20, 2, 1, 1, 1, 1, 2),
         )
-        self.assertEqual((c["casualLeaves"], c["permissions"], c["lateDays"], c["earlyOutDays"]), (1, 0, 1, 1))
+        self.assertEqual((c["casualLeaves"], c["permissions"], c["lateDays"], c["earlyOutDays"]), (1, 0, 0, 1))
         self.assertEqual((c["effectiveDays"], c["totalShifts"], c["attendancePct"]), (2.5, 2.5, 12.5))  # 2.5 / 20
         b = rows["AC002"]
         self.assertEqual(

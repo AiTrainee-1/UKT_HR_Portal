@@ -290,6 +290,7 @@ Configured in **Settings → Late Detection**:
 - A **free allowance** of N lates per month before any deduction begins.
 - After that, **slabs** define how many days are deducted per additional late arrival (e.g., "after 3 lates, deduct 0.5 shifts per additional late").
 - This is automatically calculated during payroll generation.
+- **Late vs Half Day:** a first punch **before** the Morning Half cutoff (Settings → Late Detection, 1:30 PM by default) that is still after shift start + grace is a **Late** arrival. A first punch **at or after** the cutoff means the morning half was missed altogether, so the day is a **Half Day** only — it is *not* also counted as Late, and no "Late Attendance" WhatsApp alert is sent for it. (The evening half is then earned by a punch at or after the Evening Half start, 2:30 PM by default; leaving early is still judged as an Early-Out.)
 
 #### Without Permission (WP) Policy
 Similarly configured — if an employee is absent without a prior leave approval, it's tracked separately and may carry a different deduction slab.

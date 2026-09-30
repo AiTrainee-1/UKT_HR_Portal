@@ -185,7 +185,9 @@ export default function AttendanceTab() {
                   <strong>Second-Half-Start</strong> time (both set below) -these two clock times are the same for every
                   shift. <strong>Late Detection</strong> (Morning Late-In / Evening Early-Out) is judged separately,
                   against the employee's own assigned shift start/end + grace from <strong>Manage Shift</strong> -a very
-                  late arrival that still beats the Half-Day cutoff is Full Day <em>and</em> Late, never auto-demoted.{" "}
+                  late arrival that still beats the Half-Day cutoff is Full Day <em>and</em> Late, never auto-demoted.
+                  An arrival <em>at or after</em> the First-Half-End time is different: the morning half was missed, so
+                  the day is a Half Day only and is <em>not</em> also counted as Late (no Late alert is sent either).{" "}
                   <strong>Permission</strong> (Settings → Late Detection) can shift that day's Late Detection boundary
                   for an individual employee, but never moves the Half-Day cutoff itself.
                 </p>
