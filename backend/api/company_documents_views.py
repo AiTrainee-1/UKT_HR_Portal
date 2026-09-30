@@ -11,12 +11,7 @@ a couple of fields that aren't stored on Employee (last working day, etc.)
 are accepted as optional query params at generation time and are not persisted.
 """
 import io
-import smtplib
-import ssl
 from datetime import date
-from email.mime.application import MIMEApplication
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
 from django.http import HttpResponse
 from django.utils import timezone
@@ -28,6 +23,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from . import email_service
 from .auth import get_token_employee_id, is_hr, require_auth, require_hr
 from .user_settings import settings_for
 from .branch_scope import get_branch_scope
@@ -281,8 +277,6 @@ def offer_letter_email(request: Request, employee_id: int) -> Response:
     if not to_email:
         return Response({"error": "Employee has no email address. Provide toEmail in request body."}, status=400)
 
-    company_name = ps.company_name or "UKTextiles"
-    emp_name = full_name(emp)
     desig_title = emp.designation.title if emp.designation_id and emp.designation else "your new role"
 
     opts = {
@@ -294,54 +288,20 @@ def offer_letter_email(request: Request, employee_id: int) -> Response:
     pdf_bytes = build_offer_letter_pdf(emp, opts)
     pdf_filename = f"offer_letter_{emp.employee_code}.pdf"
 
-    subject = f"Offer of Employment -{desig_title} | {company_name}"
-    html_body = f"""
-    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1a3a2e">
-      <div style="background:#0E4B3A;padding:20px;text-align:center;border-radius:8px 8px 0 0">
-        <h1 style="color:white;margin:0;font-size:18px">{company_name.upper()}</h1>
-        <p style="color:rgba(255,255,255,0.8);margin:4px 0 0;font-size:12px">Offer of Employment</p>
-      </div>
-      <div style="background:#ffffff;padding:30px;border:1px solid #d8e5df;border-top:none">
-        <p>Dear <strong>{emp_name}</strong>,</p>
-        <p>
-          We are pleased to share your offer of employment as <strong>{desig_title}</strong> with
-          {company_name}. Please find the detailed offer letter attached.
-        </p>
-        <p style="color:#888;font-size:12px">
-          This is a system-generated email from the {company_name} HR Portal.
-        </p>
-      </div>
-    </div>
-    """
-
-    msg = MIMEMultipart("mixed")
-    msg["Subject"] = subject
-    msg["From"] = f"{ps.smtp_from_name} <{ps.smtp_from_email or ps.smtp_username}>"
-    msg["To"] = to_email
-    msg.attach(MIMEText(html_body, "html"))
-
-    attachment = MIMEApplication(pdf_bytes, _subtype="pdf")
-    attachment.add_header("Content-Disposition", "attachment", filename=pdf_filename)
-    msg.attach(attachment)
-
-    try:
-        context = ssl.create_default_context()
-        port = ps.smtp_port
-        if port == 465:
-            with smtplib.SMTP_SSL(ps.smtp_host, port, context=context) as server:
-                server.login(ps.smtp_username, ps.smtp_password)
-                server.sendmail(ps.smtp_from_email or ps.smtp_username, to_email, msg.as_string())
-        else:
-            with smtplib.SMTP(ps.smtp_host, port, timeout=15) as server:
-                server.ehlo()
-                server.starttls(context=context)
-                server.login(ps.smtp_username, ps.smtp_password)
-                server.sendmail(ps.smtp_from_email or ps.smtp_username, to_email, msg.as_string())
-    except smtplib.SMTPAuthenticationError:
-        return Response({"error": "SMTP authentication failed. Check username/password."}, status=502)
-    except Exception as exc:
-        return Response({"error": f"Failed to send email: {exc}"}, status=502)
-
+    emp_name = full_name(emp)
+    log = email_service.send_email(
+        "offer_letter",
+        to_email=to_email,
+        params={"employee_name": emp_name, "designation": desig_title},
+        ps=ps,
+        recipient_name=emp_name,
+        employee=emp,
+        attachments=[(pdf_filename, pdf_bytes, "application/pdf")],
+        ref_id=emp.id,
+        sent_by_id=request.jwt_user.get("hrUserId"),
+    )
+    if log.status != email_service.EMAIL_SENT:
+        return Response({"error": log.error_message}, status=log.http_status)
     return Response({"ok": True, "sentTo": to_email, "pdfAttached": True})
 
 

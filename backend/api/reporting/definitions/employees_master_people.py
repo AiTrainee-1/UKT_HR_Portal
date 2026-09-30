@@ -29,10 +29,12 @@ from .employees_master_base import (
     code_key,
     department_name,
     employees_qs,
+    is_active,
     join_date_of,
     months_between,
     months_reached_on,
     occurrence_in_window,
+    service_end_dates,
     type_label,
     window_bounds,
 )
@@ -61,14 +63,14 @@ def _window_filter():
 # ═════════════════════════════════════════════════════════════════════════════
 
 BIRTHDAY_COLUMNS = (
-    ColumnSpec("birthday", "Birthday", DATE, 1.1),
+    ColumnSpec("birthday", "Birthday", DATE, 1.5),
     ColumnSpec("weekday", "Day", TEXT, 1.0),
     ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
     ColumnSpec("employeeName", "Employee", TEXT, 2.2),
     ColumnSpec("department", "Department", TEXT, 1.5),
     ColumnSpec("designation", "Designation", TEXT, 1.5),
-    ColumnSpec("employmentType", "Type", BADGE, 0.9),
-    ColumnSpec("dateOfBirth", "Date of Birth", DATE, 1.1),
+    ColumnSpec("employmentType", "Type", BADGE, 1.3),
+    ColumnSpec("dateOfBirth", "Date of Birth", DATE, 1.5),
     ColumnSpec("turningAge", "Turning", INTEGER, 0.7),
     ColumnSpec("phone", "Phone", TEXT, 1.2),
 )
@@ -123,8 +125,7 @@ register(ReportSpec(
     tags=("birthday", "celebrations", "date of birth", "wishes"),
     family="celebrations",
     variant="Birthdays",
-    landscape=False,
-    filters=(_window_filter(), *F.scope(employee=False, status="active")),
+    filters=(_window_filter(), *F.scope(status="active")),
     columns=BIRTHDAY_COLUMNS,
     run=_birthdays_run,
 ))  # fmt: skip
@@ -135,14 +136,14 @@ register(ReportSpec(
 # ═════════════════════════════════════════════════════════════════════════════
 
 ANNIVERSARY_COLUMNS = (
-    ColumnSpec("anniversary", "Anniversary", DATE, 1.1),
+    ColumnSpec("anniversary", "Anniversary", DATE, 1.5),
     ColumnSpec("weekday", "Day", TEXT, 1.0),
     ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
     ColumnSpec("employeeName", "Employee", TEXT, 2.2),
     ColumnSpec("department", "Department", TEXT, 1.5),
     ColumnSpec("designation", "Designation", TEXT, 1.5),
-    ColumnSpec("employmentType", "Type", BADGE, 0.9),
-    ColumnSpec("joinDate", "Join Date", DATE, 1.1),
+    ColumnSpec("employmentType", "Type", BADGE, 1.3),
+    ColumnSpec("joinDate", "Join Date", DATE, 1.5),
     ColumnSpec("yearsCompleted", "Years Completed", INTEGER, 0.9),
     ColumnSpec("phone", "Phone", TEXT, 1.2),
 )
@@ -203,10 +204,9 @@ register(ReportSpec(
     tags=("anniversary", "service", "years of service", "celebrations", "milestone", "long service"),
     family="celebrations",
     variant="Work anniversaries",
-    landscape=False,
     filters=(
         _window_filter(),
-        *F.scope(employee=False, status=None),
+        *F.scope(status=None),
         F.number("minYears", "Minimum years of service", default=1, min=1, max=60),
     ),
     columns=ANNIVERSARY_COLUMNS,
@@ -223,13 +223,13 @@ MILESTONE_COLUMNS = (
     ColumnSpec("employeeName", "Employee", TEXT, 2.2),
     ColumnSpec("department", "Department", TEXT, 1.5),
     ColumnSpec("designation", "Designation", TEXT, 1.5),
-    ColumnSpec("employmentType", "Type", BADGE, 0.9),
-    ColumnSpec("joinDate", "Join Date", DATE, 1.1),
+    ColumnSpec("employmentType", "Type", BADGE, 1.3),
+    ColumnSpec("joinDate", "Join Date", DATE, 1.5),
     ColumnSpec("serviceMonths", "Service (Months)", INTEGER, 0.9),
-    ColumnSpec("probationEnd", "Probation Ends", DATE, 1.1),
+    ColumnSpec("probationEnd", "Probation Ends", DATE, 1.5),
     ColumnSpec("probationSource", "Probation Date", BADGE, 0.9),
-    ColumnSpec("confirmationDate", "Confirmed On", DATE, 1.1),
-    ColumnSpec("clEligibleFrom", "Casual Leave From", DATE, 1.1),
+    ColumnSpec("confirmationDate", "Confirmed On", DATE, 1.5),
+    ColumnSpec("clEligibleFrom", "Casual Leave From", DATE, 1.5),
     ColumnSpec("clEligible", "Casual Leave", BADGE, 1.0),
 )
 MILESTONE_OPTIONS = (
@@ -248,6 +248,7 @@ def _milestones_run(ctx) -> ReportResult:
     milestone = ctx.params.get("milestone")
     emps = list(employees_qs(ctx))
     emps.sort(key=lambda e: code_key(e.employee_code))
+    served_to = service_end_dates(emps, today)  # a leaver's service stops at the exit, it does not keep growing
 
     counts: Counter = Counter()
     rows = []
@@ -257,15 +258,16 @@ def _milestones_run(ctx) -> ReportResult:
         if joined is None:
             no_join += 1
             continue
-        months = max(0, months_between(joined, today))
+        months = max(0, months_between(joined, served_to[e.id]))
         recorded = e.probation_end_date
         probation_end = recorded or add_months(joined, probation_months)
         confirmed = e.confirmation_date
-        on_probation = probation_end > today and not (confirmed and confirmed <= today)
+        probation_done = probation_end <= today or bool(confirmed and confirmed <= today)
+        on_probation = is_active(e) and not probation_done  # someone who has left is no longer "on probation"
         ending_soon = on_probation and probation_end <= today + timedelta(days=30)
         is_staff = (e.employment_type or "").strip() == "staff"
-        if not is_staff:
-            cl_state, cl_from = "Not applicable", None
+        if not (is_staff and is_active(e)):
+            cl_state, cl_from = "Not applicable", None  # casual leave is for active staff only
         else:
             cl_from = months_reached_on(joined, ELIGIBILITY_MONTHS)
             cl_state = "Eligible" if months >= ELIGIBILITY_MONTHS else "Not yet"
@@ -276,7 +278,7 @@ def _milestones_run(ctx) -> ReportResult:
         keep = {
             None: True,
             "probation_ending": ending_soon,
-            "probation_over": not on_probation,
+            "probation_over": probation_done,
             "cl_eligible": cl_state == "Eligible",
             "cl_not_yet": cl_state == "Not yet",
         }[milestone]
@@ -307,9 +309,13 @@ def _milestones_run(ctx) -> ReportResult:
     notes = [
         f"No probation policy is stored: 'Derived' probation end = join date + {probation_months} month(s); 'Recorded' "
         "means HR entered a probation end date on the employee. Change the months above to test another policy.",
-        f"Casual leave is for staff only, after {ELIGIBILITY_MONTHS} completed months of service (the same rule the "
-        "casual-leave screens apply); production employees show 'Not applicable'.",
+        f"Casual leave is for active staff only, after {ELIGIBILITY_MONTHS} completed months of service (the same "
+        "rule the casual-leave screens apply); production employees and people who have left show 'Not applicable'.",
     ]
+    if any(not is_active(e) for e in emps):
+        notes.append(
+            "Service of an employee who has left is counted up to the exit date (as in the Exits Register), not to today."
+        )
     if no_join:
         notes.append(f"{no_join} employee(s) have a missing or unreadable join date and are left out.")
     return ReportResult(rows=rows, summary=summary, notes=notes)
@@ -324,7 +330,7 @@ register(ReportSpec(
     icon="Hourglass",
     tags=("probation", "confirmation", "casual leave", "eligibility", "service", "tenure"),
     filters=(
-        *F.scope(employee=False, status="active"),
+        *F.scope(status="active"),
         F.number("probationMonths", "Probation (months)", default=3, min=1, max=24, help="Used where no probation end date is recorded."),
         F.select("milestone", "Show", MILESTONE_OPTIONS, placeholder="Everyone"),
     ),

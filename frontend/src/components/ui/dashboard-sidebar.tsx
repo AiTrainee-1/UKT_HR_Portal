@@ -14,7 +14,7 @@ import {
   ChevronRight, Search, X, Command, UserCheck, UserMinus,
   CalendarCheck, Bell, Award, TrendingUp, Gift, CreditCard,
   CalendarHeart, MessageCircle, UserCog, FolderOpen, MonitorSmartphone,
-  Smartphone, Landmark, DoorOpen,
+  Smartphone, Landmark, DoorOpen, Mail,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -137,6 +137,7 @@ const navGroups: NavGroupData[] = [
       { path: '/hr/login-devices', label: 'Login Devices', icon: MonitorSmartphone },
       { path: '/hr/mobile-app-login', label: 'Mobile App Login', icon: Smartphone },
       { path: '/hr/whatsapp-control', label: 'WhatsApp Control', icon: MessageCircle },
+      { path: '/hr/gmail-control', label: 'Gmail Control', icon: Mail },
       { path: '/hr/settings', label: 'Settings', icon: Settings },
     ],
   },
@@ -844,10 +845,8 @@ export function HrSidebar({
             // every child are hidden (a parent with a visible child stays,
             // even if its own path's module happens to be hidden).
             .filter((item) => {
-              // Compensation page (CTC Breakdown + OT Detection + Compensation
-              // Leave + History & Reports) is gated by its own Settings master
-              // switch -same "not loaded yet = enabled" convention as above.
-              if (item.path === '/hr/compensation' && settings?.compensationFeatureEnabled === false) return false;
+              // The Compensation page is mandatory: it is never hidden by the Settings -> Payroll switch (which
+              // only turns the background OT / Compensation features off), only by the role's own permission below.
               // Account Management is admin-only, independent of Role.permissions.
               if (item.path === '/hr/account-management') return !!user?.isSuperAdmin;
               // Admin-only, same as Account Management -no per-role grant.

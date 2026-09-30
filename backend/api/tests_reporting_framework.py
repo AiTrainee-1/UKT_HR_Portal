@@ -18,7 +18,15 @@ from .reporting import registry
 from .reporting import filters as F
 from .reporting.formatting import indian_number, minutes_text, parse_date
 from .reporting.types import (
-    BADGE, CURRENCY, DATE, DURATION, INTEGER, TEXT, ColumnSpec, ReportResult, ReportSpec,
+    BADGE,
+    CURRENCY,
+    DATE,
+    DURATION,
+    INTEGER,
+    TEXT,
+    ColumnSpec,
+    ReportResult,
+    ReportSpec,
 )
 
 
@@ -29,18 +37,22 @@ def _hr_headers(user: HRUser) -> dict:
 def _run_probe(ctx):
     rows = []
     for e in ctx.employees():
-        rows.append({
-            "code": e.employee_code,
-            "name": f"{e.first_name} {e.last_name}",
-            "dept": e.department.name if e.department_id else None,
-            "amount": 1000.5 if e.employee_code != "RPT_C" else 250,
-            "count": 2,
-            "day": "2026-09-05",
-            "mins": 125,
-            "state": "active",
-            "secret": "must never leave the server",
-        })
-    return ReportResult(rows=rows, summary=[{"label": "People", "value": len(rows), "format": "integer"}], notes=["a note"])
+        rows.append(
+            {
+                "code": e.employee_code,
+                "name": f"{e.first_name} {e.last_name}",
+                "dept": e.department.name if e.department_id else None,
+                "amount": 1000.5 if e.employee_code != "RPT_C" else 250,
+                "count": 2,
+                "day": "2026-09-05",
+                "mins": 125,
+                "state": "active",
+                "secret": "must never leave the server",
+            }
+        )
+    return ReportResult(
+        rows=rows, summary=[{"label": "People", "value": len(rows), "format": "integer"}], notes=["a note"]
+    )
 
 
 def _probe_spec(report_id="zz_probe", **kw):
@@ -84,7 +96,9 @@ class _Base(TestCase):
         role = Role.objects.create(name="rpt_viewer", permissions={"reports": "view"})
         cls.branch_user = HRUser.objects.create(username="rpt_b1", password_hash="x", role=role, branch=cls.b1)
         cls.no_reports = HRUser.objects.create(
-            username="rpt_none", password_hash="x", role=Role.objects.create(name="rpt_none", permissions={"reports": "hidden"})
+            username="rpt_none",
+            password_hash="x",
+            role=Role.objects.create(name="rpt_none", permissions={"reports": "hidden"}),
         )
 
     def setUp(self):
@@ -158,7 +172,9 @@ class CatalogTests(_Base):
         before = self.get("/api/reports/catalog").json()
         n_emp = next(c["count"] for c in before["categories"] if c["id"] == "employees")
         # probe + one family (two variants) = 2 entries, not 3
-        self.assertEqual(n_emp, len({(s.category, s.family or s.id) for s in registry.all_specs() if s.category == "employees"}))
+        self.assertEqual(
+            n_emp, len({(s.category, s.family or s.id) for s in registry.all_specs() if s.category == "employees"})
+        )
 
 
 class RunTests(_Base):
@@ -179,7 +195,9 @@ class RunTests(_Base):
 
     def test_scope_filters(self):
         def codes(**p):
-            body = self.get("/api/reports/run/zz_probe", period="2026-09", dateFrom="2026-09-01", dateTo="2026-09-02", **p).json()
+            body = self.get(
+                "/api/reports/run/zz_probe", period="2026-09", dateFrom="2026-09-01", dateTo="2026-09-02", **p
+            ).json()
             return [x["code"] for x in body["rows"]]
 
         self.assertEqual(codes(departmentIds=str(self.sewing.id)), ["RPT_C"])
@@ -190,16 +208,30 @@ class RunTests(_Base):
 
     def test_branch_isolation_cannot_be_widened_by_params(self):
         body = self.get(
-            "/api/reports/run/zz_probe", user=self.branch_user, period="2026-09", dateFrom="2026-09-01", dateTo="2026-09-02",
+            "/api/reports/run/zz_probe",
+            user=self.branch_user,
+            period="2026-09",
+            dateFrom="2026-09-01",
+            dateTo="2026-09-02",
             branchIds=str(self.b2.id),
         ).json()
         self.assertEqual(body["rows"], [])
         body = self.get(
-            "/api/reports/run/zz_probe", user=self.branch_user, period="2026-09", dateFrom="2026-09-01", dateTo="2026-09-02",
+            "/api/reports/run/zz_probe",
+            user=self.branch_user,
+            period="2026-09",
+            dateFrom="2026-09-01",
+            dateTo="2026-09-02",
             employeeIds=str(self.c.id),
         ).json()
         self.assertEqual(body["rows"], [])
-        body = self.get("/api/reports/run/zz_probe", user=self.branch_user, period="2026-09", dateFrom="2026-09-01", dateTo="2026-09-02").json()
+        body = self.get(
+            "/api/reports/run/zz_probe",
+            user=self.branch_user,
+            period="2026-09",
+            dateFrom="2026-09-01",
+            dateTo="2026-09-02",
+        ).json()
         self.assertEqual(sorted(x["code"] for x in body["rows"]), ["RPT_A", "RPT_B", "RPT_D"])
 
     def test_employee_status_filter_active_and_inactive(self):
@@ -233,18 +265,20 @@ class RunTests(_Base):
         self.assertTrue(any(f["label"] == "Month" for f in r.json()["filters"]))
 
     def test_select_boolean_number_text_filters(self):
-        spec = self.reg(_probe_spec(
-            "zz_kinds",
-            filters=(
-                F.select("mode", "Mode", [("a", "Alpha"), ("b", "Beta")], default="a"),
-                F.select("multi", "Multi", [("x", "X"), ("y", "Y")], multi=True),
-                F.boolean("flag", "Flag"),
-                F.number("min", "Minimum", default=3, min=1, max=9),
-                F.text("q", "Search"),
-            ),
-            run=lambda ctx: ReportResult(rows=[{"code": str(sorted(ctx.params.items(), key=lambda kv: kv[0]))}]),
-            columns=(ColumnSpec("code", "Params", TEXT),),
-        ))
+        spec = self.reg(
+            _probe_spec(
+                "zz_kinds",
+                filters=(
+                    F.select("mode", "Mode", [("a", "Alpha"), ("b", "Beta")], default="a"),
+                    F.select("multi", "Multi", [("x", "X"), ("y", "Y")], multi=True),
+                    F.boolean("flag", "Flag"),
+                    F.number("min", "Minimum", default=3, min=1, max=9),
+                    F.text("q", "Search"),
+                ),
+                run=lambda ctx: ReportResult(rows=[{"code": str(sorted(ctx.params.items(), key=lambda kv: kv[0]))}]),
+                columns=(ColumnSpec("code", "Params", TEXT),),
+            )
+        )
         r = self.get(f"/api/reports/run/{spec.id}", mode="b", multi="x,y", flag="true", min="5", q="  hello ")
         self.assertEqual(r.status_code, 200)
         text = r.json()["rows"][0]["code"]
@@ -259,28 +293,40 @@ class RunTests(_Base):
         self.assertIn("'min', 3", d)
 
     def test_row_limit_truncates_and_flags(self):
-        spec = self.reg(_probe_spec(
-            "zz_big", screen_limit=5,
-            run=lambda ctx: ReportResult(rows=[{"code": f"R{i}", "amount": 1} for i in range(ctx.row_limit)] + [{"code": "extra"}] * 3),
-        ))
-        body = self.get(f"/api/reports/run/{spec.id}", period="2026-09", dateFrom="2026-09-01", dateTo="2026-09-02").json()
+        spec = self.reg(
+            _probe_spec(
+                "zz_big",
+                screen_limit=5,
+                run=lambda ctx: ReportResult(
+                    rows=[{"code": f"R{i}", "amount": 1} for i in range(ctx.row_limit)] + [{"code": "extra"}] * 3
+                ),
+            )
+        )
+        body = self.get(
+            f"/api/reports/run/{spec.id}", period="2026-09", dateFrom="2026-09-01", dateTo="2026-09-02"
+        ).json()
         self.assertEqual(body["rowCount"], 5)
         self.assertTrue(body["truncated"])
         self.assertEqual(body["limit"], 5)
         self.assertIsNone(body["totals"])  # a sum over a cut-off list would under-state the real total
 
     def test_export_over_the_row_limit_is_refused_not_truncated(self):
-        spec = self.reg(_probe_spec(
-            "zz_toobig", pdf_max_rows=3,
-            run=lambda ctx: ReportResult(rows=[{"code": f"R{i}", "amount": 1} for i in range(5)]),
-        ))
+        spec = self.reg(
+            _probe_spec(
+                "zz_toobig",
+                pdf_max_rows=3,
+                run=lambda ctx: ReportResult(rows=[{"code": f"R{i}", "amount": 1} for i in range(5)]),
+            )
+        )
         q = dict(period="2026-09", dateFrom="2026-09-01", dateTo="2026-09-02")
         r = self.get(f"/api/reports/export/{spec.id}", fmt="pdf", **q)
         self.assertEqual(r.status_code, 413)
         self.assertEqual(r.json()["error"], "too_many_rows")
         self.assertEqual(r.json()["limit"], 3)
         self.assertIn("Narrow the filters", r.json()["message"])
-        self.assertEqual(self.get(f"/api/reports/export/{spec.id}", fmt="xlsx", **q).status_code, 200)  # xlsx cap is higher
+        self.assertEqual(
+            self.get(f"/api/reports/export/{spec.id}", fmt="xlsx", **q).status_code, 200
+        )  # xlsx cap is higher
 
     def test_failing_report_returns_500_json_not_traceback(self):
         def boom(ctx):
@@ -293,29 +339,58 @@ class RunTests(_Base):
         self.assertEqual(r.json()["error"], "report_failed")
         self.assertNotIn("kaput", r.content.decode())
 
+    def test_subtotal_rows_do_not_count_against_the_row_limit(self):
+        def rows(ctx):
+            out = []
+            for i in range(4):
+                out.append({"code": f"R{i}", "amount": 1})
+                out.append({"code": "Subtotal", "amount": 1, "_kind": "subtotal"})
+            return ReportResult(rows=out)
+
+        spec = self.reg(_probe_spec("zz_sublimit", screen_limit=4, run=rows))
+        q = dict(period="2026-09", dateFrom="2026-09-01", dateTo="2026-09-02")
+        body = self.get(f"/api/reports/run/{spec.id}", **q).json()
+        self.assertFalse(body["truncated"])  # 4 data rows fit a limit of 4 even though 8 lines are returned
+        self.assertEqual(body["rowCount"], 8)
+        over = self.reg(_probe_spec("zz_sublimit2", screen_limit=3, run=rows))
+        body = self.get(f"/api/reports/run/{over.id}", **q).json()
+        self.assertTrue(body["truncated"])
+        self.assertEqual(sum(1 for r in body["rows"] if not r.get("_kind")), 3)
+
     def test_structural_rows_are_excluded_from_totals(self):
-        spec = self.reg(_probe_spec(
-            "zz_sub",
-            run=lambda ctx: ReportResult(rows=[
-                {"code": "a", "amount": 10, "count": 1},
-                {"code": "b", "amount": 20, "count": 2},
-                {"code": "Subtotal", "amount": 30, "count": 3, "_kind": "subtotal"},
-            ]),
-        ))
-        body = self.get(f"/api/reports/run/{spec.id}", period="2026-09", dateFrom="2026-09-01", dateTo="2026-09-02").json()
+        spec = self.reg(
+            _probe_spec(
+                "zz_sub",
+                run=lambda ctx: ReportResult(
+                    rows=[
+                        {"code": "a", "amount": 10, "count": 1},
+                        {"code": "b", "amount": 20, "count": 2},
+                        {"code": "Subtotal", "amount": 30, "count": 3, "_kind": "subtotal"},
+                    ]
+                ),
+            )
+        )
+        body = self.get(
+            f"/api/reports/run/{spec.id}", period="2026-09", dateFrom="2026-09-01", dateTo="2026-09-02"
+        ).json()
         self.assertEqual(body["totals"]["amount"], 30.0)
         self.assertEqual(body["rows"][2]["_kind"], "subtotal")
 
     def test_dynamic_columns_and_explicit_totals_override(self):
-        spec = self.reg(_probe_spec(
-            "zz_dyn", columns=(),
-            run=lambda ctx: ReportResult(
-                rows=[{"a": 1, "b": "x"}],
-                columns=[ColumnSpec("a", "A", INTEGER), ColumnSpec("b", "B", TEXT)],
-                totals={"a": 99},
-            ),
-        ))
-        body = self.get(f"/api/reports/run/{spec.id}", period="2026-09", dateFrom="2026-09-01", dateTo="2026-09-02").json()
+        spec = self.reg(
+            _probe_spec(
+                "zz_dyn",
+                columns=(),
+                run=lambda ctx: ReportResult(
+                    rows=[{"a": 1, "b": "x"}],
+                    columns=[ColumnSpec("a", "A", INTEGER), ColumnSpec("b", "B", TEXT)],
+                    totals={"a": 99},
+                ),
+            )
+        )
+        body = self.get(
+            f"/api/reports/run/{spec.id}", period="2026-09", dateFrom="2026-09-01", dateTo="2026-09-02"
+        ).json()
         self.assertEqual([c["key"] for c in body["columns"]], ["a", "b"])
         self.assertEqual(body["totals"], {"a": 99})
         cat = next(x for x in self.get("/api/reports/catalog").json()["reports"] if x["id"] == spec.id)
@@ -342,7 +417,9 @@ class ExportTests(_Base):
         self.assertEqual(first[0], "RPT_A")
         self.assertEqual(first[3], 1000.5)
         self.assertEqual(ws["F8"].value.date() if hasattr(ws["F8"].value, "date") else ws["F8"].value, date(2026, 9, 5))
-        self.assertEqual(ws["G8"].value, timedelta(minutes=125))  # duration is stored as a fraction of a day, format [h]:mm
+        self.assertEqual(
+            ws["G8"].value, timedelta(minutes=125)
+        )  # duration is stored as a fraction of a day, format [h]:mm
         self.assertEqual(ws["G12"].value, timedelta(minutes=500))
         self.assertIn("₹", ws["D8"].number_format)
         total_row = [c.value for c in ws[12]]
@@ -352,12 +429,17 @@ class ExportTests(_Base):
         self.assertTrue(ws.auto_filter.ref.startswith("A7:"))
 
     def test_xlsx_never_turns_text_into_formulas(self):
-        spec = self.reg(_probe_spec(
-            "zz_inject", run=lambda ctx: ReportResult(rows=[
-                {"code": "=HYPERLINK(\"http://evil\",\"x\")", "name": "+91 98765 43210", "dept": "@SUM(A1)"},
-                {"code": "-cmd|calc", "name": "\t=1+1"},
-            ]),
-        ))
+        spec = self.reg(
+            _probe_spec(
+                "zz_inject",
+                run=lambda ctx: ReportResult(
+                    rows=[
+                        {"code": '=HYPERLINK("http://evil","x")', "name": "+91 98765 43210", "dept": "@SUM(A1)"},
+                        {"code": "-cmd|calc", "name": "\t=1+1"},
+                    ]
+                ),
+            )
+        )
         r = self.get(f"/api/reports/export/{spec.id}", fmt="xlsx", **self.P)
         ws = load_workbook(io.BytesIO(r.content)).active
         for cell in (ws["A8"], ws["B8"], ws["C8"], ws["A9"], ws["B9"]):
@@ -369,9 +451,14 @@ class ExportTests(_Base):
         self.assertEqual(r.status_code, 200)
         self.assertTrue(r.content.startswith(b"%PDF"))
         self.assertIn("application/pdf", r["Content-Type"])
-        many = self.reg(_probe_spec(
-            "zz_many", run=lambda ctx: ReportResult(rows=[{"code": f"E{i}", "name": f"Name {i}", "amount": i * 10.5, "count": i} for i in range(400)]),
-        ))
+        many = self.reg(
+            _probe_spec(
+                "zz_many",
+                run=lambda ctx: ReportResult(
+                    rows=[{"code": f"E{i}", "name": f"Name {i}", "amount": i * 10.5, "count": i} for i in range(400)]
+                ),
+            )
+        )
         big = self.get(f"/api/reports/export/{many.id}", fmt="pdf", **self.P)
         self.assertEqual(big.status_code, 200)
         self.assertGreater(big.content.count(b"/Type /Page\n") + big.content.count(b"/Type /Page "), 3)
@@ -382,12 +469,20 @@ class ExportTests(_Base):
             r = self.get(f"/api/reports/export/{empty.id}", fmt=fmt, **self.P)
             self.assertEqual(r.status_code, 200, fmt)
         cols = tuple(ColumnSpec(f"c{i}", f"D{i + 1}", INTEGER, 0.5) for i in range(32))
-        wide = self.reg(_probe_spec("zz_wide", columns=cols, run=lambda ctx: ReportResult(rows=[{f"c{i}": i for i in range(32)}] * 3)))
+        wide = self.reg(
+            _probe_spec(
+                "zz_wide", columns=cols, run=lambda ctx: ReportResult(rows=[{f"c{i}": i for i in range(32)}] * 3)
+            )
+        )
         for fmt in ("pdf", "xlsx"):
             self.assertEqual(self.get(f"/api/reports/export/{wide.id}", fmt=fmt, **self.P).status_code, 200, fmt)
 
     def test_custom_builders_replace_generic_export(self):
-        spec = self.reg(_probe_spec("zz_custom", pdf_builder=lambda ctx, out: b"%PDF-custom", xlsx_builder=lambda ctx, out: b"PK-custom"))
+        spec = self.reg(
+            _probe_spec(
+                "zz_custom", pdf_builder=lambda ctx, out: b"%PDF-custom", xlsx_builder=lambda ctx, out: b"PK-custom"
+            )
+        )
         self.assertEqual(self.get(f"/api/reports/export/{spec.id}", fmt="pdf", **self.P).content, b"%PDF-custom")
         self.assertEqual(self.get(f"/api/reports/export/{spec.id}", fmt="xlsx", **self.P).content, b"PK-custom")
 
@@ -450,7 +545,9 @@ class ModuleGateTests(_Base):
             self.assertEqual(r.status_code, 403, url)
             self.assertEqual(r.json()["error"], "report_forbidden", url)  # not the middleware's permission_denied
         self.assertEqual(self.get("/api/reports/run/zz_pay", user=self.payroll, **self.P).status_code, 200)
-        self.assertEqual(self.get("/api/reports/export/zz_pay", user=self.slip_edit, fmt="pdf", **self.P).status_code, 200)
+        self.assertEqual(
+            self.get("/api/reports/export/zz_pay", user=self.slip_edit, fmt="pdf", **self.P).status_code, 200
+        )
 
     def test_child_module_inherits_parent_grant(self):
         self.assertIn("zz_child", self.ids(self.cascade))
@@ -473,7 +570,10 @@ class OptionsTests(_Base):
         self.assertEqual([x["value"] for x in r.json()], [self.a.id])
         self.assertEqual(r.json()[0]["label"], "RPT_A · RPT_A T")
         ids = f"{self.a.id},{self.c.id}"
-        self.assertEqual(sorted(x["value"] for x in self.get("/api/reports/options/employees", ids=ids).json()), sorted([self.a.id, self.c.id]))
+        self.assertEqual(
+            sorted(x["value"] for x in self.get("/api/reports/options/employees", ids=ids).json()),
+            sorted([self.a.id, self.c.id]),
+        )
         only_active = self.get("/api/reports/options/employees", status="active").json()
         self.assertNotIn(self.gone.id, [x["value"] for x in only_active])
         by_dept = self.get("/api/reports/options/employees", departmentIds=str(self.sewing.id)).json()
@@ -495,12 +595,16 @@ class OptionsTests(_Base):
         try:
             self.reg(_probe_spec("zz_gated", modules=("payroll",)))
             plain = HRUser.objects.create(
-                username="opt_plain", password_hash="x", role=Role.objects.create(name="opt_plain", permissions={"reports": "view"})
+                username="opt_plain",
+                password_hash="x",
+                role=Role.objects.create(name="opt_plain", permissions={"reports": "view"}),
             )
             r = self.get("/api/reports/options/employees", user=plain, q="RPT")
             self.assertEqual(r.status_code, 403)
             self.assertEqual(r.json()["error"], "report_forbidden")
-            self.assertEqual(self.get("/api/reports/options/employees", q="RPT").status_code, 200)  # super admin still can
+            self.assertEqual(
+                self.get("/api/reports/options/employees", q="RPT").status_code, 200
+            )  # super admin still can
         finally:
             registry._REGISTRY.clear()
             registry._REGISTRY.update(saved)

@@ -32,6 +32,9 @@ const backendEnv = {
   WACLIENT_API_URL: `http://127.0.0.1:${FAKE_PORT}/send`,
   WHATSAPP_SEND_DELAY_SECONDS: "0",
   WHATSAPP_MIN_SEND_GAP_SECONDS: "0",
+  // Same for email: a dev-mode backend refuses to send unless told otherwise. Nothing can leave the machine, because
+  // the only SMTP account the tests save points at 127.0.0.1:9 (gmail-control.spec.ts); until then SMTP isn't set up.
+  EMAIL_ALLOW_SENDING: "true",
   EMPLOYEE_PORTAL_URL: "https://portal.e2e.test",
 };
 

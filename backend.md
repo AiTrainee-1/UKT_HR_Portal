@@ -210,6 +210,9 @@ backend/
 │   ├── payroll_progress.py             # In-memory bulk-generation progress tracker
 │   ├── salary_slip_views.py / salary_slip_bulk_pdf.py / salary_slip_bulk_progress.py
 │   ├── whatsapp_service.py / whatsapp_views.py / whatsapp_bulk_progress.py / idcard_render.py
+│   ├── email_catalog.py / email_service.py / email_control_views.py   # Every email goes through email_service; Gmail Control page (gmail-integration.md)
+│   ├── salary_split.py                 # The mandatory 50% + 50% salary split (Basic/DA/Retention | Other/Petrol/RHA/Special/CA); descriptive, payroll ignores it
+│   ├── ctc.py                          # Employer PF / ESI / annual CTC from the salary split; shared by the Compensation page and the Report Center CTC statement
 │   ├── settlement_views.py             # Advances and repayments
 │   ├── recruitment_views.py            # Jobs, applicants, new joinees, resignations
 │   ├── resume_screening_ml.py / resume_screening_views.py / screening_cleanup*.py
@@ -303,6 +306,8 @@ All endpoints prefixed `/api/`. JWT in `Authorization: Bearer <token>`. This cov
 | Production Payroll | `GET/POST /payroll/production`, `GET /payroll/production/skip-check`, `/next-period` |
 | Salary Slip | `GET/POST /salary-slips`, `/<id>/email`, `/<id>/whatsapp`, `/bulk-email`, `/bulk-whatsapp` |
 | WhatsApp | `GET /whatsapp/status`, `GET/PUT /whatsapp/templates` |
+| HR / support contact | `GET /support-contact` (public, read-only; edited under Settings → HR Contact via `PUT /payroll-settings`) |
+| Gmail Control | `GET /gmail-control/overview`, `/messages`, `/employees`, `/settings`, `/templates`; `PUT /gmail-control/settings`, `/templates/<type>`; `POST /gmail-control/templates/<type>/preview`, `/test-email` |
 | ID Card | `GET /idcard`, `POST /idcard/email`, `/idcard/whatsapp` |
 | Department Managers | `GET/POST /department-managers`, `POST/DELETE .../departments`, `.../employees` |
 | Manager Approvals (mobile) | `GET /manager/me`, `/manager/pending-requests`, `PATCH /manager/leave-requests/<id>/status` |
@@ -318,7 +323,7 @@ All endpoints prefixed `/api/`. JWT in `Authorization: Bearer <token>`. This cov
 | Core | `branches`, `departments`, `designations`, `employees` |
 | Attendance | `attendance`, `attendance_logs`, `attendance_day_records` (final per-day verdict, payroll's source of truth), `daily_shift_log`, `night_shift_relaxations`, `on_duty_sessions`/`on_duty_punch_verifications`, `biometric_devices`, `auto_sync_rules`, `missing_punch_requests` |
 | Leave | `leave_types`, `leave_balances`, `leave_requests`, `employee_permissions`, `casual_leaves`, `holidays` |
-| Shift & Payroll | `shift_templates`, `employee_shift_assignments`, `production_shift_config`/`production_shift_segments`, `payroll`, `payroll_settings`, `salary_slips`, `whatsapp_message_log`, `whatsapp_message_template` |
+| Shift & Payroll | `shift_templates`, `employee_shift_assignments`, `production_shift_config`/`production_shift_segments`, `payroll`, `payroll_settings`, `salary_slips`, `whatsapp_message_log`, `whatsapp_message_template`, `email_message_log`, `email_settings`, `email_message_template` |
 | Settlement | `advances`, `advance_repayments` |
 | User Management & Auth | `department_managers`, `manager_department_assignments`, `manager_employee_assignments`, `hr_users`, `roles`, `login_sessions`, `audit_logs` |
 | Recruitment & Documents | `jobs`/`applicants`, `hiring_rule_sets`/`screening_candidates`, `company_document_settings`, `employee_documents` |

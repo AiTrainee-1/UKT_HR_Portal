@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import calendar
 import re
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
@@ -107,13 +108,20 @@ def clean(value) -> str | None:
 # ── dates ───────────────────────────────────────────────────────────────────
 
 
+# A join date outside this window is a spreadsheet placeholder ('9999-12-31', '1900-01-01'), not a hire date: it is
+# treated as unreadable so date arithmetic on it (probation end, casual-leave date) can never overflow.
+MIN_JOIN_YEAR, MAX_JOIN_YEAR = 1950, 2100
+
+
 def join_date_of(emp) -> tuple[date | None, str]:
-    """(date, state): Employee.join_date is TEXT, so it may be empty or junk. state = ok|missing|unreadable."""
+    """(date, state): Employee.join_date is TEXT, so it may be empty, junk or absurd. state = ok|missing|unreadable."""
     raw = (emp.join_date or "").strip()
     if not raw:
         return None, "missing"
     parsed = parse_date(raw)
-    return (parsed, "ok") if parsed else (None, "unreadable")
+    if parsed and MIN_JOIN_YEAR <= parsed.year <= MAX_JOIN_YEAR:
+        return parsed, "ok"
+    return None, "unreadable"
 
 
 def age_on(dob: date | None, ref: date) -> int | None:
@@ -144,8 +152,10 @@ def tenure_text(months: int | None) -> str | None:
 
 
 def add_months(d: date, n: int) -> date:
-    """d + n calendar months, clamped to the month end (31-Aug + 6 months = 28/29-Feb)."""
+    """d + n calendar months, clamped to the month end (31-Aug + 6 months = 28/29-Feb); saturates at 31-Dec-9999."""
     year, month0 = divmod(d.year * 12 + d.month - 1 + n, 12)
+    if year > date.max.year:
+        return date.max
     month = month0 + 1
     return date(year, month, min(d.day, calendar.monthrange(year, month)[1]))
 
@@ -154,13 +164,18 @@ def months_reached_on(start: date, n: int) -> date:
     """First date on which ``months_between(start, date) >= n``.
 
     Differs from add_months only for month-end joiners: 31-Aug + 6 months has no 31st in February, so the
-    sixth completed month is reached on 1-Mar."""
+    sixth completed month is reached on 1-Mar. Saturates at 31-Dec-9999."""
     year, month0 = divmod(start.year * 12 + start.month - 1 + n, 12)
+    if year > date.max.year:
+        return date.max
     month = month0 + 1
     last = calendar.monthrange(year, month)[1]
     if start.day <= last:
         return date(year, month, start.day)
-    return date(year, month, last) + timedelta(days=1)
+    try:
+        return date(year, month, last) + timedelta(days=1)
+    except OverflowError:
+        return date.max
 
 
 def occurrence_in_year(month: int, day: int, year: int) -> date:
@@ -254,27 +269,77 @@ def exit_infos(inactive_employees) -> dict[int, ExitInfo]:
 
     There is no exit-date column. Truth is the latest APPROVED resignation (its last working date, else the
     day HR approved it); a manual deactivation carries no date at all, so the record's last-modified date is
-    used and labelled approximate. One query, however many employees."""
+    used and labelled approximate. One query, however many employees.
+
+    Rehiring under the same record is common: an approved resignation dated BEFORE the employee's (latest) join
+    date belongs to an earlier stint and is ignored, so a rejoiner who left again is dated by the real exit."""
     from api.models import ResignationRequest
 
     emps = list(inactive_employees)
     if not emps:
         return {}
-    latest: dict[int, ResignationRequest] = {}
+    approved: dict[int, list[ResignationRequest]] = {}
     rows = ResignationRequest.objects.filter(status="approved", employee_id__in=[e.id for e in emps]).order_by(
         "employee_id", F("approved_at").desc(nulls_last=True), "-id"
     )
     for r in rows:
-        latest.setdefault(r.employee_id, r)
+        approved.setdefault(r.employee_id, []).append(r)
     out: dict[int, ExitInfo] = {}
     for e in emps:
-        r = latest.get(e.id)
-        if r is not None and r.last_working_date:
-            out[e.id] = ExitInfo(r.last_working_date, BASIS_RESIGNATION, r)
-        elif r is not None and r.approved_at:
-            out[e.id] = ExitInfo(ist_date(r.approved_at), BASIS_RESIGNATION_APPROVAL, r)
+        joined, _state = join_date_of(e)
+        chosen = None
+        for r in approved.get(e.id, ()):
+            said = r.last_working_date or ist_date(r.approved_at)
+            if joined is not None and said is not None and said < joined:
+                continue  # an earlier stint: the person came back after it
+            chosen = r
+            break
+        if chosen is not None and chosen.last_working_date:
+            out[e.id] = ExitInfo(chosen.last_working_date, BASIS_RESIGNATION, chosen)
+        elif chosen is not None and chosen.approved_at:
+            out[e.id] = ExitInfo(ist_date(chosen.approved_at), BASIS_RESIGNATION_APPROVAL, chosen)
         else:
             out[e.id] = ExitInfo(ist_date(e.updated_at), BASIS_APPROX, None)
+    return out
+
+
+def service_end_dates(employees, today: date) -> dict[int, date]:
+    """{employee_id: the date length of service is measured to}: today for the active, the exit date for leavers.
+
+    A person who has left must not keep accruing service: the Exits Register stops the clock at the exit date, so
+    every report that shows tenure has to agree with it. One query for all the leavers."""
+    emps = list(employees)
+    infos = exit_infos([e for e in emps if not is_active(e)])
+    out: dict[int, date] = {}
+    for e in emps:
+        info = infos.get(e.id)
+        out[e.id] = info.when if info is not None and info.when is not None else today
+    return out
+
+
+# ── labels ──────────────────────────────────────────────────────────────────
+
+
+def department_labels(departments) -> dict[int, str]:
+    """{department_id: label}. The plain name, plus ' (Branch)' -- and the id as a last resort -- only where two
+    departments in the list would otherwise read alike (CUTTING of Unit 1 and CUTTING of Unit 2)."""
+    from api.models import Branch
+
+    depts = list(departments)
+    by_name: dict[str, list] = defaultdict(list)
+    for d in depts:
+        by_name[(d.name or "").strip().lower()].append(d)
+    out = {d.id: d.name for d in depts}
+    clashing = [d for group in by_name.values() if len(group) > 1 for d in group]
+    if not clashing:
+        return out
+    names = dict(Branch.objects.filter(id__in={d.branch_id for d in clashing if d.branch_id}).values_list("id", "name"))
+    for d in clashing:
+        out[d.id] = f"{d.name} ({names.get(d.branch_id, NO_BRANCH) if d.branch_id else NO_BRANCH})"
+    seen = Counter(out[d.id] for d in clashing)
+    for d in clashing:
+        if seen[out[d.id]] > 1:  # two departments of one unit with the same name: only the id tells them apart
+            out[d.id] = f"{out[d.id]} #{d.id}"
     return out
 
 

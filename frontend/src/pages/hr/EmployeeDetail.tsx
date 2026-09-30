@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { CircleLoader } from "@/components/ui/CircleLoader";
 import EmployeeAvatar from "@/components/EmployeeAvatar";
+import { FIRST_PORTION, SECOND_PORTION } from "@/lib/salary-split";
 
 export default function EmployeeDetail() {
   const { id } = useParams<{ id: string }>();
@@ -236,6 +237,24 @@ export default function EmployeeDetail() {
               <div className="flex justify-between"><span className="text-muted-foreground">Type</span><span className="capitalize font-medium">{employee.salaryType}</span></div>
               <Separator />
               <div className="flex justify-between"><span className="text-muted-foreground">Amount</span><span className="font-black text-lg">₹{Number(employee.salaryAmount ?? 0).toLocaleString("en-IN")}</span></div>
+              {employee.salaryBreakup && (
+                <div className="pt-2 mt-1 border-t space-y-2" data-testid="salary-split-summary">
+                  {[
+                    { title: "First portion · 50%", fields: FIRST_PORTION },
+                    { title: "Second portion · 50%", fields: SECOND_PORTION },
+                  ].map(({ title, fields }) => (
+                    <div key={title}>
+                      <p className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground mb-1">{title}</p>
+                      {fields.map(({ key, label }) => (
+                        <div key={key} className="flex justify-between text-xs py-0.5">
+                          <span className="text-muted-foreground">{label}</span>
+                          <span className="font-medium tabular-nums">₹{Number(employee.salaryBreakup?.[key] ?? 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
 

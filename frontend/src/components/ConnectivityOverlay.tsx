@@ -1,5 +1,7 @@
 import * as React from "react";
-import { WifiOff, Database, RefreshCw, Phone, AlertTriangle } from "lucide-react";
+import { WifiOff, Database, RefreshCw, AlertTriangle } from "lucide-react";
+import SupportContactCard from "@/components/SupportContactCard";
+import { useSupportContact } from "@/lib/api-client/custom-hooks";
 import { Button } from "@/components/ui/button";
 import { customFetch } from "@/lib/api-client/custom-fetch";
 import { getOfflineReason, subscribeConnectivity, markOnline, type OfflineReason } from "@/lib/connectivity";
@@ -11,7 +13,6 @@ const COPY: Record<Exclude<OfflineReason, null>, {
   badge: string;
   title: string;
   description: string;
-  contacts: string[];
   statusRows: { label: string; value: string }[];
 }> = {
   network: {
@@ -20,7 +21,6 @@ const COPY: Record<Exclude<OfflineReason, null>, {
     title: "Can't Reach the Server",
     description:
       "We can't connect to the UKTextiles server right now -this usually means the server is offline, the network connection dropped, or the domain is temporarily unreachable. We'll reconnect automatically as soon as it's back.",
-    contacts: ["Contact your Server Team", "Contact your Backend Team"],
     statusRows: [
       { label: "Component", value: "Backend / Network" },
       { label: "Status", value: "Unreachable" },
@@ -32,7 +32,6 @@ const COPY: Record<Exclude<OfflineReason, null>, {
     title: "Database Server Offline",
     description:
       "The application server is reachable, but its database is currently unavailable. Data cannot be retrieved right now. We'll reconnect automatically once the database is back online.",
-    contacts: ["Contact your Database Management Team"],
     statusRows: [
       { label: "Component", value: "PostgreSQL (On-Premise)" },
       { label: "Status", value: "Unreachable" },
@@ -49,6 +48,9 @@ const COPY: Record<Exclude<OfflineReason, null>, {
  * the moment the server responds again.
  */
 export default function ConnectivityOverlay() {
+  // Mounted on every page, so this also keeps the Software Support contact (Settings -> HR Contact) up to date on
+  // this device -it is shown below when the server can't be reached, which is when it could no longer be fetched.
+  useSupportContact();
   const [reason, setReason] = React.useState<OfflineReason>(getOfflineReason());
   const [checking, setChecking] = React.useState(false);
   const [lastCheckedAt, setLastCheckedAt] = React.useState<Date | null>(null);
@@ -112,18 +114,8 @@ export default function ConnectivityOverlay() {
         <h1 className="text-2xl font-black text-white mb-3">{copy.title}</h1>
         <p className="text-white/50 text-sm leading-relaxed mb-5">{copy.description}</p>
 
-        {/* Who to contact */}
-        <div className="flex flex-col sm:flex-row gap-2 justify-center mb-8">
-          {copy.contacts.map((c) => (
-            <span
-              key={c}
-              className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold"
-              style={{ background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.25)", color: "#93c5fd" }}
-            >
-              <Phone size={11} /> {c}
-            </span>
-          ))}
-        </div>
+        {/* Who to contact: the Software Support details HR set in Settings -> HR Contact */}
+        <SupportContactCard situation="server" tone="dark" className="mb-6" />
 
         <div className="flex flex-col sm:flex-row gap-3 justify-center mb-8">
           <Button
@@ -134,15 +126,6 @@ export default function ConnectivityOverlay() {
           >
             <RefreshCw size={16} className={checking ? "animate-spin" : ""} />
             {checking ? "Checking Connection…" : "Retry Now"}
-          </Button>
-          <Button
-            variant="outline"
-            className="gap-2"
-            style={{ border: "1px solid rgba(255,255,255,0.2)", color: "white", background: "transparent" }}
-            onClick={() => (window.location.href = "tel:+919876543210")}
-          >
-            <Phone size={16} />
-            Contact Administrator
           </Button>
         </div>
 

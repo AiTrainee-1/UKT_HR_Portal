@@ -41,6 +41,7 @@ describe("pageHasRefresh", () => {
       "/hr/login-devices",
       "/hr/mobile-app-login",
       "/hr/whatsapp-control",
+      "/hr/gmail-control",
       "/hr/recruitment/dashboard",
       "/hr/recruitment/new-joinees",
       "/hr/recruitment/resignations",

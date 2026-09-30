@@ -40,7 +40,11 @@ def _logo_png(data_url: str | None, max_px: int = 240) -> bytes | None:
 def company() -> Company:
     from api.models import PayrollSettings
 
-    ps = PayrollSettings.get()
+    # Read-only: PayrollSettings.get() would INSERT the singleton on a database that has none, and a report
+    # export is a GET (it must never write). Without a row the letterhead falls back to a plain name.
+    ps = PayrollSettings.objects.filter(pk=1).first()
+    if ps is None:
+        return Company(name="UKTextiles", tagline="", address="", contact="", gstin="", logo_png=None)
     bits = [b for b in (ps.company_phone, ps.company_email, ps.company_website) if b]
     return Company(
         name=(ps.company_name or "UKTextiles").strip(),

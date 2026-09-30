@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   ATTENDANCE_STATUS_TONE,
+  EMAIL_STATUS_TONE,
   REQUEST_STATUS_TONE,
   TONE,
   attendanceStatusClass,
+  emailStatusClass,
   whatsappStatusClass,
   requestStatusClass,
   toneClass,
@@ -47,6 +49,14 @@ describe("statusTones", () => {
     expect(whatsappStatusClass("read")).toBe(TONE.accent);
     expect(whatsappStatusClass("failed")).toBe(TONE.danger);
     expect(whatsappStatusClass("mystery")).toBe(TONE.neutral);
+  });
+
+  it("colours every email state: a blocked email is a warning, not a failure", () => {
+    expect(Object.keys(EMAIL_STATUS_TONE).sort()).toEqual(["blocked", "failed", "sent"]);
+    expect(emailStatusClass("sent")).toBe(TONE.success);
+    expect(emailStatusClass("failed")).toBe(TONE.danger);
+    expect(emailStatusClass("blocked")).toBe(TONE.warning);
+    expect(emailStatusClass("mystery")).toBe(TONE.neutral);
   });
 
   it("falls back to neutral for unknown, empty or missing statuses", () => {

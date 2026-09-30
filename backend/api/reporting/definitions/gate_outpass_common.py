@@ -353,7 +353,9 @@ def truncated_note(ctx, count: int) -> str | None:
     """A note when the row limit cut the list (the runner also flags it; summary cards then cover the
     listed rows only)."""
     if count >= ctx.row_limit:
-        return "The list was cut at the row limit, so the headline figures cover the listed rows only. Narrow the filters."
+        return (
+            "The list was cut at the row limit, so the headline figures cover the listed rows only. Narrow the filters."
+        )
     return None
 
 

@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from django.db.models import Case, CharField, DecimalField, ExpressionWrapper, F, Q, Value, When
@@ -143,11 +143,34 @@ def month_text(year: int, month: int) -> str:
     return f"{MONTH_ABBR[month - 1]} {year}"
 
 
-def is_provisional(s, today: date) -> bool:
-    """A staff slip generated before its month ended counts future working days as absent."""
+def computed_date(s, payroll_row: dict | None = None) -> date | None:
+    """The (IST) day the slip's figures were last computed, as far as stored data can tell.
+
+    ``SalarySlip.generated_at`` is auto_now_add - it is the FIRST generation - while regenerating payroll upserts the
+    Payroll row (``updated_at`` is auto_now), so the later of the two is the best stored evidence of the last run."""
+    stamps = [getattr(s, "generated_at", None), (payroll_row or {}).get("updated_at")]
+    stamps = [x for x in stamps if isinstance(x, datetime)]
+    if not stamps:
+        return None
+    latest = max(stamps)
+    if latest.tzinfo is not None:
+        from api.clock import FACTORY_TZ
+
+        latest = latest.astimezone(FACTORY_TZ)
+    return latest.date()
+
+
+def is_provisional(s, today: date, computed_on: date | None = None) -> bool:
+    """A staff slip computed before its month ended counts the days still to come as absent.
+
+    That is true while the month is running AND for a slip that was generated mid-month and never regenerated
+    (``computed_on`` = the day of its last known computation): viewed months later it is still understated."""
     if is_production(s):
         return False
-    return month_bounds(s.year, s.month)[1] >= today
+    month_end = month_bounds(s.year, s.month)[1]
+    if month_end >= today:
+        return True
+    return computed_on is not None and computed_on <= month_end
 
 
 def amount_in_words(amount) -> str:
@@ -196,16 +219,23 @@ ANY_PRODUCTION_Q = Q(period_start__isnull=False) | Q(week_number__isnull=False)
 _PROD_ONLY_NOTE = "Your role can view production payroll only, so staff slips are not included."
 
 
-def production_only_role(ctx, full_modules: tuple[str, ...] = ("payroll",)) -> bool:
-    """True for a (non super-admin) user whose only payroll grant is Production Payroll."""
+def has_module(ctx, module: str) -> bool:
+    """True when the requesting HR user may view ``module`` (a super admin may view everything)."""
     if ctx.is_super_admin:
-        return False
+        return True
     from ..access import permission_level
 
-    def has(module: str) -> bool:
-        return permission_level(ctx.request, module) in ("view", "edit")
+    return permission_level(ctx.request, module) in ("view", "edit")
 
-    return not any(has(m) for m in full_modules) and has("production_payroll")
+
+def production_only_role(ctx, full_modules: tuple[str, ...] = ("payroll",)) -> bool:
+    """True for a (non super-admin) user whose only payroll grant is Production Payroll.
+
+    ``full_modules`` are the permission modules that open EVERY slip type (Payroll; Salary Slip for the slip listing);
+    a user holding none of them but holding Production Payroll is limited to production slips."""
+    if ctx.is_super_admin:
+        return False
+    return not any(has_module(ctx, m) for m in full_modules) and has_module(ctx, "production_payroll")
 
 
 def slip_filter(
@@ -221,7 +251,10 @@ def slip_filter(
     q = scope_q(ctx, "employee__")
     notes: list[str] = []
     kind = force_kind or ctx.params.get("employment_type")
-    if production_only_role(ctx, full_modules):
+    if not force_kind and production_only_role(ctx, full_modules):
+        if kind == "staff":
+            # asking for staff slips must not quietly turn into production slips: the role may not see staff payroll
+            q &= Q(pk__in=[])
         kind = "production"
         notes.append(_PROD_ONLY_NOTE)
     legacy = bool(legacy_key and ctx.params.get(legacy_key))
@@ -232,7 +265,9 @@ def slip_filter(
     elif not legacy:
         q &= Q(week_number__isnull=True)
     if not legacy:
-        notes.append("Legacy weekly production slips (week-number based, before period-based payroll) are not included.")
+        notes.append(
+            "Legacy weekly production slips (week-number based, before period-based payroll) are not included."
+        )
     return q, notes
 
 
@@ -251,7 +286,10 @@ def pairs_q(pairs) -> Q:
 
 
 def fy_start_month() -> int:
-    return int(PayrollSettings.get().bonus_fy_start_month or 4)
+    """The Bonus financial-year start month (April by default). A plain read: PayrollSettings.get() would create the
+    singleton row on a brand-new install, and a report must never write."""
+    value = PayrollSettings.objects.filter(pk=1).values_list("bonus_fy_start_month", flat=True).first()
+    return int(value or 4)
 
 
 def fy_pairs(label: str, start_month: int | None = None) -> list[tuple[int, int]]:
@@ -301,7 +339,9 @@ def _parts(s) -> tuple[dict, dict, dict, object]:
 _DEC = DecimalField(max_digits=14, decimal_places=2)
 LATE_SQL = Coalesce(
     Cast(KT("breakdown_details__deductions__lateShiftPenalty"), _DEC),
-    ExpressionWrapper(F("total_deductions") - F("pf_deduction") - F("esi_deduction") - F("advance_deduction"), output_field=_DEC),
+    ExpressionWrapper(
+        F("total_deductions") - F("pf_deduction") - F("esi_deduction") - F("advance_deduction"), output_field=_DEC
+    ),
     output_field=_DEC,
 )
 SLIP_TYPE_SQL = Case(
@@ -312,10 +352,11 @@ SLIP_TYPE_SQL = Case(
 )
 
 
-def derive(s, today: date) -> dict:
+def derive(s, today: date, payroll_row: dict | None = None) -> dict:
     """Every figure the payroll reports print for one slip, from the stored columns + breakdown snapshot.
 
-    Money values are floats rounded to paise; ``None`` = not stored / not applicable (rendered as a dash)."""
+    Money values are floats rounded to paise; ``None`` = not stored / not applicable (rendered as a dash).
+    ``payroll_row`` (the slip's Payroll fields) only feeds the "when was this last computed" evidence."""
     summary, earn, ded, rate = _parts(s)
     production = is_production(s)
     has_ded_snapshot = bool(ded)
@@ -357,7 +398,7 @@ def derive(s, today: date) -> dict:
         "production": production,
         "legacy": is_legacy_weekly(s),
         "period": period_label(s),
-        "provisional": is_provisional(s, today),
+        "provisional": is_provisional(s, today, computed_date(s, payroll_row)),
         "has_snapshot": bool(summary or earn or ded),
         "basic": r2(s.basic),
         "hra": r2(s.hra),
@@ -407,13 +448,22 @@ def payroll_index(ctx, years) -> dict[tuple, dict]:
         Payroll.objects.filter(scope_q(ctx, "employee__"), year__in=sorted(set(years)))
         .order_by("updated_at", "id")
         .values(
-            "employee_id", "month", "year", "week_number", "period_start", "period_end",
-            "status", "final_salary", "updated_at",
+            "employee_id",
+            "month",
+            "year",
+            "week_number",
+            "period_start",
+            "period_end",
+            "status",
+            "final_salary",
+            "updated_at",
         )
     )
     out: dict[tuple, dict] = {}
     for p in rows:
-        out[payroll_key(p["employee_id"], p["period_start"], p["period_end"], p["week_number"], p["year"], p["month"])] = p
+        out[
+            payroll_key(p["employee_id"], p["period_start"], p["period_end"], p["week_number"], p["year"], p["month"])
+        ] = p
     return out
 
 
@@ -475,7 +525,8 @@ def load_slips(
     today = ctx.today
     out: list[SlipRow] = []
     for s in slips:
-        row = SlipRow(s, derive(s, today), index.get(slip_key(s)))
+        pay = index.get(slip_key(s))
+        row = SlipRow(s, derive(s, today, pay), pay)
         if wanted == "paid" and not row.paid:
             continue
         if wanted == "pending" and row.paid:

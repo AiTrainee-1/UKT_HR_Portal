@@ -6,14 +6,10 @@ Department-scoped hiring rule sets, single/bulk resume upload + ML scoring
 pipeline, and bulk email actions (rejection notice, interview invite).
 
 Same conventions as the rest of this codebase: plain @api_view + @require_hr
-functions, no serializers/viewsets, hand-built response dicts. Email sending
-reuses the exact smtplib + PayrollSettings pattern already proven in
-offer_letter_email/resignation_email.
+functions, no serializers/viewsets, hand-built response dicts. Emails go
+through the central email service (email_service), so each one is logged for
+the Gmail Control page.
 """
-import smtplib
-import ssl
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
 from django.core.files.base import ContentFile
 from django.db.models import Q
@@ -25,14 +21,17 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from . import email_service
 from .view_common import error_response as _error
 from .auth import require_hr
 from .branch_scope import scope_to_branch
+from .clock import FACTORY_TZ
 from .models import Department, HiringRuleSet, PayrollSettings, ScreeningCandidate
 from . import resume_screening_progress
 
 
 # ── JSON shapers ────────────────────────────────────────────────────────────
+
 
 def _rule_set_json(rs: HiringRuleSet) -> dict:
     return {
@@ -89,14 +88,18 @@ def _candidate_json(c: ScreeningCandidate) -> dict:
 
 def _active_vocabularies() -> tuple[list[str], list[str], list[str]]:
     from . import resume_screening_ml as ml
+
     active = list(HiringRuleSet.objects.filter(is_active=True))
     vocabulary = ml.build_skill_vocabulary(active)
     soft_vocabulary = ml.build_soft_skill_vocabulary(active)
-    known_cities = sorted({rs.preferred_city.strip() for rs in active if rs.preferred_city and rs.preferred_city.strip()})
+    known_cities = sorted(
+        {rs.preferred_city.strip() for rs in active if rs.preferred_city and rs.preferred_city.strip()}
+    )
     return vocabulary, soft_vocabulary, known_cities
 
 
 # ── Hiring rule sets ─────────────────────────────────────────────────────────
+
 
 @api_view(["GET", "POST"])
 @require_hr
@@ -180,6 +183,7 @@ def rule_set_detail(request: Request, pk: int) -> Response:
 
 # ── Single resume upload + score ────────────────────────────────────────────
 
+
 @api_view(["POST"])
 @parser_classes([MultiPartParser, FormParser])
 @require_hr
@@ -195,6 +199,7 @@ def upload_single(request: Request) -> Response:
         return _error("Rule set not found or inactive", 404)
 
     from . import resume_screening_ml as ml
+
     vocabulary, soft_vocabulary, known_cities = _active_vocabularies()
 
     file_bytes = file.read()
@@ -206,9 +211,12 @@ def upload_single(request: Request) -> Response:
         return _error(f"Failed to screen this resume: {exc}", 500)
 
     candidate = ScreeningCandidate(
-        rule_set=rule_set, department=rule_set.department,
-        original_filename=file.name, source="single",
-        status="screened", screened_at=timezone.now(),
+        rule_set=rule_set,
+        department=rule_set.department,
+        original_filename=file.name,
+        source="single",
+        status="screened",
+        screened_at=timezone.now(),
         **result,
     )
     candidate.resume_file.save(file.name, ContentFile(file_bytes), save=False)
@@ -221,9 +229,7 @@ def upload_single(request: Request) -> Response:
 def shortlist_candidate(request: Request, pk: int) -> Response:
     """Manual promote -used by the single-upload 'Add to Shortlist' button
     and the 'move to shortlist' action on a Not Shortlisted bulk candidate."""
-    c = scope_to_branch(
-        ScreeningCandidate.objects, request, field="department__branch_id"
-    ).filter(pk=pk).first()
+    c = scope_to_branch(ScreeningCandidate.objects, request, field="department__branch_id").filter(pk=pk).first()
     if not c:
         return _error("Candidate not found", 404)
     if c.status not in ("uploaded", "screened", "not_shortlisted"):
@@ -234,6 +240,7 @@ def shortlist_candidate(request: Request, pk: int) -> Response:
 
 
 # ── Bulk resume upload + screen (with progress) ─────────────────────────────
+
 
 @api_view(["POST"])
 @parser_classes([MultiPartParser, FormParser])
@@ -258,6 +265,7 @@ def upload_bulk(request: Request) -> Response:
         return _error("Rule set not found or inactive", 404)
 
     from . import resume_screening_ml as ml
+
     vocabulary, soft_vocabulary, known_cities = _active_vocabularies()
 
     resume_screening_progress.start(len(files))
@@ -270,9 +278,12 @@ def upload_bulk(request: Request) -> Response:
             file_bytes = f.read()
             result = ml.screen_resume(file_bytes, f.name, rule_set, vocabulary, soft_vocabulary, known_cities)
             candidate = ScreeningCandidate(
-                rule_set=rule_set, department=rule_set.department,
-                original_filename=f.name, source="bulk",
-                status="screened", screened_at=timezone.now(),
+                rule_set=rule_set,
+                department=rule_set.department,
+                original_filename=f.name,
+                source="bulk",
+                status="screened",
+                screened_at=timezone.now(),
                 **result,
             )
             candidate.resume_file.save(f.name, ContentFile(file_bytes), save=False)
@@ -294,17 +305,19 @@ def upload_bulk(request: Request) -> Response:
 
     shortlisted_count = min(top_n, len(created))
     not_shortlisted_count = max(0, len(created) - shortlisted_count)
-    return Response({
-        "message": (
-            f"Screened {len(created)} resume(s): {shortlisted_count} shortlisted, "
-            f"{not_shortlisted_count} not shortlisted"
-            + (f", {len(failed)} failed" if failed else "") + "."
-        ),
-        "totalUploaded": len(files),
-        "shortlisted": shortlisted_count,
-        "notShortlisted": not_shortlisted_count,
-        "failed": failed,
-    }, status=201)
+    return Response(
+        {
+            "message": (
+                f"Screened {len(created)} resume(s): {shortlisted_count} shortlisted, "
+                f"{not_shortlisted_count} not shortlisted" + (f", {len(failed)} failed" if failed else "") + "."
+            ),
+            "totalUploaded": len(files),
+            "shortlisted": shortlisted_count,
+            "notShortlisted": not_shortlisted_count,
+            "failed": failed,
+        },
+        status=201,
+    )
 
 
 @api_view(["GET"])
@@ -316,10 +329,14 @@ def upload_bulk_progress(request: Request) -> Response:
 # ── Candidates: list, status transitions, delete, resume file ──────────────
 
 _ALLOWED_TRANSITIONS = {
-    ("uploaded", "shortlisted"), ("screened", "shortlisted"), ("not_shortlisted", "shortlisted"),
-    ("uploaded", "not_shortlisted"), ("screened", "not_shortlisted"),
+    ("uploaded", "shortlisted"),
+    ("screened", "shortlisted"),
+    ("not_shortlisted", "shortlisted"),
+    ("uploaded", "not_shortlisted"),
+    ("screened", "not_shortlisted"),
     ("shortlisted", "selected"),
-    ("shortlisted", "rejected"), ("selected", "rejected"),
+    ("shortlisted", "rejected"),
+    ("selected", "rejected"),
 }
 
 
@@ -329,11 +346,11 @@ def candidates(request: Request) -> Response:
     # A candidate reaches a branch through the department they were
     # screened for. One with no department belongs to no branch and is
     # admin-only -the same rule designations follow.
-    qs = scope_to_branch(
-        ScreeningCandidate.objects, request, field="department__branch_id"
-    ).select_related(
-        "rule_set", "department"
-    ).order_by("-match_score", "-created_at")
+    qs = (
+        scope_to_branch(ScreeningCandidate.objects, request, field="department__branch_id")
+        .select_related("rule_set", "department")
+        .order_by("-match_score", "-created_at")
+    )
     status_param = request.query_params.get("status")
     if status_param:
         qs = qs.filter(status=status_param)
@@ -345,18 +362,19 @@ def candidates(request: Request) -> Response:
         qs = qs.filter(department_id=dept_id)
     search = request.query_params.get("search")
     if search:
-        qs = qs.filter(
-            Q(candidate_name__icontains=search) | Q(email__icontains=search) | Q(phone__icontains=search)
-        )
+        qs = qs.filter(Q(candidate_name__icontains=search) | Q(email__icontains=search) | Q(phone__icontains=search))
     return Response([_candidate_json(c) for c in qs])
 
 
 @api_view(["PATCH", "DELETE"])
 @require_hr
 def candidate_detail(request: Request, pk: int) -> Response:
-    c = scope_to_branch(
-        ScreeningCandidate.objects, request, field="department__branch_id"
-    ).select_related("rule_set", "department").filter(pk=pk).first()
+    c = (
+        scope_to_branch(ScreeningCandidate.objects, request, field="department__branch_id")
+        .select_related("rule_set", "department")
+        .filter(pk=pk)
+        .first()
+    )
     if not c:
         return _error("Candidate not found", 404)
 
@@ -387,9 +405,7 @@ def candidate_detail(request: Request, pk: int) -> Response:
 @api_view(["GET"])
 @require_hr
 def candidate_resume(request: Request, pk: int) -> Response:
-    c = scope_to_branch(
-        ScreeningCandidate.objects, request, field="department__branch_id"
-    ).filter(pk=pk).first()
+    c = scope_to_branch(ScreeningCandidate.objects, request, field="department__branch_id").filter(pk=pk).first()
     if not c or not c.resume_file:
         return _error("Resume not found", 404)
     disposition = "attachment" if request.query_params.get("download") else "inline"
@@ -400,86 +416,35 @@ def candidate_resume(request: Request, pk: int) -> Response:
 
 # ── Email: rejection notice + interview invite ──────────────────────────────
 
-def _send_mail(ps: PayrollSettings, to_email: str, subject: str, html_body: str) -> None:
-    msg = MIMEMultipart("mixed")
-    msg["Subject"] = subject
-    msg["From"] = f"{ps.smtp_from_name} <{ps.smtp_from_email or ps.smtp_username}>"
-    msg["To"] = to_email
-    msg.attach(MIMEText(html_body, "html"))
 
-    context = ssl.create_default_context()
-    port = ps.smtp_port
-    if port == 465:
-        with smtplib.SMTP_SSL(ps.smtp_host, port, context=context) as server:
-            server.login(ps.smtp_username, ps.smtp_password)
-            server.sendmail(ps.smtp_from_email or ps.smtp_username, to_email, msg.as_string())
-    else:
-        with smtplib.SMTP(ps.smtp_host, port, timeout=15) as server:
-            server.ehlo()
-            server.starttls(context=context)
-            server.login(ps.smtp_username, ps.smtp_password)
-            server.sendmail(ps.smtp_from_email or ps.smtp_username, to_email, msg.as_string())
-
-
-def _email_shell(ps: PayrollSettings, title: str, body_html: str) -> str:
-    company_name = ps.company_name or "UKTextiles"
-    return f"""
-    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1a3a2e">
-      <div style="background:#0E4B3A;padding:20px;text-align:center;border-radius:8px 8px 0 0">
-        <h1 style="color:white;margin:0;font-size:18px">{company_name.upper()}</h1>
-        <p style="color:rgba(255,255,255,0.8);margin:4px 0 0;font-size:12px">{title}</p>
-      </div>
-      <div style="background:#ffffff;padding:30px;border:1px solid #d8e5df;border-top:none">
-        {body_html}
-        <p style="color:#888;font-size:12px;margin-top:24px">
-          This is a system-generated email from the {company_name} HR Portal.
-        </p>
-      </div>
-    </div>
-    """
-
-
-def send_rejection_email(candidate: ScreeningCandidate, ps: PayrollSettings) -> None:
-    company_name = ps.company_name or "UKTextiles"
+def send_rejection_email(candidate: ScreeningCandidate, ps: PayrollSettings, sent_by_id: int | None = None):
+    """Send through the central email service, which logs it for the Gmail Control page. Returns the
+    EmailMessageLog row: status "sent" on success, otherwise error_message says why."""
     name = candidate.candidate_name or "Candidate"
-    body = f"""
-      <p>Dear <strong>{name}</strong>,</p>
-      <p>
-        Thank you for participating in our recruitment process and for your interest in
-        {company_name}. We appreciate your time and effort. Unfortunately, you were not
-        selected this time. We wish you all the best and hope to connect with you again
-        in the future.
-      </p>
-    """
-    _send_mail(
-        ps, candidate.email,
-        f"Application Update -{company_name}",
-        _email_shell(ps, "Recruitment Update", body),
+    return email_service.send_email(
+        "screening_rejection",
+        to_email=candidate.email,
+        params={"candidate_name": name},
+        ps=ps,
+        recipient_name=candidate.candidate_name or "",
+        ref_id=candidate.id,
+        sent_by_id=sent_by_id,
     )
 
 
-def send_interview_invite_email(candidate: ScreeningCandidate, ps: PayrollSettings) -> None:
-    company_name = ps.company_name or "UKTextiles"
+def send_interview_invite_email(candidate: ScreeningCandidate, ps: PayrollSettings, sent_by_id: int | None = None):
+    """As send_rejection_email, for the interview invitation (needs candidate.interview_datetime)."""
     name = candidate.candidate_name or "Candidate"
-    when = timezone.localtime(candidate.interview_datetime).strftime("%A, %d %B %Y at %I:%M %p")
-    address = ps.company_address or ""
-    body = f"""
-      <p>Dear <strong>{name}</strong>,</p>
-      <p>
-        We are pleased to inform you that you have been shortlisted for the next stage of
-        our recruitment process at {company_name}. We would like to invite you for a
-        face-to-face interview at our office.
-      </p>
-      <p style="background:#f3f9f6;border:1px solid #d8e5df;border-radius:6px;padding:12px 16px">
-        <strong>Date &amp; Time:</strong> {when}<br/>
-        {f"<strong>Location:</strong> {address}<br/>" if address else ""}
-      </p>
-      <p>Please bring a copy of your resume and a valid photo ID. We look forward to meeting you.</p>
-    """
-    _send_mail(
-        ps, candidate.email,
-        f"Interview Invitation -{company_name}",
-        _email_shell(ps, "Interview Invitation", body),
+    # In the factory's own time: Django's current timezone is UTC, which put the invitation 5.5 hours early.
+    when = candidate.interview_datetime.astimezone(FACTORY_TZ).strftime("%A, %d %B %Y at %I:%M %p")
+    return email_service.send_email(
+        "interview_invite",
+        to_email=candidate.email,
+        params={"candidate_name": name, "interview_datetime": when, "location": ps.company_address or ""},
+        ps=ps,
+        recipient_name=candidate.candidate_name or "",
+        ref_id=candidate.id,
+        sent_by_id=sent_by_id,
     )
 
 
@@ -515,19 +480,17 @@ def reject_email_all(request: Request) -> Response:
         return err
 
     pending = ScreeningCandidate.objects.filter(status="rejected", rejection_emailed_at__isnull=True)
+    sent_by_id = request.jwt_user.get("hrUserId")
     sent = 0
     failed = []
     for c in pending:
-        if not c.email:
-            failed.append({"candidateId": c.id, "name": c.candidate_name, "error": "No email address on file"})
-            continue
-        try:
-            send_rejection_email(c, ps)
+        log = send_rejection_email(c, ps, sent_by_id)
+        if log.status == email_service.EMAIL_SENT:
             c.rejection_emailed_at = timezone.now()
             c.save(update_fields=["rejection_emailed_at", "updated_at"])
             sent += 1
-        except Exception as exc:
-            failed.append({"candidateId": c.id, "name": c.candidate_name, "error": str(exc)})
+        else:
+            failed.append({"candidateId": c.id, "name": c.candidate_name, "error": log.error_message})
     return Response({"sent": sent, "failed": failed})
 
 
@@ -552,10 +515,9 @@ def interview_invite_single(request: Request, pk: int) -> Response:
 
     c.interview_datetime = interview_dt
     c.save(update_fields=["interview_datetime", "updated_at"])
-    try:
-        send_interview_invite_email(c, ps)
-    except Exception as exc:
-        return _error(f"Failed to send email: {exc}", 502)
+    log = send_interview_invite_email(c, ps, request.jwt_user.get("hrUserId"))
+    if log.status != email_service.EMAIL_SENT:
+        return _error(log.error_message, log.http_status)
     c.interview_invited_at = timezone.now()
     c.save(update_fields=["interview_invited_at", "updated_at"])
     return Response(_candidate_json(c))
@@ -576,18 +538,16 @@ def interview_invite_bulk(request: Request) -> Response:
         return _error(str(exc))
 
     pending = ScreeningCandidate.objects.filter(status="selected", interview_invited_at__isnull=True)
+    sent_by_id = request.jwt_user.get("hrUserId")
     sent = 0
     failed = []
     for c in pending:
-        if not c.email:
-            failed.append({"candidateId": c.id, "name": c.candidate_name, "error": "No email address on file"})
-            continue
         c.interview_datetime = interview_dt
-        try:
-            send_interview_invite_email(c, ps)
+        log = send_interview_invite_email(c, ps, sent_by_id)
+        if log.status == email_service.EMAIL_SENT:
             c.interview_invited_at = timezone.now()
             c.save(update_fields=["interview_datetime", "interview_invited_at", "updated_at"])
             sent += 1
-        except Exception as exc:
-            failed.append({"candidateId": c.id, "name": c.candidate_name, "error": str(exc)})
+        else:
+            failed.append({"candidateId": c.id, "name": c.candidate_name, "error": log.error_message})
     return Response({"sent": sent, "failed": failed})

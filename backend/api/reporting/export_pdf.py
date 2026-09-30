@@ -18,13 +18,32 @@ from reportlab.lib.units import cm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as canvas_mod
-from reportlab.platypus import BaseDocTemplate, Frame, Image as RLImage, PageTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import (
+    BaseDocTemplate,
+    Frame,
+    Image as RLImage,
+    PageTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle,
+)
 
 from .branding import company
 from .formatting import display_date, display_datetime, indian_number, minutes_text
 from .runner import KIND_SUBTOTAL, KIND_TOTAL, RunOutput
 from .types import (
-    BADGE, CURRENCY, DATE, DATETIME, DURATION, HOURS, INTEGER, MINUTES, NUMBER, PERCENT, TIME,
+    BADGE,
+    CURRENCY,
+    DATE,
+    DATETIME,
+    DURATION,
+    HOURS,
+    INTEGER,
+    MINUTES,
+    NUMBER,
+    PERCENT,
+    TIME,
     ColumnSpec,
 )
 
@@ -99,7 +118,8 @@ def _page_size(spec, n_cols: int):
 def _column_widths(cols: list[ColumnSpec], avail: float) -> list[float]:
     weights = [max(0.5, c.width) for c in cols]
     widths = [avail * w / sum(weights) for w in weights]
-    floor = 1.1 * cm
+    # The floor must itself fit on the page (a 40-column muster would otherwise get negative widths).
+    floor = min(1.1 * cm, avail / len(cols) * 0.85)
     if any(w < floor for w in widths):
         fixed = sum(floor for w in widths if w < floor)
         rest = [i for i, w in enumerate(widths) if w >= floor]
@@ -146,7 +166,7 @@ def build_pdf(out: RunOutput) -> bytes:
     margin = 1.0 * cm
     avail = page[0] - 2 * margin
     n = len(cols)
-    size = 8.0 if n <= 12 else 7.0 if n <= 18 else 6.0
+    size = 8.0 if n <= 12 else 7.0 if n <= 18 else 6.0 if n <= 30 else 5.0
 
     def style(name, **kw) -> ParagraphStyle:
         base = dict(fontName=regular, fontSize=size, leading=size * 1.25, textColor=INK)
@@ -163,7 +183,9 @@ def build_pdf(out: RunOutput) -> bytes:
     s_note = style("n", fontSize=7, leading=9, textColor=MUTED)
 
     def align_style(c: ColumnSpec, strong: bool):
-        a = c.align or ("right" if c.type in _NUMERIC else "center" if c.type in (DATE, TIME, DATETIME, BADGE) else "left")
+        a = c.align or (
+            "right" if c.type in _NUMERIC else "center" if c.type in (DATE, TIME, DATETIME, BADGE) else "left"
+        )
         if strong:
             return {"left": s_bold_left, "right": s_bold_right, "center": s_bold_center}[a]
         return {"left": s_left, "right": s_right, "center": s_center}[a]
@@ -192,43 +214,74 @@ def build_pdf(out: RunOutput) -> bytes:
     story.append(Spacer(1, 4))
 
     title = Table(
-        [[Paragraph(escape(spec.title.upper()), style("t", fontName=bold, fontSize=11, leading=14, textColor=colors.white))]],
+        [
+            [
+                Paragraph(
+                    escape(spec.title.upper()),
+                    style("t", fontName=bold, fontSize=11, leading=14, textColor=colors.white),
+                )
+            ]
+        ],
         colWidths=[avail],
     )
-    title.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), BRAND),
-        ("LEFTPADDING", (0, 0), (-1, -1), 8), ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-    ]))
+    title.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), BRAND),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ]
+        )
+    )
     story.append(title)
 
     filt = "   |   ".join(f"<b>{escape(k)}:</b> {escape(v)}" for k, v in out.filters) or "All records"
     fbox = Table([[Paragraph(filt, style("f", fontSize=8, leading=11))]], colWidths=[avail])
-    fbox.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), BRAND_SOFT),
-        ("LEFTPADDING", (0, 0), (-1, -1), 8), ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-    ]))
+    fbox.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), BRAND_SOFT),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
     story.append(fbox)
     story.append(Spacer(1, 6))
 
     # ── KPI strip ────────────────────────────────────────────────────────────
     if out.summary:
         cards = []
-        for s in out.summary[:8]:
+        for s in out.summary[:12]:
             fake = ColumnSpec("v", s["label"], s.get("format", INTEGER))
-            cards.append([
-                Paragraph(escape(str(s["label"])), style("kl", fontSize=7, leading=9, textColor=MUTED)),
-                Paragraph(f"<b>{escape(pdf_text(fake, s.get('value'), rupee_ok))}</b>", style("kv", fontName=bold, fontSize=11, leading=14, textColor=BRAND)),
-            ])
+            cards.append(
+                [
+                    Paragraph(escape(str(s["label"])), style("kl", fontSize=7, leading=9, textColor=MUTED)),
+                    Paragraph(
+                        f"<b>{escape(pdf_text(fake, s.get('value'), rupee_ok))}</b>",
+                        style("kv", fontName=bold, fontSize=11, leading=14, textColor=BRAND),
+                    ),
+                ]
+            )
         per_row = min(len(cards), 6)
-        rows_ = [cards[i:i + per_row] for i in range(0, len(cards), per_row)]
+        rows_ = [cards[i : i + per_row] for i in range(0, len(cards), per_row)]
         for chunk in rows_:
             cells = [[c[0], c[1]] for c in chunk]
             kt = Table([[cell for cell in cells]], colWidths=[avail / per_row] * len(cells))
-            kt.setStyle(TableStyle([
-                ("BOX", (0, 0), (-1, -1), 0.5, GRID), ("INNERGRID", (0, 0), (-1, -1), 0.5, GRID),
-                ("BACKGROUND", (0, 0), (-1, -1), colors.white),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6), ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ]))
+            kt.setStyle(
+                TableStyle(
+                    [
+                        ("BOX", (0, 0), (-1, -1), 0.5, GRID),
+                        ("INNERGRID", (0, 0), (-1, -1), 0.5, GRID),
+                        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                        ("TOPPADDING", (0, 0), (-1, -1), 4),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                    ]
+                )
+            )
             story.append(kt)
         story.append(Spacer(1, 6))
 
@@ -237,7 +290,10 @@ def build_pdf(out: RunOutput) -> bytes:
     # column is wrapped in a Paragraph; everything else is drawn as text with column-level styles.
     widths = _column_widths(cols, avail)
     pad = 3.0
-    aligns = [c.align or ("right" if c.type in _NUMERIC else "center" if c.type in (DATE, TIME, DATETIME, BADGE) else "left") for c in cols]
+    aligns = [
+        c.align or ("right" if c.type in _NUMERIC else "center" if c.type in (DATE, TIME, DATETIME, BADGE) else "left")
+        for c in cols
+    ]
 
     def cell_for(c: ColumnSpec, i: int, text: str, strong: bool):
         if pdfmetrics.stringWidth(text, bold if strong else regular, size) <= widths[i] - 2 * pad:
@@ -253,8 +309,10 @@ def build_pdf(out: RunOutput) -> bytes:
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, ZEBRA]),
         ("LINEBELOW", (0, 0), (-1, -1), 0.25, GRID),
-        ("LEFTPADDING", (0, 0), (-1, -1), pad), ("RIGHTPADDING", (0, 0), (-1, -1), pad),
-        ("TOPPADDING", (0, 0), (-1, -1), 2.5), ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+        ("LEFTPADDING", (0, 0), (-1, -1), pad),
+        ("RIGHTPADDING", (0, 0), (-1, -1), pad),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
     ]
     for i, a in enumerate(aligns):
         cmds.append(("ALIGN", (i, 1), (i, -1), a.upper()))
@@ -262,10 +320,12 @@ def build_pdf(out: RunOutput) -> bytes:
         kind = r.get("_kind")
         strong = kind in (KIND_SUBTOTAL, KIND_TOTAL)
         idx = len(data)
-        data.append([
-            cell_for(c, i, "" if strong and r.get(c.key) is None else pdf_text(c, r.get(c.key), rupee_ok), strong)
-            for i, c in enumerate(cols)
-        ])
+        data.append(
+            [
+                cell_for(c, i, "" if strong and r.get(c.key) is None else pdf_text(c, r.get(c.key), rupee_ok), strong)
+                for i, c in enumerate(cols)
+            ]
+        )
         if strong:
             cmds.append(("FONTNAME", (0, idx), (-1, idx), bold))
             cmds.append(("BACKGROUND", (0, idx), (-1, idx), TOTAL if kind == KIND_TOTAL else SUBTOTAL))
@@ -289,7 +349,9 @@ def build_pdf(out: RunOutput) -> bytes:
                 cmds.append(("ALIGN", (i, idx), (i, idx), "LEFT"))
 
     if len(data) == 1:
-        story.append(Paragraph("No records match the selected filters.", style("e", fontSize=10, leading=14, textColor=MUTED)))
+        story.append(
+            Paragraph("No records match the selected filters.", style("e", fontSize=10, leading=14, textColor=MUTED))
+        )
     else:
         tbl = Table(data, colWidths=widths, repeatRows=1, splitByRow=1)
         tbl.setStyle(TableStyle(cmds))
@@ -297,20 +359,38 @@ def build_pdf(out: RunOutput) -> bytes:
 
     if out.truncated:
         story.append(Spacer(1, 4))
-        story.append(Paragraph(
-            f"<b>Note:</b> only the first {out.row_count:,} rows are printed here. Narrow the filters or use the Excel export for the full data.",
-            s_note,
-        ))
+        story.append(
+            Paragraph(
+                f"<b>Note:</b> only the first {out.row_count:,} rows are printed here. Narrow the filters or use the Excel export for the full data.",
+                s_note,
+            )
+        )
     for note in out.notes:
         story.append(Spacer(1, 2))
         story.append(Paragraph(escape(note), s_note))
 
     buf = io.BytesIO()
     doc = BaseDocTemplate(
-        buf, pagesize=page, leftMargin=margin, rightMargin=margin, topMargin=margin, bottomMargin=1.5 * cm,
-        title=spec.title, author=co.name,
+        buf,
+        pagesize=page,
+        leftMargin=margin,
+        rightMargin=margin,
+        topMargin=margin,
+        bottomMargin=1.5 * cm,
+        title=spec.title,
+        author=co.name,
     )
-    frame = Frame(margin, 1.5 * cm, avail, page[1] - margin - 1.5 * cm, id="body", leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
+    frame = Frame(
+        margin,
+        1.5 * cm,
+        avail,
+        page[1] - margin - 1.5 * cm,
+        id="body",
+        leftPadding=0,
+        rightPadding=0,
+        topPadding=0,
+        bottomPadding=0,
+    )
     doc.addPageTemplates([PageTemplate(id="report", frames=[frame])])
     stamp = f"Generated {display_date(out.generated_at[:10])} {out.generated_at[11:]} by {out.generated_by}"
     doc.build(story, canvasmaker=_canvas_maker(stamp, f"{co.name} - {spec.title}", regular))

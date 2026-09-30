@@ -1,6 +1,8 @@
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
+from . import salary_split
+
 if TYPE_CHECKING:
     from .models import Employee
 
@@ -87,6 +89,8 @@ def employee_json(emp, department_name: str | None = None) -> dict:
         "unitCode": emp.unit_code,
         "salaryType": emp.salary_type,
         "salaryAmount": _float_or_none(emp.salary_amount),
+        # The mandatory 50% + 50% split of salaryAmount (salary_split.py), or null when none is recorded.
+        "salaryBreakup": salary_split.json_of(emp),
         "salaryPerShift": _float_or_none(emp.salary_per_shift),
         "status": emp.status,
         "bankName": emp.bank_name,

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from django.db.models import Avg, Case, Count, F, Max, Min, OuterRef, Q, Subquery, TextField, Value, When
+from django.db.models import Avg, Case, Count, Exists, F, Max, Min, OuterRef, Q, Subquery, TextField, Value, When
 from django.db.models.functions import Cast, Concat, Right, Trim
 
 from ..filters import branches, date_range, departments, employees, select, text
@@ -28,7 +28,9 @@ from . import gate_visitor_tea_common as C
 # ── shared filter definitions ────────────────────────────────────────────────
 
 _HOST_LINKED = select(
-    "hostLinked", "Host", [("linked_employee", "Linked to an employee"), ("free_text", "Free-text host only")],
+    "hostLinked",
+    "Host",
+    [("linked_employee", "Linked to an employee"), ("free_text", "Free-text host only")],
     placeholder="All hosts",
 )
 _NOTE_PHONE_VARIANTS = (
@@ -62,7 +64,11 @@ def _apply_notification(qs, mode):
     if mode == "either":
         return qs.filter(Q(notified_email_at__isnull=False) | Q(notified_whatsapp_at__isnull=False))
     if mode == "neither":
-        return qs.filter(notified_email_at__isnull=True, notified_whatsapp_at__isnull=True)
+        # Only visits that HAD someone to notify: a free-text host has no linked employee, so the register shows a
+        # dash for them (sent_badge) and they must not be listed as a failed notification.
+        return qs.filter(
+            meeting_employee__isnull=False, notified_email_at__isnull=True, notified_whatsapp_at__isnull=True
+        )
     return qs
 
 
@@ -81,33 +87,50 @@ def _run_register(ctx):
     rows_qs = (
         qs.annotate(aad_tail=Right(Trim("visitor__aadhaar_number"), 4))
         .values(
-            "id", "visited_at", "visitor__name", "visitor__phone", "aad_tail", "why_came", "whom_to_meet", "purpose",
-            "branch__name", "meeting_employee_id", "meeting_employee__employee_code", "meeting_employee__first_name",
-            "meeting_employee__last_name", "meeting_employee__department__name", "notified_email_at",
-            "notified_whatsapp_at", "visit_no",
+            "id",
+            "visited_at",
+            "visitor__name",
+            "visitor__phone",
+            "aad_tail",
+            "why_came",
+            "whom_to_meet",
+            "purpose",
+            "branch__name",
+            "meeting_employee_id",
+            "meeting_employee__employee_code",
+            "meeting_employee__first_name",
+            "meeting_employee__last_name",
+            "meeting_employee__department__name",
+            "notified_email_at",
+            "notified_whatsapp_at",
+            "visit_no",
         )
         .order_by("visited_at", "id")
     )
     rows = []
     for r in rows_qs[: ctx.row_limit]:
         linked = r["meeting_employee_id"] is not None
-        rows.append({
-            "visitedAt": fmt_dt(r["visited_at"]),
-            "visitorName": r["visitor__name"],
-            "phone": r["visitor__phone"],
-            "aadhaarMasked": C.mask_aadhaar(r["aad_tail"]),
-            "whyCame": r["why_came"],
-            "whomToMeet": r["whom_to_meet"],
-            "hostCode": r["meeting_employee__employee_code"],
-            "hostName": C.person_name(r["meeting_employee__first_name"], r["meeting_employee__last_name"]) if linked else None,
-            "hostDepartment": r["meeting_employee__department__name"] if linked else None,
-            "purpose": r["purpose"],
-            "branch": r["branch__name"],
-            "visitNo": r["visit_no"],
-            "visitorType": "First visit" if r["visit_no"] == 1 else "Repeat",
-            "emailNotified": C.sent_badge(r["notified_email_at"], linked),
-            "whatsappNotified": C.sent_badge(r["notified_whatsapp_at"], linked),
-        })
+        rows.append(
+            {
+                "visitedAt": fmt_dt(r["visited_at"]),
+                "visitorName": r["visitor__name"],
+                "phone": r["visitor__phone"],
+                "aadhaarMasked": C.mask_aadhaar(r["aad_tail"]),
+                "whyCame": r["why_came"],
+                "whomToMeet": r["whom_to_meet"],
+                "hostCode": r["meeting_employee__employee_code"],
+                "hostName": C.person_name(r["meeting_employee__first_name"], r["meeting_employee__last_name"])
+                if linked
+                else None,
+                "hostDepartment": r["meeting_employee__department__name"] if linked else None,
+                "purpose": r["purpose"],
+                "branch": r["branch__name"],
+                "visitNo": r["visit_no"],
+                "visitorType": "First visit" if r["visit_no"] == 1 else "Repeat",
+                "emailNotified": C.sent_badge(r["notified_email_at"], linked),
+                "whatsappNotified": C.sent_badge(r["notified_whatsapp_at"], linked),
+            }
+        )
 
     agg = qs.aggregate(
         visits=Count("id"),
@@ -137,52 +160,66 @@ def _run_register(ctx):
     ]
     branch_split = list(qs.order_by().values("branch__name").annotate(n=Count("id")).order_by("branch__name"))
     if len(branch_split) > 1:
-        notes.append("Visits by branch: " + "; ".join(f"{b['branch__name'] or 'No branch'} {b['n']}" for b in branch_split) + ".")
+        notes.append(
+            "Visits by branch: " + "; ".join(f"{b['branch__name'] or 'No branch'} {b['n']}" for b in branch_split) + "."
+        )
+    if ctx.params.get("notification") == "neither":
+        notes.append(
+            "'Host not notified' lists only visits with a linked host employee; visits with a free-text host had "
+            "no one to notify and are left out."
+        )
     note = C.host_filter_note(ctx)
     if note:
         notes.append(note)
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="visitor-register",
-    title="Visitor Register",
-    description="Every visitor check-in with who they met, purpose and whether the host was notified; Aadhaar masked.",
-    category=C.CATEGORY,
-    icon="UserRound",
-    tags=("visitor", "visitors", "reception", "guest", "visit", "gate", "check-in"),
-    family="visitors",
-    variant="Register",
-    modules=C.MODULES,
-    filters=(
-        date_range("thisMonth", "Visit date"),
-        branches(),
-        departments("Host department"),
-        employees("Host employee"),
-        _HOST_LINKED,
-        select("visitorType", "Visitor type", [("first_visit", "First visit only"), ("repeat", "Repeat visits only")], placeholder="All visits"),
-        select("notification", "Host notification", _NOTIFICATION_OPTIONS, placeholder="Any"),
-        text("q", "Visitor name / phone", "Search"),
-    ),
-    columns=(
-        ColumnSpec("visitedAt", "Visited at", DATETIME, 1.4),
-        ColumnSpec("visitorName", "Visitor", TEXT, 1.8),
-        ColumnSpec("phone", "Phone", TEXT, 1.2),
-        ColumnSpec("aadhaarMasked", "Aadhaar", TEXT, 1.3),
-        ColumnSpec("whyCame", "Why came", TEXT, 1.5),
-        ColumnSpec("whomToMeet", "Whom to meet", TEXT, 1.5),
-        ColumnSpec("hostCode", "Host code", TEXT, 0.9),
-        ColumnSpec("hostName", "Host employee", TEXT, 1.6),
-        ColumnSpec("hostDepartment", "Host dept", TEXT, 1.3),
-        ColumnSpec("purpose", "Purpose", TEXT, 1.8),
-        ColumnSpec("branch", "Branch", TEXT, 1.0),
-        ColumnSpec("visitNo", "Visit no.", INTEGER, 0.7),
-        ColumnSpec("visitorType", "Type", BADGE, 0.9),
-        ColumnSpec("emailNotified", "Email", BADGE, 0.8),
-        ColumnSpec("whatsappNotified", "WhatsApp", BADGE, 0.8),
-    ),
-    run=_run_register,
-))
+register(
+    ReportSpec(
+        id="visitor-register",
+        title="Visitor Register",
+        description="Every visitor check-in with who they met, purpose and whether the host was notified; Aadhaar masked.",
+        category=C.CATEGORY,
+        icon="UserRound",
+        tags=("visitor", "visitors", "reception", "guest", "visit", "gate", "check-in"),
+        family="visitors",
+        variant="Register",
+        modules=C.MODULES,
+        filters=(
+            date_range("thisMonth", "Visit date"),
+            branches(),
+            departments("Host department"),
+            employees("Host employee"),
+            _HOST_LINKED,
+            select(
+                "visitorType",
+                "Visitor type",
+                [("first_visit", "First visit only"), ("repeat", "Repeat visits only")],
+                placeholder="All visits",
+            ),
+            select("notification", "Host notification", _NOTIFICATION_OPTIONS, placeholder="Any"),
+            text("q", "Visitor name / phone", "Search"),
+        ),
+        columns=(
+            ColumnSpec("visitedAt", "Visited at", DATETIME, 2.1),
+            ColumnSpec("visitorName", "Visitor", TEXT, 1.6),
+            ColumnSpec("phone", "Phone", TEXT, 1.5),
+            ColumnSpec("aadhaarMasked", "Aadhaar", TEXT, 1.8),
+            ColumnSpec("whyCame", "Why came", TEXT, 1.2),
+            ColumnSpec("whomToMeet", "Whom to meet", TEXT, 1.4),
+            ColumnSpec("hostCode", "Host code", TEXT, 0.9),
+            ColumnSpec("hostName", "Host employee", TEXT, 1.5),
+            ColumnSpec("hostDepartment", "Host dept", TEXT, 1.2),
+            ColumnSpec("purpose", "Purpose", TEXT, 1.5),
+            ColumnSpec("branch", "Branch", TEXT, 0.9),
+            ColumnSpec("visitNo", "Visit no.", INTEGER, 0.7),
+            ColumnSpec("visitorType", "Type", BADGE, 1.1),
+            ColumnSpec("emailNotified", "Email", BADGE, 1.0),
+            ColumnSpec("whatsappNotified", "WhatsApp", BADGE, 1.25),
+        ),
+        run=_run_register,
+    )
+)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -203,8 +240,11 @@ def _run_host_summary(ctx):
     linked = (
         qs.filter(meeting_employee__isnull=False)
         .values(
-            "meeting_employee_id", "meeting_employee__employee_code", "meeting_employee__first_name",
-            "meeting_employee__last_name", "meeting_employee__department__name",
+            "meeting_employee_id",
+            "meeting_employee__employee_code",
+            "meeting_employee__first_name",
+            "meeting_employee__last_name",
+            "meeting_employee__department__name",
         )
         .annotate(**measures)
         .order_by()
@@ -218,26 +258,38 @@ def _run_host_summary(ctx):
     )
     rows = []
     for r in linked:
-        rows.append({
-            "hostType": "Employee",
-            "hostCode": r["meeting_employee__employee_code"],
-            "hostName": C.person_name(r["meeting_employee__first_name"], r["meeting_employee__last_name"]),
-            "department": r["meeting_employee__department__name"] or "Unassigned",
-            "visits": r["visits"], "uniqueVisitors": r["unique"],
-            "firstVisitAt": fmt_dt(r["first"]), "lastVisitAt": fmt_dt(r["last"]),
-            "emailSent": r["emailed"], "whatsappSent": r["whatsapped"],
-        })
+        rows.append(
+            {
+                "hostType": "Employee",
+                "hostCode": r["meeting_employee__employee_code"],
+                "hostName": C.person_name(r["meeting_employee__first_name"], r["meeting_employee__last_name"]),
+                "department": r["meeting_employee__department__name"] or "Unassigned",
+                "visits": r["visits"],
+                "uniqueVisitors": r["unique"],
+                "firstVisitAt": fmt_dt(r["first"]),
+                "lastVisitAt": fmt_dt(r["last"]),
+                "emailSent": r["emailed"],
+                "whatsappSent": r["whatsapped"],
+            }
+        )
     for r in free:
-        rows.append({
-            "hostType": "Free text",
-            "hostCode": None,
-            "hostName": r["host_name"] or "(blank)",
-            "department": None,
-            "visits": r["visits"], "uniqueVisitors": r["unique"],
-            "firstVisitAt": fmt_dt(r["first"]), "lastVisitAt": fmt_dt(r["last"]),
-            "emailSent": r["emailed"], "whatsappSent": r["whatsapped"],
-        })
-    rows.sort(key=lambda x: (-x["visits"], (x["hostName"] or "").lower(), x["hostType"] != "Employee", x["hostCode"] or ""))
+        rows.append(
+            {
+                "hostType": "Free text",
+                "hostCode": None,
+                "hostName": r["host_name"] or "(blank)",
+                "department": None,
+                "visits": r["visits"],
+                "uniqueVisitors": r["unique"],
+                "firstVisitAt": fmt_dt(r["first"]),
+                "lastVisitAt": fmt_dt(r["last"]),
+                "emailSent": r["emailed"],
+                "whatsappSent": r["whatsapped"],
+            }
+        )
+    rows.sort(
+        key=lambda x: (-x["visits"], (x["hostName"] or "").lower(), x["hostType"] != "Employee", x["hostCode"] or "")
+    )
     rows = rows[: ctx.row_limit]
 
     total = sum(r["visits"] for r in rows)
@@ -249,7 +301,8 @@ def _run_host_summary(ctx):
         {"label": "Visits with no linked employee", "value": C.pct(free_visits, total), "format": "percent"},
         {
             "label": "Most visited host",
-            "value": f"{top['hostName']} ({top['visits']})" if top else None, "format": "text",
+            "value": f"{top['hostName']} ({top['visits']})" if top else None,
+            "format": "text",
         },
     ]
     notes = [
@@ -265,37 +318,39 @@ def _run_host_summary(ctx):
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="visitor-host-summary",
-    title="Visitors by Host",
-    description="Which employees (or free-text hosts) receive the most visitors, with unique visitors and notification counts.",
-    category=C.CATEGORY,
-    icon="Handshake",
-    tags=("visitor", "host", "person met", "whom to meet"),
-    family="visitors",
-    variant="By host",
-    modules=C.MODULES,
-    filters=(
-        date_range("thisMonth", "Visit date"),
-        branches(),
-        departments("Host department"),
-        employees("Host employee"),
-        _HOST_LINKED,
-    ),
-    columns=(
-        ColumnSpec("hostType", "Host type", BADGE, 0.9),
-        ColumnSpec("hostCode", "Host code", TEXT, 0.9),
-        ColumnSpec("hostName", "Host", TEXT, 2.2),
-        ColumnSpec("department", "Department", TEXT, 1.5),
-        ColumnSpec("visits", "Visits", INTEGER, 0.8, total="sum"),
-        ColumnSpec("uniqueVisitors", "Unique visitors", INTEGER, 1.0),
-        ColumnSpec("firstVisitAt", "First visit", DATETIME, 1.3),
-        ColumnSpec("lastVisitAt", "Last visit", DATETIME, 1.3),
-        ColumnSpec("emailSent", "Emailed", INTEGER, 0.8, total="sum"),
-        ColumnSpec("whatsappSent", "WhatsApp sent", INTEGER, 0.9, total="sum"),
-    ),
-    run=_run_host_summary,
-))
+register(
+    ReportSpec(
+        id="visitor-host-summary",
+        title="Visitors by Host",
+        description="Which employees (or free-text hosts) receive the most visitors, with unique visitors and notification counts.",
+        category=C.CATEGORY,
+        icon="Handshake",
+        tags=("visitor", "host", "person met", "whom to meet"),
+        family="visitors",
+        variant="By host",
+        modules=C.MODULES,
+        filters=(
+            date_range("thisMonth", "Visit date"),
+            branches(),
+            departments("Host department"),
+            employees("Host employee"),
+            _HOST_LINKED,
+        ),
+        columns=(
+            ColumnSpec("hostType", "Host type", BADGE, 0.9),
+            ColumnSpec("hostCode", "Host code", TEXT, 0.9),
+            ColumnSpec("hostName", "Host", TEXT, 2.2),
+            ColumnSpec("department", "Department", TEXT, 1.5),
+            ColumnSpec("visits", "Visits", INTEGER, 0.8, total="sum"),
+            ColumnSpec("uniqueVisitors", "Unique visitors", INTEGER, 1.0),
+            ColumnSpec("firstVisitAt", "First visit", DATETIME, 1.3),
+            ColumnSpec("lastVisitAt", "Last visit", DATETIME, 1.3),
+            ColumnSpec("emailSent", "Emailed", INTEGER, 0.8, total="sum"),
+            ColumnSpec("whatsappSent", "WhatsApp sent", INTEGER, 0.9, total="sum"),
+        ),
+        run=_run_host_summary,
+    )
+)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -310,10 +365,9 @@ def _run_frequency(ctx):
     scope = C.branch_q(ctx, "visits__branch_id")  # branch isolation AND the branch filter, for every count
     period = scope & Q(visits__visited_at__gte=lo, visits__visited_at__lt=hi)
 
-    latest = (
-        VisitorVisit.objects.filter(C.branch_q(ctx, "branch_id"), C.in_range("visited_at", ctx), visitor_id=OuterRef("pk"))
-        .order_by("-visited_at", "-id")
-    )
+    latest = VisitorVisit.objects.filter(
+        C.branch_q(ctx, "branch_id"), C.in_range("visited_at", ctx), visitor_id=OuterRef("pk")
+    ).order_by("-visited_at", "-id")
     host_key = Case(
         When(
             visits__meeting_employee_id__isnull=False,
@@ -322,16 +376,27 @@ def _run_frequency(ctx):
         default=Concat(Value("t"), C.free_text_host_key("visits__whom_to_meet"), output_field=TextField()),
         output_field=TextField(),
     )
-    qs = Visitor.objects.annotate(
-        in_period=Count("visits", filter=period),
-        ever=Count("visits", filter=scope or None),
-        first_visit=Min("visits__visited_at", filter=scope or None),
-        last_visit=Max("visits__visited_at", filter=period),
-        hosts=Count(host_key, filter=period, distinct=True),
-        last_host=Subquery(latest.values("whom_to_meet")[:1]),
-        last_purpose=Subquery(latest.values("purpose")[:1]),
-        aad_tail=Right(Trim("aadhaar_number"), 4),
-    ).filter(in_period__gte=max(1, int(ctx.params.get("minVisits") or 1)))
+    # Semi-join first: only visitors with a visit in the period are aggregated (WHERE is applied before the
+    # aggregates and adds no join, so the conditional counts below are unaffected).
+    seen_in_period = VisitorVisit.objects.filter(
+        C.branch_q(ctx, "branch_id"),
+        C.in_range("visited_at", ctx),
+        visitor_id=OuterRef("pk"),
+    )
+    qs = (
+        Visitor.objects.filter(Exists(seen_in_period))
+        .annotate(
+            in_period=Count("visits", filter=period),
+            ever=Count("visits", filter=scope or None),
+            first_visit=Min("visits__visited_at", filter=scope or None),
+            last_visit=Max("visits__visited_at", filter=period),
+            hosts=Count(host_key, filter=period, distinct=True),
+            last_host=Subquery(latest.values("whom_to_meet")[:1]),
+            last_purpose=Subquery(latest.values("purpose")[:1]),
+            aad_tail=Right(Trim("aadhaar_number"), 4),
+        )
+        .filter(in_period__gte=max(1, int(ctx.params.get("minVisits") or 1)))
+    )
     vtype = ctx.params.get("visitorType")
     if vtype == "new_in_period":
         qs = qs.filter(first_visit__gte=lo)
@@ -343,80 +408,106 @@ def _run_frequency(ctx):
 
     fetched = list(
         qs.order_by("-in_period", "-ever", "name", "id").values(
-            "id", "name", "phone", "aad_tail", "first_visit", "in_period", "ever", "last_visit", "hosts", "last_host", "last_purpose",
+            "id",
+            "name",
+            "phone",
+            "aad_tail",
+            "first_visit",
+            "in_period",
+            "ever",
+            "last_visit",
+            "hosts",
+            "last_host",
+            "last_purpose",
         )[: ctx.row_limit]
     )
     rows = []
     for r in fetched:
-        rows.append({
-            "visitorName": r["name"],
-            "phone": r["phone"],
-            "aadhaarMasked": C.mask_aadhaar(r["aad_tail"]),
-            "firstSeenAt": fmt_dt(r["first_visit"]),
-            "visitsInPeriod": r["in_period"],
-            "totalVisitsEver": r["ever"],
-            "lastVisitAt": fmt_dt(r["last_visit"]),
-            "distinctHosts": r["hosts"],
-            "lastHost": r["last_host"],
-            "lastPurpose": r["last_purpose"],
-        })
+        rows.append(
+            {
+                "visitorName": r["name"],
+                "phone": r["phone"],
+                "aadhaarMasked": C.mask_aadhaar(r["aad_tail"]),
+                "firstSeenAt": fmt_dt(r["first_visit"]),
+                "visitsInPeriod": r["in_period"],
+                "totalVisitsEver": r["ever"],
+                "lastVisitAt": fmt_dt(r["last_visit"]),
+                "distinctHosts": r["hosts"],
+                "lastHost": r["last_host"],
+                "lastPurpose": r["last_purpose"],
+            }
+        )
 
+    narrowed = C.get_branch_scope(ctx.request) is not None or bool(ctx.params.get("branch_ids"))
+    where = " at the branch(es) in scope" if narrowed else ""
     notes = [
         "Visitors with at least one visit in the period. 'Total visits' counts every visit ever recorded for that "
-        "visitor" + (" at your branch" if C.get_branch_scope(ctx.request) is not None else "") + ", not just the period.",
-        "'First seen' is the visitor's first recorded visit. 'Distinct hosts' counts employees and free-text names "
-        "met in the period (free text compared case-insensitively).",
+        f"visitor{where}, not just the period.",
+        f"'First seen' is the visitor's first recorded visit{where}. 'Distinct hosts' counts employees and free-text "
+        "names met in the period (free text compared case-insensitively).",
         "Phone numbers are shown so that two visitors with the same name can be told apart; Aadhaar is masked to the last 4 digits.",
         _NOTE_PHONE_VARIANTS,
     ]
     if len(fetched) >= ctx.row_limit:
-        return ReportResult(rows=rows, notes=notes + ["Summary cards are omitted because the list is longer than the row limit."])
+        return ReportResult(
+            rows=rows, notes=notes + ["Summary cards are omitted because the list is longer than the row limit."]
+        )
     new_count = sum(1 for r in fetched if lo is not None and r["first_visit"] is not None and r["first_visit"] >= lo)
     top = fetched[0] if fetched else None
     summary = [
         {"label": "Unique visitors", "value": len(fetched), "format": "integer"},
         {"label": "New in period", "value": new_count, "format": "integer"},
         {"label": "Returning", "value": len(fetched) - new_count, "format": "integer"},
-        {"label": "Most frequent visitor", "value": f"{top['name']} ({top['in_period']})" if top else None, "format": "text"},
+        {
+            "label": "Most frequent visitor",
+            "value": f"{top['name']} ({top['in_period']})" if top else None,
+            "format": "text",
+        },
     ]
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="visitor-frequency",
-    title="Repeat Visitor Report",
-    description="Visitors ranked by number of visits, with first-seen date, hosts met and the latest purpose.",
-    category=C.CATEGORY,
-    icon="History",
-    tags=("visitor", "repeat", "frequent", "returning"),
-    modules=C.MODULES,
-    filters=(
-        date_range("thisMonth", "Visit date"),
-        branches(),
-        select(
-            "minVisits", "Minimum visits in period",
-            [("2", "2 or more"), ("3", "3 or more"), ("5", "5 or more"), ("10", "10 or more")], placeholder="1 or more",
+register(
+    ReportSpec(
+        id="visitor-frequency",
+        title="Repeat Visitor Report",
+        description="Visitors ranked by number of visits, with first-seen date, hosts met and the latest purpose.",
+        category=C.CATEGORY,
+        icon="History",
+        tags=("visitor", "repeat", "frequent", "returning"),
+        modules=C.MODULES,
+        filters=(
+            date_range("thisMonth", "Visit date"),
+            branches(),
+            select(
+                "minVisits",
+                "Minimum visits in period",
+                [("2", "2 or more"), ("3", "3 or more"), ("5", "5 or more"), ("10", "10 or more")],
+                placeholder="1 or more",
+            ),
+            select(
+                "visitorType",
+                "Visitor type",
+                [("new_in_period", "First seen in the period"), ("returning", "Seen before the period")],
+                placeholder="All",
+            ),
+            text("q", "Visitor name / phone", "Search"),
         ),
-        select(
-            "visitorType", "Visitor type",
-            [("new_in_period", "First seen in the period"), ("returning", "Seen before the period")], placeholder="All",
+        columns=(
+            ColumnSpec("visitorName", "Visitor", TEXT, 1.8),
+            ColumnSpec("phone", "Phone", TEXT, 1.3),
+            ColumnSpec("aadhaarMasked", "Aadhaar", TEXT, 1.6),
+            ColumnSpec("firstSeenAt", "First seen", DATETIME, 1.7),
+            ColumnSpec("visitsInPeriod", "Visits in period", INTEGER, 0.9, total="sum"),
+            ColumnSpec("totalVisitsEver", "Total visits", INTEGER, 0.9),
+            ColumnSpec("lastVisitAt", "Last visit", DATETIME, 1.7),
+            ColumnSpec("distinctHosts", "Distinct hosts", INTEGER, 0.9),
+            ColumnSpec("lastHost", "Last person met", TEXT, 1.6),
+            ColumnSpec("lastPurpose", "Last purpose", TEXT, 1.7),
         ),
-        text("q", "Visitor name / phone", "Search"),
-    ),
-    columns=(
-        ColumnSpec("visitorName", "Visitor", TEXT, 2.0),
-        ColumnSpec("phone", "Phone", TEXT, 1.2),
-        ColumnSpec("aadhaarMasked", "Aadhaar", TEXT, 1.3),
-        ColumnSpec("firstSeenAt", "First seen", DATETIME, 1.3),
-        ColumnSpec("visitsInPeriod", "Visits in period", INTEGER, 0.9, total="sum"),
-        ColumnSpec("totalVisitsEver", "Total visits", INTEGER, 0.9),
-        ColumnSpec("lastVisitAt", "Last visit", DATETIME, 1.3),
-        ColumnSpec("distinctHosts", "Distinct hosts", INTEGER, 0.9),
-        ColumnSpec("lastHost", "Last person met", TEXT, 1.6),
-        ColumnSpec("lastPurpose", "Last purpose", TEXT, 2.0),
-    ),
-    run=_run_frequency,
-))
+        run=_run_frequency,
+    )
+)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -429,12 +520,15 @@ def _run_daily(ctx):
     day = C.ist_day_expr("visited_at")
     per_day = {
         r["d"]: r
-        for r in qs.annotate(d=day).values("d").annotate(
+        for r in qs.annotate(d=day)
+        .values("d")
+        .annotate(
             visits=Count("id"),
             unique=Count("visitor_id", distinct=True),
             first=Count("id", filter=Q(visit_no=1)),
             linked=Count("id", filter=Q(meeting_employee__isnull=False)),
-        ).order_by()
+        )
+        .order_by()
     }
     hours: dict[date, dict[int, int]] = {}
     for r in qs.annotate(d=day, h=C.ist_hour_expr("visited_at")).values("d", "h").annotate(n=Count("id")).order_by():
@@ -444,29 +538,38 @@ def _run_daily(ctx):
     for d in ctx.days_in_range:
         r = per_day.get(d)
         visits = r["visits"] if r else 0
-        rows.append({
-            "date": d.isoformat(),
-            "weekday": C.weekday_name(d),
-            "visits": visits,
-            "uniqueVisitors": r["unique"] if r else 0,
-            "firstTime": r["first"] if r else 0,
-            "repeat": (r["visits"] - r["first"]) if r else 0,
-            "hostLinked": r["linked"] if r else 0,
-            "peakHour": C.peak_hour_text(hours.get(d, {})),
-        })
+        rows.append(
+            {
+                "date": d.isoformat(),
+                "weekday": C.weekday_name(d),
+                "visits": visits,
+                "uniqueVisitors": r["unique"] if r else 0,
+                "firstTime": r["first"] if r else 0,
+                "repeat": (r["visits"] - r["first"]) if r else 0,
+                "hostLinked": r["linked"] if r else 0,
+                "peakHour": C.peak_hour_text(hours.get(d, {})),
+            }
+        )
 
     total = sum(r["visits"] for r in rows)
     busiest = max(
-        (r for r in rows if r["visits"]), key=lambda r: (r["visits"], -date.fromisoformat(r["date"]).toordinal()), default=None,
+        (r for r in rows if r["visits"]),
+        key=lambda r: (r["visits"], -date.fromisoformat(r["date"]).toordinal()),
+        default=None,
     )
     overall_unique = qs.order_by().values("visitor_id").distinct().count()
     summary = [
         {"label": "Visits", "value": total, "format": "integer"},
         {"label": "Unique visitors in period", "value": overall_unique, "format": "integer"},
-        {"label": "Daily average (calendar days)", "value": round(total / len(rows), 1) if rows else None, "format": "number"},
+        {
+            "label": "Daily average (calendar days)",
+            "value": round(total / len(rows), 1) if rows else None,
+            "format": "number",
+        },
         {
             "label": "Busiest day",
-            "value": f"{busiest['date']} ({busiest['visits']})" if busiest else None, "format": "text",
+            "value": f"{busiest['date']} ({busiest['visits']})" if busiest else None,
+            "format": "text",
         },
     ]
     notes = [
@@ -478,29 +581,32 @@ def _run_daily(ctx):
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="visitor-daily-summary",
-    title="Visitor Daily Summary",
-    description="Day-wise visitor volumes with the first-time / repeat split and the peak check-in hour.",
-    category=C.CATEGORY,
-    icon="CalendarDays",
-    tags=("visitor", "daily", "trend", "footfall"),
-    family="visitors",
-    variant="Daily",
-    modules=C.MODULES,
-    filters=(date_range("thisMonth", "Visit date"), branches(), _HOST_LINKED),
-    columns=(
-        ColumnSpec("date", "Date", DATE, 1.1),
-        ColumnSpec("weekday", "Day", TEXT, 0.7),
-        ColumnSpec("visits", "Visits", INTEGER, 0.8, total="sum"),
-        ColumnSpec("uniqueVisitors", "Unique visitors", INTEGER, 1.0),
-        ColumnSpec("firstTime", "First-time", INTEGER, 0.9, total="sum"),
-        ColumnSpec("repeat", "Repeat", INTEGER, 0.8, total="sum"),
-        ColumnSpec("hostLinked", "Host linked", INTEGER, 0.9, total="sum"),
-        ColumnSpec("peakHour", "Peak hour", TEXT, 1.1),
-    ),
-    run=_run_daily,
-))
+register(
+    ReportSpec(
+        id="visitor-daily-summary",
+        title="Visitor Daily Summary",
+        description="Day-wise visitor volumes with the first-time / repeat split and the peak check-in hour.",
+        category=C.CATEGORY,
+        icon="CalendarDays",
+        tags=("visitor", "daily", "trend", "footfall"),
+        landscape=False,
+        family="visitors",
+        variant="Daily",
+        modules=C.MODULES,
+        filters=(date_range("thisMonth", "Visit date"), branches(), _HOST_LINKED),
+        columns=(
+            ColumnSpec("date", "Date", DATE, 1.1),
+            ColumnSpec("weekday", "Day", TEXT, 0.7),
+            ColumnSpec("visits", "Visits", INTEGER, 0.8, total="sum"),
+            ColumnSpec("uniqueVisitors", "Unique visitors", INTEGER, 1.0),
+            ColumnSpec("firstTime", "First-time", INTEGER, 0.9, total="sum"),
+            ColumnSpec("repeat", "Repeat", INTEGER, 0.8, total="sum"),
+            ColumnSpec("hostLinked", "Host linked", INTEGER, 0.9, total="sum"),
+            ColumnSpec("peakHour", "Peak hour", TEXT, 1.1, align="center"),
+        ),
+        run=_run_daily,
+    )
+)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -534,28 +640,34 @@ def _run_notification(ctx):
     elif state == "none_sent":
         qs = qs.filter(~has_email, ~has_wa)
 
-    fetched = (
-        qs.values(
-            "visited_at", "visitor__name", "meeting_employee_id", "meeting_employee__first_name",
-            "meeting_employee__last_name", "meeting_employee__department__name", "meeting_employee__email",
-            "meeting_employee__phone", "notified_email_at", "notified_whatsapp_at",
-        )
-        .order_by("visited_at", "id")[: ctx.row_limit]
-    )
+    fetched = qs.values(
+        "visited_at",
+        "visitor__name",
+        "meeting_employee_id",
+        "meeting_employee__first_name",
+        "meeting_employee__last_name",
+        "meeting_employee__department__name",
+        "meeting_employee__email",
+        "meeting_employee__phone",
+        "notified_email_at",
+        "notified_whatsapp_at",
+    ).order_by("visited_at", "id")[: ctx.row_limit]
     rows = []
     for r in fetched:
-        rows.append({
-            "visitedAt": fmt_dt(r["visited_at"]),
-            "visitorName": r["visitor__name"],
-            "hostName": C.person_name(r["meeting_employee__first_name"], r["meeting_employee__last_name"]),
-            "hostDepartment": r["meeting_employee__department__name"] or "Unassigned",
-            "hostHasEmail": "Yes" if (r["meeting_employee__email"] or "").strip() else "No",
-            "hostHasPhone": "Yes" if (r["meeting_employee__phone"] or "").strip() else "No",
-            "emailSentAt": fmt_dt(r["notified_email_at"]),
-            "emailDelaySeconds": _delay_seconds(r["notified_email_at"], r["visited_at"]),
-            "whatsappSentAt": fmt_dt(r["notified_whatsapp_at"]),
-            "whatsappDelaySeconds": _delay_seconds(r["notified_whatsapp_at"], r["visited_at"]),
-        })
+        rows.append(
+            {
+                "visitedAt": fmt_dt(r["visited_at"]),
+                "visitorName": r["visitor__name"],
+                "hostName": C.person_name(r["meeting_employee__first_name"], r["meeting_employee__last_name"]),
+                "hostDepartment": r["meeting_employee__department__name"] or "Unassigned",
+                "hostHasEmail": "Yes" if (r["meeting_employee__email"] or "").strip() else "No",
+                "hostHasPhone": "Yes" if (r["meeting_employee__phone"] or "").strip() else "No",
+                "emailSentAt": fmt_dt(r["notified_email_at"]),
+                "emailDelaySeconds": _delay_seconds(r["notified_email_at"], r["visited_at"]),
+                "whatsappSentAt": fmt_dt(r["notified_whatsapp_at"]),
+                "whatsappDelaySeconds": _delay_seconds(r["notified_whatsapp_at"], r["visited_at"]),
+            }
+        )
 
     no_email = Q(meeting_employee__email__isnull=True) | Q(meeting_employee__email="")
     no_phone = Q(meeting_employee__phone__isnull=True) | Q(meeting_employee__phone="")
@@ -574,11 +686,13 @@ def _run_notification(ctx):
         {"label": "WhatsApp delivered", "value": C.pct(agg["whatsapped"], agg["visits"]), "format": "percent"},
         {
             "label": "Avg email delay (s)",
-            "value": round(agg["avg_email"].total_seconds()) if agg["avg_email"] is not None else None, "format": "integer",
+            "value": round(agg["avg_email"].total_seconds()) if agg["avg_email"] is not None else None,
+            "format": "integer",
         },
         {
             "label": "Avg WhatsApp delay (s)",
-            "value": round(agg["avg_wa"].total_seconds()) if agg["avg_wa"] is not None else None, "format": "integer",
+            "value": round(agg["avg_wa"].total_seconds()) if agg["avg_wa"] is not None else None,
+            "format": "integer",
         },
         {"label": "Hosts with no email on file", "value": agg["hosts_no_email"], "format": "integer"},
         {"label": "Hosts with no phone on file", "value": agg["hosts_no_phone"], "format": "integer"},
@@ -593,32 +707,34 @@ def _run_notification(ctx):
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="visitor-notification-delivery",
-    title="Visitor Host Notification Status",
-    description="For visits tied to an employee host: was the host notified by email and WhatsApp, and how fast.",
-    category=C.CATEGORY,
-    icon="Smartphone",
-    tags=("visitor", "notification", "whatsapp", "email", "host"),
-    modules=C.MODULES,
-    filters=(
-        date_range("thisMonth", "Visit date"),
-        branches(),
-        departments("Host department"),
-        employees("Host employee"),
-        select("deliveryState", "Delivery", _DELIVERY_STATES, placeholder="Any"),
-    ),
-    columns=(
-        ColumnSpec("visitedAt", "Visited at", DATETIME, 1.4),
-        ColumnSpec("visitorName", "Visitor", TEXT, 1.8),
-        ColumnSpec("hostName", "Host", TEXT, 2.0),
-        ColumnSpec("hostDepartment", "Host dept", TEXT, 1.4),
-        ColumnSpec("hostHasEmail", "Host email on file", BADGE, 0.9),
-        ColumnSpec("hostHasPhone", "Host phone on file", BADGE, 0.9),
-        ColumnSpec("emailSentAt", "Email sent at", DATETIME, 1.4),
-        ColumnSpec("emailDelaySeconds", "Email delay (s)", INTEGER, 0.9),
-        ColumnSpec("whatsappSentAt", "WhatsApp sent at", DATETIME, 1.4),
-        ColumnSpec("whatsappDelaySeconds", "WhatsApp delay (s)", INTEGER, 0.9),
-    ),
-    run=_run_notification,
-))
+register(
+    ReportSpec(
+        id="visitor-notification-delivery",
+        title="Visitor Host Notification Status",
+        description="For visits tied to an employee host: was the host notified by email and WhatsApp, and how fast.",
+        category=C.CATEGORY,
+        icon="Smartphone",
+        tags=("visitor", "notification", "whatsapp", "email", "host"),
+        modules=C.MODULES,
+        filters=(
+            date_range("thisMonth", "Visit date"),
+            branches(),
+            departments("Host department"),
+            employees("Host employee"),
+            select("deliveryState", "Delivery", _DELIVERY_STATES, placeholder="Any"),
+        ),
+        columns=(
+            ColumnSpec("visitedAt", "Visited at", DATETIME, 1.7),
+            ColumnSpec("visitorName", "Visitor", TEXT, 1.6),
+            ColumnSpec("hostName", "Host", TEXT, 1.8),
+            ColumnSpec("hostDepartment", "Host dept", TEXT, 1.2),
+            ColumnSpec("hostHasEmail", "Host email on file", BADGE, 0.9),
+            ColumnSpec("hostHasPhone", "Host phone on file", BADGE, 0.9),
+            ColumnSpec("emailSentAt", "Email sent at", DATETIME, 1.75),
+            ColumnSpec("emailDelaySeconds", "Email delay (s)", INTEGER, 0.9),
+            ColumnSpec("whatsappSentAt", "WhatsApp sent at", DATETIME, 1.75),
+            ColumnSpec("whatsappDelaySeconds", "WhatsApp delay (s)", INTEGER, 0.9),
+        ),
+        run=_run_notification,
+    )
+)

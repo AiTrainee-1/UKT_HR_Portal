@@ -18,7 +18,7 @@ from django.test.utils import CaptureQueriesContext
 from openpyxl import load_workbook
 
 from .jwt_utils import sign_token
-from .models import Branch, Department, Employee, HRUser, Role
+from .models import Branch, Department, Employee, HRUser, PayrollSettings, Role
 from .permission_registry import all_module_keys
 from .reporting import registry
 from .reporting.export_xlsx import HEADER_ROW
@@ -74,25 +74,40 @@ def _row_counts() -> dict[str, int]:
 class AllReportsTests(TestCase):
     @classmethod
     def setUpTestData(cls):
-        call_command("seed_data", confirm=True, verbosity=0)
+        call_command(
+            "seed_data", confirm=True, verbosity=0, stdout=io.StringIO(), stderr=io.StringIO()
+        )  # its check mark cannot be printed to a cp1252 console
+        PayrollSettings.get()  # the app's singleton settings row exists on every installed system (created at first use)
         cls.seed_branch = Branch.objects.order_by("id").first()
         cls.other_branch = Branch.objects.create(name="Other Unit", code="OTH")
         other_dept = Department.objects.create(name="OTHER-DEPT", branch=cls.other_branch)
         cls.stranger = Employee.objects.create(
-            employee_code="OTHER001", first_name="Stranger", last_name="Elsewhere", employment_type="staff",
-            department=other_dept, branch=cls.other_branch, status="active", join_date="2026-01-05",
+            employee_code="OTHER001",
+            first_name="Stranger",
+            last_name="Elsewhere",
+            employment_type="staff",
+            department=other_dept,
+            branch=cls.other_branch,
+            status="active",
+            join_date="2026-01-05",
         )
         cls.admin = HRUser.objects.create(username="all_admin", password_hash="x", is_super_admin=True)
         every_module = {key: "view" for key in all_module_keys()}
         cls.scoped = HRUser.objects.create(
-            username="all_scoped", password_hash="x", branch=cls.seed_branch,
+            username="all_scoped",
+            password_hash="x",
+            branch=cls.seed_branch,
             role=Role.objects.create(name="all_scoped_role", permissions=every_module),
         )
         cls.viewer = HRUser.objects.create(
-            username="all_viewer", password_hash="x", role=Role.objects.create(name="all_viewer_role", permissions=every_module),
+            username="all_viewer",
+            password_hash="x",
+            role=Role.objects.create(name="all_viewer_role", permissions=every_module),
         )
         cls.reports_only = HRUser.objects.create(
-            username="all_reports_only", password_hash="x", role=Role.objects.create(name="all_reports_only_role", permissions={"reports": "view"}),
+            username="all_reports_only",
+            password_hash="x",
+            role=Role.objects.create(name="all_reports_only_role", permissions={"reports": "view"}),
         )
 
     def catalog(self, user):
@@ -147,7 +162,9 @@ class AllReportsTests(TestCase):
             with self.subTest(report=spec["id"]):
                 params = _default_query(spec, JUNE)
                 screen = self.run_report(self.admin, spec, params).json()
-                x = self.client.get(f"/api/reports/export/{spec['id']}", {**params, "fmt": "xlsx"}, **_headers(self.admin))
+                x = self.client.get(
+                    f"/api/reports/export/{spec['id']}", {**params, "fmt": "xlsx"}, **_headers(self.admin)
+                )
                 self.assertEqual(x.status_code, 200, x.content[:300])
                 self.assertTrue(x.content.startswith(b"PK"))
                 ws = load_workbook(io.BytesIO(x.content)).active
@@ -159,7 +176,9 @@ class AllReportsTests(TestCase):
                     got = [ws.cell(row=HEADER_ROW + 1 + i, column=1).value for i in range(len(screen["rows"]))]
                     want = [r.get(first["key"]) for r in screen["rows"]]
                     self.assertEqual([str(g or "") for g in got], [str(w or "") for w in want])
-                p = self.client.get(f"/api/reports/export/{spec['id']}", {**params, "fmt": "pdf"}, **_headers(self.admin))
+                p = self.client.get(
+                    f"/api/reports/export/{spec['id']}", {**params, "fmt": "pdf"}, **_headers(self.admin)
+                )
                 self.assertEqual(p.status_code, 200, p.content[:300])
                 self.assertTrue(p.content.startswith(b"%PDF"))
 
@@ -170,7 +189,43 @@ class AllReportsTests(TestCase):
             params = _default_query(spec, JUNE)
             self.run_report(self.admin, spec, params)
             self.client.get(f"/api/reports/export/{spec['id']}", {**params, "fmt": "xlsx"}, **_headers(self.admin))
-        self.assertEqual(_row_counts(), before, "a report wrote to the database")
+        after = _row_counts()
+        changed = {k: (before[k], after[k]) for k in before if before[k] != after[k]}
+        self.assertEqual(changed, {}, "a report wrote to the database (table: (before, after))")
+
+    # ── hostile / malformed input never crashes a report ───────────────────
+    def test_malformed_filters_are_a_400_never_a_500(self):
+        nasty = [
+            {"dateFrom": "9999-12-31", "dateTo": "9999-12-31"},
+            {"dateFrom": "0001-01-01", "dateTo": "0001-01-02"},
+            {"period": "9999-12"},
+            {"period": "2026-13"},
+            {"year": "99999999999999999999"},
+            {"departmentIds": "99999999999999999999"},
+            {"employeeIds": "1,,2,x"},
+            {"employeeIds": ",".join(str(i) for i in range(1, 1500))},
+            {"branchIds": "-1"},
+            {"employmentType": "x" * 500},
+            {"employeeStatus": "\u0000"},
+        ]
+        for spec in self.catalog(self.admin)["reports"]:
+            for bad in nasty:
+                with self.subTest(report=spec["id"], params=str(bad)[:60]):
+                    params = _default_query(spec, JUNE)
+                    params.update(bad)
+                    r = self.run_report(self.admin, spec, params)
+                    self.assertIn(r.status_code, (200, 400), r.content[:300])
+
+    def test_free_text_filters_survive_nul_bytes_and_unicode(self):
+        for spec in self.catalog(self.admin)["reports"]:
+            text_filters = [f["key"] for f in spec["filters"] if f["kind"] == "text"]
+            for key in text_filters:
+                for value in ("a\u0000b", "\u0000", "நிர்வாகி", "x" * 5000, "%_\\"):
+                    with self.subTest(report=spec["id"], filter=key):
+                        params = _default_query(spec, JUNE)
+                        params[key] = value
+                        r = self.run_report(self.admin, spec, params)
+                        self.assertIn(r.status_code, (200, 400), r.content[:300])
 
     # ── access ───────────────────────────────────────────────────────────────
     def test_a_view_only_role_can_run_and_export_everything_it_may_see(self):
@@ -180,7 +235,9 @@ class AllReportsTests(TestCase):
             with self.subTest(report=spec["id"]):
                 params = _default_query(spec, JUNE)
                 self.assertEqual(self.run_report(self.viewer, spec, params).status_code, 200)
-                x = self.client.get(f"/api/reports/export/{spec['id']}", {**params, "fmt": "xlsx"}, **_headers(self.viewer))
+                x = self.client.get(
+                    f"/api/reports/export/{spec['id']}", {**params, "fmt": "xlsx"}, **_headers(self.viewer)
+                )
                 self.assertEqual(x.status_code, 200)
 
     def test_admin_only_reports_are_hidden_from_every_other_role(self):
@@ -189,7 +246,9 @@ class AllReportsTests(TestCase):
         specs = {s.id: s for s in registry.all_specs()}
         self.assertTrue(any(s.super_admin_only for s in specs.values()), "no admin-only report registered")
         for rid in admin_ids - viewer_ids:
-            self.assertTrue(specs[rid].super_admin_only, f"{rid} is hidden from an all-access role but is not super_admin_only")
+            self.assertTrue(
+                specs[rid].super_admin_only, f"{rid} is hidden from an all-access role but is not super_admin_only"
+            )
         for spec in specs.values():
             if spec.super_admin_only:
                 self.assertIn(spec.id, admin_ids)
@@ -206,9 +265,19 @@ class AllReportsTests(TestCase):
 
     def test_sensitive_reports_are_gated_by_an_owning_module(self):
         specs = {s.id: s for s in registry.all_specs()}
-        for rid in ("salary-register", "salary-slip", "pf-statement", "esi-statement", "bank-advice", "advance-ledger", "visitor-register"):
+        for rid in (
+            "salary-register",
+            "salary-slip",
+            "pf-statement",
+            "esi-statement",
+            "bank-advice",
+            "advance-ledger",
+            "visitor-register",
+        ):
             if rid in specs:
-                self.assertTrue(specs[rid].modules or specs[rid].super_admin_only, f"{rid} must name its owning module(s)")
+                self.assertTrue(
+                    specs[rid].modules or specs[rid].super_admin_only, f"{rid} must name its owning module(s)"
+                )
 
     # ── branch isolation ─────────────────────────────────────────────────────
     def test_a_branch_scoped_user_never_sees_another_branchs_people(self):
@@ -219,7 +288,9 @@ class AllReportsTests(TestCase):
                 r = self.run_report(self.scoped, spec, params)
                 self.assertEqual(r.status_code, 200, r.content[:300])
                 self.assertNotIn("OTHER001", r.content.decode(), "another branch's employee leaked")
-                x = self.client.get(f"/api/reports/export/{spec['id']}", {**params, "fmt": "xlsx"}, **_headers(self.scoped))
+                x = self.client.get(
+                    f"/api/reports/export/{spec['id']}", {**params, "fmt": "xlsx"}, **_headers(self.scoped)
+                )
                 self.assertEqual(x.status_code, 200)
                 ws = load_workbook(io.BytesIO(x.content)).active
                 cells = " ".join(str(c.value) for row in ws.iter_rows() for c in row if c.value is not None)
@@ -229,7 +300,9 @@ class AllReportsTests(TestCase):
         specs = {s["id"]: s for s in self.catalog(self.admin)["reports"]}
         if "employee-master" not in specs:
             self.skipTest("employee-master not registered")
-        body = self.run_report(self.admin, specs["employee-master"], _default_query(specs["employee-master"], JUNE)).json()
+        body = self.run_report(
+            self.admin, specs["employee-master"], _default_query(specs["employee-master"], JUNE)
+        ).json()
         self.assertIn("OTHER001", str(body["rows"]))
 
     # ── contract on the specs themselves ─────────────────────────────────────

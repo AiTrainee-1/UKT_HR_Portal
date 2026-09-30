@@ -36,7 +36,18 @@ MINUTES = "minutes"  # whole minutes
 DURATION = "duration"  # minutes, rendered "2h 05m"
 
 COLUMN_TYPES = (
-    TEXT, INTEGER, NUMBER, CURRENCY, PERCENT, DATE, TIME, DATETIME, BADGE, HOURS, MINUTES, DURATION,
+    TEXT,
+    INTEGER,
+    NUMBER,
+    CURRENCY,
+    PERCENT,
+    DATE,
+    TIME,
+    DATETIME,
+    BADGE,
+    HOURS,
+    MINUTES,
+    DURATION,
 )
 NUMERIC_TYPES = (INTEGER, NUMBER, CURRENCY, PERCENT, HOURS, MINUTES, DURATION)
 
@@ -56,14 +67,30 @@ F_TEXT = "text"  # param = spec key
 F_NUMBER = "number"  # param = spec key; integer
 
 FILTER_KINDS = (
-    F_PERIOD, F_YEAR, F_DATE_RANGE, F_DEPARTMENT, F_DESIGNATION, F_BRANCH, F_EMPLOYEE,
-    F_EMPLOYMENT_TYPE, F_EMPLOYEE_STATUS, F_SELECT, F_BOOLEAN, F_TEXT, F_NUMBER,
+    F_PERIOD,
+    F_YEAR,
+    F_DATE_RANGE,
+    F_DEPARTMENT,
+    F_DESIGNATION,
+    F_BRANCH,
+    F_EMPLOYEE,
+    F_EMPLOYMENT_TYPE,
+    F_EMPLOYEE_STATUS,
+    F_SELECT,
+    F_BOOLEAN,
+    F_TEXT,
+    F_NUMBER,
 )
 
 # Category ids, in display order. (id, label, description, lucide icon name)
 CATEGORIES: list[tuple[str, str, str, str]] = [
     ("payroll", "Payroll & Salary", "Slips, registers, wages, statutory statements and deductions", "Wallet"),
-    ("attendance", "Attendance", "Time cards, daily and monthly attendance, late, overtime and shifts", "CalendarCheck"),
+    (
+        "attendance",
+        "Attendance",
+        "Time cards, daily and monthly attendance, late, overtime and shifts",
+        "CalendarCheck",
+    ),
     ("leave", "Leave & Requests", "Leave, permission, on-duty, missing punch and other requests", "CalendarOff"),
     ("gate", "Gate & Visitors", "Outpass, visitor and tea-break registers", "DoorOpen"),
     ("employees", "Employees", "Master data, headcount, joiners, exits and compliance", "Users"),

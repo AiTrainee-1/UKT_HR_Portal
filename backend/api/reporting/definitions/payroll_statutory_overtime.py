@@ -15,13 +15,14 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
-from django.db.models import Count, Q, Sum
+from django.db.models import Count, Exists, OuterRef, Q, Sum
 
 from api.branch_scope import get_branch_scope
 from api.clock import FACTORY_TZ
 from api.models import (
     CompensationDayAnnouncement,
     CompensationLeaveCredit,
+    Department,
     Employee,
     OvertimeRecord,
     SalarySlip,
@@ -30,9 +31,30 @@ from api.models import (
 from ..filters import branches, date_range, departments, period, scope, select
 from ..formatting import fmt_dt, month_bounds, month_label
 from ..registry import register
-from ..types import BADGE, CURRENCY, DATE, DATETIME, HOURS, INTEGER, MINUTES, TEXT, TIME, ColumnSpec, ReportResult, ReportSpec
+from ..types import (
+    BADGE,
+    CURRENCY,
+    DATE,
+    DATETIME,
+    HOURS,
+    INTEGER,
+    MINUTES,
+    TEXT,
+    TIME,
+    ColumnSpec,
+    ReportResult,
+    ReportSpec,
+)
 from .payroll_statutory_common import (
-    as_dict, dec, dec_or_none, dept_name, feature_off_result_notes, money, natural_key, read_settings, with_breakdown,
+    as_dict,
+    dec,
+    dec_or_none,
+    dept_name,
+    feature_off_result_notes,
+    money,
+    natural_key,
+    read_settings,
+    with_breakdown,
 )
 
 _ZERO = Decimal("0")
@@ -128,13 +150,18 @@ def _run_register(ctx) -> ReportResult:
         ).values_list("employee_id", "date")
         for emp_id, d in pay_qs:
             pay_counts[(emp_id, d.year, d.month)] = pay_counts.get((emp_id, d.year, d.month), 0) + 1
-    credits = {
-        c.source_overtime_record_id: c
-        for c in CompensationLeaveCredit.objects.filter(source_overtime_record_id__in=[r.id for r in recs])
-    } if recs else {}
+    credits = (
+        {
+            c.source_overtime_record_id: c
+            for c in CompensationLeaveCredit.objects.filter(source_overtime_record_id__in=[r.id for r in recs])
+        }
+        if recs
+        else {}
+    )
 
     rows: list[dict] = []
-    n = {"detected": 0, "announced": 0, "rejected": 0, "pay_pending": 0, "relax": 0}
+    n = {"detected": 0, "announced": 0, "rejected": 0, "relax": 0}
+    pay_groups: dict[tuple[int, int, int], list[int]] = {}  # (employee, year, month) -> [listed pay rows, missing days]
     hours_total = _ZERO
     payable_total = _ZERO
     for r in recs:
@@ -148,92 +175,112 @@ def _run_register(ctx) -> ReportResult:
             paid_days = int(dec(as_dict(slip.bd_earn).get("otDays"))) if slip else 0
             announced = pay_counts.get(key, 0)
             outcome = "Paid in slip" if paid_days >= announced else ("Partly paid" if paid_days else "Awaiting payroll")
-            n["pay_pending"] += outcome != "Paid in slip"
+            # A month's slip pays a COUNT of days, so the days still missing are counted once per employee-month
+            # (as the payment summary does) - not once for every listed row of a month that is only partly paid.
+            group = pay_groups.setdefault(key, [0, max(0, announced - paid_days)])
+            group[0] += 1
             payable = rate
             payable_total += rate or _ZERO
         elif r.status == "announced" and r.compensation_type == "relaxation":
             n["relax"] += 1
             credit = credits.get(r.id)
-            outcome = "No credit" if credit is None else ("Credit used" if credit.status == "used" else "Credit available")
+            outcome = (
+                "No credit" if credit is None else ("Credit used" if credit.status == "used" else "Credit available")
+            )
         n[r.status] += 1
         hours_total += Decimal(str(_hours(r.ot_minutes)))
-        rows.append({
-            "employeeCode": emp.employee_code,
-            "employeeName": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
-            "department": dept_name(emp),
-            "date": r.date.isoformat(),
-            "shiftEndTime": r.shift_end_time,
-            "lastPunchOut": r.last_punch_out,
-            "otMinutes": r.ot_minutes,
-            "otHours": _hours(r.ot_minutes),
-            "status": r.status.title(),
-            "compensationType": r.compensation_type.title() if r.compensation_type else None,
-            "outcome": outcome,
-            "announcedBy": r.announced_by,
-            "announcedAt": fmt_dt(r.announced_at),
-            "payableAmount": money(payable),
-        })
+        rows.append(
+            {
+                "employeeCode": emp.employee_code,
+                "employeeName": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
+                "department": dept_name(emp),
+                "date": r.date.isoformat(),
+                "shiftEndTime": r.shift_end_time,
+                "lastPunchOut": r.last_punch_out,
+                "otMinutes": r.ot_minutes,
+                "otHours": _hours(r.ot_minutes),
+                "status": r.status.title(),
+                "compensationType": r.compensation_type.title() if r.compensation_type else None,
+                "outcome": outcome,
+                "announcedBy": r.announced_by,
+                "announcedAt": fmt_dt(r.announced_at),
+                "payableAmount": money(payable),
+            }
+        )
 
-    notes += [_OT_PAY_NOTE, _OT_ROWS_NOTE,
-              "Payable = the daily rate on the employee's generated slip for that month (a dash when no slip exists yet). "
-              "Outcome: 'Paid in slip' = the slip's overtime days cover every announced Pay day of that month; "
-              "'Awaiting payroll' = announced after (or without) payroll generation - regenerate payroll to include it."]
+    pay_pending = sum(min(listed, missing) for listed, missing in pay_groups.values())
+    notes += [
+        _OT_PAY_NOTE,
+        _OT_ROWS_NOTE,
+        "Payable = the daily rate on the employee's generated slip for that month (a dash when no slip exists yet). "
+        "Outcome: 'Paid in slip' = the slip's overtime days cover every announced Pay day of that month; "
+        "'Awaiting payroll' = announced after (or without) payroll generation - regenerate payroll to include it; "
+        "'Partly paid' = the slip covers only some of the month's Pay days (the slip holds a count, not which days), "
+        "and 'Pay days awaiting payroll' counts only the days the slip is still missing.",
+    ]
     summary = [
         {"label": "Records", "value": len(rows), "format": "integer"},
         {"label": "Total OT hours (listed)", "value": money(hours_total), "format": "hours"},
         {"label": "Detected", "value": n["detected"], "format": "integer"},
         {"label": "Announced", "value": n["announced"], "format": "integer"},
         {"label": "Rejected", "value": n["rejected"], "format": "integer"},
-        {"label": "Pay days awaiting payroll", "value": n["pay_pending"], "format": "integer"},
+        {"label": "Pay days awaiting payroll", "value": pay_pending, "format": "integer"},
         {"label": "Payable (where a slip exists)", "value": money(payable_total), "format": "currency"},
         {"label": "Relaxation credits granted", "value": n["relax"], "format": "integer"},
     ]
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="overtime-register",
-    title="Overtime Register",
-    description="Day-wise overtime on record: shift end, last punch, minutes, HR decision (pay or relaxation) and "
-    "whether payroll has paid it.",
-    category="payroll",
-    icon="Clock",
-    tags=("overtime", "ot", "compensation", "announced", "relaxation", "payroll"),
-    family="overtime",
-    variant="Register",
-    modules=OT_MODULES,
-    filters=(
-        date_range(label="Overtime date"),
-        *scope(status=None, employment=False),
-        select(
-            "status", "Status",
-            [("all", "All"), ("detected", "Detected"), ("announced", "Announced"), ("rejected", "Rejected")],
-            default="all",
+register(
+    ReportSpec(
+        id="overtime-register",
+        title="Overtime Register",
+        description="Day-wise overtime on record: shift end, last punch, minutes, HR decision (pay or relaxation) and "
+        "whether payroll has paid it.",
+        category="payroll",
+        icon="Clock",
+        tags=("overtime", "ot", "compensation", "announced", "relaxation", "payroll"),
+        family="overtime",
+        variant="Register",
+        modules=(
+            "compensation",
+        ),  # day-wise HR decisions are Compensation-page data; the Summary also opens for Payroll
+        filters=(
+            date_range(label="Overtime date"),
+            *scope(status=None, employment=False),
+            select(
+                "status",
+                "Status",
+                [("all", "All"), ("detected", "Detected"), ("announced", "Announced"), ("rejected", "Rejected")],
+                default="all",
+            ),
+            select(
+                "compensationType",
+                "Compensation",
+                [("all", "All"), ("pay", "Pay"), ("relaxation", "Relaxation")],
+                default="all",
+            ),
         ),
-        select(
-            "compensationType", "Compensation",
-            [("all", "All"), ("pay", "Pay"), ("relaxation", "Relaxation")], default="all",
+        columns=(
+            ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
+            ColumnSpec("employeeName", "Employee", TEXT, 2.2),
+            ColumnSpec("department", "Department", TEXT, 1.4),
+            ColumnSpec("date", "Date", DATE, 1.1),
+            ColumnSpec("shiftEndTime", "Shift end", TIME, 0.8),
+            ColumnSpec("lastPunchOut", "Last punch", TIME, 0.8),
+            ColumnSpec("otMinutes", "OT minutes", MINUTES, 0.8, total="sum"),
+            ColumnSpec("otHours", "OT hours", HOURS, 0.8, total="sum"),
+            ColumnSpec("status", "Status", BADGE, 1.0),
+            ColumnSpec("compensationType", "Comp. type", BADGE, 1.0),
+            ColumnSpec("outcome", "Outcome", BADGE, 1.4),
+            ColumnSpec("announcedBy", "Announced by", TEXT, 1.2),
+            ColumnSpec("announcedAt", "Announced at", DATETIME, 1.7),
+            ColumnSpec("payableAmount", "Payable", CURRENCY, 1.1, total="sum"),
         ),
-    ),
-    columns=(
-        ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
-        ColumnSpec("employeeName", "Employee", TEXT, 2.2),
-        ColumnSpec("department", "Department", TEXT, 1.4),
-        ColumnSpec("date", "Date", DATE, 1.1),
-        ColumnSpec("shiftEndTime", "Shift end", TIME, 0.8),
-        ColumnSpec("lastPunchOut", "Last punch", TIME, 0.8),
-        ColumnSpec("otMinutes", "OT minutes", MINUTES, 0.8, total="sum"),
-        ColumnSpec("otHours", "OT hours", HOURS, 0.8, total="sum"),
-        ColumnSpec("status", "Status", BADGE, 1.0),
-        ColumnSpec("compensationType", "Compensation", BADGE, 1.0),
-        ColumnSpec("outcome", "Outcome", BADGE, 1.3),
-        ColumnSpec("announcedBy", "Announced by", TEXT, 1.3),
-        ColumnSpec("announcedAt", "Announced at", DATETIME, 1.4),
-        ColumnSpec("payableAmount", "Payable", CURRENCY, 1.1, total="sum"),
-    ),
-    run=_run_register,
-    screen_limit=10_000,
-))
+        run=_run_register,
+        screen_limit=10_000,
+    )
+)
 
 
 # -- overtime payment summary ------------------------------------------------------------------------------------
@@ -262,7 +309,10 @@ def _run_summary(ctx) -> ReportResult:
     slip_qs = with_breakdown(
         SalarySlip.objects.filter(
             Q(ot_amount__gt=0) | Q(employee_id__in=list(by_emp)),
-            ctx.emp_q("employee__"), year=year, month=month, **_STAFF_SLIP,
+            ctx.emp_q("employee__"),
+            year=year,
+            month=month,
+            **_STAFF_SLIP,
         ).select_related("employee__department"),
         "bd_earn",
     )
@@ -295,28 +345,33 @@ def _run_summary(ctx) -> ReportResult:
         tot["paid"] += slip_ot or _ZERO
         tot["pend_days"] += pending
         tot["pend_amt"] += pend_amt or _ZERO
-        rows.append({
-            "employeeCode": emp.employee_code,
-            "employeeName": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
-            "department": dept_name(emp),
-            "period": month_label(year, month),
-            "detectedDays": a["detected"],
-            "announcedPayDays": a["pay"],
-            "relaxationDays": a["relax"],
-            "rejectedDays": a["rejected"],
-            "totalOtHours": _hours(a["minutes"]),
-            "dailyRate": money(rate),
-            "expectedOtPay": money(expected),
-            "slipOtAmount": money(slip_ot),
-            "pendingPayDays": pending,
-            "pendingPayAmount": money(pend_amt),
-        })
+        rows.append(
+            {
+                "employeeCode": emp.employee_code,
+                "employeeName": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
+                "department": dept_name(emp),
+                "period": month_label(year, month),
+                "detectedDays": a["detected"],
+                "announcedPayDays": a["pay"],
+                "relaxationDays": a["relax"],
+                "rejectedDays": a["rejected"],
+                "totalOtHours": _hours(a["minutes"]),
+                "dailyRate": money(rate),
+                "expectedOtPay": money(expected),
+                "slipOtAmount": money(slip_ot),
+                "pendingPayDays": pending,
+                "pendingPayAmount": money(pend_amt),
+            }
+        )
 
     ids = list(emps)
     redeemed = 0
     if ids:
         redeemed = CompensationLeaveCredit.objects.filter(
-            employee_id__in=ids, status="used", source_overtime_record__date__gte=m1, source_overtime_record__date__lte=m2
+            employee_id__in=ids,
+            status="used",
+            source_overtime_record__date__gte=m1,
+            source_overtime_record__date__lte=m2,
         ).count()
     notes += [
         _OT_PAY_NOTE,
@@ -339,48 +394,55 @@ def _run_summary(ctx) -> ReportResult:
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="overtime-payment-summary",
-    title="Overtime Payment Summary",
-    description="Per employee for a month: overtime days by decision, hours, expected vs paid overtime wages and "
-    "what is still pending payroll.",
-    category="payroll",
-    icon="Banknote",
-    tags=("overtime", "ot payment", "ot wages", "compensation", "payroll"),
-    family="overtime",
-    variant="Summary",
-    modules=OT_MODULES,
-    filters=(
-        period(default="lastMonth"),
-        *scope(status=None, employment=False),
-        select(
-            "compensationType", "Compensation",
-            [("all", "All"), ("pay", "Pay"), ("relaxation", "Relaxation")], default="all",
+register(
+    ReportSpec(
+        id="overtime-payment-summary",
+        title="Overtime Payment Summary",
+        description="Per employee for a month: overtime days by decision, hours, expected vs paid overtime wages and "
+        "what is still pending payroll.",
+        category="payroll",
+        icon="Banknote",
+        tags=("overtime", "ot payment", "ot wages", "compensation", "payroll"),
+        family="overtime",
+        variant="Summary",
+        modules=OT_MODULES,
+        filters=(
+            period(default="lastMonth"),
+            *scope(status=None, employment=False),
+            select(
+                "compensationType",
+                "Compensation",
+                [("all", "All"), ("pay", "Pay"), ("relaxation", "Relaxation")],
+                default="all",
+            ),
         ),
-    ),
-    columns=(
-        ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
-        ColumnSpec("employeeName", "Employee", TEXT, 2.2),
-        ColumnSpec("department", "Department", TEXT, 1.4),
-        ColumnSpec("period", "Month", TEXT, 1.1),
-        ColumnSpec("detectedDays", "Detected days", INTEGER, 0.8, total="sum"),
-        ColumnSpec("announcedPayDays", "Pay days", INTEGER, 0.7, total="sum"),
-        ColumnSpec("relaxationDays", "Relaxation days", INTEGER, 0.8, total="sum"),
-        ColumnSpec("rejectedDays", "Rejected days", INTEGER, 0.8, total="sum"),
-        ColumnSpec("totalOtHours", "OT hours", HOURS, 0.8, total="sum"),
-        ColumnSpec("dailyRate", "Daily rate", CURRENCY, 1.0),
-        ColumnSpec("expectedOtPay", "Expected OT pay", CURRENCY, 1.2, total="sum"),
-        ColumnSpec("slipOtAmount", "OT paid in slip", CURRENCY, 1.2, total="sum"),
-        ColumnSpec("pendingPayDays", "Pending days", INTEGER, 0.8, total="sum"),
-        ColumnSpec("pendingPayAmount", "Pending amount", CURRENCY, 1.2, total="sum"),
-    ),
-    run=_run_summary,
-))
+        columns=(
+            ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
+            ColumnSpec("employeeName", "Employee", TEXT, 2.2),
+            ColumnSpec("department", "Department", TEXT, 1.4),
+            ColumnSpec("period", "Month", TEXT, 1.1),
+            ColumnSpec("detectedDays", "Detected days", INTEGER, 1.0, total="sum"),
+            ColumnSpec("announcedPayDays", "Pay days", INTEGER, 0.7, total="sum"),
+            ColumnSpec("relaxationDays", "Relaxation days", INTEGER, 1.0, total="sum"),
+            ColumnSpec("rejectedDays", "Rejected days", INTEGER, 0.9, total="sum"),
+            ColumnSpec("totalOtHours", "OT hours", HOURS, 0.8, total="sum"),
+            ColumnSpec("dailyRate", "Daily rate", CURRENCY, 1.0),
+            ColumnSpec("expectedOtPay", "Expected OT pay", CURRENCY, 1.2, total="sum"),
+            ColumnSpec("slipOtAmount", "OT paid in slip", CURRENCY, 1.2, total="sum"),
+            ColumnSpec("pendingPayDays", "Pending days", INTEGER, 0.8, total="sum"),
+            ColumnSpec("pendingPayAmount", "Pending amount", CURRENCY, 1.2, total="sum"),
+        ),
+        run=_run_summary,
+    )
+)
 
 
 # -- compensation (alternative day) credits -----------------------------------------------------------------------
 _EARNED_OPTIONS = [
-    ("all", "All time"), ("thisMonth", "This month"), ("lastMonth", "Last month"), ("last90", "Last 90 days"),
+    ("all", "All time"),
+    ("thisMonth", "This month"),
+    ("lastMonth", "Last month"),
+    ("last90", "Last 90 days"),
     ("thisYear", "This year"),
 ]
 
@@ -400,7 +462,9 @@ def _run_credits(ctx) -> ReportResult:
         start, end = _ist_bounds(a, b)
         qs = qs.filter(created_at__gte=start, created_at__lt=end)
     credits = list(
-        qs.select_related("employee__department", "source_overtime_record").order_by("created_at", "id")[: ctx.row_limit]
+        qs.select_related("employee__department", "source_overtime_record").order_by("created_at", "id")[
+            : ctx.row_limit
+        ]
     )
     credits.sort(key=lambda c: (natural_key(c.employee.employee_code), c.created_at, c.id))
 
@@ -418,16 +482,18 @@ def _run_credits(ctx) -> ReportResult:
             oldest = age if oldest is None else max(oldest, age)
         else:
             used += 1
-        rows.append({
-            "employeeCode": emp.employee_code,
-            "employeeName": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
-            "department": dept_name(emp),
-            "sourceDate": c.source_overtime_record.date.isoformat() if c.source_overtime_record_id else None,
-            "createdAt": fmt_dt(c.created_at),
-            "status": c.status.title(),
-            "usedDate": c.used_date.isoformat() if c.used_date else None,
-            "ageDays": age,
-        })
+        rows.append(
+            {
+                "employeeCode": emp.employee_code,
+                "employeeName": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
+                "department": dept_name(emp),
+                "sourceDate": c.source_overtime_record.date.isoformat() if c.source_overtime_record_id else None,
+                "createdAt": fmt_dt(c.created_at),
+                "status": c.status.title(),
+                "usedDate": c.used_date.isoformat() if c.used_date else None,
+                "ageDays": age,
+            }
+        )
     notes += [
         "A credit is earned when HR announces a day of overtime as Relaxation; HR later redeems it against a date, "
         "which is written as a paid present day. This report only reads that record.",
@@ -444,32 +510,36 @@ def _run_credits(ctx) -> ReportResult:
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="compensation-credits",
-    title="Compensation Credits (Alternative Days)",
-    description="Alternative-day credits earned from relaxation-type overtime: who holds them, how old they are and "
-    "which have been redeemed.",
-    category="payroll",
-    icon="Hourglass",
-    tags=("compensation", "alternative day", "relaxation", "credit", "comp off", "overtime"),
-    modules=("compensation",),
-    filters=(
-        *scope(status=None, employment=False),
-        select("status", "Status", [("all", "All"), ("available", "Available"), ("used", "Redeemed")], default="all"),
-        select("earnedIn", "Earned", _EARNED_OPTIONS, default="all"),
-    ),
-    columns=(
-        ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
-        ColumnSpec("employeeName", "Employee", TEXT, 2.2),
-        ColumnSpec("department", "Department", TEXT, 1.5),
-        ColumnSpec("sourceDate", "Overtime date", DATE, 1.1),
-        ColumnSpec("createdAt", "Credit earned", DATETIME, 1.4),
-        ColumnSpec("status", "Status", BADGE, 1.0),
-        ColumnSpec("usedDate", "Redeemed on", DATE, 1.1),
-        ColumnSpec("ageDays", "Age (days)", INTEGER, 0.8),
-    ),
-    run=_run_credits,
-))
+register(
+    ReportSpec(
+        id="compensation-credits",
+        title="Compensation Credits (Alternative Days)",
+        description="Alternative-day credits earned from relaxation-type overtime: who holds them, how old they are and "
+        "which have been redeemed.",
+        category="payroll",
+        icon="Hourglass",
+        tags=("compensation", "alternative day", "relaxation", "credit", "comp off", "overtime"),
+        modules=("compensation",),
+        filters=(
+            *scope(status=None, employment=False),
+            select(
+                "status", "Status", [("all", "All"), ("available", "Available"), ("used", "Redeemed")], default="all"
+            ),
+            select("earnedIn", "Earned", _EARNED_OPTIONS, default="all"),
+        ),
+        columns=(
+            ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
+            ColumnSpec("employeeName", "Employee", TEXT, 2.2),
+            ColumnSpec("department", "Department", TEXT, 1.5),
+            ColumnSpec("sourceDate", "Overtime date", DATE, 1.1),
+            ColumnSpec("createdAt", "Credit earned", DATETIME, 1.4),
+            ColumnSpec("status", "Status", BADGE, 1.0),
+            ColumnSpec("usedDate", "Redeemed on", DATE, 1.1),
+            ColumnSpec("ageDays", "Age (days)", INTEGER, 0.8),
+        ),
+        run=_run_credits,
+    )
+)
 
 
 # -- compensation day announcements ---------------------------------------------------------------------------------
@@ -488,6 +558,32 @@ def _announcements_q(ctx) -> Q:
     )
 
 
+def _applies_to_q(branch_ids, department_ids) -> Q:
+    """Announcements that apply to at least one employee inside the branch / department filters, by the engine's
+    own rule (``attendance_final._compensation_day_for``): an announcement that NAMES employees applies to those
+    employees only - whatever its branch / department fields say - and one that names nobody applies to the people
+    of its branch and department, null meaning 'not limited' on that axis. A department implies its own branch, so
+    a Unit 1 department's day does not apply to Unit 2."""
+    named = CompensationDayAnnouncement.employees.through.objects.filter(compensationdayannouncement_id=OuterRef("pk"))
+    listed = named
+    unlisted = Q()
+    if branch_ids:
+        listed = listed.filter(employee__branch_id__in=branch_ids)
+        unlisted &= (Q(branch__isnull=True) | Q(branch_id__in=branch_ids)) & (
+            Q(department__isnull=True) | Q(department__branch__isnull=True) | Q(department__branch_id__in=branch_ids)
+        )
+    if department_ids:
+        listed = listed.filter(employee__department_id__in=department_ids)
+        wanted = Department.objects.filter(pk__in=department_ids)
+        # the mirror image: the filtered departments' own branches (a branch-less department restricts nothing)
+        unlisted &= (Q(department__isnull=True) | Q(department_id__in=department_ids)) & (
+            Q(branch__isnull=True)
+            | Q(branch_id__in=wanted.values("branch_id"))
+            | Q(Exists(wanted.filter(branch__isnull=True)))
+        )
+    return (Q(Exists(named)) & Q(Exists(listed))) | (~Q(Exists(named)) & unlisted)
+
+
 def _run_announcements(ctx) -> ReportResult:
     settings = read_settings()
     notes = feature_off_result_notes(settings)
@@ -501,15 +597,8 @@ def _run_announcements(ctx) -> ReportResult:
     if b is not None:
         qs = qs.filter(date__lte=b)
     p = ctx.params
-    if p.get("branch_ids"):
-        qs = qs.filter(
-            Q(branch_id__in=p["branch_ids"]) | Q(branch__isnull=True) | Q(employees__branch_id__in=p["branch_ids"])
-        )
-    if p.get("department_ids"):
-        qs = qs.filter(
-            Q(department_id__in=p["department_ids"]) | Q(department__isnull=True)
-            | Q(employees__department_id__in=p["department_ids"])
-        )
+    if p.get("branch_ids") or p.get("department_ids"):
+        qs = qs.filter(_applies_to_q(p.get("branch_ids"), p.get("department_ids")))
     anns = list(qs.select_related("branch", "department").distinct().order_by("-date", "-id")[: ctx.row_limit])
 
     counts: dict[int, int] = {}
@@ -530,17 +619,19 @@ def _run_announcements(ctx) -> ReportResult:
         is_early = x.leave_until_time is not None
         early += is_early
         whole += not is_early
-        rows.append({
-            "date": x.date.isoformat(),
-            "leaveUntilTime": x.leave_until_time,
-            "releaseType": "Early release" if is_early else "Whole day",
-            "branch": x.branch.name if x.branch_id else "All branches",
-            "department": x.department.name if x.department_id else "All departments",
-            "employeeCount": counts.get(x.id),
-            "reason": x.reason,
-            "announcedBy": x.announced_by,
-            "createdAt": fmt_dt(x.created_at),
-        })
+        rows.append(
+            {
+                "date": x.date.isoformat(),
+                "leaveUntilTime": x.leave_until_time,
+                "releaseType": "Early release" if is_early else "Whole day",
+                "branch": x.branch.name if x.branch_id else "All branches",
+                "department": x.department.name if x.department_id else "All departments",
+                "employeeCount": counts.get(x.id),
+                "reason": x.reason,
+                "announcedBy": x.announced_by,
+                "createdAt": fmt_dt(x.created_at),
+            }
+        )
     notes += [
         "A compensation day only suspends late / permission detection for the people it covers (a whole day, or from the "
         "'leave until' time for an early release); Full / Half day is still decided by the day's punches.",
@@ -556,36 +647,42 @@ def _run_announcements(ctx) -> ReportResult:
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="compensation-day-announcements",
-    title="Compensation Day Announcements",
-    description="HR-declared festival or special compensation days with their scope and early-release time.",
-    category="payroll",
-    icon="CalendarDays",
-    tags=("compensation day", "festival", "early release", "announcement", "holiday"),
-    modules=("compensation",),
-    filters=(
-        select(
-            "when", "Announced for",
-            [
-                ("thisYear", "This year"), ("all", "All time"), ("upcoming", "Upcoming"), ("thisMonth", "This month"),
-                ("lastMonth", "Last month"),
-            ],
-            default="thisYear",
+register(
+    ReportSpec(
+        id="compensation-day-announcements",
+        title="Compensation Day Announcements",
+        description="HR-declared festival or special compensation days with their scope and early-release time.",
+        category="payroll",
+        icon="CalendarDays",
+        tags=("compensation day", "festival", "early release", "announcement", "holiday"),
+        modules=("compensation",),
+        filters=(
+            select(
+                "when",
+                "Announced for",
+                [
+                    ("thisYear", "This year"),
+                    ("all", "All time"),
+                    ("upcoming", "Upcoming"),
+                    ("thisMonth", "This month"),
+                    ("lastMonth", "Last month"),
+                ],
+                default="thisYear",
+            ),
+            branches(),
+            departments(),
         ),
-        branches(),
-        departments(),
-    ),
-    columns=(
-        ColumnSpec("date", "Date", DATE, 1.1),
-        ColumnSpec("leaveUntilTime", "Leave until", TIME, 0.9),
-        ColumnSpec("releaseType", "Type", BADGE, 1.1),
-        ColumnSpec("branch", "Branch", TEXT, 1.3),
-        ColumnSpec("department", "Department", TEXT, 1.4),
-        ColumnSpec("employeeCount", "Employees named", INTEGER, 0.9),
-        ColumnSpec("reason", "Reason", TEXT, 2.4),
-        ColumnSpec("announcedBy", "Announced by", TEXT, 1.4),
-        ColumnSpec("createdAt", "Announced on", DATETIME, 1.4),
-    ),
-    run=_run_announcements,
-))
+        columns=(
+            ColumnSpec("date", "Date", DATE, 1.1),
+            ColumnSpec("leaveUntilTime", "Leave until", TIME, 0.9),
+            ColumnSpec("releaseType", "Type", BADGE, 1.1),
+            ColumnSpec("branch", "Branch", TEXT, 1.3),
+            ColumnSpec("department", "Department", TEXT, 1.4),
+            ColumnSpec("employeeCount", "Employees named", INTEGER, 0.9),
+            ColumnSpec("reason", "Reason", TEXT, 2.4),
+            ColumnSpec("announcedBy", "Announced by", TEXT, 1.4),
+            ColumnSpec("createdAt", "Announced on", DATETIME, 1.4),
+        ),
+        run=_run_announcements,
+    )
+)

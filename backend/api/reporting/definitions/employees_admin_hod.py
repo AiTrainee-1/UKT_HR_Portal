@@ -22,7 +22,7 @@ from api.models import (
 )
 
 from ..common import EMP_COLS, emp_cells
-from ..filters import branches, boolean, departments, employee_status, scope, select
+from ..filters import boolean, branches, departments, employee_status, employees, scope, select
 from ..formatting import full_name
 from ..registry import register
 from ..types import BADGE, DATE, INTEGER, TEXT, ColumnSpec, ReportResult, ReportSpec
@@ -44,6 +44,7 @@ def _hod_name(mgr) -> str:
 
 
 # ── HOD Directory & Approval Rights ─────────────────────────────────────────
+
 
 def _run_directory(ctx):
     state = ctx.param("state", "active")
@@ -104,11 +105,10 @@ def _run_directory(ctx):
     active_hods = inactive_hods = hod_emp_inactive = covered = 0
     for m in mgrs:
         emp = m.employee
-        team = [
-            e for e in raw[m.id] if owner.get(e) == m.id and e != m.employee_id and status_of.get(e) == "active"
-        ]
+        team = [e for e in raw[m.id] if owner.get(e) == m.id and e != m.employee_id and status_of.get(e) == "active"]
         overlap = [
-            e for e in raw[m.id]
+            e
+            for e in raw[m.id]
             if owner.get(e) not in (None, m.id) and e != m.employee_id and status_of.get(e) == "active"
         ]
         rights = [lab for flag, lab in RIGHTS if getattr(m, flag)]
@@ -131,23 +131,25 @@ def _run_directory(ctx):
         inactive_hods += 0 if m.is_active else 1
         hod_emp_inactive += 1 if emp.status != "active" else 0
         covered += len(team)
-        rows.append({
-            **emp_cells(emp),
-            "branch": branch_label(emp),
-            "hodActive": "Active" if m.is_active else "Inactive",
-            "employeeStatus": status_label(emp.status),
-            "departmentsCovered": ", ".join(sorted(covered_names)) or None,
-            "directAssignments": len(direct[m.id]),
-            "teamSize": len(team),
-            "overlapCount": len(overlap),
-            "approves": ", ".join(rights) or None,
-            "rightsCount": len(rights),
-            "createdAt": ist_date(m.created_at),
-            "issues": "; ".join(issues) or None,
-        })
+        rows.append(
+            {
+                **emp_cells(emp),
+                "branch": branch_label(emp),
+                "hodActive": "Active" if m.is_active else "Inactive",
+                "employeeStatus": status_label(emp.status),
+                "departmentsCovered": ", ".join(sorted(covered_names)) or None,
+                "directAssignments": len(direct[m.id]),
+                "teamSize": len(team),
+                "overlapCount": len(overlap),
+                "approves": ", ".join(rights) or None,
+                "rightsCount": len(rights),
+                "createdAt": ist_date(m.created_at),
+                "issues": "; ".join(issues) or None,
+            }
+        )
     rows.sort(key=lambda r: natural_key(r["employeeCode"]))
 
-    # Org-level figure: active employees (branch-scoped) who have no HOD at all and are not a HOD themselves.
+    # Org-level figure: active employees (branch-scoped) who have no HOD at all and are not an ACTIVE HOD themselves.
     unowned = _active_without_hod(ctx)
     return ReportResult(
         rows=rows,
@@ -163,7 +165,8 @@ def _run_directory(ctx):
             "Team size counts ACTIVE employees whose one HOD (individual assignment beats department, earliest "
             "wins, only active HODs) is this person, excluding the HOD themselves.",
             "Overlap = employees also listed under this HOD but who report to a different active HOD.",
-            "'Active employees with no HOD' ignores the filters other than branch and excludes HODs themselves.",
+            "'Active employees with no HOD' ignores the filters other than branch and excludes active HODs themselves "
+            "(an inactive HOD approves nothing, so he is counted like any other employee).",
             "The rule does not look at the HOD's own employee status: approvals still route to a HOD whose "
             "employee record is inactive (flagged under Issues).",
         ],
@@ -180,43 +183,54 @@ def _active_without_hod(ctx) -> int:
     ids = set(Employee.objects.filter(q).values_list("id", flat=True))
     if not ids:
         return 0
-    hod_employees = set(DepartmentManager.objects.filter(employee_id__in=ids).values_list("employee_id", flat=True))
+    # Only an ACTIVE head is exempt: an inactive HOD approves nothing, so his own requests have no HOD either
+    # (the same rule the mapping report applies).
+    hod_employees = set(
+        DepartmentManager.objects.filter(employee_id__in=ids, is_active=True).values_list("employee_id", flat=True)
+    )
     owner = effective_owner_map(ids)
     return len([i for i in ids if i not in owner and i not in hod_employees])
 
 
-register(ReportSpec(
-    id="hod-directory",
-    title="HOD Directory & Approval Rights",
-    description="Every department head with the departments they cover, real team size and approval rights.",
-    category="employees",
-    icon="Users",
-    tags=("hod", "department head", "approver", "approval rights"),
-    family="hod",
-    variant="Directory",
-    modules=("user_management",),
-    filters=(
-        branches(),
-        departments("HOD's department"),
-        select("state", "HOD status", (("active", "Active"), ("inactive", "Inactive"), ("all", "All")), default="active"),
-        boolean("problemsOnly", "Only HODs with issues"),
-    ),
-    columns=(
-        *EMP_COLS,
-        ColumnSpec("branch", "Branch", TEXT, 1.2),
-        ColumnSpec("hodActive", "HOD Status", BADGE, 0.9),
-        ColumnSpec("employeeStatus", "Employee", BADGE, 0.9),
-        ColumnSpec("departmentsCovered", "Departments Covered", TEXT, 2.0),
-        ColumnSpec("directAssignments", "Direct", INTEGER, 0.7, total="sum"),
-        ColumnSpec("teamSize", "Team Size", INTEGER, 0.8, total="sum"),
-        ColumnSpec("overlapCount", "Overlap", INTEGER, 0.8, total="sum"),
-        ColumnSpec("approves", "Approves", TEXT, 2.2),
-        ColumnSpec("rightsCount", "Rights", INTEGER, 0.7),
-        ColumnSpec("createdAt", "Since", DATE, 1.0),
-        ColumnSpec("issues", "Issues", TEXT, 2.0),
-    ),
-    run=_run_directory,
-))
+register(
+    ReportSpec(
+        id="hod-directory",
+        title="HOD Directory & Approval Rights",
+        description="Every department head with the departments they cover, real team size and approval rights.",
+        category="employees",
+        icon="Users",
+        tags=("hod", "department head", "approver", "approval rights"),
+        family="hod",
+        variant="Directory",
+        modules=("user_management",),
+        filters=(
+            branches(),
+            departments("HOD's department"),
+            select(
+                "state",
+                "HOD status",
+                (("active", "Active"), ("inactive", "Inactive"), ("all", "All")),
+                default="active",
+            ),
+            boolean("problemsOnly", "Only HODs with issues"),
+        ),
+        columns=(
+            *EMP_COLS,
+            ColumnSpec("branch", "Branch", TEXT, 1.2),
+            ColumnSpec("hodActive", "HOD Status", BADGE, 1.2),
+            ColumnSpec("employeeStatus", "Employee Status", BADGE, 1.2),
+            ColumnSpec("departmentsCovered", "Departments Covered", TEXT, 1.8),
+            ColumnSpec("directAssignments", "Direct", INTEGER, 0.8, total="sum"),
+            ColumnSpec("teamSize", "Team Size", INTEGER, 0.9, total="sum"),
+            ColumnSpec("overlapCount", "Overlap", INTEGER, 1.0, total="sum"),
+            ColumnSpec("approves", "Approves", TEXT, 2.0),
+            ColumnSpec("rightsCount", "Rights", INTEGER, 0.9),
+            ColumnSpec("createdAt", "Since", DATE, 1.4),
+            ColumnSpec("issues", "Issues", TEXT, 1.8),
+        ),
+        run=_run_directory,
+    )
+)
 
 
 # ── Employee -> HOD Mapping ─────────────────────────────────────────────────
@@ -278,16 +292,18 @@ def _run_mapping(ctx):
             continue
         if wanted == "uncovered" and mgr is not None:
             continue
-        rows.append({
-            **emp_cells(emp),
-            "employmentType": type_label(emp.employment_type),
-            "branch": branch_label(emp),
-            "hodCode": hod_code,
-            "hodName": hod_name,
-            "via": via,
-            "isHod": "HOD" if is_hod else None,
-            "reason": reason,
-        })
+        rows.append(
+            {
+                **emp_cells(emp),
+                "employmentType": type_label(emp.employment_type),
+                "branch": branch_label(emp),
+                "hodCode": hod_code,
+                "hodName": hod_name,
+                "via": via,
+                "isHod": "HOD" if is_hod else None,
+                "reason": reason,
+            }
+        )
     rows.sort(key=lambda r: natural_key(r["employeeCode"]))
 
     notes = [
@@ -311,35 +327,38 @@ def _run_mapping(ctx):
     )
 
 
-register(ReportSpec(
-    id="hod-mapping",
-    title="Employee to HOD Mapping",
-    description="For each employee, the one HOD who approves their requests and how (direct or department).",
-    category="employees",
-    icon="ArrowRightLeft",
-    tags=("hod", "department head", "reporting", "approver", "uncovered"),
-    family="hod",
-    variant="Employee mapping",
-    modules=("user_management",),
-    filters=(
-        *scope(status="active"),
-        select("coverage", "Coverage", _COVERAGE, default="all"),
-    ),
-    columns=(
-        *EMP_COLS,
-        ColumnSpec("employmentType", "Type", BADGE, 0.9),
-        ColumnSpec("branch", "Branch", TEXT, 1.2),
-        ColumnSpec("hodCode", "HOD Code", TEXT, 1.0),
-        ColumnSpec("hodName", "HOD", TEXT, 2.0),
-        ColumnSpec("via", "Via", BADGE, 1.0),
-        ColumnSpec("isHod", "Is HOD", BADGE, 0.8),
-        ColumnSpec("reason", "Note", TEXT, 2.6),
-    ),
-    run=_run_mapping,
-))
+register(
+    ReportSpec(
+        id="hod-mapping",
+        title="Employee to HOD Mapping",
+        description="For each employee, the one HOD who approves their requests and how (direct or department).",
+        category="employees",
+        icon="ArrowRightLeft",
+        tags=("hod", "department head", "reporting", "approver", "uncovered"),
+        family="hod",
+        variant="Employee mapping",
+        modules=("user_management",),
+        filters=(
+            *scope(status="active"),
+            select("coverage", "Coverage", _COVERAGE, default="all"),
+        ),
+        columns=(
+            *EMP_COLS,
+            ColumnSpec("employmentType", "Type", BADGE, 0.9),
+            ColumnSpec("branch", "Branch", TEXT, 1.2),
+            ColumnSpec("hodCode", "HOD Code", TEXT, 1.0),
+            ColumnSpec("hodName", "HOD", TEXT, 2.0),
+            ColumnSpec("via", "Via", BADGE, 1.3),
+            ColumnSpec("isHod", "Is HOD", BADGE, 0.9),
+            ColumnSpec("reason", "Note", TEXT, 2.3),
+        ),
+        run=_run_mapping,
+    )
+)
 
 
 # ── HOD Assignment Conflicts ────────────────────────────────────────────────
+
 
 def _run_conflicts(ctx):
     emps = list(employee_qs(ctx))
@@ -384,17 +403,17 @@ def _run_conflicts(ctx):
             continue
         winner = owner.get(emp.id)
         involved.update(via)
-        others = sorted(
-            f"{_hod_name(mgrs[m])} ({kind})" for m, kind in via.items() if m != winner and m in mgrs
+        others = sorted(f"{_hod_name(mgrs[m])} ({kind})" for m, kind in via.items() if m != winner and m in mgrs)
+        rows.append(
+            {
+                **emp_cells(emp),
+                "branch": branch_label(emp),
+                "effectiveHod": _hod_name(mgrs[winner]) if winner in mgrs else None,
+                "effectiveVia": ("Direct" if via.get(winner) == "direct" else "Department") if winner in via else None,
+                "alsoListedUnder": ", ".join(others) or None,
+                "otherListings": len(others),
+            }
         )
-        rows.append({
-            **emp_cells(emp),
-            "branch": branch_label(emp),
-            "effectiveHod": _hod_name(mgrs[winner]) if winner in mgrs else None,
-            "effectiveVia": ("Direct" if via.get(winner) == "direct" else "Department") if winner in via else None,
-            "alsoListedUnder": ", ".join(others) or None,
-            "otherListings": len(others),
-        })
     rows.sort(key=lambda r: natural_key(r["employeeCode"]))
     notes = [
         "An employee is in conflict when more than one ACTIVE HOD is listed against them (individually or through "
@@ -414,24 +433,26 @@ def _run_conflicts(ctx):
     )
 
 
-register(ReportSpec(
-    id="hod-conflicts",
-    title="HOD Assignment Conflicts",
-    description="Employees listed under more than one HOD, and which HOD wins under the one-HOD rule.",
-    category="employees",
-    icon="TriangleAlert",
-    tags=("hod", "conflict", "duplicate assignment", "overlap"),
-    family="hod",
-    variant="Conflicts",
-    modules=("user_management",),
-    filters=(branches(), departments(), employee_status("active")),
-    columns=(
-        *EMP_COLS,
-        ColumnSpec("branch", "Branch", TEXT, 1.2),
-        ColumnSpec("effectiveHod", "Effective HOD", TEXT, 2.0),
-        ColumnSpec("effectiveVia", "Via", BADGE, 1.0),
-        ColumnSpec("alsoListedUnder", "Also Listed Under", TEXT, 3.0),
-        ColumnSpec("otherListings", "Other HODs", INTEGER, 0.8, total="sum"),
-    ),
-    run=_run_conflicts,
-))
+register(
+    ReportSpec(
+        id="hod-conflicts",
+        title="HOD Assignment Conflicts",
+        description="Employees listed under more than one HOD, and which HOD wins under the one-HOD rule.",
+        category="employees",
+        icon="TriangleAlert",
+        tags=("hod", "conflict", "duplicate assignment", "overlap"),
+        family="hod",
+        variant="Conflicts",
+        modules=("user_management",),
+        filters=(branches(), departments(), employees(), employee_status("active")),
+        columns=(
+            *EMP_COLS,
+            ColumnSpec("branch", "Branch", TEXT, 1.2),
+            ColumnSpec("effectiveHod", "Effective HOD", TEXT, 2.0),
+            ColumnSpec("effectiveVia", "Via", BADGE, 1.0),
+            ColumnSpec("alsoListedUnder", "Also Listed Under", TEXT, 3.0),
+            ColumnSpec("otherListings", "Other HODs", INTEGER, 0.8, total="sum"),
+        ),
+        run=_run_conflicts,
+    )
+)

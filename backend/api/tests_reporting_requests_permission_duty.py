@@ -12,6 +12,7 @@ Run via: python manage.py test api.tests_reporting_requests_permission_duty -v 2
 import io
 from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 from decimal import Decimal
+from unittest import mock
 
 from django.db import connection
 from django.test import TestCase
@@ -63,9 +64,16 @@ DOMAIN_MODULES = {
     "payroll": "view",
 }
 GROUP_IDS = (
-    "permission-register", "permission-monthly-counts", "permission-excess-salary-impact",
-    "on-duty-register", "on-duty-employee-summary", "on-duty-punch-verification-log",
-    "missing-punch-register", "missing-punch-monthly-counts", "absence-around-holidays", "leave-attendance-conflicts",
+    "permission-register",
+    "permission-monthly-counts",
+    "permission-excess-salary-impact",
+    "on-duty-register",
+    "on-duty-employee-summary",
+    "on-duty-punch-verification-log",
+    "missing-punch-register",
+    "missing-punch-monthly-counts",
+    "absence-around-holidays",
+    "leave-attendance-conflicts",
 )
 NO_ONE = "999999999"  # a valid id that matches no employee -> an empty report
 
@@ -99,11 +107,15 @@ class _Base(TestCase):
 
         cls.admin = HRUser.objects.create(username="pd_admin", password_hash="x", is_super_admin=True)
         cls.b1_user = HRUser.objects.create(
-            username="pd_b1", password_hash="x", branch=cls.b1,
+            username="pd_b1",
+            password_hash="x",
+            branch=cls.b1,
             role=Role.objects.create(name="pd_b1_role", permissions=dict(DOMAIN_MODULES)),
         )
         cls.only_reports = HRUser.objects.create(
-            username="pd_plain", password_hash="x", role=Role.objects.create(name="pd_plain", permissions={"reports": "view"}),
+            username="pd_plain",
+            password_hash="x",
+            role=Role.objects.create(name="pd_plain", permissions={"reports": "view"}),
         )
 
     @classmethod
@@ -111,8 +123,13 @@ class _Base(TestCase):
         kw.setdefault("employment_type", "staff")
         kw.setdefault("salary_amount", Decimal("26000"))
         return Employee.objects.create(
-            employee_code=code, first_name=first, last_name="Kumar", department=dept, branch=branch,
-            designation=cls.operator if desig else None, **kw,
+            employee_code=code,
+            first_name=first,
+            last_name="Kumar",
+            department=dept,
+            branch=branch,
+            designation=cls.operator if desig else None,
+            **kw,
         )
 
     def hr(self, name, perms, **kw):
@@ -176,9 +193,41 @@ class _Base(TestCase):
 
     def many(self, n, prefix="PD_M", dept=None, branch=None, **kw):
         return [
-            self.mk(f"{prefix}{i:02d}", f"Many{i:02d}", dept or self.cutting, branch or self.b1, **kw)
-            for i in range(n)
+            self.mk(f"{prefix}{i:02d}", f"Many{i:02d}", dept or self.cutting, branch or self.b1, **kw) for i in range(n)
         ]
+
+    def check_scope_filters(self, rid, params, employment=True):
+        """Every employee-scope filter the report offers narrows the rows to exactly the matching people.
+        ``employment=False`` for a staff-only report, which does not offer the employee-type filter."""
+        codes = lambda **kw: set(self.codes(self.run_report(rid, **{**params, **kw})))  # noqa: E731
+        everyone = codes()
+        self.assertIn("PD_A", everyone, "the scenario must contain PD_A for this check to mean anything")
+        unused = Designation.objects.create(title="Unused designation")
+        self.assertEqual(codes(designationIds=str(unused.id)), set())
+        with_operator = codes(designationIds=str(self.operator.id))
+        self.assertIn("PD_A", with_operator)
+        self.assertNotIn("PD_X", with_operator)  # PD_X has no designation
+        if employment:
+            self.assertLessEqual(codes(employmentType="production"), {"PD_P"})
+            self.assertNotIn("PD_P", codes(employmentType="staff"))
+        else:
+            self.assertNotIn("PD_P", everyone)
+        self.assertLessEqual(codes(departmentIds=str(self.sewing.id)), {"PD_C", "PD_HOD2"})
+        self.assertNotIn("PD_C", codes(departmentIds=str(self.cutting.id)))
+        self.assertLessEqual(codes(branchIds=str(self.b2.id)), {"PD_C", "PD_HOD2"})
+        self.assertNotIn("PD_C", codes(branchIds=str(self.b1.id)))
+        self.assertEqual(codes(employeeIds=str(self.a.id)), {"PD_A"})
+        self.assertLessEqual(codes(employeeStatus="inactive"), {"PD_G"})
+        self.assertNotIn("PD_G", codes(employeeStatus="active"))
+
+    def check_row_limit(self, rid, params, limit=2):
+        """A detail report stops at the runner's row limit, says so, and does not print a totals row of a cut-off list."""
+        with mock.patch("api.reporting.runner.SCREEN_ROW_LIMIT", limit):
+            body = self.run_report(rid, **params)
+        self.assertEqual(body["rowCount"], limit)
+        self.assertEqual(len(body["rows"]), limit)
+        self.assertTrue(body["truncated"])
+        self.assertIsNone(body["totals"])
 
     # ── contract shared by every report ──
     def check_exports(self, rid, params, first_code, header_first="Emp Code"):
@@ -187,7 +236,9 @@ class _Base(TestCase):
         self.assertEqual(r.status_code, 200, r.content[:300])
         self.assertTrue(r.content.startswith(b"PK"))
         ws = load_workbook(io.BytesIO(r.content)).active
-        header_row = next(i for i, row in enumerate(ws.iter_rows(min_row=1, max_row=15), 1) if row[0].value == header_first)
+        header_row = next(
+            i for i, row in enumerate(ws.iter_rows(min_row=1, max_row=15), 1) if row[0].value == header_first
+        )
         headers = [c.value for c in ws[header_row]]
         self.assertEqual(headers[0], header_first)
         self.assertIn(first_code, [ws.cell(row=header_row + 1, column=i).value for i in range(1, len(headers) + 1)])
@@ -239,9 +290,20 @@ class RegistryTests(_Base):
             for m in specs[rid].modules:
                 self.assertIn(m, all_module_keys())
         fam = {rid: (specs[rid].family, specs[rid].variant) for rid in GROUP_IDS}
-        self.assertEqual({fam[r][0] for r in ("permission-register", "permission-monthly-counts", "permission-excess-salary-impact")}, {"permissions"})
-        self.assertEqual({fam[r][0] for r in ("on-duty-register", "on-duty-employee-summary", "on-duty-punch-verification-log")}, {"on-duty"})
-        self.assertEqual({fam[r][0] for r in ("missing-punch-register", "missing-punch-monthly-counts")}, {"missing-punch"})
+        self.assertEqual(
+            {
+                fam[r][0]
+                for r in ("permission-register", "permission-monthly-counts", "permission-excess-salary-impact")
+            },
+            {"permissions"},
+        )
+        self.assertEqual(
+            {fam[r][0] for r in ("on-duty-register", "on-duty-employee-summary", "on-duty-punch-verification-log")},
+            {"on-duty"},
+        )
+        self.assertEqual(
+            {fam[r][0] for r in ("missing-punch-register", "missing-punch-monthly-counts")}, {"missing-punch"}
+        )
         self.assertEqual(len({v for _f, v in fam.values() if v}), len([v for _f, v in fam.values() if v]))
         self.assertEqual(registry.LOAD_ERRORS, {})
 
@@ -249,7 +311,8 @@ class RegistryTests(_Base):
         for m in checks.CONFLICT_MODULE.values():
             self.assertIn(m, all_module_keys())
         self.assertEqual(
-            dict(perms_mod.TYPE_OPTIONS[:3]), dict(EmployeePermission.TYPE_LABELS),
+            dict(perms_mod.TYPE_OPTIONS[:3]),
+            dict(EmployeePermission.TYPE_LABELS),
         )
 
     def test_catalog_lists_the_reports_for_a_role_with_the_modules(self):
@@ -261,16 +324,31 @@ class RegistryTests(_Base):
 
     def test_reports_never_write(self):
         Holiday.objects.create(name="H", date=date(2026, 3, 5))
-        EmployeePermission.objects.create(employee=self.a, date=date(2026, 3, 2), type="morning_late_in", status="approved")
+        EmployeePermission.objects.create(
+            employee=self.a, date=date(2026, 3, 2), type="morning_late_in", status="approved"
+        )
         PayrollSettings.objects.all().delete()
         before = (AttendanceDayRecord.objects.count(), AttendanceLog.objects.count(), PayrollSettings.objects.count())
         for rid in GROUP_IDS:
-            self.assertEqual(self.get(f"/api/reports/run/{rid}", dateFrom="2026-03-01", dateTo="2026-03-31", period="2026-03").status_code, 200, rid)
-        self.assertEqual(before, (AttendanceDayRecord.objects.count(), AttendanceLog.objects.count(), PayrollSettings.objects.count()))
+            self.assertEqual(
+                self.get(
+                    f"/api/reports/run/{rid}", dateFrom="2026-03-01", dateTo="2026-03-31", period="2026-03"
+                ).status_code,
+                200,
+                rid,
+            )
+        self.assertEqual(
+            before,
+            (AttendanceDayRecord.objects.count(), AttendanceLog.objects.count(), PayrollSettings.objects.count()),
+        )
         self.assertEqual(PayrollSettings.objects.count(), 0)  # reading the settings never creates the singleton row
         PayrollSettings.get()  # the (framework) letterhead creates it on export; the attendance tables must still not change
         for rid in GROUP_IDS:
-            self.assertEqual(self.export(rid, "xlsx", dateFrom="2026-03-01", dateTo="2026-03-31", period="2026-03").status_code, 200, rid)
+            self.assertEqual(
+                self.export(rid, "xlsx", dateFrom="2026-03-01", dateTo="2026-03-31", period="2026-03").status_code,
+                200,
+                rid,
+            )
         self.assertEqual(before[:2], (AttendanceDayRecord.objects.count(), AttendanceLog.objects.count()))
 
 
@@ -283,8 +361,16 @@ MARCH = dict(dateFrom="2026-03-01", dateTo="2026-03-31")
 
 def perm(emp, d, typ, status="approved", minutes=60, at=None, by=None, role=None, comment=None):
     return EmployeePermission.objects.create(
-        employee=emp, date=d, type=typ, status=status, duration_minutes=minutes, permission_time=at,
-        approved_by=by, approver_role=role, hr_comment=comment, reason=f"reason {d.isoformat()}",
+        employee=emp,
+        date=d,
+        type=typ,
+        status=status,
+        duration_minutes=minutes,
+        permission_time=at,
+        approved_by=by,
+        approver_role=role,
+        hr_comment=comment,
+        reason=f"reason {d.isoformat()}",
     )
 
 
@@ -307,7 +393,7 @@ class _PermissionFixture(_Base):
         cls.R2 = perm(cls.c, d(13), "middle_permission")
         cls.S1 = perm(cls.p, d(16), "morning_late_in", at=time(23, 30))
         cls.G1 = perm(cls.gone, d(17), "morning_late_in")
-        cls.X1 = perm(cls.x, d(18), "middle_permission")
+        cls.X1 = perm(cls.x, d(18), "Short Leave")  # pre-rewrite spelling of the middle permission
         EmployeePermission.objects.filter(pk=cls.P1.pk).update(created_at=utc(2026, 3, 1, 4, 30))  # 10:00 IST
         AttendanceDayRecord.objects.create(employee=cls.a, date=d(2), status="present", morning_permission_applied=True)
         AttendanceDayRecord.objects.create(employee=cls.a, date=d(4), status="present")
@@ -323,10 +409,22 @@ class PermissionRegisterTests(_PermissionFixture):
         rows = body["rows"]
         self.assertEqual(
             [(r["employeeCode"], r["date"]) for r in rows],
-            [("PD_A", "2026-03-02"), ("PD_A", "2026-03-03"), ("PD_A", "2026-03-04"), ("PD_A", "2026-03-05"),
-             ("PD_A", "2026-03-06"), ("PD_A", "2026-03-09"), ("PD_A", "2026-03-10"), ("PD_B", "2026-03-11"),
-             ("PD_B", "2026-03-12"), ("PD_C", "2026-03-12"), ("PD_C", "2026-03-13"), ("PD_P", "2026-03-16"),
-             ("PD_G", "2026-03-17"), ("PD_X", "2026-03-18")],
+            [
+                ("PD_A", "2026-03-02"),
+                ("PD_A", "2026-03-03"),
+                ("PD_A", "2026-03-04"),
+                ("PD_A", "2026-03-05"),
+                ("PD_A", "2026-03-06"),
+                ("PD_A", "2026-03-09"),
+                ("PD_A", "2026-03-10"),
+                ("PD_B", "2026-03-11"),
+                ("PD_B", "2026-03-12"),
+                ("PD_C", "2026-03-12"),
+                ("PD_C", "2026-03-13"),
+                ("PD_P", "2026-03-16"),
+                ("PD_G", "2026-03-17"),
+                ("PD_X", "2026-03-18"),
+            ],
         )
         by_date = {(r["employeeCode"], r["date"]): r for r in rows}
         p1 = by_date[("PD_A", "2026-03-02")]
@@ -349,13 +447,21 @@ class PermissionRegisterTests(_PermissionFixture):
         self.assertEqual((p4["typeLabel"], p4["capStatus"], p4["monthSeq"]), ("Morning Late-In", "Excess", 4))
         self.assertEqual(p4["dayEffect"], "Excess: late-in not protected")
         p5, p6 = by_date[("PD_A", "2026-03-06")], by_date[("PD_A", "2026-03-09")]
-        self.assertEqual((p5["status"], p5["capStatus"], p5["monthSeq"], p5["dayEffect"]), ("Pending", None, None, "Pending - no effect yet"))
-        self.assertEqual((p6["status"], p6["hrComment"], p6["dayEffect"]), ("Rejected", "Not needed", "Rejected - no effect"))
+        self.assertEqual(
+            (p5["status"], p5["capStatus"], p5["monthSeq"], p5["dayEffect"]),
+            ("Pending", None, None, "Pending - no effect yet"),
+        )
+        self.assertEqual(
+            (p6["status"], p6["hrComment"], p6["dayEffect"]), ("Rejected", "Not needed", "Rejected - no effect")
+        )
         p7 = by_date[("PD_A", "2026-03-10")]  # untyped legacy row still counts toward the cap
         self.assertEqual((p7["typeLabel"], p7["capStatus"], p7["monthSeq"]), ("Unclassified", "Excess", 5))
         self.assertEqual(p7["dayEffect"], "Counts toward the cap; type unknown")
         q1 = by_date[("PD_B", "2026-03-11")]  # no stored duration -> the fixed 60 minutes
-        self.assertEqual((q1["durationMinutes"], q1["permissionEnd"], q1["capStatus"], q1["monthSeq"]), (60, "10:20", "Within cap", 1))
+        self.assertEqual(
+            (q1["durationMinutes"], q1["permissionEnd"], q1["capStatus"], q1["monthSeq"]),
+            (60, "10:20", "Within cap", 1),
+        )
         s1 = by_date[("PD_P", "2026-03-16")]  # production; 23:30 + 60 min crosses midnight
         self.assertEqual((s1["permissionTime"], s1["permissionEnd"]), ("23:30", "00:30"))
         self.assertEqual(s1["dayEffect"], "None (production: permissions have no effect)")
@@ -367,13 +473,40 @@ class PermissionRegisterTests(_PermissionFixture):
         s = self.summary(body)
         self.assertEqual(s["Total requests"], 14)
         self.assertEqual((s["Approved"], s["Pending"], s["Rejected"]), (11, 2, 1))
-        self.assertEqual((s["Within cap"], s["Excess"], s["Employees with excess"]), (9, 2, 1))
+        # 11 approved = 8 within the cap + 2 excess (PD_A) + 1 production permission, to which the cap does not apply
+        self.assertEqual((s["Within cap"], s["Excess"], s["Employees with excess"]), (8, 2, 1))
         self.assertEqual(s["Approved hours"], 11.5)  # 330 + 60 + 120 + 60 + 60 + 60 minutes
+        # requests of every status by type: 7 morning (incl. the legacy "Late In"), 2 evening, 4 middle (incl. "Short Leave")
+        self.assertEqual(
+            (s["Morning late-in"], s["Evening early-out"], s["Middle 1-hour"], s["Unclassified"]), (7, 2, 4, 1)
+        )
+        self.assertEqual(
+            s["Morning late-in"] + s["Evening early-out"] + s["Middle 1-hour"] + s["Unclassified"], s["Total requests"]
+        )
         notes = " ".join(body["notes"])
         self.assertIn("cap in force: 3", notes)
         self.assertIn("Unclassified", notes)
         self.assertIn("60 minutes", notes)  # the NULL-duration row
         self.assertIn("Morning Late-In 7", notes)
+
+    def test_summary_numbers_agree_with_the_rows(self):
+        body = self.run_report(self.RID, **MARCH)
+        rows, s = body["rows"], self.summary(body)
+        self.assertEqual(s["Total requests"], len(rows))
+        for label, word in (("Approved", "Approved"), ("Pending", "Pending"), ("Rejected", "Rejected")):
+            self.assertEqual(s[label], sum(1 for r in rows if r["status"] == word), label)
+        self.assertEqual(s["Within cap"], sum(1 for r in rows if r["capStatus"] == "Within cap"))
+        self.assertEqual(s["Excess"], sum(1 for r in rows if r["capStatus"] == "Excess"))
+        self.assertEqual(
+            s["Approved hours"], round(sum(r["durationMinutes"] for r in rows if r["status"] == "Approved") / 60, 2)
+        )
+
+    def test_an_employee_without_a_branch_is_visible_to_unscoped_users_only(self):
+        nb = self.mk("PD_NB", "Nila", self.cutting, None)
+        perm(nb, date(2026, 3, 19), "morning_late_in")
+        admin_rows = self.run_report(self.RID, **MARCH)["rows"]
+        self.assertEqual(next(r for r in admin_rows if r["employeeCode"] == "PD_NB")["branch"], None)
+        self.assertNotIn("PD_NB", self.codes(self.run_report(self.RID, self.b1_user, **MARCH)))
 
     def test_filters_narrow_the_result(self):
         n = lambda **kw: len(self.run_report(self.RID, **{**MARCH, **kw})["rows"])  # noqa: E731
@@ -385,7 +518,7 @@ class PermissionRegisterTests(_PermissionFixture):
         self.assertEqual(n(status="rejected"), 1)
         self.assertEqual(n(status="approved"), 11)
         self.assertEqual(n(capStatus="excess"), 2)
-        self.assertEqual(n(capStatus="within_cap"), 9)
+        self.assertEqual(n(capStatus="within_cap"), 8)  # the production permission is neither within the cap nor excess
         self.assertEqual(n(approverRole="hr"), 1)
         self.assertEqual(n(approverRole="dept_head"), 1)
         self.assertEqual(n(departmentIds=str(self.finishing.id)), 2)
@@ -413,12 +546,45 @@ class PermissionRegisterTests(_PermissionFixture):
         from .attendance_final import permission_cap_status
 
         body = self.run_report(self.RID, employeeIds=str(self.a.id), **MARCH)
-        engine = {p.date.isoformat(): permission_cap_status(p, 3) for p in EmployeePermission.objects.filter(employee=self.a)}
+        engine = {
+            p.date.isoformat(): permission_cap_status(p, 3) for p in EmployeePermission.objects.filter(employee=self.a)
+        }
         label = {"within_cap": "Within cap", "excess": "Excess", "not_applicable": None}
         for r in body["rows"]:
             self.assertEqual(r["capStatus"], label[engine[r["date"]]], r["date"])
             if r["monthSeq"] is not None:
                 self.assertEqual(r["monthSeq"] <= 3, r["capStatus"] == "Within cap")
+
+    def test_a_type_filter_keeps_the_cap_position_of_the_whole_month(self):
+        rows = {
+            r["date"]: r
+            for r in self.run_report(self.RID, employeeIds=str(self.a.id), permissionType="morning_late_in", **MARCH)[
+                "rows"
+            ]
+        }
+        # P4 ("Late In", 5 Mar) is the 4th approved permission of the month once the other types are counted -> Excess
+        self.assertEqual((rows["2026-03-05"]["monthSeq"], rows["2026-03-05"]["capStatus"]), (4, "Excess"))
+        self.assertEqual((rows["2026-03-02"]["monthSeq"], rows["2026-03-02"]["capStatus"]), (1, "Within cap"))
+        self.assertEqual(
+            sorted(rows), ["2026-03-02", "2026-03-05", "2026-03-06"]
+        )  # P5 (pending) is a morning late-in too
+        only_excess = self.run_report(
+            self.RID, employeeIds=str(self.a.id), capStatus="excess", permissionType="middle_permission", **MARCH
+        )
+        self.assertEqual(only_excess["rows"], [])  # the middle permission (4 Mar) is 3rd -> within cap
+
+    def test_a_zero_cap_makes_every_approved_permission_excess(self):
+        ps = PayrollSettings.get()
+        ps.permission_monthly_cap = 0
+        ps.save()
+        rows = self.run_report(self.RID, employeeIds=str(self.b.id), **MARCH)["rows"]
+        self.assertEqual([(r["status"], r["capStatus"]) for r in rows], [("Approved", "Excess"), ("Pending", None)])
+
+    def test_row_limit_is_honoured(self):
+        self.check_row_limit(self.RID, MARCH)
+
+    def test_scope_filters(self):
+        self.check_scope_filters(self.RID, MARCH)
 
     def test_row_order_is_deterministic(self):
         first = self.run_report(self.RID, **MARCH)["rows"]
@@ -440,7 +606,9 @@ class PermissionRegisterTests(_PermissionFixture):
         def grow():
             for i, e in enumerate(self.many(12)):
                 perm(e, date(2026, 3, 20), "morning_late_in", at=time(9, 30))
-                AttendanceDayRecord.objects.create(employee=e, date=date(2026, 3, 20), status="present", morning_permission_applied=True)
+                AttendanceDayRecord.objects.create(
+                    employee=e, date=date(2026, 3, 20), status="present", morning_permission_applied=True
+                )
 
         for i, e in enumerate(self.many(2, prefix="PD_S")):
             perm(e, date(2026, 3, 20), "morning_late_in")
@@ -459,14 +627,21 @@ class PermissionCountsTests(_PermissionFixture):
         self.assertEqual(sorted(rows), ["PD_A", "PD_B", "PD_C", "PD_G", "PD_P", "PD_X"])
         a = rows["PD_A"]
         self.assertEqual(a["month"], "2026-03")
-        self.assertEqual((a["morningLateIn"], a["eveningEarlyOut"], a["middleOneHour"], a["unclassified"]), (2, 1, 1, 1))
+        self.assertEqual(
+            (a["morningLateIn"], a["eveningEarlyOut"], a["middleOneHour"], a["unclassified"]), (2, 1, 1, 1)
+        )
         self.assertEqual((a["totalApproved"], a["pending"], a["rejected"]), (5, 1, 1))
         self.assertEqual((a["monthlyCap"], a["excess"], a["capUsedPct"]), (3, 2, 166.7))
         self.assertEqual((a["approvedMinutes"], a["lastPermissionDate"]), (330, "2026-03-10"))
         b = rows["PD_B"]
-        self.assertEqual((b["totalApproved"], b["pending"], b["excess"], b["capUsedPct"], b["approvedMinutes"]), (1, 1, 0, 33.3, 60))
+        self.assertEqual(
+            (b["totalApproved"], b["pending"], b["excess"], b["capUsedPct"], b["approvedMinutes"]), (1, 1, 0, 33.3, 60)
+        )
         c = rows["PD_C"]
-        self.assertEqual((c["morningLateIn"], c["middleOneHour"], c["totalApproved"], c["capUsedPct"], c["approvedMinutes"]), (1, 1, 2, 66.7, 120))
+        self.assertEqual(
+            (c["morningLateIn"], c["middleOneHour"], c["totalApproved"], c["capUsedPct"], c["approvedMinutes"]),
+            (1, 1, 2, 66.7, 120),
+        )
         self.assertEqual(rows["PD_X"]["department"], "Unassigned")
 
     def test_summary_totals_and_subtotals_add_up(self):
@@ -478,23 +653,48 @@ class PermissionCountsTests(_PermissionFixture):
         self.assertEqual(body["totals"]["totalApproved"], 11)
         self.assertEqual(body["totals"]["excess"], 2)
         subtotals = {r["employeeName"]: r for r in body["rows"] if r.get("_kind") == "subtotal"}
-        self.assertEqual(sorted(subtotals), ["CUTTING (Unit 1) total", "FINISHING (Unit 1) total", "SEWING (Unit 2) total", "Unassigned (Unit 1) total"])
+        self.assertEqual(
+            sorted(subtotals),
+            [
+                "CUTTING (Unit 1) total",
+                "FINISHING (Unit 1) total",
+                "SEWING (Unit 2) total",
+                "Unassigned (Unit 1) total",
+            ],
+        )
         self.assertEqual(subtotals["CUTTING (Unit 1) total"]["totalApproved"], 7)  # A 5 + G 1 + P 1
 
     def test_filters(self):
         self.assertEqual(sorted(self.rows_by_code(onlyExcess="true")[0]), ["PD_A"])
         self.assertEqual(sorted(self.rows_by_code(employmentType="production")[0]), ["PD_P"])
         self.assertEqual(sorted(self.rows_by_code(departmentIds=str(self.sewing.id))[0]), ["PD_C"])
-        self.assertEqual(sorted(self.rows_by_code(employeeStatus="active")[0]), ["PD_A", "PD_B", "PD_C", "PD_P", "PD_X"])
+        self.assertEqual(
+            sorted(self.rows_by_code(employeeStatus="active")[0]), ["PD_A", "PD_B", "PD_C", "PD_P", "PD_X"]
+        )
         self.assertEqual(sorted(self.rows_by_code(employeeIds=str(self.b.id))[0]), ["PD_B"])
         self.assertEqual(sorted(self.rows_by_code(branchIds=str(self.b2.id))[0]), ["PD_C"])
 
     def test_range_spanning_months_gives_one_row_per_month_and_is_widened_to_whole_months(self):
         perm(self.a, date(2026, 4, 7), "middle_permission")
-        rows = self.data_rows(self.run_report(self.RID, dateFrom="2026-03-20", dateTo="2026-04-10", employeeIds=str(self.a.id)))
-        self.assertEqual([(r["month"], r["totalApproved"]) for r in rows], [("2026-03", 5), ("2026-04", 1)])  # March counted whole
+        rows = self.data_rows(
+            self.run_report(self.RID, dateFrom="2026-03-20", dateTo="2026-04-10", employeeIds=str(self.a.id))
+        )
+        self.assertEqual(
+            [(r["month"], r["totalApproved"]) for r in rows], [("2026-03", 5), ("2026-04", 1)]
+        )  # March counted whole
         body = self.run_report(self.RID, dateFrom="2026-03-20", dateTo="2026-04-10", employeeIds=str(self.a.id))
         self.assertIn("widened to whole months (2026-03-01 to 2026-04-30)", " ".join(body["notes"]))
+
+    def test_a_zero_cap_makes_every_approved_permission_excess_and_the_percentage_unknown(self):
+        ps = PayrollSettings.get()
+        ps.permission_monthly_cap = 0
+        ps.save()
+        rows, _ = self.rows_by_code()
+        self.assertEqual((rows["PD_B"]["monthlyCap"], rows["PD_B"]["excess"], rows["PD_B"]["capUsedPct"]), (0, 1, None))
+        self.assertEqual(rows["PD_A"]["excess"], 5)
+
+    def test_scope_filters(self):
+        self.check_scope_filters(self.RID, MARCH)
 
     def test_excess_uses_the_engines_late_pool_formula(self):
         from .attendance_final import late_pool_summary
@@ -524,13 +724,19 @@ class PermissionCountsTests(_PermissionFixture):
 
 def impact_perm(emp, day, status="approved"):
     return EmployeePermission.objects.create(
-        employee=emp, date=date(2026, 3, day), type="morning_late_in", status=status, duration_minutes=60,
+        employee=emp,
+        date=date(2026, 3, day),
+        type="morning_late_in",
+        status=status,
+        duration_minutes=60,
     )
 
 
 def impact_punch(emp, day, first, last=time(18, 0)):
     for t in (first, last):
-        AttendanceLog.objects.create(employee=emp, date=date(2026, 3, day), punch_time=t, punch_type="IN", source="test")
+        AttendanceLog.objects.create(
+            employee=emp, date=date(2026, 3, day), punch_time=t, punch_type="IN", source="test"
+        )
 
 
 class SalaryImpactTests(_Base):
@@ -548,33 +754,53 @@ class SalaryImpactTests(_Base):
         ps.late_free_allowance = 3
         ps.save()
         shift = ShiftTemplate.objects.create(
-            name="PD Shift", shift_type="staff", start_time=time(9, 0), end_time=time(18, 0), grace_period_minutes=15,
-            first_half_end=time(13, 30), lunch_duration_minutes=60, lunch_grace_minutes=10,
+            name="PD Shift",
+            shift_type="staff",
+            start_time=time(9, 0),
+            end_time=time(18, 0),
+            grace_period_minutes=15,
+            first_half_end=time(13, 30),
+            lunch_duration_minutes=60,
+            lunch_grace_minutes=10,
         )
         cls.d = cls.mk("PD_D", "Devi", cls.cutting, cls.b1)
-        for emp in (cls.a, cls.b, cls.d):
+        cls.e = cls.mk("PD_E", "Eswari", cls.cutting, cls.b1)
+        for emp in (cls.a, cls.b, cls.d, cls.e):
             EmployeeShiftAssignment.objects.create(employee=emp, shift=shift, effective_from=date(2020, 1, 1))
 
         perm, punch = impact_perm, impact_punch
 
         # A: 5 approved permissions (3 in cap + 2 excess) and 5 plain lates -> pool 5 + 2 = 7, billable 4 -> 0.25 shift.
-        for day in (2, 3, 4, 5, 6):
+        # The two excess permissions sit on days A arrived on time, so they really add two occurrences to the pool.
+        for day in (2, 3, 4):
             perm(cls.a, day)
-            punch(cls.a, day, time(10, 10))
+            punch(cls.a, day, time(10, 10))  # inside the permission-shifted start (10:00 + 15 min grace)
+        for day in (5, 6):
+            perm(cls.a, day)
+            punch(cls.a, day, time(9, 0))
         for day in (9, 10, 11, 12, 13):
             punch(cls.a, day, time(9, 40))
+        # E: the same permissions, but the two excess ones fall on days E was late anyway (10:10 against the plain 09:15):
+        # each such day is one pool occurrence either way, so the excess permissions cost E nothing extra.
+        for day in (2, 3, 4, 5, 6):
+            perm(cls.e, day)
+            punch(cls.e, day, time(10, 10))
+        for day in (9, 10, 11, 12, 13):
+            punch(cls.e, day, time(9, 40))
         # B: one in-cap permission, no lateness.  D: three in-cap permissions; a 4th is approved AFTER the payslip.
         perm(cls.b, 2)
         punch(cls.b, 2, time(10, 10))
         for day in (2, 3, 4):
             perm(cls.d, day)
             punch(cls.d, day, time(10, 10))
-        cls.slips = {e.employee_code: _generate_staff_payroll(e, 3, 2026)["slip"] for e in (cls.a, cls.b, cls.d)}
+        cls.slips = {e.employee_code: _generate_staff_payroll(e, 3, 2026)["slip"] for e in (cls.a, cls.b, cls.d, cls.e)}
         perm(cls.d, 5)
         # C (branch 2): four approved permissions and no payslip.  P (production): one, never listed.
         for day in (2, 3, 4, 5):
             perm(cls.c, day)
-        EmployeePermission.objects.create(employee=cls.p, date=date(2026, 3, 2), type="morning_late_in", status="approved")
+        EmployeePermission.objects.create(
+            employee=cls.p, date=date(2026, 3, 2), type="morning_late_in", status="approved"
+        )
 
     def rows(self, **params):
         body = self.run_report(self.RID, **{**self.PARAMS, **params})
@@ -583,46 +809,86 @@ class SalaryImpactTests(_Base):
     def test_the_generated_slip_is_what_this_test_assumes(self):
         late = self.slips["PD_A"].breakdown_details["deductions"]["lateSummary"]
         self.assertEqual(
-            (late["lateInCount"], late["excessPermissionCount"], late["totalLateCount"], late["billableLateCount"], late["shiftDeductions"]),
+            (
+                late["lateInCount"],
+                late["excessPermissionCount"],
+                late["totalLateCount"],
+                late["billableLateCount"],
+                late["shiftDeductions"],
+            ),
             (5, 2, 7, 4, 0.25),
         )
         self.assertEqual(self.slips["PD_A"].breakdown_details["earnings"]["dailyRate"], 1000.0)
         self.assertEqual(self.slips["PD_A"].other_deductions, Decimal("250.00"))
+        # E's excess-permission days were late as well: flagged days (7) exceed the de-duplicated late-in count (5).
+        e_late = self.slips["PD_E"].breakdown_details["deductions"]["lateSummary"]
+        self.assertEqual(
+            (e_late["lateInDays"], e_late["lateInCount"], e_late["excessPermissionCount"], e_late["totalLateCount"]),
+            (7, 5, 2, 7),
+        )
+        self.assertEqual(late["lateInDays"], 5)
+        self.assertEqual(self.slips["PD_E"].other_deductions, Decimal("250.00"))
 
     def test_golden_rows(self):
         rows, body = self.rows()
-        self.assertEqual(sorted(rows), ["PD_A", "PD_B", "PD_C", "PD_D"])  # not the production employee
+        self.assertEqual(sorted(rows), ["PD_A", "PD_B", "PD_C", "PD_D", "PD_E"])  # not the production employee
         a = rows["PD_A"]
         self.assertEqual((a["approvedPermissions"], a["monthlyCap"], a["excessPermissions"]), (5, 3, 2))
-        self.assertEqual((a["lateInCount"], a["earlyOutCount"], a["totalPool"], a["freeAllowance"], a["billableLate"]), (5, 0, 7, 3, 4))
+        self.assertEqual(
+            (a["lateInCount"], a["earlyOutCount"], a["totalPool"], a["freeAllowance"], a["billableLate"]),
+            (5, 0, 7, 3, 4),
+        )
         self.assertEqual((a["shiftDeductions"], a["dailyRate"], a["latePenalty"]), (0.25, 1000.0, 250.0))
         # Without the two excess permissions the pool would be 5 -> billable 2 -> below the first slab -> no deduction.
         self.assertEqual(a["excessCost"], 250.0)
         self.assertEqual(a["slipStatus"], "Payslip generated")
+        e = rows["PD_E"]  # same pool and penalty, but the excess permissions fell on days that were late anyway
+        self.assertEqual(
+            (e["approvedPermissions"], e["excessPermissions"], e["lateInCount"], e["totalPool"], e["billableLate"]),
+            (5, 2, 5, 7, 4),
+        )
+        self.assertEqual((e["latePenalty"], e["excessCost"]), (250.0, 0.0))
         b = rows["PD_B"]
-        self.assertEqual((b["approvedPermissions"], b["excessPermissions"], b["totalPool"], b["latePenalty"], b["excessCost"]), (1, 0, 0, 0.0, 0.0))
+        self.assertEqual(
+            (b["approvedPermissions"], b["excessPermissions"], b["totalPool"], b["latePenalty"], b["excessCost"]),
+            (1, 0, 0, 0.0, 0.0),
+        )
         d = rows["PD_D"]  # a 4th permission was approved after the payslip was generated
-        self.assertEqual((d["approvedPermissions"], d["excessPermissions"], d["slipStatus"]), (4, 0, "Changed since payslip"))
+        self.assertEqual(
+            (d["approvedPermissions"], d["excessPermissions"], d["slipStatus"]), (4, 0, "Changed since payslip")
+        )
         c = rows["PD_C"]  # no payslip: live counts only, the pool is unknown (dash), not zero
         self.assertEqual((c["approvedPermissions"], c["excessPermissions"], c["slipStatus"]), (4, 1, "No payslip"))
-        for key in ("lateInCount", "totalPool", "billableLate", "shiftDeductions", "dailyRate", "latePenalty", "excessCost"):
+        for key in (
+            "lateInCount",
+            "totalPool",
+            "billableLate",
+            "shiftDeductions",
+            "dailyRate",
+            "latePenalty",
+            "excessCost",
+        ):
             self.assertIsNone(c[key], key)
 
     def test_summary_totals_and_subtotals(self):
         rows, body = self.rows()
         s = self.summary(body)
-        self.assertEqual(s["Late-pool salary deducted"], 250.0)
-        self.assertEqual(s["Salary caused by excess permissions"], 250.0)
-        self.assertEqual((s["Employees penalised"], s["Excess permissions"], s["Billable occurrences"], s["Changed since payslip"]), (1, 3, 4, 1))
+        self.assertEqual(s["Late-pool salary deducted"], 500.0)  # A 250 + E 250
+        self.assertEqual(s["Salary caused by excess permissions"], 250.0)  # A 250 + E 0
+        self.assertEqual(
+            (s["Employees penalised"], s["Excess permissions"], s["Billable occurrences"], s["Changed since payslip"]),
+            (2, 5, 8, 1),
+        )
         self.assert_totals_consistent(body)
-        self.assertEqual(body["totals"]["latePenalty"], 250.0)
-        self.assertEqual(body["totals"]["approvedPermissions"], 14)
+        self.assertEqual(body["totals"]["latePenalty"], 500.0)
+        self.assertEqual(body["totals"]["excessCost"], 250.0)
+        self.assertEqual(body["totals"]["approvedPermissions"], 19)
         labels = [r["employeeName"] for r in body["rows"] if r.get("_kind") == "subtotal"]
         self.assertEqual(labels, ["CUTTING (Unit 1) total", "FINISHING (Unit 1) total", "SEWING (Unit 2) total"])
 
     def test_show_filter_and_scope_filters(self):
-        self.assertEqual(sorted(self.rows(show="excess")[0]), ["PD_A", "PD_C"])
-        self.assertEqual(sorted(self.rows(show="penalised")[0]), ["PD_A"])
+        self.assertEqual(sorted(self.rows(show="excess")[0]), ["PD_A", "PD_C", "PD_E"])
+        self.assertEqual(sorted(self.rows(show="penalised")[0]), ["PD_A", "PD_E"])
         self.assertEqual(sorted(self.rows(departmentIds=str(self.finishing.id))[0]), ["PD_B"])
         self.assertEqual(sorted(self.rows(branchIds=str(self.b2.id))[0]), ["PD_C"])
         self.assertEqual(sorted(self.rows(employeeIds=str(self.d.id))[0]), ["PD_D"])
@@ -635,6 +901,17 @@ class SalaryImpactTests(_Base):
         rows, _ = self.rows()
         self.assertEqual(rows["PD_A"]["latePenalty"], 250.0)  # still what was paid
         self.assertIsNone(rows["PD_A"]["excessCost"])  # re-pricing with the new slabs would not reproduce the payslip
+        self.assertIsNone(rows["PD_E"]["excessCost"])
+
+    def test_the_excess_cost_is_blank_for_a_payslip_without_flagged_day_counts(self):
+        slip = self.slips["PD_A"]
+        bd = slip.breakdown_details
+        for key in ("lateInDays", "earlyOutDays"):
+            bd["deductions"]["lateSummary"].pop(key)
+        SalarySlip.objects.filter(pk=slip.pk).update(breakdown_details=bd)
+        rows, _ = self.rows()
+        self.assertIsNone(rows["PD_A"]["excessCost"])
+        self.assertEqual(rows["PD_A"]["latePenalty"], 250.0)  # the payslip's own figure is still shown
 
     def test_a_payslip_without_late_data_is_reported_as_such(self):
         SalarySlip.objects.filter(pk=self.slips["PD_B"].pk).update(breakdown_details={"type": "staff"})
@@ -642,20 +919,50 @@ class SalaryImpactTests(_Base):
         self.assertEqual(rows["PD_B"]["slipStatus"], "Payslip without late data")
         self.assertIsNone(rows["PD_B"]["latePenalty"])
 
-    def test_production_slips_and_other_months_are_ignored(self):
+    def test_a_slip_of_another_month_is_ignored(self):
         SalarySlip.objects.filter(pk=self.slips["PD_D"].pk).update(month=2)
         rows, _ = self.rows()
         self.assertEqual(rows["PD_D"]["slipStatus"], "No payslip")
 
+    def test_scope_filters(self):
+        self.check_scope_filters(self.RID, self.PARAMS, employment=False)
+
+    def test_day_effects_and_conflicts_agree_with_the_records_the_engine_really_wrote(self):
+        """The payroll run above computed real day records: the register must read their flags correctly and the
+        conflicts report must not call a properly reflected permission 'not reflected'."""
+        rows = {
+            r["date"]: r for r in self.run_report("permission-register", employeeIds=str(self.a.id), **MARCH)["rows"]
+        }
+        self.assertEqual(rows["2026-03-02"]["dayEffect"], "Late-in boundary moved +60 min")
+        self.assertEqual(rows["2026-03-04"]["dayEffect"], "Late-in boundary moved +60 min")
+        self.assertEqual(rows["2026-03-05"]["dayEffect"], "Excess: late-in not protected")
+        self.assertEqual(rows["2026-03-06"]["dayEffect"], "Excess: late-in not protected")
+        self.assertEqual([r["capStatus"] for _d, r in sorted(rows.items())], ["Within cap"] * 3 + ["Excess"] * 2)
+        conflicts = self.run_report("leave-attendance-conflicts", conflictType="permission_no_effect", **MARCH)
+        self.assertEqual(self.data_rows(conflicts), [])
+
     def test_exports_empty_and_gating(self):
         self.check_exports(self.RID, self.PARAMS, "PD_A")
-        r = self.get(f"/api/reports/run/{self.RID}", self.hr("gate_requests_only", {"reports": "view", "requests": "view"}), **self.PARAMS)
-        self.assertEqual((r.status_code, r.json()["error"]), (403, "report_forbidden"))  # salary data needs a payroll module
+        r = self.get(
+            f"/api/reports/run/{self.RID}",
+            self.hr("gate_requests_only", {"reports": "view", "requests": "view"}),
+            **self.PARAMS,
+        )
+        self.assertEqual(
+            (r.status_code, r.json()["error"]), (403, "report_forbidden")
+        )  # salary data needs a payroll module
         for perms in ({"payroll": "view"}, {"salary": "view"}, {"salary_slip": "view"}):
-            self.assertEqual(self.get(f"/api/reports/run/{self.RID}", self.hr(f"g_{next(iter(perms))}", {"reports": "view", **perms}), **self.PARAMS).status_code, 200)
+            self.assertEqual(
+                self.get(
+                    f"/api/reports/run/{self.RID}",
+                    self.hr(f"g_{next(iter(perms))}", {"reports": "view", **perms}),
+                    **self.PARAMS,
+                ).status_code,
+                200,
+            )
 
     def test_branch_isolation(self):
-        self.check_branch_isolation(self.RID, self.PARAMS, ["PD_A", "PD_B", "PD_D"], "PD_C", self.c.id)
+        self.check_branch_isolation(self.RID, self.PARAMS, ["PD_A", "PD_B", "PD_D", "PD_E"], "PD_C", self.c.id)
 
     def test_query_count_is_flat(self):
         def grow():
@@ -673,18 +980,41 @@ class SalaryImpactTests(_Base):
 
 
 def od_session(emp, dest, status, created, **kw):
-    s = OnDutySession.objects.create(employee=emp, destination=dest, status=status, branch=kw.pop("branch", emp.branch), **kw)
+    s = OnDutySession.objects.create(
+        employee=emp, destination=dest, status=status, branch=kw.pop("branch", emp.branch), **kw
+    )
     OnDutySession.objects.filter(pk=s.pk).update(created_at=created)
     s.refresh_from_db()
     return s
 
 
-def od_punch(s, n, t, status="approved", mocked=False, acc=None, photo="on_duty_punch_verifications/2026/03/p.jpg",
-             day=None, lat="11.104512", lng="77.341234", **kw):
+def od_punch(
+    s,
+    n,
+    t,
+    status="approved",
+    mocked=False,
+    acc=None,
+    photo="on_duty_punch_verifications/2026/03/p.jpg",
+    day=None,
+    lat="11.104512",
+    lng="77.341234",
+    **kw,
+):
     return OnDutyPunchVerification.objects.create(
-        session=s, employee=s.employee, punch_date=day or date(2026, 3, 10), punch_time=t,
-        punch_type="IN" if n % 2 else "OUT", punch_number=n, latitude=Decimal(lat), longitude=Decimal(lng),
-        accuracy_m=acc, is_mocked=mocked, photo=photo, status=status, **kw,
+        session=s,
+        employee=s.employee,
+        punch_date=day or date(2026, 3, 10),
+        punch_time=t,
+        punch_type="IN" if n % 2 else "OUT",
+        punch_number=n,
+        latitude=Decimal(lat),
+        longitude=Decimal(lng),
+        accuracy_m=acc,
+        is_mocked=mocked,
+        photo=photo,
+        status=status,
+        **kw,
     )
 
 
@@ -695,28 +1025,67 @@ class _OnDutyFixture(_Base):
 
         session, punch = od_session, od_punch
         # S1: 01:30 IST on 10 Mar (= 20:00 UTC on the 9th). HOD then HR; completed by the employee.
-        cls.S1 = session(cls.a, "Coimbatore mill", "completed", utc(2026, 3, 9, 20, 0),
-                         hod_reviewed_by="Meena K", hod_reviewed_at=utc(2026, 3, 9, 21, 0), hod_review_comment="ok",
-                         hr_reviewed_by="Ravi", hr_reviewed_at=utc(2026, 3, 9, 23, 0), hr_review_comment="fine",
-                         completion_reason="manual", started_at=utc(2026, 3, 9, 23, 0))
+        cls.S1 = session(
+            cls.a,
+            "Coimbatore mill",
+            "completed",
+            utc(2026, 3, 9, 20, 0),
+            hod_reviewed_by="Meena K",
+            hod_reviewed_at=utc(2026, 3, 9, 21, 0),
+            hod_review_comment="ok",
+            hr_reviewed_by="Ravi",
+            hr_reviewed_at=utc(2026, 3, 9, 23, 0),
+            hr_review_comment="fine",
+            completion_reason="manual",
+            started_at=utc(2026, 3, 9, 23, 0),
+        )
         punch(cls.S1, 1, time(8, 30), acc=10)
         punch(cls.S1, 2, time(12, 30), acc=20, mocked=True)
         punch(cls.S1, 3, time(13, 30), acc=30)
         punch(cls.S1, 4, time(17, 30), acc=40)
-        cls.S2 = session(cls.a, "Erode", "rejected", utc(2026, 3, 11, 5, 0),
-                         hod_reviewed_by="Meena K", hod_reviewed_at=utc(2026, 3, 11, 7, 0))
-        punch(cls.S2, 1, time(9, 0), status="rejected", photo="", day=date(2026, 3, 11),
-              hr_review_comment="Voided automatically -the On-Duty request was rejected by HOD.")
-        cls.S3 = session(cls.b, "Chennai", "pending_hr", utc(2026, 3, 12, 4, 0),
-                         hod_reviewed_by="Meena K", hod_reviewed_at=utc(2026, 3, 12, 6, 0),
-                         employee_ended_at=utc(2026, 3, 12, 11, 0))
+        cls.S2 = session(
+            cls.a,
+            "Erode",
+            "rejected",
+            utc(2026, 3, 11, 5, 0),
+            hod_reviewed_by="Meena K",
+            hod_reviewed_at=utc(2026, 3, 11, 7, 0),
+        )
+        punch(
+            cls.S2,
+            1,
+            time(9, 0),
+            status="rejected",
+            photo="",
+            day=date(2026, 3, 11),
+            hr_review_comment="Voided automatically -the On-Duty request was rejected by HOD.",
+        )
+        cls.S3 = session(
+            cls.b,
+            "Chennai",
+            "pending_hr",
+            utc(2026, 3, 12, 4, 0),
+            hod_reviewed_by="Meena K",
+            hod_reviewed_at=utc(2026, 3, 12, 6, 0),
+            employee_ended_at=utc(2026, 3, 12, 11, 0),
+        )
         punch(cls.S3, 1, time(9, 0), status="pending", acc=100, day=date(2026, 3, 12))
         punch(cls.S3, 2, time(9, 30), status="pending", day=date(2026, 3, 12))
-        cls.S4 = session(cls.c, "Salem", "active", utc(2026, 3, 13, 4, 0),
-                         hr_reviewed_by="Ravi", hr_reviewed_at=utc(2026, 3, 13, 9, 0))
+        cls.S4 = session(
+            cls.c,
+            "Salem",
+            "active",
+            utc(2026, 3, 13, 4, 0),
+            hr_reviewed_by="Ravi",
+            hr_reviewed_at=utc(2026, 3, 13, 9, 0),
+        )
         cls.S5 = session(cls.p, "Tiruppur", "pending_hod", utc(2026, 3, 14, 4, 0), branch=None)
         OutpassRequest.objects.create(
-            employee=cls.a, destination="Coimbatore mill", reason="on duty", status="approved", source="on_duty",
+            employee=cls.a,
+            destination="Coimbatore mill",
+            reason="on duty",
+            status="approved",
+            source="on_duty",
             on_duty_session=cls.S1,
         )
 
@@ -726,22 +1095,41 @@ class OnDutyRegisterTests(_OnDutyFixture):
 
     def test_golden_rows(self):
         body = self.run_report(self.RID, **MARCH)
-        self.assertEqual([r["destination"] for r in body["rows"]], ["Coimbatore mill", "Erode", "Chennai", "Salem", "Tiruppur"])
+        self.assertEqual(
+            [r["destination"] for r in body["rows"]], ["Coimbatore mill", "Erode", "Chennai", "Salem", "Tiruppur"]
+        )
         s1, s2, s3, s4, s5 = body["rows"]
         self.assertEqual(s1["requestedAt"], "2026-03-10 01:30")  # IST, although stored on the 9th in UTC
-        self.assertEqual((s1["status"], s1["decisionPath"], s1["hodBy"], s1["hrBy"]), ("Completed", "HOD, then HR", "Meena K", "Ravi"))
+        self.assertEqual(
+            (s1["status"], s1["decisionPath"], s1["hodBy"], s1["hrBy"]),
+            ("Completed", "HOD, then HR", "Meena K", "Ravi"),
+        )
         self.assertEqual((s1["hodAt"], s1["hrAt"], s1["decisionHours"]), ("2026-03-10 02:30", "2026-03-10 04:30", 3.0))
         self.assertEqual(s1["comments"], "HOD: ok; HR: fine")
-        self.assertEqual((s1["punchesTotal"], s1["punchesApproved"], s1["punchesPending"], s1["punchesRejected"]), (4, 4, 0, 0))
+        self.assertEqual(
+            (s1["punchesTotal"], s1["punchesApproved"], s1["punchesPending"], s1["punchesRejected"]), (4, 4, 0, 0)
+        )
         self.assertEqual((s1["firstPunch"], s1["lastPunch"], s1["mockedPunches"]), ("08:30", "17:30", 1))
         self.assertEqual((s1["completion"], s1["outpass"], s1["branch"]), ("Employee marked done", "Issued", "Unit 1"))
         self.assertEqual((s2["status"], s2["decisionPath"], s2["decisionHours"]), ("Rejected", "Rejected by HOD", 2.0))
-        self.assertEqual((s2["punchesTotal"], s2["punchesRejected"], s2["firstPunch"], s2["lastPunch"]), (1, 1, None, None))
-        self.assertEqual((s3["status"], s3["decisionPath"], s3["decisionHours"]), ("Pending", "Awaiting HR (HOD approved)", None))
-        self.assertEqual((s3["punchesPending"], s3["firstPunch"], s3["lastPunch"], s3["completion"]), (2, "09:00", "09:30", "Employee done (awaiting HR)"))
-        self.assertEqual((s4["status"], s4["decisionPath"], s4["decisionHours"], s4["hodBy"], s4["punchesTotal"]), ("Active", "HR directly", 5.0, None, 0))
+        self.assertEqual(
+            (s2["punchesTotal"], s2["punchesRejected"], s2["firstPunch"], s2["lastPunch"]), (1, 1, None, None)
+        )
+        self.assertEqual(
+            (s3["status"], s3["decisionPath"], s3["decisionHours"]), ("Pending", "Awaiting HR (HOD approved)", None)
+        )
+        self.assertEqual(
+            (s3["punchesPending"], s3["firstPunch"], s3["lastPunch"], s3["completion"]),
+            (2, "09:00", "09:30", "Employee done (awaiting HR)"),
+        )
+        self.assertEqual(
+            (s4["status"], s4["decisionPath"], s4["decisionHours"], s4["hodBy"], s4["punchesTotal"]),
+            ("Active", "HR directly", 5.0, None, 0),
+        )
         self.assertEqual((s4["branch"], s4["department"]), ("Unit 2", "SEWING"))
-        self.assertEqual((s5["status"], s5["decisionPath"], s5["branch"], s5["outpass"]), ("Pending", "Awaiting HOD", None, None))
+        self.assertEqual(
+            (s5["status"], s5["decisionPath"], s5["branch"], s5["outpass"]), ("Pending", "Awaiting HOD", None, None)
+        )
 
     def test_summary_totals_and_notes(self):
         body = self.run_report(self.RID, **MARCH)
@@ -764,8 +1152,10 @@ class OnDutyRegisterTests(_OnDutyFixture):
         self.assertEqual(dest(decisionPath="hod_rejected"), ["Erode"])
         self.assertEqual(dest(decisionPath="hr_direct"), ["Salem"])
         self.assertEqual(dest(decisionPath="awaiting"), ["Chennai", "Tiruppur"])
-        self.assertEqual(dest(completion="manual"), ["Coimbatore mill"])
-        self.assertEqual(dest(completion="not_completed"), ["Erode", "Chennai", "Salem", "Tiruppur"])
+        # Chennai: the employee tapped Done but HR has not decided (its Completion column says so), so it is "marked
+        # done" and NOT "not completed"
+        self.assertEqual(dest(completion="manual"), ["Coimbatore mill", "Chennai"])
+        self.assertEqual(dest(completion="not_completed"), ["Erode", "Salem", "Tiruppur"])
         self.assertEqual(dest(destination="ERODE"), ["Erode"])
         self.assertEqual(dest(mockedOnly="true"), ["Coimbatore mill"])
         self.assertEqual(dest(departmentIds=str(self.finishing.id)), ["Chennai"])
@@ -779,6 +1169,40 @@ class OnDutyRegisterTests(_OnDutyFixture):
         self.assertEqual(one("2026-03-10"), ["Coimbatore mill"])  # 01:30 IST on the 10th
         self.assertEqual(one("2026-03-09"), [])  # a UTC-date lookup would have filed it here
         self.assertEqual(one("2026-03-11"), ["Erode"])
+
+    def test_the_month_end_boundary_is_the_ist_midnight(self):
+        od_session(self.a, "Late night", "active", utc(2026, 3, 31, 18, 29))  # 23:59 IST on 31 March
+        od_session(self.a, "After midnight", "active", utc(2026, 3, 31, 18, 31))  # 00:01 IST on 1 April
+        march = [r["destination"] for r in self.run_report(self.RID, **MARCH)["rows"]]
+        self.assertIn("Late night", march)
+        self.assertNotIn("After midnight", march)
+        april = [
+            r["destination"] for r in self.run_report(self.RID, dateFrom="2026-04-01", dateTo="2026-04-01")["rows"]
+        ]
+        self.assertEqual(april, ["After midnight"])
+
+    def test_scope_filters(self):
+        self.check_scope_filters(self.RID, MARCH)
+
+    def test_an_employee_without_a_department_is_listed_as_unassigned(self):
+        od_session(self.x, "Nowhere", "pending_hod", utc(2026, 3, 15, 4, 0))
+        row = next(r for r in self.run_report(self.RID, **MARCH)["rows"] if r["destination"] == "Nowhere")
+        self.assertEqual((row["department"], row["branch"]), ("Unassigned", "Unit 1"))
+
+    def test_sessions_of_employees_who_have_left_are_listed_unless_filtered_out(self):
+        od_session(self.gone, "Old colleague", "completed", utc(2026, 3, 15, 4, 0))
+        self.assertIn("Old colleague", [r["destination"] for r in self.run_report(self.RID, **MARCH)["rows"]])
+        self.assertNotIn(
+            "Old colleague",
+            [r["destination"] for r in self.run_report(self.RID, employeeStatus="active", **MARCH)["rows"]],
+        )
+        self.assertEqual(
+            [r["destination"] for r in self.run_report(self.RID, employeeStatus="inactive", **MARCH)["rows"]],
+            ["Old colleague"],
+        )
+
+    def test_row_limit_is_honoured(self):
+        self.check_row_limit(self.RID, MARCH)
 
     def test_exports_empty_and_gating(self):
         self.check_exports(self.RID, MARCH, "PD_A")
@@ -809,18 +1233,38 @@ class OnDutySummaryTests(_OnDutyFixture):
         a = rows["PD_A"]
         self.assertEqual((a["sessions"], a["daysOnDuty"], a["approved"], a["rejected"], a["pending"]), (2, 1, 1, 1, 0))
         self.assertEqual((a["punchesTotal"], a["punchesRejected"], a["mockedPunches"]), (5, 1, 1))
-        self.assertEqual((a["topDestination"], a["lastOnDuty"]), ("Coimbatore mill", "2026-03-11"))  # tie -> alphabetical
+        # tie -> alphabetical; last on duty = the last APPROVED day (the 11 Mar request was rejected)
+        self.assertEqual((a["topDestination"], a["lastOnDuty"]), ("Coimbatore mill", "2026-03-10"))
         b = rows["PD_B"]
-        self.assertEqual((b["sessions"], b["daysOnDuty"], b["approved"], b["pending"], b["punchesTotal"]), (1, 0, 0, 1, 2))
+        self.assertEqual(
+            (b["sessions"], b["daysOnDuty"], b["approved"], b["pending"], b["punchesTotal"]), (1, 0, 0, 1, 2)
+        )
         c = rows["PD_C"]
         self.assertEqual((c["sessions"], c["daysOnDuty"], c["approved"], c["punchesTotal"]), (1, 1, 1, 0))
         s = self.summary(body)
-        self.assertEqual((s["Employees with on-duty"], s["Sessions"], s["Approved on-duty days"], s["Mock-GPS punches"]), (4, 5, 2, 1))
+        self.assertEqual(
+            (s["Employees with on-duty"], s["Sessions"], s["Approved on-duty days"], s["Mock-GPS punches"]),
+            (4, 5, 2, 1),
+        )
         self.assertEqual(s["Most sessions"], "Asha Kumar (2)")
         self.assert_totals_consistent(body)
         self.assertEqual(body["totals"]["sessions"], 5)
         labels = [r["employeeName"] for r in body["rows"] if r.get("_kind") == "subtotal"]
         self.assertEqual(labels, ["CUTTING (Unit 1) total", "FINISHING (Unit 1) total", "SEWING (Unit 2) total"])
+
+    def test_scope_filters(self):
+        self.check_scope_filters(self.RID, MARCH)
+
+    def test_employees_without_department_or_branch_get_their_own_subtotal_and_stay_out_of_a_branch_users_view(self):
+        od_session(self.x, "Nowhere", "active", utc(2026, 3, 15, 4, 0))
+        no_branch = self.mk("PD_NB", "Nila", self.cutting, None)
+        od_session(no_branch, "Nowhere else", "active", utc(2026, 3, 16, 4, 0), branch=None)
+        body = self.run_report(self.RID, **MARCH)
+        labels = {r["employeeName"] for r in body["rows"] if r.get("_kind") == "subtotal"}
+        self.assertIn("Unassigned (Unit 1) total", labels)
+        self.assertIn("CUTTING (no branch) total", labels)
+        self.assert_totals_consistent(body)
+        self.assertNotIn("PD_NB", self.codes(self.run_report(self.RID, self.b1_user, **MARCH)))
 
     def test_approved_days_count_distinct_dates(self):
         s = od_session(self.a, "Palladam", "active", utc(2026, 3, 10, 6, 0))  # same IST day as S1
@@ -865,18 +1309,30 @@ class OnDutyPunchLogTests(_OnDutyFixture):
         self.assertNotIn("photo", keys)
         self.assertTrue(all("photo" not in k.lower() or k == "hasPhoto" for k in keys))
         r = body["rows"][1]  # 12:30 mocked punch of S1
-        self.assertEqual((r["punchDate"], r["punchTime"], r["punchNumber"], r["punchType"]), ("2026-03-10", "12:30", 2, "OUT"))
+        self.assertEqual(
+            (r["punchDate"], r["punchTime"], r["punchNumber"], r["punchType"]), ("2026-03-10", "12:30", 2, "OUT")
+        )
         self.assertEqual((r["latitude"], r["longitude"], r["accuracyM"]), ("11.104512", "77.341234", 20.0))
-        self.assertEqual((r["isMocked"], r["hasPhoto"], r["status"], r["sessionStatus"]), ("Mocked", "Yes", "Approved", "Completed"))
+        self.assertEqual(
+            (r["isMocked"], r["hasPhoto"], r["status"], r["sessionStatus"]), ("Mocked", "Yes", "Approved", "Completed")
+        )
         self.assertEqual(r["mapLink"], "https://www.google.com/maps?q=11.104512,77.341234")
         self.assertEqual(r["destination"], "Coimbatore mill")
         voided = next(x for x in body["rows"] if x["destination"] == "Erode")
         self.assertEqual((voided["hasPhoto"], voided["status"], voided["accuracyM"]), ("No", "Rejected", None))
         self.assertTrue(voided["hrReviewComment"].startswith("Voided automatically"))
-        self.assertEqual(self.summary(body), {
-            "Punches": 7, "Approved": 4, "Pending": 2, "Rejected": 1, "Mock-GPS punches": 1, "Average accuracy (m)": 40.0,
-        })
-        self.assertEqual(body["totals"]["accuracyM"], 40.0)
+        self.assertEqual(
+            self.summary(body),
+            {
+                "Punches": 7,
+                "Approved": 4,
+                "Pending": 2,
+                "Rejected": 1,
+                "Mock-GPS punches": 1,
+                "Average accuracy (m)": 40.0,
+            },
+        )
+        self.assertIsNone(body["totals"])  # the average sits in the summary; a "TOTAL" of accuracies would mislead
 
     def test_filters(self):
         n = lambda **kw: len(self.run_report(self.RID, **{**MARCH, **kw})["rows"])  # noqa: E731
@@ -894,8 +1350,18 @@ class OnDutyPunchLogTests(_OnDutyFixture):
         self.check_exports(self.RID, MARCH, "PD_A")
         self.check_gating(self.RID, MARCH, {"geo_attendance": "view"})
 
+    def test_row_limit_is_honoured(self):
+        self.check_row_limit(self.RID, MARCH)
+
+    def test_scope_filters(self):
+        self.check_scope_filters(self.RID, MARCH)
+
     def test_pdf_and_xlsx_carry_no_photo_reference(self):
-        cells = [c.value for row in load_workbook(io.BytesIO(self.export(self.RID, "xlsx", **MARCH).content)).active.iter_rows() for c in row]
+        cells = [
+            c.value
+            for row in load_workbook(io.BytesIO(self.export(self.RID, "xlsx", **MARCH).content)).active.iter_rows()
+            for c in row
+        ]
         self.assertFalse(any("on_duty_punch_verifications" in str(c) or "/photo" in str(c) for c in cells))
 
     def test_branch_isolation(self):
@@ -919,8 +1385,14 @@ class OnDutyPunchLogTests(_OnDutyFixture):
 
 def mp_req(emp, day, at, typ, slot, status, created, **kw):
     r = MissingPunchRequest.objects.create(
-        employee=emp, date=date(2026, 3, day), punch_time=at, punch_type=typ, punch_slot=slot, status=status,
-        reason=f"forgot {day}", **kw,
+        employee=emp,
+        date=date(2026, 3, day),
+        punch_time=at,
+        punch_type=typ,
+        punch_slot=slot,
+        status=status,
+        reason=f"forgot {day}",
+        **kw,
     )
     MissingPunchRequest.objects.filter(pk=r.pk).update(created_at=created)
     r.refresh_from_db()
@@ -941,25 +1413,93 @@ class _MissingPunchFixture(_Base):
         m2 = DepartmentManager.objects.create(employee=cls.hod2, can_approve_missing_punch=False)
         ManagerDepartmentAssignment.objects.create(manager=m2, department=cls.sewing)
 
-        cls.M1 = req(cls.a, 2, time(9, 0), "IN", "morning_in", "approved", utc(2026, 3, 3, 5, 0),
-                     hod_reviewed_by="Hari Kumar", hod_reviewed_at=utc(2026, 3, 3, 6, 0),
-                     hr_reviewed_by="Ravi", hr_reviewed_at=utc(2026, 3, 4, 7, 0), hr_review_comment="ok")
-        cls.M2 = req(cls.a, 3, time(13, 0), "OUT", "lunch_out", "approved", utc(2026, 3, 3, 5, 0),
-                     hod_reviewed_at=utc(2026, 3, 3, 6, 0), hr_reviewed_at=utc(2026, 3, 3, 8, 0))
-        cls.M3 = req(cls.a, 4, time(18, 0), "OUT", "evening_out", "approved", utc(2026, 3, 8, 5, 0),
-                     hod_reviewed_at=utc(2026, 3, 8, 6, 0), hr_reviewed_at=utc(2026, 3, 8, 8, 0))
-        cls.M4 = req(cls.a, 5, time(9, 5), "IN", None, "rejected", utc(2026, 3, 6, 5, 0),
-                     hod_reviewed_by="Hari Kumar", hod_reviewed_at=utc(2026, 3, 6, 6, 30), hod_review_comment="not sure")
-        cls.M5 = req(cls.a, 6, time(12, 30), "OUT", "lunch_out", "rejected", utc(2026, 3, 9, 5, 0),
-                     hod_reviewed_at=utc(2026, 3, 9, 6, 0), hr_reviewed_at=utc(2026, 3, 9, 7, 0))
+        cls.M1 = req(
+            cls.a,
+            2,
+            time(9, 0),
+            "IN",
+            "morning_in",
+            "approved",
+            utc(2026, 3, 3, 5, 0),
+            hod_reviewed_by="Hari Kumar",
+            hod_reviewed_at=utc(2026, 3, 3, 6, 0),
+            hr_reviewed_by="Ravi",
+            hr_reviewed_at=utc(2026, 3, 4, 7, 0),
+            hr_review_comment="ok",
+        )
+        cls.M2 = req(
+            cls.a,
+            3,
+            time(13, 0),
+            "OUT",
+            "lunch_out",
+            "approved",
+            utc(2026, 3, 3, 5, 0),
+            hod_reviewed_at=utc(2026, 3, 3, 6, 0),
+            hr_reviewed_at=utc(2026, 3, 3, 8, 0),
+        )
+        cls.M3 = req(
+            cls.a,
+            4,
+            time(18, 0),
+            "OUT",
+            "evening_out",
+            "approved",
+            utc(2026, 3, 8, 5, 0),
+            hod_reviewed_at=utc(2026, 3, 8, 6, 0),
+            hr_reviewed_at=utc(2026, 3, 8, 8, 0),
+        )
+        cls.M4 = req(
+            cls.a,
+            5,
+            time(9, 5),
+            "IN",
+            None,
+            "rejected",
+            utc(2026, 3, 6, 5, 0),
+            hod_reviewed_by="Hari Kumar",
+            hod_reviewed_at=utc(2026, 3, 6, 6, 30),
+            hod_review_comment="not sure",
+        )
+        cls.M5 = req(
+            cls.a,
+            6,
+            time(12, 30),
+            "OUT",
+            "lunch_out",
+            "rejected",
+            utc(2026, 3, 9, 5, 0),
+            hod_reviewed_at=utc(2026, 3, 9, 6, 0),
+            hr_reviewed_at=utc(2026, 3, 9, 7, 0),
+        )
         cls.M6 = req(cls.a, 9, time(9, 0), "IN", "morning_in", "pending_hod", utc(2026, 3, 10, 5, 0))
-        cls.M7 = req(cls.a, 10, time(9, 0), "IN", "morning_in", "pending_hr", utc(2026, 3, 11, 5, 0),
-                     hod_reviewed_at=utc(2026, 3, 11, 6, 0))
+        cls.M7 = req(
+            cls.a,
+            10,
+            time(9, 0),
+            "IN",
+            "morning_in",
+            "pending_hr",
+            utc(2026, 3, 11, 5, 0),
+            hod_reviewed_at=utc(2026, 3, 11, 6, 0),
+        )
         cls.M8 = req(cls.b, 11, time(9, 0), "IN", "morning_in", "pending_hod", utc(2026, 3, 12, 5, 0))  # no HOD
-        cls.M9 = req(cls.c, 12, time(9, 0), "IN", "morning_in", "pending_hod", utc(2026, 3, 13, 5, 0))  # HOD lacks the right
-        cls.M10 = req(cls.x, 13, time(17, 0), "OUT", "evening_out", "pending_hod", utc(2026, 3, 14, 5, 0))  # no dept, no HOD
-        AttendanceLog.objects.create(employee=cls.a, date=date(2026, 3, 2), punch_time=time(9, 0), punch_type="IN", source="missing_punch:approved")
-        AttendanceLog.objects.create(employee=cls.a, date=date(2026, 3, 3), punch_time=time(13, 0), punch_type="OUT", source="biometric:essl")
+        cls.M9 = req(
+            cls.c, 12, time(9, 0), "IN", "morning_in", "pending_hod", utc(2026, 3, 13, 5, 0)
+        )  # HOD lacks the right
+        cls.M10 = req(
+            cls.x, 13, time(17, 0), "OUT", "evening_out", "pending_hod", utc(2026, 3, 14, 5, 0)
+        )  # no dept, no HOD
+        AttendanceLog.objects.create(
+            employee=cls.a,
+            date=date(2026, 3, 2),
+            punch_time=time(9, 0),
+            punch_type="IN",
+            source="missing_punch:approved",
+        )
+        AttendanceLog.objects.create(
+            employee=cls.a, date=date(2026, 3, 3), punch_time=time(13, 0), punch_type="OUT", source="biometric:essl"
+        )
 
 
 class MissingPunchRegisterTests(_MissingPunchFixture):
@@ -970,29 +1510,48 @@ class MissingPunchRegisterTests(_MissingPunchFixture):
         self.assertEqual(body["rowCount"], 10)
         by = {r["reason"]: r for r in body["rows"]}
         m1 = by["forgot 2"]
-        self.assertEqual((m1["date"], m1["punchSlot"], m1["punchType"], m1["punchTime"]), ("2026-03-02", "Morning Check-In", "IN", "09:00"))
+        self.assertEqual(
+            (m1["date"], m1["punchSlot"], m1["punchType"], m1["punchTime"]),
+            ("2026-03-02", "Morning Check-In", "IN", "09:00"),
+        )
         self.assertEqual((m1["appliedOn"], m1["lagDays"], m1["status"]), ("2026-03-03 10:30", 1, "Approved"))
-        self.assertEqual((m1["hodBy"], m1["hodAt"], m1["hrBy"], m1["hrAt"], m1["comments"]), ("Hari Kumar", "2026-03-03 11:30", "Ravi", "2026-03-04 12:30", "HR: ok"))
-        self.assertEqual((m1["turnaroundHours"], m1["punchWritten"], m1["pendingWith"]), (26.0, "Yes - added by approval", None))
+        self.assertEqual(
+            (m1["hodBy"], m1["hodAt"], m1["hrBy"], m1["hrAt"], m1["comments"]),
+            ("Hari Kumar", "2026-03-03 11:30", "Ravi", "2026-03-04 12:30", "HR: ok"),
+        )
+        self.assertEqual(
+            (m1["turnaroundHours"], m1["punchWritten"], m1["pendingWith"]), (26.0, "Yes - added by approval", None)
+        )
         m2 = by["forgot 3"]
         self.assertEqual((m2["turnaroundHours"], m2["punchWritten"]), (3.0, "Yes - already recorded"))
         m3 = by["forgot 4"]
         self.assertEqual((m3["lagDays"], m3["punchWritten"]), (4, "Missing from punch log"))
         m4 = by["forgot 5"]  # rejected by the HOD: the HR columns stay empty
-        self.assertEqual((m4["status"], m4["punchSlot"], m4["hrBy"], m4["hrAt"], m4["turnaroundHours"], m4["punchWritten"]), ("Rejected", "Not specified", None, None, 1.5, None))
+        self.assertEqual(
+            (m4["status"], m4["punchSlot"], m4["hrBy"], m4["hrAt"], m4["turnaroundHours"], m4["punchWritten"]),
+            ("Rejected", "Not specified", None, None, 1.5, None),
+        )
         self.assertEqual(m4["comments"], "HOD: not sure")
         m5 = by["forgot 6"]
         self.assertEqual((m5["status"], m5["hrAt"], m5["turnaroundHours"]), ("Rejected", "2026-03-09 12:30", 2.0))
-        self.assertEqual((by["forgot 9"]["status"], by["forgot 9"]["pendingWith"], by["forgot 9"]["turnaroundHours"]), ("Pending", "HOD: Hari Kumar", None))
+        self.assertEqual(
+            (by["forgot 9"]["status"], by["forgot 9"]["pendingWith"], by["forgot 9"]["turnaroundHours"]),
+            ("Pending", "HOD: Hari Kumar", None),
+        )
         self.assertEqual(by["forgot 10"]["pendingWith"], "HR")
         self.assertEqual(by["forgot 11"]["pendingWith"], "No HOD assigned - HR cannot act")
         self.assertEqual(by["forgot 12"]["pendingWith"], "HOD Hema Kumar: no Missing Punch approval right - stuck")
-        self.assertEqual((by["forgot 13"]["pendingWith"], by["forgot 13"]["department"]), ("No HOD assigned - HR cannot act", "Unassigned"))
+        self.assertEqual(
+            (by["forgot 13"]["pendingWith"], by["forgot 13"]["department"]),
+            ("No HOD assigned - HR cannot act", "Unassigned"),
+        )
 
     def test_summary_and_notes(self):
         body = self.run_report(self.RID, **MARCH)
         s = self.summary(body)
-        self.assertEqual((s["Requests"], s["Approved"], s["Rejected by HOD"], s["Rejected by HR"], s["Pending"]), (10, 3, 1, 1, 5))
+        self.assertEqual(
+            (s["Requests"], s["Approved"], s["Rejected by HOD"], s["Rejected by HR"], s["Pending"]), (10, 3, 1, 1, 5)
+        )
         self.assertEqual((s["Stuck (no HOD / no right)"], s["Approved but not in log"]), (3, 1))
         # decided requests: M1 26h, M2 3h, M3 3h, M4 1.5h, M5 2h -> 35.5 / 5
         self.assertEqual(s["Avg turnaround (h)"], 7.1)
@@ -1017,6 +1576,34 @@ class MissingPunchRegisterTests(_MissingPunchFixture):
         self.assertEqual(reasons(employeeStatus="inactive"), [])
         self.assertEqual(reasons(dateFrom="2026-03-04", dateTo="2026-03-05"), ["forgot 4", "forgot 5"])
 
+    def test_row_limit_is_honoured(self):
+        self.check_row_limit(self.RID, MARCH)
+
+    def test_scope_filters(self):
+        self.check_scope_filters(self.RID, MARCH)
+
+    def test_a_deactivated_hod_leaves_the_request_stuck(self):
+        DepartmentManager.objects.filter(employee=self.hod).update(is_active=False)
+        row = next(r for r in self.run_report(self.RID, **MARCH)["rows"] if r["reason"] == "forgot 9")
+        self.assertEqual(row["pendingWith"], "No HOD assigned - HR cannot act")
+        self.assertEqual(self.summary(self.run_report(self.RID, **MARCH))["Stuck (no HOD / no right)"], 4)
+
+    def test_requests_of_employees_who_have_left_are_listed_unless_filtered_out(self):
+        mp_req(
+            self.gone,
+            20,
+            time(9, 0),
+            "IN",
+            "morning_in",
+            "approved",
+            utc(2026, 3, 21, 5, 0),
+            hr_reviewed_at=utc(2026, 3, 21, 8, 0),
+        )
+        reasons = lambda **kw: [r["reason"] for r in self.run_report(self.RID, **{**MARCH, **kw})["rows"]]  # noqa: E731
+        self.assertIn("forgot 20", reasons())
+        self.assertNotIn("forgot 20", reasons(employeeStatus="active"))
+        self.assertEqual(reasons(employeeStatus="inactive"), ["forgot 20"])
+
     def test_the_hod_stage_follows_the_one_hod_rule(self):
         # Give PD_A an individual HOD (the SEWING HOD): it beats the department HOD.
         from .models import ManagerEmployeeAssignment
@@ -1036,7 +1623,16 @@ class MissingPunchRegisterTests(_MissingPunchFixture):
         def grow():
             for i, e in enumerate(self.many(12)):
                 mp_req(e, 20, time(9, 0), "IN", "morning_in", "pending_hod", utc(2026, 3, 21, 5, 0))
-                mp_req(e, 21, time(9, 0), "IN", "morning_in", "approved", utc(2026, 3, 22, 5, 0), hr_reviewed_at=utc(2026, 3, 22, 8, 0))
+                mp_req(
+                    e,
+                    21,
+                    time(9, 0),
+                    "IN",
+                    "morning_in",
+                    "approved",
+                    utc(2026, 3, 22, 5, 0),
+                    hr_reviewed_at=utc(2026, 3, 22, 8, 0),
+                )
 
         for e in self.many(2, prefix="PD_S"):
             mp_req(e, 20, time(9, 0), "IN", "morning_in", "pending_hod", utc(2026, 3, 21, 5, 0))
@@ -1053,7 +1649,9 @@ class MissingPunchCountsTests(_MissingPunchFixture):
         a = rows["PD_A"]
         self.assertEqual(a["month"], "2026-03")
         self.assertEqual((a["requests"], a["approved"], a["rejected"], a["pending"]), (7, 3, 2, 2))
-        self.assertEqual((a["morningIn"], a["lunchOut"], a["lunchIn"], a["eveningOut"], a["unspecified"]), (3, 2, 0, 1, 1))
+        self.assertEqual(
+            (a["morningIn"], a["lunchOut"], a["lunchIn"], a["eveningOut"], a["unspecified"]), (3, 2, 0, 1, 1)
+        )
         # days late: M1 1, M2 0, M3 4, M4 1, M5 3, M6 1, M7 1 -> 11 / 7
         self.assertEqual(a["avgLagDays"], 1.6)
         self.assertEqual(rows["PD_X"]["department"], "Unassigned")
@@ -1065,16 +1663,49 @@ class MissingPunchCountsTests(_MissingPunchFixture):
 
     def test_filters_and_month_bucketing(self):
         MissingPunchRequest.objects.create(
-            employee=self.a, date=date(2026, 4, 2), punch_time=time(9, 0), punch_type="IN", punch_slot=None, status="approved", reason="apr"
+            employee=self.a,
+            date=date(2026, 4, 2),
+            punch_time=time(9, 0),
+            punch_type="IN",
+            punch_slot=None,
+            status="approved",
+            reason="apr",
         )
-        rows = self.data_rows(self.run_report(self.RID, dateFrom="2026-03-01", dateTo="2026-04-30", employeeIds=str(self.a.id)))
-        self.assertEqual([(r["month"], r["requests"], r["unspecified"]) for r in rows], [("2026-03", 7, 1), ("2026-04", 1, 1)])
+        rows = self.data_rows(
+            self.run_report(self.RID, dateFrom="2026-03-01", dateTo="2026-04-30", employeeIds=str(self.a.id))
+        )
+        self.assertEqual(
+            [(r["month"], r["requests"], r["unspecified"]) for r in rows], [("2026-03", 7, 1), ("2026-04", 1, 1)]
+        )
         codes = lambda **kw: self.codes(self.run_report(self.RID, **{**MARCH, **kw}))  # noqa: E731
         self.assertEqual(codes(minRequests="3"), ["PD_A"])
         self.assertEqual(codes(minRequests="2"), ["PD_A"])
         self.assertEqual(codes(minRequests="5"), ["PD_A"])
         self.assertEqual(codes(departmentIds=str(self.sewing.id)), ["PD_C"])
         self.assertEqual(codes(employmentType="production"), [])
+
+    def test_scope_filters(self):
+        self.check_scope_filters(self.RID, MARCH)
+
+    def test_min_requests_counts_the_whole_range_not_one_month(self):
+        for day in (2, 3):
+            MissingPunchRequest.objects.create(
+                employee=self.b,
+                date=date(2026, 4, day),
+                punch_time=time(9, 0),
+                punch_type="IN",
+                punch_slot="morning_in",
+                status="pending_hod",
+                reason="apr",
+            )
+        both = dict(dateFrom="2026-03-01", dateTo="2026-04-30")
+        rows = self.data_rows(self.run_report(self.RID, minRequests="3", **both))
+        # PD_B: 1 request in March + 2 in April = 3 over the range -> kept, and shown month by month
+        self.assertEqual(
+            sorted((r["employeeCode"], r["month"], r["requests"]) for r in rows),
+            [("PD_A", "2026-03", 7), ("PD_B", "2026-03", 1), ("PD_B", "2026-04", 2)],
+        )
+        self.assertEqual(self.codes(self.run_report(self.RID, minRequests="5", **both)), ["PD_A"])
 
     def test_exports_empty_and_gating(self):
         self.check_exports(self.RID, MARCH, "PD_A")
@@ -1113,16 +1744,35 @@ class AbsenceAroundHolidaysTests(_Base):
         Holiday.objects.create(name="Pongal", date=date(2026, 1, 14))
         Holiday.objects.create(name="Thiruvalluvar Day", date=date(2026, 1, 15))
         cls.sat_off = cls.mk("PD_SAT", "Sathya", cls.cutting, cls.b1)
-        shift = ShiftTemplate.objects.create(name="PD Sat shift", shift_type="staff", start_time=time(9, 0), end_time=time(18, 0))
-        EmployeeShiftAssignment.objects.create(employee=cls.sat_off, shift=shift, effective_from=date(2020, 1, 1), saturday_off=True)
+        shift = ShiftTemplate.objects.create(
+            name="PD Sat shift", shift_type="staff", start_time=time(9, 0), end_time=time(18, 0)
+        )
+        EmployeeShiftAssignment.objects.create(
+            employee=cls.sat_off, shift=shift, effective_from=date(2020, 1, 1), saturday_off=True
+        )
         cls.joiner = cls.mk("PD_JN", "Jaya", cls.cutting, cls.b1, join_date="12/01/2026")  # dd/mm/yyyy, like real data
         rec = day_rec
         # PD_A: four sandwiches around Sundays 4, 11, 18 and the Pongal block (14-15).
-        for day, status in ((3, "present"), (5, "absent"), (10, "absent"), (12, "absent"), (13, "absent"), (16, "absent"),
-                            (17, "present"), (19, "on_leave")):
+        for day, status in (
+            (3, "present"),
+            (5, "absent"),
+            (10, "absent"),
+            (12, "absent"),
+            (13, "absent"),
+            (16, "absent"),
+            (17, "present"),
+            (19, "on_leave"),
+        ):
             rec(cls.a, day, status)
         # PD_SAT has Saturday off: an 'absent' Saturday record must never make the Sunday look sandwiched.
-        for day, status in ((2, "absent"), (3, "absent"), (5, "present"), (9, "present"), (10, "absent"), (12, "present")):
+        for day, status in (
+            (2, "absent"),
+            (3, "absent"),
+            (5, "present"),
+            (9, "present"),
+            (10, "absent"),
+            (12, "present"),
+        ):
             rec(cls.sat_off, day, status)
         # Production works Sundays: only the holidays are off days.
         for day, status in ((4, "absent"), (13, "absent"), (16, "present")):
@@ -1139,22 +1789,54 @@ class AbsenceAroundHolidaysTests(_Base):
 
     def test_golden_rows(self):
         rows, body = self.rows()
-        got = [(r["employeeCode"], r["offDay"], r["offDayName"], r["offDays"], r["dayBefore"], r["dayAfter"], r["pattern"]) for r in rows]
-        self.assertEqual(got, [
-            ("PD_A", "2026-01-04", "Sunday", 1, "Present", "Absent", "After only"),
-            ("PD_A", "2026-01-11", "Sunday", 1, "Absent", "Absent", "Before and after"),
-            ("PD_A", "2026-01-14", "Pongal + Thiruvalluvar Day", 2, "Absent", "Absent", "Before and after"),
-            ("PD_A", "2026-01-18", "Sunday", 1, "Present", "On leave", "After only"),
-            ("PD_C", "2026-01-14", "Pongal + Thiruvalluvar Day", 2, "Absent", "Absent", "Before and after"),
-            ("PD_P", "2026-01-14", "Pongal + Thiruvalluvar Day", 2, "Absent", "Present", "Before only"),
-            ("PD_SAT", "2026-01-03", "Saturday (weekly off) + Sunday", 2, "Absent", "Present", "Before only"),
-        ])
+        got = [
+            (r["employeeCode"], r["offDay"], r["offDayName"], r["offDays"], r["dayBefore"], r["dayAfter"], r["pattern"])
+            for r in rows
+        ]
+        self.assertEqual(
+            got,
+            [
+                ("PD_A", "2026-01-04", "Sunday", 1, "Present", "Absent", "After only"),
+                ("PD_A", "2026-01-11", "Sunday", 1, "Absent", "Absent", "Before and after"),
+                ("PD_A", "2026-01-14", "Pongal + Thiruvalluvar Day", 2, "Absent", "Absent", "Before and after"),
+                ("PD_A", "2026-01-18", "Sunday", 1, "Present", "On leave", "After only"),
+                ("PD_C", "2026-01-14", "Pongal + Thiruvalluvar Day", 2, "Absent", "Absent", "Before and after"),
+                ("PD_P", "2026-01-14", "Pongal + Thiruvalluvar Day", 2, "Absent", "Present", "Before only"),
+                ("PD_SAT", "2026-01-03", "Saturday (weekly off) + Sunday", 2, "Absent", "Present", "Before only"),
+            ],
+        )
         first = rows[1]
         self.assertEqual((first["beforeDate"], first["afterDate"]), ("2026-01-10", "2026-01-12"))
         block = rows[2]
         self.assertEqual((block["beforeDate"], block["afterDate"]), ("2026-01-13", "2026-01-16"))
         s = self.summary(body)
-        self.assertEqual((s["Sandwich absences"], s["Away before and after"], s["Employees affected"], s["Employees with 3 or more"]), (7, 3, 4, 1))
+        self.assertEqual(
+            (
+                s["Sandwich absences"],
+                s["Away before and after"],
+                s["Employees affected"],
+                s["Employees with 3 or more"],
+            ),
+            (7, 3, 4, 1),
+        )
+
+    def test_row_limit_is_honoured(self):
+        self.check_row_limit(self.RID, JAN)
+
+    def test_scope_filters(self):
+        self.check_scope_filters(self.RID, JAN)
+
+    def test_an_unparseable_joining_date_hides_nothing_and_breaks_nothing(self):
+        junk = self.mk("PD_JK", "Junk", self.cutting, self.b1, join_date="sometime in 2019")
+        day_rec(junk, 13, "absent")
+        day_rec(junk, 16, "absent")
+        rows, _ = self.rows(employeeIds=str(junk.id))
+        self.assertEqual([(r["offDay"], r["pattern"]) for r in rows], [("2026-01-14", "Before and after")])
+
+    def test_duplicate_holiday_rows_do_not_repeat_the_name(self):
+        Holiday.objects.create(name="Pongal", date=date(2026, 1, 14))
+        rows, _ = self.rows(employeeIds=str(self.p.id))
+        self.assertEqual(rows[0]["offDayName"], "Pongal + Thiruvalluvar Day")
 
     def test_joining_date_masks_the_days_before_joining(self):
         rows, _ = self.rows()
@@ -1173,7 +1855,9 @@ class AbsenceAroundHolidaysTests(_Base):
         self.assertEqual(codes(employmentType="production"), [("PD_P", "2026-01-14")])
         self.assertEqual(codes(departmentIds=str(self.sewing.id)), [("PD_C", "2026-01-14")])
         self.assertEqual(codes(branchIds=str(self.b2.id)), [("PD_C", "2026-01-14")])
-        self.assertEqual(codes(employeeIds=str(self.a.id), dateFrom="2026-01-15", dateTo="2026-01-15"), [("PD_A", "2026-01-14")])  # block found from its 2nd day
+        self.assertEqual(
+            codes(employeeIds=str(self.a.id), dateFrom="2026-01-15", dateTo="2026-01-15"), [("PD_A", "2026-01-14")]
+        )  # block found from its 2nd day
         self.assertEqual(codes(employeeIds=str(self.a.id), dateFrom="2026-01-12", dateTo="2026-01-13"), [])
         self.assertEqual(codes(dateFrom="2026-02-01", dateTo="2026-02-28"), [])
 
@@ -1184,7 +1868,10 @@ class AbsenceAroundHolidaysTests(_Base):
         day_rec(self.a, 27, "absent")
         day_rec(self.a, 24, "present")
         rows = [r for r in self.rows(employeeIds=str(self.a.id), dateFrom="2026-01-25", dateTo="2026-01-25")[0]]
-        self.assertEqual([(r["offDay"], r["offDayName"], r["offDays"], r["dayAfter"]) for r in rows], [("2026-01-25", "Sunday + Republic Day", 2, "Absent")])
+        self.assertEqual(
+            [(r["offDay"], r["offDayName"], r["offDays"], r["dayAfter"]) for r in rows],
+            [("2026-01-25", "Sunday + Republic Day", 2, "Absent")],
+        )
 
     def test_days_from_today_on_are_never_flagged(self):
         from .clock import ist_today
@@ -1194,7 +1881,9 @@ class AbsenceAroundHolidaysTests(_Base):
         sunday = today + timedelta(days=(6 - today.weekday()) % 7 + 7)
         AttendanceDayRecord.objects.create(employee=self.a, date=sunday - timedelta(days=1), status="absent")
         AttendanceDayRecord.objects.create(employee=self.a, date=sunday + timedelta(days=1), status="absent")
-        body = self.run_report(self.RID, dateFrom=sunday.isoformat(), dateTo=sunday.isoformat(), employeeIds=str(self.a.id))
+        body = self.run_report(
+            self.RID, dateFrom=sunday.isoformat(), dateTo=sunday.isoformat(), employeeIds=str(self.a.id)
+        )
         self.assertEqual(body["rows"], [])
 
     def test_exports_empty_and_gating(self):
@@ -1223,7 +1912,9 @@ class AbsenceAroundHolidaysTests(_Base):
 
 def log_punch(emp, day, *times):
     for t in times:
-        AttendanceLog.objects.create(employee=emp, date=date(2026, 3, day), punch_time=t, punch_type="IN", source="biometric:test")
+        AttendanceLog.objects.create(
+            employee=emp, date=date(2026, 3, day), punch_time=t, punch_type="IN", source="biometric:test"
+        )
 
 
 class ConflictTests(_Base):
@@ -1236,22 +1927,46 @@ class ConflictTests(_Base):
         punch = log_punch
         casual = LeaveType.objects.create(name="Casual Leave", code="PDCL")
         # 1. leave but punched: PD_A approved 16-18 Mar, punched on the 17th only.
-        LeaveRequest.objects.create(employee=cls.a, leave_type_ref=casual, type="casual", start_date="2026-03-16", end_date="2026-03-18", status="approved")
+        LeaveRequest.objects.create(
+            employee=cls.a,
+            leave_type_ref=casual,
+            type="casual",
+            start_date="2026-03-16",
+            end_date="2026-03-18",
+            status="approved",
+        )
         punch(cls.a, 17, time(9, 0), time(18, 0))
-        LeaveRequest.objects.create(employee=cls.b, type="casual", start_date="2026-03-16", end_date="2026-03-16", status="approved", is_half_day=True, half_day_slot="morning", total_days=Decimal("0.5"))
+        LeaveRequest.objects.create(
+            employee=cls.b,
+            type="casual",
+            start_date="2026-03-16",
+            end_date="2026-03-16",
+            status="approved",
+            is_half_day=True,
+            half_day_slot="morning",
+            total_days=Decimal("0.5"),
+        )
         punch(cls.b, 16, time(9, 0))  # half-day leave: not a conflict
-        LeaveRequest.objects.create(employee=cls.b, type="casual", start_date="2026-03-17", end_date="2026-03-17", status="pending")
+        LeaveRequest.objects.create(
+            employee=cls.b, type="casual", start_date="2026-03-17", end_date="2026-03-17", status="pending"
+        )
         punch(cls.b, 17, time(9, 0))  # pending leave: not a conflict
-        LeaveRequest.objects.create(employee=cls.p, type="casual", start_date="2026-03-17", end_date="2026-03-17", status="approved")
+        LeaveRequest.objects.create(
+            employee=cls.p, type="casual", start_date="2026-03-17", end_date="2026-03-17", status="approved"
+        )
         punch(cls.p, 17, time(9, 0))  # production: leave has no effect
-        LeaveRequest.objects.create(employee=cls.x, type="casual", start_date="soon", end_date="later", status="approved")  # unparseable
+        LeaveRequest.objects.create(
+            employee=cls.x, type="casual", start_date="soon", end_date="later", status="approved"
+        )  # unparseable
         AttendanceDayRecord.objects.create(employee=cls.a, date=date(2026, 3, 17), status="present")
         # 2. casual leave rejected but worked.
         CasualLeaveRequest.objects.create(employee=cls.a, date=date(2026, 3, 19), status="rejected")
         punch(cls.a, 19, time(9, 0), time(17, 0), time(17, 30))
         CasualLeaveRequest.objects.create(employee=cls.b, date=date(2026, 3, 19), status="approved")
         punch(cls.b, 19, time(9, 0))
-        CasualLeaveRequest.objects.create(employee=cls.b, date=date(2026, 3, 20), status="rejected")  # no punches -> fine
+        CasualLeaveRequest.objects.create(
+            employee=cls.b, date=date(2026, 3, 20), status="rejected"
+        )  # no punches -> fine
         AttendanceDayRecord.objects.create(employee=cls.a, date=date(2026, 3, 19), status="on_leave", source="manual")
         # 3. on-duty approved without any approved punch.
         cls.od_bad = OnDutySession.objects.create(employee=cls.a, destination="Karur", status="active", branch=cls.b1)
@@ -1259,28 +1974,79 @@ class ConflictTests(_Base):
         ok = OnDutySession.objects.create(employee=cls.b, destination="Trichy", status="completed", branch=cls.b1)
         OnDutySession.objects.filter(pk=ok.pk).update(created_at=utc(2026, 3, 21, 4, 0))
         OnDutyPunchVerification.objects.create(
-            session=ok, employee=cls.b, punch_date=date(2026, 3, 21), punch_time=time(9, 0), punch_type="IN", punch_number=1,
-            latitude=Decimal("10.1"), longitude=Decimal("77.1"), photo="x.jpg", status="approved",
+            session=ok,
+            employee=cls.b,
+            punch_date=date(2026, 3, 21),
+            punch_time=time(9, 0),
+            punch_type="IN",
+            punch_number=1,
+            latitude=Decimal("10.1"),
+            longitude=Decimal("77.1"),
+            photo="x.jpg",
+            status="approved",
         )
-        pend = OnDutySession.objects.create(employee=cls.a, destination="Pending place", status="pending_hr", branch=cls.b1)
+        pend = OnDutySession.objects.create(
+            employee=cls.a, destination="Pending place", status="pending_hr", branch=cls.b1
+        )
         OnDutySession.objects.filter(pk=pend.pk).update(created_at=utc(2026, 3, 21, 4, 0))
         # 4. approved missing punch that is not in the log.
-        MissingPunchRequest.objects.create(employee=cls.a, date=date(2026, 3, 23), punch_time=time(9, 0), punch_type="IN", status="approved", reason="r")
-        MissingPunchRequest.objects.create(employee=cls.b, date=date(2026, 3, 23), punch_time=time(9, 0), punch_type="IN", status="approved", reason="r")
+        MissingPunchRequest.objects.create(
+            employee=cls.a,
+            date=date(2026, 3, 23),
+            punch_time=time(9, 0),
+            punch_type="IN",
+            status="approved",
+            reason="r",
+        )
+        MissingPunchRequest.objects.create(
+            employee=cls.b,
+            date=date(2026, 3, 23),
+            punch_time=time(9, 0),
+            punch_type="IN",
+            status="approved",
+            reason="r",
+        )
         punch(cls.b, 23, time(9, 0))
-        MissingPunchRequest.objects.create(employee=cls.a, date=date(2026, 3, 24), punch_time=time(9, 0), punch_type="IN", status="pending_hr", reason="r")
+        MissingPunchRequest.objects.create(
+            employee=cls.a,
+            date=date(2026, 3, 24),
+            punch_time=time(9, 0),
+            punch_type="IN",
+            status="pending_hr",
+            reason="r",
+        )
         # 5. approved permission not reflected on a worked, auto-computed day.
         for day, typ in ((24, "morning_late_in"), (25, "evening_early_out"), (26, "middle_permission")):
             EmployeePermission.objects.create(employee=cls.a, date=date(2026, 3, day), type=typ, status="approved")
-            AttendanceDayRecord.objects.create(employee=cls.a, date=date(2026, 3, day), status="present", source="auto")
-        EmployeePermission.objects.create(employee=cls.b, date=date(2026, 3, 24), type="morning_late_in", status="approved")
-        AttendanceDayRecord.objects.create(employee=cls.b, date=date(2026, 3, 24), status="present", morning_permission_applied=True)
-        EmployeePermission.objects.create(employee=cls.b, date=date(2026, 3, 25), type="morning_late_in", status="approved")  # no record
-        EmployeePermission.objects.create(employee=cls.b, date=date(2026, 3, 26), type="middle_permission", status="approved")
+            AttendanceDayRecord.objects.create(
+                employee=cls.a, date=date(2026, 3, day), status="present", source="auto", total_punches=2
+            )
+        EmployeePermission.objects.create(
+            employee=cls.b, date=date(2026, 3, 24), type="morning_late_in", status="approved"
+        )
+        AttendanceDayRecord.objects.create(
+            employee=cls.b, date=date(2026, 3, 24), status="present", morning_permission_applied=True
+        )
+        EmployeePermission.objects.create(
+            employee=cls.b, date=date(2026, 3, 28), type="morning_late_in", status="approved"
+        )  # present only through a manual attendance entry: no punches, so the engine never set the flags
+        AttendanceDayRecord.objects.create(
+            employee=cls.b, date=date(2026, 3, 28), status="present", source="auto", total_punches=0
+        )
+        EmployeePermission.objects.create(
+            employee=cls.b, date=date(2026, 3, 25), type="morning_late_in", status="approved"
+        )  # no record
+        EmployeePermission.objects.create(
+            employee=cls.b, date=date(2026, 3, 26), type="middle_permission", status="approved"
+        )
         AttendanceDayRecord.objects.create(employee=cls.b, date=date(2026, 3, 26), status="present", source="manual")
-        EmployeePermission.objects.create(employee=cls.b, date=date(2026, 3, 27), type=None, status="approved")  # untyped: cannot verify
+        EmployeePermission.objects.create(
+            employee=cls.b, date=date(2026, 3, 27), type=None, status="approved"
+        )  # untyped: cannot verify
         AttendanceDayRecord.objects.create(employee=cls.b, date=date(2026, 3, 27), status="present", source="auto")
-        EmployeePermission.objects.create(employee=cls.p, date=date(2026, 3, 24), type="morning_late_in", status="approved")  # production
+        EmployeePermission.objects.create(
+            employee=cls.p, date=date(2026, 3, 24), type="morning_late_in", status="approved"
+        )  # production
         AttendanceDayRecord.objects.create(employee=cls.p, date=date(2026, 3, 24), status="present", source="auto")
 
     def rows(self, user=None, **params):
@@ -1289,16 +2055,22 @@ class ConflictTests(_Base):
 
     def test_golden_rows(self):
         rows, body = self.rows()
-        got = [(r["employeeCode"], r["date"], r["conflictType"], r["requestRef"].split(" #")[0], r["attendanceStatus"]) for r in rows]
-        self.assertEqual(got, [
-            ("PD_A", "2026-03-17", "Approved leave, but punched", "Leave", "Present"),
-            ("PD_A", "2026-03-19", "Casual leave rejected, but worked", "Casual leave", "On leave"),
-            ("PD_A", "2026-03-21", "On-duty approved, no approved punches", "On-duty", None),
-            ("PD_A", "2026-03-23", "Missing punch approved, not in the log", "Missing punch", None),
-            ("PD_A", "2026-03-24", "Permission approved, not reflected", "Permission", "Present"),
-            ("PD_A", "2026-03-25", "Permission approved, not reflected", "Permission", "Present"),
-            ("PD_A", "2026-03-26", "Permission approved, not reflected", "Permission", "Present"),
-        ])
+        got = [
+            (r["employeeCode"], r["date"], r["conflictType"], r["requestRef"].split(" #")[0], r["attendanceStatus"])
+            for r in rows
+        ]
+        self.assertEqual(
+            got,
+            [
+                ("PD_A", "2026-03-17", "Approved leave, but punched", "Leave", "Present"),
+                ("PD_A", "2026-03-19", "Casual leave rejected, but worked", "Casual leave", "On leave"),
+                ("PD_A", "2026-03-21", "On-duty approved, no approved punches", "On-duty", None),
+                ("PD_A", "2026-03-23", "Missing punch approved, not in the log", "Missing punch", None),
+                ("PD_A", "2026-03-24", "Permission approved, not reflected", "Permission", "Present"),
+                ("PD_A", "2026-03-25", "Permission approved, not reflected", "Permission", "Present"),
+                ("PD_A", "2026-03-26", "Permission approved, not reflected", "Permission", "Present"),
+            ],
+        )
         self.assertIn("Approved Casual Leave (16-Mar-2026 to 18-Mar-2026) but 2 punch(es)", rows[0]["detail"])
         self.assertIn("3 punch(es)", rows[1]["detail"])
         self.assertIn("Karur", rows[2]["detail"])
@@ -1310,6 +2082,12 @@ class ConflictTests(_Base):
             self.assertIn(label, s)
         self.assertEqual(s["Permission approved, not reflected"], 3)
         self.assertEqual(s["Approved leave, but punched"], 1)
+
+    def test_row_limit_is_honoured(self):
+        self.check_row_limit(self.RID, MARCH)
+
+    def test_scope_filters(self):
+        self.check_scope_filters(self.RID, MARCH)
 
     def test_conflict_type_filter(self):
         only = lambda t: [(r["employeeCode"], r["date"]) for r in self.rows(conflictType=t)[0]]  # noqa: E731
@@ -1338,12 +2116,23 @@ class ConflictTests(_Base):
         self.assertIn("Permission approved, not reflected", " ".join(body["notes"]))
         forbidden = self.rows(user=leave_only, conflictType="on_duty_no_punches")[0]
         self.assertEqual(forbidden, [])  # asking for a type the role cannot open returns nothing, not an error
-        full = self.hr("pd_all", {"reports": "view", **{k: "view" for k in ("attendance", "leave", "casual_leave", "geo_attendance", "missing_punch", "requests")}})
+        full = self.hr(
+            "pd_all",
+            {
+                "reports": "view",
+                **{
+                    k: "view"
+                    for k in ("attendance", "leave", "casual_leave", "geo_attendance", "missing_punch", "requests")
+                },
+            },
+        )
         self.assertEqual(len(self.rows(user=full)[0]), 7)
 
     def test_totals_and_summary_agree_with_the_rows(self):
         rows, body = self.rows()
-        self.assertEqual(sum(v for k, v in self.summary(body).items() if k in checks.CONFLICT_LABELS.values()), len(rows))
+        self.assertEqual(
+            sum(v for k, v in self.summary(body).items() if k in checks.CONFLICT_LABELS.values()), len(rows)
+        )
         self.assertIsNone(body["totals"])
 
     def test_exports_empty_and_gating(self):
@@ -1363,9 +2152,170 @@ class ConflictTests(_Base):
             for e in self.many(12):
                 CasualLeaveRequest.objects.create(employee=e, date=date(2026, 3, 19), status="rejected")
                 log_punch(e, 19, time(9, 0))
-                MissingPunchRequest.objects.create(employee=e, date=date(2026, 3, 23), punch_time=time(9, 0), punch_type="IN", status="approved", reason="r")
+                MissingPunchRequest.objects.create(
+                    employee=e,
+                    date=date(2026, 3, 23),
+                    punch_time=time(9, 0),
+                    punch_type="IN",
+                    status="approved",
+                    reason="r",
+                )
 
         for e in self.many(2, prefix="PD_S"):
             CasualLeaveRequest.objects.create(employee=e, date=date(2026, 3, 19), status="rejected")
             log_punch(e, 19, time(9, 0))
         self.assert_constant_queries(self.RID, MARCH, grow)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  Adversarial review (a second engineer probing the reports against the code they read)
+# ════════════════════════════════════════════════════════════════════════════
+
+
+class AdversarialPermissionTests(_Base):
+    def test_production_permissions_are_not_reported_as_excess_that_payroll_prices(self):
+        """Payroll and the attendance engine ignore permissions of production employees completely (staff only), yet
+        the counts/register would call the 4th approved one an 'Excess' that 'joins the late pool, priced by payroll'."""
+        from .attendance_final import compute_month_records
+
+        for day in (2, 3, 4, 5):
+            perm(self.p, date(2026, 3, day), "morning_late_in", at=time(9, 30))
+            AttendanceLog.objects.create(
+                employee=self.p, date=date(2026, 3, day), punch_time=time(8, 30), punch_type="IN", source="test"
+            )
+            AttendanceLog.objects.create(
+                employee=self.p, date=date(2026, 3, day), punch_time=time(17, 30), punch_type="OUT", source="test"
+            )
+        records = {r.date: r for r in compute_month_records(self.p, 2026, 3)}
+        self.assertFalse(
+            any(
+                r.morning_permission_applied or r.morning_permission_excess
+                for r in records.values()
+                if r.date <= date(2026, 3, 5)
+            )
+        )  # the engine really does ignore them
+
+        counts = self.run_report("permission-monthly-counts", employeeIds=str(self.p.id), **MARCH)
+        row = self.data_rows(counts)[0]
+        self.assertFalse(row["excess"], row)  # 4 approved - 3 cap = "1 excess" although nothing is ever priced
+        s = self.summary(counts)
+        self.assertEqual((s["Excess permissions"], s["Employees over the cap"]), (0, 0))
+        register = self.run_report("permission-register", employeeIds=str(self.p.id), **MARCH)
+        self.assertEqual(self.summary(register)["Excess"], 0)
+        self.assertEqual(self.summary(register)["Employees with excess"], 0)
+
+    def test_an_untyped_permission_the_engine_inferred_is_shown_with_its_real_effect(self):
+        """The register claims to read the stored day flags, but for an untyped row it never looks at them, although
+        the engine infers the type from the shift and DID move the boundary."""
+        ps = PayrollSettings.get()
+        ps.attendance_mode = "simple"
+        ps.morning_late_in_enabled = True
+        ps.save()
+        shift = ShiftTemplate.objects.create(
+            name="Adv Shift",
+            shift_type="staff",
+            start_time=time(9, 0),
+            end_time=time(18, 0),
+            grace_period_minutes=15,
+            first_half_end=time(13, 30),
+            lunch_duration_minutes=60,
+            lunch_grace_minutes=10,
+        )
+        EmployeeShiftAssignment.objects.create(employee=self.a, shift=shift, effective_from=date(2020, 1, 1))
+        EmployeePermission.objects.create(
+            employee=self.a, date=date(2026, 3, 2), type=None, status="approved", permission_time=time(9, 30)
+        )
+        for t in (time(10, 10), time(18, 0)):
+            AttendanceLog.objects.create(
+                employee=self.a, date=date(2026, 3, 2), punch_time=t, punch_type="IN", source="test"
+            )
+        _generate_staff_payroll(self.a, 3, 2026)
+        rec = AttendanceDayRecord.objects.get(employee=self.a, date=date(2026, 3, 2))
+        self.assertTrue(rec.morning_permission_applied)  # the engine inferred a Morning Late-In and applied it
+        row = self.run_report("permission-register", employeeIds=str(self.a.id), **MARCH)["rows"][0]
+        self.assertIn("boundary moved", row["dayEffect"] or "")
+
+    def test_an_evening_permission_on_a_compensation_day_is_not_called_unreflected(self):
+        """The conflicts report treats a compensation day as the reason an evening permission left no flag, the
+        register says 'Not reflected on the day record' for the very same row."""
+        perm(self.a, date(2026, 3, 25), "evening_early_out", at=time(17, 0))
+        AttendanceDayRecord.objects.create(
+            employee=self.a,
+            date=date(2026, 3, 25),
+            status="present",
+            source="auto",
+            total_punches=2,
+            is_compensation_day=True,
+        )
+        conflicts = self.run_report("leave-attendance-conflicts", conflictType="permission_no_effect", **MARCH)
+        self.assertEqual(self.data_rows(conflicts), [])
+        row = self.run_report("permission-register", employeeIds=str(self.a.id), **MARCH)["rows"][0]
+        self.assertNotEqual(row["dayEffect"], "Not reflected on the day record")
+
+    def test_summary_cards_of_a_truncated_register_do_not_count_the_cut_off_row(self):
+        for day in (2, 3, 4, 5):
+            perm(self.a, date(2026, 3, day), "morning_late_in")
+        with mock.patch("api.reporting.runner.SCREEN_ROW_LIMIT", 2):
+            body = self.run_report("permission-register", employeeIds=str(self.a.id), **MARCH)
+        self.assertTrue(body["truncated"])
+        self.assertEqual(body["rowCount"], 2)
+        self.assertLessEqual(self.summary(body)["Total requests"], body["rowCount"])
+
+
+class AdversarialOnDutyTests(_OnDutyFixture):
+    def test_last_on_duty_is_the_last_day_actually_on_duty_not_a_rejected_request(self):
+        rows = {r["employeeCode"]: r for r in self.data_rows(self.run_report("on-duty-employee-summary", **MARCH))}
+        # PD_A: completed session on 10 Mar, then a REJECTED one on 11 Mar (never attendance)
+        self.assertEqual(rows["PD_A"]["lastOnDuty"], "2026-03-10")
+
+    def test_the_completion_filter_agrees_with_the_completion_column(self):
+        body = self.run_report("on-duty-register", completion="not_completed", **MARCH)
+        shown = [r["completion"] for r in body["rows"]]
+        self.assertEqual(
+            [c for c in shown if c], []
+        )  # 'Not completed' must not return rows that say the employee is done
+
+    def test_a_session_still_in_progress_today_is_not_a_conflict(self):
+        from .clock import ist_today
+
+        today = ist_today()
+        OnDutySession.objects.create(employee=self.a, destination="Live trip", status="active", branch=self.b1)
+        body = self.run_report(
+            "leave-attendance-conflicts",
+            conflictType="on_duty_no_punches",
+            dateFrom=today.isoformat(),
+            dateTo=today.isoformat(),
+        )
+        self.assertEqual(self.data_rows(body), [])
+
+
+class AdversarialMissingPunchTests(_MissingPunchFixture):
+    def test_a_heads_own_request_is_stuck_because_a_head_never_decides_their_own(self):
+        req = mp_req(self.hod, 12, time(9, 0), "IN", "morning_in", "pending_hod", utc(2026, 3, 13, 5, 0))
+        # The approval endpoint really refuses: the HOD's approval scope excludes their own requests.
+        token = sign_token({"role": "employee", "employeeId": self.hod.id})
+        r = self.client.patch(
+            f"/api/manager/missing-punch-requests/{req.id}/status",
+            {"status": "approved"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+        self.assertIn(r.status_code, (403, 404), r.content[:200])
+        body = self.run_report("missing-punch-register", employeeIds=str(self.hod.id), **MARCH)
+        row = body["rows"][0]
+        self.assertIn("stuck", (row["pendingWith"] or "").lower(), row["pendingWith"])
+        self.assertEqual(self.summary(body)["Stuck (no HOD / no right)"], 1)
+
+
+class AdversarialSandwichTests(_Base):
+    def test_a_stored_absent_verdict_contradicted_by_real_punches_is_not_flagged(self):
+        """Punch ingestion never refreshes AttendanceDayRecord, so an 'absent' written before a late device sync can
+        outlive the punches that prove the employee worked; the report must not accuse on such a record."""
+        AttendanceDayRecord.objects.create(employee=self.a, date=date(2026, 1, 3), status="absent")  # Saturday
+        AttendanceDayRecord.objects.create(employee=self.a, date=date(2026, 1, 5), status="present")  # Monday
+        for t in (time(9, 0), time(18, 0)):
+            AttendanceLog.objects.create(
+                employee=self.a, date=date(2026, 1, 3), punch_time=t, punch_type="IN", source="biometric:test"
+            )
+        body = self.run_report("absence-around-holidays", employeeIds=str(self.a.id), **JAN)
+        self.assertEqual(body["rows"], [])

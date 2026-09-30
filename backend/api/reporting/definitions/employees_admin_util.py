@@ -121,3 +121,31 @@ def status_label(status) -> str:
 
 def type_label(employment_type) -> str | None:
     return label(employment_type)
+
+
+def stored_files(names) -> set[str]:
+    """Which of these stored file names still exist in the file storage?
+
+    A FileField value is only a path: a file can be gone while the column still holds it (the retention job
+    deletes the stored file without clearing the value, a legacy on-disk file may have vanished with a
+    redeploy). New uploads live in Postgres (``FileBlob``) and older ones on disk (``HybridFileStorage``), so
+    ask the database ONCE for the whole batch and stat the disk only for what it does not hold - never one query
+    per row. When the disk cannot be read the file is assumed present: a report must not claim a removal it
+    cannot prove."""
+    from django.core.files.storage import FileSystemStorage
+
+    from api.models import FileBlob
+
+    wanted = {n for n in names if n}
+    found: set[str] = set()
+    ordered = sorted(wanted)
+    for i in range(0, len(ordered), 5000):
+        found.update(FileBlob.objects.filter(name__in=ordered[i : i + 5000]).values_list("name", flat=True))
+    disk = FileSystemStorage()
+    for name in wanted - found:
+        try:
+            if disk.exists(name):
+                found.add(name)
+        except Exception:  # noqa: BLE001 - unreadable storage: do not claim the file is gone
+            found.add(name)
+    return found

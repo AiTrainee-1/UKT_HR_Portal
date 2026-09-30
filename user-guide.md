@@ -192,6 +192,23 @@ Click **Add Employee** (top right). Fill in:
 
 > **Important:** The employee code is the system's unique identifier for an employee. It cannot be changed after it's used in any attendance or payroll record. Choose it carefully (e.g., format like `EMP001`).
 
+##### Salary Split (50% + 50%)
+
+For a salaried employee (Salary Type **Monthly** or **Weekly**) the salary is always divided into two equal halves:
+
+| Portion | Share | Made up of |
+|---|---|---|
+| **First portion** | 50% of the salary | Basic + DA + Retention Allowance |
+| **Second portion** | 50% of the salary | Other Allowance + Petrol Allowance + RHA + Special Allowance + CA |
+
+- **It fills itself in.** As soon as you type the Salary Amount, all eight amounts appear (each portion is shared equally between its components, and if the salary has an odd paisa it goes to the first portion). Type a different salary and they are worked out again.
+- **You can change any amount.** For example, put most of the first portion into Basic. The two portions show a live total with a green tick when correct or how much is over / short in red.
+- **The 50% + 50% rule is mandatory.** Save is blocked until each portion is exactly half of the salary (so the two halves add up to the salary). **Reset to automatic split** puts the equal split back.
+- **Older employees** with no split on record get a suggested split on their Edit page; saving records it. Employees paid **per shift** (Production) have no monthly amount, so no split.
+- **When the salary changes** (Edit Employee, an Increment, or a bulk update) the split is re-worked to the new salary, keeping the way each half was shared.
+- **Bulk upload:** the last eight template columns (Basic … CA) hold the split. Leave them blank and it is done for you; if you fill them, blanks count as 0 and each half must be exactly 50%. A template downloaded before these columns existed still uploads.
+- **Nothing else changes.** The split is a record of how the salary is made up; payroll, attendance and salary slips still calculate from the Salary Amount exactly as before.
+
 #### Employee Profile
 Click any employee's name to open their full profile. The profile is split into tabs:
 
@@ -417,6 +434,22 @@ The payroll page also shows older sessions from before the current payroll syste
 - ❌ Do not publish payroll if any employee's pay looks incorrect — re-check attendance first.
 - ❌ Do not generate payroll twice for the same month (this creates duplicate records).
 
+#### Compensation page — CTC Breakdown
+The **Compensation** page (sidebar) has a **CTC Breakdown** tab that lists every active employee's salary the way it was entered on Add / Edit Employee — the **50% + 50% salary split**:
+
+| | Columns |
+|---|---|
+| **First portion · 50%** | Basic, DA, Retention Allowance |
+| **Second portion · 50%** | Other Allowance, Petrol Allowance, RHA, Special Allowance, CA |
+
+followed by **Employer PF**, **Employer ESI**, **Gross Monthly** and **Annual CTC**.
+
+- **Employer PF** = the PF rate (Settings → Payroll → Payroll Rules) × the **first portion** (Basic + DA + Retention Allowance). Employer ESI = the ESI rate × the salary, only while the salary is within the ESI ceiling. Annual CTC = (monthly salary + employer PF + employer ESI) × 12.
+- An employee whose split was never saved (added before the split existed) shows the **automatic** 50% + 50% split with an amber **AUTO SPLIT** tag; the page says how many. Open their Edit Employee page and save to record it — the totals do not change.
+- An employee with no monthly salary (paid per shift) shows dashes.
+- **Export to Excel** includes the same columns plus the two portion totals and whether the split is *Recorded* or *Automatic*. The Report Center's *Employer Cost / CTC Statement* uses the very same figures.
+- Display only: payroll generation and salary slips are never affected. The old Basic % / HRA % boxes (Settings → Payroll → Compensation) are no longer used.
+
 ---
 
 ### 4.6 Production Payroll
@@ -585,6 +618,25 @@ Configure the organization's identity, which appears on all generated documents:
 - Company Name, Tagline, Address, Phone, Email, Website
 - GSTIN, PAN, Registration Number
 - Company Logo (uploaded here; used on salary slips, ID cards, letters)
+
+---
+
+#### HR Contact
+
+**What it's for:** Tells employees who to contact when they need help. The details you enter here are shown in the **Employee Mobile App** and the **Employee Web App** (and on the portal's own server-down screens), so there is one place to keep them right. Company details and documents stay in the **Company** tab.
+
+Two contacts are kept, because they answer different problems:
+
+| Contact | Shown to employees when… |
+|---|---|
+| **HR Department** | They can't sign in (wrong password, code not arriving), they are not registered or their account is inactive, or there is any problem with the mobile app or web app itself. |
+| **Software / IT Support** | The server is not working or can't be reached, the database is offline, or the app can't connect. Leave it blank and the HR contact is shown instead. |
+
+For each you can enter a **name** (shown to employees), **phone number**, **WhatsApp number** (opens a WhatsApp chat; without a country code +91 is assumed), **email** and **available hours**. An optional **note** appears under the contacts, for example "HR office is on the first floor". Enter one number per box: `0421 430 0800`, `+91 98765 43210`. Boxes you leave empty are simply not shown (no button, no blank line). If nothing is filled in at all, employees see "Please contact your HR department."
+
+A live **What employees will see** preview shows your entries before you save. The details take effect the next time an employee opens the app; the apps also remember the last details they received, so the contact is still there when the server is down.
+
+> The contacts are company-wide. A login assigned to one branch can see them but not change them; ask an administrator. Access is controlled by the **HR Contact** entry under Settings in Account Management (a role with edit access to the whole Settings module has it too).
 
 ---
 

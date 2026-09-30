@@ -65,12 +65,14 @@ MODULE_TREE: list[dict] = [
     {"key": "login_devices", "label": "Login Devices"},
     {"key": "mobile_app_login", "label": "Mobile App Login"},
     {"key": "whatsapp_control", "label": "WhatsApp Control"},
+    {"key": "gmail_control", "label": "Gmail Control"},
     {"key": "chat", "label": "Chat"},
     {"key": "notifications", "label": "Notifications"},
     {"key": "geo_attendance", "label": "Geo Attendance"},
     {"key": "outpass_visitors", "label": "Outpass / Visitors"},
     {"key": "settings", "label": "Settings", "children": [
         {"key": "settings.company", "label": "Company"},
+        {"key": "settings.hr_contact", "label": "HR Contact"},
         {"key": "settings.attendance", "label": "Attendance"},
         {"key": "settings.late_detection", "label": "Late Detection"},
         {"key": "settings.devices", "label": "Devices"},
@@ -230,6 +232,8 @@ URL_MODULE_MAP: dict[str, str] = {
     "mobile-app/versions": "mobile_app_login",
 
     "whatsapp-control": "whatsapp_control",
+
+    "gmail-control": "gmail_control",
 
     "chat": "chat",
 

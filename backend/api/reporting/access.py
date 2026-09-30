@@ -49,7 +49,7 @@ def hr_display_name(request) -> str:
 
 
 def permission_level(request, module_key: str) -> str:
-    """"hidden" | "view" | "edit" for the requesting HR user (super admin = edit; unknown user = hidden)."""
+    """ "hidden" | "view" | "edit" for the requesting HR user (super admin = edit; unknown user = hidden)."""
     user = _hr_user(request)
     if user is None:
         return "hidden"

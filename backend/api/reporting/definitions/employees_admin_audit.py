@@ -32,6 +32,7 @@ AUDIT_MODULES = (
     ("attendance", "Attendance"),
     ("bonus", "Bonus"),
     ("compensation", "Compensation"),
+    ("payroll", "Payroll"),
     ("mobile_app_login", "Mobile app login"),
     ("mobile_app_version", "Mobile app version"),
     ("reports", "Reports"),
@@ -64,6 +65,7 @@ def _audit_q(ctx) -> Q:
 
 # ── Audit / Activity Log ────────────────────────────────────────────────────
 
+
 def _run_audit_log(ctx):
     q = _audit_q(ctx)
     modules = ctx.param("module", [])
@@ -85,15 +87,13 @@ def _run_audit_log(ctx):
         )
     base = AuditLog.objects.filter(q)
     logs = (
-        base.select_related("branch")
-        .defer("old_values", "new_values")
-        .order_by("-created_at", "-id")[: ctx.row_limit]
+        base.select_related("branch").defer("old_values", "new_values").order_by("-created_at", "-id")[: ctx.row_limit]
     )
     rows = [
         {
             "createdAt": fmt_dt(a.created_at),
             "userName": a.user_name,
-            "userType": label(a.user_type),
+            "userType": "HR" if a.user_type == "hr" else label(a.user_type),
             "action": label(a.action),
             "module": a.module,
             "recordId": a.record_id,
@@ -130,37 +130,39 @@ def _run_audit_log(ctx):
     )
 
 
-register(ReportSpec(
-    id="audit-log",
-    title="Audit / Activity Log",
-    description="Who did what and when in the HR portal, with module, action, user and text filters.",
-    category="admin",
-    icon="History",
-    tags=("audit", "activity log", "security", "who changed"),
-    family="audit",
-    variant="Activity log",
-    super_admin_only=True,
-    filters=(
-        date_range("last7", label="Date range", max_days=92),
-        select("module", "Module", AUDIT_MODULES, multi=True, placeholder="All modules"),
-        select("action", "Action", AUDIT_ACTIONS, multi=True, placeholder="All actions"),
-        text("userName", "User", "Name contains"),
-        text("search", "Search", "Text in user, module, action or description"),
-        branches(),
-    ),
-    columns=(
-        ColumnSpec("createdAt", "When (IST)", DATETIME, 1.4),
-        ColumnSpec("userName", "User", TEXT, 1.6),
-        ColumnSpec("userType", "Type", BADGE, 0.8),
-        ColumnSpec("action", "Action", BADGE, 1.0),
-        ColumnSpec("module", "Module", TEXT, 1.2),
-        ColumnSpec("recordId", "Record ID", INTEGER, 0.8),
-        ColumnSpec("description", "Description", TEXT, 3.2),
-        ColumnSpec("ipAddress", "IP Address", TEXT, 1.2),
-        ColumnSpec("branch", "Branch", TEXT, 1.1),
-    ),
-    run=_run_audit_log,
-))
+register(
+    ReportSpec(
+        id="audit-log",
+        title="Audit / Activity Log",
+        description="Who did what and when in the HR portal, with module, action, user and text filters.",
+        category="admin",
+        icon="History",
+        tags=("audit", "activity log", "security", "who changed"),
+        family="audit",
+        variant="Activity log",
+        super_admin_only=True,
+        filters=(
+            date_range("last7", label="Date range", max_days=92),
+            select("module", "Module", AUDIT_MODULES, multi=True, placeholder="All modules"),
+            select("action", "Action", AUDIT_ACTIONS, multi=True, placeholder="All actions"),
+            text("userName", "User", "Name contains"),
+            text("search", "Search", "Text in user, module, action or description"),
+            branches(),
+        ),
+        columns=(
+            ColumnSpec("createdAt", "When (IST)", DATETIME, 1.4),
+            ColumnSpec("userName", "User", TEXT, 1.6),
+            ColumnSpec("userType", "Type", BADGE, 0.8),
+            ColumnSpec("action", "Action", BADGE, 1.0),
+            ColumnSpec("module", "Module", TEXT, 1.2),
+            ColumnSpec("recordId", "Record ID", INTEGER, 0.8),
+            ColumnSpec("description", "Description", TEXT, 3.2),
+            ColumnSpec("ipAddress", "IP Address", TEXT, 1.2),
+            ColumnSpec("branch", "Branch", TEXT, 1.1),
+        ),
+        run=_run_audit_log,
+    )
+)
 
 
 # ── Employee Change & Deletion Log ──────────────────────────────────────────
@@ -190,9 +192,7 @@ def _run_employee_changes(ctx):
         q &= Q(record_description__icontains=f"employee {code} -")
     base = AuditLog.objects.filter(q)
     logs = (
-        base.select_related("branch")
-        .defer("old_values", "new_values")
-        .order_by("-created_at", "-id")[: ctx.row_limit]
+        base.select_related("branch").defer("old_values", "new_values").order_by("-created_at", "-id")[: ctx.row_limit]
     )
     rows = []
     for a in logs:
@@ -208,17 +208,19 @@ def _run_employee_changes(ctx):
         else:  # e.g. "Bulk enabled live location tracking for 12 employee(s)"
             kind = "Bulk change" if desc.startswith("Bulk") else label(a.action)
             emp_code = name = fields = None
-        rows.append({
-            "createdAt": fmt_dt(a.created_at),
-            "userName": a.user_name,
-            "action": kind,
-            "employeeCode": emp_code,
-            "employeeName": name,
-            "fieldsChanged": fields,
-            "description": desc or None,
-            "ipAddress": a.ip_address or None,
-            "branch": a.branch.name if a.branch_id else None,
-        })
+        rows.append(
+            {
+                "createdAt": fmt_dt(a.created_at),
+                "userName": a.user_name,
+                "action": kind,
+                "employeeCode": emp_code,
+                "employeeName": name,
+                "fieldsChanged": fields,
+                "description": desc or None,
+                "ipAddress": a.ip_address or None,
+                "branch": a.branch.name if a.branch_id else None,
+            }
+        )
 
     def desc_is(prefix: str) -> Q:
         return Q(record_description__startswith=prefix)
@@ -249,36 +251,38 @@ def _run_employee_changes(ctx):
     )
 
 
-register(ReportSpec(
-    id="employee-change-log",
-    title="Employee Change & Deletion Log",
-    description="Employee create, update, delete and bulk-import events, including employees who no longer exist.",
-    category="admin",
-    icon="UserRound",
-    tags=("audit", "deleted employees", "employee changes", "bulk import"),
-    family="audit",
-    variant="Employee changes",
-    super_admin_only=True,
-    filters=(
-        date_range("thisMonth", label="Date range"),
-        select("action", "Action", _CHANGE_ACTIONS, multi=True, placeholder="All actions"),
-        text("userName", "Changed by", "Name contains"),
-        text("employeeCode", "Employee code", "Exact code"),
-        branches(),
-    ),
-    columns=(
-        ColumnSpec("createdAt", "When (IST)", DATETIME, 1.4),
-        ColumnSpec("userName", "Changed By", TEXT, 1.5),
-        ColumnSpec("action", "Action", BADGE, 1.0),
-        ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
-        ColumnSpec("employeeName", "Employee", TEXT, 1.8),
-        ColumnSpec("fieldsChanged", "Fields Changed (bulk update)", TEXT, 2.0),
-        ColumnSpec("description", "Description", TEXT, 3.0),
-        ColumnSpec("ipAddress", "IP Address", TEXT, 1.2),
-        ColumnSpec("branch", "Branch", TEXT, 1.1),
-    ),
-    run=_run_employee_changes,
-))
+register(
+    ReportSpec(
+        id="employee-change-log",
+        title="Employee Change & Deletion Log",
+        description="Employee create, update, delete and bulk-import events, including employees who no longer exist.",
+        category="admin",
+        icon="UserRound",
+        tags=("audit", "deleted employees", "employee changes", "bulk import"),
+        family="audit",
+        variant="Employee changes",
+        super_admin_only=True,
+        filters=(
+            date_range("thisMonth", label="Date range"),
+            select("action", "Action", _CHANGE_ACTIONS, multi=True, placeholder="All actions"),
+            text("userName", "Changed by", "Name contains"),
+            text("employeeCode", "Employee code", "Exact code"),
+            branches(),
+        ),
+        columns=(
+            ColumnSpec("createdAt", "When (IST)", DATETIME, 1.4),
+            ColumnSpec("userName", "Changed By", TEXT, 1.5),
+            ColumnSpec("action", "Action", BADGE, 1.0),
+            ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
+            ColumnSpec("employeeName", "Employee", TEXT, 1.8),
+            ColumnSpec("fieldsChanged", "Fields Changed (bulk update)", TEXT, 2.0),
+            ColumnSpec("description", "Description", TEXT, 3.0),
+            ColumnSpec("ipAddress", "IP Address", TEXT, 1.2),
+            ColumnSpec("branch", "Branch", TEXT, 1.1),
+        ),
+        run=_run_employee_changes,
+    )
+)
 
 
 # ── Audit Summary ───────────────────────────────────────────────────────────
@@ -310,24 +314,29 @@ def _run_audit_summary(ctx):
     rows = []
     for r in result:
         known = r["logins"] + r["failed"] + r["creates"] + r["updates"] + r["deletes"] + r["exports"]
-        rows.append({
-            "group": r["bucket"].isoformat() if group == "day" else r["bucket"],
-            "total": r["total"],
-            "logins": r["logins"],
-            "failedLogins": r["failed"],
-            "creates": r["creates"],
-            "updates": r["updates"],
-            "deletes": r["deletes"],
-            "exports": r["exports"],
-            "other": r["total"] - known,
-            "firstAt": fmt_dt(r["first"]),
-            "lastAt": fmt_dt(r["last"]),
-        })
+        rows.append(
+            {
+                "group": r["bucket"].isoformat() if group == "day" else r["bucket"],
+                "total": r["total"],
+                "logins": r["logins"],
+                "failedLogins": r["failed"],
+                "creates": r["creates"],
+                "updates": r["updates"],
+                "deletes": r["deletes"],
+                "exports": r["exports"],
+                "other": r["total"] - known,
+                "firstAt": fmt_dt(r["first"]),
+                "lastAt": fmt_dt(r["last"]),
+            }
+        )
     overall = base.aggregate(total=Count("id"))["total"]
     top_user = base.values("user_name").annotate(n=Count("id")).order_by("-n", "user_name").first()
     busiest = (
-        base.annotate(day=TruncDate("created_at", tzinfo=FACTORY_TZ)).values("day").annotate(n=Count("id"))
-        .order_by("-n", "day").first()
+        base.annotate(day=TruncDate("created_at", tzinfo=FACTORY_TZ))
+        .values("day")
+        .annotate(n=Count("id"))
+        .order_by("-n", "day")
+        .first()
     )
     head = {"user": ("User", TEXT), "module": ("Module", TEXT), "day": ("Day (IST)", DATE)}[group]
     columns = [ColumnSpec("group", head[0], head[1], 1.8), *_SUMMARY_COLUMNS[1:]]
@@ -368,21 +377,23 @@ _SUMMARY_COLUMNS = (
     ColumnSpec("lastAt", "Last Event", DATETIME, 1.3),
 )
 
-register(ReportSpec(
-    id="audit-summary",
-    title="Audit Summary",
-    description="Counts of audit events by user, module or day with the action split.",
-    category="admin",
-    icon="BarChart3",
-    tags=("audit", "activity summary", "most active", "logins"),
-    family="audit",
-    variant="Summary",
-    super_admin_only=True,
-    filters=(
-        date_range("thisMonth", label="Date range", max_days=92),
-        select("groupBy", "Group by", _GROUPS, default="user"),
-        branches(),
-    ),
-    columns=_SUMMARY_COLUMNS,
-    run=_run_audit_summary,
-))
+register(
+    ReportSpec(
+        id="audit-summary",
+        title="Audit Summary",
+        description="Counts of audit events by user, module or day with the action split.",
+        category="admin",
+        icon="BarChart3",
+        tags=("audit", "activity summary", "most active", "logins"),
+        family="audit",
+        variant="Summary",
+        super_admin_only=True,
+        filters=(
+            date_range("thisMonth", label="Date range", max_days=92),
+            select("groupBy", "Group by", _GROUPS, default="user"),
+            branches(),
+        ),
+        columns=_SUMMARY_COLUMNS,
+        run=_run_audit_summary,
+    )
+)

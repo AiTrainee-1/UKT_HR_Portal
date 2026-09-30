@@ -7,6 +7,7 @@ import { loginAsHr } from "./helpers";
 
 const TAB_HEADINGS: Record<string, string> = {
   Company: "Company Profile",
+  "HR Contact": "HR & Software Support Contacts",
   Attendance: "Attendance Calculation Mode",
   "Late Detection": "Late Detection Policy",
   Devices: "Biometric / Punching Devices",

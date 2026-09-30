@@ -19,7 +19,18 @@ from .branding import company
 from .formatting import display_date, parse_date
 from .runner import KIND_SUBTOTAL, KIND_TOTAL, RunOutput
 from .types import (
-    BADGE, CURRENCY, DATE, DATETIME, DURATION, HOURS, INTEGER, MINUTES, NUMBER, PERCENT, TEXT, TIME,
+    BADGE,
+    CURRENCY,
+    DATE,
+    DATETIME,
+    DURATION,
+    HOURS,
+    INTEGER,
+    MINUTES,
+    NUMBER,
+    PERCENT,
+    TEXT,
+    TIME,
     ColumnSpec,
 )
 
@@ -236,8 +247,9 @@ def build_xlsx(out: RunOutput) -> bytes:
     # ── notes ────────────────────────────────────────────────────────────────
     if out.truncated:
         ws.append([])
-        ws.append([text_cell(
-            f"Showing the first {out.row_count:,} rows only - narrow the filters to see the rest.", f_note)])
+        ws.append(
+            [text_cell(f"Showing the first {out.row_count:,} rows only - narrow the filters to see the rest.", f_note)]
+        )
     if out.notes:
         ws.append([])
         for n in out.notes:

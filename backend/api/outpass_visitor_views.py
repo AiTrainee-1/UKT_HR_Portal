@@ -24,11 +24,7 @@ UTC.
 """
 from __future__ import annotations
 
-import smtplib
-import ssl
 from datetime import timedelta
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
 from django.utils import timezone
 from rest_framework.decorators import api_view, throttle_classes
@@ -170,57 +166,31 @@ def _employee_contact_json(emp: Employee) -> dict:
 # Reception dashboard) and the WhatsAppMessageLog audit trail reflect it.
 
 def _send_visitor_email(visit: VisitorVisit, emp: Employee) -> None:
-    if not emp.email:
-        return
-    ps = settings_for_employee(emp)
-    if not ps.smtp_host or not ps.smtp_username or not ps.smtp_password:
-        return
+    """The arrival notice by email, through the central email service (which logs it for the Gmail Control
+    page). Automatic: with nothing to attempt -no address on file, SMTP not set up, HR switched it off- it
+    returns quietly and leaves no history row; a real attempt that fails is logged."""
+    from . import email_service
 
     visitor = visit.visitor
     emp_name = f"{emp.first_name} {emp.last_name}".strip()
-    company_name = ps.company_name or ps.slip_company_name or "UKTextiles"
-    subject = f"You have a visitor: {visitor.name}"
-    html_body = f"""
-    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1a3a2e">
-      <div style="background:#0E4B3A;padding:20px;text-align:center;border-radius:8px 8px 0 0">
-        <h1 style="color:white;margin:0;font-size:18px">{company_name.upper()}</h1>
-        <p style="color:rgba(255,255,255,0.8);margin:4px 0 0;font-size:12px">Visitor Arrival Notice</p>
-      </div>
-      <div style="background:#ffffff;padding:30px;border:1px solid #d8e5df;border-top:none">
-        <p>Dear <strong>{emp_name}</strong>,</p>
-        <p><strong>{visitor.name}</strong> has arrived at reception to meet you.</p>
-        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">
-          <tr><td style="padding:4px 0;color:#666">Phone</td><td style="padding:4px 0"><strong>{visitor.phone}</strong></td></tr>
-          <tr><td style="padding:4px 0;color:#666">Purpose</td><td style="padding:4px 0"><strong>{visit.purpose}</strong></td></tr>
-        </table>
-        <p style="color:#888;font-size:12px">This is a system-generated email from the Reception desk.</p>
-      </div>
-    </div>
-    """
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = f"{ps.smtp_from_name} <{ps.smtp_from_email or ps.smtp_username}>"
-    msg["To"] = emp.email
-    msg.attach(MIMEText(html_body, "html"))
-
-    try:
-        context = ssl.create_default_context()
-        if ps.smtp_port == 465:
-            with smtplib.SMTP_SSL(ps.smtp_host, ps.smtp_port, context=context) as server:
-                server.login(ps.smtp_username, ps.smtp_password)
-                server.sendmail(ps.smtp_from_email or ps.smtp_username, emp.email, msg.as_string())
-        else:
-            with smtplib.SMTP(ps.smtp_host, ps.smtp_port, timeout=15) as server:
-                server.ehlo()
-                server.starttls(context=context)
-                server.login(ps.smtp_username, ps.smtp_password)
-                server.sendmail(ps.smtp_from_email or ps.smtp_username, emp.email, msg.as_string())
-    except Exception:
-        return
-
-    visit.notified_email_at = timezone.now()
-    visit.save(update_fields=["notified_email_at"])
+    log = email_service.send_email(
+        "visitor_arrival",
+        to_email=emp.email,
+        params={
+            "employee_name": emp_name,
+            "visitor_name": visitor.name,
+            "visitor_phone": visitor.phone,
+            "purpose": visit.purpose,
+        },
+        ps=settings_for_employee(emp),
+        recipient_name=emp_name,
+        employee=emp,
+        ref_id=visit.id,
+        automatic=True,
+    )
+    if log is not None and log.status == email_service.EMAIL_SENT:
+        visit.notified_email_at = timezone.now()
+        visit.save(update_fields=["notified_email_at"])
 
 
 def _send_visitor_whatsapp(visit: VisitorVisit, emp: Employee) -> None:

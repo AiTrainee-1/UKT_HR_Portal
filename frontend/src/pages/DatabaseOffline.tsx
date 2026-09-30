@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { Database, RefreshCw, Phone, AlertTriangle } from "lucide-react";
+import { Database, RefreshCw, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import SupportContactCard from "@/components/SupportContactCard";
 
 export default function DatabaseOffline() {
   const [checking, setChecking] = useState(false);
@@ -40,6 +41,9 @@ export default function DatabaseOffline() {
           Please contact the system administration team and refresh the application once the database server is available.
         </p>
 
+        {/* Who to contact: the Software Support details HR set in Settings -> HR Contact */}
+        <SupportContactCard situation="server" tone="dark" className="mb-6" />
+
         {/* Actions */}
         <div className="flex flex-col sm:flex-row gap-3 justify-center mb-8">
           <Button
@@ -50,15 +54,6 @@ export default function DatabaseOffline() {
           >
             <RefreshCw size={16} className={checking ? "animate-spin" : ""} />
             {checking ? "Checking Connection…" : "Retry Connection"}
-          </Button>
-          <Button
-            variant="outline"
-            className="gap-2"
-            style={{ border: "1px solid rgba(255,255,255,0.2)", color: "white", background: "transparent" }}
-            onClick={() => window.location.href = "tel:+919876543210"}
-          >
-            <Phone size={16} />
-            Contact Administrator
           </Button>
         </div>
 

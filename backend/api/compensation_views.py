@@ -1,13 +1,10 @@
 """Compensation -read-only CTC breakdown per employee.
 
-Purely a display/reporting feature: computes Basic/HRA/Allowances/Employer
-PF/Employer ESI/Annual CTC live from each employee's own salary_amount and
-the configurable basic_percent/hra_percent settings (Settings -> Payroll).
-Deliberately does NOT touch, read from, or feed back into the actual payroll
-generation engine (_generate_staff_payroll/_generate_production_payroll in
-payroll_views.py), which keeps its own separate, hardcoded 50/20 split
-exactly as it already was -this page can be reconfigured freely without
-changing a single real payroll number.
+Purely a display/reporting feature: shows each employee's 50% + 50% salary split (Basic, DA, Retention Allowance |
+Other, Petrol, RHA, Special Allowance, CA -salary_split.py) with the Employer PF / Employer ESI / Annual CTC worked
+out from it (ctc.py, shared with the Report Center's CTC statement). Deliberately does NOT touch, read from, or feed
+back into the actual payroll generation engine (_generate_staff_payroll/_generate_production_payroll in
+payroll_views.py), which keeps its own calculation exactly as it already was.
 """
 from datetime import date as date_type, time as time_type
 from decimal import Decimal
@@ -20,6 +17,7 @@ from rest_framework.response import Response
 from .auth import require_hr, get_hr_display_name
 from .audit_utils import log_action
 from .branch_scope import scope_to_branch
+from .ctc import ctc_figures
 from .models import (
     CompensationDayAnnouncement, CompensationLeaveCredit, Employee,
     OvertimeRecord, PayrollSettings, SalarySlip,
@@ -27,18 +25,29 @@ from .models import (
 from .user_settings import settings_for_employee
 
 
-def require_compensation_enabled(view_func):
+COMPENSATION_FEATURES_OFF_MESSAGE = (
+    "The OT / Compensation features are switched off in Settings > Payroll > OT / Compensation, so this can't be "
+    "changed right now. Switch them on there to announce OT, add Compensation Days or redeem credits."
+)
+
+
+def require_compensation_features_for_changes(view_func):
     """
-    Single choke point for the Compensation feature's master switch
-    (PayrollSettings.compensation_feature_enabled) -every endpoint in this
-    module goes through it, so turning the feature off in Settings genuinely
-    disables CTC Breakdown, OT Detection, Compensation Leave, and History &
-    Reports everywhere at once, not just hides the sidebar entry.
+    The Compensation page is a mandatory part of the portal, so PayrollSettings.compensation_feature_enabled does NOT
+    switch the page off: it stays in the sidebar, and every read here (CTC Breakdown, OT records, Compensation Days,
+    credits, History & Reports) keeps working whatever the switch says. The switch controls what the feature DOES in the
+    background -detecting OT, paying announced OT in payroll, exempting Compensation Days from Late/Permission
+    detection- and each of those checks it where it acts (overtime.py, attendance_final.py, payroll_views.py).
+
+    What this decorator adds is the one thing that would otherwise mislead: while the features are off, announcing OT,
+    adding or removing a Compensation Day and redeeming a credit would save a record that nothing acts on (and that
+    would start to act, retroactively, the day the switch is turned back on). Those changes are refused with a clear
+    message; GET/HEAD/OPTIONS always pass. Existing records are never touched by the switch.
     """
     @wraps(view_func)
     def wrapper(request, *args, **kwargs):
-        if not PayrollSettings.get().compensation_feature_enabled:
-            return Response({"error": "The Compensation feature is currently disabled in Settings."}, status=403)
+        if request.method not in ("GET", "HEAD", "OPTIONS") and not PayrollSettings.get().compensation_feature_enabled:
+            return Response({"error": COMPENSATION_FEATURES_OFF_MESSAGE}, status=403)
         return view_func(request, *args, **kwargs)
     return wrapper
 
@@ -47,25 +56,8 @@ def _d2(value) -> Decimal:
     return Decimal(str(value)).quantize(Decimal("0.01"))
 
 
-def _compensation_dict(emp: Employee) -> dict:
-    settings = settings_for_employee(emp)
-    salary = emp.salary_amount or Decimal("0")
-
-    basic = _d2(salary * settings.basic_percent / 100)
-    hra = _d2(salary * settings.hra_percent / 100)
-    allowances = _d2(salary - basic - hra)
-
-    is_production = emp.employment_type == Employee.EMPLOYMENT_TYPE_PRODUCTION
-    pf_rate = settings.prod_pf_rate if is_production else settings.pf_rate
-    esi_rate = settings.prod_esi_rate if is_production else settings.esi_rate
-    esi_ceiling = settings.prod_esi_applicable_below if is_production else settings.esi_applicable_below
-
-    employer_pf = _d2(basic * pf_rate / 100) if pf_rate else Decimal("0.00")
-    employer_esi = _d2(salary * esi_rate / 100) if esi_rate and salary <= esi_ceiling else Decimal("0.00")
-
-    gross_monthly = _d2(salary)
-    annual_ctc = _d2((gross_monthly + employer_pf + employer_esi) * 12)
-
+def _compensation_dict(emp: Employee, settings=None) -> dict:
+    """One CTC Breakdown row. `settings` may be passed in when the caller already has the employee's resolved settings."""
     return {
         "employeeId": emp.id,
         "employeeCode": emp.employee_code,
@@ -74,19 +66,13 @@ def _compensation_dict(emp: Employee) -> dict:
         "designation": emp.designation.title if emp.designation else None,
         "branch": emp.branch.name if emp.branch else None,
         "employmentType": emp.employment_type,
-        "basic": float(basic),
-        "hra": float(hra),
-        "allowances": float(allowances),
-        "employerPf": float(employer_pf),
-        "employerEsi": float(employer_esi),
-        "grossMonthly": float(gross_monthly),
-        "annualCtc": float(annual_ctc),
+        **ctc_figures(emp, settings or settings_for_employee(emp)),
     }
 
 
 @api_view(["GET"])
 @require_hr
-@require_compensation_enabled
+@require_compensation_features_for_changes
 def compensation_list(request: Request) -> Response:
     qs = scope_to_branch(
         Employee.objects.select_related("department", "designation", "branch"), request
@@ -137,7 +123,7 @@ def _ot_dict(r: OvertimeRecord) -> dict:
 
 @api_view(["GET"])
 @require_hr
-@require_compensation_enabled
+@require_compensation_features_for_changes
 def overtime_list(request: Request) -> Response:
     """Runs detection fresh (cheap, idempotent upsert -see overtime.py), then
     returns the month's records, optionally filtered by status."""
@@ -169,7 +155,7 @@ def overtime_list(request: Request) -> Response:
 
 @api_view(["POST"])
 @require_hr
-@require_compensation_enabled
+@require_compensation_features_for_changes
 def overtime_announce(request: Request) -> Response:
     """Body: {records: [{employeeId, date}], compensationType?}. Confirms
     Pay or Relaxation for each detected record -nothing is paid/credited
@@ -214,7 +200,7 @@ def overtime_announce(request: Request) -> Response:
 
 @api_view(["POST"])
 @require_hr
-@require_compensation_enabled
+@require_compensation_features_for_changes
 def overtime_reject(request: Request) -> Response:
     """Body: {records: [{employeeId, date}]}. Dismisses a detected record
     (e.g. an HR-authorized late stay that isn't real OT) -no further action."""
@@ -250,7 +236,7 @@ def _credit_dict(c: CompensationLeaveCredit) -> dict:
 
 @api_view(["GET"])
 @require_hr
-@require_compensation_enabled
+@require_compensation_features_for_changes
 def compensation_credits_list(request: Request) -> Response:
     emp_ids = scope_to_branch(Employee.objects, request).values_list("id", flat=True)
     qs = CompensationLeaveCredit.objects.select_related("employee", "source_overtime_record").filter(
@@ -268,7 +254,7 @@ def compensation_credits_list(request: Request) -> Response:
 
 @api_view(["POST"])
 @require_hr
-@require_compensation_enabled
+@require_compensation_features_for_changes
 def compensation_credit_redeem(request: Request, pk: int) -> Response:
     """Body: {date}. HR redeems an available credit on the employee's behalf
     (per the requirement that employees cannot self-assign compensation) -
@@ -336,7 +322,7 @@ def _leave_day_dict(a: CompensationDayAnnouncement) -> dict:
 
 @api_view(["GET", "POST"])
 @require_hr
-@require_compensation_enabled
+@require_compensation_features_for_changes
 def compensation_leave_days(request: Request) -> Response:
     if request.method == "GET":
         qs = CompensationDayAnnouncement.objects.select_related("branch", "department").prefetch_related("employees")
@@ -378,7 +364,7 @@ def compensation_leave_days(request: Request) -> Response:
 
 @api_view(["DELETE"])
 @require_hr
-@require_compensation_enabled
+@require_compensation_features_for_changes
 def compensation_leave_day_detail(request: Request, pk: int) -> Response:
     ann = CompensationDayAnnouncement.objects.filter(pk=pk).first()
     if not ann:
@@ -469,7 +455,7 @@ def _compensation_summary_data(emp_ids: set[int], month: int, year: int) -> dict
 
 @api_view(["GET"])
 @require_hr
-@require_compensation_enabled
+@require_compensation_features_for_changes
 def compensation_summary(request: Request) -> Response:
     today = date_type.today()
     year = int(request.query_params.get("year") or today.year)

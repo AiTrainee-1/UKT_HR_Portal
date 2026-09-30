@@ -123,21 +123,28 @@ def reports_catalog(request):
     branches = Branch.objects.all()
     if branch_scoped:
         branches = branches.filter(id=get_branch_scope(request))
-    return Response({
-        "generatedAt": ist_now().strftime("%Y-%m-%d %H:%M"),
-        "branchScoped": branch_scoped,
-        "categories": [
-            {"id": cid, "label": label, "description": desc, "icon": icon, "count": counts.get(cid, 0)}
-            for cid, label, desc, icon in CATEGORIES
-            if counts.get(cid)
-        ],
-        "reports": [spec_json(s, today, branch_scoped) for s in specs],
-        "options": {
-            "departments": [{"id": d["id"], "name": d["name"]} for d in departments],
-            "designations": [{"id": d["id"], "name": d["title"]} for d in Designation.objects.order_by("title").values("id", "title")],
-            "branches": [{"id": b["id"], "name": b["name"]} for b in branches.order_by("name").values("id", "name")],
-        },
-    })
+    return Response(
+        {
+            "generatedAt": ist_now().strftime("%Y-%m-%d %H:%M"),
+            "branchScoped": branch_scoped,
+            "categories": [
+                {"id": cid, "label": label, "description": desc, "icon": icon, "count": counts.get(cid, 0)}
+                for cid, label, desc, icon in CATEGORIES
+                if counts.get(cid)
+            ],
+            "reports": [spec_json(s, today, branch_scoped) for s in specs],
+            "options": {
+                "departments": [{"id": d["id"], "name": d["name"]} for d in departments],
+                "designations": [
+                    {"id": d["id"], "name": d["title"]}
+                    for d in Designation.objects.order_by("title").values("id", "title")
+                ],
+                "branches": [
+                    {"id": b["id"], "name": b["name"]} for b in branches.order_by("name").values("id", "name")
+                ],
+            },
+        }
+    )
 
 
 @api_view(["GET"])
@@ -193,7 +200,12 @@ def reports_export(request, report_id: str):
         return _error("This report could not be exported. Please try again or contact support.", 500, "export_failed")
 
     filters = "; ".join(f"{k}: {v}" for k, v in out.filters) or "no filters"
-    log_action(request, "export", "reports", description=f"{spec.title} - {fmt.upper()} - {out.row_count} rows - {filters}"[:480])
+    log_action(
+        request,
+        "export",
+        "reports",
+        description=f"{spec.title} - {fmt.upper()} - {out.row_count} rows - {filters}"[:480],
+    )
 
     slug = _SLUG.sub("_", spec.title.lower()).strip("_") or "report"
     stamp = ist_now().strftime("%Y%m%d_%H%M")
@@ -234,14 +246,15 @@ def reports_options(request, source: str):
         dept_ids = [int(i) for i in (request.query_params.get("departmentIds") or "").split(",") if i.strip().isdigit()]
         if dept_ids:
             qs = qs.filter(department_id__in=dept_ids)
-    qs = qs.order_by("employee_code")[:200 if ids else 40]
-    return Response([
-        {
-            "value": e.id,
-            "label": f"{e.employee_code} · {e.first_name} {e.last_name}".strip(),
-            "sub": e.department.name if e.department_id else "",
-            "status": e.status,
-        }
-        for e in qs
-    ])
-
+    qs = qs.order_by("employee_code")[: 200 if ids else 40]
+    return Response(
+        [
+            {
+                "value": e.id,
+                "label": f"{e.employee_code} · {e.first_name} {e.last_name}".strip(),
+                "sub": e.department.name if e.department_id else "",
+                "status": e.status,
+            }
+            for e in qs
+        ]
+    )

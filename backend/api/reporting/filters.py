@@ -17,11 +17,25 @@ from api.clock import ist_today
 
 from .formatting import MONTH_NAMES, display_date, month_bounds, parse_date, parse_period
 from .types import (
-    F_BOOLEAN, F_BRANCH, F_DATE_RANGE, F_DEPARTMENT, F_DESIGNATION, F_EMPLOYEE, F_EMPLOYEE_STATUS,
-    F_EMPLOYMENT_TYPE, F_NUMBER, F_PERIOD, F_SELECT, F_TEXT, F_YEAR, FilterSpec, ReportSpec,
+    F_BOOLEAN,
+    F_BRANCH,
+    F_DATE_RANGE,
+    F_DEPARTMENT,
+    F_DESIGNATION,
+    F_EMPLOYEE,
+    F_EMPLOYEE_STATUS,
+    F_EMPLOYMENT_TYPE,
+    F_NUMBER,
+    F_PERIOD,
+    F_SELECT,
+    F_TEXT,
+    F_YEAR,
+    FilterSpec,
+    ReportSpec,
 )
 
 MAX_IDS = 1000
+MAX_DB_INT = 2_147_483_647  # ids are 32-bit integer columns; a bigger number is a DataError (HTTP 500) otherwise
 DEFAULT_MAX_DAYS = 366
 EARLIEST_YEAR = 2000
 LATEST_YEAR = 2100
@@ -41,6 +55,7 @@ class ReportParamError(ValueError):
 
 # ── factories ───────────────────────────────────────────────────────────────
 
+
 def period(default: str = "thisMonth", label: str = "Month", required: bool = True) -> FilterSpec:
     return FilterSpec("period", F_PERIOD, label, default=default, required=required)
 
@@ -50,7 +65,10 @@ def year(default: str = "thisYear", label: str = "Year", required: bool = True) 
 
 
 def date_range(
-    default: str = "thisMonth", label: str = "Date range", required: bool = True, max_days: int | None = None,
+    default: str = "thisMonth",
+    label: str = "Date range",
+    required: bool = True,
+    max_days: int | None = None,
 ) -> FilterSpec:
     return FilterSpec("dateRange", F_DATE_RANGE, label, default=default, required=required, max_days=max_days)
 
@@ -72,7 +90,9 @@ def employees(label: str = "Employee") -> FilterSpec:
 
 
 def employment_type(label: str = "Employee type") -> FilterSpec:
-    return FilterSpec("employmentType", F_EMPLOYMENT_TYPE, label, options=EMPLOYMENT_TYPE_OPTIONS, placeholder="All types")
+    return FilterSpec(
+        "employmentType", F_EMPLOYMENT_TYPE, label, options=EMPLOYMENT_TYPE_OPTIONS, placeholder="All types"
+    )
 
 
 def employee_status(default: str = "active", label: str = "Employee status") -> FilterSpec:
@@ -80,12 +100,25 @@ def employee_status(default: str = "active", label: str = "Employee status") -> 
 
 
 def select(
-    key: str, label: str, options, default: str | None = None, multi: bool = False,
-    required: bool = False, placeholder: str | None = None, help: str | None = None,
+    key: str,
+    label: str,
+    options,
+    default: str | None = None,
+    multi: bool = False,
+    required: bool = False,
+    placeholder: str | None = None,
+    help: str | None = None,
 ) -> FilterSpec:
     return FilterSpec(
-        key, F_SELECT, label, options=tuple((str(v), str(l)) for v, l in options),
-        default=default, multi=multi, required=required, placeholder=placeholder or "All", help=help,
+        key,
+        F_SELECT,
+        label,
+        options=tuple((str(v), str(l)) for v, l in options),
+        default=default,
+        multi=multi,
+        required=required,
+        placeholder=placeholder or "All",
+        help=help,
     )
 
 
@@ -97,12 +130,18 @@ def text(key: str, label: str, placeholder: str | None = None) -> FilterSpec:
     return FilterSpec(key, F_TEXT, label, placeholder=placeholder)
 
 
-def number(key: str, label: str, default: int | None = None, min: int = 0, max: int = 10_000, help: str | None = None) -> FilterSpec:
+def number(
+    key: str, label: str, default: int | None = None, min: int = 0, max: int = 10_000, help: str | None = None
+) -> FilterSpec:
     return FilterSpec(key, F_NUMBER, label, default=default, min=min, max=max, help=help)
 
 
 def scope(
-    *, designation: bool = True, branch: bool = True, status: str | None = None, employee: bool = True,
+    *,
+    designation: bool = True,
+    branch: bool = True,
+    status: str | None = None,
+    employee: bool = True,
     employment: bool = True,
 ) -> tuple[FilterSpec, ...]:
     """The employee-scoping filters almost every report offers.
@@ -127,6 +166,7 @@ def scope(
 
 # ── defaults ────────────────────────────────────────────────────────────────
 
+
 def resolve_default(spec_filter: FilterSpec, today: date) -> Any:
     """Turn a FilterSpec default (literal or token) into what the UI should pre-fill."""
     d = spec_filter.default
@@ -148,6 +188,8 @@ def resolve_default(spec_filter: FilterSpec, today: date) -> Any:
 
 
 def _range_default(token: Any, today: date) -> dict[str, str]:
+    if token == "none":  # optional range: open with no dates pre-filled ("all time")
+        return {"dateFrom": "", "dateTo": ""}
     if token == "today":
         a = b = today
     elif token == "yesterday":
@@ -166,6 +208,7 @@ def _range_default(token: Any, today: date) -> dict[str, str]:
 
 # ── parsing ─────────────────────────────────────────────────────────────────
 
+
 def _ids(raw: str | None, field_name: str) -> list[int]:
     if not raw:
         return []
@@ -174,8 +217,8 @@ def _ids(raw: str | None, field_name: str) -> list[int]:
         part = part.strip()
         if not part:
             continue
-        if not part.isdigit():
-            raise ReportParamError(f"{field_name}: '{part}' is not a valid id", field_name)
+        if not part.isdigit() or int(part) > MAX_DB_INT:
+            raise ReportParamError(f"{field_name}: '{part[:12]}' is not a valid id", field_name)
         out.append(int(part))
     if len(out) > MAX_IDS:
         raise ReportParamError(f"{field_name}: too many values (max {MAX_IDS})", field_name)
@@ -221,7 +264,7 @@ def parse_params(spec: ReportSpec, query) -> dict[str, Any]:
             raw_from = (query.get("dateFrom") or "").strip()
             raw_to = (query.get("dateTo") or "").strip()
             if not raw_from and not raw_to:
-                if f.required or f.default:
+                if f.required or (f.default and f.default != "none"):
                     dflt = resolve_default(f, today)
                     raw_from, raw_to = dflt["dateFrom"], dflt["dateTo"]
                 else:
@@ -232,6 +275,9 @@ def parse_params(spec: ReportSpec, query) -> dict[str, Any]:
                 raise ReportParamError("'From' date is not valid (use YYYY-MM-DD)", "dateFrom")
             if raw_to and d_to is None:
                 raise ReportParamError("'To' date is not valid (use YYYY-MM-DD)", "dateTo")
+            for d_, key_ in ((d_from, "dateFrom"), (d_to, "dateTo")):
+                if d_ is not None and not EARLIEST_YEAR <= d_.year <= LATEST_YEAR:
+                    raise ReportParamError("Date is out of range", key_)
             if f.required and (d_from is None or d_to is None):
                 raise ReportParamError("Both From and To dates are required", "dateFrom")
             if d_from and d_to:
@@ -239,7 +285,9 @@ def parse_params(spec: ReportSpec, query) -> dict[str, Any]:
                     raise ReportParamError("'From' date is after 'To' date", "dateFrom")
                 limit = f.max_days or DEFAULT_MAX_DAYS
                 if (d_to - d_from).days + 1 > limit:
-                    raise ReportParamError(f"Date range is too wide (max {limit} days) - narrow it and try again", "dateTo")
+                    raise ReportParamError(
+                        f"Date range is too wide (max {limit} days) - narrow it and try again", "dateTo"
+                    )
             out["date_from"], out["date_to"] = d_from, d_to
         elif kind == F_DEPARTMENT:
             out["department_ids"] = _ids(query.get("departmentIds"), "departmentIds")
@@ -282,7 +330,7 @@ def parse_params(spec: ReportSpec, query) -> dict[str, Any]:
             raw = (query.get(f.key) or "").strip().lower()
             out[f.key] = bool(f.default) if raw == "" else raw in ("1", "true", "yes", "on")
         elif kind == F_TEXT:
-            out[f.key] = (query.get(f.key) or "").strip()[:100] or None
+            out[f.key] = (query.get(f.key) or "").replace("\x00", "").strip()[:100] or None
         elif kind == F_NUMBER:
             raw = (query.get(f.key) or "").strip()
             if not raw:
@@ -301,6 +349,7 @@ def parse_params(spec: ReportSpec, query) -> dict[str, Any]:
 
 
 # ── context handed to run() ─────────────────────────────────────────────────
+
 
 @dataclass
 class ReportContext:
@@ -385,19 +434,25 @@ class ReportContext:
     def employees(self):
         from api.models import Employee
 
+        # photo_url is often a ~43 KB base64 data URI and password_hash is a secret: never load them for a report.
         return (
             Employee.objects.select_related("department", "designation", "branch")
+            .defer("photo_url", "password_hash")
             .filter(self.emp_q())
             .order_by("employee_code")
         )
 
     # --- description for export headers ---------------------------------
     def describe(self) -> list[tuple[str, str]]:
-        return describe_params(self.spec, self.params)
+        return describe_params(self.spec, self.params, get_branch_scope(self.request))
 
 
-def describe_params(spec: ReportSpec, params: dict[str, Any]) -> list[tuple[str, str]]:
-    """Human-readable (label, value) pairs of the filters that were actually applied."""
+def describe_params(spec: ReportSpec, params: dict[str, Any], branch_id: int | None = None) -> list[tuple[str, str]]:
+    """Human-readable (label, value) pairs of the filters that were actually applied.
+
+    ``branch_id`` (the viewer's branch, None = unscoped) confines the name lookups: the echo goes into every
+    JSON payload and export header, so it must not reveal the name of a department/employee/branch that
+    belongs to another branch just because its id was passed in."""
     from api.models import Branch, Department, Designation, Employee
 
     out: list[tuple[str, str]] = []
@@ -421,13 +476,16 @@ def describe_params(spec: ReportSpec, params: dict[str, Any]) -> list[tuple[str,
             ids = params.get(key) or []
             if not ids:
                 continue
+            qs = model.objects.filter(id__in=ids)
+            if branch_id is not None and model is not Designation:
+                qs = qs.filter(id=branch_id) if model is Branch else qs.filter(branch_id=branch_id)
             if model is Employee:
                 names = [
                     f"{e.employee_code} {e.first_name}".strip()
-                    for e in Employee.objects.filter(id__in=ids).order_by("employee_code")[:6]
+                    for e in qs.only("employee_code", "first_name").order_by("employee_code")[:6]
                 ]
             else:
-                names = list(model.objects.filter(id__in=ids).order_by(name).values_list(name, flat=True)[:6])
+                names = list(qs.order_by(name).values_list(name, flat=True)[:6])
             more = len(ids) - len(names)
             out.append((f.label, ", ".join(names) + (f" +{more} more" if more > 0 else "")))
         elif k == F_EMPLOYMENT_TYPE and params.get("employment_type"):

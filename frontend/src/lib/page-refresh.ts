@@ -21,6 +21,7 @@ const PAGES_WITHOUT_REFRESH: (string | RegExp)[] = [
   "/hr/login-devices",
   "/hr/mobile-app-login",
   "/hr/whatsapp-control",
+  "/hr/gmail-control",
   "/hr/recruitment/dashboard",
   "/hr/recruitment/new-joinees",
   "/hr/recruitment/resignations",

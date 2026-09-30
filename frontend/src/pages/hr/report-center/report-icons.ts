@@ -49,12 +49,24 @@ import {
   UserRound,
   Users,
   Wallet,
+  Award,
+  UserX,
+  Phone,
+  Network,
+  Heart,
+  HandCoins,
+  Grid3x3,
+  ArrowLeftRight,
+  ClipboardCheck,
+  CalendarRange,
+  Inbox,
   type LucideIcon,
 } from "lucide-react";
 
 /** Icon names the backend may send (categories and reports) -> components. Explicit on purpose: importing
  *  the whole lucide namespace would defeat tree-shaking. Unknown names fall back to FileText. */
 const ICONS: Record<string, LucideIcon> = {
+  AlertTriangle: TriangleAlert, // the older lucide name some reports use
   ArrowRightLeft,
   BadgeCheck,
   Banknote,
@@ -105,6 +117,17 @@ const ICONS: Record<string, LucideIcon> = {
   UserRound,
   Users,
   Wallet,
+  Award,
+  UserX,
+  Phone,
+  Network,
+  Heart,
+  HandCoins,
+  Grid3x3,
+  ArrowLeftRight,
+  ClipboardCheck,
+  CalendarRange,
+  Inbox,
 };
 
 export function iconFor(name: string | null | undefined): LucideIcon {

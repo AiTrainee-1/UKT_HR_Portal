@@ -40,7 +40,8 @@ Visits (visitor, branch, time, host):
 
 import io
 import json
-from collections import Counter
+import random
+from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from datetime import timezone as dt_timezone
 from unittest import mock
@@ -54,8 +55,23 @@ from openpyxl import load_workbook
 from .clock import FACTORY_TZ
 from .jwt_utils import sign_token
 from .models import (
-    AuditLog, Branch, Department, Designation, Employee, GateDevice, HRUser, OutpassGateScan, OutpassRecord,
-    OutpassRequest, ReceptionDevice, Role, TeaBreakLog, TeaBreakRule, Visitor, VisitorVisit,
+    AuditLog,
+    Branch,
+    Department,
+    Designation,
+    Employee,
+    GateDevice,
+    HRUser,
+    OutpassGateScan,
+    OutpassRecord,
+    OutpassRequest,
+    PayrollSettings,
+    ReceptionDevice,
+    Role,
+    TeaBreakLog,
+    TeaBreakRule,
+    Visitor,
+    VisitorVisit,
 )
 from .permission_registry import all_module_keys
 from .reporting import registry
@@ -69,9 +85,19 @@ FULL_AADHAAR_1 = "123456789012"
 FULL_AADHAAR_2 = "987654321098"
 
 MY_IDS = [
-    "visitor-register", "visitor-host-summary", "visitor-frequency", "visitor-daily-summary", "visitor-notification-delivery",
-    "tea-break-register", "tea-break-employee-summary", "tea-break-department-summary", "tea-break-exceptions",
-    "tea-break-daily-trend", "tea-break-hourly-distribution", "tea-break-frequency", "employee-time-away-summary",
+    "visitor-register",
+    "visitor-host-summary",
+    "visitor-frequency",
+    "visitor-daily-summary",
+    "visitor-notification-delivery",
+    "tea-break-register",
+    "tea-break-employee-summary",
+    "tea-break-department-summary",
+    "tea-break-exceptions",
+    "tea-break-daily-trend",
+    "tea-break-hourly-distribution",
+    "tea-break-frequency",
+    "employee-time-away-summary",
     "gate-device-register",
 ]
 
@@ -102,11 +128,28 @@ class _Base(TestCase):
 
         def emp(code, first, last, dept, desig, branch, etype, status="active", **kw):
             return Employee.objects.create(
-                employee_code=code, first_name=first, last_name=last, department=dept, designation=desig,
-                branch=branch, employment_type=etype, status=status, **kw,
+                employee_code=code,
+                first_name=first,
+                last_name=last,
+                department=dept,
+                designation=desig,
+                branch=branch,
+                employment_type=etype,
+                status=status,
+                **kw,
             )
 
-        cls.e1 = emp("T001", "Anita", "Kumar", cls.d_cut, cls.des_op, cls.b1, "staff", email="anita@example.com", phone="9111111111")
+        cls.e1 = emp(
+            "T001",
+            "Anita",
+            "Kumar",
+            cls.d_cut,
+            cls.des_op,
+            cls.b1,
+            "staff",
+            email="anita@example.com",
+            phone="9111111111",
+        )
         cls.e2 = emp("T002", "Bala", "Raj", cls.d_cut, cls.des_help, cls.b1, "production", phone="9222222222")
         cls.e3 = emp("T003", "Chitra", "Devi", cls.d_sew, cls.des_op, cls.b1, "staff")
         cls.e4 = emp("T004", "Dinesh", "Babu", cls.d_pack, cls.des_op, cls.b2, "staff", email="")
@@ -129,20 +172,37 @@ class _Base(TestCase):
         # ── gates / desks
         def gate(name, branch, user, active=True, last=None):
             return GateDevice.objects.create(
-                name=name, branch=branch, username=user, password_hash=f"hash-secret-{user}", login_token=f"tok-{user}",
-                is_active=active, created_by="Admin", last_login_at=last,
+                name=name,
+                branch=branch,
+                username=user,
+                password_hash=f"hash-secret-{user}",
+                login_token=f"tok-{user}",
+                is_active=active,
+                created_by="Admin",
+                last_login_at=last,
             )
 
         cls.g1 = gate("Gate 1", cls.b1, "gate1", True, ist(9, 10, 13, 30))
         cls.g2 = gate("Gate 2", cls.b1, "gate2", False)
         cls.g3 = gate("Gate 3", cls.b2, "gate3", True, ist(9, 1, 9, 0))
         cls.r1 = ReceptionDevice.objects.create(
-            name="Reception 1", branch=cls.b1, username="rec1", password_hash="hash-secret-rec1", login_token="tok-rec1",
-            is_active=True, created_by="Admin", last_login_at=ist(9, 11, 9, 0),
+            name="Reception 1",
+            branch=cls.b1,
+            username="rec1",
+            password_hash="hash-secret-rec1",
+            login_token="tok-rec1",
+            is_active=True,
+            created_by="Admin",
+            last_login_at=ist(9, 11, 9, 0),
         )
         cls.r2 = ReceptionDevice.objects.create(
-            name="Reception 2", branch=cls.b2, username="rec2", password_hash="hash-secret-rec2", login_token="tok-rec2",
-            is_active=False, created_by="Admin",
+            name="Reception 2",
+            branch=cls.b2,
+            username="rec2",
+            password_hash="hash-secret-rec2",
+            login_token="tok-rec2",
+            is_active=False,
+            created_by="Admin",
         )
 
         # ── tea breaks
@@ -171,11 +231,18 @@ class _Base(TestCase):
 
         def visit(visitor, branch, at, whom, purpose, why=None, host=None, email=None, wa=None):
             v = VisitorVisit.objects.create(
-                visitor=visitor, branch=branch, why_came=why, whom_to_meet=whom, purpose=purpose, meeting_employee=host,
+                visitor=visitor,
+                branch=branch,
+                why_came=why,
+                whom_to_meet=whom,
+                purpose=purpose,
+                meeting_employee=host,
                 notified_email_at=(at + timedelta(seconds=email)) if email is not None else None,
                 notified_whatsapp_at=(at + timedelta(seconds=wa)) if wa is not None else None,
             )
-            VisitorVisit.objects.filter(pk=v.pk).update(visited_at=at)  # auto_now_add ignores a value passed to create()
+            VisitorVisit.objects.filter(pk=v.pk).update(
+                visited_at=at
+            )  # auto_now_add ignores a value passed to create()
             return v
 
         cls.vis1 = visit(cls.v1, cls.b1, ist(9, 2, 10, 0), "Anita Kumar", "Fabric samples", "Supplier", cls.e1, 4, 40)
@@ -189,8 +256,15 @@ class _Base(TestCase):
         # ── outpass (for employee-time-away-summary and the device scan counts)
         def op(emp_, out, back=None, status="approved"):
             return OutpassRequest.objects.create(
-                employee=emp_, destination="Bank", reason="Personal", status=status, approved_at=out - timedelta(minutes=10),
-                exit_gate=cls.g1, exited_at=out, entry_gate=cls.g1 if back else None, entered_at=back,
+                employee=emp_,
+                destination="Bank",
+                reason="Personal",
+                status=status,
+                approved_at=out - timedelta(minutes=10),
+                exit_gate=cls.g1,
+                exited_at=out,
+                entry_gate=cls.g1 if back else None,
+                entered_at=back,
             )
 
         op(cls.e1, ist(9, 5, 11, 0), ist(9, 5, 12, 30))  # 90 min
@@ -202,7 +276,12 @@ class _Base(TestCase):
 
         def qr(emp_, branch, at, source="qr", name="x", code="x"):
             rec = OutpassRecord.objects.create(
-                branch=branch, employee=emp_, employee_name=name, employee_code=code, destination="Market", source=source,
+                branch=branch,
+                employee=emp_,
+                employee_name=name,
+                employee_code=code,
+                destination="Market",
+                source=source,
             )
             OutpassRecord.objects.filter(pk=rec.pk).update(submitted_at=at)
 
@@ -234,7 +313,9 @@ class _Base(TestCase):
         return r.json()
 
     def export(self, rid, fmt, params=None, user=None):
-        return self.client.get(f"/api/reports/export/{rid}", {"fmt": fmt, **(params or {})}, **headers(user or self.admin))
+        return self.client.get(
+            f"/api/reports/export/{rid}", {"fmt": fmt, **(params or {})}, **headers(user or self.admin)
+        )
 
     def rows(self, rid, params=None, user=None):
         return self.get_report(rid, params, user)["rows"]
@@ -253,16 +334,29 @@ class VisitorRegisterTests(_Base):
         rows = body["rows"]
         self.assertEqual(
             [r["visitedAt"] for r in rows],
-            ["2026-09-02 10:00", "2026-09-09 02:30", "2026-09-09 11:00", "2026-09-09 15:00",
-             "2026-09-10 09:00", "2026-09-12 12:00", "2026-09-12 13:00"],
+            [
+                "2026-09-02 10:00",
+                "2026-09-09 02:30",
+                "2026-09-09 11:00",
+                "2026-09-09 15:00",
+                "2026-09-10 09:00",
+                "2026-09-12 12:00",
+                "2026-09-12 13:00",
+            ],
         )
         self.assertEqual([r["visitNo"] for r in rows], [1, 2, 1, 1, 2, 3, 2])
-        self.assertEqual([r["visitorType"] for r in rows], ["First visit", "Repeat", "First visit", "First visit", "Repeat", "Repeat", "Repeat"])
+        self.assertEqual(
+            [r["visitorType"] for r in rows],
+            ["First visit", "Repeat", "First visit", "First visit", "Repeat", "Repeat", "Repeat"],
+        )
         r0 = rows[0]
         self.assertEqual(r0["visitorName"], "Ravi Kumar")
         self.assertEqual(r0["phone"], "9000000001")
         self.assertEqual(r0["aadhaarMasked"], "XXXX XXXX 9012")
-        self.assertEqual((r0["whyCame"], r0["whomToMeet"], r0["purpose"], r0["branch"]), ("Supplier", "Anita Kumar", "Fabric samples", "Unit 1"))
+        self.assertEqual(
+            (r0["whyCame"], r0["whomToMeet"], r0["purpose"], r0["branch"]),
+            ("Supplier", "Anita Kumar", "Fabric samples", "Unit 1"),
+        )
         self.assertEqual((r0["hostCode"], r0["hostName"], r0["hostDepartment"]), ("T001", "Anita Kumar", "CUTTING"))
         self.assertEqual((r0["emailNotified"], r0["whatsappNotified"]), ("Sent", "Sent"))
         # free-text host: no employee cells and notification does not apply (dash), never "Not sent"
@@ -297,6 +391,7 @@ class VisitorRegisterTests(_Base):
             self.assertNotIn(full, text)
             self.assertNotIn(full[:8], text)  # not even a long prefix
         self.assertIn("XXXX XXXX 9012", text)
+
         # everything the PDF prints comes from RunOutput; assert on that too (rows, summary cards, notes, filters)
         class _Request:  # what run_report reads from a request: the branch scope and the HR identity
             hr_branch_id = None
@@ -327,7 +422,10 @@ class VisitorRegisterTests(_Base):
     def test_ist_day_boundaries(self):
         one_day = lambda d: self.rows(self.RID, {"dateFrom": d, "dateTo": d})  # noqa: E731
         # v2 checked in at 02:30 IST on 09-09 (21:00 UTC on 09-08): it belongs to 09-09
-        self.assertEqual([r["visitedAt"] for r in one_day("2026-09-09")], ["2026-09-09 02:30", "2026-09-09 11:00", "2026-09-09 15:00"])
+        self.assertEqual(
+            [r["visitedAt"] for r in one_day("2026-09-09")],
+            ["2026-09-09 02:30", "2026-09-09 11:00", "2026-09-09 15:00"],
+        )
         self.assertEqual(one_day("2026-09-08"), [])
 
     def test_filters_narrow(self):
@@ -344,7 +442,8 @@ class VisitorRegisterTests(_Base):
         self.assertEqual(at(notification="email_sent"), ["09-02 10:00", "09-09 11:00"])
         self.assertEqual(at(notification="whatsapp_sent"), ["09-02 10:00", "09-10 09:00"])
         self.assertEqual(at(notification="either"), ["09-02 10:00", "09-09 11:00", "09-10 09:00"])
-        self.assertEqual(at(notification="neither"), ["09-09 02:30", "09-09 15:00", "09-12 12:00", "09-12 13:00"])
+        # free-text hosts have no one to notify (a dash in the register), so only the linked-host visit qualifies
+        self.assertEqual(at(notification="neither"), ["09-12 12:00"])
         self.assertEqual(at(q="0002"), ["09-09 11:00", "09-10 09:00"])
         self.assertEqual(at(q="mohan"), ["09-09 15:00", "09-12 13:00"])
         self.assertEqual(at(dateFrom="2026-09-10", dateTo="2026-09-12"), ["09-10 09:00", "09-12 12:00", "09-12 13:00"])
@@ -356,7 +455,9 @@ class VisitorRegisterTests(_Base):
 
     def test_branch_isolation_and_visit_numbers_are_scoped(self):
         b1 = self.get_report(self.RID, SEPT, self.b1_user)
-        self.assertEqual([r["visitedAt"][5:] for r in b1["rows"]], ["09-02 10:00", "09-09 02:30", "09-09 11:00", "09-10 09:00"])
+        self.assertEqual(
+            [r["visitedAt"][5:] for r in b1["rows"]], ["09-02 10:00", "09-09 02:30", "09-09 11:00", "09-10 09:00"]
+        )
         self.assertEqual([r["visitNo"] for r in b1["rows"]], [1, 2, 1, 2])
         self.assertEqual(summary_of(b1)["Visits"], 4)
         self.assertEqual(summary_of(b1)["Unique visitors"], 2)
@@ -374,6 +475,14 @@ class VisitorRegisterTests(_Base):
         body = self.get_report(self.RID, SEPT)
         self.assertIsNone(body["totals"])
 
+    def test_visits_at_the_same_instant_are_numbered_by_id(self):
+        at = ist(9, 20, 10, 0)
+        first = VisitorVisit.objects.create(visitor=self.v3, branch=self.b1, whom_to_meet="A", purpose="p")
+        second = VisitorVisit.objects.create(visitor=self.v3, branch=self.b1, whom_to_meet="B", purpose="p")
+        VisitorVisit.objects.filter(pk__in=[first.pk, second.pk]).update(visited_at=at)
+        rows = self.rows(self.RID, {"dateFrom": "2026-09-20", "dateTo": "2026-09-20"})
+        self.assertEqual([(r["whomToMeet"], r["visitNo"]) for r in rows], [("A", 3), ("B", 4)])  # Mohan had 2 before
+
 
 class VisitorHostSummaryTests(_Base):
     RID = "visitor-host-summary"
@@ -385,8 +494,13 @@ class VisitorHostSummaryTests(_Base):
         key = lambda r: (r["hostType"], r["hostCode"], r["hostName"].lower())  # noqa: E731
         self.assertEqual(
             [key(r) for r in rows],
-            [("Employee", "T001", "anita kumar"), ("Free text", None, "anita kumar"), ("Employee", "T002", "bala raj"),
-             ("Employee", "T004", "dinesh babu"), ("Free text", None, "mr x")],
+            [
+                ("Employee", "T001", "anita kumar"),
+                ("Free text", None, "anita kumar"),
+                ("Employee", "T002", "bala raj"),
+                ("Employee", "T004", "dinesh babu"),
+                ("Free text", None, "mr x"),
+            ],
         )
         e1 = rows[0]
         self.assertEqual((e1["department"], e1["visits"], e1["uniqueVisitors"]), ("CUTTING", 2, 2))
@@ -427,7 +541,9 @@ class VisitorHostSummaryTests(_Base):
 
     def test_branch_isolation(self):
         rows = self.rows(self.RID, SEPT, self.b1_user)
-        self.assertEqual(sorted((r["hostType"], r["visits"]) for r in rows), [("Employee", 1), ("Employee", 2), ("Free text", 1)])
+        self.assertEqual(
+            sorted((r["hostType"], r["visits"]) for r in rows), [("Employee", 1), ("Employee", 2), ("Free text", 1)]
+        )
         self.assertEqual(sum(r["visits"] for r in rows), 4)
         self.assertEqual(self.rows(self.RID, {**SEPT, "branchIds": self.b2.id}, self.b1_user), [])
         b2 = self.rows(self.RID, SEPT, self.b2_user)
@@ -479,11 +595,25 @@ class VisitorFrequencyTests(_Base):
         self.assertEqual(got(visitorType="new_in_period"), ["Mohan", "Sita Devi"])
         self.assertEqual(names(q="sita"), ["Sita Devi"])
         self.assertEqual(names(q="9000000003"), ["Mohan"])
-        self.assertEqual(names(branchIds=self.b2.id), ["Mohan", "Ravi Kumar"])  # one visit each at Unit 2: name breaks the tie
+        self.assertEqual(
+            names(branchIds=self.b2.id), ["Mohan", "Ravi Kumar"]
+        )  # one visit each at Unit 2: name breaks the tie
+
+    def test_notes_say_when_the_history_is_limited_to_a_branch(self):
+        plain = " ".join(self.get_report(self.RID, SEPT)["notes"])
+        self.assertNotIn("branch(es) in scope", plain)
+        for body in (
+            self.get_report(self.RID, {**SEPT, "branchIds": self.b2.id}),
+            self.get_report(self.RID, SEPT, self.b1_user),
+        ):
+            self.assertIn("at the branch(es) in scope", " ".join(body["notes"]))
 
     def test_branch_isolation(self):
         b1 = self.rows(self.RID, SEPT, self.b1_user)
-        self.assertEqual([(r["visitorName"], r["visitsInPeriod"], r["totalVisitsEver"]) for r in b1], [("Ravi Kumar", 2, 2), ("Sita Devi", 2, 2)])
+        self.assertEqual(
+            [(r["visitorName"], r["visitsInPeriod"], r["totalVisitsEver"]) for r in b1],
+            [("Ravi Kumar", 2, 2), ("Sita Devi", 2, 2)],
+        )
         self.assertEqual(self.rows(self.RID, {**SEPT, "branchIds": self.b2.id}, self.b1_user), [])
         b2 = self.rows(self.RID, SEPT, self.b2_user)
         # Ravi has 3 visits overall but a Unit 2 user only counts (and dates) the one at Unit 2
@@ -498,7 +628,9 @@ class VisitorDailySummaryTests(_Base):
     def test_golden_calendar_is_filled_and_days_are_ist(self):
         body = self.get_report(self.RID, self.WINDOW)
         rows = body["rows"]
-        self.assertEqual([r["date"] for r in rows], ["2026-09-08", "2026-09-09", "2026-09-10", "2026-09-11", "2026-09-12"])
+        self.assertEqual(
+            [r["date"] for r in rows], ["2026-09-08", "2026-09-09", "2026-09-10", "2026-09-11", "2026-09-12"]
+        )
         self.assertEqual([r["weekday"] for r in rows], ["Tue", "Wed", "Thu", "Fri", "Sat"])
         self.assertEqual([r["visits"] for r in rows], [0, 3, 1, 0, 2])  # v2 (02:30 IST) is on the 9th, not the 8th
         d9 = rows[1]
@@ -528,7 +660,9 @@ class VisitorDailySummaryTests(_Base):
     def test_branch_isolation_and_scoped_first_visit(self):
         rows = self.rows(self.RID, self.WINDOW, self.b1_user)
         self.assertEqual([r["visits"] for r in rows], [0, 2, 1, 0, 0])
-        self.assertEqual((rows[1]["firstTime"], rows[1]["repeat"]), (1, 1))  # v3 is Sita's first, v2 is Ravi's 2nd at Unit 1
+        self.assertEqual(
+            (rows[1]["firstTime"], rows[1]["repeat"]), (1, 1)
+        )  # v3 is Sita's first, v2 is Ravi's 2nd at Unit 1
         self.assertEqual(self.rows(self.RID, {**self.WINDOW, "branchIds": self.b2.id}, self.b1_user)[1]["visits"], 0)
 
 
@@ -538,15 +672,22 @@ class VisitorNotificationTests(_Base):
     def test_golden(self):
         body = self.get_report(self.RID, SEPT)
         rows = body["rows"]
-        self.assertEqual([r["visitedAt"][5:] for r in rows], ["09-02 10:00", "09-09 11:00", "09-10 09:00", "09-12 12:00"])
+        self.assertEqual(
+            [r["visitedAt"][5:] for r in rows], ["09-02 10:00", "09-09 11:00", "09-10 09:00", "09-12 12:00"]
+        )
         r0, r1, r2, r3 = rows
-        self.assertEqual((r0["hostName"], r0["hostDepartment"], r0["hostHasEmail"], r0["hostHasPhone"]), ("Anita Kumar", "CUTTING", "Yes", "Yes"))
+        self.assertEqual(
+            (r0["hostName"], r0["hostDepartment"], r0["hostHasEmail"], r0["hostHasPhone"]),
+            ("Anita Kumar", "CUTTING", "Yes", "Yes"),
+        )
         self.assertEqual((r0["emailDelaySeconds"], r0["whatsappDelaySeconds"]), (4, 40))
         self.assertEqual(r0["emailSentAt"], "2026-09-02 10:00")
         self.assertEqual((r1["hostHasEmail"], r1["hostHasPhone"]), ("No", "Yes"))
         self.assertEqual((r1["emailDelaySeconds"], r1["whatsappSentAt"], r1["whatsappDelaySeconds"]), (10, None, None))
         self.assertEqual((r2["emailSentAt"], r2["whatsappDelaySeconds"]), (None, 6))
-        self.assertEqual((r3["hostHasEmail"], r3["hostHasPhone"], r3["emailDelaySeconds"]), ("No", "No", None))  # "" email and NULL phone
+        self.assertEqual(
+            (r3["hostHasEmail"], r3["hostHasPhone"], r3["emailDelaySeconds"]), ("No", "No", None)
+        )  # "" email and NULL phone
         s = summary_of(body)
         self.assertEqual(s["Visits with a linked host"], 4)
         self.assertEqual((s["Email delivered"], s["WhatsApp delivered"]), (50.0, 50.0))
@@ -560,7 +701,9 @@ class VisitorNotificationTests(_Base):
     def test_free_text_hosts_are_not_listed(self):
         names = {r["visitorName"] for r in self.rows(self.RID, SEPT)}
         self.assertEqual(names, {"Ravi Kumar", "Sita Devi"})
-        self.assertEqual(len(self.rows(self.RID, {"dateFrom": "2026-09-09", "dateTo": "2026-09-09"})), 1)  # only v3 has a host that day
+        self.assertEqual(
+            len(self.rows(self.RID, {"dateFrom": "2026-09-09", "dateTo": "2026-09-09"})), 1
+        )  # only v3 has a host that day
 
     def test_filters(self):
         def at(**p):
@@ -600,17 +743,27 @@ class TeaRegisterTests(_Base):
             ("2026-09-05", "Anita Kumar", "CUTTING", "Operator", "Staff"),
         )
         self.assertEqual((a["outGate"], a["inAt"], a["inGate"]), ("Gate 1", "10:10", "Gate 1"))
-        self.assertEqual((a["takenMinutes"], a["allowedMinutes"], a["overMinutes"], a["remark"], a["flag"]), (10, 15, 0, "On time", None))
+        self.assertEqual(
+            (a["takenMinutes"], a["allowedMinutes"], a["overMinutes"], a["remark"], a["flag"]),
+            (10, 15, 0, "On time", None),
+        )
         m = rows[3]  # resigned employee with no department / designation
-        self.assertEqual((m["department"], m["designation"], m["employmentType"], m["takenMinutes"]), ("Unassigned", None, "Production", 14))
+        self.assertEqual(
+            (m["department"], m["designation"], m["employmentType"], m["takenMinutes"]),
+            ("Unassigned", None, "Production", 14),
+        )
         b, d = rows[4], rows[5]
         self.assertEqual((b["takenMinutes"], b["overMinutes"], b["remark"]), (16, 1, "Overtime"))  # 15 min 30 s -> 16
-        self.assertEqual((d["inAt"], d["takenMinutes"], d["overMinutes"], d["inGate"]), ("15:26", 16, 1, "Gate 2"))  # 16.5 -> 16 (half-even)
+        self.assertEqual(
+            (d["inAt"], d["takenMinutes"], d["overMinutes"], d["inGate"]), ("15:26", 16, 1, "Gate 2")
+        )  # 16.5 -> 16 (half-even)
         self.assertEqual(rows[6]["overMinutes"], 15)
         self.assertEqual(body["totals"]["takenMinutes"], 113)
         self.assertEqual(body["totals"]["overMinutes"], 17)
         s = summary_of(body)
-        self.assertEqual((s["Allowed minutes"], s["Breaks"], s["Completed"], s["On time"], s["Overtime"]), (15, 7, 7, 4, 3))
+        self.assertEqual(
+            (s["Allowed minutes"], s["Breaks"], s["Completed"], s["On time"], s["Overtime"]), (15, 7, 7, 4, 3)
+        )
         self.assertEqual((s["Not returned"], s["In progress"], s["Long or left open"], s["Employees"]), (0, 0, 0, 4))
         self.assertEqual(s["Total time taken"], 113)
         self.assertEqual(s["Minutes over allowance"], 17)
@@ -627,47 +780,67 @@ class TeaRegisterTests(_Base):
         rows = self.rows(self.RID, {"dateFrom": "2026-09-06", "dateTo": "2026-09-06"})
         self.assertEqual(len(rows), 1)
         e = rows[0]
-        self.assertEqual((e["date"], e["outAt"], e["inAt"], e["takenMinutes"], e["overMinutes"]), ("2026-09-06", "23:50", "00:10 (+1d)", 20, 5))
-        self.assertEqual(self.rows(self.RID, {"dateFrom": "2026-09-07", "dateTo": "2026-09-07"})[0]["employeeCode"], "T003")
+        self.assertEqual(
+            (e["date"], e["outAt"], e["inAt"], e["takenMinutes"], e["overMinutes"]),
+            ("2026-09-06", "23:50", "00:10 (+1d)", 20, 5),
+        )
+        self.assertEqual(
+            self.rows(self.RID, {"dateFrom": "2026-09-07", "dateTo": "2026-09-07"})[0]["employeeCode"], "T003"
+        )
 
     def test_night_shift_break_is_bucketed_by_ist_not_utc(self):
         # F started 01:30 IST on 09-07 = 20:00 UTC on 09-06
         on_7th = self.rows(self.RID, {"dateFrom": "2026-09-07", "dateTo": "2026-09-07"})
-        self.assertEqual([(r["employeeCode"], r["outAt"], r["date"]) for r in on_7th], [("T003", "01:30", "2026-09-07")])
-        self.assertNotIn("T003", [r["employeeCode"] for r in self.rows(self.RID, {"dateFrom": "2026-09-06", "dateTo": "2026-09-06"})])
+        self.assertEqual(
+            [(r["employeeCode"], r["outAt"], r["date"]) for r in on_7th], [("T003", "01:30", "2026-09-07")]
+        )
+        self.assertNotIn(
+            "T003", [r["employeeCode"] for r in self.rows(self.RID, {"dateFrom": "2026-09-06", "dateTo": "2026-09-06"})]
+        )
 
     def test_open_breaks_have_no_duration_and_are_marked(self):
         rows = self.rows(self.RID, {"dateFrom": "2026-09-14", "dateTo": "2026-09-15"})
-        self.assertEqual([(r["employeeCode"], r["remark"], r["flag"]) for r in rows], [
-            ("T001", "Not returned", "Left open"),  # since 20:00 the day before: 19.5 h
-            ("T002", "Not returned", None),  # 150 min
-            ("T004", "In progress", None),  # 30 min
-        ])
+        self.assertEqual(
+            [(r["employeeCode"], r["remark"], r["flag"]) for r in rows],
+            [
+                ("T001", "Not returned", "Left open"),  # since 20:00 the day before: 19.5 h
+                ("T002", "Not returned", None),  # 150 min
+                ("T004", "In progress", None),  # 30 min
+            ],
+        )
         for r in rows:
             self.assertIsNone(r["takenMinutes"])
             self.assertIsNone(r["overMinutes"])
             self.assertIsNone(r["inAt"])
         s = summary_of(self.get_report(self.RID, {"dateFrom": "2026-09-14", "dateTo": "2026-09-15"}))
-        self.assertEqual((s["Breaks"], s["Completed"], s["Not returned"], s["In progress"], s["Long or left open"]), (3, 0, 2, 1, 1))
+        self.assertEqual(
+            (s["Breaks"], s["Completed"], s["Not returned"], s["In progress"], s["Long or left open"]), (3, 0, 2, 1, 1)
+        )
         self.assertIsNone(s["Avg minutes / break"])  # nothing completed: a dash, not 0
         self.assertIsNone(s["Longest break (min)"])
 
     def test_long_break_is_flagged(self):
         rows = self.rows(self.RID, {"dateFrom": "2026-09-08", "dateTo": "2026-09-08"})
         g = rows[0]
-        self.assertEqual((g["takenMinutes"], g["overMinutes"], g["remark"], g["flag"]), (150, 135, "Overtime", "Long break"))
+        self.assertEqual(
+            (g["takenMinutes"], g["overMinutes"], g["remark"], g["flag"]), (150, 135, "Overtime", "Long break")
+        )
 
     def test_filters(self):
         def codes(**p):
             return sorted(r["employeeCode"] for r in self.rows(self.RID, {**SEPT, **p}))
 
         self.assertEqual(len(self.rows(self.RID, SEPT)), 13)
-        self.assertEqual(self.rows(self.RID, {"dateFrom": "2026-09-05", "dateTo": "2026-09-07"})[0]["date"], "2026-09-05")
+        self.assertEqual(
+            self.rows(self.RID, {"dateFrom": "2026-09-05", "dateTo": "2026-09-07"})[0]["date"], "2026-09-05"
+        )
         self.assertEqual(codes(remark="on_time"), ["T001", "T002", "T003", "T004", "T005"])  # A C F H M
         self.assertEqual(codes(remark="overtime"), ["T001", "T001", "T002", "T003", "T004"])  # B E D G I
         self.assertEqual(codes(remark="not_returned"), ["T001", "T002"])  # L J
         self.assertEqual(codes(remark="in_progress"), ["T004"])  # K
-        self.assertEqual(sorted(r["flag"] for r in self.rows(self.RID, {**SEPT, "longBreaks": "only"})), ["Left open", "Long break"])
+        self.assertEqual(
+            sorted(r["flag"] for r in self.rows(self.RID, {**SEPT, "longBreaks": "only"})), ["Left open", "Long break"]
+        )
         self.assertEqual(len(self.rows(self.RID, {**SEPT, "longBreaks": "exclude"})), 11)
         self.assertEqual(codes(departmentIds=self.d_cut.id), ["T001"] * 4 + ["T002"] * 3)
         self.assertEqual(codes(employmentType="production"), ["T002"] * 3 + ["T005"])
@@ -677,9 +850,29 @@ class TeaRegisterTests(_Base):
         self.assertEqual(len(self.rows(self.RID, {**SEPT, "employeeStatus": "active"})), 12)
         self.assertEqual(len(self.rows(self.RID, {**SEPT, "branchIds": self.b2.id})), 3)
 
+    def test_gate_name_filter_matches_either_scan(self):
+        def who(gate):
+            return sorted((r["employeeCode"], r["outAt"]) for r in self.rows(self.RID, {**SEPT, "gate": gate}))
+
+        # Gate 1: A B C D E (out) and the open J, L; Gate 2 is only the IN gate of D and E
+        self.assertEqual(len(who("Gate 1")), 7)
+        self.assertEqual(
+            who("gate 2"),
+            [("T001", "23:50"), ("T002", "15:10"), ("T003", "01:30"), ("T003", "09:00"), ("T005", "11:00")],
+        )
+        self.assertEqual([c for c, _ in who("GATE 3")], ["T004"] * 3)  # case-insensitive
+        self.assertEqual(who("no such gate"), [])
+        # the summary cards follow the same filter as the rows
+        s = summary_of(self.get_report(self.RID, {**SEPT, "gate": "Gate 3"}))
+        self.assertEqual((s["Breaks"], s["Overtime"], s["In progress"]), (3, 1, 1))
+
     def test_ist_day_edges_2330_and_0030(self):
-        TeaBreakLog.objects.create(employee=self.e1, out_at=ist(9, 25, 23, 30), in_at=ist(9, 25, 23, 35))  # 18:00 UTC on the 25th
-        TeaBreakLog.objects.create(employee=self.e1, out_at=ist(9, 26, 0, 30), in_at=ist(9, 26, 0, 35))  # 19:00 UTC on the 25th
+        TeaBreakLog.objects.create(
+            employee=self.e1, out_at=ist(9, 25, 23, 30), in_at=ist(9, 25, 23, 35)
+        )  # 18:00 UTC on the 25th
+        TeaBreakLog.objects.create(
+            employee=self.e1, out_at=ist(9, 26, 0, 30), in_at=ist(9, 26, 0, 35)
+        )  # 19:00 UTC on the 25th
         d25 = self.rows(self.RID, {"dateFrom": "2026-09-25", "dateTo": "2026-09-25"})
         d26 = self.rows(self.RID, {"dateFrom": "2026-09-26", "dateTo": "2026-09-26"})
         self.assertEqual([(r["date"], r["outAt"]) for r in d25], [("2026-09-25", "23:30")])
@@ -715,6 +908,29 @@ class TeaRegisterTests(_Base):
         with mock.patch("api.reporting.filters.ist_today", return_value=date(2026, 9, 20)):
             self.assertEqual(self.get_report(self.RID, {})["rows"], [])
 
+    def test_rows_written_by_the_real_gate_scan_engine(self):
+        """Breaks created by the kiosk's own OUT/IN toggle (not hand-built rows) show up correctly."""
+        from .tea_break_views import resolve_tea_break_scan
+
+        clock = [ist(9, 22, 9, 0)]  # every timezone.now() call (auto_now_add columns too) sees the same instant
+        with mock.patch("django.utils.timezone.now", side_effect=lambda: clock[0]):
+            resolve_tea_break_scan(self.g1, self.e3)  # OUT 09:00
+            clock[0] = ist(9, 22, 9, 12)
+            resolve_tea_break_scan(self.g2, self.e3)  # IN 09:12 at another gate
+            clock[0] = ist(9, 22, 9, 40)
+            resolve_tea_break_scan(self.g1, self.e3)  # OUT again 09:40: a new, open break
+        day = {"dateFrom": "2026-09-22", "dateTo": "2026-09-22"}
+        rows = self.rows(self.RID, day)
+        self.assertEqual(len(rows), 2)
+        first, second = rows
+        self.assertEqual(
+            (first["outAt"], first["outGate"], first["inAt"], first["inGate"]), ("09:00", "Gate 1", "09:12", "Gate 2")
+        )
+        self.assertEqual((first["takenMinutes"], first["remark"]), (12, "On time"))
+        self.assertEqual((second["outAt"], second["inAt"], second["takenMinutes"]), ("09:40", None, None))
+        # NOW is 15-Sep, before this break: a break "from the future" is not more than an hour old, so it is in progress
+        self.assertEqual(second["remark"], "In progress")
+
     def test_matches_the_hr_tea_break_page_row_for_row(self):
         counts = Counter()
         for log in TeaBreakLog.objects.select_related("employee__department"):
@@ -736,28 +952,68 @@ class TeaEmployeeSummaryTests(_Base):
         rows = {r["employeeCode"]: r for r in body["rows"]}
         self.assertEqual([r["employeeCode"] for r in body["rows"]], ["T001", "T002", "T003", "T004", "T005"])
         e1 = rows["T001"]
-        self.assertEqual((e1["breaks"], e1["completed"], e1["onTime"], e1["overtime"], e1["notReturned"], e1["inProgress"]), (4, 3, 1, 2, 1, 0))
+        self.assertEqual(
+            (e1["breaks"], e1["completed"], e1["onTime"], e1["overtime"], e1["notReturned"], e1["inProgress"]),
+            (4, 3, 1, 2, 1, 0),
+        )
         self.assertEqual((e1["longBreaks"], e1["totalMinutes"], e1["avgMinutes"], e1["maxMinutes"]), (1, 46, 15.33, 20))
         self.assertEqual((e1["overMinutesTotal"], e1["overtimePct"], e1["daysWithBreaks"]), (6, 66.7, 3))
         e2 = rows["T002"]
-        self.assertEqual((e2["breaks"], e2["overtime"], e2["notReturned"], e2["totalMinutes"], e2["avgMinutes"]), (3, 1, 1, 31, 15.5))
+        self.assertEqual(
+            (e2["breaks"], e2["overtime"], e2["notReturned"], e2["totalMinutes"], e2["avgMinutes"]), (3, 1, 1, 31, 15.5)
+        )
         self.assertEqual((e2["overMinutesTotal"], e2["daysWithBreaks"], e2["longBreaks"]), (1, 2, 0))
         e3 = rows["T003"]
-        self.assertEqual((e3["totalMinutes"], e3["avgMinutes"], e3["maxMinutes"], e3["overMinutesTotal"], e3["longBreaks"]), (160, 80.0, 150, 135, 1))
+        self.assertEqual(
+            (e3["totalMinutes"], e3["avgMinutes"], e3["maxMinutes"], e3["overMinutesTotal"], e3["longBreaks"]),
+            (160, 80.0, 150, 135, 1),
+        )
         self.assertEqual(e3["daysWithBreaks"], 2)  # 09-07 (IST) and 09-08
         e4 = rows["T004"]
-        self.assertEqual((e4["inProgress"], e4["totalMinutes"], e4["avgMinutes"], e4["overMinutesTotal"]), (1, 42, 21.0, 15))
+        self.assertEqual(
+            (e4["inProgress"], e4["totalMinutes"], e4["avgMinutes"], e4["overMinutesTotal"]), (1, 42, 21.0, 15)
+        )
         e5 = rows["T005"]
-        self.assertEqual((e5["department"], e5["designation"], e5["overtime"], e5["overtimePct"], e5["avgMinutes"]), ("Unassigned", None, 0, 0.0, 14.0))
+        self.assertEqual(
+            (e5["department"], e5["overtime"], e5["overtimePct"], e5["avgMinutes"]),
+            ("Unassigned", 0, 0.0, 14.0),
+        )
         t = body["totals"]
-        self.assertEqual((t["breaks"], t["completed"], t["onTime"], t["overtime"], t["notReturned"], t["inProgress"]), (13, 10, 5, 5, 2, 1))
-        self.assertEqual((t["longBreaks"], t["totalMinutes"], t["overMinutesTotal"], t["daysWithBreaks"]), (2, 293, 157, 10))
+        self.assertEqual(
+            (t["breaks"], t["completed"], t["onTime"], t["overtime"], t["notReturned"], t["inProgress"]),
+            (13, 10, 5, 5, 2, 1),
+        )
+        self.assertEqual(
+            (t["longBreaks"], t["totalMinutes"], t["overMinutesTotal"], t["daysWithBreaks"]), (2, 293, 157, 10)
+        )
         s = summary_of(body)
-        self.assertEqual((s["Employees with breaks"], s["Breaks"], s["Overtime breaks"], s["Long or left open"]), (5, 13, 5, 2))
+        self.assertEqual(
+            (s["Employees with breaks"], s["Breaks"], s["Overtime breaks"], s["Long or left open"]), (5, 13, 5, 2)
+        )
         self.assertEqual(s["Avg minutes / break"], 29.3)
         self.assertEqual(s["Most overtime breaks"], "T001 Anita Kumar (2)")
         self.assertEqual(s["Most total time"], "T003 Chitra Devi (160 min)")
         self.assertEqual(s["Breaks"], t["breaks"])
+        notes = body["notes"]
+        self.assertIn(
+            "Top 5 by overtime breaks: T001 Anita Kumar (2); T002 Bala Raj (1); T003 Chitra Devi (1); T004 Dinesh Babu (1).",
+            notes,
+        )
+        self.assertIn(
+            "Top 5 by total break time: T003 Chitra Devi (160 min); T001 Anita Kumar (46 min); T004 Dinesh Babu (42 min); "
+            "T002 Bala Raj (31 min); T005 Esther Mary (14 min).",
+            notes,
+        )
+
+    def test_breaks_per_day(self):
+        body = self.get_report(self.RID, SEPT)
+        rows = {r["employeeCode"]: r for r in body["rows"]}
+        # breaks / distinct IST days with a break: T001 4 over 3, T002 3 over 2, T003 2 over 2, T004 3 over 2, T005 1 over 1
+        self.assertEqual(
+            {c: r["avgBreaksPerDay"] for c, r in rows.items()},
+            {"T001": 1.33, "T002": 1.5, "T003": 1.0, "T004": 1.5, "T005": 1.0},
+        )
+        self.assertIsNone(body["totals"].get("avgBreaksPerDay"))  # a ratio is not additive
 
     def test_filters(self):
         def codes(**p):
@@ -783,7 +1039,9 @@ class TeaEmployeeSummaryTests(_Base):
         self.assertIn("left out of this report", " ".join(body["notes"]))
 
     def test_branch_isolation(self):
-        self.assertEqual([r["employeeCode"] for r in self.rows(self.RID, SEPT, self.b1_user)], ["T001", "T002", "T003", "T005"])
+        self.assertEqual(
+            [r["employeeCode"] for r in self.rows(self.RID, SEPT, self.b1_user)], ["T001", "T002", "T003", "T005"]
+        )
         self.assertEqual(self.rows(self.RID, {**SEPT, "employeeIds": self.e4.id}, self.b1_user), [])
         self.assertEqual(self.rows(self.RID, {**SEPT, "branchIds": self.b2.id}, self.b1_user), [])
         self.assertEqual([r["employeeCode"] for r in self.rows(self.RID, SEPT, self.b2_user)], ["T004"])
@@ -792,20 +1050,32 @@ class TeaEmployeeSummaryTests(_Base):
 class TeaDepartmentSummaryTests(_Base):
     RID = "tea-break-department-summary"
 
-    def test_golden_by_department_default_active_only(self):
-        body = self.get_report(self.RID, SEPT)
+    def test_golden_by_department_active_only(self):
+        # Employee status now defaults to All (tea data is transactional); the Active filter is exercised explicitly.
+        body = self.get_report(self.RID, {**SEPT, "employeeStatus": "active"})
         rows = body["rows"]
-        self.assertEqual([(r["group"], r["branch"]) for r in rows], [("CUTTING", "Unit 1"), ("PACKING", "Unit 2"), ("SEWING", "Unit 1")])
+        self.assertEqual(
+            [(r["group"], r["branch"]) for r in rows],
+            [("CUTTING", "Unit 1"), ("PACKING", "Unit 2"), ("SEWING", "Unit 1")],
+        )
         cut, pack, sew = rows
-        self.assertEqual((cut["headcount"], cut["employeesOnBreak"], cut["participationPct"]), (3, 2, 66.7))  # T006 never scans
+        self.assertEqual(
+            (cut["headcount"], cut["employeesOnBreak"], cut["participationPct"]), (3, 2, 66.7)
+        )  # T006 never scans
         self.assertEqual((cut["breaks"], cut["totalMinutes"], cut["avgMinutes"]), (7, 77, 15.4))
         self.assertEqual((cut["overtime"], cut["overtimePct"], cut["notReturned"], cut["longBreaks"]), (3, 60.0, 2, 1))
         self.assertEqual(cut["avgBreaksPerEmployeeDay"], 1.4)  # 7 breaks over 5 employee-days
-        self.assertEqual((sew["headcount"], sew["employeesOnBreak"], sew["participationPct"], sew["breaks"]), (1, 1, 100.0, 2))
-        self.assertEqual((sew["totalMinutes"], sew["avgMinutes"], sew["overtime"], sew["longBreaks"]), (160, 80.0, 1, 1))
+        self.assertEqual(
+            (sew["headcount"], sew["employeesOnBreak"], sew["participationPct"], sew["breaks"]), (1, 1, 100.0, 2)
+        )
+        self.assertEqual(
+            (sew["totalMinutes"], sew["avgMinutes"], sew["overtime"], sew["longBreaks"]), (160, 80.0, 1, 1)
+        )
         self.assertEqual((pack["totalMinutes"], pack["avgMinutes"], pack["avgBreaksPerEmployeeDay"]), (42, 21.0, 1.5))
         t = body["totals"]
-        self.assertEqual((t["headcount"], t["employeesOnBreak"], t["breaks"], t["totalMinutes"], t["overtime"]), (5, 4, 12, 279, 5))
+        self.assertEqual(
+            (t["headcount"], t["employeesOnBreak"], t["breaks"], t["totalMinutes"], t["overtime"]), (5, 4, 12, 279, 5)
+        )
         s = summary_of(body)
         self.assertEqual((s["Breaks"], s["Headcount"]), (12, 5))
         self.assertEqual(s["Participation"], 80.0)
@@ -813,11 +1083,27 @@ class TeaDepartmentSummaryTests(_Base):
         self.assertEqual(s["Highest overtime %"], "CUTTING (60.0%)")
         self.assertEqual(s["Breaks"], t["breaks"])
 
+    def test_default_status_is_all_and_keeps_breaks_by_people_who_left(self):
+        body = self.get_report(self.RID, SEPT)
+        self.assertEqual([r["group"] for r in body["rows"]], ["CUTTING", "No department", "PACKING", "SEWING"])
+        self.assertEqual(body["totals"]["breaks"], 13)  # 12 by active staff + T005's break
+        self.assertIn("defaults to All", " ".join(body["notes"]))
+
     def test_all_statuses_adds_no_department_group(self):
         rows = self.rows(self.RID, {**SEPT, "employeeStatus": "all"})
         self.assertEqual([r["group"] for r in rows], ["CUTTING", "No department", "PACKING", "SEWING"])
         nd = rows[1]
-        self.assertEqual((nd["branch"], nd["headcount"], nd["employeesOnBreak"], nd["breaks"], nd["overtime"], nd["overtimePct"]), (None, 1, 1, 1, 0, 0.0))
+        self.assertEqual(
+            (nd["branch"], nd["headcount"], nd["employeesOnBreak"], nd["breaks"], nd["overtime"], nd["overtimePct"]),
+            (None, 1, 1, 1, 0, 0.0),
+        )
+
+    def test_inactive_status_shows_only_people_who_left(self):
+        body = self.get_report(self.RID, {**SEPT, "employeeStatus": "inactive"})
+        self.assertEqual([r["group"] for r in body["rows"]], ["No department"])
+        row = body["rows"][0]
+        self.assertEqual((row["headcount"], row["employeesOnBreak"], row["breaks"], row["totalMinutes"]), (1, 1, 1, 14))
+        self.assertIn("choose Active to limit breaks and headcount to current employees", " ".join(body["notes"]))
 
     def test_group_by_branch_and_employment_type(self):
         body = self.get_report(self.RID, {**SEPT, "employeeStatus": "all", "groupBy": "branch"})
@@ -825,7 +1111,10 @@ class TeaDepartmentSummaryTests(_Base):
         self.assertNotIn("branch", [c["key"] for c in body["columns"]])
         rows = {r["group"]: r for r in body["rows"]}
         self.assertEqual(list(rows), ["No branch", "Unit 1", "Unit 2"])
-        self.assertEqual((rows["No branch"]["headcount"], rows["No branch"]["breaks"], rows["No branch"]["participationPct"]), (1, 0, 0.0))
+        self.assertEqual(
+            (rows["No branch"]["headcount"], rows["No branch"]["breaks"], rows["No branch"]["participationPct"]),
+            (1, 0, 0.0),
+        )
         self.assertIsNone(rows["No branch"]["avgMinutes"])  # nothing to average: a dash
         self.assertEqual((rows["Unit 1"]["headcount"], rows["Unit 1"]["breaks"]), (4, 10))
         self.assertEqual((rows["Unit 2"]["headcount"], rows["Unit 2"]["breaks"]), (1, 3))
@@ -839,14 +1128,28 @@ class TeaDepartmentSummaryTests(_Base):
         rows = self.rows(self.RID, {**SEPT, "departmentIds": self.d_sew.id})
         self.assertEqual([r["group"] for r in rows], ["SEWING"])
         rows = self.rows(self.RID, {**SEPT, "employmentType": "production"})
+        self.assertEqual(
+            [(r["group"], r["headcount"], r["breaks"]) for r in rows], [("CUTTING", 1, 3), ("No department", 1, 1)]
+        )  # T002 and the resigned T005
+        rows = self.rows(self.RID, {**SEPT, "employmentType": "production", "employeeStatus": "active"})
         self.assertEqual([(r["group"], r["headcount"], r["breaks"]) for r in rows], [("CUTTING", 1, 3)])
+        rows = self.rows(self.RID, {**SEPT, "branchIds": self.b2.id})
+        self.assertEqual(
+            [(r["group"], r["branch"], r["headcount"], r["breaks"]) for r in rows], [("PACKING", "Unit 2", 1, 3)]
+        )
         body = self.get_report(self.RID, {**SEPT, "excludeSuspect": "true"})
-        self.assertEqual(body["totals"]["breaks"], 10)
+        self.assertEqual(body["totals"]["breaks"], 11)  # 10 by active staff + T005's on-time break
         self.assertEqual(body["totals"]["longBreaks"], 0)
 
     def test_branch_isolation(self):
-        rows = self.rows(self.RID, SEPT, self.b1_user)
-        self.assertEqual([(r["group"], r["headcount"]) for r in rows], [("CUTTING", 2), ("SEWING", 1)])  # T006 has no branch
+        rows = self.rows(self.RID, {**SEPT, "employeeStatus": "active"}, self.b1_user)
+        self.assertEqual(
+            [(r["group"], r["headcount"]) for r in rows], [("CUTTING", 2), ("SEWING", 1)]
+        )  # T006 has no branch
+        rows = self.rows(self.RID, SEPT, self.b1_user)  # default status All: the resigned T005 (Unit 1) is included
+        self.assertEqual(
+            [(r["group"], r["headcount"]) for r in rows], [("CUTTING", 2), ("No department", 1), ("SEWING", 1)]
+        )
         self.assertEqual(self.rows(self.RID, {**SEPT, "branchIds": self.b2.id}, self.b1_user), [])
         self.assertEqual([r["group"] for r in self.rows(self.RID, SEPT, self.b2_user)], ["PACKING"])
 
@@ -857,21 +1160,37 @@ class TeaExceptionsTests(_Base):
     def test_golden_worst_first(self):
         body = self.get_report(self.RID, SEPT)
         rows = body["rows"]
-        self.assertEqual([(r["employeeCode"], r["outAt"]) for r in rows], [
-            ("T003", "09:00"), ("T004", "16:00"), ("T001", "23:50"), ("T002", "15:10"), ("T001", "15:00"),  # overtime, longest first
-            ("T001", "20:00"), ("T002", "13:00"),  # never closed last, oldest first
-        ])
+        self.assertEqual(
+            [(r["employeeCode"], r["outAt"]) for r in rows],
+            [
+                ("T003", "09:00"),
+                ("T004", "16:00"),
+                ("T001", "23:50"),
+                ("T002", "15:10"),
+                ("T001", "15:00"),  # overtime, longest first
+                ("T001", "20:00"),
+                ("T002", "13:00"),  # never closed last, oldest first
+            ],
+        )
         g = rows[0]
         self.assertEqual(
             (g["date"], g["inAt"], g["takenMinutes"], g["allowedMinutes"], g["overMinutes"], g["remark"], g["flag"]),
             ("2026-09-08", "11:30", 150, 15, 135, "Overtime", "Long break"),
         )
         self.assertEqual((g["overtimeCountInPeriod"], g["outGate"], g["inGate"]), (1, "Gate 2", "Gate 2"))
-        self.assertEqual((rows[3]["takenMinutes"], rows[4]["takenMinutes"]), (16, 16))  # 16m30s ranks above 15m30s though both show 16
+        self.assertEqual(
+            (rows[3]["takenMinutes"], rows[4]["takenMinutes"]), (16, 16)
+        )  # 16m30s ranks above 15m30s though both show 16
         self.assertEqual(rows[2]["inAt"], "00:10 (+1d)")
         l_row = rows[5]
-        self.assertEqual((l_row["date"], l_row["inAt"], l_row["takenMinutes"], l_row["overMinutes"]), ("2026-09-14", None, None, None))
-        self.assertEqual((l_row["remark"], l_row["flag"], l_row["overtimeCountInPeriod"], l_row["inGate"]), ("Not returned", "Left open", 2, None))
+        self.assertEqual(
+            (l_row["date"], l_row["inAt"], l_row["takenMinutes"], l_row["overMinutes"]),
+            ("2026-09-14", None, None, None),
+        )
+        self.assertEqual(
+            (l_row["remark"], l_row["flag"], l_row["overtimeCountInPeriod"], l_row["inGate"]),
+            ("Not returned", "Left open", 2, None),
+        )
         self.assertEqual(rows[6]["flag"], None)
         self.assertEqual(body["totals"]["takenMinutes"], 232)
         self.assertEqual(body["totals"]["overMinutes"], 157)
@@ -889,11 +1208,16 @@ class TeaExceptionsTests(_Base):
         self.assertEqual(key(exceptionType="not_returned"), [("T001", "20:00"), ("T002", "13:00")])
         # rounded minutes >= allowed + N: N=10 -> >= 25 (G 150, I 30); N=5 -> >= 20 (adds E, exactly 20)
         self.assertEqual(key(exceptionType="overtime", minOverMinutes=10), [("T003", "09:00"), ("T004", "16:00")])
-        self.assertEqual(key(exceptionType="overtime", minOverMinutes=5), [("T003", "09:00"), ("T004", "16:00"), ("T001", "23:50")])
+        self.assertEqual(
+            key(exceptionType="overtime", minOverMinutes=5), [("T003", "09:00"), ("T004", "16:00"), ("T001", "23:50")]
+        )
         # open breaks are not affected by the minimum-over filter
         self.assertEqual(len(key(minOverMinutes=30)), 1 + 2)
-        self.assertEqual(key(employmentType="production"), [("T002", "15:10"), ("T002", "13:00")])  # D overtime, J open; M is on time
+        self.assertEqual(
+            key(employmentType="production"), [("T002", "15:10"), ("T002", "13:00")]
+        )  # D overtime, J open; M is on time
         self.assertEqual(key(departmentIds=self.d_sew.id), [("T003", "09:00")])
+        self.assertEqual(key(branchIds=self.b2.id), [("T004", "16:00")])
         self.assertEqual(len(key(employeeIds=self.e1.id)), 3)
         self.assertEqual(len(key(dateFrom="2026-09-14", dateTo="2026-09-30")), 2)
 
@@ -921,12 +1245,22 @@ class TeaDailyTrendTests(_Base):
         rows = {r["date"]: r for r in body["rows"]}
         self.assertEqual(len(body["rows"]), 10)
         d5 = rows["2026-09-05"]
-        self.assertEqual((d5["weekday"], d5["breaks"], d5["employees"], d5["totalMinutes"], d5["avgMinutes"]), ("Sat", 7, 4, 113, round(113 / 7, 2)))
-        self.assertEqual((d5["overtime"], d5["overtimePct"], d5["notReturned"], d5["peakHour"]), (3, 42.9, 0, "10:00-10:59"))
+        self.assertEqual(
+            (d5["weekday"], d5["breaks"], d5["employees"], d5["totalMinutes"], d5["avgMinutes"]),
+            ("Sat", 7, 4, 113, round(113 / 7, 2)),
+        )
+        self.assertEqual(
+            (d5["overtime"], d5["overtimePct"], d5["notReturned"], d5["peakHour"]), (3, 42.9, 0, "10:00-10:59")
+        )
         d6 = rows["2026-09-06"]
-        self.assertEqual((d6["breaks"], d6["totalMinutes"], d6["overtime"], d6["overtimePct"], d6["peakHour"]), (1, 20, 1, 100.0, "23:00-23:59"))
+        self.assertEqual(
+            (d6["breaks"], d6["totalMinutes"], d6["overtime"], d6["overtimePct"], d6["peakHour"]),
+            (1, 20, 1, 100.0, "23:00-23:59"),
+        )
         d7 = rows["2026-09-07"]  # the 01:30 IST night-shift break is on the 7th (it is 20:00 UTC on the 6th)
-        self.assertEqual((d7["breaks"], d7["totalMinutes"], d7["overtimePct"], d7["peakHour"]), (1, 10, 0.0, "01:00-01:59"))
+        self.assertEqual(
+            (d7["breaks"], d7["totalMinutes"], d7["overtimePct"], d7["peakHour"]), (1, 10, 0.0, "01:00-01:59")
+        )
         self.assertEqual((rows["2026-09-08"]["totalMinutes"], rows["2026-09-08"]["overtime"]), (150, 1))
         empty = rows["2026-09-01"]
         self.assertEqual((empty["breaks"], empty["employees"], empty["totalMinutes"], empty["overtime"]), (0, 0, 0, 0))
@@ -945,10 +1279,14 @@ class TeaDailyTrendTests(_Base):
         self.assertEqual({r["date"]: r["breaks"] for r in body["rows"]}["2026-09-08"], 0)
         prod = self.get_report(self.RID, {**self.WINDOW, "employmentType": "production"})
         self.assertEqual(prod["totals"]["breaks"], 3)  # C, D, M
-        self.assertEqual(self.get_report(self.RID, {**self.WINDOW, "departmentIds": self.d_pack.id})["totals"]["breaks"], 2)
+        self.assertEqual(
+            self.get_report(self.RID, {**self.WINDOW, "departmentIds": self.d_pack.id})["totals"]["breaks"], 2
+        )
         b1 = self.get_report(self.RID, self.WINDOW, self.b1_user)
         self.assertEqual(b1["totals"]["breaks"], 8)  # H and I (Unit 2) hidden
-        self.assertEqual(self.get_report(self.RID, {**self.WINDOW, "branchIds": self.b2.id}, self.b1_user)["totals"]["breaks"], 0)
+        self.assertEqual(
+            self.get_report(self.RID, {**self.WINDOW, "branchIds": self.b2.id}, self.b1_user)["totals"]["breaks"], 0
+        )
         self.assertEqual(self.get_report(self.RID, self.WINDOW, self.b2_user)["totals"]["breaks"], 2)
 
 
@@ -967,18 +1305,32 @@ class TeaHourlyTests(_Base):
         h15 = rows["15:00-15:59"]  # B, D and the open K (open breaks count as breaks but not in the average)
         self.assertEqual((h15["breaks"], h15["avgMinutes"], h15["overtime"]), (3, 16.0, 2))
         quiet = rows["02:00-02:59"]
-        self.assertEqual((quiet["breaks"], quiet["sharePct"], quiet["avgMinutes"], quiet["overtime"]), (0, 0.0, None, 0))
+        self.assertEqual(
+            (quiet["breaks"], quiet["sharePct"], quiet["avgMinutes"], quiet["overtime"]), (0, 0.0, None, 0)
+        )
         self.assertEqual(body["totals"]["breaks"], 13)
         self.assertEqual(body["totals"]["overtime"], 5)
         s = summary_of(body)
-        self.assertEqual((s["Breaks"], s["Peak hour"], s["Breaks in peak hour"]), (13, "10:00-10:59", 3))  # 10 and 15 tie: earlier
+        self.assertEqual(
+            (s["Breaks"], s["Peak hour"], s["Breaks in peak hour"]), (13, "10:00-10:59", 3)
+        )  # 10 and 15 tie: earlier
         self.assertEqual(s["Breaks"], body["totals"]["breaks"])
 
     def test_filters_and_isolation(self):
         body = self.get_report(self.RID, {**SEPT, "excludeSuspect": "true"})
         self.assertEqual(body["totals"]["breaks"], 11)
         self.assertEqual(self.get_report(self.RID, {**SEPT, "employmentType": "production"})["totals"]["breaks"], 4)
+        pack = self.get_report(self.RID, {**SEPT, "departmentIds": self.d_pack.id})  # H 10:00, K open 15:00, I 16:00
+        self.assertEqual(
+            [r["hourBand"] for r in pack["rows"]][:1] + [r["hourBand"] for r in pack["rows"]][-1:],
+            ["10:00-10:59", "16:00-16:59"],
+        )
+        self.assertEqual(
+            {r["hourBand"]: r["breaks"] for r in pack["rows"] if r["breaks"]},
+            {"10:00-10:59": 1, "15:00-15:59": 1, "16:00-16:59": 1},
+        )
         self.assertEqual(self.get_report(self.RID, SEPT, self.b1_user)["totals"]["breaks"], 10)
+        self.assertEqual(self.get_report(self.RID, {**SEPT, "branchIds": self.b2.id})["totals"]["breaks"], 3)
         self.assertEqual(self.get_report(self.RID, {**SEPT, "branchIds": self.b2.id}, self.b1_user)["rows"], [])
         self.assertEqual(self.get_report(self.RID, {"dateFrom": "2025-01-01", "dateTo": "2025-01-31"})["rows"], [])
 
@@ -989,9 +1341,15 @@ class TeaFrequencyTests(_Base):
     def test_golden_more_than_one_break_a_day(self):
         body = self.get_report(self.RID, {**SEPT, "minBreaksPerDay": 1})
         rows = body["rows"]
-        self.assertEqual([(r["date"], r["employeeCode"]) for r in rows], [("2026-09-05", "T001"), ("2026-09-05", "T002"), ("2026-09-05", "T004")])
+        self.assertEqual(
+            [(r["date"], r["employeeCode"]) for r in rows],
+            [("2026-09-05", "T001"), ("2026-09-05", "T002"), ("2026-09-05", "T004")],
+        )
         a, b, c = rows
-        self.assertEqual((a["breaksThatDay"], a["totalMinutes"], a["overtime"], a["stillOpen"], a["firstOutAt"], a["lastInAt"]), (2, 26, 1, 0, "10:00", "15:15"))
+        self.assertEqual(
+            (a["breaksThatDay"], a["totalMinutes"], a["overtime"], a["stillOpen"], a["firstOutAt"], a["lastInAt"]),
+            (2, 26, 1, 0, "10:00", "15:15"),
+        )
         self.assertEqual((b["totalMinutes"], b["firstOutAt"], b["lastInAt"]), (31, "10:05", "15:26"))
         self.assertEqual((c["totalMinutes"], c["overtime"], c["lastInAt"]), (42, 1, "16:30"))
         self.assertEqual(body["totals"]["breaksThatDay"], 6)
@@ -1002,17 +1360,24 @@ class TeaFrequencyTests(_Base):
     def test_default_threshold_and_open_breaks(self):
         self.assertEqual(self.rows(self.RID, SEPT), [])  # nobody had MORE than 2 in a day
         for i, (h, m) in enumerate([(9, 0), (12, 0), (15, 0)]):
-            TeaBreakLog.objects.create(employee=self.e3, out_at=ist(9, 20, h, m), in_at=ist(9, 20, h, m + 5) if i < 2 else None)
+            TeaBreakLog.objects.create(
+                employee=self.e3, out_at=ist(9, 20, h, m), in_at=ist(9, 20, h, m + 5) if i < 2 else None
+            )
         rows = self.rows(self.RID, SEPT)
         self.assertEqual(len(rows), 1)
         r = rows[0]
-        self.assertEqual((r["date"], r["employeeCode"], r["breaksThatDay"], r["totalMinutes"], r["stillOpen"]), ("2026-09-20", "T003", 3, 10, 1))
+        self.assertEqual(
+            (r["date"], r["employeeCode"], r["breaksThatDay"], r["totalMinutes"], r["stillOpen"]),
+            ("2026-09-20", "T003", 3, 10, 1),
+        )
         self.assertEqual((r["firstOutAt"], r["lastInAt"]), ("09:00", "12:05"))
         self.assertEqual(self.rows(self.RID, {**SEPT, "minBreaksPerDay": 3}), [])
 
     def test_filters_and_isolation(self):
         p = {**SEPT, "minBreaksPerDay": 1}
-        self.assertEqual([r["employeeCode"] for r in self.rows(self.RID, {**p, "departmentIds": self.d_cut.id})], ["T001", "T002"])
+        self.assertEqual(
+            [r["employeeCode"] for r in self.rows(self.RID, {**p, "departmentIds": self.d_cut.id})], ["T001", "T002"]
+        )
         self.assertEqual([r["employeeCode"] for r in self.rows(self.RID, {**p, "employeeIds": self.e4.id})], ["T004"])
         self.assertEqual([r["employeeCode"] for r in self.rows(self.RID, p, self.b1_user)], ["T001", "T002"])
         self.assertEqual(self.rows(self.RID, {**p, "branchIds": self.b2.id}, self.b1_user), [])
@@ -1032,26 +1397,60 @@ class TimeAwayTests(_Base):
         rows = {r["employeeCode"]: r for r in body["rows"]}
         self.assertEqual(list(rows), ["T001", "T002", "T003", "T004", "T005"])
         e1 = rows["T001"]
-        self.assertEqual((e1["outpassExits"], e1["outpassMinutes"], e1["qrExits"]), (3, 136, 2))  # 90 + 46 (46.5 half-even); 3rd never returned
-        self.assertEqual((e1["teaBreaks"], e1["teaMinutes"], e1["teaOvertime"], e1["visitorsHosted"], e1["totalAwayMinutes"]), (4, 46, 2, 2, 182))
+        self.assertEqual(
+            (e1["outpassExits"], e1["outpassMinutes"], e1["qrExits"]), (3, 136, 2)
+        )  # 90 + 46 (46.5 half-even); 3rd never returned
+        self.assertEqual(
+            (e1["teaBreaks"], e1["teaMinutes"], e1["teaOvertime"], e1["visitorsHosted"], e1["totalAwayMinutes"]),
+            (4, 46, 2, 2, 182),
+        )
         e2 = rows["T002"]
-        self.assertEqual((e2["outpassExits"], e2["outpassMinutes"], e2["qrExits"], e2["teaBreaks"], e2["teaMinutes"]), (1, 20, 0, 3, 31))
+        self.assertEqual(
+            (e2["outpassExits"], e2["outpassMinutes"], e2["qrExits"], e2["teaBreaks"], e2["teaMinutes"]),
+            (1, 20, 0, 3, 31),
+        )
         self.assertEqual((e2["teaOvertime"], e2["visitorsHosted"], e2["totalAwayMinutes"]), (1, 1, 51))
         e3 = rows["T003"]
-        self.assertEqual((e3["outpassExits"], e3["teaMinutes"], e3["visitorsHosted"], e3["totalAwayMinutes"]), (0, 160, 0, 160))  # pending pass is not an exit
+        self.assertEqual(
+            (e3["outpassExits"], e3["teaMinutes"], e3["visitorsHosted"], e3["totalAwayMinutes"]), (0, 160, 0, 160)
+        )  # pending pass is not an exit
         e4 = rows["T004"]
-        self.assertEqual((e4["outpassExits"], e4["outpassMinutes"], e4["qrExits"], e4["teaMinutes"], e4["totalAwayMinutes"]), (1, 30, 1, 42, 72))
+        self.assertEqual(
+            (e4["outpassExits"], e4["outpassMinutes"], e4["qrExits"], e4["teaMinutes"], e4["totalAwayMinutes"]),
+            (1, 30, 1, 42, 72),
+        )
         self.assertEqual((e4["visitorsHosted"], e4["teaBreaks"]), (1, 3))
         e5 = rows["T005"]
         self.assertEqual((e5["department"], e5["totalAwayMinutes"], e5["outpassExits"]), ("Unassigned", 14, 0))
         t = body["totals"]
-        self.assertEqual((t["outpassExits"], t["outpassMinutes"], t["qrExits"], t["teaBreaks"], t["teaMinutes"]), (5, 186, 3, 13, 293))
+        self.assertEqual(
+            (t["outpassExits"], t["outpassMinutes"], t["qrExits"], t["teaBreaks"], t["teaMinutes"]),
+            (5, 186, 3, 13, 293),
+        )
         self.assertEqual((t["teaOvertime"], t["visitorsHosted"], t["totalAwayMinutes"]), (5, 4, 186 + 293))
         s = summary_of(body)
         self.assertEqual(s["Employees with gate activity"], 5)
         self.assertEqual((s["Outpass exits"], s["Tea breaks"], s["Visitors hosted"]), (5, 13, 4))
         self.assertEqual(s["Time away (outpass + tea)"], t["totalAwayMinutes"])
         self.assertEqual(s["Most time away"], "T001 Anita Kumar")
+        self.assertIn(
+            "Top 10 by time away: T001 Anita Kumar (182 min); T003 Chitra Devi (160 min); T004 Dinesh Babu (72 min); "
+            "T002 Bala Raj (51 min); T005 Esther Mary (14 min).",
+            body["notes"],
+        )
+
+    def test_return_scanned_before_the_exit_gives_no_minutes(self):
+        """Corrupt data (a return stamped earlier than the exit) must not produce negative time away."""
+        OutpassRequest.objects.create(
+            employee=self.e3,
+            destination="Bank",
+            reason="x",
+            status="approved",
+            exited_at=ist(9, 20, 12, 0),
+            entered_at=ist(9, 20, 11, 0),
+        )
+        e3 = next(r for r in self.rows(self.RID, SEPT) if r["employeeCode"] == "T003")
+        self.assertEqual((e3["outpassExits"], e3["outpassMinutes"], e3["totalAwayMinutes"]), (1, 0, 160))
 
     def test_unmatched_qr_rows_and_mirror_rows_are_not_counted(self):
         e1 = next(r for r in self.rows(self.RID, SEPT) if r["employeeCode"] == "T001")
@@ -1066,13 +1465,19 @@ class TimeAwayTests(_Base):
         self.assertEqual(codes(employmentType="production"), ["T002", "T005"])
         self.assertEqual(codes(employeeStatus="active"), ["T001", "T002", "T003", "T004"])
         self.assertEqual(codes(employeeIds=self.e5.id), ["T005"])
-        self.assertEqual(codes(dateFrom="2026-09-08", dateTo="2026-09-08"), ["T002", "T003"])  # T002 pass out 10:00, T003 break 09:00
+        self.assertEqual(codes(branchIds=self.b2.id), ["T004"])
+        self.assertEqual(codes(designationIds=self.des_help.id), ["T002"])
+        self.assertEqual(
+            codes(dateFrom="2026-09-08", dateTo="2026-09-08"), ["T002", "T003"]
+        )  # T002 pass out 10:00, T003 break 09:00
         body = self.get_report(self.RID, {**SEPT, "excludeSuspect": "true"})
         rows = {r["employeeCode"]: r for r in body["rows"]}
         self.assertEqual(rows["T003"]["teaBreaks"], 1)  # the 150-minute break is left out
 
     def test_branch_isolation(self):
-        self.assertEqual([r["employeeCode"] for r in self.rows(self.RID, SEPT, self.b1_user)], ["T001", "T002", "T003", "T005"])
+        self.assertEqual(
+            [r["employeeCode"] for r in self.rows(self.RID, SEPT, self.b1_user)], ["T001", "T002", "T003", "T005"]
+        )
         self.assertEqual(self.rows(self.RID, {**SEPT, "branchIds": self.b2.id}, self.b1_user), [])
         self.assertEqual(self.rows(self.RID, {**SEPT, "employeeIds": self.e4.id}, self.b1_user), [])
         self.assertEqual([r["employeeCode"] for r in self.rows(self.RID, SEPT, self.b2_user)], ["T004"])
@@ -1086,12 +1491,19 @@ class DeviceRegisterTests(_Base):
         rows = body["rows"]
         self.assertEqual([r["name"] for r in rows], ["Gate 1", "Gate 2", "Gate 3", "Reception 1", "Reception 2"])
         g1, g2, g3, r1, r2 = rows
-        self.assertEqual((g1["deviceType"], g1["branch"], g1["username"], g1["status"], g1["createdBy"]), ("Gate scanner", "Unit 1", "gate1", "Active", "Admin"))
+        self.assertEqual(
+            (g1["deviceType"], g1["branch"], g1["username"], g1["status"], g1["createdBy"]),
+            ("Gate scanner", "Unit 1", "gate1", "Active", "Admin"),
+        )
         self.assertEqual(g1["lastLoginAt"], "2026-09-10 13:30")
         self.assertEqual((g1["outpassScans"], g1["teaScans"]), (3, 10))  # 4th scan is in August; tea: 7 OUT + 3 IN
-        self.assertEqual((g2["status"], g2["lastLoginAt"], g2["outpassScans"], g2["teaScans"]), ("Deactivated", None, 0, 8))
+        self.assertEqual(
+            (g2["status"], g2["lastLoginAt"], g2["outpassScans"], g2["teaScans"]), ("Deactivated", None, 0, 8)
+        )
         self.assertEqual((g3["outpassScans"], g3["teaScans"]), (1, 5))
-        self.assertEqual((r1["deviceType"], r1["outpassScans"], r1["teaScans"]), ("Reception desk", None, None))  # desks do not scan
+        self.assertEqual(
+            (r1["deviceType"], r1["outpassScans"], r1["teaScans"]), ("Reception desk", None, None)
+        )  # desks do not scan
         self.assertEqual((r2["status"], r2["lastLoginAt"]), ("Deactivated", None))
         self.assertEqual(body["totals"]["outpassScans"], 4)
         self.assertEqual(body["totals"]["teaScans"], 23)
@@ -1124,7 +1536,9 @@ class DeviceRegisterTests(_Base):
         self.assertEqual(window[0]["outpassScans"], 1)  # the August scan
 
     def test_branch_isolation(self):
-        self.assertEqual([r["name"] for r in self.rows(self.RID, SEPT, self.b1_user)], ["Gate 1", "Gate 2", "Reception 1"])
+        self.assertEqual(
+            [r["name"] for r in self.rows(self.RID, SEPT, self.b1_user)], ["Gate 1", "Gate 2", "Reception 1"]
+        )
         self.assertEqual([r["name"] for r in self.rows(self.RID, SEPT, self.b2_user)], ["Gate 3", "Reception 2"])
         self.assertEqual(self.rows(self.RID, {**SEPT, "branchIds": self.b2.id}, self.b1_user), [])
         b1 = self.get_report(self.RID, SEPT, self.b1_user)
@@ -1141,9 +1555,35 @@ class TeaRuleParityTests(_Base):
     """The summaries aggregate in SQL and the registers compute per row in Python; both must equal the HR page."""
 
     DURATIONS = [
-        0, 29, 30, 31, 59, 60, 89, 90, 91, 149, 150, 151, 14 * 60 + 29, 14 * 60 + 30, 14 * 60 + 31, 15 * 60 + 29, 15 * 60 + 30,
-        15 * 60 + 31, 16 * 60 + 29, 16 * 60 + 30, 16 * 60 + 31, 17 * 60 + 30, 59 * 60 + 30, 60 * 60, 60 * 60 + 29, 60 * 60 + 30,
-        60 * 60 + 31, 61 * 60 + 30, 200 * 60,
+        0,
+        29,
+        30,
+        31,
+        59,
+        60,
+        89,
+        90,
+        91,
+        149,
+        150,
+        151,
+        14 * 60 + 29,
+        14 * 60 + 30,
+        14 * 60 + 31,
+        15 * 60 + 29,
+        15 * 60 + 30,
+        15 * 60 + 31,
+        16 * 60 + 29,
+        16 * 60 + 30,
+        16 * 60 + 31,
+        17 * 60 + 30,
+        59 * 60 + 30,
+        60 * 60,
+        60 * 60 + 29,
+        60 * 60 + 30,
+        60 * 60 + 31,
+        61 * 60 + 30,
+        200 * 60,
     ]
     OPEN_AGES = [1800, 3599, 3600, 3629, 3630, 3631, 3660, 12 * 3600 - 1, 12 * 3600, 12 * 3600 + 1, 13 * 3600]
 
@@ -1166,7 +1606,9 @@ class TeaRuleParityTests(_Base):
             for log in self.logs().select_related("employee__department"):
                 page = _log_json(log, allowed, NOW)
                 taken, remark = C.tea_metrics(log.out_at, log.in_at, allowed, NOW)
-                self.assertEqual((taken, remark), (page["takenMinutes"], page["remark"]), (allowed, log.out_at, log.in_at))
+                self.assertEqual(
+                    (taken, remark), (page["takenMinutes"], page["remark"]), (allowed, log.out_at, log.in_at)
+                )
 
     def test_sql_filters_equal_python_remarks(self):
         for allowed in (15, 16):
@@ -1178,7 +1620,9 @@ class TeaRuleParityTests(_Base):
     def test_sql_minutes_round_half_even_like_python(self):
         done = [log for log in self.logs() if log.in_at]
         expected = [C.tea_metrics(log.out_at, log.in_at, 15, NOW)[0] for log in done]
-        agg = self.logs().aggregate(s=Sum(C.break_minutes(), filter=C.completed_q()), m=Max(C.break_minutes(), filter=C.completed_q()))
+        agg = self.logs().aggregate(
+            s=Sum(C.break_minutes(), filter=C.completed_q()), m=Max(C.break_minutes(), filter=C.completed_q())
+        )
         self.assertEqual(agg["s"], sum(expected))
         self.assertEqual(agg["m"], max(expected))
         # every duration one by one - including the exact half minutes (15m30s -> 16, 16m30s -> 16, 60m30s -> 60), where
@@ -1199,7 +1643,9 @@ class TeaRuleParityTests(_Base):
         self.assertFalse(suspect & clean)
         for log in self.logs():
             taken, _ = C.tea_metrics(log.out_at, log.in_at, 15, NOW)
-            self.assertEqual(C.tea_flag(log.out_at, log.in_at, taken, NOW) is not None, log.id in suspect, (log.out_at, log.in_at))
+            self.assertEqual(
+                C.tea_flag(log.out_at, log.in_at, taken, NOW) is not None, log.id in suspect, (log.out_at, log.in_at)
+            )
 
     def test_register_summary_uses_the_same_numbers(self):
         p = {"dateFrom": "2026-09-01", "dateTo": "2026-09-30", "employeeIds": self.par.id}
@@ -1229,6 +1675,17 @@ class ContractTests(_Base):
             p["branchIds"] = self.b_empty.id  # a device list is not date-based
         return p
 
+    def test_a_choice_outside_the_allowed_options_is_a_400(self):
+        for rid, params in (
+            ("tea-break-frequency", {"minBreaksPerDay": "9"}),
+            ("tea-break-register", {"remark": "bogus"}),
+            ("visitor-register", {"notification": "bogus"}),
+            ("gate-device-register", {"deviceType": "bogus"}),
+        ):
+            r = self.client.get(f"/api/reports/run/{rid}", {**SEPT, **params}, **headers(self.admin))
+            self.assertEqual(r.status_code, 400, rid)
+            self.assertEqual(r.json()["error"], "invalid_filter", rid)
+
     def test_registered_metadata(self):
         registered = {s.id: s for s in registry.all_specs()}
         for rid in MY_IDS:
@@ -1241,8 +1698,18 @@ class ContractTests(_Base):
                 self.assertIn(m, all_module_keys())
             self.assertTrue(spec.description and spec.title)
         fam = lambda name: sorted((s.variant, s.id) for s in registered.values() if s.family == name)  # noqa: E731
-        self.assertEqual(fam("visitors"), [("By host", "visitor-host-summary"), ("Daily", "visitor-daily-summary"), ("Register", "visitor-register")])
-        self.assertEqual(fam("tea-break"), [("By department", "tea-break-department-summary"), ("By employee", "tea-break-employee-summary"), ("Register", "tea-break-register")])
+        self.assertEqual(
+            fam("visitors"),
+            [("By host", "visitor-host-summary"), ("Daily", "visitor-daily-summary"), ("Register", "visitor-register")],
+        )
+        self.assertEqual(
+            fam("tea-break"),
+            [
+                ("By department", "tea-break-department-summary"),
+                ("By employee", "tea-break-employee-summary"),
+                ("Register", "tea-break-register"),
+            ],
+        )
         self.assertEqual(registry.LOAD_ERRORS, {})
 
     def test_every_report_runs_and_exports_with_valid_signatures(self):
@@ -1257,10 +1724,14 @@ class ContractTests(_Base):
             self.assertTrue(pdf.content.startswith(b"%PDF"), rid)
             # xlsx round trip: header row and the first text cell
             ws = load_workbook(io.BytesIO(xlsx.content)).active
-            self.assertEqual([c.value for c in ws[7]][: len(body["columns"])], [c["label"] for c in body["columns"]], rid)
+            self.assertEqual(
+                [c.value for c in ws[7]][: len(body["columns"])], [c["label"] for c in body["columns"]], rid
+            )
             self.assertTrue(body["rows"], rid)
             first = body["rows"][0]
-            idx, col = next((i, c) for i, c in enumerate(body["columns"]) if c["type"] == "text" and first.get(c["key"]))
+            idx, col = next(
+                (i, c) for i, c in enumerate(body["columns"]) if c["type"] == "text" and first.get(c["key"])
+            )
             self.assertEqual(ws.cell(row=8, column=idx + 1).value, first[col["key"]], rid)
 
     def test_empty_results_work_on_screen_and_in_both_exports(self):
@@ -1283,8 +1754,16 @@ class ContractTests(_Base):
             body = self.get_report(rid, self.params_for(rid))
             wanted = [c for c in body["columns"] if c["total"] == "sum"]
             for c in wanted:
-                vals = [r[c["key"]] for r in body["rows"] if r.get("_kind") not in ("subtotal", "total") and isinstance(r.get(c["key"]), (int, float))]
-                self.assertEqual(body["totals"][c["key"]], round(sum(vals), 2) if c["type"] not in ("integer", "minutes", "duration") else sum(vals), (rid, c["key"]))
+                vals = [
+                    r[c["key"]]
+                    for r in body["rows"]
+                    if r.get("_kind") not in ("subtotal", "total") and isinstance(r.get(c["key"]), (int, float))
+                ]
+                self.assertEqual(
+                    body["totals"][c["key"]],
+                    round(sum(vals), 2) if c["type"] not in ("integer", "minutes", "duration") else sum(vals),
+                    (rid, c["key"]),
+                )
 
     def test_role_without_the_owning_module_gets_403_report_forbidden(self):
         for rid in MY_IDS:
@@ -1307,22 +1786,47 @@ class ContractTests(_Base):
         depts = [self.d_cut, self.d_sew, self.d_pack]
         for i in range(start, stop):
             e = Employee.objects.create(
-                employee_code=f"S{i:03d}", first_name=f"Scale{i}", last_name="Emp", department=depts[i % 3],
-                designation=self.des_op if i % 2 else self.des_help, branch=self.b1, employment_type="staff" if i % 2 else "production",
+                employee_code=f"S{i:03d}",
+                first_name=f"Scale{i}",
+                last_name="Emp",
+                department=depts[i % 3],
+                designation=self.des_op if i % 2 else self.des_help,
+                branch=self.b1,
+                employment_type="staff" if i % 2 else "production",
             )
-            TeaBreakLog.objects.create(employee=e, out_gate=self.g1, in_gate=self.g2, out_at=ist(9, 10, 9, i % 50), in_at=ist(9, 10, 9, 20 + i % 50))
+            TeaBreakLog.objects.create(
+                employee=e,
+                out_gate=self.g1,
+                in_gate=self.g2,
+                out_at=ist(9, 10, 9, i % 50),
+                in_at=ist(9, 10, 9, 20 + i % 50),
+            )
             TeaBreakLog.objects.create(employee=e, out_gate=self.g1, out_at=ist(9, 15, 8, i % 50))
-            v = Visitor.objects.create(name=f"Scale Visitor {i}", phone=f"8{i:09d}", aadhaar_number=f"5555666677{i:02d}")
+            v = Visitor.objects.create(
+                name=f"Scale Visitor {i}", phone=f"8{i:09d}", aadhaar_number=f"5555666677{i:02d}"
+            )
             vv = VisitorVisit.objects.create(
-                visitor=v, branch=self.b1, whom_to_meet=f"Host {i}", purpose="x", meeting_employee=e,
+                visitor=v,
+                branch=self.b1,
+                whom_to_meet=f"Host {i}",
+                purpose="x",
+                meeting_employee=e,
                 notified_email_at=NOW if i % 2 else None,
             )
             VisitorVisit.objects.filter(pk=vv.pk).update(visited_at=ist(9, 10, 10, i % 50))
             OutpassRequest.objects.create(
-                employee=e, destination="d", reason="r", status="approved", exit_gate=self.g1, exited_at=ist(9, 11, 10, 0),
-                entry_gate=self.g1, entered_at=ist(9, 11, 10, 20 + i % 30),
+                employee=e,
+                destination="d",
+                reason="r",
+                status="approved",
+                exit_gate=self.g1,
+                exited_at=ist(9, 11, 10, 0),
+                entry_gate=self.g1,
+                entered_at=ist(9, 11, 10, 20 + i % 30),
             )
-            rec = OutpassRecord.objects.create(branch=self.b1, employee=e, employee_name="n", employee_code="c", destination="d")
+            rec = OutpassRecord.objects.create(
+                branch=self.b1, employee=e, employee_name="n", employee_code="c", destination="d"
+            )
             OutpassRecord.objects.filter(pk=rec.pk).update(submitted_at=ist(9, 12, 10, 0))
 
     def _queries(self, rid):
@@ -1336,10 +1840,13 @@ class ContractTests(_Base):
         small = {rid: self._queries(rid) for rid in MY_IDS}
         self._scale(3, 15)
         for rid in MY_IDS:
-            self.assertLessEqual(abs(self._queries(rid) - small[rid]), 2, (rid, small[rid]))
+            self.assertLessEqual(abs(self._queries(rid) - small[rid]), 1, (rid, small[rid]))
 
     def test_row_limit_is_applied_in_the_query_and_exports_are_refused_not_cut(self):
-        with mock.patch("api.reporting.runner.SCREEN_ROW_LIMIT", 3), mock.patch("api.reporting.runner.XLSX_ROW_LIMIT", 3):
+        with (
+            mock.patch("api.reporting.runner.SCREEN_ROW_LIMIT", 3),
+            mock.patch("api.reporting.runner.XLSX_ROW_LIMIT", 3),
+        ):
             with CaptureQueriesContext(connection) as cap:
                 body = self.get_report("visitor-register", SEPT)
             self.assertEqual((body["rowCount"], body["truncated"], body["limit"]), (3, True, 3))
@@ -1353,13 +1860,40 @@ class ContractTests(_Base):
             self.assertEqual(r.status_code, 413)
             self.assertEqual(r.json()["error"], "too_many_rows")
 
-    def test_screen_runs_never_write(self):
-        TeaBreakRule.objects.all().delete()
-        models = (TeaBreakRule, TeaBreakLog, VisitorVisit, Visitor, GateDevice, ReceptionDevice, OutpassRequest, OutpassRecord, OutpassGateScan, Employee, AuditLog)
-        before = {m.__name__: m.objects.count() for m in models}
+    def test_screen_runs_and_exports_never_write(self):
+        from django.apps import apps
+
+        TeaBreakRule.objects.all().delete()  # a missing rule row must not be re-created by a GET
+        # The file exporters' letterhead lazily creates the company-settings singleton (framework behaviour that is
+        # not part of any report); create it up front so the check below is about THIS group's reports only.
+        PayrollSettings.get()
+
+        def snapshot():
+            # every table of the app; the audit trail is excluded because an export is supposed to log itself there
+            return {m.__name__: m.objects.count() for m in apps.get_app_config("api").get_models() if m is not AuditLog}
+
+        def rows_as_stored():  # a GET must not even edit a row (timestamps, notification stamps ...)
+            return [
+                list(m.objects.order_by("pk").values_list())
+                for m in (
+                    TeaBreakLog,
+                    VisitorVisit,
+                    Visitor,
+                    GateDevice,
+                    ReceptionDevice,
+                    OutpassRequest,
+                    OutpassRecord,
+                )
+            ]
+
+        before, stored = snapshot(), rows_as_stored()
         for rid in MY_IDS:
-            self.get_report(rid, SEPT)
-        self.assertEqual({m.__name__: m.objects.count() for m in models}, before)
+            params = self.params_for(rid)
+            self.get_report(rid, params)
+            self.assertEqual(self.export(rid, "xlsx", params).status_code, 200, rid)
+            self.assertEqual(self.export(rid, "pdf", params).status_code, 200, rid)
+        self.assertEqual(snapshot(), before)
+        self.assertEqual(rows_as_stored(), stored)
         self.assertEqual(TeaBreakRule.objects.count(), 0)
 
     def test_pdf_and_screen_never_receive_free_text_as_markup_or_formulas(self):
@@ -1367,10 +1901,595 @@ class ContractTests(_Base):
         VisitorVisit.objects.filter(pk=self.vis1.pk).update(purpose="<b>bold</b> & more")
         self.assertEqual(self.export("visitor-register", "pdf", SEPT).status_code, 200)
         ws = load_workbook(io.BytesIO(self.export("visitor-register", "xlsx", SEPT).content)).active
-        cell = next(c for row in ws.iter_rows(min_row=8, max_row=8) for c in row if str(c.value).startswith("=HYPERLINK"))
+        cell = next(
+            c for row in ws.iter_rows(min_row=8, max_row=8) for c in row if str(c.value).startswith("=HYPERLINK")
+        )
         self.assertEqual(cell.data_type, "s")  # stored as text, never evaluated
 
     def test_unauthenticated_and_employee_tokens_are_refused(self):
         self.assertEqual(self.client.get("/api/reports/run/visitor-register", SEPT).status_code, 401)
         emp = {"HTTP_AUTHORIZATION": f"Bearer {sign_token({'role': 'employee', 'employeeId': self.e1.id})}"}
         self.assertEqual(self.client.get("/api/reports/run/tea-break-register", SEPT, **emp).status_code, 403)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Adversarial review: independent oracles over randomised data + edge probes
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def _first_of(rows, **kw):
+    return next(r for r in rows if all(r.get(k) == v for k, v in kw.items()))
+
+
+class AdversarialReviewTests(_Base):
+    """Every number is re-derived in plain Python (built on the HR page's own ``_log_json`` for tea breaks) over
+    randomised data that is heavy on the awkward cases: exact half minutes, IST midnight, open breaks at the
+    thresholds, odd/even allowances."""
+
+    ALLOWED = (15, 16, 20)
+
+    # ── randomised tea-break data ────────────────────────────────────────────
+    def _random_tea(self, seed=11):
+        rnd = random.Random(seed)
+        TeaBreakLog.objects.all().delete()
+        depts = [self.d_cut, self.d_sew, self.d_pack, None]
+        people = [self.e1, self.e2, self.e3, self.e4, self.e5, self.e6]
+        for i in range(9):
+            people.append(
+                Employee.objects.create(
+                    employee_code=f"R{i:02d}",
+                    first_name=f"Rand{i}",
+                    last_name="Emp",
+                    department=depts[i % 4],
+                    designation=self.des_op if i % 2 else None,
+                    branch=[self.b1, self.b2, None][i % 3],
+                    employment_type="staff" if i % 2 else "production",
+                    status="active" if i % 4 else "inactive",
+                )
+            )
+        edge = [(0, 0, 0), (0, 29, 59), (5, 29, 59), (5, 30, 0), (23, 30, 0), (23, 59, 59), (12, 0, 0)]
+        gates = [self.g1, self.g2, self.g3, None]
+        for _ in range(420):
+            emp = rnd.choice(people)
+            if rnd.random() < 0.3:
+                h, m, s = rnd.choice(edge)
+            else:
+                h, m, s = rnd.randint(0, 23), rnd.randint(0, 59), rnd.choice([0, 30, rnd.randint(0, 59)])
+            out = ist(9, rnd.randint(1, 14), h, m, s)
+            roll = rnd.random()
+            if roll < 0.12:
+                back = None
+            elif roll < 0.2:
+                back = out + timedelta(seconds=rnd.randint(61, 200) * 60 + rnd.choice([0, 30]))
+            else:
+                back = out + timedelta(
+                    seconds=rnd.choice([rnd.randint(0, 1800), 30 * rnd.randint(0, 60), 60 * rnd.randint(1, 30) + 30])
+                )
+            TeaBreakLog.objects.create(
+                employee=emp,
+                out_gate=rnd.choice(gates),
+                out_at=out,
+                in_gate=rnd.choice(gates) if back else None,
+                in_at=back,
+            )
+        for age in (1800, 3599, 3600, 3629, 3630, 3631, 3660, 12 * 3600 - 1, 12 * 3600, 12 * 3600 + 1, 13 * 3600):
+            TeaBreakLog.objects.create(
+                employee=rnd.choice(people), out_gate=self.g1, out_at=NOW - timedelta(seconds=age)
+            )
+        return people
+
+    def _oracle(self, allowed):
+        rows = []
+        for log in TeaBreakLog.objects.select_related("employee__department").order_by("out_at", "id"):
+            page = _log_json(log, allowed, NOW)
+            done = log.in_at is not None
+            local = log.out_at.astimezone(FACTORY_TZ)
+            taken = page["takenMinutes"]
+            rows.append(
+                {
+                    "log": log,
+                    "emp": log.employee,
+                    "done": done,
+                    "taken": taken if done else None,
+                    "remark": page["remark"],
+                    "day": local.date(),
+                    "hour": local.hour,
+                    "suspect": bool((done and taken > 60) or (not done and NOW - log.out_at > timedelta(hours=12))),
+                }
+            )
+        return rows
+
+    @staticmethod
+    def _tot(rows, allowed):
+        done = [r for r in rows if r["done"]]
+        over = [r for r in rows if r["remark"] == "overtime"]
+        return {
+            "breaks": len(rows),
+            "completed": len(done),
+            "onTime": sum(r["remark"] == "on_time" for r in rows),
+            "overtime": len(over),
+            "notReturned": sum(r["remark"] == "not_returned" for r in rows),
+            "inProgress": sum(r["remark"] == "in_progress" for r in rows),
+            "longBreaks": sum(r["suspect"] for r in rows),
+            "totalMinutes": sum(r["taken"] for r in done),
+            "maxMinutes": max((r["taken"] for r in done), default=None),
+            "overMinutesTotal": sum(r["taken"] - allowed for r in over),
+        }
+
+    def _set_allowed(self, allowed):
+        TeaBreakRule.objects.filter(pk=1).update(allowed_minutes=allowed)
+
+    # ── tea reports vs the oracle ────────────────────────────────────────────
+    def test_tea_register_matches_the_oracle(self):
+        self._random_tea()
+        label = C.REMARK_LABEL
+        for allowed in self.ALLOWED:
+            self._set_allowed(allowed)
+            oracle = self._oracle(allowed)
+            body = self.get_report("tea-break-register", SEPT)
+            got = [
+                (r["employeeCode"], r["date"], r["outAt"], r["takenMinutes"], r["overMinutes"], r["remark"], r["flag"])
+                for r in body["rows"]
+            ]
+            want = [
+                (
+                    o["emp"].employee_code,
+                    o["day"].isoformat(),
+                    o["log"].out_at.astimezone(FACTORY_TZ).strftime("%H:%M"),
+                    o["taken"],
+                    max(0, o["taken"] - allowed) if o["done"] else None,
+                    label[o["remark"]],
+                    "Long break"
+                    if o["done"] and o["taken"] > 60
+                    else "Left open"
+                    if not o["done"] and NOW - o["log"].out_at > timedelta(hours=12)
+                    else None,
+                )
+                for o in oracle
+            ]
+            self.assertEqual(got, want, allowed)
+            s, t = summary_of(body), self._tot(oracle, allowed)
+            self.assertEqual(
+                (s["Breaks"], s["Completed"], s["On time"], s["Overtime"], s["Not returned"], s["In progress"]),
+                (t["breaks"], t["completed"], t["onTime"], t["overtime"], t["notReturned"], t["inProgress"]),
+                allowed,
+            )
+            self.assertEqual(
+                (s["Long or left open"], s["Total time taken"], s["Minutes over allowance"], s["Longest break (min)"]),
+                (t["longBreaks"], t["totalMinutes"], t["overMinutesTotal"], t["maxMinutes"]),
+                allowed,
+            )
+            self.assertEqual(body["totals"]["takenMinutes"], t["totalMinutes"])
+            self.assertEqual(body["totals"]["overMinutes"], t["overMinutesTotal"])
+            # the register's own filters against the oracle
+            for remark in ("on_time", "overtime", "not_returned", "in_progress"):
+                rows = self.rows("tea-break-register", {**SEPT, "remark": remark})
+                self.assertEqual(len(rows), sum(o["remark"] == remark for o in oracle), (allowed, remark))
+            only = self.rows("tea-break-register", {**SEPT, "longBreaks": "only"})
+            self.assertEqual(len(only), sum(o["suspect"] for o in oracle), allowed)
+            rest = self.rows("tea-break-register", {**SEPT, "longBreaks": "exclude"})
+            self.assertEqual(len(rest), sum(not o["suspect"] for o in oracle), allowed)
+
+    def test_tea_employee_summary_matches_the_oracle(self):
+        self._random_tea()
+        for allowed in self.ALLOWED:
+            self._set_allowed(allowed)
+            for exclude in (False, True):
+                oracle = [o for o in self._oracle(allowed) if not (exclude and o["suspect"])]
+                params = {**SEPT, **({"excludeSuspect": "true"} if exclude else {})}
+                body = self.get_report("tea-break-employee-summary", params)
+                by_emp = defaultdict(list)
+                for o in oracle:
+                    by_emp[o["emp"].employee_code].append(o)
+                self.assertEqual([r["employeeCode"] for r in body["rows"]], sorted(by_emp), (allowed, exclude))
+                for r in body["rows"]:
+                    rows = by_emp[r["employeeCode"]]
+                    t = self._tot(rows, allowed)
+                    for k, v in t.items():
+                        self.assertEqual(r[k], v, (allowed, exclude, r["employeeCode"], k))
+                    days = len({o["day"] for o in rows})
+                    self.assertEqual(r["daysWithBreaks"], days)
+                    self.assertEqual(
+                        r["avgMinutes"], round(t["totalMinutes"] / t["completed"], 2) if t["completed"] else None
+                    )
+                    self.assertEqual(
+                        r["overtimePct"], round(100.0 * t["overtime"] / t["completed"], 1) if t["completed"] else None
+                    )
+                    self.assertEqual(r["avgBreaksPerDay"], round(t["breaks"] / days, 2))
+                self.assertEqual(body["totals"]["breaks"], len(oracle))
+
+    def test_tea_department_summary_matches_the_oracle(self):
+        self._random_tea()
+        keyers = {
+            "department": lambda e: e.department_id,
+            "branch": lambda e: e.branch_id,
+            "employmentType": lambda e: e.employment_type,
+        }
+        for allowed in self.ALLOWED:
+            self._set_allowed(allowed)
+            oracle = self._oracle(allowed)
+            for group_by, keyer in keyers.items():
+                body = self.get_report(
+                    "tea-break-department-summary", {**SEPT, "employeeStatus": "all", "groupBy": group_by}
+                )
+                groups = defaultdict(list)
+                for o in oracle:
+                    groups[keyer(o["emp"])].append(o)
+                want = []
+                for rows in groups.values():
+                    t = self._tot(rows, allowed)
+                    emp_days = len({(o["emp"].id, o["day"]) for o in rows})
+                    want.append(
+                        (
+                            t["breaks"],
+                            len({o["emp"].id for o in rows}),
+                            t["totalMinutes"],
+                            t["overtime"],
+                            t["notReturned"],
+                            t["longBreaks"],
+                            round(t["breaks"] / emp_days, 2),
+                        )
+                    )
+                got = [
+                    (
+                        r["breaks"],
+                        r["employeesOnBreak"],
+                        r["totalMinutes"],
+                        r["overtime"],
+                        r["notReturned"],
+                        r["longBreaks"],
+                        r["avgBreaksPerEmployeeDay"],
+                    )
+                    for r in body["rows"]
+                    if r["breaks"]
+                ]
+                self.assertEqual(sorted(got), sorted(want), (allowed, group_by))
+                self.assertEqual(body["totals"]["headcount"], Employee.objects.count(), (allowed, group_by))
+                self.assertEqual(body["totals"]["breaks"], len(oracle), (allowed, group_by))
+
+    def test_tea_daily_hourly_and_frequency_match_the_oracle(self):
+        self._random_tea()
+        for allowed in self.ALLOWED:
+            self._set_allowed(allowed)
+            oracle = self._oracle(allowed)
+            body = self.get_report("tea-break-daily-trend", SEPT)
+            for r in body["rows"]:
+                rows = [o for o in oracle if o["day"].isoformat() == r["date"]]
+                t = self._tot(rows, allowed)
+                hrs = Counter(o["hour"] for o in rows)
+                peak = C.hour_band(max(hrs.items(), key=lambda kv: (kv[1], -kv[0]))[0]) if hrs else None
+                self.assertEqual(
+                    (r["breaks"], r["employees"], r["totalMinutes"], r["overtime"], r["notReturned"], r["peakHour"]),
+                    (
+                        t["breaks"],
+                        len({o["emp"].id for o in rows}),
+                        t["totalMinutes"],
+                        t["overtime"],
+                        t["notReturned"],
+                        peak,
+                    ),
+                    (allowed, r["date"]),
+                )
+            hourly = {r["hourBand"]: r for r in self.get_report("tea-break-hourly-distribution", SEPT)["rows"]}
+            for h in range(24):
+                rows = [o for o in oracle if o["hour"] == h]
+                got = hourly.get(C.hour_band(h))
+                if got is None:
+                    self.assertEqual(rows, [], (allowed, h))
+                    continue
+                t = self._tot(rows, allowed)
+                self.assertEqual(
+                    (got["breaks"], got["overtime"], got["avgMinutes"]),
+                    (
+                        t["breaks"],
+                        t["overtime"],
+                        round(t["totalMinutes"] / t["completed"], 2) if t["completed"] else None,
+                    ),
+                    (allowed, h),
+                )
+            for threshold in (1, 2, 3):
+                days = defaultdict(list)
+                for o in oracle:
+                    days[(o["day"], o["emp"].employee_code)].append(o)
+                want = {}
+                for (day, code), rows in days.items():
+                    if len(rows) <= threshold:
+                        continue
+                    ins = [o["log"].in_at for o in rows if o["done"]]
+                    last = max(ins).astimezone(FACTORY_TZ) if ins else None
+                    extra = (last.date() - day).days if last else 0
+                    want[(day.isoformat(), code)] = (
+                        len(rows),
+                        sum(o["taken"] for o in rows if o["done"]),
+                        sum(o["remark"] == "overtime" for o in rows),
+                        sum(not o["done"] for o in rows),
+                        min(o["log"].out_at for o in rows).astimezone(FACTORY_TZ).strftime("%H:%M"),
+                        (last.strftime("%H:%M") + (f" (+{extra}d)" if extra > 0 else "")) if last else None,
+                    )
+                got = {
+                    (r["date"], r["employeeCode"]): (
+                        r["breaksThatDay"],
+                        r["totalMinutes"],
+                        r["overtime"],
+                        r["stillOpen"],
+                        r["firstOutAt"],
+                        r["lastInAt"],
+                    )
+                    for r in self.rows("tea-break-frequency", {**SEPT, "minBreaksPerDay": threshold})
+                }
+                self.assertEqual(got, want, (allowed, threshold))
+
+    def test_tea_exceptions_match_the_oracle(self):
+        self._random_tea()
+        for allowed in self.ALLOWED:
+            self._set_allowed(allowed)
+            oracle = self._oracle(allowed)
+            overtime_count = Counter(o["emp"].employee_code for o in oracle if o["remark"] == "overtime")
+            for kind in ("both", "overtime", "not_returned"):
+                for min_over in (1, 5, 30):
+
+                    def wanted(o):
+                        is_ot = o["remark"] == "overtime" and o["taken"] >= allowed + min_over
+                        is_nr = o["remark"] == "not_returned"
+                        return {"both": is_ot or is_nr, "overtime": is_ot, "not_returned": is_nr}[kind]
+
+                    sel = [o for o in oracle if wanted(o)]
+                    sel.sort(
+                        key=lambda o: (
+                            (0, -(o["log"].in_at - o["log"].out_at).total_seconds()) if o["done"] else (1, 0),
+                            o["log"].out_at,
+                            o["log"].id,
+                        )
+                    )
+                    body = self.get_report(
+                        "tea-break-exceptions", {**SEPT, "exceptionType": kind, "minOverMinutes": min_over}
+                    )
+                    got = [(r["employeeCode"], r["date"], r["outAt"], r["overtimeCountInPeriod"]) for r in body["rows"]]
+                    want = [
+                        (
+                            o["emp"].employee_code,
+                            o["day"].isoformat(),
+                            o["log"].out_at.astimezone(FACTORY_TZ).strftime("%H:%M"),
+                            overtime_count[o["emp"].employee_code],
+                        )
+                        for o in sel
+                    ]
+                    self.assertEqual(got, want, (allowed, kind, min_over))
+
+    def test_time_away_tea_columns_match_the_oracle(self):
+        self._random_tea()
+        for allowed in self.ALLOWED:
+            self._set_allowed(allowed)
+            oracle = self._oracle(allowed)
+            rows = {r["employeeCode"]: r for r in self.rows("employee-time-away-summary", SEPT)}
+            for code, r in rows.items():
+                mine = [o for o in oracle if o["emp"].employee_code == code]
+                t = self._tot(mine, allowed)
+                self.assertEqual(
+                    (r["teaBreaks"], r["teaMinutes"], r["teaOvertime"]),
+                    (t["breaks"], t["totalMinutes"], t["overtime"]),
+                    (allowed, code),
+                )
+
+    # ── randomised visitor data ──────────────────────────────────────────────
+    def _random_visits(self, seed=5):
+        rnd = random.Random(seed)
+        VisitorVisit.objects.all().delete()
+        Visitor.objects.all().delete()
+        visitors = [
+            Visitor.objects.create(
+                name=f"Vis {i}", phone=f"7{i:09d}", aadhaar_number=(f"99998888777{i % 10}" if i % 3 else None)
+            )
+            for i in range(12)
+        ]
+        hosts = [self.e1, self.e2, self.e4, self.e3, None, None, None]
+        branches = [self.b1, self.b2, None]
+        free = ["Mr Shah", "mr shah ", "MR SHAH", "Accounts", "accounts", "HR"]
+        for _ in range(160):
+            v, br, host = rnd.choice(visitors), rnd.choice(branches), rnd.choice(hosts)
+            at = ist(9, rnd.randint(1, 20), rnd.randint(0, 23), rnd.randint(0, 59), rnd.randint(0, 59))
+            whom = f"{host.first_name} {host.last_name}" if host else rnd.choice(free)
+            stamp = lambda: rnd.choice([None, at + timedelta(seconds=rnd.randint(1, 90))])  # noqa: E731
+            vv = VisitorVisit.objects.create(
+                visitor=v,
+                branch=br,
+                whom_to_meet=whom,
+                purpose=rnd.choice(["Audit", "Sample", "Interview"]),
+                meeting_employee=host,
+                notified_email_at=stamp() if host else None,
+                notified_whatsapp_at=stamp() if host else None,
+            )
+            VisitorVisit.objects.filter(pk=vv.pk).update(visited_at=at)
+        # two visits at exactly the same instant for one visitor
+        at = ist(9, 21, 10, 0)
+        for whom in ("tie-a", "tie-b"):
+            vv = VisitorVisit.objects.create(visitor=visitors[0], branch=self.b1, whom_to_meet=whom, purpose="p")
+            VisitorVisit.objects.filter(pk=vv.pk).update(visited_at=at)
+
+    def _visit_oracle(self, scope_branch):
+        every = list(VisitorVisit.objects.select_related("visitor").order_by("visited_at", "id"))
+        seen = [v for v in every if scope_branch is None or v.branch_id == scope_branch]
+        counter = Counter()
+        out = []
+        for v in seen:
+            counter[v.visitor_id] += 1
+            out.append((v, counter[v.visitor_id]))
+        return out
+
+    def test_visitor_reports_match_the_oracle_for_every_scope(self):
+        self._random_visits()
+        for user, scope_branch in ((self.admin, None), (self.b1_user, self.b1.id), (self.b2_user, self.b2.id)):
+            oracle = self._visit_oracle(scope_branch)
+            body = self.get_report("visitor-register", SEPT, user)
+            got = [
+                (r["visitedAt"], r["visitorName"], r["visitNo"], r["whomToMeet"], r["hostCode"]) for r in body["rows"]
+            ]
+            want = [
+                (
+                    v.visited_at.astimezone(FACTORY_TZ).strftime("%Y-%m-%d %H:%M"),
+                    v.visitor.name,
+                    n,
+                    v.whom_to_meet,
+                    v.meeting_employee.employee_code if v.meeting_employee_id else None,
+                )
+                for v, n in oracle
+            ]
+            self.assertEqual(got, want, scope_branch)
+            s = summary_of(body)
+            self.assertEqual(s["Visits"], len(oracle))
+            self.assertEqual(s["Unique visitors"], len({v.visitor_id for v, _ in oracle}))
+            self.assertEqual(s["First-time visits"], sum(n == 1 for _, n in oracle))
+            self.assertEqual(s["With a linked host employee"], sum(bool(v.meeting_employee_id) for v, _ in oracle))
+            self.assertEqual(s["Host emailed"], sum(v.notified_email_at is not None for v, _ in oracle))
+            self.assertEqual(s["Host sent WhatsApp"], sum(v.notified_whatsapp_at is not None for v, _ in oracle))
+
+            # host summary
+            hosts = defaultdict(list)
+            for v, _ in oracle:
+                key = ("e", v.meeting_employee_id) if v.meeting_employee_id else ("t", v.whom_to_meet.strip().lower())
+                hosts[key].append(v)
+            want_hosts = sorted(
+                (
+                    "Employee" if k[0] == "e" else "Free text",
+                    len(vs),
+                    len({v.visitor_id for v in vs}),
+                    sum(v.notified_email_at is not None for v in vs),
+                    sum(v.notified_whatsapp_at is not None for v in vs),
+                )
+                for k, vs in hosts.items()
+            )
+            got_hosts = sorted(
+                (r["hostType"], r["visits"], r["uniqueVisitors"], r["emailSent"], r["whatsappSent"])
+                for r in self.rows("visitor-host-summary", SEPT, user)
+            )
+            self.assertEqual(got_hosts, want_hosts, scope_branch)
+
+            # daily summary
+            daily = {r["date"]: r for r in self.get_report("visitor-daily-summary", SEPT, user)["rows"]}
+            for day in range(1, 31):
+                d = date(2026, 9, day)
+                vs = [(v, n) for v, n in oracle if v.visited_at.astimezone(FACTORY_TZ).date() == d]
+                r = daily[d.isoformat()]
+                self.assertEqual(
+                    (r["visits"], r["uniqueVisitors"], r["firstTime"], r["repeat"], r["hostLinked"]),
+                    (
+                        len(vs),
+                        len({v.visitor_id for v, _ in vs}),
+                        sum(n == 1 for _, n in vs),
+                        sum(n > 1 for _, n in vs),
+                        sum(bool(v.meeting_employee_id) for v, _ in vs),
+                    ),
+                    (scope_branch, d),
+                )
+
+            # repeat-visitor report
+            freq = {r["phone"]: r for r in self.rows("visitor-frequency", SEPT, user)}
+            per_visitor = defaultdict(list)
+            for v, _ in oracle:
+                per_visitor[v.visitor.phone].append(v)
+            self.assertEqual(set(freq), set(per_visitor), scope_branch)
+            for phone, vs in per_visitor.items():
+                r = freq[phone]
+                distinct = {
+                    ("e", v.meeting_employee_id) if v.meeting_employee_id else ("t", v.whom_to_meet.strip().lower())
+                    for v in vs
+                }
+                self.assertEqual(
+                    (r["visitsInPeriod"], r["totalVisitsEver"], r["distinctHosts"]),
+                    (len(vs), len(vs), len(distinct)),
+                    (scope_branch, phone),
+                )
+                self.assertEqual(r["lastHost"], vs[-1].whom_to_meet, (scope_branch, phone))
+
+            # notification report
+            linked = [v for v, _ in oracle if v.meeting_employee_id]
+            notes = self.get_report("visitor-notification-delivery", SEPT, user)
+            self.assertEqual(len(notes["rows"]), len(linked))
+            s = summary_of(notes)
+            self.assertEqual(s["Visits with a linked host"], len(linked))
+            if linked:
+                self.assertEqual(
+                    s["Email delivered"],
+                    round(100.0 * sum(v.notified_email_at is not None for v in linked) / len(linked), 1),
+                )
+
+    # ── every declared filter choice must run on screen and in both files ────
+    def test_every_filter_choice_runs_for_every_report(self):
+        for rid in MY_IDS:
+            spec = registry.get_spec(rid)
+            combos = [{}]
+            for f in spec.filters:
+                if f.kind == "select":
+                    combos += [{f.key: v} for v, _ in f.options]
+                elif f.kind == "boolean":
+                    combos.append({f.key: "true"})
+                elif f.kind == "text":
+                    combos += [{f.key: "%_\\'\"<>&;--"}, {f.key: "ravi"}]
+                elif f.kind == "employeeStatus":
+                    combos += [{"employeeStatus": s} for s in ("active", "inactive", "all")]
+                elif f.kind == "employmentType":
+                    combos += [{"employmentType": t} for t in ("staff", "production")]
+                elif f.kind in ("department", "designation", "branch", "employee"):
+                    param = {
+                        "department": "departmentIds",
+                        "designation": "designationIds",
+                        "branch": "branchIds",
+                        "employee": "employeeIds",
+                    }[f.kind]
+                    combos += [{param: "999999"}, {param: f"{self.e1.id},{self.e2.id}"}]
+            for user in (self.admin, self.b1_user):
+                for extra in combos:
+                    params = {**SEPT, **extra}
+                    r = self.client.get(f"/api/reports/run/{rid}", params, **headers(user))
+                    self.assertEqual(r.status_code, 200, (rid, extra, r.content[:300]))
+                    body = r.json()
+                    # a totals row must equal the sum of the rows it totals
+                    for c in body["columns"]:
+                        if c["total"] == "sum" and body["totals"]:
+                            vals = [x[c["key"]] for x in body["rows"] if isinstance(x.get(c["key"]), (int, float))]
+                            if not vals:
+                                continue
+                            want = sum(vals) if c["type"] in ("integer", "minutes", "duration") else round(sum(vals), 2)
+                            self.assertEqual(body["totals"][c["key"]], want, (rid, extra, c["key"]))
+            for extra in combos:
+                for fmt in ("xlsx", "pdf"):
+                    r = self.export(rid, fmt, {**SEPT, **extra})
+                    self.assertEqual(r.status_code, 200, (rid, fmt, extra))
+
+    # ── probes for suspected defects (a failing test here is a finding) ──────
+    def test_filter_echo_does_not_reveal_other_branch_people(self):
+        """Unit 1 user asks for a Unit 2 employee: the rows are (correctly) empty, but the filter summary that is
+        echoed in the response - and printed on the Excel/PDF header - must not name that employee either."""
+        for rid in (
+            "tea-break-register",
+            "tea-break-employee-summary",
+            "employee-time-away-summary",
+            "visitor-register",
+        ):
+            body = self.get_report(rid, {**SEPT, "employeeIds": self.e4.id}, self.b1_user)
+            self.assertEqual(body["rows"], [], rid)
+            blob = json.dumps(body["filters"])
+            self.assertNotIn("T004", blob, (rid, blob))
+            self.assertNotIn("Dinesh", blob, (rid, blob))
+        body = self.get_report(
+            "tea-break-register", {**SEPT, "departmentIds": self.d_pack.id, "branchIds": self.b2.id}, self.b1_user
+        )
+        blob = json.dumps(body["filters"])
+        self.assertNotIn("PACKING", blob, blob)
+        self.assertNotIn("Unit 2", blob, blob)
+
+    def test_department_summary_default_reconciles_with_the_other_tea_reports(self):
+        """T005 resigned after a 14-minute break on 5 Sep. Tea data is transactional: the department summary must not
+        silently drop it by default, or its 'Breaks' total disagrees with the register / trend for the same dates."""
+        dept = self.get_report("tea-break-department-summary", SEPT)
+        register = self.get_report("tea-break-register", SEPT)
+        daily = self.get_report("tea-break-daily-trend", SEPT)
+        self.assertEqual(summary_of(register)["Breaks"], daily["totals"]["breaks"])
+        self.assertEqual(dept["totals"]["breaks"], daily["totals"]["breaks"])
+
+    def test_host_not_notified_filter_only_lists_visits_that_had_someone_to_notify(self):
+        """The register shows a dash (nothing to notify) for free-text hosts, yet 'Host not notified' returns them
+        mixed in with the linked-host visits whose notification really failed."""
+        rows = self.rows("visitor-register", {**SEPT, "notification": "neither"})
+        self.assertTrue(rows)
+        self.assertTrue(all(r["hostCode"] for r in rows), [r["hostCode"] for r in rows])

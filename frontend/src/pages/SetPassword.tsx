@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, Lock } from "lucide-react";
+import SupportContactCard from "@/components/SupportContactCard";
 
 const schema = z.object({
   identifier: z.string().min(1, "Please enter your phone, email, or employee ID"),
@@ -97,6 +98,8 @@ export default function SetPassword() {
             </form>
           </Form>
         </div>
+
+        <SupportContactCard situation="hr" title="Need help? Contact HR" tone="dark" compact className="mt-4" />
       </div>
     </div>
   );

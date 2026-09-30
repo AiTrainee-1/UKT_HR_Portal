@@ -59,6 +59,12 @@ from .whatsapp_control_views import (
     whatsapp_control_templates,
     whatsapp_employees, whatsapp_messages, whatsapp_overview,
 )
+from .support_contact_views import support_contact
+from .email_control_views import (
+    email_control_settings, email_control_template_preview, email_control_template_update,
+    email_control_templates, email_control_test,
+    email_employees, email_messages, email_overview,
+)
 from .whatsapp_views import (
     whatsapp_status, whatsapp_templates, whatsapp_template_update, whatsapp_media, whatsapp_webhook,
 )
@@ -473,6 +479,19 @@ urlpatterns = [
     path("whatsapp-control/templates", whatsapp_control_templates),
     path("whatsapp-control/templates/<str:document_type>/preview", whatsapp_control_template_preview),
     path("whatsapp-control/templates/<str:document_type>", whatsapp_control_template_update),
+
+    # ── HR / software-support contacts for the employee apps (public, read-only) ──
+    path("support-contact", support_contact),
+
+    # ── Gmail Control page (HR portal) ───────────────────────────────────────
+    path("gmail-control/overview", email_overview),
+    path("gmail-control/messages", email_messages),
+    path("gmail-control/employees", email_employees),
+    path("gmail-control/settings", email_control_settings),
+    path("gmail-control/templates", email_control_templates),
+    path("gmail-control/templates/<str:email_type>/preview", email_control_template_preview),
+    path("gmail-control/templates/<str:email_type>", email_control_template_update),
+    path("gmail-control/test-email", email_control_test),
     path("verify-employee/<str:code>", verify_employee),
 
     # ── Biometric Device Management ─────────────────────────────────────────

@@ -22,8 +22,25 @@ from ..formatting import month_label
 from ..registry import register
 from ..types import BADGE, CURRENCY, INTEGER, NUMBER, PERCENT, TEXT, ColumnSpec, ReportResult, ReportSpec
 from .payroll_statutory_common import (
-    PAYROLL_MODULES, STAFF, TYPE_LABEL, as_dict, dec, dec_or_none, dept_name, dept_subtotals, money, month_end,
-    natural_key, pct, period_text, slip_type, slip_type_q, visible_types, with_breakdown,
+    PAYROLL_MODULES,
+    STAFF,
+    TYPE_LABEL,
+    as_dict,
+    dec,
+    dec_or_none,
+    dept_name,
+    dept_subtotals,
+    money,
+    natural_key,
+    no_slips_note,
+    pct,
+    period_text,
+    provisional_note,
+    provisional_slip_ids,
+    slip_type,
+    slip_type_q,
+    visible_types,
+    with_breakdown,
 )
 
 _ZERO = Decimal("0")
@@ -46,15 +63,24 @@ def _late_penalty(slip, typ: str, has_late_summary: bool) -> Decimal | None:
         return pen
     if typ == STAFF:
         return dec(slip.other_deductions)
-    residual = dec(slip.total_deductions) - dec(slip.pf_deduction) - dec(slip.esi_deduction) - dec(slip.advance_deduction)
+    residual = (
+        dec(slip.total_deductions) - dec(slip.pf_deduction) - dec(slip.esi_deduction) - dec(slip.advance_deduction)
+    )
     if residual > 0:
         return residual
     return _ZERO if has_late_summary else None
 
 
 # -- late detection and salary impact -----------------------------------------------------------------------
-_LATE_KEYS = ["lateInCount", "earlyOutCount", "excessPermissionCount", "totalLateCount", "billableLateCount",
-              "shiftDeductions", "lateDeductionAmount"]
+_LATE_KEYS = [
+    "lateInCount",
+    "earlyOutCount",
+    "excessPermissionCount",
+    "totalLateCount",
+    "billableLateCount",
+    "shiftDeductions",
+    "lateDeductionAmount",
+]
 
 
 def _run_late(ctx) -> ReportResult:
@@ -68,7 +94,9 @@ def _run_late(ctx) -> ReportResult:
     slips = list(with_breakdown(qs, "bd_late", "bd_penalty", "bd_earn", "bd_rate").order_by("employee_id", "id"))
 
     rows: list[dict] = []
-    occurrences = billable = affected = deducted_n = 0
+    occurrences = billable = 0
+    affected_ids: set[int] = set()  # people, not slips: a production employee has one slip per pay period
+    deducted_ids: set[int] = set()
     shifts = amount = _ZERO
     for s in slips:
         emp = s.employee
@@ -89,32 +117,35 @@ def _run_late(ctx) -> ReportResult:
         bill = _count(late.get("billableLateCount")) if known else None
         earnings = dec(s.gross_salary) + dec(s.ot_amount)
         if total:
-            affected += 1
+            affected_ids.add(s.employee_id)
         occurrences += total or 0
         billable += bill or 0
         shifts += shift_ded or _ZERO
         if pen is not None:
             amount += pen
-            deducted_n += pen > 0
-        rows.append({
-            "employeeCode": emp.employee_code,
-            "employeeName": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
-            "department": dept_name(emp),
-            "employmentType": TYPE_LABEL[typ],
-            "period": period_text(s),
-            "lateInCount": _count(late.get("lateInCount")) if known and typ == STAFF else None,
-            "earlyOutCount": _count(late.get("earlyOutCount")) if known and typ == STAFF else None,
-            "excessPermissionCount": _count(late.get("excessPermissionCount")) if known and typ == STAFF else None,
-            "totalLateCount": total,
-            "freeAllowance": _count(late.get("freeAllowance")) if known and typ == STAFF else None,
-            "freeUsed": _count(late.get("freeAllowanceUsed")) if known and typ == STAFF else None,
-            "billableLateCount": bill,
-            "shiftDeductions": money(shift_ded),
-            "unitRate": money(unit),
-            "lateDeductionAmount": money(pen),
-            "pctOfEarnings": pct(pen, earnings),
-            "netPay": money(dec(s.net_salary)),
-        })
+            if pen > 0:
+                deducted_ids.add(s.employee_id)
+        rows.append(
+            {
+                "employeeCode": emp.employee_code,
+                "employeeName": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
+                "department": dept_name(emp),
+                "employmentType": TYPE_LABEL[typ],
+                "period": period_text(s),
+                "lateInCount": _count(late.get("lateInCount")) if known and typ == STAFF else None,
+                "earlyOutCount": _count(late.get("earlyOutCount")) if known and typ == STAFF else None,
+                "excessPermissionCount": _count(late.get("excessPermissionCount")) if known and typ == STAFF else None,
+                "totalLateCount": total,
+                "freeAllowance": _count(late.get("freeAllowance")) if known and typ == STAFF else None,
+                "freeUsed": _count(late.get("freeAllowanceUsed")) if known and typ == STAFF else None,
+                "billableLateCount": bill,
+                "shiftDeductions": money(shift_ded),
+                "unitRate": money(unit),
+                "lateDeductionAmount": money(pen),
+                "pctOfEarnings": pct(pen, earnings),
+                "netPay": money(dec(s.net_salary)),
+            }
+        )
     rows.sort(key=lambda r: (r["department"].lower(), natural_key(r["employeeCode"]), r["period"]))
     rows = dept_subtotals(rows, _LATE_KEYS)
 
@@ -130,67 +161,93 @@ def _run_late(ctx) -> ReportResult:
         "permission is one occurrence, not two.",
     ]
     if min_n is not None:
-        notes.append("Only slips with at least " + str(min_n) + " late occurrence(s) (or an unexplained late deduction) are listed.")
+        notes.append(
+            "Only slips with at least "
+            + str(min_n)
+            + " late occurrence(s) (or an unexplained late deduction) are listed."
+        )
+    warning = provisional_note(len(provisional_slip_ids(slips, year, month, ctx.today)), year, month, ctx.today)
+    if warning:
+        notes.insert(0, warning)
+    if not slips:
+        notes.insert(0, no_slips_note(year, month))
     summary = [
-        {"label": "Employees with lates", "value": affected, "format": "integer"},
+        {"label": "Employees with lates", "value": len(affected_ids), "format": "integer"},
         {"label": "Late occurrences", "value": occurrences, "format": "integer"},
         {"label": "Billable occurrences", "value": billable, "format": "integer"},
         {"label": "Shifts deducted", "value": float(shifts), "format": "number"},
         {"label": "Late deduction", "value": money(amount), "format": "currency"},
         {
             "label": "Average per deducted employee",
-            "value": money(amount / deducted_n) if deducted_n else None,
+            "value": money(amount / len(deducted_ids)) if deducted_ids else None,
             "format": "currency",
         },
     ]
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="late-salary-impact",
-    title="Late Detection - Salary Impact",
-    description="What late-ins, early-outs and excess permissions actually cost: pool counts, free vs billable, "
-    "shifts and rupees deducted on each generated slip.",
-    category="payroll",
-    icon="Timer",
-    tags=("late", "salary deduction", "late detection", "permission", "penalty", "payroll"),
-    modules=PAYROLL_MODULES,
-    filters=(
-        period(default="lastMonth"),
-        *scope(status=None),
-        select(
-            "minLates", "Show employees with",
-            [("all", "All slips"), ("1", "1 or more lates"), ("3", "3 or more"), ("5", "5 or more"), ("10", "10 or more")],
-            default="1",
+register(
+    ReportSpec(
+        id="late-salary-impact",
+        title="Late Detection - Salary Impact",
+        description="What late-ins, early-outs and excess permissions actually cost: pool counts, free vs billable, "
+        "shifts and rupees deducted on each generated slip.",
+        category="payroll",
+        icon="Timer",
+        tags=("late", "salary deduction", "late detection", "permission", "penalty", "payroll"),
+        modules=PAYROLL_MODULES,
+        filters=(
+            period(default="lastMonth"),
+            *scope(status=None),
+            select(
+                "minLates",
+                "Show employees with",
+                [
+                    ("all", "All slips"),
+                    ("1", "1 or more lates"),
+                    ("3", "3 or more"),
+                    ("5", "5 or more"),
+                    ("10", "10 or more"),
+                ],
+                default="1",
+            ),
+            boolean("onlyDeducted", "Only where money was deducted"),
         ),
-        boolean("onlyDeducted", "Only where money was deducted"),
-    ),
-    columns=(
-        ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
-        ColumnSpec("employeeName", "Employee", TEXT, 2.2),
-        ColumnSpec("department", "Department", TEXT, 1.4),
-        ColumnSpec("employmentType", "Type", BADGE, 0.9),
-        ColumnSpec("period", "Period", TEXT, 1.4),
-        ColumnSpec("lateInCount", "Late-in", INTEGER, 0.7, total="sum"),
-        ColumnSpec("earlyOutCount", "Early-out", INTEGER, 0.7, total="sum"),
-        ColumnSpec("excessPermissionCount", "Excess perm.", INTEGER, 0.8, total="sum"),
-        ColumnSpec("totalLateCount", "Pool total", INTEGER, 0.7, total="sum"),
-        ColumnSpec("freeAllowance", "Free allowance", INTEGER, 0.8),
-        ColumnSpec("freeUsed", "Free used", INTEGER, 0.7),
-        ColumnSpec("billableLateCount", "Billable", INTEGER, 0.7, total="sum"),
-        ColumnSpec("shiftDeductions", "Shifts deducted", NUMBER, 0.8, total="sum"),
-        ColumnSpec("unitRate", "Rate / shift", CURRENCY, 1.1),
-        ColumnSpec("lateDeductionAmount", "Late deduction", CURRENCY, 1.2, total="sum"),
-        ColumnSpec("pctOfEarnings", "% of earnings", PERCENT, 0.8),
-        ColumnSpec("netPay", "Net pay", CURRENCY, 1.2, total="sum"),
-    ),
-    run=_run_late,
-))
+        columns=(
+            ColumnSpec("employeeCode", "Emp Code", TEXT, 0.9),
+            ColumnSpec("employeeName", "Employee", TEXT, 1.9),
+            ColumnSpec("department", "Department", TEXT, 1.2),
+            ColumnSpec("employmentType", "Type", BADGE, 0.9),
+            ColumnSpec("period", "Period", TEXT, 1.3),
+            ColumnSpec("lateInCount", "Late-in", INTEGER, 0.9, total="sum"),
+            ColumnSpec("earlyOutCount", "Early-out", INTEGER, 1.0, total="sum"),
+            ColumnSpec("excessPermissionCount", "Excess perm.", INTEGER, 0.9, total="sum"),
+            ColumnSpec("totalLateCount", "Pool total", INTEGER, 0.8, total="sum"),
+            ColumnSpec("freeAllowance", "Free allow.", INTEGER, 0.9),
+            ColumnSpec("freeUsed", "Free used", INTEGER, 0.8),
+            ColumnSpec("billableLateCount", "Billable", INTEGER, 0.9, total="sum"),
+            ColumnSpec("shiftDeductions", "Shifts ded.", NUMBER, 0.9, total="sum"),
+            ColumnSpec("unitRate", "Rate / shift", CURRENCY, 1.1),
+            ColumnSpec("lateDeductionAmount", "Late deduction", CURRENCY, 1.2, total="sum"),
+            ColumnSpec("pctOfEarnings", "% of pay", PERCENT, 0.8),
+            ColumnSpec("netPay", "Net pay", CURRENCY, 1.2, total="sum"),
+        ),
+        run=_run_late,
+    )
+)
 
 
 # -- salary loss: absent, unpaid leave, half-day (loss of pay) + late -----------------------------------------
-_LOSS_KEYS = ["absentDays", "unpaidLeaveDays", "halfDayCount", "halfDayLossDays", "lopDays", "lopAmount",
-              "lateDeduction", "totalSalaryImpact"]
+_LOSS_KEYS = [
+    "absentDays",
+    "unpaidLeaveDays",
+    "halfDayCount",
+    "halfDayLossDays",
+    "lopDays",
+    "lopAmount",
+    "lateDeduction",
+    "totalSalaryImpact",
+]
 
 
 def _run_loss(ctx) -> ReportResult:
@@ -200,7 +257,7 @@ def _run_loss(ctx) -> ReportResult:
     base = SalarySlip.objects.filter(ctx.emp_q("employee__"), slip_type_q(types), year=year, month=month)
     qs = with_breakdown(base.select_related("employee__department"), "bd_summary", "bd_earn", "bd_late", "bd_penalty")
     slips = list(qs.order_by("employee_id", "id"))
-    provisional = month_end(year, month) >= ctx.today
+    provisional_ids = provisional_slip_ids(slips, year, month, ctx.today)  # computed before the month ended
 
     rows: list[dict] = []
     tot = {k: _ZERO for k in ("lop", "late", "absent", "half", "unpaid")}
@@ -245,25 +302,27 @@ def _run_loss(ctx) -> ReportResult:
         tot["absent"] += absent
         tot["half"] += Decimal(halves or 0)
         tot["unpaid"] += unpaid
-        rows.append({
-            "employeeCode": emp.employee_code,
-            "employeeName": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
-            "department": dept_name(emp),
-            "monthlySalary": money(monthly),
-            "workingDays": int(working),
-            "paidDays": money(paid_days),
-            "absentDays": money(absent),
-            "unpaidLeaveDays": money(unpaid),
-            "halfDayCount": halves,
-            "halfDayLossDays": money(half_loss),
-            "lopDays": money(lop),
-            "dailyRate": money(dec_or_none(earn.get("dailyRate"))),
-            "lopAmount": money(lop_amount),
-            "lateDeduction": money(pen),
-            "totalSalaryImpact": money(impact_amt),
-            "impactPct": pct(impact_amt, monthly),
-            "monthStatus": "Provisional" if provisional else "Month complete",
-        })
+        rows.append(
+            {
+                "employeeCode": emp.employee_code,
+                "employeeName": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
+                "department": dept_name(emp),
+                "monthlySalary": money(monthly),
+                "workingDays": int(working),
+                "paidDays": money(paid_days),
+                "absentDays": money(absent),
+                "unpaidLeaveDays": money(unpaid),
+                "halfDayCount": halves,
+                "halfDayLossDays": money(half_loss),
+                "lopDays": money(lop),
+                "dailyRate": money(dec_or_none(earn.get("dailyRate"))),
+                "lopAmount": money(lop_amount),
+                "lateDeduction": money(pen),
+                "totalSalaryImpact": money(impact_amt),
+                "impactPct": pct(impact_amt, monthly),
+                "monthStatus": "Provisional" if s.id in provisional_ids else "Complete",
+            }
+        )
     rows.sort(key=lambda r: (r["department"].lower(), natural_key(r["employeeCode"])))
     rows = dept_subtotals(rows, _LOSS_KEYS)
 
@@ -279,17 +338,17 @@ def _run_loss(ctx) -> ReportResult:
         f"Production employees are paid shifts x rate per shift, so absence has no defined loss of pay; "
         f"{excluded} production slip(s) for this month are not included here.",
     ]
-    if provisional:
-        notes.append(
-            "This month has not ended: payroll generated mid-month counts the remaining working days as absent, so "
-            "losses are overstated until payroll is regenerated after the month closes."
-        )
+    warning = provisional_note(len(provisional_ids), year, month, ctx.today)
+    if warning:
+        notes.append(warning + " Losses are overstated until then.")
     if fallback_used:
         notes.append(
             "Slips without a stored breakdown use the employee's current profile salary as the monthly salary."
         )
     if impact != "all":
         notes.append("Filtered to employees matching the 'Salary impact' filter; choose 'All staff' to list everyone.")
+    if not slips:
+        notes.insert(0, no_slips_note(year, month))
     summary = [
         {"label": "Loss of pay", "value": money(tot["lop"]), "format": "currency"},
         {"label": "Late deduction", "value": money(tot["late"]), "format": "currency"},
@@ -302,46 +361,52 @@ def _run_loss(ctx) -> ReportResult:
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="attendance-salary-loss",
-    title="Salary Detection - Loss of Pay",
-    description="Salary lost to absent days, unpaid leave and half-days, plus the late penalty, per staff employee "
-    "for a payroll month.",
-    category="payroll",
-    icon="UserMinus",
-    tags=("salary deduction", "salary detection", "lop", "loss of pay", "absent", "unpaid leave", "half day"),
-    modules=("payroll", "salary_slip"),
-    filters=(
-        period(default="lastMonth"),
-        *scope(status=None, employment=False),
-        select(
-            "impact", "Salary impact",
-            [
-                ("any", "Any impact"), ("absent", "Absent days"), ("half", "Half-days"), ("unpaid", "Unpaid leave"),
-                ("late", "Late deduction"), ("all", "All staff"),
-            ],
-            default="any",
+register(
+    ReportSpec(
+        id="attendance-salary-loss",
+        title="Salary Deduction - Loss of Pay",
+        description="Salary deducted for absent days, unpaid leave and half-days (loss of pay), plus the late penalty, per "
+        "staff employee for a payroll month.",
+        category="payroll",
+        icon="UserMinus",
+        tags=("salary deduction", "salary detection", "lop", "loss of pay", "absent", "unpaid leave", "half day"),
+        modules=("payroll", "salary_slip"),
+        filters=(
+            period(default="lastMonth"),
+            *scope(status=None, employment=False),
+            select(
+                "impact",
+                "Salary impact",
+                [
+                    ("any", "Any impact"),
+                    ("absent", "Absent days"),
+                    ("half", "Half-days"),
+                    ("unpaid", "Unpaid leave"),
+                    ("late", "Late deduction"),
+                    ("all", "All staff"),
+                ],
+                default="any",
+            ),
         ),
-    ),
-    columns=(
-        ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
-        ColumnSpec("employeeName", "Employee", TEXT, 2.2),
-        ColumnSpec("department", "Department", TEXT, 1.4),
-        ColumnSpec("monthlySalary", "Monthly salary", CURRENCY, 1.2),
-        ColumnSpec("workingDays", "Working days", INTEGER, 0.8),
-        ColumnSpec("paidDays", "Paid days", NUMBER, 0.8),
-        ColumnSpec("absentDays", "Absent", NUMBER, 0.7, total="sum"),
-        ColumnSpec("unpaidLeaveDays", "Unpaid leave", NUMBER, 0.8, total="sum"),
-        ColumnSpec("halfDayCount", "Half-days", INTEGER, 0.7, total="sum"),
-        ColumnSpec("halfDayLossDays", "Half-day loss (days)", NUMBER, 0.9, total="sum"),
-        ColumnSpec("lopDays", "LOP days", NUMBER, 0.8, total="sum"),
-        ColumnSpec("dailyRate", "Daily rate", CURRENCY, 1.0),
-        ColumnSpec("lopAmount", "LOP amount", CURRENCY, 1.2, total="sum"),
-        ColumnSpec("lateDeduction", "Late deduction", CURRENCY, 1.2, total="sum"),
-        ColumnSpec("totalSalaryImpact", "Total impact", CURRENCY, 1.3, total="sum"),
-        ColumnSpec("impactPct", "% of salary", PERCENT, 0.8),
-        ColumnSpec("monthStatus", "Month", BADGE, 1.1),
-    ),
-    run=_run_loss,
-))
-
+        columns=(
+            ColumnSpec("employeeCode", "Emp Code", TEXT, 0.9),
+            ColumnSpec("employeeName", "Employee", TEXT, 1.9),
+            ColumnSpec("department", "Department", TEXT, 1.2),
+            ColumnSpec("monthlySalary", "Monthly salary", CURRENCY, 1.2),
+            ColumnSpec("workingDays", "Work days", INTEGER, 0.9),
+            ColumnSpec("paidDays", "Paid days", NUMBER, 0.8),
+            ColumnSpec("absentDays", "Absent", NUMBER, 0.9, total="sum"),
+            ColumnSpec("unpaidLeaveDays", "Unpaid leave", NUMBER, 0.9, total="sum"),
+            ColumnSpec("halfDayCount", "Half-days", INTEGER, 0.9, total="sum"),
+            ColumnSpec("halfDayLossDays", "Half-day loss", NUMBER, 1.0, total="sum"),
+            ColumnSpec("lopDays", "LOP days", NUMBER, 0.8, total="sum"),
+            ColumnSpec("dailyRate", "Daily rate", CURRENCY, 1.1),
+            ColumnSpec("lopAmount", "LOP amount", CURRENCY, 1.2, total="sum"),
+            ColumnSpec("lateDeduction", "Late deduction", CURRENCY, 1.2, total="sum"),
+            ColumnSpec("totalSalaryImpact", "Total impact", CURRENCY, 1.3, total="sum"),
+            ColumnSpec("impactPct", "% salary", PERCENT, 0.9),
+            ColumnSpec("monthStatus", "Month", BADGE, 1.1),
+        ),
+        run=_run_loss,
+    )
+)

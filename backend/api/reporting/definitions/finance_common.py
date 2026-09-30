@@ -47,9 +47,7 @@ def _fy_label(start_year: int) -> str:
 
 # Newest first. A generous fixed range: options must be static, and the filter is optional, so a
 # financial year outside the list is still reachable through "All".
-FY_OPTIONS: tuple[tuple[str, str], ...] = tuple(
-    (_fy_label(y), f"FY {_fy_label(y)}") for y in range(2045, 2009, -1)
-)
+FY_OPTIONS: tuple[tuple[str, str], ...] = tuple((_fy_label(y), f"FY {_fy_label(y)}") for y in range(2045, 2009, -1))
 
 
 def window_filter(key: str, label: str, help: str | None = None) -> FilterSpec:
@@ -61,6 +59,7 @@ def financial_year_filter(label: str = "Financial year", multi: bool = False, he
 
 
 # ── date windows ────────────────────────────────────────────────────────────
+
 
 def add_months(first_of_month: date, n: int) -> date:
     """First day of the month ``n`` months after (or before, n < 0) the given month."""
@@ -139,6 +138,7 @@ def ist_range_q(field: str, lo: date | None, hi: date | None) -> Q:
 
 
 # ── value helpers ───────────────────────────────────────────────────────────
+
 
 def ist_date_iso(value: Any) -> str | None:
     """A UTC-aware datetime -> its IST calendar date as 'YYYY-MM-DD' (naive values are taken as IST)."""

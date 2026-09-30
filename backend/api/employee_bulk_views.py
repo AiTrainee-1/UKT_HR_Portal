@@ -2,6 +2,7 @@
 
 import io
 
+from . import salary_split
 from .audit_utils import log_action
 from .auth import require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
@@ -22,7 +23,11 @@ from rest_framework.response import Response
 # Column order/text is the enforced contract with the downloaded template —
 # keep this in sync with EMPLOYEE_TEMPLATE_HEADERS in
 # frontend/src/pages/hr/BulkUploadEmployees.tsx if either ever changes.
-EMPLOYEE_UPLOAD_HEADERS = [
+#
+# The eight salary-split columns (Basic ... CA) come last. A template downloaded before they existed (the same
+# columns without them) is still accepted, and its rows get the automatic 50% + 50% split like any row that
+# leaves the split blank.
+LEGACY_UPLOAD_HEADERS = [
     "Employee Code", "First Name", "Last Name", "Email", "Phone", "Gender",
     "Date of Birth", "Employment Type", "Department", "Designation", "Branch",
     "Salary Type", "Salary Amount", "Salary Per Shift", "Join Date",
@@ -30,6 +35,11 @@ EMPLOYEE_UPLOAD_HEADERS = [
     "Address", "ID Proof", "Father's Name", "Mother's Name",
     "Biometric Device ID", "Blood Group", "Emergency Contact",
 ]
+# Column header -> salary_split component, in the order they appear in the sheet.
+SPLIT_COLUMNS = {salary_split.LABELS[c]: c for c in salary_split.COMPONENTS}
+SPLIT_HEADERS = list(SPLIT_COLUMNS)
+EMPLOYEE_UPLOAD_HEADERS = LEGACY_UPLOAD_HEADERS + SPLIT_HEADERS
+_ACCEPTED_HEADER_ROWS = (EMPLOYEE_UPLOAD_HEADERS, LEGACY_UPLOAD_HEADERS)
 
 
 _VALID_EMPLOYMENT_TYPES = {"staff", "production"}
@@ -55,6 +65,26 @@ def _parse_date_cell(value):
         except ValueError:
             continue
     return raw  # unparseable -let Django's own validation reject it with its own message
+
+
+def _split_cell(value) -> str:
+    """One salary-split cell as text for salary_split.parse_breakup: blank is 0, and a spreadsheet number (or a
+    formula result such as 2083.3333333333335) is rounded to the paisa."""
+    if value is None or (isinstance(value, str) and value.strip() == ""):
+        return "0"
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, (int, float, Decimal)):
+        return str(Decimal(str(value)).quantize(Decimal("0.01")))
+    return str(value).strip()
+
+
+def _split_from_row(row: dict) -> dict | None:
+    """The salary split typed into a sheet row ({basic, da, ...} as parse_breakup expects), or None when all eight
+    cells are blank (the split is then worked out automatically). Blank cells in a partly filled split count as 0."""
+    if all(row.get(h) is None or str(row.get(h)).strip() == "" for h in SPLIT_HEADERS):
+        return None
+    return {salary_split.JSON_KEYS[c]: _split_cell(row.get(h)) for h, c in SPLIT_COLUMNS.items()}
 
 
 def _employee_row_to_data(row: dict) -> tuple[dict, str | None]:
@@ -99,6 +129,7 @@ def _employee_row_to_data(row: dict) -> tuple[dict, str | None]:
         "branch": cell("Branch") or None,
         "salaryType": salary_type or None,
         "salaryAmount": num_cell("Salary Amount"),
+        "salaryBreakup": _split_from_row(row),
         "salaryPerShift": num_cell("Salary Per Shift"),
         "joinDate": _parse_date_cell(row.get("Join Date")),
         "bankName": cell("Bank Name") or None,
@@ -146,7 +177,7 @@ def bulk_upload_employees(request: Request) -> Response:
     while header_row and header_row[-1] == "":
         header_row.pop()
 
-    if header_row != EMPLOYEE_UPLOAD_HEADERS:
+    if header_row not in _ACCEPTED_HEADER_ROWS:
         return Response(
             {
                 "error": "invalid_template",
@@ -169,7 +200,7 @@ def bulk_upload_employees(request: Request) -> Response:
             # even if the user forgets to delete them before uploading.
             sample_skipped += 1
             continue
-        row = dict(zip(EMPLOYEE_UPLOAD_HEADERS, raw_row))
+        row = dict(zip(header_row, raw_row))
         data, row_error = _employee_row_to_data(row)
         if row_error:
             errors.append(f"Row {idx}: {row_error}")
@@ -283,6 +314,27 @@ def _apply_row_updates(emp, row: dict, request: Request) -> tuple[list[str], lis
                 setattr(emp, attr, parsed)
                 changed.append(header)
 
+    # The 50% + 50% salary split follows the salary. Cells typed in the sheet win (and must be a valid split); a new
+    # salary with no split typed re-scales the stored one; an untouched salary leaves it alone. A file exported before
+    # the salary was edited still carries the OLD split next to the NEW amount -identical to what is stored means
+    # "not edited", so it is re-scaled rather than rejected.
+    stored_split = salary_split.breakup_of(emp)
+    salary_changed = "Salary Amount" in changed
+    submitted_split = _split_from_row(row)
+    if submitted_split is not None and stored_split is not None:
+        typed, _typed_error = salary_split.parse_breakup(submitted_split)
+        if typed is not None and typed == stored_split:
+            submitted_split = None
+    if submitted_split is not None or salary_changed:
+        parts, split_error = salary_split.resolve(
+            emp.salary_amount, submitted_split, stored_split, total_changed=salary_changed
+        )
+        if split_error:
+            return [], [], split_error
+        if parts != stored_split:
+            salary_split.apply_to_employee(emp, parts)
+            changed.append("Salary Split")
+
     dept_name = cell("Department")
     if dept_name and dept_name.lower() != (emp.department.name.lower() if emp.department_id and emp.department else ""):
         dept = Department.objects.filter(name__iexact=dept_name).first()
@@ -355,7 +407,7 @@ def bulk_update_employees(request: Request) -> Response:
     while header_row and header_row[-1] == "":
         header_row.pop()
 
-    if header_row != EMPLOYEE_UPLOAD_HEADERS:
+    if header_row not in _ACCEPTED_HEADER_ROWS:
         return Response(
             {
                 "error": "invalid_template",
@@ -385,7 +437,7 @@ def bulk_update_employees(request: Request) -> Response:
             errors.append(f"Row {idx}: Employee Code is required to match an existing employee")
             continue
 
-        row = dict(zip(EMPLOYEE_UPLOAD_HEADERS, raw_row))
+        row = dict(zip(header_row, raw_row))
         emp = scoped_qs.filter(employee_code=first_cell).first()
         if emp is None:
             not_found.append(f"Row {idx}: no employee with code '{first_cell}' -use Bulk Upload to add new employees")

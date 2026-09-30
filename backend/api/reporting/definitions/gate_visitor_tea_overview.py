@@ -30,7 +30,8 @@ def _run_time_away(ctx):
     returned = Q(entered_at__isnull=False, entered_at__gte=F("exited_at"))
     outpass = {
         r["employee_id"]: r
-        for r in OutpassRequest.objects.filter(scope_q, exited_at__isnull=False).filter(C.in_range("exited_at", ctx))
+        for r in OutpassRequest.objects.filter(scope_q, exited_at__isnull=False)
+        .filter(C.in_range("exited_at", ctx))
         .values("employee_id")
         .annotate(exits=Count("id"), mins=Sum(C.WholeMinutes(F("entered_at") - F("exited_at")), filter=returned))
         .order_by()
@@ -40,7 +41,9 @@ def _run_time_away(ctx):
         r["employee_id"]: r["n"]
         for r in OutpassRecord.objects.filter(scope_q, source="qr", employee__isnull=False)
         .filter(C.in_range("submitted_at", ctx))
-        .values("employee_id").annotate(n=Count("id")).order_by()
+        .values("employee_id")
+        .annotate(n=Count("id"))
+        .order_by()
     }
     tea = {
         r["employee_id"]: r
@@ -57,7 +60,9 @@ def _run_time_away(ctx):
         r["meeting_employee_id"]: r["n"]
         for r in VisitorVisit.objects.filter(ctx.emp_q("meeting_employee__"), meeting_employee__isnull=False)
         .filter(C.in_range("visited_at", ctx))
-        .values("meeting_employee_id").annotate(n=Count("id")).order_by()
+        .values("meeting_employee_id")
+        .annotate(n=Count("id"))
+        .order_by()
     }
 
     ids = set(outpass) | set(qr) | set(tea) | set(hosted)
@@ -72,17 +77,19 @@ def _run_time_away(ctx):
         tb = tea.get(e["id"])
         op_min = int(op["mins"] or 0) if op else 0
         tea_min = int(tb["mins"] or 0) if tb else 0
-        rows.append({
-            **C.emp_cells_from_values(e, ""),
-            "outpassExits": op["exits"] if op else 0,
-            "outpassMinutes": op_min,
-            "qrExits": qr.get(e["id"], 0),
-            "teaBreaks": tb["n"] if tb else 0,
-            "teaMinutes": tea_min,
-            "teaOvertime": tb["ot"] if tb else 0,
-            "visitorsHosted": hosted.get(e["id"], 0),
-            "totalAwayMinutes": op_min + tea_min,
-        })
+        rows.append(
+            {
+                **C.emp_cells_from_values(e, ""),
+                "outpassExits": op["exits"] if op else 0,
+                "outpassMinutes": op_min,
+                "qrExits": qr.get(e["id"], 0),
+                "teaBreaks": tb["n"] if tb else 0,
+                "teaMinutes": tea_min,
+                "teaOvertime": tb["ot"] if tb else 0,
+                "visitorsHosted": hosted.get(e["id"], 0),
+                "totalAwayMinutes": op_min + tea_min,
+            }
+        )
 
     top = max(rows, key=lambda r: r["totalAwayMinutes"], default=None)  # first (lowest code) wins a tie
     summary = [
@@ -101,48 +108,57 @@ def _run_time_away(ctx):
         "Informational only - not linked to attendance, shift or payroll.",
         "Outpass minutes count passes whose return was scanned (door to door); a pass with no return scan has no duration "
         "and contributes only to the exit count. Gate QR exits are unverified and have no in-time, so they are counts only.",
-        "Tea minutes are completed breaks only (open breaks have no duration). "
-        + C.rule_note(allowed, rule_at),
+        "Tea minutes are completed breaks only (open breaks have no duration). " + C.rule_note(allowed, rule_at),
         "Time away = outpass minutes + tea-break minutes; visitors hosted are visits where the visitor was matched to this "
         "employee. Each figure uses its own timestamp (pass exit, QR submission, break start, visit) in Indian Standard Time.",
     ]
     if excluded:
         notes.append("Long and left-open tea breaks were left out (filter 'Leave out long / unclosed tea breaks').")
+    ranked = [r for r in sorted(rows, key=lambda r: r["totalAwayMinutes"], reverse=True) if r["totalAwayMinutes"]][:10]
+    if ranked:
+        notes.append(
+            "Top 10 by time away: "
+            + "; ".join(f"{r['employeeCode']} {r['employeeName']} ({r['totalAwayMinutes']} min)" for r in ranked)
+            + "."
+        )
     return ReportResult(rows=rows[: ctx.row_limit], summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="employee-time-away-summary",
-    title="Employee Time Away Summary",
-    description="Per employee: outpass exits and minutes outside, gate QR exits, tea breaks and visitors hosted - informational.",
-    category=C.CATEGORY,
-    icon="LogOut",
-    tags=("time away", "outpass", "tea", "visitor", "gate", "summary"),
-    modules=C.MODULES,
-    filters=(
-        date_range("thisMonth", "Period"),
-        *scope(status="all"),
-        boolean(
-            "excludeSuspect", "Leave out long / unclosed tea breaks",
-            help=f"Drops completed tea breaks over {C.SUSPECT_MINUTES} minutes and breaks left open for over 12 hours (usually a missed scan).",
+register(
+    ReportSpec(
+        id="employee-time-away-summary",
+        title="Employee Time Away Summary",
+        description="Per employee: outpass exits and minutes outside, gate QR exits, tea breaks and visitors hosted - informational.",
+        category=C.CATEGORY,
+        icon="LogOut",
+        tags=("time away", "outpass", "tea", "visitor", "gate", "summary"),
+        modules=C.MODULES,
+        filters=(
+            date_range("thisMonth", "Period"),
+            *scope(status="all"),
+            boolean(
+                "excludeSuspect",
+                "Leave out long / unclosed tea breaks",
+                help=f"Drops completed tea breaks over {C.SUSPECT_MINUTES} minutes and breaks left open for over 12 hours (usually a missed scan).",
+            ),
         ),
-    ),
-    columns=(
-        ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
-        ColumnSpec("employeeName", "Employee", TEXT, 2.2),
-        ColumnSpec("department", "Department", TEXT, 1.5),
-        ColumnSpec("designation", "Designation", TEXT, 1.5),
-        ColumnSpec("outpassExits", "Outpass exits", INTEGER, 0.9, total="sum"),
-        ColumnSpec("outpassMinutes", "Outpass time", DURATION, 1.0, total="sum"),
-        ColumnSpec("qrExits", "QR exits", INTEGER, 0.8, total="sum"),
-        ColumnSpec("teaBreaks", "Tea breaks", INTEGER, 0.8, total="sum"),
-        ColumnSpec("teaMinutes", "Tea time", DURATION, 1.0, total="sum"),
-        ColumnSpec("teaOvertime", "Tea overtime", INTEGER, 0.8, total="sum"),
-        ColumnSpec("visitorsHosted", "Visitors hosted", INTEGER, 0.9, total="sum"),
-        ColumnSpec("totalAwayMinutes", "Total time away", DURATION, 1.1, total="sum"),
-    ),
-    run=_run_time_away,
-))
+        columns=(
+            ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
+            ColumnSpec("employeeName", "Employee", TEXT, 2.2),
+            ColumnSpec("department", "Department", TEXT, 1.5),
+            ColumnSpec("designation", "Designation", TEXT, 1.5),
+            ColumnSpec("outpassExits", "Outpass exits", INTEGER, 0.9, total="sum"),
+            ColumnSpec("outpassMinutes", "Outpass time", DURATION, 1.0, total="sum"),
+            ColumnSpec("qrExits", "QR exits", INTEGER, 0.8, total="sum"),
+            ColumnSpec("teaBreaks", "Tea breaks", INTEGER, 0.8, total="sum"),
+            ColumnSpec("teaMinutes", "Tea time", DURATION, 1.0, total="sum"),
+            ColumnSpec("teaOvertime", "Tea overtime", INTEGER, 0.8, total="sum"),
+            ColumnSpec("visitorsHosted", "Visitors hosted", INTEGER, 0.9, total="sum"),
+            ColumnSpec("totalAwayMinutes", "Total time away", DURATION, 1.1, total="sum"),
+        ),
+        run=_run_time_away,
+    )
+)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -167,8 +183,9 @@ def _run_devices(ctx):
             qs = qs.filter(is_active=False)
         # Explicit columns: password_hash and login_token must never be read into a report.
         return list(
-            qs.values("id", "name", "branch__name", "username", "is_active", "created_by", "created_at", "last_login_at")
-            .order_by("branch__name", "name", "id")
+            qs.values(
+                "id", "name", "branch__name", "username", "is_active", "created_by", "created_at", "last_login_at"
+            ).order_by("branch__name", "name", "id")
         )
 
     gates = fetch(GateDevice) if kind != "reception" else []
@@ -177,18 +194,27 @@ def _run_devices(ctx):
 
     outpass_scans = {
         r["gate_id"]: r["n"]
-        for r in OutpassGateScan.objects.filter(gate_id__in=gate_ids).filter(C.in_range("scanned_at", ctx))
-        .values("gate_id").annotate(n=Count("id")).order_by()
+        for r in OutpassGateScan.objects.filter(gate_id__in=gate_ids)
+        .filter(C.in_range("scanned_at", ctx))
+        .values("gate_id")
+        .annotate(n=Count("id"))
+        .order_by()
     }
     tea_out = {
         r["out_gate_id"]: r["n"]
-        for r in TeaBreakLog.objects.filter(out_gate_id__in=gate_ids).filter(C.in_range("out_at", ctx))
-        .values("out_gate_id").annotate(n=Count("id")).order_by()
+        for r in TeaBreakLog.objects.filter(out_gate_id__in=gate_ids)
+        .filter(C.in_range("out_at", ctx))
+        .values("out_gate_id")
+        .annotate(n=Count("id"))
+        .order_by()
     }
     tea_in = {
         r["in_gate_id"]: r["n"]
-        for r in TeaBreakLog.objects.filter(in_gate_id__in=gate_ids).filter(C.in_range("in_at", ctx))
-        .values("in_gate_id").annotate(n=Count("id")).order_by()
+        for r in TeaBreakLog.objects.filter(in_gate_id__in=gate_ids)
+        .filter(C.in_range("in_at", ctx))
+        .values("in_gate_id")
+        .annotate(n=Count("id"))
+        .order_by()
     }
 
     def row(d, label, scans, tea_scans):
@@ -206,7 +232,8 @@ def _run_devices(ctx):
         }
 
     rows = [
-        row(g, "Gate scanner", outpass_scans.get(g["id"], 0), tea_out.get(g["id"], 0) + tea_in.get(g["id"], 0)) for g in gates
+        row(g, "Gate scanner", outpass_scans.get(g["id"], 0), tea_out.get(g["id"], 0) + tea_in.get(g["id"], 0))
+        for g in gates
     ] + [row(d, "Reception desk", None, None) for d in desks]
 
     devices = gates + desks
@@ -214,9 +241,17 @@ def _run_devices(ctx):
         {"label": "Devices", "value": len(devices), "format": "integer"},
         {"label": "Active", "value": sum(1 for d in devices if d["is_active"]), "format": "integer"},
         {"label": "Deactivated", "value": sum(1 for d in devices if not d["is_active"]), "format": "integer"},
-        {"label": "Never logged in", "value": sum(1 for d in devices if d["last_login_at"] is None), "format": "integer"},
+        {
+            "label": "Never logged in",
+            "value": sum(1 for d in devices if d["last_login_at"] is None),
+            "format": "integer",
+        },
         {"label": "Outpass scans in period", "value": sum(outpass_scans.values()), "format": "integer"},
-        {"label": "Tea-break scans in period", "value": sum(tea_out.values()) + sum(tea_in.values()), "format": "integer"},
+        {
+            "label": "Tea-break scans in period",
+            "value": sum(tea_out.values()) + sum(tea_in.values()),
+            "format": "integer",
+        },
     ]
     notes = [
         "Login tokens and password hashes are never included in this report.",
@@ -228,31 +263,33 @@ def _run_devices(ctx):
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="gate-device-register",
-    title="Gate & Reception Device Register",
-    description="Master list of gate scanner and reception desk logins with status, last activity and scans in a period.",
-    category=C.CATEGORY,
-    icon="ScanLine",
-    tags=("gate", "device", "scanner", "reception", "kiosk"),
-    modules=C.MODULES,
-    filters=(
-        date_range("thisMonth", "Scan activity period"),
-        branches(),
-        select("deviceType", "Device type", _DEVICE_TYPES, placeholder="All devices"),
-        select("deviceStatus", "Status", _DEVICE_STATUS, placeholder="All"),
-    ),
-    columns=(
-        ColumnSpec("name", "Device", TEXT, 1.8),
-        ColumnSpec("deviceType", "Type", BADGE, 1.1),
-        ColumnSpec("branch", "Branch", TEXT, 1.4),
-        ColumnSpec("username", "Username", TEXT, 1.4),
-        ColumnSpec("status", "Status", BADGE, 1.0),
-        ColumnSpec("createdBy", "Created by", TEXT, 1.3),
-        ColumnSpec("createdAt", "Created at", DATETIME, 1.4),
-        ColumnSpec("lastLoginAt", "Last login", DATETIME, 1.4),
-        ColumnSpec("outpassScans", "Outpass scans", INTEGER, 1.0, total="sum"),
-        ColumnSpec("teaScans", "Tea scans", INTEGER, 0.9, total="sum"),
-    ),
-    run=_run_devices,
-))
+register(
+    ReportSpec(
+        id="gate-device-register",
+        title="Gate & Reception Device Register",
+        description="Master list of gate scanner and reception desk logins with status, last activity and scans in a period.",
+        category=C.CATEGORY,
+        icon="ScanLine",
+        tags=("gate", "device", "scanner", "reception", "kiosk"),
+        modules=C.MODULES,
+        filters=(
+            date_range("thisMonth", "Scan activity period"),
+            branches(),
+            select("deviceType", "Device type", _DEVICE_TYPES, placeholder="All devices"),
+            select("deviceStatus", "Status", _DEVICE_STATUS, placeholder="All"),
+        ),
+        columns=(
+            ColumnSpec("name", "Device", TEXT, 1.8),
+            ColumnSpec("deviceType", "Type", BADGE, 1.1),
+            ColumnSpec("branch", "Branch", TEXT, 1.4),
+            ColumnSpec("username", "Username", TEXT, 1.4),
+            ColumnSpec("status", "Status", BADGE, 1.0),
+            ColumnSpec("createdBy", "Created by", TEXT, 1.3),
+            ColumnSpec("createdAt", "Created at", DATETIME, 1.4),
+            ColumnSpec("lastLoginAt", "Last login", DATETIME, 1.4),
+            ColumnSpec("outpassScans", "Outpass scans", INTEGER, 1.0, total="sum"),
+            ColumnSpec("teaScans", "Tea scans", INTEGER, 0.9, total="sum"),
+        ),
+        run=_run_devices,
+    )
+)

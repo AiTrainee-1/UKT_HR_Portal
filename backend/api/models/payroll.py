@@ -753,19 +753,14 @@ class PayrollSettings(models.Model):
     # (Production salary-range rules keep their own prod_pf_ef_enabled toggle.)
     staff_payroll_rules_enabled = models.BooleanField(default=False, db_column="staff_payroll_rules_enabled")
     prod_payroll_rules_enabled = models.BooleanField(default=False, db_column="prod_payroll_rules_enabled")
-    # Compensation feature master switch (CTC Breakdown + OT Detection +
-    # Compensation Leave + History & Reports -the whole /hr/compensation
-    # page). Checked at a single choke point everywhere it matters
-    # (compensation_views.py's @require_compensation_enabled, attendance_
-    # final.py's _compensation_day_for, payroll_views.py's OT-pay block,
-    # overtime.py's detect_overtime_for_month) -a toggle that only hides a
-    # sidebar entry while the underlying calculations keep running regardless
-    # is a bug, not a feature, so this one is wired to genuinely disable
-    # everything at once from day one. Sub-settings (ot_detection_enabled,
-    # ot_threshold_minutes, ot_compensation_type) stay independent finer-
-    # grained controls underneath this master switch -this is default True
-    # since the pages are already live; HR turns it off explicitly to
-    # postpone the feature.
+    # OT / Compensation background-features master switch. It controls what the feature DOES, never whether
+    # the /hr/compensation page exists: the page is mandatory (always in the sidebar, every read endpoint works
+    # with the switch off; compensation_views.py's @require_compensation_features_for_changes only refuses the
+    # changes nothing would act on). Each background behaviour checks it at its own single choke point:
+    # attendance_final.py's _compensation_day_for (Compensation-Day exemption), payroll_views.py's OT-pay block,
+    # overtime.py's detect_overtime_for_month (detection). Sub-settings (ot_detection_enabled, ot_threshold_minutes,
+    # ot_compensation_type) stay independent finer-grained controls underneath this master switch. Default True
+    # since the feature is already live; HR turns it off explicitly (after a confirmation) to pause it.
     compensation_feature_enabled = models.BooleanField(default=True, db_column="compensation_feature_enabled")
 
     # ── Database backup ─────────────────────────────────────────────────────
@@ -778,6 +773,22 @@ class PayrollSettings(models.Model):
     smtp_password = models.TextField(blank=True, default="", db_column="smtp_password")
     smtp_from_email = models.TextField(blank=True, default="", db_column="smtp_from_email")
     smtp_from_name = models.TextField(default="UKTextiles HR", db_column="smtp_from_name")
+
+    # ── HR / software-support contacts (Settings -> HR Contact) ───────────
+    # One company-wide answer to "who do I call?", shown in the Employee Web App and the mobile app for
+    # sign-in problems, app problems and the server being down (support_contact_views.py). Blank = not set.
+    hr_contact_name = models.TextField(default="HR Department", db_column="hr_contact_name")
+    hr_contact_phone = models.TextField(blank=True, default="", db_column="hr_contact_phone")
+    hr_contact_whatsapp = models.TextField(blank=True, default="", db_column="hr_contact_whatsapp")
+    hr_contact_email = models.TextField(blank=True, default="", db_column="hr_contact_email")
+    hr_contact_hours = models.TextField(blank=True, default="", db_column="hr_contact_hours")
+    support_contact_name = models.TextField(default="Software Support", db_column="support_contact_name")
+    support_contact_phone = models.TextField(blank=True, default="", db_column="support_contact_phone")
+    support_contact_whatsapp = models.TextField(blank=True, default="", db_column="support_contact_whatsapp")
+    support_contact_email = models.TextField(blank=True, default="", db_column="support_contact_email")
+    support_contact_hours = models.TextField(blank=True, default="", db_column="support_contact_hours")
+    # A line of guidance shown under the contacts ("HR office: first floor, admin block").
+    contact_note = models.TextField(blank=True, default="", db_column="contact_note")
 
     # ── Appearance / Theme ────────────────────────────────────────────────
     # Org-wide, not per-user: whichever theme is active here is what every HR

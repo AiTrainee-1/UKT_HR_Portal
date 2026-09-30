@@ -29,7 +29,11 @@ STATUS_OPTIONS = (
     ("rejected", "Rejected"),
 )
 STATUS_LABELS = {
-    "pending_hod": "Pending", "pending_hr": "Pending", "active": "Active", "completed": "Completed", "rejected": "Rejected",
+    "pending_hod": "Pending",
+    "pending_hr": "Pending",
+    "active": "Active",
+    "completed": "Completed",
+    "rejected": "Rejected",
 }
 APPROVED_STATUSES = ("active", "completed")
 PATH_OPTIONS = (
@@ -107,17 +111,21 @@ def _session_filters(ctx, qs):
         qs = qs.filter(hod_reviewed_at__isnull=True, hr_reviewed_at__isnull=False)
     elif path == "awaiting":
         qs = qs.filter(status__in=("pending_hod", "pending_hr"))
+    # The same three-way reading as ``completion_text`` (the Completion column), so a filter never returns rows whose
+    # column says the opposite: a session the employee ended themselves but that HR has not decided yet has no
+    # completion_reason, yet its column reads "Employee done (awaiting HR)".
     completion = ctx.param("completion")
+    no_reason = Q(completion_reason__isnull=True) | Q(completion_reason="")
     if completion == "not_completed":
-        qs = qs.filter(Q(completion_reason__isnull=True) | Q(completion_reason=""))
+        qs = qs.filter(no_reason, employee_ended_at__isnull=True)
+    elif completion == "manual":
+        qs = qs.filter(Q(completion_reason="manual") | (no_reason & Q(employee_ended_at__isnull=False)))
     elif completion:
         qs = qs.filter(completion_reason=completion)
     if ctx.param("destination"):
         qs = qs.filter(destination__icontains=ctx.param("destination"))
     if ctx.param("mockedOnly"):
-        qs = qs.filter(
-            Exists(OnDutyPunchVerification.objects.filter(session=OuterRef("pk"), is_mocked=True))
-        )
+        qs = qs.filter(Exists(OnDutyPunchVerification.objects.filter(session=OuterRef("pk"), is_mocked=True)))
     return qs
 
 
@@ -169,59 +177,77 @@ def _register_run(ctx) -> ReportResult:
         )
     }
     with_outpass = set(
-        OutpassRequest.objects.filter(on_duty_session_id__in=ids, source="on_duty").values_list("on_duty_session_id", flat=True)
+        OutpassRequest.objects.filter(on_duty_session_id__in=ids, source="on_duty").values_list(
+            "on_duty_session_id", flat=True
+        )
     )
 
     rows = []
     hours: list[float] = []
     totals = {"punches": 0, "mocked_sessions": 0}
     by_status: Counter = Counter()
+    counted = S.shown(sessions, ctx)  # the summary cards describe the rows that stay, not the runner's extra one
+    counted_ids = {s.id for s in counted}
     for s in sessions:
         st = stats.get(s.id) or {}
         h = S.hours_between(s.created_at, decided_at(s))
-        if h is not None:
+        if h is not None and s.id in counted_ids:
             hours.append(h)
         comments = "; ".join(
             f"{label}: {text}" for label, text in (("HOD", s.hod_review_comment), ("HR", s.hr_review_comment)) if text
         )
-        rows.append({
-            **S.base_cells(s.employee),
-            "branch": s.branch.name if s.branch_id else None,  # the branch at request time
-            "requestedAt": fmt_dt(s.created_at),
-            "destination": s.destination,
-            "status": status_label(s.status),
-            "decisionPath": decision_path(s),
-            "hodBy": s.hod_reviewed_by,
-            "hodAt": fmt_dt(s.hod_reviewed_at),
-            "hrBy": s.hr_reviewed_by,
-            "hrAt": fmt_dt(s.hr_reviewed_at),
-            "comments": comments or None,
-            "decisionHours": h,
-            "punchesTotal": st.get("total", 0),
-            "punchesApproved": st.get("approved", 0),
-            "punchesPending": st.get("pending", 0),
-            "punchesRejected": st.get("rejected", 0),
-            "firstPunch": S.tstr(st.get("first")),
-            "lastPunch": S.tstr(st.get("last")),
-            "mockedPunches": st.get("mocked", 0),
-            "completion": completion_text(s),
-            "outpass": "Issued" if s.id in with_outpass else None,
-        })
+        rows.append(
+            {
+                **S.base_cells(s.employee),
+                "branch": s.branch.name if s.branch_id else None,  # the branch at request time
+                "requestedAt": fmt_dt(s.created_at),
+                "destination": s.destination,
+                "status": status_label(s.status),
+                "decisionPath": decision_path(s),
+                "hodBy": s.hod_reviewed_by,
+                "hodAt": fmt_dt(s.hod_reviewed_at),
+                "hrBy": s.hr_reviewed_by,
+                "hrAt": fmt_dt(s.hr_reviewed_at),
+                "comments": comments or None,
+                "decisionHours": h,
+                "punchesTotal": st.get("total", 0),
+                "punchesApproved": st.get("approved", 0),
+                "punchesPending": st.get("pending", 0),
+                "punchesRejected": st.get("rejected", 0),
+                "firstPunch": S.tstr(st.get("first")),
+                "lastPunch": S.tstr(st.get("last")),
+                "mockedPunches": st.get("mocked", 0),
+                "completion": completion_text(s),
+                "outpass": "Issued" if s.id in with_outpass else None,
+            }
+        )
+        if s.id not in counted_ids:
+            continue
         totals["punches"] += st.get("total", 0)
         totals["mocked_sessions"] += 1 if st.get("mocked", 0) else 0
-        by_status["pending" if s.status in ("pending_hod", "pending_hr") else "approved" if s.status in APPROVED_STATUSES else s.status] += 1
+        by_status[
+            "pending"
+            if s.status in ("pending_hod", "pending_hr")
+            else "approved"
+            if s.status in APPROVED_STATUSES
+            else s.status
+        ] += 1
 
     return ReportResult(
         rows=rows,
         summary=[
-            {"label": "Sessions", "value": len(rows), "format": "integer"},
+            {"label": "Sessions", "value": len(counted), "format": "integer"},
             {"label": "Pending decision", "value": by_status["pending"], "format": "integer"},
             {"label": "Approved by HR", "value": by_status["approved"], "format": "integer"},
             {"label": "Rejected", "value": by_status["rejected"], "format": "integer"},
             {"label": "Punches captured", "value": totals["punches"], "format": "integer"},
             {"label": "Sessions with mock GPS", "value": totals["mocked_sessions"], "format": "integer"},
-            {"label": "Avg request-to-decision (h)", "value": round(sum(hours) / len(hours), 2) if hours else None, "format": "hours"},
-            {"label": "Employees on duty", "value": len({s.employee_id for s in sessions}), "format": "integer"},
+            {
+                "label": "Avg request-to-decision (h)",
+                "value": round(sum(hours) / len(hours), 2) if hours else None,
+                "format": "hours",
+            },
+            {"label": "Employees on duty", "value": len({s.employee_id for s in counted}), "format": "integer"},
         ],
         notes=[
             "Date = the IST date the on-duty request was submitted (a session has no date of its own). Branch = the "
@@ -231,46 +257,49 @@ def _register_run(ctx) -> ReportResult:
             "(Active or Completed).",
             "First / last punch consider approved and pending punches only. Decision hours = request submitted to the "
             "final answer (HR decision, or the HOD's rejection); blank while undecided.",
+            *S.cut_note(sessions, ctx),
         ],
     )
 
 
-register(ReportSpec(
-    id="on-duty-register",
-    title="On-Duty Records",
-    description="Every on-duty session with destination, HOD and HR decisions, punches captured and how it ended.",
-    category=S.CATEGORY,
-    family="on-duty",
-    variant="Sessions",
-    icon="MapPin",
-    tags=("on duty", "on-duty", "field visit", "gps", "geo attendance"),
-    modules=("geo_attendance",),
-    filters=(F.date_range("thisMonth", "Request date"), *F.scope(status="all"), *_session_filter_specs()),
-    columns=(
-        *EMP_COLS[:3],
-        S.BRANCH_COL,
-        ColumnSpec("requestedAt", "Requested", DATETIME, 1.4),
-        ColumnSpec("destination", "Destination", TEXT, 2.0),
-        ColumnSpec("status", "Status", BADGE, 0.9),
-        ColumnSpec("decisionPath", "Decision path", BADGE, 1.5),
-        ColumnSpec("hodBy", "HOD", TEXT, 1.3),
-        ColumnSpec("hodAt", "HOD decided", DATETIME, 1.4),
-        ColumnSpec("hrBy", "HR", TEXT, 1.3),
-        ColumnSpec("hrAt", "HR decided", DATETIME, 1.4),
-        ColumnSpec("comments", "Comments", TEXT, 1.8),
-        ColumnSpec("decisionHours", "Decision (h)", HOURS, 0.9),
-        ColumnSpec("punchesTotal", "Punches", INTEGER, 0.7, total="sum"),
-        ColumnSpec("punchesApproved", "Approved", INTEGER, 0.8, total="sum"),
-        ColumnSpec("punchesPending", "Pending", INTEGER, 0.8, total="sum"),
-        ColumnSpec("punchesRejected", "Rejected", INTEGER, 0.8, total="sum"),
-        ColumnSpec("firstPunch", "First punch", TIME, 0.8),
-        ColumnSpec("lastPunch", "Last punch", TIME, 0.8),
-        ColumnSpec("mockedPunches", "Mock GPS", INTEGER, 0.8, total="sum"),
-        ColumnSpec("completion", "Completion", BADGE, 1.6),
-        ColumnSpec("outpass", "Outpass", BADGE, 0.8),
-    ),
-    run=_register_run,
-))
+register(
+    ReportSpec(
+        id="on-duty-register",
+        title="On-Duty Records",
+        description="Every on-duty session with destination, HOD and HR decisions, punches captured and how it ended.",
+        category=S.CATEGORY,
+        family="on-duty",
+        variant="Sessions",
+        icon="MapPin",
+        tags=("on duty", "on-duty", "field visit", "gps", "geo attendance"),
+        modules=("geo_attendance",),
+        filters=(F.date_range("thisMonth", "Request date"), *F.scope(status="all"), *_session_filter_specs()),
+        columns=(
+            *S.LEAD_COLS,
+            S.BRANCH_COL,
+            ColumnSpec("requestedAt", "Requested", DATETIME, 1.4),
+            ColumnSpec("destination", "Destination", TEXT, 2.0),
+            ColumnSpec("status", "Status", BADGE, 1.1),
+            ColumnSpec("decisionPath", "Decision path", BADGE, 1.5),
+            ColumnSpec("hodBy", "HOD", TEXT, 1.3),
+            ColumnSpec("hodAt", "HOD decided", DATETIME, 1.4),
+            ColumnSpec("hrBy", "HR", TEXT, 1.3),
+            ColumnSpec("hrAt", "HR decided", DATETIME, 1.4),
+            ColumnSpec("comments", "Comments", TEXT, 1.8),
+            ColumnSpec("decisionHours", "Decision (h)", HOURS, 0.9),
+            ColumnSpec("punchesTotal", "Punches", INTEGER, 1.0, total="sum"),
+            ColumnSpec("punchesApproved", "Approved", INTEGER, 1.05, total="sum"),
+            ColumnSpec("punchesPending", "Pending", INTEGER, 1.0, total="sum"),
+            ColumnSpec("punchesRejected", "Rejected", INTEGER, 1.05, total="sum"),
+            ColumnSpec("firstPunch", "First punch", TIME, 0.85),
+            ColumnSpec("lastPunch", "Last punch", TIME, 0.85),
+            ColumnSpec("mockedPunches", "Mock GPS", INTEGER, 0.85, total="sum"),
+            ColumnSpec("completion", "Completion", BADGE, 1.6),
+            ColumnSpec("outpass", "Outpass", BADGE, 1.0),
+        ),
+        run=_register_run,
+    )
+)
 
 
 # ── 2. Employee summary ─────────────────────────────────────────────────────
@@ -280,13 +309,24 @@ def _summary_run(ctx) -> ReportResult:
     from api.models import OnDutyPunchVerification
 
     base = _sessions_base(ctx)
-    per: dict[int, dict] = defaultdict(lambda: {
-        "sessions": 0, "approved": 0, "rejected": 0, "pending": 0, "days": set(), "dest": Counter(), "names": {}, "last": None,
-    })
+    per: dict[int, dict] = defaultdict(
+        lambda: {
+            "sessions": 0,
+            "approved": 0,
+            "rejected": 0,
+            "pending": 0,
+            "days": set(),
+            "dest": Counter(),
+            "names": {},
+            "last": None,
+        }
+    )
     session_ids: list[int] = []
-    for sid, eid, status, destination, created in base.order_by("created_at", "id").values_list(
-        "id", "employee_id", "status", "destination", "created_at"
-    ).iterator():
+    for sid, eid, status, destination, created in (
+        base.order_by("created_at", "id")
+        .values_list("id", "employee_id", "status", "destination", "created_at")
+        .iterator()
+    ):
         session_ids.append(sid)
         b = per[eid]
         day = S.ist_date(created)
@@ -294,6 +334,9 @@ def _summary_run(ctx) -> ReportResult:
         if status in APPROVED_STATUSES:
             b["approved"] += 1
             b["days"].add(day)
+            # Only a day HR approved is a day on duty: a rejected request never became attendance and a pending one
+            # is not decided yet.
+            b["last"] = day if b["last"] is None or day > b["last"] else b["last"]
         elif status == "rejected":
             b["rejected"] += 1
         else:
@@ -302,7 +345,6 @@ def _summary_run(ctx) -> ReportResult:
         if text:
             b["dest"][text.lower()] += 1
             b["names"].setdefault(text.lower(), text)
-        b["last"] = day if b["last"] is None or day > b["last"] else b["last"]
 
     punches = {
         r["employee_id"]: r
@@ -310,7 +352,9 @@ def _summary_run(ctx) -> ReportResult:
         .order_by()
         .values("employee_id")
         .annotate(
-            total=Count("id"), rejected=Count("id", filter=Q(status="rejected")), mocked=Count("id", filter=Q(is_mocked=True))
+            total=Count("id"),
+            rejected=Count("id", filter=Q(status="rejected")),
+            mocked=Count("id", filter=Q(is_mocked=True)),
         )
     }
     employees = {e.id: e for e in ctx.employees().filter(id__in=per.keys())}
@@ -321,22 +365,34 @@ def _summary_run(ctx) -> ReportResult:
             continue
         top = sorted(b["dest"].items(), key=lambda kv: (-kv[1], kv[0]))
         pr = punches.get(eid) or {}
-        rows.append({
-            **{k: v for k, v in S.base_cells(emp).items() if k != "branch"},
-            "_branch": S.branch_name(emp),
-            "sessions": b["sessions"],
-            "daysOnDuty": len(b["days"]),
-            "approved": b["approved"],
-            "rejected": b["rejected"],
-            "pending": b["pending"],
-            "punchesTotal": pr.get("total", 0),
-            "punchesRejected": pr.get("rejected", 0),
-            "mockedPunches": pr.get("mocked", 0),
-            "topDestination": b["names"][top[0][0]] if top else None,
-            "lastOnDuty": S.dstr(b["last"]),
-        })
+        rows.append(
+            {
+                **{k: v for k, v in S.base_cells(emp).items() if k != "branch"},
+                "_branch": S.branch_name(emp),
+                "sessions": b["sessions"],
+                "daysOnDuty": len(b["days"]),
+                "approved": b["approved"],
+                "rejected": b["rejected"],
+                "pending": b["pending"],
+                "punchesTotal": pr.get("total", 0),
+                "punchesRejected": pr.get("rejected", 0),
+                "mockedPunches": pr.get("mocked", 0),
+                "topDestination": b["names"][top[0][0]] if top else None,
+                "lastOnDuty": S.dstr(b["last"]),
+            }
+        )
     rows = S.department_subtotals(
-        rows, ("sessions", "daysOnDuty", "approved", "rejected", "pending", "punchesTotal", "punchesRejected", "mockedPunches")
+        rows,
+        (
+            "sessions",
+            "daysOnDuty",
+            "approved",
+            "rejected",
+            "pending",
+            "punchesTotal",
+            "punchesRejected",
+            "mockedPunches",
+        ),
     )
     data = [r for r in rows if r.get("_kind") != "subtotal"]
     busiest = max(data, key=lambda r: (r["sessions"], r["employeeCode"] or ""), default=None) if data else None
@@ -355,39 +411,42 @@ def _summary_run(ctx) -> ReportResult:
         ],
         notes=[
             "Approved days = distinct IST dates with at least one HR-approved (Active or Completed) session; rejected "
-            "days never count as attendance. Pending = still awaiting the HOD or HR decision.",
+            "days never count as attendance. Pending = still awaiting the HOD or HR decision. Last on duty = the latest "
+            "such approved day (blank when none of the employee's requests was approved).",
             "Punch counts include every captured on-duty punch (approved, pending and rejected). Top destination = the "
             "destination typed most often in the period.",
         ],
     )
 
 
-register(ReportSpec(
-    id="on-duty-employee-summary",
-    title="On-Duty Summary by Employee",
-    description="Per employee: on-duty sessions and approved days, decisions, punches and mock-GPS flags.",
-    category=S.CATEGORY,
-    family="on-duty",
-    variant="Employee summary",
-    icon="Users",
-    tags=("on duty", "on-duty", "summary", "employee"),
-    modules=("geo_attendance",),
-    filters=(F.date_range("thisMonth", "Request date"), *F.scope(status="all"), *_session_filter_specs()),
-    columns=(
-        *EMP_COLS,
-        ColumnSpec("sessions", "Sessions", INTEGER, 0.8, total="sum"),
-        ColumnSpec("daysOnDuty", "Approved days", INTEGER, 0.9, total="sum"),
-        ColumnSpec("approved", "Approved", INTEGER, 0.8, total="sum"),
-        ColumnSpec("rejected", "Rejected", INTEGER, 0.8, total="sum"),
-        ColumnSpec("pending", "Pending", INTEGER, 0.8, total="sum"),
-        ColumnSpec("punchesTotal", "Punches", INTEGER, 0.8, total="sum"),
-        ColumnSpec("punchesRejected", "Punches rejected", INTEGER, 0.9, total="sum"),
-        ColumnSpec("mockedPunches", "Mock GPS", INTEGER, 0.8, total="sum"),
-        ColumnSpec("topDestination", "Top destination", TEXT, 2.0),
-        ColumnSpec("lastOnDuty", "Last on duty", DATE, 1.1),
-    ),
-    run=_summary_run,
-))
+register(
+    ReportSpec(
+        id="on-duty-employee-summary",
+        title="On-Duty Summary by Employee",
+        description="Per employee: on-duty sessions and approved days, decisions, punches and mock-GPS flags.",
+        category=S.CATEGORY,
+        family="on-duty",
+        variant="Employee summary",
+        icon="Users",
+        tags=("on duty", "on-duty", "summary", "employee"),
+        modules=("geo_attendance",),
+        filters=(F.date_range("thisMonth", "Request date"), *F.scope(status="all"), *_session_filter_specs()),
+        columns=(
+            *EMP_COLS,
+            ColumnSpec("sessions", "Sessions", INTEGER, 1.0, total="sum"),
+            ColumnSpec("daysOnDuty", "Approved days", INTEGER, 1.1, total="sum"),
+            ColumnSpec("approved", "Approved", INTEGER, 1.1, total="sum"),
+            ColumnSpec("rejected", "Rejected", INTEGER, 1.1, total="sum"),
+            ColumnSpec("pending", "Pending", INTEGER, 1.0, total="sum"),
+            ColumnSpec("punchesTotal", "Punches", INTEGER, 1.0, total="sum"),
+            ColumnSpec("punchesRejected", "Punches rejected", INTEGER, 1.1, total="sum"),
+            ColumnSpec("mockedPunches", "Mock GPS", INTEGER, 0.9, total="sum"),
+            ColumnSpec("topDestination", "Top destination", TEXT, 2.0),
+            ColumnSpec("lastOnDuty", "Last on duty", DATE, 1.4),
+        ),
+        run=_summary_run,
+    )
+)
 
 
 # ── 3. Punch verification log (GPS & selfie audit) ──────────────────────────
@@ -406,47 +465,56 @@ def _punch_run(ctx) -> ReportResult:
     if ctx.param("accuracyWorse"):
         qs = qs.filter(accuracy_m__gt=int(ctx.param("accuracyWorse")))
     punches = list(
-        qs.select_related("employee__department", "employee__designation", "employee__branch", "session")
-        .order_by("punch_date", "punch_time", "id")[: ctx.row_limit]
+        qs.select_related("employee__department", "employee__designation", "employee__branch", "session").order_by(
+            "punch_date", "punch_time", "id"
+        )[: ctx.row_limit]
     )
     rows = []
     counts: Counter = Counter()
     accuracies: list[float] = []
     mocked = 0
+    counted = {v.id for v in S.shown(punches, ctx)}  # the extra row the runner uses to flag a cut is not counted
     for v in punches:
         lat, lng = f"{v.latitude:.6f}", f"{v.longitude:.6f}"
-        if v.accuracy_m is not None:
-            accuracies.append(v.accuracy_m)
-        counts[v.status] += 1
-        mocked += 1 if v.is_mocked else 0
-        rows.append({
-            **S.base_cells(v.employee),
-            "punchDate": v.punch_date.isoformat(),
-            "punchTime": S.tstr(v.punch_time),
-            "punchNumber": v.punch_number,
-            "punchType": v.punch_type,
-            "destination": v.session.destination,
-            "latitude": lat,
-            "longitude": lng,
-            "accuracyM": r2(v.accuracy_m),
-            "isMocked": "Mocked" if v.is_mocked else "Genuine",
-            "hasPhoto": S.yes_no(bool(v.photo.name)),
-            "mapLink": f"https://www.google.com/maps?q={lat},{lng}",
-            "sessionStatus": status_label(v.session.status),
-            "status": (v.status or "").title() or None,
-            "hrReviewedBy": v.hr_reviewed_by,
-            "hrReviewedAt": fmt_dt(v.hr_reviewed_at),
-            "hrReviewComment": v.hr_review_comment,
-        })
+        if v.id in counted:
+            if v.accuracy_m is not None:
+                accuracies.append(v.accuracy_m)
+            counts[v.status] += 1
+            mocked += 1 if v.is_mocked else 0
+        rows.append(
+            {
+                **S.base_cells(v.employee),
+                "punchDate": v.punch_date.isoformat(),
+                "punchTime": S.tstr(v.punch_time),
+                "punchNumber": v.punch_number,
+                "punchType": v.punch_type,
+                "destination": v.session.destination,
+                "latitude": lat,
+                "longitude": lng,
+                "accuracyM": r2(v.accuracy_m),
+                "isMocked": "Mocked" if v.is_mocked else "Genuine",
+                "hasPhoto": S.yes_no(bool(v.photo.name)),
+                "mapLink": f"https://www.google.com/maps?q={lat},{lng}",
+                "sessionStatus": status_label(v.session.status),
+                "status": (v.status or "").title() or None,
+                "hrReviewedBy": v.hr_reviewed_by,
+                "hrReviewedAt": fmt_dt(v.hr_reviewed_at),
+                "hrReviewComment": v.hr_review_comment,
+            }
+        )
     return ReportResult(
         rows=rows,
         summary=[
-            {"label": "Punches", "value": len(rows), "format": "integer"},
+            {"label": "Punches", "value": len(counted), "format": "integer"},
             {"label": "Approved", "value": counts["approved"], "format": "integer"},
             {"label": "Pending", "value": counts["pending"], "format": "integer"},
             {"label": "Rejected", "value": counts["rejected"], "format": "integer"},
             {"label": "Mock-GPS punches", "value": mocked, "format": "integer"},
-            {"label": "Average accuracy (m)", "value": round(sum(accuracies) / len(accuracies), 1) if accuracies else None, "format": "number"},
+            {
+                "label": "Average accuracy (m)",
+                "value": round(sum(accuracies) / len(accuracies), 1) if accuracies else None,
+                "format": "number",
+            },
         ],
         notes=[
             "Date and time are the punch as captured on the device (IST). Coordinates are exact; open the map link to "
@@ -455,46 +523,55 @@ def _punch_run(ctx) -> ReportResult:
             "Geo Attendance screen.",
             "A punch under a session that is still pending stays Pending until HR decides the session; punches "
             "voided by a rejected request carry the comment 'Voided automatically ...'.",
+            *S.cut_note(punches, ctx),
         ],
     )
 
 
-register(ReportSpec(
-    id="on-duty-punch-verification-log",
-    title="On-Duty Punch Verification Log",
-    description="Every GPS and selfie on-duty punch with location, accuracy, mock-GPS flag and HR decision, for audit.",
-    category=S.CATEGORY,
-    family="on-duty",
-    variant="Punch verification",
-    icon="ScanFace",
-    tags=("on duty", "gps", "selfie", "mock location", "audit", "punch"),
-    modules=("geo_attendance",),
-    filters=(
-        F.date_range("thisMonth", "Punch date"),
-        *F.scope(status="all"),
-        F.select("status", "Punch status", (("pending", "Pending"), ("approved", "Approved"), ("rejected", "Rejected"))),
-        F.boolean("mockedOnly", "Only mock-GPS punches"),
-        F.select("accuracyWorse", "GPS accuracy", (("50", "Worse than 50 m"), ("100", "Worse than 100 m"), ("200", "Worse than 200 m"))),
-    ),
-    columns=(
-        *EMP_COLS[:3],
-        S.BRANCH_COL,
-        ColumnSpec("punchDate", "Date", DATE, 1.1),
-        ColumnSpec("punchTime", "Time", TIME, 0.7),
-        ColumnSpec("punchNumber", "Punch no.", INTEGER, 0.7),
-        ColumnSpec("punchType", "In/Out", BADGE, 0.7),
-        ColumnSpec("destination", "Destination", TEXT, 1.8),
-        ColumnSpec("latitude", "Latitude", TEXT, 1.0),
-        ColumnSpec("longitude", "Longitude", TEXT, 1.0),
-        ColumnSpec("accuracyM", "Accuracy (m)", NUMBER, 0.9, total="avg"),
-        ColumnSpec("isMocked", "GPS", BADGE, 0.9),
-        ColumnSpec("hasPhoto", "Photo", BADGE, 0.7),
-        ColumnSpec("mapLink", "Map", TEXT, 2.4),
-        ColumnSpec("sessionStatus", "Session", BADGE, 0.9),
-        ColumnSpec("status", "Punch status", BADGE, 0.9),
-        ColumnSpec("hrReviewedBy", "Reviewed by", TEXT, 1.2),
-        ColumnSpec("hrReviewedAt", "Reviewed on", DATETIME, 1.4),
-        ColumnSpec("hrReviewComment", "HR comment", TEXT, 1.8),
-    ),
-    run=_punch_run,
-))
+register(
+    ReportSpec(
+        id="on-duty-punch-verification-log",
+        title="On-Duty Punch Verification Log",
+        description="Every GPS and selfie on-duty punch with location, accuracy, mock-GPS flag and HR decision, for audit.",
+        category=S.CATEGORY,
+        family="on-duty",
+        variant="Punch verification",
+        icon="Fingerprint",
+        tags=("on duty", "gps", "selfie", "mock location", "audit", "punch"),
+        modules=("geo_attendance",),
+        filters=(
+            F.date_range("thisMonth", "Punch date"),
+            *F.scope(status="all"),
+            F.select(
+                "status", "Punch status", (("pending", "Pending"), ("approved", "Approved"), ("rejected", "Rejected"))
+            ),
+            F.boolean("mockedOnly", "Only mock-GPS punches"),
+            F.select(
+                "accuracyWorse",
+                "GPS accuracy",
+                (("50", "Worse than 50 m"), ("100", "Worse than 100 m"), ("200", "Worse than 200 m")),
+            ),
+        ),
+        columns=(
+            *S.LEAD_COLS,
+            S.BRANCH_COL,
+            ColumnSpec("punchDate", "Date", DATE, 1.35),
+            ColumnSpec("punchTime", "Time", TIME, 0.7),
+            ColumnSpec("punchNumber", "Punch no.", INTEGER, 0.7),
+            ColumnSpec("punchType", "In/Out", BADGE, 0.7),
+            ColumnSpec("destination", "Destination", TEXT, 1.8),
+            ColumnSpec("latitude", "Latitude", TEXT, 1.0),
+            ColumnSpec("longitude", "Longitude", TEXT, 1.0),
+            ColumnSpec("accuracyM", "Accuracy (m)", NUMBER, 0.9),
+            ColumnSpec("isMocked", "GPS", BADGE, 0.9),
+            ColumnSpec("hasPhoto", "Photo", BADGE, 0.7),
+            ColumnSpec("mapLink", "Map", TEXT, 2.4),
+            ColumnSpec("sessionStatus", "Session", BADGE, 0.9),
+            ColumnSpec("status", "Punch status", BADGE, 0.9),
+            ColumnSpec("hrReviewedBy", "Reviewed by", TEXT, 1.2),
+            ColumnSpec("hrReviewedAt", "Reviewed on", DATETIME, 1.4),
+            ColumnSpec("hrReviewComment", "HR comment", TEXT, 1.8),
+        ),
+        run=_punch_run,
+    )
+)

@@ -22,6 +22,16 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { ArrowLeft } from "lucide-react";
 import { CircleLoader } from "@/components/ui/CircleLoader";
+import SalarySplitFields from "@/components/SalarySplitFields";
+import {
+  EMPTY_SPLIT,
+  defaultSplit,
+  splitFromBreakup,
+  splitPayload,
+  type SplitKey,
+  type SplitValues,
+} from "@/lib/salary-split";
+import { addSplitIssue, splitErrorMessage, splitSchema } from "@/lib/salary-split-form";
 
 const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
 
@@ -39,6 +49,7 @@ const schema = z.object({
   branchId: z.string().optional(),
   salaryType: z.string().optional(),
   salaryAmount: z.string().optional(),
+  split: splitSchema,
   salaryPerShift: z.string().optional(),
   joinDate: z.string().optional(),
   bankName: z.string().optional(),
@@ -53,9 +64,21 @@ const schema = z.object({
   biometricDeviceId: z.string().optional(),
   bloodGroup: z.string().optional(),
   emergencyContact: z.string().optional(),
+}).superRefine((data, ctx) => {
+  // A salary is always split 50% + 50% (Basic/DA/Retention | Other/Petrol/RHA/Special/CA); production pay is per shift.
+  if (data.employmentType !== "production") addSplitIssue(ctx, data.salaryAmount, data.split);
 });
 
 type FormData = z.infer<typeof schema>;
+
+// The split to show for a stored employee: the one on record, else (staff with a salary but no split yet, i.e. created
+// before the split existed) the automatic 50% + 50% one as a suggestion to review and save.
+function initialSplit(e: Employee): SplitValues {
+  const stored = splitFromBreakup(e.salaryBreakup);
+  if (stored) return stored;
+  const paidBySalary = (e.employmentType ?? "staff") !== "production" && !!e.salaryAmount;
+  return (paidBySalary ? defaultSplit(e.salaryAmount) : null) ?? EMPTY_SPLIT;
+}
 
 // Pure mapping from the stored record to form field strings -called exactly
 // once, by the parent, only after the employee has actually loaded (see
@@ -79,6 +102,7 @@ function employeeToFormData(employee: Employee): FormData {
     branchId: e.branchId ? String(e.branchId) : "",
     salaryType: e.salaryType ?? "monthly",
     salaryAmount: e.salaryAmount ? String(e.salaryAmount) : "",
+    split: initialSplit(employee),
     salaryPerShift: e.salaryPerShift ? String(e.salaryPerShift) : "",
     joinDate: e.joinDate ?? "",
     bankName: e.bankName ?? "",
@@ -157,6 +181,18 @@ function EditEmployeeForm({ empId, employee }: { empId: number; employee: Employ
   });
 
   const employmentType = form.watch("employmentType");
+  const salaryAmount = form.watch("salaryAmount");
+  const splitValues = form.watch("split");
+
+  // No split on record yet (older employee): the one shown is a suggestion, and saving records it.
+  const [splitNotRecorded] = useState(
+    () => (employee.employmentType ?? "staff") !== "production" && !!employee.salaryAmount && !employee.salaryBreakup,
+  );
+
+  // The split is worked out as soon as the salary is changed; every amount stays editable.
+  const setSplit = (values: SplitValues) => form.setValue("split", values, { shouldDirty: true });
+  const fillSplitFromSalary = (amount: string | undefined) => setSplit(defaultSplit(amount) ?? EMPTY_SPLIT);
+  const setSplitField = (key: SplitKey, value: string) => form.setValue(`split.${key}`, value, { shouldDirty: true });
 
   const onSubmit = (data: FormData) => {
     mutation.mutate(
@@ -176,6 +212,7 @@ function EditEmployeeForm({ empId, employee }: { empId: number; employee: Employ
           branchId: data.branchId ? Number(data.branchId) : null,
           salaryType: data.salaryType,
           salaryAmount: data.employmentType === "production" ? undefined : (data.salaryAmount ? Number(data.salaryAmount) : undefined),
+          salaryBreakup: data.employmentType === "production" || !data.salaryAmount ? undefined : splitPayload(data.split),
           salaryPerShift: data.employmentType === "production" ? (data.salaryPerShift ? Number(data.salaryPerShift) : undefined) : undefined,
           joinDate: data.joinDate || undefined,
           bankName: data.bankName || undefined,
@@ -224,7 +261,15 @@ function EditEmployeeForm({ empId, employee }: { empId: number; employee: Employ
         </div>
 
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
+          <form
+            onSubmit={form.handleSubmit(onSubmit, (errors) => {
+              const problem = splitErrorMessage(errors);
+              if (!problem) return;
+              toast({ title: "Fix the salary split", description: problem, variant: "destructive" });
+              document.querySelector('[data-testid="salary-split"]')?.scrollIntoView({ behavior: "smooth", block: "center" });
+            })}
+            className="space-y-5"
+          >
 
             {/* Profile Photo */}
             <Card>
@@ -417,8 +462,15 @@ function EditEmployeeForm({ empId, employee }: { empId: number; employee: Employ
                       </FormItem>
                     )} />
                     <FormField control={form.control} name="salaryAmount" render={({ field }) => (
-                      <FormItem><FormLabel>Amount (₹) *</FormLabel><FormControl><Input type="number" data-testid="input-salary-amount" {...field} /></FormControl><FormMessage /></FormItem>
+                      <FormItem><FormLabel>Amount (₹) *</FormLabel><FormControl><Input type="number" data-testid="input-salary-amount" {...field} onChange={(e) => { field.onChange(e); fillSplitFromSalary(e.target.value); }} /></FormControl><FormMessage /></FormItem>
                     )} />
+                    <SalarySplitFields
+                      total={salaryAmount ?? ""}
+                      values={splitValues}
+                      onChange={setSplitField}
+                      onReset={() => fillSplitFromSalary(salaryAmount)}
+                      notRecorded={splitNotRecorded}
+                    />
                   </>
                 )}
               </CardContent>

@@ -15,7 +15,7 @@ from datetime import date
 
 from api.models import AttendanceDayRecord, CasualLeaveRequest
 
-from ..common import EMP_COLS, emp_cells
+from ..common import emp_cells
 from ..filters import date_range, period, scope, select
 from ..formatting import MONTH_ABBR, fmt_dt
 from ..registry import register
@@ -31,20 +31,20 @@ STATUS_OPTIONS = (("pending", "Pending"), ("approved", "Approved"), ("rejected",
 # ══════════════════════════════════════════════════════════════════════════════
 
 _REGISTER_COLUMNS = (
-    *EMP_COLS,
-    ColumnSpec("joinDate", "Joined", DATE, 1.1),
-    ColumnSpec("serviceMonths", "Service (months)", INTEGER, 0.8),
-    ColumnSpec("clDate", "CL date", DATE, 1.1),
-    ColumnSpec("weekday", "Day", TEXT, 0.7),
-    ColumnSpec("reason", "Reason", TEXT, 2.0),
-    ColumnSpec("appliedOn", "Applied on", DATETIME, 1.4),
-    ColumnSpec("status", "Status", BADGE, 1.0),
-    ColumnSpec("reviewedBy", "Reviewed by", TEXT, 1.5),
-    ColumnSpec("reviewerRole", "Role", BADGE, 0.8),
-    ColumnSpec("reviewedAt", "Reviewed at", DATETIME, 1.4),
-    ColumnSpec("turnaroundHours", "Turnaround (hrs)", HOURS, 0.9),
-    ColumnSpec("reviewComment", "Comment", TEXT, 1.5),
-    ColumnSpec("attendanceOutcome", "Attendance outcome", BADGE, 1.6),
+    *C.emp_columns(name=1.2, dept=1.5, designation=1.55),
+    ColumnSpec("joinDate", "Joined", DATE, 1.5),
+    ColumnSpec("serviceMonths", "Months of service", INTEGER, 1.0),
+    ColumnSpec("clDate", "CL date", DATE, 1.4),
+    ColumnSpec("weekday", "Day", TEXT, 0.6),
+    ColumnSpec("reason", "Reason", TEXT, 1.1),
+    ColumnSpec("appliedOn", "Applied on", DATETIME, 1.45),
+    ColumnSpec("status", "Status", BADGE, 1.1),
+    ColumnSpec("reviewedBy", "Reviewed by", TEXT, 1.35),
+    ColumnSpec("reviewerRole", "Role", BADGE, 0.6),
+    ColumnSpec("reviewedAt", "Reviewed at", DATETIME, 1.45),
+    ColumnSpec("turnaroundHours", "Turnaround (hrs)", HOURS, 1.4),
+    ColumnSpec("reviewComment", "Comment", TEXT, 1.2),
+    ColumnSpec("attendanceOutcome", "Outcome", BADGE, 1.2),
 )
 
 
@@ -54,11 +54,11 @@ def _outcome(status: str, record) -> str | None:
         return "Awaiting decision"
     note = (record[1] if record else "") or ""
     if status == "approved":
-        return "Paid present" if note.startswith("Casual Leave (paid)") else "Not reflected in attendance"
+        return "Paid present" if note.startswith("Casual Leave (paid)") else "Not reflected"
     if status == "rejected":
         if record and record[0] == "on_leave" and note.startswith("Casual Leave rejected"):
             return "Marked unpaid leave"
-        return "Not reflected in attendance"
+        return "Not reflected"
     return None
 
 
@@ -89,28 +89,30 @@ def _run_cl_register(ctx) -> ReportResult:
     counts = defaultdict(int)
     for r in items:
         emp = r.employee
-        st = C.status_badge(r.status)
+        st = C.status_key(r.status)
         counts[st] += 1
         joined = _parse_join_date(emp.join_date)
         hours = C.hours_between(r.created_at, r.reviewed_at)
         if hours is not None:
             turnarounds.append(hours)
-        rows.append({
-            **emp_cells(emp),
-            "joinDate": joined.isoformat() if joined else None,
-            "serviceMonths": _service_months(emp, r.date),
-            "clDate": r.date.isoformat(),
-            "weekday": r.date.strftime("%a"),
-            "reason": (r.reason or "").strip() or None,
-            "appliedOn": fmt_dt(r.created_at),
-            "status": st,
-            "reviewedBy": r.reviewed_by or None,
-            "reviewerRole": C.role_label(r.reviewer_role),
-            "reviewedAt": fmt_dt(r.reviewed_at),
-            "turnaroundHours": hours,
-            "reviewComment": (r.review_comment or "").strip() or None,
-            "attendanceOutcome": _outcome(st, records.get((r.employee_id, r.date))),
-        })
+        rows.append(
+            {
+                **emp_cells(emp),
+                "joinDate": joined.isoformat() if joined else None,
+                "serviceMonths": _service_months(emp, r.date),
+                "clDate": r.date.isoformat(),
+                "weekday": r.date.strftime("%a"),
+                "reason": (r.reason or "").strip() or None,
+                "appliedOn": fmt_dt(r.created_at),
+                "status": C.status_label(r.status),
+                "reviewedBy": r.reviewed_by or None,
+                "reviewerRole": C.role_label(r.reviewer_role),
+                "reviewedAt": fmt_dt(r.reviewed_at),
+                "turnaroundHours": hours,
+                "reviewComment": (r.review_comment or "").strip() or None,
+                "attendanceOutcome": _outcome(st, records.get((r.employee_id, r.date))),
+            }
+        )
 
     summary = [
         {"label": "Casual leave requests", "value": len(rows), "format": "integer"},
@@ -118,40 +120,45 @@ def _run_cl_register(ctx) -> ReportResult:
         {"label": "Rejected", "value": counts["rejected"], "format": "integer"},
         {"label": "Pending", "value": counts["pending"], "format": "integer"},
         {"label": "Employees", "value": len({r["employeeCode"] for r in rows}), "format": "integer"},
-        {"label": "Average turnaround (hrs)",
-         "value": round(sum(turnarounds) / len(turnarounds), 2) if turnarounds else None, "format": "hours"},
+        {
+            "label": "Average turnaround (hrs)",
+            "value": round(sum(turnarounds) / len(turnarounds), 2) if turnarounds else None,
+            "format": "hours",
+        },
     ]
     notes = [
         "An approved casual leave is written to attendance as a paid full present day; a rejected one is written "
-        "as an unpaid leave day even if the employee punched that day. 'Attendance outcome' checks the stored "
-        "attendance record: 'Not reflected in attendance' means the day record was removed or later changed by "
+        "as an unpaid leave day even if the employee punched that day. 'Outcome' checks the stored "
+        "attendance record: 'Not reflected' means the day record was removed or later changed by "
         "an HR override, and a request HR deleted leaves its attendance entry behind.",
-        "Service (months) is completed months of service on the casual leave date. Turnaround is the time from "
+        "Months of service = completed months of service on the casual leave date. Turnaround is the time from "
         "filing to the reviewer's decision. All times are IST. One request per calendar month is allowed, so two "
         "in a month means the first was rejected.",
     ]
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="casual-leave-register",
-    title="Casual Leave Records",
-    description="Every casual leave request with service length, reviewer, turnaround and the attendance outcome it produced.",
-    category=CATEGORY,
-    icon="CalendarCheck",
-    tags=("casual leave", "cl", "paid leave"),
-    family="casual-leave",
-    variant="Records",
-    modules=("casual_leave",),
-    filters=(
-        date_range(label="Casual leave date"),
-        *scope(status="all"),
-        select("status", "Status", STATUS_OPTIONS),
-        select("reviewerRole", "Reviewed by", (("hr", "HR"), ("dept_head", "Department head"))),
-    ),
-    columns=_REGISTER_COLUMNS,
-    run=_run_cl_register,
-))
+register(
+    ReportSpec(
+        id="casual-leave-register",
+        title="Casual Leave Records",
+        description="Every casual leave request with service length, reviewer, turnaround and the attendance outcome it produced.",
+        category=CATEGORY,
+        icon="CalendarCheck",
+        tags=("casual leave", "cl", "paid leave"),
+        family="casual-leave",
+        variant="Records",
+        modules=("casual_leave",),
+        filters=(
+            date_range(label="Casual leave date"),
+            *scope(status="all"),
+            select("status", "Status", STATUS_OPTIONS),
+            select("reviewerRole", "Reviewed by", (("hr", "HR"), ("dept_head", "Department head"))),
+        ),
+        columns=_REGISTER_COLUMNS,
+        run=_run_cl_register,
+    )
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -166,16 +173,16 @@ _ELIGIBILITY_LABELS = {
 }
 
 _ELIGIBILITY_COLUMNS = (
-    *EMP_COLS,
-    ColumnSpec("joinDate", "Joined", DATE, 1.1),
-    ColumnSpec("serviceMonths", "Service (months)", INTEGER, 0.8),
-    ColumnSpec("eligibleFrom", "Eligible from", DATE, 1.1),
-    ColumnSpec("eligible", "Eligibility", BADGE, 1.2),
-    ColumnSpec("reason", "Reason", TEXT, 2.2),
+    *C.emp_columns(name=2.0, dept=1.5, designation=1.4),
+    ColumnSpec("joinDate", "Joined", DATE, 1.5),
+    ColumnSpec("serviceMonths", "Months of service", INTEGER, 1.0),
+    ColumnSpec("eligibleFrom", "Eligible from", DATE, 1.3),
+    ColumnSpec("eligible", "Eligibility", BADGE, 1.3),
+    ColumnSpec("reason", "Reason", TEXT, 2.3),
     ColumnSpec("approvedThisYear", "Approved (year)", INTEGER, 0.9, total="sum"),
     ColumnSpec("pendingThisYear", "Pending (year)", INTEGER, 0.9, total="sum"),
     ColumnSpec("remainingThisYear", "Remaining (year)", INTEGER, 0.9, total="sum"),
-    ColumnSpec("monthsUsed", "Months used", TEXT, 1.8),
+    ColumnSpec("monthsUsed", "Months used", TEXT, 1.6),
 )
 
 
@@ -188,7 +195,10 @@ def _run_cl_eligibility(ctx) -> ReportResult:
 
     usage: dict[int, dict] = defaultdict(lambda: {"approved": 0, "pending": 0, "months": {}})
     for eid, d, st in CasualLeaveRequest.objects.filter(
-        ctx.emp_q("employee__"), employee__employment_type="staff", date__year=yr, status__in=("approved", "pending"),
+        ctx.emp_q("employee__"),
+        employee__employment_type="staff",
+        date__year=yr,
+        status__in=("approved", "pending"),
     ).values_list("employee_id", "date", "status"):
         u = usage[eid]
         u[st] += 1
@@ -216,19 +226,21 @@ def _run_cl_eligibility(ctx) -> ReportResult:
         used_text = ", ".join(
             MONTH_ABBR[m - 1] + (" (pending)" if s == "pending" else "") for m, s in sorted(u["months"].items())
         )
-        rows.append({
-            **emp_cells(emp),
-            "joinDate": joined.isoformat() if joined else None,
-            "serviceMonths": months,
-            "eligibleFrom": C.add_months(joined, ELIGIBILITY_MONTHS).isoformat() if joined else None,
-            "eligible": _ELIGIBILITY_LABELS[key],
-            "reason": reason,
-            "approvedThisYear": u["approved"],
-            "pendingThisYear": u["pending"],
-            "remainingThisYear": max(0, CL_YEARLY_ENTITLEMENT - u["approved"]),
-            "monthsUsed": used_text or None,
-            "_key": key,
-        })
+        rows.append(
+            {
+                **emp_cells(emp),
+                "joinDate": joined.isoformat() if joined else None,
+                "serviceMonths": months,
+                "eligibleFrom": C.add_months(joined, ELIGIBILITY_MONTHS).isoformat() if joined else None,
+                "eligible": _ELIGIBILITY_LABELS[key],
+                "reason": reason,
+                "approvedThisYear": u["approved"],
+                "pendingThisYear": u["pending"],
+                "remainingThisYear": max(0, CL_YEARLY_ENTITLEMENT - u["approved"]),
+                "monthsUsed": used_text or None,
+                "_key": key,
+            }
+        )
 
     count = defaultdict(int)
     for r in rows:
@@ -238,9 +250,16 @@ def _run_cl_eligibility(ctx) -> ReportResult:
         {"label": "Not yet eligible", "value": count["not_eligible_service"], "format": "integer"},
         {"label": "Used this month", "value": count["used_this_month"], "format": "integer"},
         {"label": "No join date", "value": count["no_join_date"], "format": "integer"},
-        {"label": f"Approved casual leave in {yr}", "value": sum(r["approvedThisYear"] for r in rows), "format": "integer"},
-        {"label": f"No approved casual leave in {yr}", "value": sum(1 for r in rows if not r["approvedThisYear"]),
-         "format": "integer"},
+        {
+            "label": f"Approved casual leave in {yr}",
+            "value": sum(r["approvedThisYear"] for r in rows),
+            "format": "integer",
+        },
+        {
+            "label": f"No approved casual leave in {yr}",
+            "value": sum(1 for r in rows if not r["approvedThisYear"]),
+            "format": "integer",
+        },
     ]
     notes = [
         f"Eligibility is judged as of the 15th of the selected month (as on the HR eligibility board): staff only, "
@@ -254,21 +273,23 @@ def _run_cl_eligibility(ctx) -> ReportResult:
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="casual-leave-eligibility-usage",
-    title="Casual Leave Eligibility & Usage",
-    description="Staff service length, casual leave eligibility, months already used and the yearly entitlement left.",
-    category=CATEGORY,
-    icon="CalendarCheck",
-    tags=("casual leave", "eligibility", "entitlement"),
-    family="casual-leave",
-    variant="Eligibility & Usage",
-    modules=("casual_leave",),
-    filters=(
-        period(label="Eligibility month"),
-        *scope(employment=False, status="active"),
-        select("eligibility", "Eligibility", tuple(_ELIGIBILITY_LABELS.items())),
-    ),
-    columns=_ELIGIBILITY_COLUMNS,
-    run=_run_cl_eligibility,
-))
+register(
+    ReportSpec(
+        id="casual-leave-eligibility-usage",
+        title="Casual Leave Eligibility & Usage",
+        description="Staff service length, casual leave eligibility, months already used and the yearly entitlement left.",
+        category=CATEGORY,
+        icon="CalendarCheck",
+        tags=("casual leave", "eligibility", "entitlement"),
+        family="casual-leave",
+        variant="Eligibility & Usage",
+        modules=("casual_leave",),
+        filters=(
+            period(label="Eligibility month"),
+            *scope(employment=False, status="active"),
+            select("eligibility", "Eligibility", tuple(_ELIGIBILITY_LABELS.items())),
+        ),
+        columns=_ELIGIBILITY_COLUMNS,
+        run=_run_cl_eligibility,
+    )
+)

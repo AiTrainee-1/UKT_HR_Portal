@@ -96,8 +96,14 @@ def read_settings():
     row = (
         PayrollSettings.objects.filter(pk=1)
         .only(
-            "compensation_feature_enabled", "ot_detection_enabled", "ot_threshold_minutes", "ot_compensation_type",
-            "min_wage_rate", "staff_payroll_rules_enabled", "prod_payroll_rules_enabled", "prod_pf_ef_enabled",
+            "compensation_feature_enabled",
+            "ot_detection_enabled",
+            "ot_threshold_minutes",
+            "ot_compensation_type",
+            "min_wage_rate",
+            "staff_payroll_rules_enabled",
+            "prod_payroll_rules_enabled",
+            "prod_pf_ef_enabled",
         )
         .first()
     )
@@ -190,6 +196,60 @@ def month_end(year: int, month: int) -> date:
     return nxt - timedelta(days=1)
 
 
+def provisional_slip_ids(slips, year: int, month: int, today: date) -> set[int]:
+    """Ids of the STAFF slips whose figures were computed before their month ended.
+
+    Such a slip counts the days still to come as absent, so its PF / ESI / late / loss-of-pay figures understate
+    pay until payroll is regenerated after the month closes - and it stays understated for as long as nobody does.
+    While the month is running every staff slip is provisional. Afterwards a slip is provisional when the last
+    stored evidence of a computation is on or before the last day of the month: ``SalarySlip.generated_at`` is
+    auto_now_add (the FIRST generation) while regenerating upserts the Payroll row, whose ``updated_at`` is
+    auto_now, so the later of the two is the best stored evidence (an edit of the payroll row after month end
+    cannot be told from a regeneration, so it counts as one). Production slips are never provisional.
+    One indexed query for the payroll rows, only when the month has ended."""
+    staff = [s for s in slips if slip_type(s) == STAFF]
+    if not staff:
+        return set()
+    last_day = month_end(year, month)
+    if last_day >= today:
+        return {s.id for s in staff}
+    from api.clock import FACTORY_TZ
+    from api.models import Payroll
+
+    touched = dict(
+        Payroll.objects.filter(
+            employee_id__in={s.employee_id for s in staff},
+            year=year,
+            month=month,
+            period_start__isnull=True,
+            week_number__isnull=True,
+        ).values_list("employee_id", "updated_at")
+    )
+    out: set[int] = set()
+    for s in staff:
+        stamps = [x for x in (s.generated_at, touched.get(s.employee_id)) if x is not None]
+        if stamps and max(stamps).astimezone(FACTORY_TZ).date() <= last_day:
+            out.add(s.id)
+    return out
+
+
+def provisional_note(n_provisional: int, year: int, month: int, today: date) -> str | None:
+    """The warning printed under a statement that contains provisional staff slips (None when there are none)."""
+    if not n_provisional:
+        return None
+    if month_end(year, month) >= today:
+        return (
+            f"PROVISIONAL: {month_label(year, month)} has not ended, so its staff slips count the remaining working "
+            "days as absent. PF / ESI / late / loss-of-pay figures will change when payroll is regenerated after the "
+            "month closes."
+        )
+    return (
+        f"PROVISIONAL: {n_provisional} staff slip(s) for {month_label(year, month)} were generated before the month "
+        "ended and not regenerated since, so they count the remaining working days as absent and understate pay. "
+        "Regenerate payroll to correct them."
+    )
+
+
 def dept_name(emp) -> str:
     return emp.department.name if emp.department_id else "Unassigned"
 
@@ -217,6 +277,14 @@ def dept_subtotals(rows: list[dict], keys: list[str], label_key: str = "employee
 
 def sort_key_dept_code(row: dict):
     return ((row.get("department") or "Unassigned").lower(), natural_key(row.get("employeeCode")))
+
+
+def no_slips_note(year: int, month: int) -> str:
+    """Why a slip-based report is empty because payroll simply has not been generated (not because all is well)."""
+    return (
+        f"No salary slips exist for {month_label(year, month)} (within your access and filters). Slips are created by "
+        "Generate Payroll - a month that has not been generated yet shows nothing here."
+    )
 
 
 def feature_off_result_notes(settings, *, need_detection: bool = False) -> list[str]:

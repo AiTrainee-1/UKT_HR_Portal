@@ -1,11 +1,15 @@
 // compensation: hooks/types split out of the former single custom-hooks.ts (see ./index.ts).
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { customFetch } from "../custom-fetch";
+import type { SplitKey } from "../../salary-split";
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Compensation -read-only CTC breakdown (Compensation.tsx)
 // ═══════════════════════════════════════════════════════════════════════════
 
+// The salary is shown as the employee's 50% + 50% split (lib/salary-split.ts): Basic, DA, Retention Allowance | Other,
+// Petrol, RHA, Special Allowance, CA. All eight are null for an employee with no monthly salary. `splitRecorded` is false
+// when the split shown is the automatic one because none has been saved yet. Employer PF is worked out on the first portion.
 export type CompensationRow = {
   employeeId: number;
   employeeCode: string;
@@ -14,14 +18,14 @@ export type CompensationRow = {
   designation: string | null;
   branch: string | null;
   employmentType: string | null;
-  basic: number;
-  hra: number;
-  allowances: number;
+  firstPortion: number | null;
+  secondPortion: number | null;
+  splitRecorded: boolean;
   employerPf: number;
   employerEsi: number;
   grossMonthly: number;
   annualCtc: number;
-};
+} & Record<SplitKey, number | null>;
 
 export type CompensationParams = {
   departmentId?: number;

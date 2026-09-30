@@ -12,6 +12,9 @@ Design rules every attendance_core report follows (see also reporting/README.md)
   engine's own helpers (``resolve_day_punch_logs`` for cross-midnight exits, ``_get_shift_for_date``,
   ``_t2s_minute`` ...). IN / OUT is always positional (even index = IN); the stored ``punch_type``
   is unreliable.
+* A stored verdict is only as fresh as the last time somebody opened the day in Attendance. When punches changed, or a
+  leave was approved, after it was stored, the day keeps its stored status but carries an "Out of date" flag
+  (build_day) -- and the absentee list treats a leave approved after the fact as leave, not absence.
 * Everything is loaded once per run (constant query count) -- no per-employee or per-day queries.
 """
 
@@ -65,6 +68,10 @@ L_HOLIDAY = "Holiday"
 L_WEEKLY_OFF = "Weekly Off"
 L_CASUAL = "Casual Leave"
 L_COMP = "Comp Off"
+
+# Flags a day carries when its stored verdict no longer matches the facts around it (see build_day).
+STALE_PUNCHES = "Out of date: punches changed after this day was stored - open it in Attendance to recompute"
+STALE_LEAVE = "Out of date: leave approved after this day was stored - open it in Attendance to recompute"
 
 KIND_LABELS = {
     "present": L_PRESENT,
@@ -121,9 +128,11 @@ def staff_type_filter(default: str = "staff"):
     (the shared ``employmentType`` filter has no server-side default). Reports that mirror the legacy
     staff-only Report Log pages default to Staff; the user can still pick Production or All."""
     return select(
-        "staffType", "Employee type",
+        "staffType",
+        "Employee type",
         [("staff", "Staff"), ("production", "Production"), ("all", "All employees")],
-        default=default, placeholder="Staff",
+        default=default,
+        placeholder="Staff",
         help="Production employees are judged on shift credit (0.25 steps), staff on the two-half rule.",
     )
 
@@ -159,9 +168,7 @@ def scoped_employees(ctx, *, order: str = "dept", search: str | None = None, lim
         qs = qs.filter(employment_type=staff_type)
     term = (search if search is not None else ctx.params.get("search") or "").strip()
     if term:
-        qs = qs.filter(
-            Q(employee_code__icontains=term) | Q(first_name__icontains=term) | Q(last_name__icontains=term)
-        )
+        qs = qs.filter(Q(employee_code__icontains=term) | Q(first_name__icontains=term) | Q(last_name__icontains=term))
     dept = F("department__name").asc(nulls_last=True)
     if order == "first_name":
         qs = qs.order_by("first_name", "last_name", "employee_code")
@@ -213,7 +220,7 @@ def device_of(source: str | None) -> str | None:
     s = source or ""
     if not s.startswith("biometric"):
         return None
-    rest = s[len("biometric"):].lstrip(":")
+    rest = s[len("biometric") :].lstrip(":")
     if not rest:
         return None
     if rest == "adms":
@@ -250,9 +257,7 @@ def worked_minutes(secs: list[int], shift, deduct_lunch: bool = True) -> tuple[i
     return total, basis
 
 
-def punch_exceptions(
-    secs: list[int], rec, *, is_today: bool, has_leave: bool, is_holiday: bool
-) -> list[str]:
+def punch_exceptions(secs: list[int], rec, *, is_today: bool, has_leave: bool, is_holiday: bool) -> list[str]:
     """Exception keys (EXC_*) for one working day. ``secs`` are the day's date-aware punch seconds."""
     out: list[str] = []
     n = len(secs)
@@ -285,8 +290,16 @@ class AttendanceData:
     at most four more). ``punches`` / ``leaves`` / ``permissions`` / ``service`` switch the optional loads."""
 
     def __init__(
-        self, ctx, employees: list, date_from: dt.date, date_to: dt.date, *,
-        punches: bool = False, leaves: bool = False, permissions: bool = False, service: bool = False,
+        self,
+        ctx,
+        employees: list,
+        date_from: dt.date,
+        date_to: dt.date,
+        *,
+        punches: bool = False,
+        leaves: bool = False,
+        permissions: bool = False,
+        service: bool = False,
     ):
         self.today: dt.date = ctx.today
         self.employees = employees
@@ -308,7 +321,9 @@ class AttendanceData:
         self._day_punches: dict[tuple[int, dt.date], list[DayPunch]] = {}
         self._prod_config = None
         self._rec_emps: set[int] = set()
+        self._punch_ids: set[int] = set()  # employees whose raw punches are loaded (all of them, or a few)
         self.service_masking = service
+        self.has_punch_data = punches  # False: the punches were not loaded, so the day's own punch count stands in
         if not ids:
             return
 
@@ -318,8 +333,8 @@ class AttendanceData:
         }
         self._rec_emps = {eid for eid, _d in self.records}
         self.holidays = {}
-        for d, name in Holiday.objects.filter(date__gte=date_from, date__lte=date_to).order_by("id").values_list(
-            "date", "name"
+        for d, name in (
+            Holiday.objects.filter(date__gte=date_from, date__lte=date_to).order_by("id").values_list("date", "name")
         ):
             self.holidays.setdefault(d, name)
 
@@ -334,16 +349,9 @@ class AttendanceData:
             self.assignments[a.employee_id].append(a)
 
         if punches:
-            raw: dict[int, dict[dt.date, list[Punch]]] = defaultdict(lambda: defaultdict(list))
-            for eid, d, t, src in (
-                AttendanceLog.objects.filter(
-                    employee_id__in=ids, date__gte=date_from - dt.timedelta(days=1), date__lte=date_to + dt.timedelta(days=1)
-                )
-                .order_by("employee_id", "date", "punch_time", "id")
-                .values_list("employee_id", "date", "punch_time", "source")
-            ):
-                raw[eid][d].append(Punch(eid, d, t, src or ""))
-            self.logs = {eid: dict(by_date) for eid, by_date in raw.items()}
+            self.load_punches(ids)
+        else:
+            self._load_saturday_off_punches(employees)
 
         if leaves:
             self._load_leaves(ids, date_from, date_to)
@@ -363,12 +371,56 @@ class AttendanceData:
                 self.exit_date[eid] = last
 
     # -- loading helpers ----------------------------------------------------
+    def load_punches(self, ids) -> None:
+        """Load the raw punches of these employees for the range (plus a day either side, for cross-midnight exits)
+        in ONE query. Loading is additive; an employee is loaded at most once."""
+        todo = {i for i in ids if i not in self._punch_ids}
+        if not todo:
+            return
+        raw: dict[int, dict[dt.date, list[Punch]]] = defaultdict(lambda: defaultdict(list))
+        for eid, d, t, src in (
+            AttendanceLog.objects.filter(
+                employee_id__in=todo,
+                date__gte=self.date_from - dt.timedelta(days=1),
+                date__lte=self.date_to + dt.timedelta(days=1),
+            )
+            .order_by("employee_id", "date", "punch_time", "id")
+            .values_list("employee_id", "date", "punch_time", "source")
+        ):
+            raw[eid][d].append(Punch(eid, d, t, src or ""))
+        for eid, by_date in raw.items():
+            self.logs[eid] = dict(by_date)
+        self._punch_ids |= todo
+
+    def punches_loaded(self, emp_id: int) -> bool:
+        return emp_id in self._punch_ids
+
+    def _load_saturday_off_punches(self, employees: list) -> None:
+        """A report that does not read punches still has to tell a Saturday-off Saturday from an absence, and the
+        engine's own punch count cannot: it counts a night exit stamped after midnight (really Friday's) as a punch
+        of the Saturday. Load the punches of just the staff on a saturday_off schedule with a Saturday stored as
+        absent that has a punch on it (rare), so ``kind`` can look at the re-attributed list."""
+        by_id = {e.id: e for e in employees}
+        need = {
+            eid
+            for (eid, d), rec in self.records.items()
+            if d.weekday() == 5
+            and rec.status == "absent"
+            and (rec.total_punches or 0) > 0
+            and eid in by_id
+            and self.saturday_off(by_id[eid], d)
+        }
+        if need:
+            self.load_punches(need)
+
     def _load_leaves(self, ids: list[int], date_from: dt.date, date_to: dt.date) -> None:
         # start_date / end_date are TEXT columns. "~" sorts after every digit, space and "T", so a value that
         # carries a time suffix still passes the prefilter; the exact overlap is decided on parsed dates.
         for lr in LeaveRequest.objects.filter(
-            employee_id__in=ids, status="approved",
-            start_date__lte=date_to.isoformat() + "~", end_date__gte=date_from.isoformat(),
+            employee_id__in=ids,
+            status="approved",
+            start_date__lte=date_to.isoformat() + "~",
+            end_date__gte=date_from.isoformat(),
         ).select_related("leave_type_ref"):
             start, end = parse_date(lr.start_date), parse_date(lr.end_date)
             if start is None or end is None:
@@ -405,7 +457,9 @@ class AttendanceData:
             return False
         key = (emp.id, d.year, d.month)
         if key not in self._sat:
-            asg = _get_assignment_for_date(emp, dt.date(d.year, d.month, 15), assignments=self.assignments.get(emp.id, []))
+            asg = _get_assignment_for_date(
+                emp, dt.date(d.year, d.month, 15), assignments=self.assignments.get(emp.id, [])
+            )
             self._sat[key] = bool(asg and asg.saturday_off)
         return self._sat[key]
 
@@ -429,6 +483,19 @@ class AttendanceData:
         last = self.exit_date.get(emp.id)
         return not (last is not None and d > last)
 
+    def leave_approved_late(self, emp, d: dt.date, rec) -> bool:
+        """A day stored as absent, with no punch, that a full-day approved leave now covers: the leave was approved
+        after the day was stored. The engine gives such a day 'on leave' the next time it is computed (payroll
+        computes every day again before it pays), so the stored 'absent' is out of date. Production has no leave."""
+        return (
+            rec is not None
+            and rec.status == "absent"
+            and rec.source != "manual"
+            and (rec.total_punches or 0) == 0
+            and emp.employment_type != "production"
+            and (emp.id, d) in self.full_leave
+        )
+
     def has_activity(self, emp_id: int) -> bool:
         """Any attendance record, or any punch stamped inside the range."""
         if emp_id in self._rec_emps:
@@ -448,7 +515,10 @@ class AttendanceData:
             emp, d, own, self.settings, assignments=self.assignments.get(emp.id, []), logs_by_date=by_date
         )
         out = sorted(
-            (DayPunch(_t2s(p.punch_time) + DAY_S * (p.date - d).days, p.punch_time, p.date, p.source) for p in resolved),
+            (
+                DayPunch(_t2s(p.punch_time) + DAY_S * (p.date - d).days, p.punch_time, p.date, p.source)
+                for p in resolved
+            ),
             key=lambda p: (p.secs, p.at),
         )
         self._day_punches[key] = out
@@ -460,8 +530,9 @@ class AttendanceData:
 
         Weekly off: a staff 'holiday' verdict with no Holiday row is a Sunday; a staff 'absent' Saturday with no
         valid punch on a saturday_off assignment is also a weekly off (the engine stores it as absent).
-        ``has_punches`` defaults to the record's own punch count (the engine's, counted before cross-midnight
-        re-attribution) when the punches themselves were not loaded."""
+        ``has_punches`` defaults to the day's re-attributed punches when this employee's punches were loaded, else to
+        the record's own punch count (the engine's, counted before cross-midnight re-attribution: a night exit stamped
+        after midnight counts for the Saturday although it closes Friday's shift)."""
         if rec is None:
             return None
         s = rec.status
@@ -473,10 +544,14 @@ class AttendanceData:
             return "leave"
         if s == "holiday":
             return "holiday" if d in self.holidays else "weekly_off"
-        if has_punches is None:
-            has_punches = (rec.total_punches or 0) > 0
-        if d.weekday() == 5 and not has_punches and self.saturday_off(emp, d):
-            return "weekly_off"
+        if d.weekday() == 5 and self.saturday_off(emp, d):
+            if has_punches is None:
+                if self.punches_loaded(emp.id):
+                    has_punches = bool(self.punches(emp, d))
+                else:
+                    has_punches = (rec.total_punches or 0) > 0
+            if not has_punches:
+                return "weekly_off"
         return "absent"
 
 
@@ -546,8 +621,11 @@ def early_minutes(rec, shift, employee, data: AttendanceData, last_secs: int | N
 
 def overtime_minutes(rec, shift, employee, punches: list[DayPunch], threshold: int) -> int | None:
     """Staff overtime: minutes of the last punch beyond the shift end, when at least the Settings threshold
-    (the overtime engine's rule, but date-aware so a night exit is not lost). None otherwise."""
-    if rec is None or employee.employment_type == "production" or shift is None or not punches:
+    (the overtime engine's rule, but date-aware so a night exit is not lost). None otherwise.
+
+    The engine stores no last punch for a day with a single punch (that one punch may as well be the arrival), so
+    it can never detect overtime there: nor does this."""
+    if rec is None or employee.employment_type == "production" or shift is None or len(punches) < 2:
         return None
     if rec.status not in ("present", "half_shift"):
         return None
@@ -562,9 +640,29 @@ class Day:
     """One employee on one date, with everything the registers print."""
 
     __slots__ = (
-        "emp", "date", "rec", "kind", "label", "in_service", "punches", "shift", "first_in", "last_out",
-        "worked_min", "basis", "late_min", "early_min", "ot_min", "perm_min", "perm_types", "half", "flags",
-        "leave", "issues", "unprocessed", "in_progress",
+        "emp",
+        "date",
+        "rec",
+        "kind",
+        "label",
+        "in_service",
+        "punches",
+        "shift",
+        "first_in",
+        "last_out",
+        "worked_min",
+        "basis",
+        "late_min",
+        "early_min",
+        "ot_min",
+        "perm_min",
+        "perm_types",
+        "half",
+        "flags",
+        "leave",
+        "issues",
+        "unprocessed",
+        "in_progress",
     )
 
 
@@ -579,14 +677,14 @@ def build_day(data: AttendanceData, emp, d: dt.date, *, deduct_lunch: bool = Tru
     day.punches = punches
     shift = data.shift(emp, d)
     day.shift = shift
-    day.kind = data.kind(emp, d, rec, bool(punches) if live else None)
+    day.kind = data.kind(emp, d, rec, bool(punches) if live and data.punches_loaded(emp.id) else None)
     day.label = label_for(day.kind, rec)
     # Today's absent is provisional: the engine judges the day live, so anyone who has not punched yet is absent.
-    day.in_progress = (
-        day.kind == "absent" and d == data.today and not punches and (rec.total_punches or 0) == 0
-    )
+    day.in_progress = day.kind == "absent" and d == data.today and not punches and (rec.total_punches or 0) == 0
     day.unprocessed = live and rec is None
-    day.leave = data.full_leave.get((emp.id, d))
+    # Production employees have no leave (the engine ignores approved leave for them), so a leave request
+    # on file is neither a status nor a "punch on leave" exception for them.
+    day.leave = None if emp.employment_type == "production" else data.full_leave.get((emp.id, d))
 
     day.first_in = day.last_out = None
     if punches:
@@ -595,7 +693,9 @@ def build_day(data: AttendanceData, emp, d: dt.date, *, deduct_lunch: bool = Tru
     elif rec is not None and rec.source == "manual":
         day.first_in, day.last_out = hhmm(rec.first_punch), hhmm(rec.last_punch)
 
-    day.worked_min, day.basis = worked_minutes([p.secs for p in punches], shift, deduct_lunch) if punches else (None, None)
+    day.worked_min, day.basis = (
+        worked_minutes([p.secs for p in punches], shift, deduct_lunch) if punches else (None, None)
+    )
     last_secs = punches[-1].secs if len(punches) >= 2 else None
     day.late_min = late_minutes(rec, shift, emp, data)
     day.early_min = early_minutes(rec, shift, emp, data, last_secs)
@@ -603,9 +703,7 @@ def build_day(data: AttendanceData, emp, d: dt.date, *, deduct_lunch: bool = Tru
 
     perms = data.permissions.get((emp.id, d), [])
     day.perm_min = sum((p.duration_minutes or 60) for p in perms) if perms else None
-    day.perm_types = [
-        EmployeePermission.TYPE_LABELS.get(p.type_key, "Permission") for p in perms
-    ]
+    day.perm_types = [EmployeePermission.TYPE_LABELS.get(p.type_key, "Permission") for p in perms]
     day.half = half_worked(rec, emp, data.settings.half_day_first_half_end_time)
 
     flags: list[str] = []
@@ -630,18 +728,46 @@ def build_day(data: AttendanceData, emp, d: dt.date, *, deduct_lunch: bool = Tru
             flags.append("HR override")
     if punches and punches[-1].on > d:
         flags.append("Exit after midnight")
+    if live and rec is not None and rec.source != "manual":
+        # The stored verdict is only as fresh as the last time somebody opened the day in Attendance. Punches that
+        # synced afterwards, or a leave approved afterwards, are on the row but not in its status: say so.
+        if data.punches_loaded(emp.id) and len(data.logs.get(emp.id, {}).get(d, ())) != (rec.total_punches or 0):
+            flags.append(STALE_PUNCHES)
+        if data.leave_approved_late(emp, d, rec):
+            flags.append(STALE_LEAVE)
     if day.in_progress:
         flags.append("Provisional (day in progress)")
     day.flags = flags
     day.issues = (
         punch_exceptions(
-            [p.secs for p in punches], rec, is_today=d == data.today,
-            has_leave=day.leave is not None, is_holiday=d in data.holidays,
+            [p.secs for p in punches],
+            rec,
+            is_today=d == data.today,
+            has_leave=day.leave is not None,
+            is_holiday=d in data.holidays,
         )
         if live
         else []
     )
     return day
+
+
+def detection_notes(settings, *, late: bool = True, early: bool = True) -> list[str]:
+    """Notes for a report with Late / Early-Out figures when Settings has that detection switched off: the engine then
+    stores no late / early-out flag on the days it computes, so the figures are zeros that mean 'not measured', not
+    'punctual'. (Days stored while it was on keep the flag they were given.)"""
+    out: list[str] = []
+    if late and not settings.morning_late_in_enabled:
+        out.append(
+            "Morning Late-In detection is switched off in Settings: days computed while it is off carry no late flag, "
+            "so late figures of those days are zero because nothing was measured, not because everyone was on time."
+        )
+    if early and not settings.evening_early_out_enabled:
+        out.append(
+            "Evening Early-Out detection is switched off in Settings: days computed while it is off carry no "
+            "early-out flag, so early-out figures of those days are zero because nothing was measured."
+        )
+    return out
 
 
 def weekday_text(d: dt.date) -> str:

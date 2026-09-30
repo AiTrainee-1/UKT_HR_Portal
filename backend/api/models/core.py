@@ -126,6 +126,26 @@ class Employee(models.Model):
     salary_amount = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True, db_column="salary_amount"
     )
+    # Salary split (salary_split.py): salary_amount is always divided into two mandatory 50% portions -
+    # Basic + DA + Retention Allowance, and Other + Petrol + RHA + Special Allowance + CA. All eight null = no
+    # split recorded (no salary amount, or created before the split existed). Descriptive only: payroll and
+    # attendance keep running on salary_amount and never read these columns.
+    salary_basic = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, db_column="salary_basic")
+    salary_da = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, db_column="salary_da")
+    salary_retention_allowance = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True, db_column="salary_retention_allowance"
+    )
+    salary_other_allowance = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True, db_column="salary_other_allowance"
+    )
+    salary_petrol_allowance = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True, db_column="salary_petrol_allowance"
+    )
+    salary_rha = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, db_column="salary_rha")
+    salary_special_allowance = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True, db_column="salary_special_allowance"
+    )
+    salary_ca = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, db_column="salary_ca")
     # Production employees only: fixed pay per shift. Payroll = total_shifts * salary_per_shift.
     salary_per_shift = models.DecimalField(
         max_digits=8, decimal_places=2, null=True, blank=True, db_column="salary_per_shift"

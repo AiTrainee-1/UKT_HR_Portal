@@ -18,6 +18,7 @@ from api.clock import FACTORY_TZ
 
 from ..access import permission_level
 from ..formatting import parse_date
+from ..types import TEXT, ColumnSpec
 
 # A stored text date that starts like YYYY-MM-DD (a 'T...' time suffix is tolerated).
 ISO_DATE_REGEX = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}"
@@ -25,6 +26,19 @@ ISO_DATE_REGEX = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}"
 KNOWN_STATUSES = ("pending", "approved", "rejected")
 
 ROLE_LABELS = {"hr": "HR", "dept_head": "HOD", "system": "System"}
+
+
+def emp_columns(name: float = 1.9, dept: float = 1.4, designation: float | None = None) -> tuple[ColumnSpec, ...]:
+    """The employee identity columns (keys match ``common.emp_cells``) with widths chosen for wide tables,
+    where the standard weights leave too little room for dates and status words."""
+    cols = [
+        ColumnSpec("employeeCode", "Emp Code", TEXT, 0.95),
+        ColumnSpec("employeeName", "Employee", TEXT, name),
+        ColumnSpec("department", "Department", TEXT, dept),
+    ]
+    if designation is not None:
+        cols.append(ColumnSpec("designation", "Designation", TEXT, designation))
+    return tuple(cols)
 
 
 # ── access ──────────────────────────────────────────────────────────────────
@@ -83,10 +97,15 @@ def _days_in_month(year: int, month: int) -> int:
 # ── small value helpers ─────────────────────────────────────────────────────
 
 
-def status_badge(raw) -> str:
+def status_key(raw) -> str:
     """pending / approved / rejected as-is; anything else (the HR PATCH does not validate) is 'other'."""
     value = str(raw or "").strip().lower()
     return value if value in KNOWN_STATUSES else "other"
+
+
+def status_label(raw) -> str:
+    """The status as shown in a badge column: Pending / Approved / Rejected / Other."""
+    return status_key(raw).capitalize()
 
 
 def role_label(raw) -> str | None:

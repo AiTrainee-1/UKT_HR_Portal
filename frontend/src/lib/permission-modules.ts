@@ -54,6 +54,7 @@ export const MODULE_TREE: ModuleNode[] = [
   { key: "login_devices", label: "Login Devices" },
   { key: "mobile_app_login", label: "Mobile App Login" },
   { key: "whatsapp_control", label: "WhatsApp Control" },
+  { key: "gmail_control", label: "Gmail Control" },
   { key: "chat", label: "Chat" },
   { key: "notifications", label: "Notifications" },
   { key: "geo_attendance", label: "Geo Attendance" },
@@ -63,6 +64,7 @@ export const MODULE_TREE: ModuleNode[] = [
     label: "Settings",
     children: [
       { key: "settings.company", label: "Company" },
+      { key: "settings.hr_contact", label: "HR Contact" },
       { key: "settings.attendance", label: "Attendance" },
       { key: "settings.late_detection", label: "Late Detection" },
       { key: "settings.devices", label: "Devices" },
@@ -169,6 +171,7 @@ export const ROUTE_MODULE_MAP: Record<string, string> = {
   "/hr/login-devices": "login_devices",
   "/hr/mobile-app-login": "mobile_app_login",
   "/hr/whatsapp-control": "whatsapp_control",
+  "/hr/gmail-control": "gmail_control",
   "/hr/chat": "chat",
   "/hr/notifications": "notifications",
   "/hr/geo-attendance": "geo_attendance",

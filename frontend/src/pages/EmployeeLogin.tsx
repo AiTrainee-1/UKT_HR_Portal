@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, User } from "lucide-react";
+import SupportContactCard from "@/components/SupportContactCard";
 
 const schema = z.object({
   identifier: z.string().min(1, "Please enter your phone, email, or employee ID"),
@@ -113,6 +114,8 @@ export default function EmployeeLogin() {
             </p>
           </div>
         </div>
+
+        <SupportContactCard situation="hr" title="Can't sign in? Contact HR" tone="dark" compact className="mt-4" />
       </div>
     </div>
   );

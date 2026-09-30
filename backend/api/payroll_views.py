@@ -37,6 +37,7 @@ from .user_settings import (
 )
 from .geo_attendance_views import source_label
 from .permission_registry import resolve_permission
+from .support_contact_views import FIELDS as SUPPORT_CONTACT_FIELDS, clean_updates
 from .clock import ist_today
 from .models import (
     AdvanceRepayment,
@@ -1717,6 +1718,8 @@ def _ps_response(ps) -> dict:
         "smtpPassword": ps.smtp_password,
         "smtpFromEmail": ps.smtp_from_email,
         "smtpFromName": ps.smtp_from_name,
+        # HR / software-support contacts (Settings -> HR Contact)
+        **{key: getattr(ps, column) for key, (column, _limit, _kind) in SUPPORT_CONTACT_FIELDS.items()},
         "updatedAt": ps.updated_at.isoformat() if ps.updated_at else None,
     }
 
@@ -1823,6 +1826,8 @@ FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "smtpFromEmail": ("settings.smtp",),
     "smtpFromName": ("settings.smtp",),
     "backupDirectory": ("settings.backup",),
+    # HR Contact is its own Settings tab: who to call for sign-in problems and when the server is down.
+    **{key: ("settings.hr_contact",) for key in SUPPORT_CONTACT_FIELDS},
 }
 
 
@@ -1889,6 +1894,21 @@ def payroll_settings_view(request: Request) -> Response:
             },
             status=403,
         )
+
+    # One company-wide answer to "who do I call?": the employee apps and the public sign-in screens show a
+    # single contact, so a branch's private overlay would be displayed here and never reach anyone.
+    if isinstance(ps, _SettingsOverlay) and any(k in data for k in SUPPORT_CONTACT_FIELDS):
+        return Response(
+            {
+                "error": "company_wide_contact",
+                "message": "HR and support contacts are company-wide. Ask an administrator to change them.",
+                "fields": [k for k in SUPPORT_CONTACT_FIELDS if k in data],
+            },
+            status=403,
+        )
+    contact_updates, contact_problem = clean_updates(data)
+    if contact_problem:
+        return _error(contact_problem)
 
     field_map = {
         "companyName": ("company_name", str),
@@ -2058,6 +2078,8 @@ def payroll_settings_view(request: Request) -> Response:
         ps.compensation_feature_enabled = bool(data["compensationFeatureEnabled"])
     if "backupDirectory" in data:
         ps.backup_directory = str(data["backupDirectory"] or "")
+    for column, value in contact_updates.items():
+        setattr(ps, column, value)
 
     # Same assignments above ran against either a real row or an overlay;
     # only the write differs. The overlay refuses .save() on purpose, so a

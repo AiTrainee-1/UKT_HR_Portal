@@ -21,7 +21,7 @@ Both reports are read-only and never touch payroll.
 from __future__ import annotations
 
 import operator
-from collections import defaultdict
+from collections import Counter, defaultdict
 from decimal import Decimal
 from functools import reduce
 
@@ -31,13 +31,30 @@ from api.models import Advance, AdvanceRepayment
 
 from ..common import EMP_COLS_SHORT, emp_cells, with_subtotals
 from ..filters import ReportContext, boolean, scope, select
-from ..formatting import MONTH_ABBR, display_date, month_label, r2
+from ..formatting import MONTH_ABBR, month_label, r2
 from ..registry import register
 from ..types import (
-    BADGE, CURRENCY, DATE, F_DATE_RANGE, INTEGER, PERCENT, TEXT, ColumnSpec, FilterSpec, ReportResult, ReportSpec,
+    BADGE,
+    CURRENCY,
+    DATE,
+    F_DATE_RANGE,
+    INTEGER,
+    PERCENT,
+    TEXT,
+    ColumnSpec,
+    FilterSpec,
+    ReportResult,
+    ReportSpec,
 )
 from .finance_common import (
-    describe_bounds, distinct_groups, ist_date_iso, ist_range_q, natural_key, pretty, window_bounds, window_filter,
+    describe_bounds,
+    distinct_groups,
+    ist_date_iso,
+    ist_range_q,
+    natural_key,
+    pretty,
+    window_bounds,
+    window_filter,
 )
 
 ZERO = Decimal("0")
@@ -46,21 +63,24 @@ APPROVED, CLOSED, PENDING, REJECTED = "approved", "closed", "pending", "rejected
 
 TYPE_LABELS = {"general": "General", "term": "Term Loan"}
 STATUS_LABELS = {"pending": "Pending", "approved": "Approved", "rejected": "Rejected", "closed": "Closed"}
-METHOD_LABELS = {"payroll": "Payroll deduction", "cash": "Hand cash", "gpay": "GPay"}
+METHOD_LABELS = {"payroll": "Payroll", "cash": "Cash", "gpay": "GPay"}
 
 TYPE_OPTIONS = (("general", "General advance"), ("term", "Term loan (EMI)"))
 STATUS_OPTIONS = (
-    ("pending", "Pending approval"), ("approved", "Approved (open)"), ("closed", "Closed (repaid)"),
+    ("pending", "Pending approval"),
+    ("approved", "Approved (open)"),
+    ("closed", "Closed (repaid)"),
     ("rejected", "Rejected"),
 )
 SORT_OPTIONS = (
-    ("employee", "Employee code"),
     ("department", "Department (with subtotals)"),
     ("newest", "Requested date (newest first)"),
     ("outstanding", "Outstanding (highest first)"),
 )
 INSTALMENT_STATUS_OPTIONS = (
-    ("deducted", "Deducted"), ("pending", "Pending (due, not yet deducted)"), ("overdue", "Overdue (earlier month, not deducted)"),
+    ("deducted", "Deducted"),
+    ("pending", "Pending (due, not yet deducted)"),
+    ("overdue", "Overdue (earlier month, not deducted)"),
 )
 
 
@@ -81,6 +101,7 @@ def _sum(values) -> float:
 # ═════════════════════════════════════════════════════════════════════════════
 #  advance-ledger
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 def _ledger_run(ctx: ReportContext) -> ReportResult:
     p = ctx.params
@@ -111,6 +132,9 @@ def _ledger_run(ctx: ReportContext) -> ReportResult:
     closed_shortfall = ZERO
     closed_short_count = 0
     processed_on_unsanctioned = 0
+    no_plan = 0
+    short_plan = 0
+    unscheduled = ZERO
     for a in advances:
         emp = a.employee
         reps = list(a.repayments.all())  # prefetched: no query per advance
@@ -131,6 +155,13 @@ def _ledger_run(ctx: ReportContext) -> ReportResult:
             balance_mismatch += 1
         if not sanctioned and processed:
             processed_on_unsanctioned += 1
+        if approved and not reps:
+            no_plan += 1
+        elif approved:
+            not_planned = a.amount - sum((r.amount for r in reps), ZERO)
+            if not_planned > Decimal("0.005"):
+                short_plan += 1
+                unscheduled += not_planned
 
         unprocessed = sorted((r for r in reps if not r.is_processed), key=lambda r: (r.year, r.month, r.id))
         overdue = [r for r in unprocessed if (r.year, r.month) < cur] if approved else []
@@ -173,7 +204,13 @@ def _ledger_run(ctx: ReportContext) -> ReportResult:
     elif sort_by == "newest":
         entries.sort(key=lambda e: (-e[1]["_created"], e[1]["_id"]))
     elif sort_by == "outstanding":
-        entries.sort(key=lambda e: (-(e[0]["outstanding"] if e[0]["outstanding"] is not None else -1.0), e[1]["_code"], e[1]["_id"]))
+        entries.sort(
+            key=lambda e: (
+                -(e[0]["outstanding"] if e[0]["outstanding"] is not None else -1.0),
+                e[1]["_code"],
+                e[1]["_id"],
+            )
+        )
     else:
         entries.sort(key=lambda e: (e[1]["_code"], e[1]["_created"], e[1]["_id"]))
 
@@ -207,6 +244,13 @@ def _ledger_run(ctx: ReportContext) -> ReportResult:
         "not deducted yet (employee skipped, advance approved after that month's payroll, or payroll not generated).",
         "The system does not record a disbursement date; 'Approved on' is the sanction date.",
     ]
+    if advances:
+        mix = Counter(a.status for a in advances)
+        parts = [f"{mix[k]} {STATUS_LABELS[k]}" for k in (APPROVED, CLOSED, PENDING, REJECTED) if mix.get(k)]
+        other = sum(n for k, n in mix.items() if k not in STATUS_LABELS)
+        if other:
+            parts.append(f"{other} other")
+        notes.insert(0, "Status mix: " + ", ".join(parts) + ".")
     window_note = describe_bounds(lo, hi, "Only advances requested")
     if window_note:
         notes.append(window_note + " Choose 'All time' to see the full ledger.")
@@ -220,6 +264,16 @@ def _ledger_run(ctx: ReportContext) -> ReportResult:
             f"{closed_short_count} closed advance(s) were closed with less recovered than sanctioned "
             f"(total not recovered: Rs. {closed_shortfall:,.2f}) - closed manually or written off."
         )
+    if no_plan:
+        notes.append(
+            f"{no_plan} approved advance(s) have no instalment schedule, so payroll will not recover them "
+            "(a term loan needs an EMI amount when it is approved)."
+        )
+    if short_plan:
+        notes.append(
+            f"{short_plan} approved advance(s) have an instalment schedule that adds up to less than the sanctioned amount "
+            f"(Rs. {unscheduled:,.2f} is not scheduled for recovery) - extend the plan or recover the balance in final settlement."
+        )
     if processed_on_unsanctioned:
         notes.append(
             f"{processed_on_unsanctioned} pending/rejected advance(s) already have deducted instalments - check their status."
@@ -227,48 +281,55 @@ def _ledger_run(ctx: ReportContext) -> ReportResult:
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="advance-ledger",
-    title="Advance & Loan Ledger",
-    description="Every salary advance and term loan: approval, instalment plan, amount recovered, outstanding balance and overdue instalments.",
-    category="finance",
-    modules=("settlement",),
-    icon="HandCoins",
-    tags=("advance", "loan", "settlement", "outstanding", "emi", "recovery", "term loan"),
-    filters=(
-        window_filter("requested", "Requested", help="Filters on the date the advance was requested (IST). All time by default."),
-        select("status", "Status", STATUS_OPTIONS, multi=True),
-        select("advanceType", "Advance type", TYPE_OPTIONS),
-        *scope(status="all"),
-        boolean("overdueOnly", "Only advances with overdue instalments"),
-        select("sortBy", "Order by", SORT_OPTIONS, default="employee"),
-    ),
-    columns=(
-        *EMP_COLS_SHORT,
-        ColumnSpec("empStatus", "Emp. status", BADGE, 0.9),
-        ColumnSpec("advanceType", "Type", BADGE, 1.0),
-        ColumnSpec("status", "Status", BADGE, 1.0),
-        ColumnSpec("amount", "Amount", CURRENCY, 1.2),
-        ColumnSpec("requestedOn", "Requested on", DATE, 1.1),
-        ColumnSpec("approvedOn", "Approved on", DATE, 1.1),
-        ColumnSpec("approvedBy", "Decision by", TEXT, 1.2),
-        ColumnSpec("purpose", "Purpose", TEXT, 1.6),
-        ColumnSpec("instalments", "Instalments paid", TEXT, 0.9, align="center"),
-        ColumnSpec("emi", "EMI", CURRENCY, 1.1),
-        ColumnSpec("repaid", "Recovered", CURRENCY, 1.3, total="sum"),
-        ColumnSpec("outstanding", "Outstanding", CURRENCY, 1.3, total="sum"),
-        ColumnSpec("repaidPct", "% recovered", PERCENT, 0.8),
-        ColumnSpec("nextDue", "Next instalment", TEXT, 0.9, align="center"),
-        ColumnSpec("overdueInstalments", "Overdue instalments", INTEGER, 0.8, total="sum"),
-        ColumnSpec("overdueAmount", "Overdue amount", CURRENCY, 1.2, total="sum"),
-    ),
-    run=_ledger_run,
-))
+register(
+    ReportSpec(
+        id="advance-ledger",
+        title="Advance & Loan Ledger",
+        description="Every salary advance and term loan: approval, instalment plan, amount recovered, outstanding balance and overdue instalments.",
+        category="finance",
+        modules=("settlement",),
+        icon="HandCoins",
+        tags=("advance", "loan", "settlement", "outstanding", "emi", "recovery", "term loan"),
+        filters=(
+            window_filter(
+                "requested",
+                "Requested",
+                help="Filters on the date the advance was requested (IST). All time by default.",
+            ),
+            select("status", "Status", STATUS_OPTIONS, multi=True),
+            select("advanceType", "Advance type", TYPE_OPTIONS),
+            *scope(status="all"),
+            boolean("overdueOnly", "Only advances with overdue instalments"),
+            select("sortBy", "Order by", SORT_OPTIONS, placeholder="Employee code"),
+        ),
+        columns=(
+            *EMP_COLS_SHORT,
+            ColumnSpec("empStatus", "Emp. status", BADGE, 0.9),
+            ColumnSpec("advanceType", "Type", BADGE, 1.0),
+            ColumnSpec("status", "Status", BADGE, 1.0),
+            ColumnSpec("amount", "Amount", CURRENCY, 1.2),
+            ColumnSpec("requestedOn", "Requested on", DATE, 1.1),
+            ColumnSpec("approvedOn", "Approved on", DATE, 1.1),
+            ColumnSpec("approvedBy", "Decision by", TEXT, 1.2),
+            ColumnSpec("purpose", "Purpose", TEXT, 1.6),
+            ColumnSpec("instalments", "Instalments paid", TEXT, 1.15, align="center"),
+            ColumnSpec("emi", "EMI", CURRENCY, 1.1),
+            ColumnSpec("repaid", "Recovered", CURRENCY, 1.3, total="sum"),
+            ColumnSpec("outstanding", "Outstanding", CURRENCY, 1.3, total="sum"),
+            ColumnSpec("repaidPct", "% recovered", PERCENT, 0.8),
+            ColumnSpec("nextDue", "Next instalment", TEXT, 0.9, align="center"),
+            ColumnSpec("overdueInstalments", "Overdue instalments", INTEGER, 1.0, total="sum"),
+            ColumnSpec("overdueAmount", "Overdue amount", CURRENCY, 1.2, total="sum"),
+        ),
+        run=_ledger_run,
+    )
+)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  advance-recovery-schedule
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 def _schedule_run(ctx: ReportContext) -> ReportResult:
     p = ctx.params
@@ -302,6 +363,7 @@ def _schedule_run(ctx: ReportContext) -> ReportResult:
 
     # Position of each instalment inside its advance's full plan (needs the siblings that fall outside the filter).
     plan: dict[int, tuple[int, int, Decimal]] = {}
+    plan_end: dict[int, Decimal] = {}  # what each advance's whole schedule adds up to
     siblings: dict[int, list[tuple[int, Decimal]]] = defaultdict(list)
     adv_ids = {r.advance_id for r in reps}
     if adv_ids:
@@ -316,6 +378,7 @@ def _schedule_run(ctx: ReportContext) -> ReportResult:
         for pos, (rid, amt) in enumerate(items, start=1):
             cum += amt
             plan[rid] = (pos, len(items), cum)
+        plan_end[adv_id] = cum
 
     entries: list[tuple[dict, dict]] = []
     for r in reps:
@@ -366,8 +429,16 @@ def _schedule_run(ctx: ReportContext) -> ReportResult:
         {"label": "Deducted", "value": amount_of("Deducted"), "format": "currency"},
         {"label": "Pending", "value": amount_of("Pending"), "format": "currency"},
         {"label": "Overdue amount", "value": amount_of("Overdue"), "format": "currency"},
-        {"label": "Overdue instalments", "value": sum(1 for _, f in entries if f["state"] == "Overdue"), "format": "integer"},
-        {"label": "Not yet recovered - ex-employees", "value": _sum(r["amount"] for r, _ in at_risk), "format": "currency"},
+        {
+            "label": "Overdue instalments",
+            "value": sum(1 for _, f in entries if f["state"] == "Overdue"),
+            "format": "integer",
+        },
+        {
+            "label": "Not yet recovered - ex-employees",
+            "value": _sum(r["amount"] for r, _ in at_risk),
+            "format": "currency",
+        },
     ]
 
     if distinct_groups(rows, _dept_name) > 1 and len(rows) * 2 <= ctx.row_limit:
@@ -384,45 +455,68 @@ def _schedule_run(ctx: ReportContext) -> ReportResult:
         "Payroll deducts each instalment in its own scheduled month.",
         "'Balance after' is the scheduled balance: the sanctioned amount less this and every earlier scheduled instalment.",
     ]
+    closed_open = sum(1 for r, f in entries if f["state"] != "Deducted" and r["advanceStatus"] == "Closed")
+    if closed_open:
+        notes.append(
+            f"{closed_open} pending/overdue instalment(s) belong to advances already marked Closed - payroll does not "
+            "check the advance status and would still deduct them; review before the next payroll run."
+        )
     if at_risk:
         notes.append(
             f"{len(at_risk)} pending/overdue instalment(s) belong to employees who are no longer active - "
             "recover them through final settlement."
         )
+    short_plans = {
+        r.advance_id
+        for r in reps
+        if r.advance.status == APPROVED and r.advance.amount - plan_end.get(r.advance_id, ZERO) > Decimal("0.005")
+    }
+    if short_plans:
+        notes.append(
+            f"{len(short_plans)} approved advance(s) listed here have a schedule that adds up to less than the "
+            "sanctioned amount, so a balance remains after their last instalment (see 'Balance after')."
+        )
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="advance-recovery-schedule",
-    title="Advance Recovery Schedule",
-    description="Instalment-level plan of advance and loan recovery: what payroll has deducted, what is due, and what is overdue.",
-    category="finance",
-    modules=("settlement",),
-    icon="CalendarClock",
-    tags=("advance", "loan", "instalment", "emi", "due", "overdue", "deduction", "recovery"),
-    filters=(
-        FilterSpec(
-            "dateRange", F_DATE_RANGE, "Instalments due between", default="thisMonth", required=True, max_days=1100,
-            help="Instalments fall due by month; every month touched by the range is included.",
+register(
+    ReportSpec(
+        id="advance-recovery-schedule",
+        title="Advance Recovery Schedule",
+        description="Instalment-level plan of advance and loan recovery: what payroll has deducted, what is due, and what is overdue.",
+        category="finance",
+        modules=("settlement",),
+        icon="CalendarClock",
+        tags=("advance", "loan", "instalment", "emi", "due", "overdue", "deduction", "recovery"),
+        filters=(
+            FilterSpec(
+                "dateRange",
+                F_DATE_RANGE,
+                "Instalments due between",
+                default="thisMonth",
+                required=True,
+                max_days=1100,
+                help="Instalments fall due by month; every month touched by the range is included.",
+            ),
+            select("instalmentStatus", "Instalment status", INSTALMENT_STATUS_OPTIONS, multi=True),
+            select("advanceType", "Advance type", TYPE_OPTIONS),
+            *scope(status="all"),
         ),
-        select("instalmentStatus", "Instalment status", INSTALMENT_STATUS_OPTIONS, multi=True),
-        select("advanceType", "Advance type", TYPE_OPTIONS),
-        *scope(status="all"),
-    ),
-    columns=(
-        *EMP_COLS_SHORT,
-        ColumnSpec("empStatus", "Emp. status", BADGE, 0.9),
-        ColumnSpec("advanceType", "Type", BADGE, 1.0),
-        ColumnSpec("advanceStatus", "Advance status", BADGE, 1.0),
-        ColumnSpec("advanceAmount", "Advance amount", CURRENCY, 1.2),
-        ColumnSpec("instalmentNo", "Instalment", TEXT, 0.9, align="center"),
-        ColumnSpec("dueMonth", "Due month", TEXT, 0.9, align="center"),
-        ColumnSpec("amount", "Instalment amount", CURRENCY, 1.3, total="sum"),
-        ColumnSpec("paymentMethod", "Method", BADGE, 1.1),
-        ColumnSpec("status", "Status", BADGE, 1.0),
-        ColumnSpec("monthsLate", "Months late", INTEGER, 0.8),
-        ColumnSpec("balanceAfter", "Balance after", CURRENCY, 1.3),
-        ColumnSpec("notes", "Notes", TEXT, 1.6),
-    ),
-    run=_schedule_run,
-))
+        columns=(
+            *EMP_COLS_SHORT,
+            ColumnSpec("empStatus", "Emp. status", BADGE, 0.9),
+            ColumnSpec("advanceType", "Type", BADGE, 1.0),
+            ColumnSpec("advanceStatus", "Advance status", BADGE, 1.0),
+            ColumnSpec("advanceAmount", "Advance amount", CURRENCY, 1.2),
+            ColumnSpec("instalmentNo", "Instalment", TEXT, 1.15, align="center"),
+            ColumnSpec("dueMonth", "Due month", TEXT, 1.0, align="center"),
+            ColumnSpec("amount", "Instalment amount", CURRENCY, 1.3, total="sum"),
+            ColumnSpec("paymentMethod", "Method", BADGE, 1.0),
+            ColumnSpec("status", "Status", BADGE, 1.0),
+            ColumnSpec("monthsLate", "Months late", INTEGER, 0.8),
+            ColumnSpec("balanceAfter", "Balance after", CURRENCY, 1.3),
+            ColumnSpec("notes", "Notes", TEXT, 1.3),
+        ),
+        run=_schedule_run,
+    )
+)

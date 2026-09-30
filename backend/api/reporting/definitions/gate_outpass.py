@@ -15,7 +15,7 @@ reports say so instead of implying a deduction.
 from __future__ import annotations
 
 from collections import Counter
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 
 from django.db.models import Count, F, Q
 
@@ -26,7 +26,17 @@ from ..filters import boolean, scope, select
 from ..formatting import minutes_text, r2
 from ..registry import register
 from ..types import (
-    BADGE, DATE, DATETIME, DURATION, INTEGER, NUMBER, PERCENT, TEXT, ColumnSpec, ReportResult, ReportSpec,
+    BADGE,
+    DATE,
+    DATETIME,
+    DURATION,
+    INTEGER,
+    NUMBER,
+    PERCENT,
+    TEXT,
+    ColumnSpec,
+    ReportResult,
+    ReportSpec,
 )
 from . import gate_outpass_common as C
 
@@ -53,7 +63,9 @@ ROLE_OPTIONS = (("hr", "HR"), ("dept_head", "Department head"), ("system", "Syst
 def _request_qs(ctx):
     """OutpassRequest with everything the detail reports print, branch isolation + employee filters applied."""
     return (
-        OutpassRequest.objects.select_related("employee__department", "employee__designation", "exit_gate", "entry_gate")
+        OutpassRequest.objects.select_related(
+            "employee__department", "employee__designation", "exit_gate", "entry_gate"
+        )
         .defer(*C.EMP_DEFER)
         .filter(ctx.emp_q("employee__"))
     )
@@ -143,7 +155,7 @@ def _run_register(ctx) -> ReportResult:
     if wanted_state:
         # The pass state depends on "now", so it cannot be a SQL filter: derive it, keep matches, stop at the cap.
         picked = []
-        for req in qs:
+        for req in qs.iterator(chunk_size=500):
             if C.pass_state(req, now_dt, today) == wanted_state:
                 picked.append(req)
                 if len(picked) >= ctx.row_limit:
@@ -187,58 +199,64 @@ def _run_register(ctx) -> ReportResult:
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="outpass-register",
-    title="Outpass Register",
-    description="Every outpass request with its approval, gate exit and return, time outside and current pass status.",
-    category="gate",
-    icon="DoorOpen",
-    tags=("outpass", "gate pass", "approved passes", "exit", "return", "register"),
-    family="outpass",
-    variant="Register",
-    modules=MODULES,
-    filters=(
-        C.dates("Requested between", "the date the pass was requested"),
-        *scope(status="all"),
-        C.pass_type_filter(),
-        select("approvalStatus", "Approval status", APPROVAL_OPTIONS, placeholder="All"),
-        select("scanStatus", "Pass status", C.STATE_OPTIONS, placeholder="All"),
-        select("source", "Origin", ORIGIN_OPTIONS, placeholder="All origins"),
-        select("reviewerRole", "Reviewed by", ROLE_OPTIONS, placeholder="Anyone"),
-        C.gate_filter(),
-    ),
-    columns=REGISTER_COLUMNS,
-    run=_run_register,
-))
+register(
+    ReportSpec(
+        id="outpass-register",
+        title="Outpass Register",
+        description="Every outpass request with its approval, gate exit and return, time outside and current pass status.",
+        category="gate",
+        icon="DoorOpen",
+        tags=("outpass", "gate pass", "approved passes", "exit", "return", "register"),
+        family="outpass",
+        variant="Register",
+        modules=MODULES,
+        filters=(
+            C.dates("Requested between", "the date the pass was requested"),
+            *scope(status="all"),
+            C.pass_type_filter(),
+            select("approvalStatus", "Approval status", APPROVAL_OPTIONS, placeholder="All"),
+            select("scanStatus", "Pass status", C.STATE_OPTIONS, placeholder="All"),
+            select("source", "Origin", ORIGIN_OPTIONS, placeholder="All origins"),
+            select("reviewerRole", "Reviewed by", ROLE_OPTIONS, placeholder="Anyone"),
+            C.gate_filter(),
+        ),
+        columns=REGISTER_COLUMNS,
+        run=_run_register,
+    )
+)
 
 
 # ── 2. outpass-in-out-register ──────────────────────────────────────────────
 
 IN_OUT_COLUMNS = (
-    ColumnSpec("date", "Date", DATE, 1.1),
+    ColumnSpec("date", "Date", DATE, 1.35),
     ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
     ColumnSpec("employeeName", "Employee", TEXT, 2.2),
     ColumnSpec("department", "Department", TEXT, 1.5),
     ColumnSpec("passType", "Pass Type", BADGE, 1.1),
-    ColumnSpec("destination", "Destination", TEXT, 1.8),
+    ColumnSpec("destination", "Destination", TEXT, 1.4),
     ColumnSpec("exitGate", "Exit Gate", TEXT, 1.0),
     ColumnSpec("exitedAt", "Out", DATETIME, 1.4),
     ColumnSpec("entryGate", "Return Gate", TEXT, 1.0),
     ColumnSpec("enteredAt", "In", DATETIME, 1.4),
     ColumnSpec("outsideMinutes", "Time Outside", DURATION, 1.0, total="sum"),
     ColumnSpec("expectedReturnAt", "Expected Return", DATETIME, 1.4),
-    ColumnSpec("overrunMinutes", "Over Expected", DURATION, 1.0),
-    ColumnSpec("reviewedBy", "Approved By", TEXT, 1.5),
+    ColumnSpec("overrunMinutes", "Over Expected", DURATION, 1.3),
+    ColumnSpec("reviewedBy", "Approved By", TEXT, 1.7),
     ColumnSpec("state", "State", BADGE, 1.1),
 )
 
 
 _RETURN_STATE_OPTIONS = (
-    ("returned", "Returned"), ("outside_now", "Outside Now"), ("not_returned", "Not Returned"),
+    ("returned", "Returned"),
+    ("outside_now", "Outside Now"),
+    ("not_returned", "Not Returned"),
     ("early_dismissal", "Early Dismissal"),
 )
 _RETURN_STATE_KEYS = {
-    "outside_now": C.OUTSIDE_STATES, "not_returned": ("not_returned",), "early_dismissal": ("early_dismissal",),
+    "outside_now": C.OUTSIDE_STATES,
+    "not_returned": ("not_returned",),
+    "early_dismissal": ("early_dismissal",),
 }
 
 
@@ -258,9 +276,24 @@ def _run_in_out(ctx) -> ReportResult:
         qs = qs.filter(entered_at__isnull=False)
     elif wanted:
         qs = qs.filter(entered_at__isnull=True)
+        # SQL narrowing only (a superset of the state, re-checked below): early dismissals are their own state and
+        # "outside now" / "not returned" split at IST midnight of today.
+        today_start = datetime.combine(today, time.min, tzinfo=C.FACTORY_TZ)
+        if p["returnState"] == "early_dismissal":
+            qs = qs.filter(pass_type="early_dismissal")
+        else:
+            qs = qs.exclude(pass_type="early_dismissal")
+            qs = (
+                qs.filter(exited_at__gte=today_start)
+                if p["returnState"] == "outside_now"
+                else qs.filter(exited_at__lt=today_start)
+            )
 
+    qs = qs.order_by("-exited_at", "-id")
+    if not wanted:
+        qs = qs[: ctx.row_limit]  # every row is kept, so the limit belongs in the query
     picked, states = [], []
-    for req in qs.order_by("-exited_at", "-id"):
+    for req in qs.iterator(chunk_size=500):
         state = C.pass_state(req, now_dt, today)
         if wanted and state not in wanted:
             continue
@@ -272,23 +305,25 @@ def _run_in_out(ctx) -> ReportResult:
     rows = []
     for req, state in zip(picked, states):
         emp = emp_cells(req.employee)
-        rows.append({
-            "date": C.ist_date(req.exited_at).isoformat(),
-            "employeeCode": emp["employeeCode"],
-            "employeeName": emp["employeeName"],
-            "department": emp["department"],
-            "passType": C.pass_type_label(req.pass_type),
-            "destination": C.clean(req.destination),
-            "exitGate": req.exit_gate.name if req.exit_gate_id else None,
-            "exitedAt": C.fmt(req.exited_at),
-            "entryGate": req.entry_gate.name if req.entry_gate_id else None,
-            "enteredAt": C.fmt(req.entered_at),
-            "outsideMinutes": C.minutes_between(req.exited_at, req.entered_at),
-            "expectedReturnAt": C.fmt(req.expected_return_at),
-            "overrunMinutes": C.overrun_minutes(req, state, now_dt),
-            "reviewedBy": C.reviewer_text(req.approver_role, req.approved_by),
-            "state": C.movement_label(state),
-        })
+        rows.append(
+            {
+                "date": C.ist_date(req.exited_at).isoformat(),
+                "employeeCode": emp["employeeCode"],
+                "employeeName": emp["employeeName"],
+                "department": emp["department"],
+                "passType": C.pass_type_label(req.pass_type),
+                "destination": C.clean(req.destination),
+                "exitGate": req.exit_gate.name if req.exit_gate_id else None,
+                "exitedAt": C.fmt(req.exited_at),
+                "entryGate": req.entry_gate.name if req.entry_gate_id else None,
+                "enteredAt": C.fmt(req.entered_at),
+                "outsideMinutes": C.minutes_between(req.exited_at, req.entered_at),
+                "expectedReturnAt": C.fmt(req.expected_return_at),
+                "overrunMinutes": C.overrun_minutes(req, state, now_dt),
+                "reviewedBy": C.reviewer_text(req.approver_role, req.approved_by),
+                "state": C.movement_label(state),
+            }
+        )
 
     n = len(picked)
     outside = [r["outsideMinutes"] for r in rows if r["outsideMinutes"] is not None]
@@ -309,7 +344,9 @@ def _run_in_out(ctx) -> ReportResult:
         NOTE_DOOR_TO_DOOR,
         "State: Outside Now = scanned out today and not yet back; Not Returned = scanned out on an earlier day with no "
         "return scan; Early Dismissal = an early-shift-dismissal pass (not expected back).",
-        f"Early dismissals in this list: {by_state.get('early_dismissal', 0)}." if by_state.get("early_dismissal") else None,
+        f"Early dismissals in this list: {by_state.get('early_dismissal', 0)}."
+        if by_state.get("early_dismissal")
+        else None,
         "Over Expected is shown only for passes that came back, or are outside now, and had an expected return time.",
         _counts_line("Exits per gate", per_gate),
         C.truncated_note(ctx, n),
@@ -317,33 +354,42 @@ def _run_in_out(ctx) -> ReportResult:
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="outpass-in-out-register",
-    title="Gate In / Out Register",
-    description="Security-desk register of gate exits and returns with the time each employee was outside.",
-    category="gate",
-    icon="ArrowRightLeft",
-    tags=("outpass", "in out", "gate register", "movement", "exit", "return"),
-    family="outpass",
-    variant="In / Out",
-    modules=MODULES,
-    filters=(
-        C.dates("Exited between", "the time of the exit scan"),
-        *scope(designation=False, status=None),
-        C.pass_type_filter(),
-        select("returnState", "State", _RETURN_STATE_OPTIONS, placeholder="All"),
-        C.gate_filter(),
-    ),
-    columns=IN_OUT_COLUMNS,
-    run=_run_in_out,
-))
+register(
+    ReportSpec(
+        id="outpass-in-out-register",
+        title="Gate In / Out Register",
+        description="Security-desk register of gate exits and returns with the time each employee was outside.",
+        category="gate",
+        icon="ArrowRightLeft",
+        tags=("outpass", "in out", "gate register", "movement", "exit", "return"),
+        family="outpass",
+        variant="In / Out",
+        modules=MODULES,
+        filters=(
+            C.dates("Exited between", "the time of the exit scan"),
+            *scope(designation=False, status=None),
+            C.pass_type_filter(),
+            select("returnState", "State", _RETURN_STATE_OPTIONS, placeholder="All"),
+            C.gate_filter(),
+        ),
+        columns=IN_OUT_COLUMNS,
+        run=_run_in_out,
+    )
+)
 
 
 # ── per-employee / per-group statistics (values-based) ──────────────────────
 
 STAT_FIELDS = (
-    "employee_id", "status", "pass_type", "source", "approved_at", "exited_at", "entered_at",
-    "return_qr_generated_at", "expected_return_at",
+    "employee_id",
+    "status",
+    "pass_type",
+    "source",
+    "approved_at",
+    "exited_at",
+    "entered_at",
+    "return_qr_generated_at",
+    "expected_return_at",
 )
 
 
@@ -351,8 +397,21 @@ class _Stats:
     """Counters for a set of requests. Feed it ``.values()`` rows via ``add``."""
 
     __slots__ = (
-        "requests", "approved", "rejected", "pending", "exited", "returned", "open", "expired_unused",
-        "official", "personal", "early", "unspecified", "outside", "late", "employees",
+        "requests",
+        "approved",
+        "rejected",
+        "pending",
+        "exited",
+        "returned",
+        "open",
+        "expired_unused",
+        "official",
+        "personal",
+        "early",
+        "unspecified",
+        "outside",
+        "late",
+        "employees",
     )
 
     def __init__(self):
@@ -462,7 +521,9 @@ def _run_employee_summary(ctx) -> ReportResult:
         emp_qs = Employee.objects.filter(id__in=list(per_emp))
     emps = {
         e.id: e
-        for e in emp_qs.select_related("department", "designation").defer("photo_url", "id_proof", "address", "password_hash")
+        for e in emp_qs.select_related("department", "designation").defer(
+            "photo_url", "id_proof", "address", "password_hash"
+        )
     }
     qr_counts = dict(
         OutpassRecord.objects.filter(source="qr", employee__isnull=False)
@@ -480,23 +541,50 @@ def _run_employee_summary(ctx) -> ReportResult:
         if s.requests < threshold:
             continue
         all_outside.extend(s.outside)
-        rows.append({
-            **emp_cells(emp),
-            "requests": s.requests, "approved": s.approved, "rejected": s.rejected, "pending": s.pending,
-            "exited": s.exited, "returned": s.returned, "notReturned": s.open,
-            "expiredUnused": s.expired_unused, "official": s.official, "personal": s.personal,
-            "earlyDismissal": s.early, "unspecified": s.unspecified,
-            "totalOutsideMinutes": s.total_outside, "avgOutsideMinutes": s.avg_outside,
-            "maxOutsideMinutes": s.max_outside, "lateReturns": s.late,
-            "qrSubmissions": qr_counts.get(emp_id, 0),
-        })
+        rows.append(
+            {
+                **emp_cells(emp),
+                "requests": s.requests,
+                "approved": s.approved,
+                "rejected": s.rejected,
+                "pending": s.pending,
+                "exited": s.exited,
+                "returned": s.returned,
+                "notReturned": s.open,
+                "expiredUnused": s.expired_unused,
+                "official": s.official,
+                "personal": s.personal,
+                "earlyDismissal": s.early,
+                "unspecified": s.unspecified,
+                "totalOutsideMinutes": s.total_outside,
+                "avgOutsideMinutes": s.avg_outside,
+                "maxOutsideMinutes": s.max_outside,
+                "lateReturns": s.late,
+                "qrSubmissions": qr_counts.get(emp_id, 0),
+            }
+        )
         per_person.append((f"{emp.employee_code} {emp.first_name}".strip(), s))
     rows.sort(key=lambda r: (-r["requests"], r["employeeCode"]))
 
-    totals = C.sum_totals(rows, [
-        "requests", "approved", "rejected", "pending", "exited", "returned", "notReturned", "expiredUnused",
-        "official", "personal", "earlyDismissal", "unspecified", "lateReturns", "qrSubmissions",
-    ])
+    totals = C.sum_totals(
+        rows,
+        [
+            "requests",
+            "approved",
+            "rejected",
+            "pending",
+            "exited",
+            "returned",
+            "notReturned",
+            "expiredUnused",
+            "official",
+            "personal",
+            "earlyDismissal",
+            "unspecified",
+            "lateReturns",
+            "qrSubmissions",
+        ],
+    )
     totals["totalOutsideMinutes"] = sum(all_outside) if all_outside else None
     totals["avgOutsideMinutes"] = C.mean_minutes(all_outside)
     totals["maxOutsideMinutes"] = max(all_outside) if all_outside else None
@@ -523,32 +611,40 @@ def _run_employee_summary(ctx) -> ReportResult:
         "Employees with no passes are hidden unless 'Include employees with no passes' is on.",
         ("Most passes: " + "; ".join(f"{n} ({v})" for n, v in top_passes) + ".") if top_passes else None,
         ("Most time outside: " + "; ".join(f"{n} ({minutes_text(v)})" for n, v in top_minutes) + ".")
-        if top_minutes else None,
+        if top_minutes
+        else None,
     )
     return ReportResult(rows=rows, totals=totals, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="outpass-employee-summary",
-    title="Outpass Summary by Employee",
-    description="Per employee: passes requested, approved, used and returned, time outside and late returns.",
-    category="gate",
-    icon="UserRound",
-    tags=("outpass", "employee", "summary", "counts", "frequent", "time outside"),
-    family="outpass",
-    variant="By Employee",
-    modules=MODULES,
-    filters=(
-        C.dates("Requested between", "the date the pass was requested"),
-        *scope(status="all"),
-        C.pass_type_filter(),
-        select("minPasses", "Minimum passes", _MIN_PASSES, placeholder="Any (at least 1)",
-               help="Only employees with at least this many requests. Ignored when employees with no passes are included."),
-        boolean("includeZero", "Include employees with no passes"),
-    ),
-    columns=EMPLOYEE_SUMMARY_COLUMNS,
-    run=_run_employee_summary,
-))
+register(
+    ReportSpec(
+        id="outpass-employee-summary",
+        title="Outpass Summary by Employee",
+        description="Per employee: passes requested, approved, used and returned, time outside and late returns.",
+        category="gate",
+        icon="UserRound",
+        tags=("outpass", "employee", "summary", "counts", "frequent", "time outside"),
+        family="outpass",
+        variant="By Employee",
+        modules=MODULES,
+        filters=(
+            C.dates("Requested between", "the date the pass was requested"),
+            *scope(status="all"),
+            C.pass_type_filter(),
+            select(
+                "minPasses",
+                "Minimum passes",
+                _MIN_PASSES,
+                placeholder="Any (at least 1)",
+                help="Only employees with at least this many requests. Ignored when employees with no passes are included.",
+            ),
+            boolean("includeZero", "Include employees with no passes"),
+        ),
+        columns=EMPLOYEE_SUMMARY_COLUMNS,
+        run=_run_employee_summary,
+    )
+)
 
 
 # ── 4. outpass-department-summary ───────────────────────────────────────────
@@ -569,22 +665,33 @@ DEPT_SUMMARY_COLUMNS = (
     ColumnSpec("passesPer100", "Passes per 100 Staff", NUMBER, 1.1),
 )
 _GROUP_OPTIONS = (
-    ("department", "Department"), ("branch", "Branch"), ("employmentType", "Staff / Production"),
+    ("department", "Department"),
+    ("branch", "Branch"),
+    ("employmentType", "Staff / Production"),
     ("passType", "Pass type"),
 )
-_GROUP_TITLE = {"department": "Department", "branch": "Branch", "employmentType": "Employee type", "passType": "Pass type"}
+_GROUP_TITLE = {
+    "department": "Department",
+    "branch": "Branch",
+    "employmentType": "Employee type",
+    "passType": "Pass type",
+}
 
 
 def _run_department_summary(ctx) -> ReportResult:
     now_dt = C.now()
     today = C.ist_date(now_dt)
     group = ctx.param("groupBy", "department")
-    rows_qs = _values_qs(ctx).filter(C.in_range("created_at", ctx)).values(
-        *STAT_FIELDS, "employee__department_id", "employee__branch_id", "employee__employment_type"
+    rows_qs = (
+        _values_qs(ctx)
+        .filter(C.in_range("created_at", ctx))
+        .values(*STAT_FIELDS, "employee__department_id", "employee__branch_id", "employee__employment_type")
     )
     key_field = {
-        "department": "employee__department_id", "branch": "employee__branch_id",
-        "employmentType": "employee__employment_type", "passType": "pass_type",
+        "department": "employee__department_id",
+        "branch": "employee__branch_id",
+        "employmentType": "employee__employment_type",
+        "passType": "pass_type",
     }[group]
 
     def key_of(row):
@@ -609,20 +716,40 @@ def _run_department_summary(ctx) -> ReportResult:
         hc = headcount.get(k) if group != "passType" else None
         label, branch = names.get(k, (str(k), None))
         all_outside.extend(s.outside)
-        rows.append({
-            "group": label, "branch": branch,
-            "headcount": hc if group != "passType" else None,
-            "employeesWithPass": len(s.employees),
-            "requests": s.requests, "approved": s.approved, "rejected": s.rejected,
-            "exited": s.exited, "returned": s.returned, "notReturned": s.open,
-            "totalOutsideMinutes": s.total_outside, "avgOutsideMinutes": s.avg_outside,
-            "passesPer100": r2(s.requests * 100 / hc) if hc else None,
-        })
+        rows.append(
+            {
+                "group": label,
+                "branch": branch,
+                "headcount": hc if group != "passType" else None,
+                "employeesWithPass": len(s.employees),
+                "requests": s.requests,
+                "approved": s.approved,
+                "rejected": s.rejected,
+                "exited": s.exited,
+                "returned": s.returned,
+                "notReturned": s.open,
+                "totalOutsideMinutes": s.total_outside,
+                "avgOutsideMinutes": s.avg_outside,
+                "passesPer100": r2(s.requests * 100 / hc) if hc else None,
+            }
+        )
     rows.sort(key=lambda r: (-r["requests"], r["group"], r["branch"] or ""))
 
-    totals = C.sum_totals(rows, [
-        "headcount", "employeesWithPass", "requests", "approved", "rejected", "exited", "returned", "notReturned",
-    ])
+    totals = C.sum_totals(
+        rows,
+        [
+            "headcount",
+            "employeesWithPass",
+            "requests",
+            "approved",
+            "rejected",
+            "exited",
+            "returned",
+            "notReturned",
+        ],
+    )
+    # Grouped by pass type one person can appear in several groups: the total is a distinct head count, not a sum.
+    totals["employeesWithPass"] = len(set().union(*(s.employees for s in stats.values())))
     totals["totalOutsideMinutes"] = sum(all_outside) if all_outside else None
     totals["avgOutsideMinutes"] = C.mean_minutes(all_outside)
     total_hc = totals["headcount"]
@@ -670,42 +797,47 @@ def _group_names(group: str, keys) -> dict:
     return {None: ("Unspecified", None), **{k: (C.pass_type_label(k), None) for k in keys if k}}
 
 
-register(ReportSpec(
-    id="outpass-department-summary",
-    title="Outpass Summary by Department",
-    description="Passes and time outside per department, branch, staff type or pass type, against headcount.",
-    category="gate",
-    icon="Building2",
-    tags=("outpass", "department", "summary", "counts", "headcount", "branch"),
-    family="outpass",
-    variant="By Department",
-    modules=MODULES,
-    filters=(
-        C.dates("Requested between", "the date the pass was requested"),
-        *scope(designation=False, employee=False, status=None),
-        select("groupBy", "Group by", _GROUP_OPTIONS, default="department", placeholder="Department"),
-    ),
-    columns=DEPT_SUMMARY_COLUMNS,
-    run=_run_department_summary,
-))
+register(
+    ReportSpec(
+        id="outpass-department-summary",
+        title="Outpass Summary by Department",
+        description="Passes and time outside per department, branch, staff type or pass type, against headcount.",
+        category="gate",
+        icon="Building2",
+        tags=("outpass", "department", "summary", "counts", "headcount", "branch"),
+        family="outpass",
+        variant="By Department",
+        modules=MODULES,
+        filters=(
+            C.dates("Requested between", "the date the pass was requested"),
+            *scope(designation=False, employee=False, status=None),
+            select("groupBy", "Group by", _GROUP_OPTIONS, default="department", placeholder="Department"),
+        ),
+        columns=DEPT_SUMMARY_COLUMNS,
+        run=_run_department_summary,
+    )
+)
 
 
 # ── 5. outpass-not-returned ─────────────────────────────────────────────────
 
 NOT_RETURNED_COLUMNS = (
-    *EMP_COLS,
-    ColumnSpec("phone", "Phone", TEXT, 1.2),
+    ColumnSpec("employeeCode", "Emp Code", TEXT, 0.9),
+    ColumnSpec("employeeName", "Employee", TEXT, 1.8),
+    ColumnSpec("department", "Department", TEXT, 1.5),
+    ColumnSpec("designation", "Designation", TEXT, 1.5),
+    ColumnSpec("phone", "Phone", TEXT, 1.4),
     ColumnSpec("passType", "Pass Type", BADGE, 1.1),
-    ColumnSpec("destination", "Destination", TEXT, 1.8),
-    ColumnSpec("reason", "Reason", TEXT, 1.8),
-    ColumnSpec("exitGate", "Exit Gate", TEXT, 1.0),
-    ColumnSpec("exitedAt", "Exit Time", DATETIME, 1.4),
-    ColumnSpec("minutesOutside", "Outside So Far", DURATION, 1.0),
-    ColumnSpec("expectedReturnAt", "Expected Return", DATETIME, 1.4),
-    ColumnSpec("overdueMinutes", "Overdue By", DURATION, 1.0),
-    ColumnSpec("returnQrState", "Return QR", BADGE, 1.0),
-    ColumnSpec("reviewedBy", "Approved By", TEXT, 1.5),
-    ColumnSpec("bucket", "Status", BADGE, 1.1),
+    ColumnSpec("destination", "Destination", TEXT, 1.4),
+    ColumnSpec("reason", "Reason", TEXT, 1.0),
+    ColumnSpec("exitGate", "Exit Gate", TEXT, 0.9),
+    ColumnSpec("exitedAt", "Exit Time", DATETIME, 1.5),
+    ColumnSpec("minutesOutside", "Outside So Far", DURATION, 1.2),
+    ColumnSpec("expectedReturnAt", "Expected Return", DATETIME, 1.5),
+    ColumnSpec("overdueMinutes", "Overdue By", DURATION, 1.1),
+    ColumnSpec("returnQrState", "Return QR", BADGE, 1.2),
+    ColumnSpec("reviewedBy", "Approved By", TEXT, 1.4),
+    ColumnSpec("bucket", "Status", BADGE, 1.0),
 )
 _MIN_OUTSIDE = (("30", "30 minutes"), ("60", "1 hour"), ("120", "2 hours"), ("240", "4 hours"))
 
@@ -738,22 +870,28 @@ def _run_not_returned(ctx) -> ReportResult:
         if req.expected_return_at and now_dt > req.expected_return_at:
             past_expected += 1
         emp = emp_cells(req.employee)
-        built.append((0 if outside_now else 1, req.exited_at, {
-            **emp,
-            "phone": C.clean(req.employee.phone, 40),
-            "passType": C.pass_type_label(req.pass_type),
-            "destination": C.clean(req.destination),
-            "reason": C.clean(req.reason),
-            "exitGate": req.exit_gate.name if req.exit_gate_id else None,
-            "exitedAt": C.fmt(req.exited_at),
-            # Only a pass that left today has a meaningful running time; an old open row must never look live.
-            "minutesOutside": running if outside_now else None,
-            "expectedReturnAt": C.fmt(req.expected_return_at),
-            "overdueMinutes": overrun if (outside_now and C.is_late(overrun)) else None,
-            "returnQrState": C.return_qr_state(req, now_dt),
-            "reviewedBy": C.reviewer_text(req.approver_role, req.approved_by),
-            "bucket": C.movement_label(state),
-        }))
+        built.append(
+            (
+                0 if outside_now else 1,
+                req.exited_at,
+                {
+                    **emp,
+                    "phone": C.clean(req.employee.phone, 40),
+                    "passType": C.pass_type_label(req.pass_type),
+                    "destination": C.clean(req.destination),
+                    "reason": C.clean(req.reason),
+                    "exitGate": req.exit_gate.name if req.exit_gate_id else None,
+                    "exitedAt": C.fmt(req.exited_at),
+                    # Only a pass that left today has a meaningful running time; an old open row must never look live.
+                    "minutesOutside": running if outside_now else None,
+                    "expectedReturnAt": C.fmt(req.expected_return_at),
+                    "overdueMinutes": overrun if (outside_now and C.is_late(overrun)) else None,
+                    "returnQrState": C.return_qr_state(req, now_dt),
+                    "reviewedBy": C.reviewer_text(req.approver_role, req.approved_by),
+                    "bucket": C.movement_label(state),
+                },
+            )
+        )
     built.sort(key=lambda b: (b[0], -b[1].timestamp()))
     rows = [b[2] for b in built]
 
@@ -769,8 +907,9 @@ def _run_not_returned(ctx) -> ReportResult:
         f"Snapshot as of {stamp} IST: who is outside and for how long depend on the moment the report is run.",
         "Outside Now = scanned out today and not yet scanned back. Not Returned = scanned out on an earlier day with no "
         "return scan; no running duration is shown for those because they are not live.",
-        None if p.get("includeEarlyDismissal") else
-        "Early-shift-dismissal passes are excluded (those employees are not expected back); tick 'Include early "
+        None
+        if p.get("includeEarlyDismissal")
+        else "Early-shift-dismissal passes are excluded (those employees are not expected back); tick 'Include early "
         "dismissals' to list them.",
         "Phone is the employee's number on file and may be blank. Return QR shows whether the employee generated a "
         "return QR (valid for 60 minutes).",
@@ -780,24 +919,26 @@ def _run_not_returned(ctx) -> ReportResult:
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="outpass-not-returned",
-    title="Outpass Not Returned",
-    description="Passes scanned out at a gate with no return scan: who is outside now and whose return was never recorded.",
-    category="gate",
-    icon="LogOut",
-    tags=("outpass", "not returned", "outside", "still out", "currently out", "missing return"),
-    modules=MODULES,
-    filters=(
-        C.dates("Exited between", "the time of the exit scan"),
-        *scope(status=None),
-        C.pass_type_filter(),
-        select("minOutsideMinutes", "Outside at least", _MIN_OUTSIDE, placeholder="Any time"),
-        boolean("includeEarlyDismissal", "Include early dismissals"),
-    ),
-    columns=NOT_RETURNED_COLUMNS,
-    run=_run_not_returned,
-))
+register(
+    ReportSpec(
+        id="outpass-not-returned",
+        title="Outpass Not Returned",
+        description="Passes scanned out at a gate with no return scan: who is outside now and whose return was never recorded.",
+        category="gate",
+        icon="LogOut",
+        tags=("outpass", "not returned", "outside", "still out", "currently out", "missing return"),
+        modules=MODULES,
+        filters=(
+            C.dates("Exited between", "the time of the exit scan"),
+            *scope(status=None),
+            C.pass_type_filter(),
+            select("minOutsideMinutes", "Outside at least", _MIN_OUTSIDE, placeholder="Any time"),
+            boolean("includeEarlyDismissal", "Include early dismissals"),
+        ),
+        columns=NOT_RETURNED_COLUMNS,
+        run=_run_not_returned,
+    )
+)
 
 
 # ── 6. outpass-late-return ──────────────────────────────────────────────────
@@ -829,7 +970,7 @@ def _run_late_return(ctx) -> ReportResult:
         .order_by("-exited_at", "-id")
     )
     rows, per_emp, skipped = [], Counter(), 0
-    for req in qs:
+    for req in qs.iterator(chunk_size=500):
         state = C.pass_state(req, now_dt, today)
         over = C.overrun_minutes(req, state, now_dt)
         if over is None:
@@ -838,17 +979,21 @@ def _run_late_return(ctx) -> ReportResult:
         if over < min_over:
             continue
         emp = emp_cells(req.employee)
-        rows.append({
-            "employeeCode": emp["employeeCode"], "employeeName": emp["employeeName"], "department": emp["department"],
-            "passType": C.pass_type_label(req.pass_type),
-            "destination": C.clean(req.destination),
-            "exitedAt": C.fmt(req.exited_at),
-            "expectedReturnAt": C.fmt(req.expected_return_at),
-            "enteredAt": C.fmt(req.entered_at),
-            "overrunMinutes": over,
-            "state": "Returned Late" if req.entered_at else "Outside Now",
-            "reviewedBy": C.reviewer_text(req.approver_role, req.approved_by),
-        })
+        rows.append(
+            {
+                "employeeCode": emp["employeeCode"],
+                "employeeName": emp["employeeName"],
+                "department": emp["department"],
+                "passType": C.pass_type_label(req.pass_type),
+                "destination": C.clean(req.destination),
+                "exitedAt": C.fmt(req.exited_at),
+                "expectedReturnAt": C.fmt(req.expected_return_at),
+                "enteredAt": C.fmt(req.entered_at),
+                "overrunMinutes": over,
+                "state": "Returned Late" if req.entered_at else "Outside Now",
+                "reviewedBy": C.reviewer_text(req.approver_role, req.approved_by),
+            }
+        )
         per_emp[emp["employeeCode"]] += 1
         if len(rows) >= ctx.row_limit:
             break
@@ -867,9 +1012,12 @@ def _run_late_return(ctx) -> ReportResult:
         "including every On-Duty pass - cannot appear here.",
         "Late By is the minutes between the expected return and the return scan (or, for someone still outside today, "
         "up to now). A return within 30 seconds of the expected time is not counted as late.",
-        (f"{skipped} pass(es) with an expected return time were scanned out on an earlier day (or are early dismissals) "
-         "and never scanned back; they have no measurable overrun - see the Outpass Not Returned report.")
-        if skipped else None,
+        (
+            f"{skipped} pass(es) with an expected return time were scanned out on an earlier day (or are early dismissals) "
+            "and never scanned back; they have no measurable overrun - see the Outpass Not Returned report."
+        )
+        if skipped
+        else None,
         "If the mobile or web app ever sent the expected time without a time zone, it would be stored 5h30m off; treat "
         "small overruns as indicative.",
         NOTE_NO_PAYROLL,
@@ -878,22 +1026,24 @@ def _run_late_return(ctx) -> ReportResult:
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="outpass-late-return",
-    title="Outpass Late Returns",
-    description="Employees who came back after the return time they gave on the pass, and by how much.",
-    category="gate",
-    icon="Timer",
-    tags=("outpass", "late return", "overrun", "expected return", "overstay"),
-    modules=MODULES,
-    filters=(
-        C.dates("Exited between", "the time of the exit scan"),
-        *scope(designation=False, status=None),
-        select("minOverrunMinutes", "Late by at least", _MIN_OVERRUN, placeholder="Any (1 minute or more)"),
-    ),
-    columns=LATE_RETURN_COLUMNS,
-    run=_run_late_return,
-))
+register(
+    ReportSpec(
+        id="outpass-late-return",
+        title="Outpass Late Returns",
+        description="Employees who came back after the return time they gave on the pass, and by how much.",
+        category="gate",
+        icon="Timer",
+        tags=("outpass", "late return", "overrun", "expected return", "overstay"),
+        modules=MODULES,
+        filters=(
+            C.dates("Exited between", "the time of the exit scan"),
+            *scope(designation=False, status=None),
+            select("minOverrunMinutes", "Late by at least", _MIN_OVERRUN, placeholder="Any (1 minute or more)"),
+        ),
+        columns=LATE_RETURN_COLUMNS,
+        run=_run_late_return,
+    )
+)
 
 
 # ── 7. outpass-approval-turnaround ──────────────────────────────────────────
@@ -906,7 +1056,7 @@ TURNAROUND_COLUMNS = (
     ColumnSpec("rejected", "Rejected", INTEGER, 0.9, total="sum"),
     ColumnSpec("avgTurnaroundMinutes", "Avg Turnaround", DURATION, 1.1),
     ColumnSpec("maxTurnaroundMinutes", "Slowest", DURATION, 1.0),
-    ColumnSpec("within15MinPct", "Approved Within 15 Min", PERCENT, 1.2),
+    ColumnSpec("within15MinPct", "Approved Within 15 Min", PERCENT, 1.6),
 )
 
 
@@ -933,18 +1083,26 @@ def _run_turnaround(ctx) -> ReportResult:
             return None, None, None
         within = sum(1 for t in turns if t <= 15 * 60)
         return (
-            C.half_up_minutes(sum(turns) / len(turns)), C.half_up_minutes(max(turns)),
+            C.half_up_minutes(sum(turns) / len(turns)),
+            C.half_up_minutes(max(turns)),
             r2(within * 100 / len(turns)),
         )
 
     rows = []
     for (role, name), g in groups.items():
         avg, mx, pct = stats(g["turn"])
-        rows.append({
-            "approverName": name or "Unknown", "approverRole": C.role_label(role),
-            "decisions": g["approved"] + g["rejected"], "approved": g["approved"], "rejected": g["rejected"],
-            "avgTurnaroundMinutes": avg, "maxTurnaroundMinutes": mx, "within15MinPct": pct,
-        })
+        rows.append(
+            {
+                "approverName": name or "Unknown",
+                "approverRole": C.role_label(role),
+                "decisions": g["approved"] + g["rejected"],
+                "approved": g["approved"],
+                "rejected": g["rejected"],
+                "avgTurnaroundMinutes": avg,
+                "maxTurnaroundMinutes": mx,
+                "within15MinPct": pct,
+            }
+        )
     rows.sort(key=lambda r: (-r["decisions"], r["approverName"], r["approverRole"] or ""))
 
     avg_all, max_all, pct_all = stats(all_turn)
@@ -974,22 +1132,26 @@ def _run_turnaround(ctx) -> ReportResult:
     return ReportResult(rows=rows, totals=totals, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="outpass-approval-turnaround",
-    title="Outpass Approval Turnaround",
-    description="How quickly HR and department heads decide outpass requests, with the approve / reject mix per approver.",
-    category="gate",
-    icon="BadgeCheck",
-    tags=("outpass", "approval", "turnaround", "approver", "hod", "hr", "sla"),
-    modules=MODULES,
-    filters=(
-        C.dates("Requested between", "the date the pass was requested"),
-        *scope(designation=False, status=None),
-        select("reviewerRole", "Reviewed by", (("hr", "HR"), ("dept_head", "Department head")), placeholder="Anyone"),
-    ),
-    columns=TURNAROUND_COLUMNS,
-    run=_run_turnaround,
-))
+register(
+    ReportSpec(
+        id="outpass-approval-turnaround",
+        title="Outpass Approval Turnaround",
+        description="How quickly HR and department heads decide outpass requests, with the approve / reject mix per approver.",
+        category="gate",
+        icon="BadgeCheck",
+        tags=("outpass", "approval", "turnaround", "approver", "hod", "hr", "sla"),
+        modules=MODULES,
+        filters=(
+            C.dates("Requested between", "the date the pass was requested"),
+            *scope(designation=False, status=None),
+            select(
+                "reviewerRole", "Reviewed by", (("hr", "HR"), ("dept_head", "Department head")), placeholder="Anyone"
+            ),
+        ),
+        columns=TURNAROUND_COLUMNS,
+        run=_run_turnaround,
+    )
+)
 
 
 # ── 8. outpass-pending-requests ─────────────────────────────────────────────
@@ -997,7 +1159,7 @@ register(ReportSpec(
 PENDING_COLUMNS = (
     ColumnSpec("requestedAt", "Requested", DATETIME, 1.4),
     ColumnSpec("ageMinutes", "Waiting", DURATION, 1.0),
-    ColumnSpec("ageBand", "Age", BADGE, 1.1),
+    ColumnSpec("ageBand", "Age", BADGE, 1.3),
     *EMP_COLS_SHORT,
     ColumnSpec("passType", "Pass Type", BADGE, 1.1),
     ColumnSpec("destination", "Destination", TEXT, 1.8),
@@ -1025,8 +1187,13 @@ def _run_pending(ctx) -> ReportResult:
     qs = (
         base.filter(C.in_range("created_at", ctx))
         .select_related("employee__department", "employee__designation", "employee__reporting_manager")
-        .defer(*C.EMP_DEFER, "employee__reporting_manager__photo_url", "employee__reporting_manager__id_proof",
-               "employee__reporting_manager__address", "employee__reporting_manager__password_hash")
+        .defer(
+            *C.EMP_DEFER,
+            "employee__reporting_manager__photo_url",
+            "employee__reporting_manager__id_proof",
+            "employee__reporting_manager__address",
+            "employee__reporting_manager__password_hash",
+        )
         .order_by("created_at", "id")
     )
     if min_age:
@@ -1038,14 +1205,21 @@ def _run_pending(ctx) -> ReportResult:
             continue
         emp = emp_cells(req.employee)
         mgr = req.employee.reporting_manager
-        rows.append({
-            "requestedAt": C.fmt(req.created_at), "ageMinutes": age, "ageBand": _age_band(age),
-            "employeeCode": emp["employeeCode"], "employeeName": emp["employeeName"], "department": emp["department"],
-            "passType": C.pass_type_label(req.pass_type),
-            "destination": C.clean(req.destination), "reason": C.clean(req.reason),
-            "expectedReturnAt": C.fmt(req.expected_return_at),
-            "reportingManager": f"{mgr.first_name} {mgr.last_name}".strip() if mgr else None,
-        })
+        rows.append(
+            {
+                "requestedAt": C.fmt(req.created_at),
+                "ageMinutes": age,
+                "ageBand": _age_band(age),
+                "employeeCode": emp["employeeCode"],
+                "employeeName": emp["employeeName"],
+                "department": emp["department"],
+                "passType": C.pass_type_label(req.pass_type),
+                "destination": C.clean(req.destination),
+                "reason": C.clean(req.reason),
+                "expectedReturnAt": C.fmt(req.expected_return_at),
+                "reportingManager": f"{mgr.first_name} {mgr.last_name}".strip() if mgr else None,
+            }
+        )
         ages.append(age)
 
     start, _end = C.ist_bounds(ctx)
@@ -1062,7 +1236,8 @@ def _run_pending(ctx) -> ReportResult:
         "A pending request never expires by itself. One waiting more than a day is marked Overdue - the outing it "
         "asked for has almost certainly passed.",
         (f"{older} more pending request(s) were created before the selected dates; widen the range to list them.")
-        if older else None,
+        if older
+        else None,
         "Reporting Manager is the manager on the employee's record (the approver may be the department head or HR).",
         NOTE_TIMES,
         C.truncated_note(ctx, len(rows)),
@@ -1070,22 +1245,24 @@ def _run_pending(ctx) -> ReportResult:
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="outpass-pending-requests",
-    title="Pending Outpass Requests",
-    description="Outpass requests still waiting for a decision and how long each has waited.",
-    category="gate",
-    icon="Hourglass",
-    tags=("outpass", "pending", "awaiting approval", "ageing", "backlog"),
-    modules=MODULES,
-    filters=(
-        C.dates("Requested between", "the date the pass was requested"),
-        *scope(designation=False, status=None),
-        select("minAge", "Waiting at least", _MIN_AGE, placeholder="Any time"),
-    ),
-    columns=PENDING_COLUMNS,
-    run=_run_pending,
-))
+register(
+    ReportSpec(
+        id="outpass-pending-requests",
+        title="Pending Outpass Requests",
+        description="Outpass requests still waiting for a decision and how long each has waited.",
+        category="gate",
+        icon="Hourglass",
+        tags=("outpass", "pending", "awaiting approval", "ageing", "backlog"),
+        modules=MODULES,
+        filters=(
+            C.dates("Requested between", "the date the pass was requested"),
+            *scope(designation=False, status=None),
+            select("minAge", "Waiting at least", _MIN_AGE, placeholder="Any time"),
+        ),
+        columns=PENDING_COLUMNS,
+        run=_run_pending,
+    )
+)
 
 
 # ── 9. outpass-expired-unused ───────────────────────────────────────────────
@@ -1107,31 +1284,33 @@ def _run_expired_unused(ctx) -> ReportResult:
     today = C.ist_date(now_dt)
     p = ctx.params
     origin = p.get("source") or "manual"
-    base = (
-        _request_qs(ctx)
-        .filter(status="approved", approved_at__isnull=False)
-        .filter(C.in_range("approved_at", ctx))
-    )
+    base = _request_qs(ctx).filter(status="approved", approved_at__isnull=False).filter(C.in_range("approved_at", ctx))
     if origin != "all":
         base = base.filter(source=origin)
     if p.get("reviewerRole"):
         base = base.filter(approver_role=p["reviewerRole"])
     approved_total = base.count()
-    candidates = base.filter(exited_at__isnull=True, approved_at__lte=now_dt - C.PASS_VALID).order_by("-approved_at", "-id")
+    candidates = base.filter(exited_at__isnull=True, entered_at__isnull=True, approved_at__lte=now_dt - C.PASS_VALID)
 
     rows = []
-    for req in candidates:
+    for req in candidates.order_by("-approved_at", "-id").iterator(chunk_size=500):
         if C.pass_state(req, now_dt, today) != "expired_unscanned":
             continue
         emp = emp_cells(req.employee)
-        rows.append({
-            "employeeCode": emp["employeeCode"], "employeeName": emp["employeeName"], "department": emp["department"],
-            "passType": C.pass_type_label(req.pass_type), "source": C.source_label(req.source),
-            "destination": C.clean(req.destination),
-            "approvedAt": C.fmt(req.approved_at), "expiredAt": C.fmt(req.approved_at + C.PASS_VALID),
-            "reviewedBy": C.reviewer_text(req.approver_role, req.approved_by),
-            "reviewerRole": C.role_label(req.approver_role),
-        })
+        rows.append(
+            {
+                "employeeCode": emp["employeeCode"],
+                "employeeName": emp["employeeName"],
+                "department": emp["department"],
+                "passType": C.pass_type_label(req.pass_type),
+                "source": C.source_label(req.source),
+                "destination": C.clean(req.destination),
+                "approvedAt": C.fmt(req.approved_at),
+                "expiredAt": C.fmt(req.approved_at + C.PASS_VALID),
+                "reviewedBy": C.reviewer_text(req.approver_role, req.approved_by),
+                "reviewerRole": C.role_label(req.approver_role),
+            }
+        )
         if len(rows) >= ctx.row_limit:
             break
 
@@ -1140,7 +1319,11 @@ def _run_expired_unused(ctx) -> ReportResult:
     summary = [
         {"label": "Approved but never used", "value": n, "format": "integer"},
         {"label": "Approved passes in period", "value": approved_total, "format": "integer"},
-        {"label": "Share never used", "value": r2(n * 100 / approved_total) if approved_total else None, "format": "percent"},
+        {
+            "label": "Share never used",
+            "value": r2(n * 100 / approved_total) if approved_total else None,
+            "format": "percent",
+        },
     ]
     notes = _sorted_notes(
         NOTE_TIMES,
@@ -1150,33 +1333,39 @@ def _run_expired_unused(ctx) -> ReportResult:
         "within the chosen origin, so the share is a rough guide, not a leakage rate.",
         "On-Duty passes are created automatically when an On-Duty session is finally approved and are often never "
         "scanned; that is why the default origin is Manual. Choose All to include them."
-        if origin == "manual" else None,
+        if origin == "manual"
+        else None,
         _counts_line("By origin", by_origin),
         C.truncated_note(ctx, n),
     )
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="outpass-expired-unused",
-    title="Approved but Unused Outpasses",
-    description="Approved passes whose 60-minute exit window lapsed without a gate scan.",
-    category="gate",
-    icon="TriangleAlert",
-    tags=("outpass", "expired", "unused", "not scanned", "approved not used"),
-    modules=MODULES,
-    filters=(
-        C.dates("Approved between", "the approval time"),
-        *scope(designation=False, status=None),
-        select(
-            "source", "Origin", (("manual", "Manual requests"), ("on_duty", "On-Duty passes"), ("all", "All origins")),
-            default="manual",
+register(
+    ReportSpec(
+        id="outpass-expired-unused",
+        title="Approved but Unused Outpasses",
+        description="Approved passes whose 60-minute exit window lapsed without a gate scan.",
+        category="gate",
+        icon="TriangleAlert",
+        tags=("outpass", "expired", "unused", "not scanned", "approved not used"),
+        modules=MODULES,
+        filters=(
+            C.dates("Approved between", "the approval time"),
+            *scope(designation=False, status=None),
+            select(
+                "source",
+                "Origin",
+                (("manual", "Manual requests"), ("on_duty", "On-Duty passes"), ("all", "All origins")),
+                default="manual",
+                placeholder="Manual requests",
+            ),
+            select("reviewerRole", "Approved by", ROLE_OPTIONS, placeholder="Anyone"),
         ),
-        select("reviewerRole", "Approved by", ROLE_OPTIONS, placeholder="Anyone"),
-    ),
-    columns=EXPIRED_COLUMNS,
-    run=_run_expired_unused,
-))
+        columns=EXPIRED_COLUMNS,
+        run=_run_expired_unused,
+    )
+)
 
 
 # ── 10. outpass-purpose-analysis ────────────────────────────────────────────
@@ -1208,13 +1397,21 @@ def _run_purpose(ctx) -> ReportResult:
     for (pt, src), s in stats.items():
         decided = s.approved + s.rejected
         all_outside.extend(s.outside)
-        rows.append({
-            "passType": C.pass_type_label(pt), "origin": C.source_label(src),
-            "requests": s.requests, "approved": s.approved, "rejected": s.rejected, "pending": s.pending,
-            "approvalRatePct": r2(s.approved * 100 / decided) if decided else None,
-            "returned": s.returned, "avgOutsideMinutes": s.avg_outside, "totalOutsideMinutes": s.total_outside,
-            "sharePct": r2(s.requests * 100 / total_requests) if total_requests else None,
-        })
+        rows.append(
+            {
+                "passType": C.pass_type_label(pt),
+                "origin": C.source_label(src),
+                "requests": s.requests,
+                "approved": s.approved,
+                "rejected": s.rejected,
+                "pending": s.pending,
+                "approvalRatePct": r2(s.approved * 100 / decided) if decided else None,
+                "returned": s.returned,
+                "avgOutsideMinutes": s.avg_outside,
+                "totalOutsideMinutes": s.total_outside,
+                "sharePct": r2(s.requests * 100 / total_requests) if total_requests else None,
+            }
+        )
     rows.sort(key=lambda r: (-r["requests"], r["passType"], r["origin"] or ""))
 
     totals = C.sum_totals(rows, ["requests", "approved", "rejected", "pending", "returned"])
@@ -1245,18 +1442,20 @@ def _run_purpose(ctx) -> ReportResult:
     return ReportResult(rows=rows, totals=totals, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="outpass-purpose-analysis",
-    title="Outpass Purpose Analysis",
-    description="Passes by pass type and origin: volume, approval rate and time outside.",
-    category="gate",
-    icon="PieChart",
-    tags=("outpass", "purpose", "pass type", "analysis", "official", "personal", "approval rate"),
-    modules=MODULES,
-    filters=(
-        C.dates("Requested between", "the date the pass was requested"),
-        *scope(designation=False, employee=False, status=None),
-    ),
-    columns=PURPOSE_COLUMNS,
-    run=_run_purpose,
-))
+register(
+    ReportSpec(
+        id="outpass-purpose-analysis",
+        title="Outpass Purpose Analysis",
+        description="Passes by pass type and origin: volume, approval rate and time outside.",
+        category="gate",
+        icon="PieChart",
+        tags=("outpass", "purpose", "pass type", "analysis", "official", "personal", "approval rate"),
+        modules=MODULES,
+        filters=(
+            C.dates("Requested between", "the date the pass was requested"),
+            *scope(designation=False, employee=False, status=None),
+        ),
+        columns=PURPOSE_COLUMNS,
+        run=_run_purpose,
+    )
+)

@@ -4,6 +4,7 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import {
   Building2,
+  Headset,
   Clock,
   Mail,
   Database,
@@ -22,6 +23,7 @@ import { ThemesPanel } from "@/components/ThemesPanel";
 import { useAuth, permissionLevel } from "@/contexts/AuthContext";
 import { lockMutatingControls } from "@/lib/view-only-lock";
 import CompanyTab from "./settings/CompanyTab";
+import HrContactTab from "./settings/HrContactTab";
 import DevicesTab from "./settings/DevicesTab";
 import IdCardTab from "./settings/IdCardTab";
 import DocumentsTab from "./settings/DocumentsTab";
@@ -82,6 +84,7 @@ export default function Settings() {
             className="flex-wrap h-auto"
             items={[
               { value: "company", label: "Company", icon: <Building2 size={13} /> },
+              { value: "hr_contact", label: "HR Contact", icon: <Headset size={13} /> },
               { value: "attendance", label: "Attendance", icon: <Clock size={13} /> },
               { value: "late_detection", label: "Late Detection", icon: <AlertTriangle size={13} /> },
               { value: "devices", label: "Devices", icon: <Fingerprint size={13} /> },
@@ -118,6 +121,10 @@ export default function Settings() {
 
           <TabsContent value="company" className="mt-4">
             <CompanyTab />
+          </TabsContent>
+
+          <TabsContent value="hr_contact" className="mt-4">
+            <HrContactTab />
           </TabsContent>
 
           <TabsContent value="devices" className="mt-4">

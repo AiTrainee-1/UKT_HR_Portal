@@ -41,6 +41,7 @@ from .models import (
 from .permission_registry import all_module_keys
 from .reporting import registry
 from .reporting.definitions import employees_master_base as B
+from .reporting.definitions import employees_master_compliance as C
 
 TODAY = date(2026, 9, 29)  # Tuesday
 MY_REPORTS = (
@@ -191,7 +192,10 @@ class _World(TestCase):
             approved_at=utc(2026, 8, 20, 10, 0),
         )  # fmt: skip
         cls.r2 = resign(
-            cls.e1, utc(2026, 9, 20, 20, 0), reason="Relocation", last_working_date=date(2026, 10, 31),
+            cls.e1,
+            utc(2026, 9, 20, 20, 0),
+            reason="Relocation",
+            last_working_date=date(2026, 10, 31),
             status="pending",
         )  # 21-Sep 01:30 IST
         cls.r3 = resign(
@@ -208,12 +212,20 @@ class _World(TestCase):
         )  # fmt: skip
 
         # Users
-        full = {"reports": "view", "employees": "view", "recruitment": "view", "casual_leave": "view", "payroll": "view"}
+        full = {
+            "reports": "view",
+            "employees": "view",
+            "recruitment": "view",
+            "casual_leave": "view",
+            "payroll": "view",
+        }
         cls.admin = HRUser.objects.create(username="em_admin", password_hash="x", is_super_admin=True)
         cls.role_full = Role.objects.create(name="em_full", permissions=full)
         cls.branch_user = HRUser.objects.create(username="em_b1", password_hash="x", role=cls.role_full, branch=cls.b1)
         cls.plain_user = HRUser.objects.create(
-            username="em_plain", password_hash="x", role=Role.objects.create(name="em_plain", permissions={"reports": "view"})
+            username="em_plain",
+            password_hash="x",
+            role=Role.objects.create(name="em_plain", permissions={"reports": "view"}),
         )
         cls.no_salary_user = HRUser.objects.create(
             username="em_nosal",
@@ -291,6 +303,31 @@ class HelperTests(SimpleTestCase):
             self.assertGreaterEqual(_service_months(emp, when), ELIGIBILITY_MONTHS, joined)
             self.assertLess(_service_months(emp, when - timedelta(days=1)), ELIGIBILITY_MONTHS, joined)
 
+    def test_month_arithmetic_saturates_instead_of_overflowing(self):
+        self.assertEqual(B.add_months(date(9999, 12, 31), 6), date.max)
+        self.assertEqual(B.add_months(date(9999, 11, 30), 24), date.max)
+        self.assertEqual(B.months_reached_on(date(9999, 12, 31), 6), date.max)
+        self.assertEqual(B.months_reached_on(date(9999, 8, 31), 6), date.max)
+
+    def test_a_placeholder_join_date_is_unreadable_not_a_date(self):
+        for raw in ("9999-12-31", "1900-01-01", "0001-01-01", "2101-01-01", "soon"):
+            self.assertEqual(B.join_date_of(Employee(join_date=raw)), (None, "unreadable"), raw)
+        self.assertEqual(B.join_date_of(Employee(join_date=" ")), (None, "missing"))
+        self.assertEqual(B.join_date_of(Employee(join_date="05-09-2026")), (date(2026, 9, 5), "ok"))
+        self.assertEqual(B.join_date_of(Employee(join_date="1950-01-01")), (date(1950, 1, 1), "ok"))
+
+    def test_identifier_placeholders(self):
+        for raw in ("-", "--", " ", "NA", "n/a", "N.A.", "NIL", "None", "null", "0", "0000000000", "00-00", "not applicable",
+                    "Not Available", "TBD", "  na "):  # fmt: skip
+            self.assertTrue(C._is_placeholder(raw), raw)
+            self.assertIsNone(C._real_id(raw), raw)
+            self.assertEqual(C._norm_id(raw), "", raw)
+        for raw in ("TN/TPR/001", "1234567890", "PF-DUP-9", "100000000001", "NAIDU1", "0123456789", "N1"):
+            self.assertFalse(C._is_placeholder(raw), raw)
+            self.assertEqual(C._real_id(raw), raw)
+        self.assertEqual(C._norm_id("pf dup-9"), "PFDUP9")
+        self.assertIsNone(C._real_id(None))
+
     def test_feb_29_anniversaries_and_year_wrap(self):
         self.assertEqual(B.occurrence_in_year(2, 29, 2027), date(2027, 2, 28))
         self.assertEqual(B.occurrence_in_year(2, 29, 2028), date(2028, 2, 29))
@@ -329,7 +366,9 @@ class HelperTests(SimpleTestCase):
 
     def test_ist_bounds_use_the_factory_day(self):
         start, end = B.ist_bounds(date(2026, 9, 21), date(2026, 9, 21))
-        self.assertEqual(start, datetime(2026, 9, 20, 18, 30, tzinfo=dt_tz.utc))  # IST midnight = 18:30 UTC previous day
+        self.assertEqual(
+            start, datetime(2026, 9, 20, 18, 30, tzinfo=dt_tz.utc)
+        )  # IST midnight = 18:30 UTC previous day
         self.assertEqual(end - start, timedelta(days=1))
         self.assertEqual(B.ist_date(utc(2026, 9, 20, 20, 0)), date(2026, 9, 21))
 
@@ -377,7 +416,9 @@ class CatalogAndAccessTests(_World):
     def test_owning_module_grants(self):
         def user(name, perms):
             return HRUser.objects.create(
-                username=name, password_hash="x", role=Role.objects.create(name=name, permissions={"reports": "view", **perms})
+                username=name,
+                password_hash="x",
+                role=Role.objects.create(name=name, permissions={"reports": "view", **perms}),
             )
 
         payroll_only = user("em_pay_only", {"payroll": "view"})
@@ -429,8 +470,13 @@ class EmployeeMasterTests(_World):
         rows = {r["employeeCode"]: r for r in body["rows"]}
         e1 = rows["E1"]
         self.assertEqual(e1["employeeName"], "Arun Kumar")
-        self.assertEqual((e1["gender"], e1["age"], e1["department"], e1["designation"]), ("Male", 36, "CUTTING", "Manager"))
-        self.assertEqual((e1["branch"], e1["employmentType"], e1["joinDate"], e1["tenure"]), ("Unit 1", "Staff", "2024-01-15", "2y 8m"))
+        self.assertEqual(
+            (e1["gender"], e1["age"], e1["department"], e1["designation"]), ("Male", 36, "CUTTING", "Manager")
+        )
+        self.assertEqual(
+            (e1["branch"], e1["employmentType"], e1["joinDate"], e1["tenure"]),
+            ("Unit 1", "Staff", "2024-01-15", "2y 8m"),
+        )
         self.assertEqual(rows["E2"]["age"], 25)  # birthday is today
         self.assertEqual(rows["E3"]["joinDate"], "2026-09-05")  # dd-mm-yyyy text parsed
         self.assertEqual(rows["E3"]["tenure"], "<1m")
@@ -462,15 +508,40 @@ class EmployeeMasterTests(_World):
         self.assertIsNone(rows["E6"]["hod"])
         self.assertTrue(any("HOD" in n for n in body["notes"]))
 
+    def test_an_individual_hod_assignment_beats_the_department_one(self):
+        from .models import ManagerEmployeeAssignment
+
+        ManagerEmployeeAssignment.objects.create(
+            manager=DepartmentManager.objects.get(employee=self.e10), employee=self.e2
+        )
+        rows = {r["employeeCode"]: r["hod"] for r in self.get(self.RID, layout="full")["rows"]}
+        self.assertEqual(rows["E2"], "Jai Singh")  # E1 still holds SEWING as a whole
+        self.assertEqual(rows["E7"], "Arun Kumar")
+
     def test_sensitive_columns_never_appear(self):
         for layout in ("standard", "full"):
             body = self.get(self.RID, layout=layout, employeeStatus="all")
-            columns = " ".join(c["key"].lower() for c in body["columns"])
-            for word in ("salary", "bank", "ifsc", "account", "idproof", "address", "pf", "esi", "uan", "password", "photo"):
-                self.assertNotIn(word, columns, word)
+            keys = {c["key"] for c in body["columns"]}
+            forbidden = {
+                "salary", "salaryAmount", "salaryPerShift", "salaryType", "bankName", "bankAccount", "bankIfsc", "idProof",
+                "address", "pfNumber", "esiNumber", "uanNumber", "passwordHash", "photoUrl",
+            }  # fmt: skip
+            self.assertFalse(keys & forbidden, keys & forbidden)
+            for row in body["rows"]:
+                self.assertFalse(set(row) & forbidden)
             values = str(body["rows"]).lower()
-            for secret in ("1234567890123", "5566778899001", "123412341234", "hdfc", "12 main st", "30000", "tn/tpr/001", "100000000001"):
+            for secret in (
+                "1234567890123",
+                "5566778899001",
+                "123412341234",
+                "hdfc",
+                "12 main st",
+                "30000",
+                "tn/tpr/001",
+                "100000000001",
+            ):
                 self.assertNotIn(secret, values, secret)
+
     def test_status_filter_treats_any_non_active_text_as_inactive(self):
         self.assertEqual(codes(self.get(self.RID, employeeStatus="inactive")), ["E4", "E5", "E9"])  # E9 is 'resigned'
         self.assertEqual(len(codes(self.get(self.RID, employeeStatus="all"))), 10)
@@ -506,7 +577,9 @@ class EmployeeMasterTests(_World):
         self.assertEqual(codes(body), ["E1", "E2", "E4", "E5", "E7", "E10"])
         self.assertEqual(codes(self.get(self.RID, user=self.branch_user, branchIds=str(self.b2.id))), [])
         self.assertEqual(codes(self.get(self.RID, user=self.branch_user, employeeIds=str(self.e3.id))), [])
-        self.assertEqual(codes(self.get(self.RID, user=self.branch_user, employeeIds=str(self.e6.id))), [])  # no-branch record
+        self.assertEqual(
+            codes(self.get(self.RID, user=self.branch_user, employeeIds=str(self.e6.id))), []
+        )  # no-branch record
 
     def test_hod_scope_shows_no_hod_across_branches_for_a_scoped_user(self):
         # Scoped user still gets HODs for their own employees
@@ -554,6 +627,9 @@ class ContactListTests(_World):
         self.assertEqual(codes(self.get(self.RID, departmentIds=str(self.d_cut1.id))), ["E1", "E10"])
         self.assertEqual(codes(self.get(self.RID, employmentType="production")), ["E2", "E8"])
         self.assertEqual(codes(self.get(self.RID, employeeStatus="inactive")), ["E4", "E5", "E9"])
+        self.assertEqual(codes(self.get(self.RID, branchIds=str(self.b2.id))), ["E3", "E8"])
+        self.assertEqual(codes(self.get(self.RID, designationIds=str(self.des_op.id))), ["E2", "E7"])
+        self.assertEqual(codes(self.get(self.RID, employeeIds=f"{self.e2.id},{self.e10.id}")), ["E2", "E10"])
         self.assertEqual(codes(self.get(self.RID, user=self.branch_user)), ["E1", "E2", "E7", "E10"])
         self.assertEqual(codes(self.get(self.RID, user=self.branch_user, branchIds=str(self.b2.id))), [])
 
@@ -574,10 +650,18 @@ class StrengthTests(_World):
         # same-named departments of different units are separate rows, distinguished by branch
         self.assertEqual([r["branch"] for r in rows], ["Unit 1", "Unit 2", "Unit 1", None])
         keys = ("staff", "production", "male", "female", "otherOrUnset", "total")
-        self.assertEqual([tuple(r[k] for k in keys) for r in rows], [(2, 0, 2, 0, 0, 2), (1, 1, 1, 1, 0, 2), (1, 1, 0, 1, 1, 2), (1, 0, 0, 1, 0, 1)])
+        self.assertEqual(
+            [tuple(r[k] for k in keys) for r in rows],
+            [(2, 0, 2, 0, 0, 2), (1, 1, 1, 1, 0, 2), (1, 1, 0, 1, 1, 2), (1, 0, 0, 1, 0, 1)],
+        )
         self.assertEqual([r["sharePct"] for r in rows], [28.57, 28.57, 28.57, 14.29])
-        self.assertEqual(body["totals"], {"staff": 5, "production": 2, "male": 3, "female": 3, "otherOrUnset": 1, "total": 7})
-        self.assertEqual(cards(body), {"Total strength": 7, "Staff": 5, "Production": 2, "Male": 3, "Female": 3, "Departments": 4})
+        self.assertEqual(
+            body["totals"], {"staff": 5, "production": 2, "male": 3, "female": 3, "otherOrUnset": 1, "total": 7}
+        )
+        # 'Unassigned' is a catch-all bucket, not a department: 3 real departments
+        self.assertEqual(
+            cards(body), {"Total strength": 7, "Staff": 5, "Production": 2, "Male": 3, "Female": 3, "Departments": 3}
+        )
 
     def test_totals_equal_the_sum_of_the_rows(self):
         for group_by in ("department", "designation", "branch"):
@@ -597,7 +681,10 @@ class StrengthTests(_World):
         self.assertEqual(rows["No designation"]["total"], 4)
         self.assertEqual(body["rows"][-1]["group"], "No designation")  # unassigned always last
         body = self.get(self.RID, groupBy="branch")
-        self.assertEqual([(r["group"], r["code"], r["total"]) for r in body["rows"]], [("Unit 1", "U1", 4), ("Unit 2", "U2", 2), ("No branch", None, 1)])
+        self.assertEqual(
+            [(r["group"], r["code"], r["total"]) for r in body["rows"]],
+            [("Unit 1", "U1", 4), ("Unit 2", "U2", 2), ("No branch", None, 1)],
+        )
 
     def test_filters(self):
         self.assertEqual([r["total"] for r in self.get(self.RID, employmentType="production")["rows"]], [1, 1])
@@ -605,8 +692,12 @@ class StrengthTests(_World):
         self.assertEqual([(r["group"], r["branch"], r["staff"], r["production"], r["male"], r["female"]) for r in body["rows"]],
                          [("CUTTING", "Unit 2", 1, 0, 0, 1), ("SEWING", "Unit 1", 1, 1, 2, 0)])  # fmt: skip
         self.assertEqual([r["total"] for r in self.get(self.RID, branchIds=str(self.b2.id))["rows"]], [2])
-        self.assertEqual([r["group"] for r in self.get(self.RID, departmentIds=str(self.d_sew1.id))["rows"]], ["SEWING"])
-        self.assertEqual(self.get(self.RID, groupBy="designation", designationIds=str(self.des_mgr.id))["totals"]["total"], 1)
+        self.assertEqual(
+            [r["group"] for r in self.get(self.RID, departmentIds=str(self.d_sew1.id))["rows"]], ["SEWING"]
+        )
+        self.assertEqual(
+            self.get(self.RID, groupBy="designation", designationIds=str(self.des_mgr.id))["totals"]["total"], 1
+        )
 
     def test_include_empty_groups(self):
         body = self.get(self.RID, includeEmpty="true")
@@ -625,11 +716,20 @@ class StrengthTests(_World):
         cutting = next(r for r in body["rows"] if r["group"] == "CUTTING" and r["branch"] == "Unit 1")
         self.assertEqual((cutting["total"], cutting["otherOrUnset"]), (3, 1))
 
+    def test_designation_without_a_department_is_admin_only(self):
+        Designation.objects.create(title="Floater", department=None)
+        body = self.get(self.RID, groupBy="designation", includeEmpty="true")
+        self.assertIn(("Floater", 0), [(r["group"], r["total"]) for r in body["rows"]])
+        body = self.get(self.RID, user=self.branch_user, groupBy="designation", includeEmpty="true")
+        self.assertNotIn("Floater", [r["group"] for r in body["rows"]])
+
     def test_branch_isolation_and_include_empty_do_not_leak(self):
         body = self.get(self.RID, user=self.branch_user)
         self.assertEqual([(r["group"], r["total"]) for r in body["rows"]], [("CUTTING", 2), ("SEWING", 2)])
         body = self.get(self.RID, user=self.branch_user, includeEmpty="true")
-        self.assertEqual([r["group"] for r in body["rows"]], ["CUTTING", "SEWING"])  # LEGACY / SCRAP / Unit 2 stay hidden
+        self.assertEqual(
+            [r["group"] for r in body["rows"]], ["CUTTING", "SEWING"]
+        )  # LEGACY / SCRAP / Unit 2 stay hidden
         body = self.get(self.RID, user=self.branch_user, groupBy="branch", includeEmpty="true")
         self.assertEqual([r["group"] for r in body["rows"]], ["Unit 1"])
         self.assertEqual(self.get(self.RID, user=self.branch_user, branchIds=str(self.b2.id))["rows"], [])
@@ -652,14 +752,28 @@ class NewJoiningsTests(_World):
         self.assertEqual((rows["E2"]["docsMissing"], rows["E3"]["docsMissing"]), (6, 5))
         self.assertEqual(
             cards(body),
-            {"Joined in period": 2, "Staff": 1, "Production": 1, "Still active": 2, "Left since joining": 0, "With documents pending": 2},
+            {
+                "Joined in period": 2,
+                "Staff": 1,
+                "Production": 1,
+                "Still active": 2,
+                "Left since joining": 0,
+                "With documents pending": 2,
+            },
         )
         notes = " ".join(body["notes"])
         self.assertIn("1 employee(s) in scope have a join date that could not be read", notes)  # E7 'soon'
         self.assertIn("1 employee(s) in scope have no join date on file", notes)  # E10 ''
 
     def test_document_gap_counts_required_documents_only(self):
-        for cat in ("pan_card", "aadhaar_card", "educational_certificate", "voter_id_or_birth_certificate", "bank_passbook", "production_employee_documents"):
+        for cat in (
+            "pan_card",
+            "aadhaar_card",
+            "educational_certificate",
+            "voter_id_or_birth_certificate",
+            "bank_passbook",
+            "production_employee_documents",
+        ):
             self.doc(self.e2, cat)
         self.doc(self.e3, "offer_letter")  # not a required category
         body = self.get(self.RID)
@@ -678,7 +792,10 @@ class NewJoiningsTests(_World):
         self.assertEqual(codes(body), ["E4", "E6", "E1", "E5", "E8", "E2", "E3"])  # by join date
         self.assertEqual(cards(body)["Still active"], 5)
         self.assertEqual(cards(body)["Left since joining"], 2)
-        self.assertEqual(codes(self.get(self.RID, dateFrom="2020-01-01", dateTo="2026-12-31", employeeStatus="inactive")), ["E4", "E5"])
+        self.assertEqual(
+            codes(self.get(self.RID, dateFrom="2020-01-01", dateTo="2026-12-31", employeeStatus="inactive")),
+            ["E4", "E5"],
+        )
         self.assertEqual(codes(self.get(self.RID, employmentType="production")), ["E2"])
         self.assertEqual(codes(self.get(self.RID, departmentIds=str(self.d_sew1.id))), ["E2"])
         self.assertEqual(codes(self.get(self.RID, designationIds=str(self.des_op.id))), ["E2"])
@@ -701,7 +818,9 @@ class NewJoiningsTests(_World):
         self.assertNotIn("salaryPerShift", keys)
         self.assertNotIn("salaryPerShift", body["rows"][0])
         self.assertTrue(any("Salary columns are hidden" in n for n in body["notes"]))
-        self.assertIn("salaryAmount", [c["key"] for c in self.get(self.RID, user=self.branch_user)["columns"]])  # payroll: view
+        self.assertIn(
+            "salaryAmount", [c["key"] for c in self.get(self.RID, user=self.branch_user)["columns"]]
+        )  # payroll: view
 
     def test_branch_isolation(self):
         body = self.get(self.RID, user=self.branch_user, dateFrom="2019-01-01", dateTo="2026-12-31")
@@ -724,7 +843,10 @@ class ExitsRegisterTests(_World):
         rows = {r["employeeCode"]: r for r in body["rows"]}
         # E4: approved resignation, dated by the last working date
         self.assertEqual((rows["E4"]["exitDate"], rows["E4"]["exitBasis"]), ("2026-08-31", "Resignation"))
-        self.assertEqual((rows["E4"]["approvedBy"], rows["E4"]["approvedOn"], rows["E4"]["reason"]), ("HR Admin", "2026-08-20", "Better opportunity"))
+        self.assertEqual(
+            (rows["E4"]["approvedBy"], rows["E4"]["approvedOn"], rows["E4"]["reason"]),
+            ("HR Admin", "2026-08-20", "Better opportunity"),
+        )
         self.assertEqual(rows["E4"]["tenureMonths"], 77)
         # E5: manually deactivated, last modified 10-Sep 08:00 UTC = 13:30 IST
         self.assertEqual((rows["E5"]["exitDate"], rows["E5"]["exitBasis"]), ("2026-09-10", "Deactivated (approx.)"))
@@ -736,7 +858,14 @@ class ExitsRegisterTests(_World):
         self.assertEqual(rows["E9"]["status"], "Resigned")
         self.assertEqual(
             cards(body),
-            {"Total exits": 3, "Resignations": 1, "Manual deactivations": 2, "Staff": 2, "Production": 1, "Average service (months)": 58.7},
+            {
+                "Total exits": 3,
+                "Resignations": 1,
+                "Manual deactivations": 2,
+                "Staff": 2,
+                "Production": 1,
+                "Average service (months)": 58.7,
+            },
         )
         notes = " ".join(body["notes"])
         self.assertIn("approx", notes)
@@ -754,7 +883,9 @@ class ExitsRegisterTests(_World):
         self.assertEqual(codes(self.get(self.RID, branchIds=str(self.b2.id), **self.WIDE)), ["E9"])
         self.assertEqual(codes(self.get(self.RID, employeeIds=str(self.e5.id), **self.WIDE)), ["E5"])
         self.assertEqual(codes(self.get(self.RID, dateFrom="2026-01-16", dateTo="2026-01-16")), ["E9"])
-        self.assertEqual(codes(self.get(self.RID, dateFrom="2026-01-15", dateTo="2026-01-15")), [])  # the UTC date must not match
+        self.assertEqual(
+            codes(self.get(self.RID, dateFrom="2026-01-15", dateTo="2026-01-15")), []
+        )  # the UTC date must not match
 
     def test_an_approved_resignation_of_an_active_employee_is_not_an_exit(self):
         ResignationRequest.objects.create(
@@ -764,24 +895,63 @@ class ExitsRegisterTests(_World):
 
     def test_latest_approved_resignation_wins_and_approval_date_is_the_fallback(self):
         e11 = self.make("E11", status="inactive", branch=self.b1, join_date="2024-06-15")
-        ResignationRequest.objects.create(employee=e11, status="approved", last_working_date=date(2026, 3, 31), approved_at=utc(2026, 3, 1, 5, 0))
-        ResignationRequest.objects.create(employee=e11, status="approved", last_working_date=date(2026, 6, 30), approved_at=utc(2026, 6, 1, 5, 0))
+        ResignationRequest.objects.create(
+            employee=e11, status="approved", last_working_date=date(2026, 3, 31), approved_at=utc(2026, 3, 1, 5, 0)
+        )
+        ResignationRequest.objects.create(
+            employee=e11, status="approved", last_working_date=date(2026, 6, 30), approved_at=utc(2026, 6, 1, 5, 0)
+        )
         e12 = self.make("E12", status="inactive", branch=self.b1)
-        ResignationRequest.objects.create(employee=e12, status="approved", approved_at=utc(2026, 5, 31, 20, 0))  # no LWD; 1-Jun IST
-        ResignationRequest.objects.create(employee=e12, status="rejected", last_working_date=date(2026, 2, 1))  # ignored
+        ResignationRequest.objects.create(
+            employee=e12, status="approved", approved_at=utc(2026, 5, 31, 20, 0)
+        )  # no LWD; 1-Jun IST
+        ResignationRequest.objects.create(
+            employee=e12, status="rejected", last_working_date=date(2026, 2, 1)
+        )  # ignored
         rows = {r["employeeCode"]: r for r in self.get(self.RID, **self.WIDE)["rows"]}
         self.assertEqual((rows["E11"]["exitDate"], rows["E11"]["exitBasis"]), ("2026-06-30", "Resignation"))
-        self.assertEqual((rows["E12"]["exitDate"], rows["E12"]["exitBasis"]), ("2026-06-01", "Resignation (approval date)"))
+        self.assertEqual(
+            (rows["E12"]["exitDate"], rows["E12"]["exitBasis"]), ("2026-06-01", "Resignation (approval date)")
+        )
         self.assertIsNone(rows["E12"]["tenureMonths"])  # no join date -> no service figure
         self.assertEqual(self.get(self.RID, exitType="resignation", **self.WIDE)["rowCount"], 3)
 
-    def test_exit_before_join_date_gives_no_service_figure_and_future_lwd_is_noted(self):
+    def test_exit_before_join_date_gives_no_service_figure(self):
+        # deactivated (approx.) on 5-Oct although the join date says 20-Oct: the join date is wrong, so no service figure
         e11 = self.make("E11", status="inactive", branch=self.b1, join_date="2026-10-20")
-        ResignationRequest.objects.create(employee=e11, status="approved", last_working_date=date(2026, 10, 15))
+        Employee.objects.filter(pk=e11.pk).update(updated_at=utc(2026, 10, 5, 5, 0))
         body = self.get(self.RID, dateFrom="2026-10-01", dateTo="2026-10-31")
         self.assertEqual(codes(body), ["E11"])
         self.assertIsNone(body["rows"][0]["tenureMonths"])
+
+    def test_future_last_working_date_is_noted(self):
+        e11 = self.make("E11", status="inactive", branch=self.b1, join_date="2026-01-05")
+        ResignationRequest.objects.create(employee=e11, status="approved", last_working_date=date(2026, 10, 15))
+        body = self.get(self.RID, dateFrom="2026-10-01", dateTo="2026-10-31")
+        self.assertEqual(codes(body), ["E11"])
         self.assertTrue(any("last working date after today" in n for n in body["notes"]))
+
+    def test_a_resignation_before_the_join_date_is_an_earlier_stint_and_falls_back(self):
+        # E11 resigned (LWD 31-Mar-2024), was re-hired 15-Jun-2024 on the same record, deactivated again 10-Sep-2026
+        e11 = self.make("E11", status="inactive", branch=self.b1, join_date="2024-06-15")
+        ResignationRequest.objects.create(employee=e11, status="approved", last_working_date=date(2024, 3, 31))
+        Employee.objects.filter(pk=e11.pk).update(updated_at=utc(2026, 9, 10, 8, 0))
+        rows = {r["employeeCode"]: r for r in self.get(self.RID, **self.WIDE)["rows"]}
+        self.assertEqual((rows["E11"]["exitDate"], rows["E11"]["exitBasis"]), ("2026-09-10", "Deactivated (approx.)"))
+        self.assertEqual(rows["E11"]["tenureMonths"], 26)  # 15-Jun-2024 -> 10-Sep-2026, not negative and not blank
+        # a resignation of the CURRENT stint still wins
+        ResignationRequest.objects.create(employee=e11, status="approved", last_working_date=date(2026, 8, 31))
+        rows = {r["employeeCode"]: r for r in self.get(self.RID, **self.WIDE)["rows"]}
+        self.assertEqual((rows["E11"]["exitDate"], rows["E11"]["exitBasis"]), ("2026-08-31", "Resignation"))
+        self.assertEqual(rows["E11"]["tenureMonths"], 26)
+
+    def test_reason_and_approver_columns_are_shown_to_a_role_with_the_resignations_module(self):
+        body = self.get(self.RID, user=self.branch_user, **self.WIDE)
+        e4 = next(r for r in body["rows"] if r["employeeCode"] == "E4")
+        self.assertEqual(
+            (e4["reason"], e4["approvedBy"], e4["approvedOn"]), ("Better opportunity", "HR Admin", "2026-08-20")
+        )
+        self.assertFalse(any("hidden: your role has no access to Resignations" in n for n in body["notes"]))
 
     def test_branch_isolation(self):
         self.assertEqual(codes(self.get(self.RID, user=self.branch_user, **self.WIDE)), ["E4", "E5"])
@@ -803,9 +973,16 @@ class ResignationRegisterTests(_World):
         # request raised 20-Sep 20:00 UTC = 21-Sep 01:30 IST
         r2 = rows["E1"]
         self.assertEqual(r2["requestedOn"], "2026-09-21 01:30")
-        self.assertEqual((r2["stage"], r2["status"], r2["pendingDays"], r2["noticeDays"]), ("Awaiting HOD", "Pending", 8, 40))
-        self.assertEqual((rows["E7"]["stage"], rows["E7"]["pendingDays"], rows["E7"]["deptHead"]), ("Awaiting HR", 14, "Arun Kumar"))
-        self.assertEqual((rows["E3"]["stage"], rows["E3"]["deptHead"], rows["E3"]["pendingDays"]), ("Rejected by HOD", "Jai Singh", None))
+        self.assertEqual(
+            (r2["stage"], r2["status"], r2["pendingDays"], r2["noticeDays"]), ("Awaiting HOD", "Pending", 8, 40)
+        )
+        self.assertEqual(
+            (rows["E7"]["stage"], rows["E7"]["pendingDays"], rows["E7"]["deptHead"]), ("Awaiting HR", 14, "Arun Kumar")
+        )
+        self.assertEqual(
+            (rows["E3"]["stage"], rows["E3"]["deptHead"], rows["E3"]["pendingDays"]),
+            ("Rejected by HOD", "Jai Singh", None),
+        )
         self.assertEqual(rows["E6"]["stage"], "Rejected by HR")
         self.assertEqual(
             cards(body),
@@ -822,8 +999,12 @@ class ResignationRegisterTests(_World):
         self.assertEqual(r1["requestedOn"], "2026-08-10 09:30")
         self.assertEqual((r1["lastWorkingDate"], r1["noticeDays"], r1["stage"]), ("2026-08-31", 21, "Approved"))
         self.assertEqual((r1["approvedBy"], r1["approvedAt"], r1["hrComment"]), ("HR Admin", "2026-08-20 15:30", "OK"))
-        self.assertEqual((r1["deptHeadStatus"], r1["deptHeadAt"], r1["deptHeadComment"]), ("Approved", "2026-08-12 10:30", "Fine"))
-        self.assertEqual((r1["surveyReason"], r1["surveyRecommend"], r1["surveyRetain"]), ("Salary", "Yes", "Higher pay"))
+        self.assertEqual(
+            (r1["deptHeadStatus"], r1["deptHeadAt"], r1["deptHeadComment"]), ("Approved", "2026-08-12 10:30", "Fine")
+        )
+        self.assertEqual(
+            (r1["surveyReason"], r1["surveyRecommend"], r1["surveyRetain"]), ("Salary", "Yes", "Higher pay")
+        )
         self.assertIsNone(r1["pendingDays"])
         # (approved: 20-Aug - 10-Aug = 10) and (HOD rejection: 3-Sep - 1-Sep = 2) -> 6.0; the HR rejection has no time stamp
         self.assertEqual(cards(body)["Avg days to decision"], 6.0)
@@ -841,7 +1022,9 @@ class ResignationRegisterTests(_World):
 
     def test_date_range_uses_the_ist_day(self):
         self.assertEqual(codes(self.get(self.RID, dateFrom="2026-09-21", dateTo="2026-09-21")), ["E1"])
-        self.assertEqual(codes(self.get(self.RID, dateFrom="2026-09-20", dateTo="2026-09-20")), [])  # UTC date must not match
+        self.assertEqual(
+            codes(self.get(self.RID, dateFrom="2026-09-20", dateTo="2026-09-20")), []
+        )  # UTC date must not match
 
     def test_filters(self):
         wide = dict(dateFrom="2026-08-01", dateTo="2026-09-29")
@@ -893,23 +1076,45 @@ class ManpowerMovementTests(_World):
         self.assertEqual(tuple(rows["Aug 2026"][k] for k in keys), (0, 1, 1, 1, 0, 1, 0))  # E8 joined; E4 left 31-Aug
         self.assertEqual(tuple(rows["Sep 2026"][k] for k in keys), (1, 1, 2, 0, 1, 1, 1))  # E3+E2 joined; E5 left
         self.assertEqual(tuple(rows["Feb 2026"][k] for k in keys), (0, 0, 0, 0, 0, 0, 0))
-        self.assertEqual(body["totals"], {"joinedStaff": 1, "joinedProduction": 2, "joinedTotal": 3, "leftStaff": 2, "leftProduction": 1, "leftTotal": 3, "net": 0, "exitRatePct": 30.0})
+        self.assertEqual(
+            body["totals"],
+            {
+                "joinedStaff": 1,
+                "joinedProduction": 2,
+                "joinedTotal": 3,
+                "leftStaff": 2,
+                "leftProduction": 1,
+                "leftTotal": 3,
+                "net": 0,
+                "exitRatePct": 30.0,
+            },
+        )
         # exit rate = leavers / (active today 7 + leavers in the year 3): 3/10 overall, 1/10 in each leaving month
-        self.assertEqual((rows["Jan 2026"]["exitRatePct"], rows["Aug 2026"]["exitRatePct"], rows["Sep 2026"]["exitRatePct"]), (10.0, 10.0, 10.0))
+        self.assertEqual(
+            (rows["Jan 2026"]["exitRatePct"], rows["Aug 2026"]["exitRatePct"], rows["Sep 2026"]["exitRatePct"]),
+            (10.0, 10.0, 10.0),
+        )
         self.assertEqual(rows["Feb 2026"]["exitRatePct"], 0.0)
         self.assertEqual(cards(body), {"Joined": 3, "Left": 3, "Net movement": 0, "Exit rate": 30.0, "Active today": 7})
         self.assertTrue(any("approximation" in n for n in body["notes"]))
-        self.assertTrue(any("1 leaver(s)" not in n and "2 leaver(s) have only an approximate" in n for n in body["notes"]))  # E5, E9
+        self.assertTrue(
+            any("1 leaver(s)" not in n and "2 leaver(s) have only an approximate" in n for n in body["notes"])
+        )  # E5, E9
 
     def test_department_view_golden(self):
         body = self.get(self.RID, year="2026", groupBy="department")
-        self.assertEqual([r["group"] for r in body["rows"]], ["CUTTING", "CUTTING", "SEWING", "Unassigned"])
+        # the two CUTTING departments are told apart by unit; SEWING has no namesake, so it stays plain
+        self.assertEqual(
+            [r["group"] for r in body["rows"]], ["CUTTING (Unit 1)", "CUTTING (Unit 2)", "SEWING", "Unassigned"]
+        )
         keys = ("joinedTotal", "leftTotal", "net", "exitRatePct")
         got = [tuple(r[k] for k in keys) for r in body["rows"]]
         # Unit 1 CUTTING: nobody moved (2 active). Unit 2 CUTTING: E3+E8 joined, E9 left 1/(2+1). SEWING: E2 joined,
         # E4+E5 left 2/(2+2). Unassigned: only E6, active since 2023.
         self.assertEqual(got, [(0, 0, 0, 0.0), (2, 1, 1, 33.33), (1, 2, -1, 50.0), (0, 0, 0, 0.0)])
-        self.assertEqual((body["totals"]["joinedTotal"], body["totals"]["leftTotal"], body["totals"]["exitRatePct"]), (3, 3, 30.0))
+        self.assertEqual(
+            (body["totals"]["joinedTotal"], body["totals"]["leftTotal"], body["totals"]["exitRatePct"]), (3, 3, 30.0)
+        )
         self.assertTrue(any("own active strength" in n for n in body["notes"]))
 
     def test_another_year_and_filters(self):
@@ -917,7 +1122,11 @@ class ManpowerMovementTests(_World):
         self.assertEqual(body["totals"]["joinedTotal"], 1)  # E5 joined 10-Jun-2025 (a leaver later, in 2026)
         self.assertEqual(next(r for r in body["rows"] if r["group"] == "Jun 2025")["joinedProduction"], 1)
         self.assertEqual(body["totals"]["leftTotal"], 0)
-        self.assertEqual(body["totals"]["exitRatePct"], 0.0)
+        # the rate divides by TODAY's headcount: meaningless (and blanked, with a note) for any year but this one
+        self.assertIsNone(body["totals"]["exitRatePct"])
+        self.assertTrue(all(r["exitRatePct"] is None for r in body["rows"]))
+        self.assertIsNone(cards(body)["Exit rate"])
+        self.assertTrue(any("current year only" in n for n in body["notes"]))
         body = self.get(self.RID, year="2026", employmentType="production")
         self.assertEqual((body["totals"]["joinedTotal"], body["totals"]["leftTotal"]), (2, 1))
         body = self.get(self.RID, year="2026", branchIds=str(self.b2.id))
@@ -943,7 +1152,10 @@ class ManpowerMovementTests(_World):
         self.assertEqual((body["totals"]["joinedTotal"], body["totals"]["leftTotal"]), (1, 2))
         self.assertEqual(body["totals"]["exitRatePct"], 33.33)
         self.assertEqual(cards(body)["Active today"], 4)
-        self.assertEqual(self.get(self.RID, user=self.branch_user, year="2026", branchIds=str(self.b2.id))["totals"]["joinedTotal"], 0)
+        self.assertEqual(
+            self.get(self.RID, user=self.branch_user, year="2026", branchIds=str(self.b2.id))["totals"]["joinedTotal"],
+            0,
+        )
 
     def test_empty_department_view_has_no_totals_row(self):
         body = self.get(self.RID, groupBy="department", departmentIds="999999")
@@ -973,19 +1185,21 @@ class StatutoryComplianceTests(_World):
                 "UAN missing": 4, "Bank details missing": 4, "Deducted, number missing": 1, "Completeness": 14.3,
             },
         )  # fmt: skip
-        self.assertEqual({k: v["issueCount"] for k, v in rows.items()}, {"E2": 7, "E3": 6, "E6": 7, "E7": 7, "E8": 5, "E10": 7})
+        self.assertEqual(
+            {k: v["issueCount"] for k, v in rows.items()}, {"E2": 7, "E3": 6, "E6": 7, "E7": 7, "E8": 5, "E10": 7}
+        )
 
     def test_each_issue_is_named(self):
         _b, rows = self.rows()
         self.assertEqual(
             rows["E2"]["issues"],
-            "PF number missing; ESI number missing; UAN missing; Bank account number and IFSC missing; "
-            "Aadhaar document not uploaded; PAN document not uploaded; Bank passbook document not uploaded",
+            "PF number missing; ESI number missing; UAN missing; Bank a/c and IFSC missing; "
+            "Aadhaar not uploaded; PAN not uploaded; Bank passbook not uploaded",
         )
         self.assertEqual(
             rows["E3"]["issues"],
-            "IFSC format is invalid; Bank account should be 9-18 digits; UAN should be 12 digits; "
-            "ESI number should be 10 (or 17) digits; PAN document not uploaded; Bank passbook document not uploaded",
+            "IFSC format is invalid; Bank a/c should be 9-18 digits; UAN should be 12 digits; "
+            "ESI number should be 10 or 17 digits; PAN not uploaded; Bank passbook not uploaded",
         )
         self.assertIn("PF deducted in payroll but no PF number", rows["E8"]["issues"])
 
@@ -1007,7 +1221,9 @@ class StatutoryComplianceTests(_World):
 
     def test_documents_and_payroll_evidence(self):
         _b, rows = self.rows(includeCompliant="true")
-        self.assertEqual((rows["E1"]["aadhaarDoc"], rows["E1"]["panDoc"], rows["E1"]["passbookDoc"]), ("Yes", "Yes", "Yes"))
+        self.assertEqual(
+            (rows["E1"]["aadhaarDoc"], rows["E1"]["panDoc"], rows["E1"]["passbookDoc"]), ("Yes", "Yes", "Yes")
+        )
         self.assertEqual((rows["E3"]["aadhaarDoc"], rows["E3"]["panDoc"]), ("Yes", "No"))
         # August 2026 is "last month": E1 has a PF+ESI slip, E8's two weekly slips (60 + 40) add up to a PF deduction
         self.assertEqual((rows["E1"]["pfDeducted"], rows["E1"]["esiDeducted"]), ("Yes", "Yes"))
@@ -1036,24 +1252,24 @@ class StatutoryComplianceTests(_World):
 
     def test_duplicates_normalise_and_name_the_other_employee(self):
         _b, rows = self.rows()
-        self.assertIn("PF number also used by E10", rows["E7"]["issues"])  # 'PF-DUP-9' == 'pf dup 9'
-        self.assertIn("PF number also used by E7", rows["E10"]["issues"])
+        self.assertIn("PF number shared with E10", rows["E7"]["issues"])  # 'PF-DUP-9' == 'pf dup 9'
+        self.assertIn("PF number shared with E7", rows["E10"]["issues"])
 
     def test_duplicates_are_found_across_departments_even_when_filtered(self):
         _b, rows = self.rows(departmentIds=str(self.d_sew1.id))
         self.assertEqual(sorted(rows), ["E2", "E7"])
-        self.assertIn("also used by E10", rows["E7"]["issues"])  # E10 is in CUTTING, outside the filter
+        self.assertIn("shared with E10", rows["E7"]["issues"])  # E10 is in CUTTING, outside the filter
 
     def test_inactive_employees_are_never_flagged_as_duplicates(self):
         self.make("E11", status="inactive", branch=self.b1, pf_number="TN/TPR/001")
         body, rows = self.rows(employeeStatus="all", includeCompliant="true")
-        self.assertNotIn("also used", rows["E11"]["issues"] or "")
+        self.assertNotIn("shared with", rows["E11"]["issues"] or "")
         self.assertEqual(rows["E1"]["issueCount"], 0)  # a rejoiner's old record does not taint the active one
 
     def test_duplicate_detection_respects_branch_isolation(self):
         self.make("E11", branch=self.b2, pf_number="TN/TPR/001")
         _b, rows = self.rows(includeCompliant="true")
-        self.assertIn("also used by E11", rows["E1"]["issues"])  # the admin sees the clash
+        self.assertIn("shared with E11", rows["E1"]["issues"])  # the admin sees the clash
         body = self.get(self.RID, user=self.branch_user, includeCompliant="true")
         e1 = next(r for r in body["rows"] if r["employeeCode"] == "E1")
         self.assertEqual(e1["issueCount"], 0)  # a Unit 1 user cannot see (or be told about) Unit 2's people
@@ -1062,6 +1278,7 @@ class StatutoryComplianceTests(_World):
     def test_scope_filters_and_status(self):
         self.assertEqual(codes(self.get(self.RID, employmentType="production")), ["E2", "E8"])
         self.assertEqual(codes(self.get(self.RID, branchIds=str(self.b2.id))), ["E3", "E8"])
+        self.assertEqual(codes(self.get(self.RID, designationIds=str(self.des_op.id))), ["E2", "E7"])
         self.assertEqual(codes(self.get(self.RID, employeeIds=str(self.e6.id))), ["E6"])
         self.assertEqual(codes(self.get(self.RID, employeeStatus="inactive")), ["E4", "E5", "E9"])
         self.assertEqual(cards(self.get(self.RID, employeeStatus="all"))["Employees checked"], 10)
@@ -1092,7 +1309,9 @@ class DataQualityTests(_World):
         body = self.get(self.RID)
         self.assertEqual(codes(body), ["E2", "E3", "E6", "E7", "E8", "E10"])
         rows = {r["employeeCode"]: r for r in body["rows"]}
-        self.assertEqual({k: v["issueCount"] for k, v in rows.items()}, {"E2": 2, "E3": 5, "E6": 5, "E7": 8, "E8": 5, "E10": 4})
+        self.assertEqual(
+            {k: v["issueCount"] for k, v in rows.items()}, {"E2": 2, "E3": 5, "E6": 5, "E7": 8, "E8": 5, "E10": 4}
+        )
         self.assertEqual(rows["E2"]["issues"], "Father's name missing; Emergency contact missing")
         self.assertEqual(
             rows["E7"]["issues"],
@@ -1102,8 +1321,13 @@ class DataQualityTests(_World):
         self.assertEqual(
             rows["E6"]["issues"], "Phone missing; No department; No designation; No branch; Monthly salary not set"
         )
-        self.assertEqual(rows["E8"]["issues"], "Address missing; No designation; Per-shift rate not set; Father's name missing; Emergency contact missing")
-        self.assertEqual(rows["E10"]["issues"], "Phone missing; Join date missing; No designation; Emergency contact missing")
+        self.assertEqual(
+            rows["E8"]["issues"],
+            "Address missing; No designation; Per-shift rate not set; Father's name missing; Emergency contact missing",
+        )
+        self.assertEqual(
+            rows["E10"]["issues"], "Phone missing; Join date missing; No designation; Emergency contact missing"
+        )
         self.assertEqual(rows["E7"]["joinDate"], "soon")  # shown exactly as entered, so the fix is visible
         self.assertEqual(
             cards(body),
@@ -1125,7 +1349,9 @@ class DataQualityTests(_World):
         self.assertEqual(codes(self.get(self.RID, check="dob")), ["E7"])
         body = self.get(self.RID, check="phone,address")
         self.assertEqual(codes(body), ["E3", "E6", "E7", "E8", "E10"])
-        self.assertEqual({r["employeeCode"]: r["issueCount"] for r in body["rows"]}, {"E3": 1, "E6": 1, "E7": 2, "E8": 1, "E10": 1})
+        self.assertEqual(
+            {r["employeeCode"]: r["issueCount"] for r in body["rows"]}, {"E3": 1, "E6": 1, "E7": 2, "E8": 1, "E10": 1}
+        )
         self.assertEqual(codes(self.get(self.RID, check="salary")), ["E3", "E6", "E8"])
         self.assertEqual(codes(self.get(self.RID, check="join_date")), ["E7", "E10"])
         self.assertEqual(codes(self.get(self.RID, check="org_unit")), ["E3", "E6", "E8", "E10"])
@@ -1151,7 +1377,9 @@ class DataQualityTests(_World):
 
     def test_join_date_in_the_future_and_unrecognised_values(self):
         self.make("E11", join_date="2027-01-01", gender="M", blood_group="Z", branch=self.b1)
-        row = next(r for r in self.get(self.RID, check="join_date,gender,profile")["rows"] if r["employeeCode"] == "E11")
+        row = next(
+            r for r in self.get(self.RID, check="join_date,gender,profile")["rows"] if r["employeeCode"] == "E11"
+        )
         self.assertIn("Join date is in the future", row["issues"])
         self.assertIn("Gender 'M' is not recognised", row["issues"])
         self.assertIn("Blood group 'Z' is not recognised", row["issues"])
@@ -1200,7 +1428,9 @@ class AgeComplianceTests(_World):
         self.assertEqual((rows["E7"]["flag"], rows["E7"]["age"]), ("DOB missing", None))
         self.assertEqual((rows["E8"]["flag"], rows["E8"]["age"]), ("Under age", 16))
         self.assertEqual((rows["E10"]["flag"], rows["E10"]["age"]), ("Over age", 66))
-        self.assertEqual(cards(body), {"Under minimum age": 1, "Over maximum age": 1, "DOB missing / invalid": 1, "Total checked": 7})
+        self.assertEqual(
+            cards(body), {"Under minimum age": 1, "Over maximum age": 1, "DOB missing / invalid": 1, "Total checked": 7}
+        )
 
     def test_show_choices(self):
         self.assertEqual(codes(self.get(self.RID, show="under_min")), ["E8"])
@@ -1239,6 +1469,9 @@ class AgeComplianceTests(_World):
         self.assertEqual(len(codes(self.get(self.RID, employeeStatus="all", show="all"))), 10)
         self.assertEqual(codes(self.get(self.RID, employmentType="production")), ["E8"])
         self.assertEqual(codes(self.get(self.RID, branchIds=str(self.b2.id))), ["E8"])
+        self.assertEqual(codes(self.get(self.RID, departmentIds=str(self.d_cut1.id))), ["E10"])
+        self.assertEqual(codes(self.get(self.RID, designationIds=str(self.des_op.id))), ["E7"])
+        self.assertEqual(codes(self.get(self.RID, employeeIds=str(self.e8.id))), ["E8"])
         self.assertEqual(codes(self.get(self.RID, user=self.branch_user)), ["E7", "E10"])
         self.assertEqual(codes(self.get(self.RID, user=self.branch_user, branchIds=str(self.b2.id))), [])
 
@@ -1273,20 +1506,46 @@ class FamilyDependentsTests(_World):
         rows = {r["dependentName"]: r for r in body["rows"]}
         self.assertEqual((rows["Priya"]["age"], rows["Kiran"]["age"]), (34, 7))
         self.assertIsNone(rows["Raman"]["age"])  # no date of birth -> blank, not 0
-        self.assertEqual((rows["Priya"]["relation"], rows["Priya"]["isInsuranceNominee"], rows["Priya"]["coveredUnderHealthScheme"]), ("Spouse", "Yes", "Yes"))
+        self.assertEqual(
+            (rows["Priya"]["relation"], rows["Priya"]["isInsuranceNominee"], rows["Priya"]["coveredUnderHealthScheme"]),
+            ("Spouse", "Yes", "Yes"),
+        )
         self.assertEqual((rows["Kiran"]["isInsuranceNominee"], rows["Raman"]["coveredUnderHealthScheme"]), ("No", "No"))
-        self.assertEqual(cards(body), {"Dependents": 4, "Employees with dependents": 3, "Insurance nominees": 2, "Covered under health scheme": 2})
+        self.assertEqual(
+            cards(body),
+            {
+                "Dependents": 4,
+                "Employees with dependents": 3,
+                "Insurance nominees": 2,
+                "Covered under health scheme": 2,
+            },
+        )
         self.assertTrue(any("cannot be added or edited from the HR portal" in n for n in body["notes"]))
 
     def test_filters(self):
         self.assertEqual([r["dependentName"] for r in self.get(self.RID, relation="child")["rows"]], ["Kiran"])
         self.assertEqual([r["dependentName"] for r in self.get(self.RID, nominee="true")["rows"]], ["Priya", "Lakshmi"])
-        self.assertEqual([r["dependentName"] for r in self.get(self.RID, healthScheme="true")["rows"]], ["Kiran", "Priya"])
+        self.assertEqual(
+            [r["dependentName"] for r in self.get(self.RID, healthScheme="true")["rows"]], ["Kiran", "Priya"]
+        )
         self.assertEqual([r["dependentName"] for r in self.get(self.RID, employeeStatus="inactive")["rows"]], ["Meena"])
         self.assertEqual(len(self.get(self.RID, employeeStatus="all")["rows"]), 5)
-        self.assertEqual([r["dependentName"] for r in self.get(self.RID, branchIds=str(self.b2.id))["rows"]], ["Lakshmi"])
-        self.assertEqual([r["dependentName"] for r in self.get(self.RID, departmentIds=str(self.d_sew1.id))["rows"]], ["Raman"])
-        self.assertEqual([r["dependentName"] for r in self.get(self.RID, employmentType="production")["rows"]], ["Raman"])
+        self.assertEqual(
+            [r["dependentName"] for r in self.get(self.RID, branchIds=str(self.b2.id))["rows"]], ["Lakshmi"]
+        )
+        self.assertEqual(
+            [r["dependentName"] for r in self.get(self.RID, departmentIds=str(self.d_sew1.id))["rows"]], ["Raman"]
+        )
+        self.assertEqual(
+            [r["dependentName"] for r in self.get(self.RID, employmentType="production")["rows"]], ["Raman"]
+        )
+        self.assertEqual(
+            [r["dependentName"] for r in self.get(self.RID, designationIds=str(self.des_mgr.id))["rows"]],
+            ["Kiran", "Priya"],
+        )
+        self.assertEqual(
+            [r["dependentName"] for r in self.get(self.RID, employeeIds=str(self.e3.id))["rows"]], ["Lakshmi"]
+        )
 
     def test_empty_table_is_a_valid_report(self):
         FamilyDependent.objects.all().delete()
@@ -1313,8 +1572,12 @@ class BirthdayTests(_World):
         body = self.get(self.RID)
         self.assertEqual(codes(body), ["E10", "E2"])  # 1-Sep then 29-Sep
         rows = {r["employeeCode"]: r for r in body["rows"]}
-        self.assertEqual((rows["E10"]["birthday"], rows["E10"]["weekday"], rows["E10"]["turningAge"]), ("2026-09-01", "Tuesday", 66))
-        self.assertEqual((rows["E2"]["birthday"], rows["E2"]["weekday"], rows["E2"]["turningAge"]), ("2026-09-29", "Tuesday", 25))
+        self.assertEqual(
+            (rows["E10"]["birthday"], rows["E10"]["weekday"], rows["E10"]["turningAge"]), ("2026-09-01", "Tuesday", 66)
+        )
+        self.assertEqual(
+            (rows["E2"]["birthday"], rows["E2"]["weekday"], rows["E2"]["turningAge"]), ("2026-09-29", "Tuesday", 25)
+        )
         self.assertEqual(rows["E2"]["dateOfBirth"], "2001-09-29")
         self.assertEqual(cards(body), {"Birthdays in window": 2, "No date of birth (not listed)": 1})
         self.assertTrue(any("Window: 01-Sep-2026 to 30-Sep-2026" in n for n in body["notes"]))
@@ -1322,7 +1585,9 @@ class BirthdayTests(_World):
 
     def test_named_months_and_windows(self):
         body = self.get(self.RID, window="m12")
-        self.assertEqual([(r["employeeCode"], r["birthday"], r["turningAge"]) for r in body["rows"]], [("E6", "2026-12-31", 31)])
+        self.assertEqual(
+            [(r["employeeCode"], r["birthday"], r["turningAge"]) for r in body["rows"]], [("E6", "2026-12-31", 31)]
+        )
         self.assertEqual(codes(self.get(self.RID, window="m05")), ["E8"])
         self.assertEqual(codes(self.get(self.RID, window="nextMonth")), [])  # nobody in October
         self.assertEqual(codes(self.get(self.RID, window="next7")), ["E2"])  # today counts
@@ -1331,10 +1596,15 @@ class BirthdayTests(_World):
 
     def test_feb_29_birthday_is_celebrated_on_28_feb_in_a_non_leap_year(self):
         body = self.get(self.RID, window="m02")
-        self.assertEqual([(r["employeeCode"], r["birthday"], r["turningAge"], r["weekday"]) for r in body["rows"]], [("E3", "2026-02-28", 26, "Saturday")])
+        self.assertEqual(
+            [(r["employeeCode"], r["birthday"], r["turningAge"], r["weekday"]) for r in body["rows"]],
+            [("E3", "2026-02-28", 26, "Saturday")],
+        )
         self.mock_today.return_value = date(2028, 2, 10)  # 2028 is a leap year
         body = self.get(self.RID)
-        self.assertEqual([(r["employeeCode"], r["birthday"], r["turningAge"]) for r in body["rows"]], [("E3", "2028-02-29", 28)])
+        self.assertEqual(
+            [(r["employeeCode"], r["birthday"], r["turningAge"]) for r in body["rows"]], [("E3", "2028-02-29", 28)]
+        )
 
     def test_window_wraps_from_december_into_january(self):
         self.make("E11", date_of_birth=date(1990, 1, 5), branch=self.b1)
@@ -1357,6 +1627,7 @@ class BirthdayTests(_World):
         self.assertEqual(codes(self.get(self.RID, departmentIds=str(self.d_cut1.id))), ["E10"])
         self.assertEqual(codes(self.get(self.RID, employmentType="production")), ["E2"])
         self.assertEqual(codes(self.get(self.RID, designationIds=str(self.des_op.id))), ["E2"])
+        self.assertEqual(codes(self.get(self.RID, employeeIds=str(self.e2.id))), ["E2"])
         self.assertEqual(codes(self.get(self.RID, branchIds=str(self.b2.id))), [])
         self.make("E11", date_of_birth=date(1985, 9, 15), branch=self.b2, department=self.d_cut2)
         self.assertEqual(codes(self.get(self.RID)), ["E10", "E11", "E2"])
@@ -1370,11 +1641,16 @@ class WorkAnniversaryTests(_World):
     def test_default_month_lists_only_completed_years(self):
         body = self.get(self.RID)  # September: E2 and E3 joined this September -> 0 years, not an anniversary
         self.assertEqual(body["rows"], [])
-        self.assertEqual(cards(body), {"Anniversaries in window": 0, "Join date missing / unreadable (not listed)": 2})  # E7, E10
+        self.assertEqual(
+            cards(body), {"Anniversaries in window": 0, "Join date missing / unreadable (not listed)": 2}
+        )  # E7, E10
 
     def test_named_months(self):
         body = self.get(self.RID, window="m01")
-        self.assertEqual([(r["employeeCode"], r["anniversary"], r["yearsCompleted"], r["joinDate"]) for r in body["rows"]], [("E1", "2026-01-15", 2, "2024-01-15")])
+        self.assertEqual(
+            [(r["employeeCode"], r["anniversary"], r["yearsCompleted"], r["joinDate"]) for r in body["rows"]],
+            [("E1", "2026-01-15", 2, "2024-01-15")],
+        )
         body = self.get(self.RID, window="m11")
         self.assertEqual([(r["employeeCode"], r["yearsCompleted"]) for r in body["rows"]], [("E6", 3)])
         self.assertEqual(codes(self.get(self.RID, window="m08")), [])  # E8 joined 31-Aug-2026: zero years
@@ -1391,18 +1667,28 @@ class WorkAnniversaryTests(_World):
     def test_feb_29_join_date_and_year_wrap(self):
         self.make("E11", join_date="2020-02-29", branch=self.b1)
         body = self.get(self.RID, window="m02")
-        self.assertEqual([(r["employeeCode"], r["anniversary"], r["yearsCompleted"]) for r in body["rows"]], [("E11", "2026-02-28", 6)])
+        self.assertEqual(
+            [(r["employeeCode"], r["anniversary"], r["yearsCompleted"]) for r in body["rows"]],
+            [("E11", "2026-02-28", 6)],
+        )
         self.mock_today.return_value = date(2028, 2, 1)
-        self.assertEqual([(r["employeeCode"], r["anniversary"]) for r in self.get(self.RID)["rows"]], [("E11", "2028-02-29")])
+        self.assertEqual(
+            [(r["employeeCode"], r["anniversary"]) for r in self.get(self.RID)["rows"]], [("E11", "2028-02-29")]
+        )
         self.make("E12", join_date="03-01-2019", branch=self.b1)  # dd-mm-yyyy text: 3-Jan-2019
         self.mock_today.return_value = date(2026, 12, 20)
         body = self.get(self.RID, window="next30")
-        self.assertEqual([(r["employeeCode"], r["anniversary"], r["yearsCompleted"]) for r in body["rows"]], [("E12", "2027-01-03", 8), ("E1", "2027-01-15", 3)])
+        self.assertEqual(
+            [(r["employeeCode"], r["anniversary"], r["yearsCompleted"]) for r in body["rows"]],
+            [("E12", "2027-01-03", 8), ("E1", "2027-01-15", 3)],
+        )
 
     def test_ordering_and_filters(self):
         self.make("E11", join_date="2020-01-15", branch=self.b2, department=self.d_cut2, employment_type="production")
         body = self.get(self.RID, window="m01")
-        self.assertEqual([(r["employeeCode"], r["yearsCompleted"]) for r in body["rows"]], [("E11", 6), ("E1", 2)])  # same day: more years first
+        self.assertEqual(
+            [(r["employeeCode"], r["yearsCompleted"]) for r in body["rows"]], [("E11", 6), ("E1", 2)]
+        )  # same day: more years first
         self.assertEqual(codes(self.get(self.RID, window="m01", employmentType="production")), ["E11"])
         self.assertEqual(codes(self.get(self.RID, window="m01", branchIds=str(self.b2.id))), ["E11"])
         self.assertEqual(codes(self.get(self.RID, window="m01", departmentIds=str(self.d_cut1.id))), ["E1"])
@@ -1427,13 +1713,23 @@ class ServiceMilestoneTests(_World):
         self.assertEqual(codes(body), ["E1", "E2", "E3", "E6", "E8"])  # E7 / E10 have no readable join date
         rows = {r["employeeCode"]: r for r in body["rows"]}
         e1 = rows["E1"]
-        self.assertEqual((e1["serviceMonths"], e1["probationEnd"], e1["probationSource"]), (32, "2024-04-15", "Derived"))
+        self.assertEqual(
+            (e1["serviceMonths"], e1["probationEnd"], e1["probationSource"]), (32, "2024-04-15", "Derived")
+        )
         self.assertEqual((e1["clEligibleFrom"], e1["clEligible"]), ("2024-07-15", "Eligible"))
         e6 = rows["E6"]
-        self.assertEqual((e6["serviceMonths"], e6["probationEnd"], e6["clEligibleFrom"], e6["clEligible"]), (33, "2024-02-29", "2024-05-30", "Eligible"))
+        self.assertEqual(
+            (e6["serviceMonths"], e6["probationEnd"], e6["clEligibleFrom"], e6["clEligible"]),
+            (33, "2024-02-29", "2024-05-30", "Eligible"),
+        )
         e3 = rows["E3"]
-        self.assertEqual((e3["serviceMonths"], e3["probationEnd"], e3["clEligibleFrom"], e3["clEligible"]), (0, "2026-12-05", "2027-03-05", "Not yet"))
-        self.assertEqual((rows["E2"]["clEligible"], rows["E2"]["clEligibleFrom"]), ("Not applicable", None))  # production
+        self.assertEqual(
+            (e3["serviceMonths"], e3["probationEnd"], e3["clEligibleFrom"], e3["clEligible"]),
+            (0, "2026-12-05", "2027-03-05", "Not yet"),
+        )
+        self.assertEqual(
+            (rows["E2"]["clEligible"], rows["E2"]["clEligibleFrom"]), ("Not applicable", None)
+        )  # production
         self.assertEqual(rows["E8"]["probationEnd"], "2026-11-30")  # 31-Aug + 3 months, clamped to the month end
         self.assertEqual(
             cards(body),
@@ -1465,7 +1761,9 @@ class ServiceMilestoneTests(_World):
 
     def test_recorded_dates_beat_derived_ones(self):
         Employee.objects.filter(pk=self.e3.pk).update(probation_end_date=date(2026, 10, 15))
-        Employee.objects.filter(pk=self.e2.pk).update(probation_end_date=date(2026, 10, 15), confirmation_date=date(2026, 9, 1))
+        Employee.objects.filter(pk=self.e2.pk).update(
+            probation_end_date=date(2026, 10, 15), confirmation_date=date(2026, 9, 1)
+        )
         body = self.get(self.RID)
         rows = {r["employeeCode"]: r for r in body["rows"]}
         self.assertEqual((rows["E3"]["probationEnd"], rows["E3"]["probationSource"]), ("2026-10-15", "Recorded"))
@@ -1473,11 +1771,22 @@ class ServiceMilestoneTests(_World):
         self.assertEqual(cards(body)["On probation"], 2)  # E2 is confirmed -> off probation
         self.assertEqual(codes(self.get(self.RID, milestone="probation_ending")), ["E3"])  # 15-Oct is within 30 days
 
+    def test_people_who_have_left_are_neither_on_probation_nor_casual_leave_eligible(self):
+        body = self.get(self.RID, employeeStatus="inactive")
+        rows = {r["employeeCode"]: r for r in body["rows"]}
+        self.assertEqual(sorted(rows), ["E4", "E5", "E9"])
+        self.assertEqual(rows["E4"]["clEligible"], "Not applicable")  # staff for 6+ years, but no longer active
+        self.assertIsNone(rows["E4"]["clEligibleFrom"])
+        self.assertEqual(cards(body)["On probation"], 0)
+        self.assertEqual(cards(body)["Casual leave eligible"], 0)
+
     def test_scope_filters_and_isolation(self):
         self.assertEqual(codes(self.get(self.RID, employmentType="staff")), ["E1", "E3", "E6"])
         self.assertEqual(codes(self.get(self.RID, employeeStatus="inactive")), ["E4", "E5", "E9"])
         self.assertEqual(codes(self.get(self.RID, branchIds=str(self.b2.id))), ["E3", "E8"])
         self.assertEqual(codes(self.get(self.RID, departmentIds=str(self.d_cut1.id))), ["E1"])
+        self.assertEqual(codes(self.get(self.RID, designationIds=str(self.des_op.id))), ["E2"])
+        self.assertEqual(codes(self.get(self.RID, employeeIds=str(self.e6.id))), ["E6"])
         self.assertEqual(codes(self.get(self.RID, user=self.branch_user)), ["E1", "E2"])
         self.assertEqual(codes(self.get(self.RID, user=self.branch_user, branchIds=str(self.b2.id))), [])
 
@@ -1497,7 +1806,9 @@ class WorkforceProfileTests(_World):
 
     def test_age_bands_golden(self):
         body = self.get(self.RID)
-        self.assertEqual([r["bucket"] for r in body["rows"]], ["Under 18", "18-25", "26-35", "36-45", "46-55", "56+", "Unknown"])
+        self.assertEqual(
+            [r["bucket"] for r in body["rows"]], ["Under 18", "18-25", "26-35", "36-45", "46-55", "56+", "Unknown"]
+        )
         self.assertEqual(
             self.table(body),
             {
@@ -1510,7 +1821,13 @@ class WorkforceProfileTests(_World):
         self.assertEqual(sum(r["total"] for r in body["rows"]), 7)
         self.assertEqual(
             cards(body),
-            {"Employees": 7, "Average age (years)": 33.2, "Average service (years)": 1.1, "Date of birth unknown": 1, "Join date unknown": 2},
+            {
+                "Employees": 7,
+                "Average age (years)": 33.2,
+                "Average service (years)": 1.1,
+                "Date of birth unknown": 1,
+                "Join date unknown": 2,
+            },
         )
 
     def test_tenure_bands(self):
@@ -1525,13 +1842,18 @@ class WorkforceProfileTests(_World):
 
     def test_gender_blood_group_and_salary_type(self):
         body = self.get(self.RID, dimension="gender")
-        self.assertEqual({k: v[-1] for k, v in self.table(body).items()}, {"Male": 3, "Female": 3, "Other": 0, "Not set": 1})
+        self.assertEqual(
+            {k: v[-1] for k, v in self.table(body).items()}, {"Male": 3, "Female": 3, "Other": 0, "Not set": 1}
+        )
         body = self.get(self.RID, dimension="bloodGroup")
         t = self.table(body)
         self.assertEqual({k: v[-1] for k, v in t.items() if v[-1]}, {"A+": 1, "B+": 1, "AB-": 1, "O+": 2, "Unknown": 2})
         self.assertEqual([r["bucket"] for r in body["rows"]][-1], "Unknown")
         body = self.get(self.RID, dimension="salaryType")
-        self.assertEqual(self.table(body), {"Monthly": (5, 0, 2, 2, 1, 5), "Weekly": (0, 2, 1, 1, 0, 2), "Unknown": (0, 0, 0, 0, 0, 0)})
+        self.assertEqual(
+            self.table(body),
+            {"Monthly": (5, 0, 2, 2, 1, 5), "Weekly": (0, 2, 1, 1, 0, 2), "Unknown": (0, 0, 0, 0, 0, 0)},
+        )
 
     def test_unrecognised_values_get_their_own_row_instead_of_vanishing(self):
         self.make("E11", salary_type="fortnightly", branch=self.b1)
@@ -1567,6 +1889,7 @@ class OrgStructureTests(_World):
         self.assertEqual(
             labels,
             [
+                ("Head Office", "No departments set up"), ("-", "Head Office total"),  # seeded by migration 0036
                 ("Old Unit (inactive)", "SCRAP"), ("-", "Old Unit (inactive) total"),
                 ("Unit 1", "CUTTING"), ("Unit 1", "SEWING"), ("-", "Unit 1 total"),
                 ("Unit 2", "CUTTING"), ("-", "Unit 2 total"),
@@ -1576,21 +1899,46 @@ class OrgStructureTests(_World):
         by = {(r["branch"], r["department"]): r for r in body["rows"] if r.get("_kind") != "subtotal"}
         keys = ("designations", "staff", "production", "hods", "required", "vacancy")
         self.assertEqual(tuple(by[("Unit 1", "CUTTING")][k] for k in keys), (1, 2, 0, "Jai Singh", 5, 3))
-        self.assertEqual(tuple(by[("Unit 1", "SEWING")][k] for k in keys), (2, 1, 1, "Arun Kumar", 1, 0))  # plan met: vacancy 0, not blank
-        self.assertEqual(tuple(by[("Unit 2", "CUTTING")][k] for k in keys), (0, 1, 1, None, None, None))  # inactive HOD; plan 0 = not planned
+        self.assertEqual(
+            tuple(by[("Unit 1", "SEWING")][k] for k in keys), (2, 1, 1, "Arun Kumar", 1, 0)
+        )  # plan met: vacancy 0, not blank
+        self.assertEqual(
+            tuple(by[("Unit 2", "CUTTING")][k] for k in keys), (0, 1, 1, None, None, None)
+        )  # inactive HOD; plan 0 = not planned
         self.assertEqual(by[("Old Unit (inactive)", "SCRAP")]["branchCode"], "OLD")
         self.assertEqual(by[("No branch", "Unassigned (no department)")]["staff"], 1)  # E6 has no department
         sub = {r["department"]: r for r in body["rows"] if r.get("_kind") == "subtotal"}
-        self.assertEqual((sub["Unit 1 total"]["designations"], sub["Unit 1 total"]["staff"], sub["Unit 1 total"]["production"], sub["Unit 1 total"]["required"], sub["Unit 1 total"]["vacancy"]), (3, 3, 1, 6, 3))
+        self.assertEqual(
+            (
+                sub["Unit 1 total"]["designations"],
+                sub["Unit 1 total"]["staff"],
+                sub["Unit 1 total"]["production"],
+                sub["Unit 1 total"]["required"],
+                sub["Unit 1 total"]["vacancy"],
+            ),
+            (3, 3, 1, 6, 3),
+        )
         self.assertEqual(body["totals"], {"designations": 3, "staff": 5, "production": 2, "required": 6, "vacancy": 3})
-        self.assertEqual(cards(body), {"Branches": 4, "Departments": 5, "Active employees": 7, "Planned positions": 6, "Open vacancies": 3})
+        self.assertEqual(
+            cards(body),
+            {"Branches": 4, "Departments": 5, "Active employees": 7, "Planned positions": 6, "Open vacancies": 3},
+        )  # Head Office + Unit 1 + Unit 2 + Old Unit: 'No branch' is a bucket for legacy rows, not a fifth branch
 
     def test_totals_equal_the_rows(self):
         body = self.get(self.RID)
         rows = data_rows(body)
         for k in ("designations", "staff", "production", "required", "vacancy"):
             self.assertEqual(body["totals"][k], sum(r[k] or 0 for r in rows), k)
-        self.assertEqual(body["totals"]["staff"] + body["totals"]["production"], 7)  # every active employee is counted once
+        self.assertEqual(
+            body["totals"]["staff"] + body["totals"]["production"], 7
+        )  # every active employee is counted once
+
+    def test_subtotals_add_up_to_the_grand_total(self):
+        body = self.get(self.RID)
+        subs = [r for r in body["rows"] if r.get("_kind") == "subtotal"]
+        self.assertEqual(len(subs), 5)  # Head Office (no departments yet), Old Unit, Unit 1, Unit 2, No branch
+        for k in ("designations", "staff", "production", "required", "vacancy"):
+            self.assertEqual(sum(r[k] for r in subs), body["totals"][k], k)
 
     def test_inactive_employees_are_not_counted_and_hod_row_must_be_active(self):
         rows = {(r["branch"], r["department"]): r for r in data_rows(self.get(self.RID))}
@@ -1606,7 +1954,9 @@ class OrgStructureTests(_World):
 
     def test_branch_isolation(self):
         body = self.get(self.RID, user=self.branch_user)
-        self.assertEqual([(r["branch"], r["department"]) for r in data_rows(body)], [("Unit 1", "CUTTING"), ("Unit 1", "SEWING")])
+        self.assertEqual(
+            [(r["branch"], r["department"]) for r in data_rows(body)], [("Unit 1", "CUTTING"), ("Unit 1", "SEWING")]
+        )
         self.assertEqual((body["totals"]["staff"], body["totals"]["production"]), (3, 1))
         text = str(body)
         for hidden in ("Unit 2", "Old Unit", "LEGACY", "SCRAP", "No branch"):
@@ -1614,12 +1964,15 @@ class OrgStructureTests(_World):
         self.assertEqual(data_rows(self.get(self.RID, user=self.branch_user, branchIds=str(self.b2.id))), [])
 
     def test_employee_in_a_department_of_another_branch_still_counts(self):
-        # legacy data: an employee of Unit 1 sitting in Unit 2's department must not vanish from the totals
+        # legacy data: an employee of Unit 1 sitting in Unit 2's department must not vanish from the totals ...
         self.make("E11", branch=self.b1, department=self.d_cut2)
         body = self.get(self.RID, user=self.branch_user)
-        cutting2 = next(r for r in data_rows(body) if r["branch"] == "Unit 2")
-        self.assertEqual(cutting2["staff"], 1)
+        outside = [r for r in data_rows(body) if r["department"].startswith("Departments outside this listing")]
+        # ... but they are counted under the user's OWN branch, on a line that names nothing of the other unit
+        self.assertEqual([(r["branch"], r["staff"], r["production"]) for r in outside], [("Unit 1", 1, 0)])
         self.assertEqual(body["totals"]["staff"] + body["totals"]["production"], 5)
+        self.assertNotIn("Unit 2", str(body))
+        self.assertTrue(any("not part of this listing" in n for n in body["notes"]))
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1661,9 +2014,14 @@ class ContractTests(_World):
             if not body["rows"]:
                 continue
             # the first TEXT column of the first data row round-trips exactly
-            idx = next((i for i, c in enumerate(body["columns"]) if c["type"] == "text" and body["rows"][0].get(c["key"])), None)
+            idx = next(
+                (i for i, c in enumerate(body["columns"]) if c["type"] == "text" and body["rows"][0].get(c["key"])),
+                None,
+            )
             if idx is not None:
-                self.assertEqual(ws.cell(row=8, column=idx + 1).value, body["rows"][0][body["columns"][idx]["key"]], rid)
+                self.assertEqual(
+                    ws.cell(row=8, column=idx + 1).value, body["rows"][0][body["columns"][idx]["key"]], rid
+                )
             self.assertGreaterEqual(ws.max_row, 8 + len(body["rows"]) - 1, rid)
 
     def test_pdf_for_every_report(self):
@@ -1674,7 +2032,9 @@ class ContractTests(_World):
             self.assertGreater(len(r.content), 1500, rid)
 
     def test_identifiers_stay_text_cells_in_excel(self):
-        ws = load_workbook(io.BytesIO(self.export("statutory-compliance", "xlsx", **WIDE["statutory-compliance"]).content)).active
+        ws = load_workbook(
+            io.BytesIO(self.export("statutory-compliance", "xlsx", **WIDE["statutory-compliance"]).content)
+        ).active
         header = [c.value for c in ws[7]]
         col = header.index("UAN") + 1
         cells = {ws.cell(row=r, column=1).value: ws.cell(row=r, column=col) for r in range(8, ws.max_row + 1)}
@@ -1690,16 +2050,28 @@ class ContractTests(_World):
                 self.assertEqual(body["rows"], [], rid)
                 self.assertEqual(body["rowCount"], 0, rid)
             else:
-                self.assertTrue(all(all(not v for k, v in r.items() if k not in ("group", "bucket", "exitRatePct", "sharePct")) for r in body["rows"]), rid)
+                self.assertTrue(
+                    all(
+                        all(not v for k, v in r.items() if k not in ("group", "bucket", "exitRatePct", "sharePct"))
+                        for r in body["rows"]
+                    ),
+                    rid,
+                )
             for fmt in ("xlsx", "pdf"):
                 self.assertEqual(self.export(rid, fmt, **params).status_code, 200, (rid, fmt))
 
     def test_no_query_count_growth_with_more_employees(self):
         # Warm caches first (roles, settings), then compare 10 employees against 22.
         variants = {rid: [WIDE[rid]] for rid in MY_REPORTS}
-        variants["strength-statement"] = [{"groupBy": g, "employeeStatus": "all", "includeEmpty": "true"} for g in ("department", "designation", "branch")]
+        variants["strength-statement"] = [
+            {"groupBy": g, "employeeStatus": "all", "includeEmpty": "true"}
+            for g in ("department", "designation", "branch")
+        ]
         variants["manpower-movement"] = [{"year": "2026", "groupBy": g} for g in ("month", "department")]
-        variants["workforce-profile"] = [{"dimension": d, "employeeStatus": "all"} for d in ("ageBand", "tenureBand", "gender", "bloodGroup", "salaryType")]
+        variants["workforce-profile"] = [
+            {"dimension": d, "employeeStatus": "all"}
+            for d in ("ageBand", "tenureBand", "gender", "bloodGroup", "salaryType")
+        ]
         variants["work-anniversaries"] = [{"window": "thisMonth"}, {"window": "next30"}]
 
         def measure():
@@ -1725,7 +2097,9 @@ class ContractTests(_World):
             self.doc(e, "pan_card")
             FamilyDependent.objects.create(employee=e, name=f"Dep{i}", relation="child", date_of_birth=date(2015, 1, 1))
             if e.status != "active":
-                ResignationRequest.objects.create(employee=e, status="approved", last_working_date=date(2026, 9, 1 + i), reason="x")
+                ResignationRequest.objects.create(
+                    employee=e, status="approved", last_working_date=date(2026, 9, 1 + i), reason="x"
+                )
             else:
                 ResignationRequest.objects.create(employee=e, status="pending", reason="y")
             SalarySlip.objects.create(employee=e, month=8, year=2026, slip_number=f"S-X{i}", pf_deduction=10)
@@ -1735,8 +2109,12 @@ class ContractTests(_World):
 
     def test_branch_isolation_across_every_employee_level_report(self):
         # Give every date-driven report something to show in BOTH units.
-        self.make("E11", date_of_birth=date(1985, 10, 3), join_date="2020-09-12", branch=self.b2, department=self.d_cut2)
-        self.make("E12", date_of_birth=date(1985, 10, 4), join_date="2020-09-13", branch=self.b1, department=self.d_cut1)
+        self.make(
+            "E11", date_of_birth=date(1985, 10, 3), join_date="2020-09-12", branch=self.b2, department=self.d_cut2
+        )
+        self.make(
+            "E12", date_of_birth=date(1985, 10, 4), join_date="2020-09-13", branch=self.b1, department=self.d_cut1
+        )
         FamilyDependent.objects.create(employee=self.e1, name="Priya", relation="spouse")
         FamilyDependent.objects.create(employee=self.e3, name="Lakshmi", relation="mother")
         wide = {**WIDE, "birthdays": {"window": "next30"}, "work-anniversaries": {"window": "thisMonth"}}
@@ -1746,21 +2124,97 @@ class ContractTests(_World):
                 continue
             admin_body = self.get(rid, **wide[rid])
             scoped = self.get(rid, user=self.branch_user, **wide[rid])
-            self.assertTrue(b2_only & {str(v) for r in admin_body["rows"] for v in r.values()}, f"{rid}: fixture shows nothing from other units")
+            self.assertTrue(
+                b2_only & {str(v) for r in admin_body["rows"] for v in r.values()},
+                f"{rid}: fixture shows nothing from other units",
+            )
             leaked = b2_only & {str(v) for r in scoped["rows"] for v in r.values()}
             self.assertFalse(leaked, f"{rid} leaks {leaked}")
             # a scoped user cannot widen the scope with params
-            for extra in ({"branchIds": str(self.b2.id)}, {"employeeIds": ",".join(str(e.id) for e in (self.e3, self.e6, self.e8, self.e9))}):
+            for extra in (
+                {"branchIds": str(self.b2.id)},
+                {"employeeIds": ",".join(str(e.id) for e in (self.e3, self.e6, self.e8, self.e9))},
+            ):
                 widened = self.get(rid, user=self.branch_user, **wide[rid], **extra)
                 self.assertFalse(b2_only & {str(v) for r in widened["rows"] for v in r.values()}, f"{rid} {extra}")
 
+    def test_employee_and_designation_filters_narrow_every_register(self):
+        registers = (
+            "employee-master", "employee-contact-list", "statutory-compliance", "data-quality-audit", "age-compliance",
+            "service-milestones", "resignation-register",
+        )  # fmt: skip
+        for rid in registers:
+            body = self.get(rid, employeeIds=str(self.e1.id), **WIDE[rid])
+            self.assertEqual(codes(body), ["E1"], rid)
+        for rid in (*registers, "new-joinings"):
+            body = self.get(rid, designationIds=str(self.des_mgr.id), **WIDE[rid])
+            self.assertEqual(codes(body), ["E1"], rid)  # Manager is held by E1 alone
+
+    def test_totals_row_equals_the_sum_of_the_rows_for_every_report(self):
+        for rid in MY_REPORTS:
+            body = self.get(rid, **WIDE[rid])
+            summed = [c for c in body["columns"] if c["total"] == "sum"]
+            if not summed:
+                self.assertIsNone(body["totals"], rid)
+                continue
+            for c in summed:
+                want = sum(r[c["key"]] or 0 for r in data_rows(body))
+                self.assertEqual(body["totals"][c["key"]], want, (rid, c["key"]))
+
+    def test_a_large_register_paginates_and_stays_complete(self):
+        Employee.objects.bulk_create(
+            Employee(
+                employee_code=f"B{i:04d}", first_name=f"Bulk{i}", last_name="Person", employment_type="staff",
+                status="active", branch=self.b1, department=self.d_cut1, join_date="2025-01-01",
+                date_of_birth=date(1990, 1, 1),
+            )
+            for i in range(300)
+        )  # fmt: skip
+        body = self.get("employee-master", employeeStatus="all")
+        self.assertEqual(body["rowCount"], 310)
+        self.assertEqual(
+            [r["employeeCode"] for r in body["rows"]][:2], ["B0000", "B0001"]
+        )  # 'B...' sorts before 'E...'
+        self.assertEqual(body["rows"][-1]["employeeCode"], "E10")
+        r = self.export("employee-master", "pdf", employeeStatus="all")
+        self.assertGreater(r.content.count(b"/Type /Page\n") + r.content.count(b"/Type /Page "), 3)
+        ws = load_workbook(io.BytesIO(self.export("employee-master", "xlsx", employeeStatus="all").content)).active
+        listed = [ws.cell(row=n, column=1).value for n in range(8, ws.max_row + 1)]
+        self.assertEqual(len([c for c in listed if c and c[0] in "BE" and c[1:].isdigit()]), 310)
+
+    def test_photo_and_password_columns_are_never_loaded(self):
+        """Employee.photo_url is a ~40 KB base64 string per row and password_hash is a secret: no report may even SELECT them."""
+        for rid in MY_REPORTS:
+            with CaptureQueriesContext(connection) as q:
+                self.get(rid, **WIDE[rid])
+                self.export(rid, "xlsx", **WIDE[rid])
+            for query in q.captured_queries:
+                sql = query["sql"]
+                self.assertNotIn("photo_url", sql, rid)
+                if '"hr_users"' not in sql:  # the login lookup reads the HR user's own hash; nothing else may read one
+                    self.assertNotIn("password_hash", sql, rid)
+
     def test_reports_never_write(self):
-        before = (Employee.objects.count(), ResignationRequest.objects.count(), list(Employee.objects.values_list("pk", "updated_at").order_by("pk")))
+        from django.apps import apps
+
+        from .models import PayrollSettings
+
+        PayrollSettings.get()  # the export letterhead reads this singleton (creating it once): make it exist up front
+
+        def snapshot():
+            counts = {
+                m.__name__: m.objects.count()
+                for m in apps.get_app_config("api").get_models()
+                if m.__name__ != "AuditLog"
+            }  # exports are audited on purpose, so the audit trail is the one table allowed to grow
+            return counts, list(Employee.objects.values_list("pk", "updated_at").order_by("pk"))
+
+        before = snapshot()
         for rid in MY_REPORTS:
             self.get(rid, **WIDE[rid])
-            self.export(rid, "xlsx", **WIDE[rid])
-        after = (Employee.objects.count(), ResignationRequest.objects.count(), list(Employee.objects.values_list("pk", "updated_at").order_by("pk")))
-        self.assertEqual(before, after)
+            for fmt in ("xlsx", "pdf"):
+                self.export(rid, fmt, **WIDE[rid])
+        self.assertEqual(before, snapshot())
 
     def test_exports_are_audited_and_row_counts_match(self):
         from .models import AuditLog
@@ -1771,3 +2225,498 @@ class ContractTests(_World):
         log = AuditLog.objects.filter(action="export", module="reports").latest("id")
         self.assertIn("Employee Master Register", log.record_description)
         self.assertIn("10 rows", log.record_description)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Adversarial review. Every test states the CORRECT behaviour: a failing test is a defect in the report.
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class AdversarialReviewTests(_World):
+    def _employees_only_user(self, name="em_emp_only_adv"):
+        return HRUser.objects.create(
+            username=name,
+            password_hash="x",
+            role=Role.objects.create(name=name, permissions={"reports": "view", "employees": "view"}),
+        )
+
+    # -- org-structure -----------------------------------------------------------------------
+    def test_org_structure_hides_another_units_plan_and_hods_from_a_scoped_user(self):
+        DepartmentHeadcount.objects.filter(department=self.d_cut2).update(required_count=9)
+        boss = self.make("E20", branch=self.b2, department=self.d_cut2)
+        ManagerDepartmentAssignment.objects.create(
+            manager=DepartmentManager.objects.create(employee=boss), department=self.d_cut2
+        )
+        self.make("E11", branch=self.b1, department=self.d_cut2)  # legacy: a Unit 1 employee in Unit 2's department
+        scoped = self.get("org-structure", user=self.branch_user)
+        for r in data_rows(scoped):
+            if r["branch"] == "Unit 2":
+                self.assertIsNone(r["hods"], "Unit 2's HOD is shown to a Unit 1 user")
+                self.assertIsNone(r["required"], "Unit 2's manpower plan is shown to a Unit 1 user")
+                self.assertIsNone(r["designations"], "Unit 2's designation count is shown to a Unit 1 user")
+        self.assertNotIn("E20 Extra", str(scoped))
+
+    def test_org_structure_vacancy_does_not_depend_on_who_is_asking(self):
+        DepartmentHeadcount.objects.filter(department=self.d_cut2).update(required_count=5)
+        self.make("E11", branch=self.b1, department=self.d_cut2)
+        admin = next(r for r in data_rows(self.get("org-structure")) if r["branch"] == "Unit 2")
+        scoped = [r for r in data_rows(self.get("org-structure", user=self.branch_user)) if r["branch"] == "Unit 2"]
+        for r in scoped:
+            self.assertEqual(r["vacancy"], admin["vacancy"])
+
+    def test_org_structure_branch_card_counts_real_branches_only(self):
+        # Unit 1, Unit 2 and the closed Old Unit. 'No branch' is a bucket for legacy rows, not a branch. (Migration 0036
+        # seeds a real 'Head Office' branch into every database: take it out so the count is the three built here.)
+        Branch.objects.filter(is_head_office=True).delete()
+        self.assertEqual(Branch.objects.count(), 3)
+        self.assertEqual(cards(self.get("org-structure"))["Branches"], 3)
+
+    def test_org_structure_lists_a_branch_that_has_no_departments_yet(self):
+        Branch.objects.create(name="Empty Unit", code="EMP")
+        self.assertIn("Empty Unit", {r["branch"] for r in data_rows(self.get("org-structure"))})
+
+    # -- labels that cannot be told apart -------------------------------------------------------
+    def test_manpower_movement_department_rows_can_be_told_apart(self):
+        labels = [r["group"] for r in self.get("manpower-movement", year="2026", groupBy="department")["rows"]]
+        self.assertEqual(len(labels), len(set(labels)), f"two rows carry the same label: {labels}")
+
+    def test_strength_designation_rows_can_be_told_apart(self):
+        sew2 = Department.objects.create(name="SEWING", branch=self.b2)
+        op2 = Designation.objects.create(title="Operator", department=sew2)
+        self.make("E21", branch=self.b2, department=sew2, designation=op2)
+        rows = self.get("strength-statement", groupBy="designation")["rows"]
+        keys = [(r["group"], r["department"]) for r in rows]
+        self.assertEqual(len(keys), len(set(keys)), f"identical-looking rows: {keys}")
+
+    # -- service length of people who have left ---------------------------------------------------
+    def test_a_leavers_tenure_stops_at_the_exit_date(self):
+        rows = {r["employeeCode"]: r for r in self.get("employee-master", employeeStatus="inactive")["rows"]}
+        # E9 joined 1-Jan-2019 and left about 16-Jan-2026: 7 years. As of today it would read 7y 8m.
+        self.assertIn(rows["E9"]["tenure"], (None, "7y"))
+        # E4 joined 1-Mar-2020, last working day 31-Aug-2026: 77 months = 6y 5m (what the exits register says).
+        self.assertIn(rows["E4"]["tenure"], (None, "6y 5m"))
+
+    def test_workforce_profile_bands_a_leaver_by_service_at_exit(self):
+        e = self.make("E30", status="inactive", branch=self.b1, department=self.d_cut1, join_date="2026-01-01")
+        Employee.objects.filter(pk=e.pk).update(updated_at=utc(2026, 2, 1, 5, 0))  # left about 1-Feb-2026: one month
+        by = {
+            r["bucket"]: r
+            for r in self.get("workforce-profile", dimension="tenureBand", employeeStatus="inactive")["rows"]
+        }
+        self.assertEqual(by["Under 6 months"]["total"], 1)
+
+    def test_service_milestones_service_months_of_a_leaver_stop_at_the_exit(self):
+        e = self.make("E30", status="inactive", branch=self.b1, department=self.d_cut1, join_date="2026-01-01")
+        Employee.objects.filter(pk=e.pk).update(updated_at=utc(2026, 2, 1, 5, 0))
+        rows = {r["employeeCode"]: r for r in self.get("service-milestones", employeeStatus="inactive")["rows"]}
+        self.assertLessEqual(rows["E30"]["serviceMonths"], 1)
+
+    # -- statutory-compliance ----------------------------------------------------------------
+    def test_placeholder_identifiers_are_missing_numbers_not_duplicates(self):
+        for code in ("P1", "P2"):
+            self.make(code, branch=self.b1, pf_number="NA", esi_number="N/A", uan_number="-")
+        rows = {r["employeeCode"]: r for r in self.get("statutory-compliance")["rows"]}
+        for code in ("P1", "P2"):
+            issues = rows[code]["issues"]
+            self.assertIn("PF number missing", issues)
+            self.assertIn("ESI number missing", issues)
+            self.assertIn("UAN missing", issues)
+            self.assertNotIn("shared with", issues)
+
+    def test_esi_number_is_not_demanded_of_staff_above_the_esi_wage_ceiling(self):
+        e = self.make(
+            "HIGH1", branch=self.b1, department=self.d_cut1, salary_amount=Decimal("50000"), pf_number="TN/TPR/900",
+            uan_number="100000000099", bank_account="1234567890123", bank_ifsc="HDFC0001234",
+        )  # fmt: skip
+        for cat in ("aadhaar_card", "pan_card", "bank_passbook"):
+            self.doc(e, cat)
+        rows = {r["employeeCode"]: r for r in self.get("statutory-compliance", includeCompliant="true")["rows"]}
+        self.assertNotIn("ESI number missing", rows["HIGH1"]["issues"] or "")
+
+    # -- permissions / leaks ----------------------------------------------------------------------
+    def test_exits_register_hides_resignation_reasons_from_a_role_without_the_resignations_module(self):
+        user = self._employees_only_user()
+        self.get("resignation-register", user=user, expect=403)  # the same reasons are gated there
+        body = self.get("exits-register", user=user, dateFrom="2025-01-01", dateTo="2026-12-31")
+        e4 = next(r for r in body["rows"] if r["employeeCode"] == "E4")
+        # the columns are dropped altogether (not left as a column of dashes) and the values never leave the server
+        shown = {c["key"] for c in body["columns"]}
+        for key in ("reason", "approvedBy", "approvedOn"):
+            self.assertNotIn(key, shown)
+            self.assertNotIn(key, e4)
+        self.assertNotIn("Better opportunity", str(body))
+        self.assertNotIn("HR Admin", str(body))
+        self.assertEqual(e4["exitBasis"], "Resignation")  # the dated exit itself is not confidential
+        self.assertTrue(any("no access to Resignations" in n for n in body["notes"]))
+        for fmt in ("xlsx", "pdf"):
+            self.export("exits-register", fmt, user=user, dateFrom="2025-01-01", dateTo="2026-12-31")
+        ws = load_workbook(
+            io.BytesIO(
+                self.export("exits-register", "xlsx", user=user, dateFrom="2025-01-01", dateTo="2026-12-31").content
+            )
+        ).active
+        cells = [str(c.value) for row in ws.iter_rows() for c in row if c.value is not None]
+        self.assertFalse(any("Better opportunity" in c or "Reason" == c for c in cells))
+
+    # The filter summary is written by the framework (reporting/filters.py describe_params); it scopes the
+    # employee / department / branch name lookups to the viewer's branch, so an id from another unit names nothing.
+    def test_filter_summary_does_not_name_employees_or_units_outside_the_users_branch(self):
+        body = self.get(
+            "employee-master", user=self.branch_user, employeeIds=str(self.e3.id), branchIds=str(self.b2.id),
+            departmentIds=str(self.d_scrap.id),
+        )  # fmt: skip
+        text = str(body["filters"])
+        for other_unit in ("Chitra", "Unit 2", "SCRAP"):
+            self.assertNotIn(other_unit, text)
+
+    # -- disclosure -------------------------------------------------------------------------------
+    def test_manpower_movement_says_how_many_employees_have_no_usable_join_date(self):
+        notes = [n.lower() for n in self.get("manpower-movement", year="2026")["notes"]]
+        # E7 ('soon') and E10 (blank) can never be counted as joiners of any year
+        self.assertTrue(
+            any("join date" in n and ("unreadable" in n or "missing" in n or "could not" in n) for n in notes), notes
+        )
+
+    # -- hostile data ---------------------------------------------------------------------------
+    def _every_report_variant(self):
+        for rid in MY_REPORTS:
+            yield rid, dict(WIDE[rid])
+        for g in ("designation", "branch"):
+            yield "strength-statement", {"groupBy": g, "employeeStatus": "all", "includeEmpty": "true"}
+        yield "manpower-movement", {"year": "2026", "groupBy": "department"}
+        for d in ("tenureBand", "gender", "bloodGroup", "salaryType"):
+            yield "workforce-profile", {"dimension": d, "employeeStatus": "all"}
+        for w in ("thisMonth", "nextMonth", "next7", "next30", "m02", "m12"):
+            yield "birthdays", {"window": w, "employeeStatus": "all"}
+            yield "work-anniversaries", {"window": w}
+        for m in ("probation_ending", "probation_over", "cl_eligible", "cl_not_yet"):
+            yield "service-milestones", {"employeeStatus": "all", "milestone": m}
+        yield "resignation-register", {"dateFrom": "2020-01-01", "dateTo": "2026-12-31", "layout": "full"}
+        yield "data-quality-audit", {"employeeStatus": "all", "includeClean": "true", "check": "dob,phone,duplicates"}
+
+    def test_hostile_but_plausible_data_never_crashes_a_report_or_an_export(self):
+        junk = [
+            dict(code="W1", first_name="<b>&Bold", last_name="O'Neil", join_date="2026-13-45", gender="M", phone="abc",
+                 blood_group="??", pf_number="=1+1", esi_number="@SUM(A1)", uan_number="+123", bank_account="0012345678",
+                 bank_ifsc="hdfc0abc123", id_proof="12", date_of_birth=date(1900, 1, 1)),
+            dict(code=" W3 ", first_name="", last_name="", join_date="   ", employment_type="", status="", gender="  ",
+                 date_of_birth=date(2026, 9, 29)),
+            dict(code="W4", join_date="2026-09-05T10:00:00+05:30", salary_amount=Decimal("99999999.99"),
+                 salary_per_shift=Decimal("0"), date_of_birth=date(2027, 1, 1)),
+            dict(code="W5", employment_type="Contract", status="Active", join_date="31/12/2026",
+                 date_of_birth=date(2000, 2, 29), blood_group="ab +", gender="Female "),
+            dict(code="W6", join_date="1-1-2026", status="inactive", date_of_birth=date(1970, 1, 1)),
+        ]  # fmt: skip
+        for kw in junk:
+            e = self.make(kw.pop("code"), branch=self.b1, department=self.d_cut1, **kw)
+            FamilyDependent.objects.create(employee=e, name="<i>Kid</i>", relation="child")
+            ResignationRequest.objects.create(employee=e, status="approved", last_working_date=date(2020, 1, 1))
+            ResignationRequest.objects.create(employee=e, status="rejected", rejected_by=None, reason="<x>&")
+        for user in (self.admin, self.branch_user):
+            for rid, params in self._every_report_variant():
+                self.get(rid, user=user, **params)
+                for fmt in ("xlsx", "pdf"):
+                    self.export(rid, fmt, user=user, **params)
+
+    def test_an_absurd_join_year_does_not_take_service_milestones_down(self):
+        self.make("W9", branch=self.b1, department=self.d_cut1, join_date="9999-12-31")
+        self.get("service-milestones", employeeStatus="all")
+        self.get("service-milestones", employeeStatus="all", milestone="probation_ending")
+        self.get("employee-master", employeeStatus="all")
+        self.get("work-anniversaries", window="m12")
+
+    def test_a_rejoiner_who_left_again_is_not_dated_by_the_first_resignation(self):
+        # Rejoining is common: E31 resigned (LWD 31-Mar-2024), came back on 15-Jun-2024 with the same record, and
+        # was switched off again this month. The 2024 resignation belongs to the first stint.
+        e = self.make("E31", status="inactive", branch=self.b1, department=self.d_cut1, join_date="2024-06-15")
+        ResignationRequest.objects.create(
+            employee=e, status="approved", last_working_date=date(2024, 3, 31), approved_at=utc(2024, 3, 1, 5, 0)
+        )
+        Employee.objects.filter(pk=e.pk).update(updated_at=utc(2026, 9, 10, 8, 0))
+        body = self.get("exits-register", dateFrom="2026-09-01", dateTo="2026-09-29")
+        self.assertIn("E31", codes(body))
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Fixes for the adversarial review: each test pins a behaviour that was wrong (or that the review's own test does
+# not reach: branch overlays, filters, exports, other report variants).
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class ReviewFixTests(_World):
+    # -- labels ------------------------------------------------------------------------------------
+    def test_department_labels_only_add_the_unit_where_two_names_clash(self):
+        class D:  # the three attributes department_labels reads
+            def __init__(self, id, name, branch_id):
+                self.id, self.name, self.branch_id = id, name, branch_id
+
+        b1 = Branch.objects.create(name="Label Unit 1", code="LU1")
+        b2 = Branch.objects.create(name="Label Unit 2", code="LU2")
+        got = B.department_labels(
+            [D(1, "CUTTING", b1.id), D(2, "cutting", b2.id), D(3, "SEWING", b1.id), D(4, "PACKING", b1.id),
+             D(5, "PACKING", b1.id), D(6, "STORES", None), D(7, "STORES", b1.id)]
+        )  # fmt: skip
+        self.assertEqual(
+            got,
+            {1: "CUTTING (Label Unit 1)", 2: "cutting (Label Unit 2)", 3: "SEWING", 4: "PACKING (Label Unit 1) #4",
+             5: "PACKING (Label Unit 1) #5", 6: "STORES (No branch)", 7: "STORES (Label Unit 1)"},
+        )  # fmt: skip
+
+    def test_strength_designation_view_says_which_unit_each_department_is(self):
+        sew2 = Department.objects.create(name="SEWING", branch=self.b2)
+        op2 = Designation.objects.create(title="Operator", department=sew2)
+        self.make("E21", branch=self.b2, department=sew2, designation=op2)
+        rows = self.get("strength-statement", groupBy="designation")["rows"]
+        self.assertEqual(
+            [(r["group"], r["department"], r["total"]) for r in rows],
+            [("Manager", "CUTTING", 1), ("Operator", "SEWING (Unit 1)", 2), ("Operator", "SEWING (Unit 2)", 1),
+             ("No designation", "Unassigned", 4)],
+        )  # fmt: skip
+
+    def test_strength_cards_count_real_groups_not_the_catch_all_bucket(self):
+        cards_by = {
+            g: cards(self.get("strength-statement", groupBy=g)) for g in ("department", "designation", "branch")
+        }
+        self.assertEqual(cards_by["department"]["Departments"], 3)  # CUTTING x2 + SEWING; 'Unassigned' is not one
+        self.assertEqual(cards_by["designation"]["Designations"], 2)  # Manager + Operator; 'No designation' is not one
+        self.assertEqual(cards_by["branch"]["Branches"], 2)  # Unit 1 + Unit 2; 'No branch' is not one
+        # an empty group that really exists still counts
+        self.assertEqual(
+            cards(self.get("strength-statement", groupBy="branch", includeEmpty="true"))["Branches"],
+            Branch.objects.count(),  # Head Office (seeded, nobody in it yet) + Unit 1 + Unit 2 + Old Unit
+        )
+
+    def test_manpower_movement_labels_only_the_clashing_departments_and_counts_unusable_join_dates(self):
+        body = self.get("manpower-movement", year="2026", groupBy="department")
+        self.assertEqual(
+            [r["group"] for r in body["rows"]], ["CUTTING (Unit 1)", "CUTTING (Unit 2)", "SEWING", "Unassigned"]
+        )
+        notes = " ".join(body["notes"])
+        self.assertIn("2 employee(s) have a missing or unreadable join date", notes)  # E7 'soon', E10 blank
+        # once the namesake is gone, the plain name comes back
+        Department.objects.filter(pk=self.d_cut2.pk).update(name="CUTTING 2")
+        self.assertEqual(
+            [r["group"] for r in self.get("manpower-movement", year="2026", groupBy="department")["rows"]],
+            ["CUTTING", "CUTTING 2", "SEWING", "Unassigned"],
+        )
+
+    def test_manpower_movement_dates_a_rejoiner_by_the_real_exit(self):
+        e = self.make("E31", status="inactive", branch=self.b1, department=self.d_cut1, join_date="2024-06-15")
+        ResignationRequest.objects.create(
+            employee=e, status="approved", last_working_date=date(2024, 3, 31), approved_at=utc(2024, 3, 1, 5, 0)
+        )
+        Employee.objects.filter(pk=e.pk).update(updated_at=utc(2026, 9, 10, 8, 0))
+        rows = {r["group"]: r for r in self.get("manpower-movement", year="2026")["rows"]}
+        self.assertEqual(rows["Sep 2026"]["leftTotal"], 2)  # E5 and E31
+        self.assertEqual(
+            {r["group"]: r for r in self.get("manpower-movement", year="2024")["rows"]}["Jun 2024"]["joinedTotal"], 1
+        )
+        self.assertEqual(
+            {r["group"]: r for r in self.get("manpower-movement", year="2024")["rows"]}["Mar 2024"]["leftTotal"], 0
+        )
+
+    # -- service length of leavers ---------------------------------------------------------------------
+    def test_workforce_profile_average_service_of_leavers_stops_at_the_exit(self):
+        # E4 77 months (to 31-Aug-2026), E5 15 (to 10-Sep-2026), E9 84 (to 16-Jan-2026): (77 + 15 + 84) / 3 / 12
+        body = self.get("workforce-profile", dimension="tenureBand", employeeStatus="inactive")
+        self.assertEqual(cards(body)["Average service (years)"], 4.9)
+        by = {r["bucket"]: r["total"] for r in body["rows"]}
+        self.assertEqual((by["1-3 years"], by["5+ years"]), (1, 2))
+        self.assertTrue(any("counted up to the exit date" in n for n in body["notes"]))
+
+    def test_the_active_are_still_measured_to_today_and_no_leaver_note_is_shown_for_them(self):
+        body = self.get("employee-master")
+        self.assertEqual({r["employeeCode"]: r["tenure"] for r in body["rows"]}["E1"], "2y 8m")
+        self.assertFalse(any("has left" in n for n in body["notes"]))
+        body = self.get("employee-master", employeeStatus="all")
+        self.assertTrue(any("has left" in n for n in body["notes"]))
+
+    def test_leaver_tenure_agrees_between_the_master_register_and_the_exits_register(self):
+        master = {
+            r["employeeCode"]: r["tenure"] for r in self.get("employee-master", employeeStatus="inactive")["rows"]
+        }
+        exits = {
+            r["employeeCode"]: r["tenureMonths"]
+            for r in self.get("exits-register", dateFrom="2025-01-01", dateTo="2026-12-31")["rows"]
+        }
+        for code, months in exits.items():
+            self.assertEqual(master[code], B.tenure_text(months), code)
+
+    # -- absurd dates --------------------------------------------------------------------------------
+    def test_an_absurd_join_date_is_reported_as_unreadable_everywhere(self):
+        self.make("W9", branch=self.b1, department=self.d_cut1, join_date="9999-12-31")
+        body = self.get("service-milestones", employeeStatus="all")
+        self.assertNotIn("W9", codes(body))
+        self.assertEqual(cards(body)["Join date missing (not listed)"], 3)  # E7 'soon', E10 blank, W9
+        rows = {r["employeeCode"]: r for r in self.get("data-quality-audit", employeeStatus="all")["rows"]}
+        self.assertIn("Join date '9999-12-31' cannot be read", rows["W9"]["issues"])
+        rows = {r["employeeCode"]: r for r in self.get("employee-master", employeeStatus="all")["rows"]}
+        self.assertEqual((rows["W9"]["joinDate"], rows["W9"]["tenure"]), (None, None))
+        for fmt in ("xlsx", "pdf"):
+            self.export("service-milestones", fmt, employeeStatus="all")
+
+    # -- statutory: placeholders and the ESI wage ceiling ----------------------------------------------
+    def test_every_placeholder_spelling_is_a_missing_number_and_never_a_duplicate(self):
+        for code, ph in (("P1", "NIL"), ("P2", "not applicable"), ("P3", "0000000000"), ("P4", "n.a."), ("P5", "None")):
+            self.make(code, branch=self.b1, pf_number=ph, esi_number=ph, uan_number=ph, bank_account=ph, bank_ifsc=ph)
+        body = self.get("statutory-compliance")
+        rows = {r["employeeCode"]: r for r in body["rows"]}
+        for code in ("P1", "P2", "P3", "P4", "P5"):
+            issues = rows[code]["issues"]
+            for missing in ("PF number missing", "ESI number missing", "UAN missing", "Bank a/c and IFSC missing"):
+                self.assertIn(missing, issues, (code, missing))
+            self.assertNotIn("shared with", issues, code)
+            self.assertNotIn("format", issues, code)
+            self.assertIsNone(rows[code]["pfNumber"])  # a dash on screen, not the typed placeholder
+            self.assertIsNone(rows[code]["bankIfsc"])
+        self.assertTrue(any("placeholder" in n for n in body["notes"]))
+        self.assertEqual(cards(body)["PF number missing"], 3 + 5)  # E2, E6, E8 + the five
+
+    def test_placeholder_bank_and_id_proof_values_are_not_masked_as_if_real(self):
+        self.make("P1", branch=self.b1, id_proof="NA", bank_account="NA")
+        rows = {r["employeeCode"]: r for r in self.get("statutory-compliance")["rows"]}
+        self.assertIsNone(rows["P1"]["idProof"])
+        self.assertIsNone(rows["P1"]["bankAccount"])
+
+    def _high_earner(self, code="HIGH1", branch=None, **kw):
+        self._seq = getattr(self, "_seq", 0) + 1  # every identifier unique: a shared number would be a finding too
+        base = dict(
+            branch=branch or self.b1, department=self.d_cut1, salary_amount=Decimal("50000"),
+            pf_number=f"TN/TPR/9{self._seq:03d}", uan_number=f"1000009{self._seq:05d}",
+            bank_account=f"98765{self._seq:08d}", bank_ifsc="HDFC0001234",
+        )  # fmt: skip
+        e = self.make(code, **{**base, **kw})
+        for cat in ("aadhaar_card", "pan_card", "bank_passbook"):
+            self.doc(e, cat)
+        return e
+
+    def _issues(self, user=None, **params):
+        body = self.get("statutory-compliance", user=user, includeCompliant="true", **params)
+        return body, {r["employeeCode"]: r["issues"] or "" for r in body["rows"]}
+
+    def test_esi_number_is_owed_up_to_the_ceiling_and_not_above_it(self):
+        self._high_earner("AT", salary_amount=Decimal("21000"))  # payroll deducts ESI at or below the ceiling
+        self._high_earner("JUST", salary_amount=Decimal("21000.01"))
+        self._high_earner("HIGH1")
+        self._high_earner("NOSAL", salary_amount=None)  # unknown salary is never assumed to be above the ceiling
+        self._high_earner("PROD", employment_type="production", salary_amount=None, salary_per_shift=Decimal("5000"))
+        body, issues = self._issues()
+        self.assertIn("ESI number missing", issues["AT"])
+        self.assertNotIn("ESI number missing", issues["JUST"])
+        self.assertNotIn("ESI number missing", issues["HIGH1"])
+        self.assertIn("ESI number missing", issues["NOSAL"])
+        self.assertIn("ESI number missing", issues["PROD"])  # production pay comes from shifts: not exempted here
+        # the counts follow: the exempt two are neither 'missing ESI' nor spoil 'fully compliant'
+        self.assertEqual(cards(body)["ESI number missing"], 4 + 3)  # E2, E6, E7, E10 + AT, NOSAL, PROD
+        self.assertEqual(issues["HIGH1"], "")
+        note = next(n for n in body["notes"] if "ESI wage ceiling" in n)
+        self.assertIn("2 staff member(s)", note)
+        self.assertIn("Rs 21,000", note)
+
+    def test_an_esi_number_that_is_present_is_still_format_checked_above_the_ceiling(self):
+        self._high_earner("HIGH1", esi_number="9999")
+        _body, issues = self._issues()
+        self.assertEqual(issues["HIGH1"], "ESI number should be 10 or 17 digits")
+
+    def test_the_esi_ceiling_follows_the_settings_of_the_employees_own_branch(self):
+        from .models import BranchSettingsOverride, PayrollSettings
+
+        self._high_earner("U1_HIGH", branch=self.b1)
+        self._high_earner("U2_HIGH", branch=self.b2)
+        BranchSettingsOverride.objects.create(branch=self.b1, overrides={"esi_applicable_below": "60000"})
+        _body, issues = self._issues(employeeStatus="active")
+        self.assertIn("ESI number missing", issues["U1_HIGH"])  # Unit 1's own ceiling is Rs 60,000
+        self.assertNotIn("ESI number missing", issues["U2_HIGH"])  # Unit 2 keeps the company one (Rs 21,000)
+        # ... whoever is asking: the Unit 1 user gets the same answer for their people
+        _body, issues = self._issues(user=self.branch_user)
+        self.assertIn("ESI number missing", issues["U1_HIGH"])
+        # and the company-wide ceiling moves both
+        PayrollSettings.objects.update(esi_applicable_below=Decimal("80000"))
+        BranchSettingsOverride.objects.all().delete()
+        _body, issues = self._issues()
+        self.assertIn("ESI number missing", issues["U1_HIGH"])
+        self.assertIn("ESI number missing", issues["U2_HIGH"])
+
+    def test_the_esi_ceiling_lookup_does_not_grow_with_the_number_of_staff(self):
+        def queries():
+            self.client.get("/api/reports/run/statutory-compliance", {"includeCompliant": "true"}, **hdr(self.admin))
+            with CaptureQueriesContext(connection) as q:
+                self.get("statutory-compliance", includeCompliant="true")
+            return len(q)
+
+        before = queries()
+        for i in range(15):
+            self._high_earner(f"H{i}", branch=(self.b1, self.b2)[i % 2])
+        self.assertLessEqual(queries() - before, 1)
+
+    # -- exits: confidential reasons -------------------------------------------------------------------
+    def test_manpower_and_exit_reports_never_expose_a_reason_to_a_role_without_resignations(self):
+        user = HRUser.objects.create(
+            username="em_emp_only_2",
+            password_hash="x",
+            role=Role.objects.create(name="em_emp_only_2", permissions={"reports": "view", "employees": "view"}),
+        )
+        for rid, params in (
+            ("exits-register", {"dateFrom": "2020-01-01", "dateTo": "2026-12-31"}),
+            ("manpower-movement", {"year": "2026"}),
+            ("employee-master", {"employeeStatus": "all", "layout": "full"}),
+        ):
+            text = str(self.get(rid, user=user, **params))
+            for secret in ("Better opportunity", "Relocation", "Health", "Studies", "HR Admin"):
+                self.assertNotIn(secret, text, (rid, secret))
+
+    # -- org structure ---------------------------------------------------------------------------------
+    def test_org_structure_admin_filtered_by_branch_gets_the_same_safe_line_for_stray_departments(self):
+        DepartmentHeadcount.objects.filter(department=self.d_cut2).update(required_count=5)
+        self.make("E11", branch=self.b1, department=self.d_cut2)  # a Unit 1 person in Unit 2's department
+        body = self.get("org-structure", branchIds=str(self.b1.id))
+        rows = data_rows(body)
+        self.assertEqual(
+            [(r["branch"], r["department"]) for r in rows],
+            [("Unit 1", "CUTTING"), ("Unit 1", "SEWING"), ("Unit 1", "Departments outside this listing (legacy data)")],
+        )
+        stray = rows[-1]
+        self.assertEqual((stray["staff"], stray["production"]), (1, 0))
+        self.assertEqual((stray["hods"], stray["required"], stray["vacancy"], stray["designations"]), (None,) * 4)
+        # unfiltered, the same department is listed properly with everybody in it, and its vacancy is not partial
+        full = next(
+            r for r in data_rows(self.get("org-structure")) if (r["branch"], r["department"]) == ("Unit 2", "CUTTING")
+        )
+        self.assertEqual((full["staff"], full["required"], full["vacancy"]), (2, 5, 3))
+
+    def test_org_structure_lists_a_branch_without_departments_for_its_own_user_and_for_admin(self):
+        empty = Branch.objects.create(name="Empty Unit", code="EMP")
+        user = HRUser.objects.create(username="em_empty", password_hash="x", role=self.role_full, branch=empty)
+        body = self.get("org-structure", user=user)
+        self.assertEqual([(r["branch"], r["branchCode"], r["department"]) for r in data_rows(body)],
+                         [("Empty Unit", "EMP", "No departments set up")])  # fmt: skip
+        self.assertEqual(cards(body)["Branches"], 1)
+        self.assertEqual((body["totals"]["staff"], body["totals"]["production"]), (0, 0))
+        admin = self.get("org-structure")
+        self.assertEqual(cards(admin)["Branches"], Branch.objects.count())  # every real branch, none twice, no bucket
+        self.assertEqual(
+            [r["department"] for r in data_rows(admin) if r["branch"] == "Empty Unit"], ["No departments set up"]
+        )
+        # a department filter is a request for those departments, not for the branches that have none
+        only = self.get("org-structure", departmentIds=str(self.d_sew1.id))
+        self.assertNotIn("Empty Unit", {r["branch"] for r in data_rows(only)})
+        self.assertEqual(cards(only)["Branches"], 1)
+        # picking one branch lists that branch only
+        picked = self.get("org-structure", branchIds=str(empty.id))
+        self.assertEqual([r["branch"] for r in data_rows(picked)], ["Empty Unit"])
+
+    def test_a_branch_user_never_sees_another_units_hods_plan_or_designations_anywhere_in_the_payload(self):
+        boss = self.make("E20", first_name="Zed", last_name="Boss", branch=self.b2, department=self.d_cut2)
+        ManagerDepartmentAssignment.objects.create(
+            manager=DepartmentManager.objects.create(employee=boss), department=self.d_cut2
+        )
+        DepartmentHeadcount.objects.filter(department=self.d_cut2).update(required_count=9)
+        for i in range(3):
+            Designation.objects.create(title=f"Secret{i}", department=self.d_cut2)
+        self.make("E11", branch=self.b1, department=self.d_cut2)
+        body = self.get("org-structure", user=self.branch_user)
+        self.assertNotIn("Zed", str(body))
+        for r in data_rows(body):
+            self.assertNotEqual(r["required"], 9)
+            self.assertNotEqual(r["designations"], 3)
+        self.assertEqual([r["hods"] for r in data_rows(body)], ["Jai Singh", "Arun Kumar", None])

@@ -1,16 +1,11 @@
-import smtplib
-import ssl
 from datetime import date, timedelta
-from email.mime.application import MIMEApplication
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
 from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import whatsapp_approvals
+from . import email_service, whatsapp_approvals
 from .view_common import error_response as _error
 from .auth import get_token_employee_id, require_auth, require_hr
 from .user_settings import settings_for
@@ -621,94 +616,39 @@ def resignation_email(request: Request, pk: int) -> Response:
     if not to_email:
         return _error("Employee has no email address. Provide toEmail in request body.", 400)
 
-    company_name = ps.slip_company_name or "UKTextiles"
     emp_name = f"{emp.first_name} {emp.last_name}".strip()
     today = timezone.now().strftime("%d %B %Y")
     last_working = r.last_working_date.strftime("%d %B %Y") if r.last_working_date else "as mutually agreed"
 
-    subject = f"Resignation Acceptance Letter | {company_name}"
-
-    html_body = f"""
-    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1a3a4a">
-      <div style="background:#006496;padding:20px;text-align:center;border-radius:8px 8px 0 0">
-        <h1 style="color:white;margin:0;font-size:18px">{company_name.upper()}</h1>
-        <p style="color:rgba(255,255,255,0.8);margin:4px 0 0;font-size:12px">
-          Resignation Acceptance Letter
-        </p>
-      </div>
-      <div style="background:#ffffff;padding:30px;border:1px solid #d0e4f0;border-top:none">
-        <p>Dear <strong>{emp_name}</strong>,</p>
-        <p>
-          We acknowledge receipt of your resignation and are pleased to confirm that your resignation has been
-          <strong>accepted with effect from {last_working}</strong>.
-        </p>
-        <div style="background:#f0f5fa;padding:16px;border-radius:8px;margin:20px 0;border-left:4px solid #006496">
-          <table style="width:100%;border-collapse:collapse;font-size:13px">
-            <tr><td style="padding:4px 8px;color:#006496;font-weight:bold;width:40%">Employee Name</td><td style="padding:4px 8px">{emp_name}</td></tr>
-            <tr><td style="padding:4px 8px;color:#006496;font-weight:bold">Employee Code</td><td style="padding:4px 8px">{emp.employee_code}</td></tr>
-            <tr><td style="padding:4px 8px;color:#006496;font-weight:bold">Department</td><td style="padding:4px 8px">{emp.department.name if emp.department_id and emp.department else "—"}</td></tr>
-            <tr><td style="padding:4px 8px;color:#006496;font-weight:bold">Last Working Day</td><td style="padding:4px 8px">{last_working}</td></tr>
-            <tr><td style="padding:4px 8px;color:#006496;font-weight:bold">Approved By</td><td style="padding:4px 8px">{r.approved_by or "HR Management"}</td></tr>
-            <tr><td style="padding:4px 8px;color:#006496;font-weight:bold">Approval Date</td><td style="padding:4px 8px">{today}</td></tr>
-          </table>
-        </div>
-        <p>
-          We appreciate your valuable contributions during your tenure and wish you all the best in your future endeavors.
-          Please ensure all handover formalities are completed before your last working day.
-        </p>
-        <p>Full and final settlement will be processed as per company policy.</p>
-        <br>
-        <p style="color:#888;font-size:12px">
-          Warm Regards,<br>
-          <strong>HR Department</strong><br>
-          {company_name}
-        </p>
-      </div>
-      <div style="background:#f0f5fa;padding:12px;text-align:center;font-size:11px;color:#888;border-radius:0 0 8px 8px">
-        This is a system-generated letter from {company_name} HR Portal. Generated on {today}.
-      </div>
-    </div>
-    """
-
     # Generate PDF attachment
     try:
         pdf_bytes = build_resignation_letter_pdf(r)
-        emp_code = emp.employee_code
-        pdf_filename = f"resignation_acceptance_{emp_code}_{r.id}.pdf"
     except Exception:
         pdf_bytes = None
-        pdf_filename = None
+    attachments = (
+        [(f"resignation_acceptance_{emp.employee_code}_{r.id}.pdf", pdf_bytes, "application/pdf")] if pdf_bytes else []
+    )
 
-    msg = MIMEMultipart("mixed")
-    msg["Subject"] = subject
-    msg["From"] = f"{ps.smtp_from_name} <{ps.smtp_from_email or ps.smtp_username}>"
-    msg["To"] = to_email
-
-    msg.attach(MIMEText(html_body, "html"))
-
-    if pdf_bytes:
-        attachment = MIMEApplication(pdf_bytes, _subtype="pdf")
-        attachment.add_header("Content-Disposition", "attachment", filename=pdf_filename)
-        msg.attach(attachment)
-
-    try:
-        context = ssl.create_default_context()
-        port = ps.smtp_port
-        if port == 465:
-            with smtplib.SMTP_SSL(ps.smtp_host, port, context=context) as server:
-                server.login(ps.smtp_username, ps.smtp_password)
-                server.sendmail(ps.smtp_from_email or ps.smtp_username, to_email, msg.as_string())
-        else:
-            with smtplib.SMTP(ps.smtp_host, port, timeout=15) as server:
-                server.ehlo()
-                server.starttls(context=context)
-                server.login(ps.smtp_username, ps.smtp_password)
-                server.sendmail(ps.smtp_from_email or ps.smtp_username, to_email, msg.as_string())
-    except smtplib.SMTPAuthenticationError:
-        return _error("SMTP authentication failed. Check username/password.", 502)
-    except Exception as exc:
-        return _error(f"Failed to send email: {exc}", 502)
-
+    log = email_service.send_email(
+        "resignation_letter",
+        to_email=to_email,
+        params={
+            "employee_name": emp_name,
+            "employee_code": emp.employee_code,
+            "department": emp.department.name if emp.department_id and emp.department else "—",
+            "last_working_day": last_working,
+            "approved_by": r.approved_by or "HR Management",
+            "approval_date": today,
+        },
+        ps=ps,
+        recipient_name=emp_name,
+        employee=emp,
+        attachments=attachments,
+        ref_id=r.id,
+        sent_by_id=request.jwt_user.get("hrUserId"),
+    )
+    if log.status != email_service.EMAIL_SENT:
+        return _error(log.error_message, log.http_status)
     return Response({"ok": True, "sentTo": to_email, "pdfAttached": pdf_bytes is not None})
 
 

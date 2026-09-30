@@ -23,7 +23,7 @@ from api.attendance_final import late_pool_summary
 from api.models import EmployeePermission, LeaveRequest
 from api.payroll_views import _d2, late_shift_deduction
 
-from ..common import EMP_COLS_SHORT, emp_cells, with_subtotals
+from ..common import EMP_COLS_SHORT, emp_cells
 from ..filters import boolean, date_range, period, select, text
 from ..formatting import month_bounds, parse_date, r2
 from ..registry import register
@@ -55,13 +55,24 @@ from .attendance_analysis_common import (
     production_config,
     scope_filters,
     secs_hm,
+    subtotals_within_limit,
 )
 
 MODULES = ("attendance",)
 
-PERMISSION_EFFECT = (("applied", "Permission applied"), ("excess", "Permission excess (over cap)"), ("none", "No permission"))
+PERMISSION_EFFECT = (
+    ("applied", "Permission applied"),
+    ("excess", "Permission excess (over cap)"),
+    ("none", "No permission"),
+)
 POOL_FILTER = (("counted", "Counted in the late pool"), ("not_counted", "Not counted"))
-MIN_LATE = (("5", "5+ minutes"), ("10", "10+ minutes"), ("15", "15+ minutes"), ("30", "30+ minutes"), ("60", "60+ minutes"))
+MIN_LATE = (
+    ("5", "5+ minutes"),
+    ("10", "10+ minutes"),
+    ("15", "15+ minutes"),
+    ("30", "30+ minutes"),
+    ("60", "60+ minutes"),
+)
 
 _RANGE_DAYS = 92
 
@@ -102,10 +113,15 @@ def _pool_status(rec, emp, roster: Roster, excess_flag: bool) -> str:
     return "Counted"
 
 
+def _production_grace(pcfg) -> int:
+    """The engine reads a 0 / empty grace as the 10-minute default (``attendance_final._compute_production``)."""
+    return pcfg.grace_minutes or 10
+
+
 def _morning_basis(emp, rec, roster: Roster, pcfg):
     """(shift name, start time, grace) the day was judged against."""
     if emp.employment_type == "production":
-        return "Production (fixed times)", pcfg.punch1_time, pcfg.grace_minutes
+        return "Production (fixed times)", pcfg.punch1_time, _production_grace(pcfg)
     shift = roster.shift_on(emp.id, rec.date)
     if shift is None:
         return None, None, 0
@@ -114,7 +130,7 @@ def _morning_basis(emp, rec, roster: Roster, pcfg):
 
 def _evening_basis(emp, rec, roster: Roster, pcfg):
     if emp.employment_type == "production":
-        return "Production (fixed times)", pcfg.punch4_time, pcfg.grace_minutes
+        return "Production (fixed times)", pcfg.punch4_time, _production_grace(pcfg)
     shift = roster.shift_on(emp.id, rec.date)
     if shift is None:
         return None, None, 0
@@ -127,16 +143,16 @@ def _evening_basis(emp, rec, roster: Roster, pcfg):
 
 _DETAIL_COLS = (
     *EMP_COLS_SHORT,
-    ColumnSpec("date", "Date", DATE, 1.1),
+    ColumnSpec("date", "Date", DATE, 1.4),
     ColumnSpec("day", "Day", TEXT, 0.6),
     ColumnSpec("shift", "Shift", TEXT, 1.4),
-    ColumnSpec("shiftStart", "Effective start", TIME, 0.9),
+    ColumnSpec("shiftStart", "Eff. start", TIME, 0.9),
     ColumnSpec("graceMinutes", "Grace (min)", MINUTES, 0.8),
-    ColumnSpec("deadline", "Deadline", TIME, 0.8),
+    ColumnSpec("deadline", "Deadline", TIME, 1.15),
     ColumnSpec("firstPunch", "First punch", TIME, 0.9),
     ColumnSpec("lateMinutes", "Late by (min)", MINUTES, 0.9, total="sum"),
-    ColumnSpec("beyondGrace", "Past deadline (min)", MINUTES, 1.0, total="sum"),
-    ColumnSpec("permission", "Permission", BADGE, 0.9),
+    ColumnSpec("beyondGrace", "Past deadline (min)", MINUTES, 1.2, total="sum"),
+    ColumnSpec("permission", "Permission", BADGE, 1.3),
     ColumnSpec("poolStatus", "Late pool", BADGE, 1.7),
     ColumnSpec("status", "Day status", BADGE, 0.9),
     ColumnSpec("reason", "Engine reason", TEXT, 3.4),
@@ -174,7 +190,13 @@ def _late_detail_run(ctx):
         shift_name, start, grace = _morning_basis(emp, rec, roster, pcfg)
         if shift_text and shift_text not in (shift_name or "").lower():
             continue
-        late = morning_lateness(rec.first_punch, start, grace, rec.morning_permission_applied)
+        late = morning_lateness(
+            rec.first_punch,
+            start,
+            grace,
+            rec.morning_permission_applied,
+            exact_seconds=emp.employment_type == "production",
+        )
         late_min = late[2] if late else None
         if min_late and (late_min is None or late_min < min_late):
             continue
@@ -202,7 +224,6 @@ def _late_detail_run(ctx):
         built.append((emp_sort_key(emp), rec.date, row))
     built.sort(key=lambda t: (t[0], t[1]))
     rows = [t[2] for t in built]
-    truncated = not python_filtered and len(records) >= ctx.row_limit
 
     minutes = [r["lateMinutes"] for r in rows if r["lateMinutes"] is not None]
     summary = [
@@ -210,10 +231,13 @@ def _late_detail_run(ctx):
         {"label": "Employees affected", "value": len({r["employeeCode"] for r in rows}), "format": "integer"},
         {"label": "Average late (min)", "value": _avg(minutes), "format": "number"},
         {"label": "Longest late (min)", "value": max(minutes) if minutes else None, "format": "integer"},
-        {"label": "Counted in late pool", "value": sum(1 for r in rows if r["poolStatus"] == "Counted"), "format": "integer"},
+        {
+            "label": "Counted in late pool",
+            "value": sum(1 for r in rows if r["poolStatus"] == "Counted"),
+            "format": "integer",
+        },
     ]
-    if not truncated:
-        rows = with_subtotals(rows, lambda r: r["department"], ["lateMinutes", "beyondGrace"])
+    rows, sub_note = subtotals_within_limit(ctx, rows, lambda r: r["department"], ["lateMinutes", "beyondGrace"])
 
     notes = [
         "Each row is one day flagged Late-In by Attendance. The day record stores only the flag, so the minutes are "
@@ -233,8 +257,8 @@ def _late_detail_run(ctx):
             "computed (the flag is kept, the minutes are not guessed)."
         )
     notes.append("Employees with no shift assignment are never flagged late, so they cannot appear here.")
-    if truncated:
-        notes.append("Department subtotals are omitted because the list was cut off; narrow the filters.")
+    if sub_note:
+        notes.append(sub_note)
     notes.extend(coverage_notes(ctx, people_by_id, d_from, d_to))
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
@@ -274,7 +298,16 @@ class _EmpMonth:
     """One employee's month of stored day records plus everything the late pool needs."""
 
     __slots__ = (
-        "emp", "records", "working", "approved", "pool", "flagged", "early_flagged", "minutes", "night", "halves",
+        "emp",
+        "records",
+        "working",
+        "approved",
+        "pool",
+        "flagged",
+        "minutes",
+        "worst_day",
+        "night",
+        "halves",
         "shift_name",
     )
 
@@ -312,18 +345,21 @@ def _month_pools(ctx, year: int, month: int):
             em.working = roster.working_days(emp_id, year, month)
             em.pool = late_pool_summary(recs, em.approved, settings, counted_dates=set(em.working))
         em.flagged = sum(1 for r in recs if r.is_late)
-        em.early_flagged = sum(1 for r in recs if r.early_leave)
         em.night = sum(1 for r in recs if r.late_afternoon)
         em.halves = sum(1 for r in recs if r.status == "half_shift")
         minutes = []
+        worst = None
         for r in recs:
             if not r.is_late:
                 continue
             _name, start, grace = _morning_basis(emp, r, roster, pcfg)
-            late = morning_lateness(r.first_punch, start, grace, r.morning_permission_applied)
+            late = morning_lateness(r.first_punch, start, grace, r.morning_permission_applied, exact_seconds=is_prod)
             if late:
                 minutes.append(late[2])
+                if worst is None or late[2] > worst[0]:  # the earliest date wins a tie (records are in date order)
+                    worst = (late[2], r.date)
         em.minutes = minutes
+        em.worst_day = worst[1] if worst else None
         if is_prod:
             em.shift_name = None
         else:
@@ -348,6 +384,7 @@ _COUNT_COLS = (
     ColumnSpec("minutesTotal", "Late minutes", MINUTES, 0.9, total="sum"),
     ColumnSpec("minutesAvg", "Avg late (min)", MINUTES, 0.9),
     ColumnSpec("minutesMax", "Worst late (min)", MINUTES, 0.9),
+    ColumnSpec("worstDay", "Worst day", DATE, 1.4),
     ColumnSpec("approvedPermissions", "Approved permissions", INTEGER, 1.0, total="sum"),
     ColumnSpec("nightLate", "Night late (info)", INTEGER, 0.9, total="sum"),
     ColumnSpec("halfDays", "Half days", INTEGER, 0.7, total="sum"),
@@ -361,9 +398,9 @@ def _counts_run(ctx):
     pools, settings, roster, people_by_id = _month_pools(ctx, year, month)
     min_pool = int(ctx.params.get("minPool") or 0)
     only_billable = bool(ctx.params.get("onlyBillable"))
-    show_early = bool(settings.evening_early_out_enabled) or any(
-        em.pool and em.pool["early_out"] for em in pools
-    )
+    show_early = bool(settings.evening_early_out_enabled) or any(em.pool and em.pool["early_out"] for em in pools)
+    # Night late is a strict-mode (lunch-return) flag: in Simple mode the column would be zeros only.
+    show_night = settings.attendance_mode == "strict" or any(em.night for em in pools)
 
     rows = []
     kept = []
@@ -375,36 +412,67 @@ def _counts_run(ctx):
         if only_billable and not (pool and pool["billable"] > 0):
             continue
         kept.append(em)
-        rows.append({
-            **emp_cells(em.emp),
-            "shift": em.shift_name,
-            "workingDays": len(em.working) if em.working is not None else None,
-            "lateDays": em.flagged,
-            "lateIn": pool["late_in"] if pool else None,
-            "earlyOut": pool["early_out"] if pool else None,
-            "excessPermissions": pool["excess_permissions"] if pool else None,
-            "poolTotal": pool_total,
-            "freeUsed": pool["free_used"] if pool else None,
-            "billable": pool["billable"] if pool else None,
-            "minutesTotal": sum(em.minutes) if em.minutes else 0,
-            "minutesAvg": round(sum(em.minutes) / len(em.minutes)) if em.minutes else None,
-            "minutesMax": max(em.minutes) if em.minutes else None,
-            "approvedPermissions": em.approved if pool else None,
-            "nightLate": em.night,
-            "halfDays": em.halves,
-        })
-    sum_keys = ["lateDays", "lateIn", "earlyOut", "excessPermissions", "poolTotal", "freeUsed", "billable",
-                "minutesTotal", "approvedPermissions", "nightLate", "halfDays"]
-    rows = with_subtotals(rows, lambda r: r["department"], sum_keys)
+        rows.append(
+            {
+                **emp_cells(em.emp),
+                "shift": em.shift_name,
+                "workingDays": len(em.working) if em.working is not None else None,
+                "lateDays": em.flagged,
+                "lateIn": pool["late_in"] if pool else None,
+                "earlyOut": pool["early_out"] if pool else None,
+                "excessPermissions": pool["excess_permissions"] if pool else None,
+                "poolTotal": pool_total,
+                "freeUsed": pool["free_used"] if pool else None,
+                "billable": pool["billable"] if pool else None,
+                # flagged days whose minutes could not be re-derived are unknown, not zero
+                "minutesTotal": sum(em.minutes) if em.minutes else (None if em.flagged else 0),
+                "minutesAvg": round(sum(em.minutes) / len(em.minutes)) if em.minutes else None,
+                "minutesMax": max(em.minutes) if em.minutes else None,
+                "worstDay": em.worst_day.isoformat() if em.worst_day else None,
+                "approvedPermissions": em.approved if pool else None,
+                "nightLate": em.night,
+                "halfDays": em.halves,
+            }
+        )
+    sum_keys = [
+        "lateDays",
+        "lateIn",
+        "earlyOut",
+        "excessPermissions",
+        "poolTotal",
+        "freeUsed",
+        "billable",
+        "minutesTotal",
+        "approvedPermissions",
+        "nightLate",
+        "halfDays",
+    ]
+    rows, sub_note = subtotals_within_limit(ctx, rows, lambda r: r["department"], sum_keys)
 
     staff = [em for em in kept if em.pool]
     summary = [
-        {"label": "Employees with lates", "value": sum(1 for em in kept if em.flagged or (em.pool and em.pool["total"])), "format": "integer"},
-        {"label": "Over the free allowance", "value": sum(1 for em in staff if em.pool["billable"] > 0), "format": "integer"},
+        {
+            "label": "Employees with lates",
+            "value": sum(1 for em in kept if em.flagged or (em.pool and em.pool["total"])),
+            "format": "integer",
+        },
+        {
+            "label": "Over the free allowance",
+            "value": sum(1 for em in staff if em.pool["billable"] > 0),
+            "format": "integer",
+        },
         {"label": "Pool occurrences", "value": sum(em.pool["total"] for em in staff), "format": "integer"},
         {"label": "Late minutes", "value": sum(sum(em.minutes) for em in kept), "format": "minutes"},
-        {"label": "Free allowance / month", "value": max(0, int(settings.late_free_allowance or 0)), "format": "integer"},
-        {"label": "Permission cap / month", "value": max(0, int(settings.permission_monthly_cap or 0)), "format": "integer"},
+        {
+            "label": "Free allowance / month",
+            "value": max(0, int(settings.late_free_allowance or 0)),
+            "format": "integer",
+        },
+        {
+            "label": "Permission cap / month",
+            "value": max(0, int(settings.permission_monthly_cap or 0)),
+            "format": "integer",
+        },
     ]
     notes = [
         f"Late pool for {month_bounds(year, month)[0]:%B %Y}, computed live from the stored day records with the same "
@@ -414,9 +482,16 @@ def _counts_run(ctx):
         "Late days flagged is the raw number of flagged days (Sundays and other non-working days included), so it can "
         "exceed Late-In (pool). Production employees are not part of the staff pool (their rules are separate); pool "
         "columns show a dash for them.",
-        "Late minutes are re-derived from first punch and shift (see Late Coming Detail); Night late (strict-mode lunch "
-        "return) is informational only.",
+        "Late minutes are re-derived from first punch and shift (see Late Coming Detail).",
     ]
+    if show_night:
+        notes.append(
+            "Night late (strict-mode lunch return) is informational only: it is never priced and never demotes a day."
+        )
+    else:
+        notes.append(
+            "Night late (a strict-mode lunch-return flag) is not shown: attendance runs in Simple mode and no day carries it."
+        )
     if not show_early:
         notes.append("Early-Out detection is switched off in Attendance settings, so that column is hidden.")
     no_shift = [em for em in kept if em.shift_name == "No shift assigned"]
@@ -425,8 +500,10 @@ def _counts_run(ctx):
             f"{len(no_shift)} staff employee(s) have no shift assignment; Late Detection cannot flag them "
             "(see the Shift Assignment Gaps report)."
         )
+    if sub_note:
+        notes.append(sub_note)
     notes.extend(coverage_notes(ctx, people_by_id, *month_bounds(year, month)))
-    columns = [c for c in _COUNT_COLS if show_early or c.key != "earlyOut"]
+    columns = [c for c in _COUNT_COLS if (show_early or c.key != "earlyOut") and (show_night or c.key != "nightLate")]
     return ReportResult(rows=rows, summary=summary, notes=notes, columns=columns)
 
 
@@ -486,27 +563,45 @@ def _penalty_run(ctx):
             deduction = _d2(shifts * daily_rate) if shifts > 0 else Decimal("0")
         else:
             deduction = None  # payroll skips an employee with no salary: no daily rate, no deduction
-        rows.append({
-            **emp_cells(em.emp),
-            "workingDays": working,
-            "lateInEarlyOut": pool["late_in"] + pool["early_out"],
-            "excessPermissions": pool["excess_permissions"],
-            "poolTotal": pool["total"],
-            "freeUsed": pool["free_used"],
-            "billable": pool["billable"],
-            "shiftDeductions": float(shifts),
-            "salaryDeduction": r2(deduction),
-        })
-    sum_keys = ["lateInEarlyOut", "excessPermissions", "poolTotal", "freeUsed", "billable", "shiftDeductions", "salaryDeduction"]
-    rows = with_subtotals(rows, lambda r: r["department"], sum_keys)
+        rows.append(
+            {
+                **emp_cells(em.emp),
+                "workingDays": working,
+                "lateInEarlyOut": pool["late_in"] + pool["early_out"],
+                "excessPermissions": pool["excess_permissions"],
+                "poolTotal": pool["total"],
+                "freeUsed": pool["free_used"],
+                "billable": pool["billable"],
+                "shiftDeductions": float(shifts),
+                "salaryDeduction": r2(deduction),
+            }
+        )
+    sum_keys = [
+        "lateInEarlyOut",
+        "excessPermissions",
+        "poolTotal",
+        "freeUsed",
+        "billable",
+        "shiftDeductions",
+        "salaryDeduction",
+    ]
+    rows, sub_note = subtotals_within_limit(ctx, rows, lambda r: r["department"], sum_keys)
 
     data = [r for r in rows if r.get("_kind") is None]
     summary = [
-        {"label": "Employees with a deduction", "value": sum(1 for r in data if (r["shiftDeductions"] or 0) > 0), "format": "integer"},
+        {
+            "label": "Employees with a deduction",
+            "value": sum(1 for r in data if (r["shiftDeductions"] or 0) > 0),
+            "format": "integer",
+        },
         {"label": "Pool occurrences", "value": sum(r["poolTotal"] for r in data), "format": "integer"},
         {"label": "Billable occurrences", "value": sum(r["billable"] for r in data), "format": "integer"},
         {"label": "Shifts deducted", "value": round(sum(r["shiftDeductions"] for r in data), 2), "format": "number"},
-        {"label": "Salary deduction", "value": round(sum(r["salaryDeduction"] or 0 for r in data), 2), "format": "currency"},
+        {
+            "label": "Salary deduction",
+            "value": round(sum(r["salaryDeduction"] or 0 for r in data), 2),
+            "format": "currency",
+        },
     ]
     notes = [
         "Live pre-payroll view: recomputed now from the stored day records with the same pool formula, working days, "
@@ -523,8 +618,16 @@ def _penalty_run(ctx):
     ]
     if not settings.evening_early_out_enabled:
         notes.append("Early-Out detection is switched off, so the pool holds Late-In days and excess permissions only.")
+    if sub_note:
+        notes.append(sub_note)
     notes.extend(coverage_notes(ctx, people_by_id, *month_bounds(year, month)))
-    return ReportResult(rows=rows, summary=summary, notes=notes)
+    # The Report Log screen heads this column "Free (n)" with the monthly allowance in it.
+    free = max(0, int(settings.late_free_allowance or 0))
+    columns = [
+        ColumnSpec("freeUsed", f"Free ({free})", INTEGER, 0.8, total="sum") if c.key == "freeUsed" else c
+        for c in _PENALTY_COLS
+    ]
+    return ReportResult(rows=rows, summary=summary, notes=notes, columns=columns)
 
 
 register(
@@ -555,14 +658,14 @@ register(
 
 _EARLY_COLS = (
     *EMP_COLS_SHORT,
-    ColumnSpec("date", "Date", DATE, 1.1),
+    ColumnSpec("date", "Date", DATE, 1.4),
     ColumnSpec("day", "Day", TEXT, 0.6),
     ColumnSpec("shift", "Shift", TEXT, 1.4),
-    ColumnSpec("shiftEnd", "Effective end", TIME, 0.9),
-    ColumnSpec("deadline", "Deadline", TIME, 0.8),
+    ColumnSpec("shiftEnd", "Eff. end", TIME, 0.9),
+    ColumnSpec("deadline", "Deadline", TIME, 1.15),
     ColumnSpec("lastPunch", "Last punch", TIME, 0.9),
     ColumnSpec("earlyMinutes", "Left early by (min)", MINUTES, 1.0, total="sum"),
-    ColumnSpec("permission", "Permission", BADGE, 0.9),
+    ColumnSpec("permission", "Permission", BADGE, 1.3),
     ColumnSpec("poolStatus", "Late pool", BADGE, 1.7),
     ColumnSpec("status", "Day status", BADGE, 0.9),
     ColumnSpec("reason", "Engine reason", TEXT, 3.4),
@@ -591,23 +694,28 @@ def _early_out_run(ctx):
         emp = people_by_id[rec.employee_id]
         shift_name, end, grace = _evening_basis(emp, rec, roster, pcfg)
         early = evening_earliness(rec.last_punch, end, grace, rec.evening_permission_applied)
-        built.append((emp_sort_key(emp), rec.date, {
-            **emp_cells(emp),
-            "date": rec.date.isoformat(),
-            "day": day_abbr(rec.date),
-            "shift": shift_name or "No shift assigned",
-            "shiftEnd": secs_hm(early[0]) if early else (hm(end) if end else None),
-            "deadline": secs_hm(early[1]) if early else None,
-            "lastPunch": hm(rec.last_punch),
-            "earlyMinutes": early[2] if early else None,
-            "permission": _permission_badge(rec.evening_permission_applied, rec.evening_permission_excess),
-            "poolStatus": _pool_status_early(rec, emp, roster),
-            "status": STATUS_LABELS.get(rec.status, rec.status),
-            "reason": rec.late_reason,
-        }))
+        built.append(
+            (
+                emp_sort_key(emp),
+                rec.date,
+                {
+                    **emp_cells(emp),
+                    "date": rec.date.isoformat(),
+                    "day": day_abbr(rec.date),
+                    "shift": shift_name or "No shift assigned",
+                    "shiftEnd": secs_hm(early[0]) if early else (hm(end) if end else None),
+                    "deadline": secs_hm(early[1]) if early else None,
+                    "lastPunch": hm(rec.last_punch),
+                    "earlyMinutes": early[2] if early else None,
+                    "permission": _permission_badge(rec.evening_permission_applied, rec.evening_permission_excess),
+                    "poolStatus": _pool_status_early(rec, emp, roster),
+                    "status": STATUS_LABELS.get(rec.status, rec.status),
+                    "reason": rec.late_reason,
+                },
+            )
+        )
     built.sort(key=lambda t: (t[0], t[1]))
     rows = [t[2] for t in built]
-    truncated = len(records) >= ctx.row_limit
 
     minutes = [r["earlyMinutes"] for r in rows if r["earlyMinutes"] is not None]
     summary = [
@@ -616,8 +724,7 @@ def _early_out_run(ctx):
         {"label": "Average early (min)", "value": _avg(minutes), "format": "number"},
         {"label": "Longest early (min)", "value": max(minutes) if minutes else None, "format": "integer"},
     ]
-    if not truncated:
-        rows = with_subtotals(rows, lambda r: r["department"], ["earlyMinutes"])
+    rows, sub_note = subtotals_within_limit(ctx, rows, lambda r: r["department"], ["earlyMinutes"])
 
     notes = [
         "Each row is a day flagged Evening Early-Out: the last punch (needs at least two punches) is before the shift end "
@@ -630,8 +737,8 @@ def _early_out_run(ctx):
             "Early-Out detection is switched off in Attendance settings (it is off by default), so no new days are flagged; "
             "any rows shown were flagged while it was on."
         )
-    if truncated:
-        notes.append("Department subtotals are omitted because the list was cut off; narrow the filters.")
+    if sub_note:
+        notes.append(sub_note)
     notes.extend(coverage_notes(ctx, people_by_id, d_from, d_to))
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
@@ -679,13 +786,13 @@ _VIEW = (("detail", "Detail (one row per half day)"), ("summary", "Summary (coun
 
 _HALF_DETAIL_COLS = (
     *EMP_COLS_SHORT,
-    ColumnSpec("date", "Date", DATE, 1.1),
+    ColumnSpec("date", "Date", DATE, 1.4),
     ColumnSpec("day", "Day", TEXT, 0.6),
     ColumnSpec("halfWorked", "Half worked", BADGE, 1.0),
-    ColumnSpec("cause", "Cause", BADGE, 1.2),
+    ColumnSpec("cause", "Cause", BADGE, 1.4),
     ColumnSpec("firstPunch", "First punch", TIME, 0.9),
     ColumnSpec("lastPunch", "Last punch", TIME, 0.9),
-    ColumnSpec("punchCount", "Punches", INTEGER, 0.7),
+    ColumnSpec("punchCount", "Punches", INTEGER, 0.9),
     ColumnSpec("leaveSlot", "Leave slot", BADGE, 0.9),
     ColumnSpec("shiftsEarned", "Shift credit", NUMBER, 0.8, total="sum"),
     ColumnSpec("shiftsLost", "Shifts lost", NUMBER, 0.8, total="sum"),
@@ -734,8 +841,11 @@ def _half_run(ctx):
     qs = day_records(ctx, d_from, d_to, status="half_shift").order_by("date", "id")
     slots = {}
     for eid, start, slot in LeaveRequest.objects.filter(
-        ctx.emp_q("employee__"), status="approved", is_half_day=True,
-        start_date__gte=d_from.isoformat(), start_date__lt=(d_to + timedelta(days=1)).isoformat(),
+        ctx.emp_q("employee__"),
+        status="approved",
+        is_half_day=True,
+        start_date__gte=d_from.isoformat(),
+        start_date__lt=(d_to + timedelta(days=1)).isoformat(),
     ).values_list("employee_id", "start_date", "half_day_slot"):
         d = parse_date(start)
         if d:
@@ -767,24 +877,33 @@ def _half_run(ctx):
         if rec.is_compensation_day:
             note_parts.append("Compensation day (evening cut-off replaced by the release time)")
         shifts = float(rec.shifts_earned or 0)
-        built.append((emp_sort_key(emp), rec.date, emp, {
-            **emp_cells(emp),
-            "date": rec.date.isoformat(),
-            "day": day_abbr(rec.date),
-            "halfWorked": worked.title() if worked else None,
-            "cause": CAUSE_LABEL[cause],
-            "firstPunch": hm(rec.first_punch),
-            "lastPunch": hm(rec.last_punch),
-            "punchCount": rec.total_punches,
-            "leaveSlot": {"morning": "Morning", "afternoon": "Afternoon"}.get(slot) if (rec.is_half_day_leave and slot) else None,
-            "shiftsEarned": shifts,
-            "shiftsLost": None if is_prod else round(1 - shifts, 2),
-            "late": "Late" if rec.is_late else None,
-            "source": "HR override" if rec.source == "manual" else rec.primary_source,
-            "note": "; ".join(note_parts) or None,
-            "_cause": cause,
-            "_worked": worked,
-        }))
+        built.append(
+            (
+                emp_sort_key(emp),
+                rec.date,
+                emp,
+                {
+                    **emp_cells(emp),
+                    "date": rec.date.isoformat(),
+                    "day": day_abbr(rec.date),
+                    "halfWorked": worked.title() if worked else None,
+                    "cause": CAUSE_LABEL[cause],
+                    "firstPunch": hm(rec.first_punch),
+                    "lastPunch": hm(rec.last_punch),
+                    "punchCount": rec.total_punches,
+                    "leaveSlot": {"morning": "Morning", "afternoon": "Afternoon"}.get(slot)
+                    if (rec.is_half_day_leave and slot)
+                    else None,
+                    "shiftsEarned": shifts,
+                    "shiftsLost": None if is_prod else round(1 - shifts, 2),
+                    "late": "Late" if rec.is_late else None,
+                    "source": "HR override" if rec.source == "manual" else rec.primary_source,
+                    "note": "; ".join(note_parts) or None,
+                    "_cause": cause,
+                    "_worked": worked,
+                },
+            )
+        )
     built.sort(key=lambda t: (t[0], t[1]))
 
     staff_lost = round(sum(t[3]["shiftsLost"] or 0 for t in built), 2)
@@ -792,9 +911,21 @@ def _half_run(ctx):
         {"label": "Half days", "value": len(built), "format": "integer"},
         {"label": "Employees affected", "value": len({t[2].id for t in built}), "format": "integer"},
         {"label": "Shift equivalents lost", "value": staff_lost, "format": "number"},
-        {"label": "Morning half worked", "value": sum(1 for t in built if t[3]["_worked"] == "morning"), "format": "integer"},
-        {"label": "Evening half worked", "value": sum(1 for t in built if t[3]["_worked"] == "evening"), "format": "integer"},
-        {"label": "Single-punch days", "value": sum(1 for t in built if t[3]["_cause"] == "single_punch"), "format": "integer"},
+        {
+            "label": "Morning half worked",
+            "value": sum(1 for t in built if t[3]["_worked"] == "morning"),
+            "format": "integer",
+        },
+        {
+            "label": "Evening half worked",
+            "value": sum(1 for t in built if t[3]["_worked"] == "evening"),
+            "format": "integer",
+        },
+        {
+            "label": "Single-punch days",
+            "value": sum(1 for t in built if t[3]["_cause"] == "single_punch"),
+            "format": "integer",
+        },
     ]
 
     if view == "summary":
@@ -811,19 +942,43 @@ def _half_run(ctx):
         rows = []
         for eid in sorted(emps, key=lambda i: emp_sort_key(emps[i])):
             c = per[eid]
-            rows.append({
-                **emp_cells(emps[eid]),
-                "halfDays": c["halfDays"], "morning": c["morning"], "evening": c["evening"], "unknown": c["unknown"],
-                "singlePunch": c["single_punch"], "leftEarly": c["left_early"], "arrivedLate": c["arrived_late"],
-                "halfDayLeave": c["half_day_leave"], "hrOverride": c["hr_override"], "shiftsLost": round(lost[eid], 2),
-            })
-        rows = with_subtotals(
-            rows, lambda r: r["department"],
-            ["halfDays", "morning", "evening", "unknown", "singlePunch", "leftEarly", "arrivedLate", "halfDayLeave", "hrOverride", "shiftsLost"],
+            rows.append(
+                {
+                    **emp_cells(emps[eid]),
+                    "halfDays": c["halfDays"],
+                    "morning": c["morning"],
+                    "evening": c["evening"],
+                    "unknown": c["unknown"],
+                    "singlePunch": c["single_punch"],
+                    "leftEarly": c["left_early"],
+                    "arrivedLate": c["arrived_late"],
+                    "halfDayLeave": c["half_day_leave"],
+                    "hrOverride": c["hr_override"],
+                    "shiftsLost": round(lost[eid], 2),
+                }
+            )
+        rows, sub_note = subtotals_within_limit(
+            ctx,
+            rows,
+            lambda r: r["department"],
+            [
+                "halfDays",
+                "morning",
+                "evening",
+                "unknown",
+                "singlePunch",
+                "leftEarly",
+                "arrivedLate",
+                "halfDayLeave",
+                "hrOverride",
+                "shiftsLost",
+            ],
         )
         columns = list(_HALF_SUMMARY_COLS)
     else:
         rows = [t[3] for t in built[: ctx.row_limit]]
+        # subtotals of a cut-off list would be wrong, and must not push a complete one over the limit
+        rows, sub_note = subtotals_within_limit(ctx, rows, lambda r: r["department"], ["shiftsEarned", "shiftsLost"])
         columns = list(_HALF_DETAIL_COLS)
 
     notes = [
@@ -837,6 +992,8 @@ def _half_run(ctx):
         "For production employees a half day means the shift credit is at most half of the day's maximum; the morning / "
         "evening split and shifts lost do not apply to them.",
     ]
+    if sub_note:
+        notes.append(sub_note)
     notes.extend(coverage_notes(ctx, people_by_id, d_from, d_to))
     return ReportResult(rows=rows, summary=summary, notes=notes, columns=columns)
 
@@ -847,7 +1004,7 @@ register(
         title="Half-Day Report",
         description="Every half-day with the half worked, punches and the derived cause; switch to counts per employee.",
         category="attendance",
-        icon="Clock",
+        icon="Hourglass",
         tags=("half day", "half shift", "0.5", "single punch", "half-day leave"),
         modules=MODULES,
         filters=(

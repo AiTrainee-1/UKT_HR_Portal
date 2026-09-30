@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { Label } from "@/components/ui/label";
 import PhotoUpload from "@/components/PhotoUpload";
+import SalarySplitFields from "@/components/SalarySplitFields";
 import {
   useCreateEmployee, getListEmployeesQueryKey,
   useListDepartments, useListDesignations,
@@ -22,6 +23,8 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { ArrowLeft } from "lucide-react";
+import { EMPTY_SPLIT, defaultSplit, splitPayload, type SplitKey, type SplitValues } from "@/lib/salary-split";
+import { addSplitIssue, splitErrorMessage, splitSchema } from "@/lib/salary-split-form";
 
 const schema = z.object({
   employeeCode: z.string().min(1, "Employee code is required"),
@@ -37,6 +40,7 @@ const schema = z.object({
   branchId: z.string().optional(),
   salaryType: z.enum(["monthly", "weekly"]),
   salaryAmount: z.string().optional(),
+  split: splitSchema,
   salaryPerShift: z.string().optional(),
   joinDate: z.string().optional(),
   bankName: z.string().optional(),
@@ -58,6 +62,9 @@ const schema = z.object({
     }
   } else if (!data.salaryAmount || Number(data.salaryAmount) <= 0) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["salaryAmount"], message: "Salary amount is required" });
+  } else {
+    // The salary is always split 50% + 50% (Basic/DA/Retention | Other/Petrol/RHA/Special/CA).
+    addSplitIssue(ctx, data.salaryAmount, data.split);
   }
 });
 
@@ -84,11 +91,19 @@ export default function NewEmployee() {
       salaryType: "monthly",
       employmentType: "staff",
       salaryAmount: "",
+      split: EMPTY_SPLIT,
       salaryPerShift: "",
     },
   });
 
   const employmentType = form.watch("employmentType");
+  const salaryAmount = form.watch("salaryAmount");
+  const splitValues = form.watch("split");
+
+  // The split is worked out as soon as the salary is typed (and whenever it changes); every amount stays editable.
+  const setSplit = (values: SplitValues) => form.setValue("split", values, { shouldDirty: true });
+  const fillSplitFromSalary = (amount: string | undefined) => setSplit(defaultSplit(amount) ?? EMPTY_SPLIT);
+  const setSplitField = (key: SplitKey, value: string) => form.setValue(`split.${key}`, value, { shouldDirty: true });
 
   // Pre-fill the configured default per-shift rate when switching to Production
   const { data: payrollSettings } = usePayrollSettings();
@@ -119,6 +134,7 @@ export default function NewEmployee() {
           branchId: data.branchId ? Number(data.branchId) : undefined,
           salaryType: data.salaryType,
           salaryAmount: data.employmentType === "production" ? undefined : Number(data.salaryAmount),
+          salaryBreakup: data.employmentType === "production" ? undefined : splitPayload(data.split),
           salaryPerShift: data.employmentType === "production" ? Number(data.salaryPerShift) : undefined,
           joinDate: data.joinDate || undefined,
           bankName: data.bankName || undefined,
@@ -164,7 +180,15 @@ export default function NewEmployee() {
         </div>
 
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
+          <form
+            onSubmit={form.handleSubmit(onSubmit, (errors) => {
+              const problem = splitErrorMessage(errors);
+              if (!problem) return;
+              toast({ title: "Fix the salary split", description: problem, variant: "destructive" });
+              document.querySelector('[data-testid="salary-split"]')?.scrollIntoView({ behavior: "smooth", block: "center" });
+            })}
+            className="space-y-5"
+          >
 
             {/* Profile Photo */}
             <Card>
@@ -334,8 +358,14 @@ export default function NewEmployee() {
                       <FormMessage /></FormItem>
                     )} />
                     <FormField control={form.control} name="salaryAmount" render={({ field }) => (
-                      <FormItem><FormLabel>Amount (₹) *</FormLabel><FormControl><Input type="number" {...field} /></FormControl><FormMessage /></FormItem>
+                      <FormItem><FormLabel>Amount (₹) *</FormLabel><FormControl><Input type="number" data-testid="input-salary-amount" {...field} onChange={(e) => { field.onChange(e); fillSplitFromSalary(e.target.value); }} /></FormControl><FormMessage /></FormItem>
                     )} />
+                    <SalarySplitFields
+                      total={salaryAmount ?? ""}
+                      values={splitValues}
+                      onChange={setSplitField}
+                      onReset={() => fillSplitFromSalary(salaryAmount)}
+                    />
                   </>
                 )}
               </CardContent>

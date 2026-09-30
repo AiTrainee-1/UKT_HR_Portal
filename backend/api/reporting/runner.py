@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from api.branch_scope import get_branch_scope
 from api.clock import ist_now
 
 from .filters import ReportContext, describe_params, parse_params
@@ -92,7 +93,9 @@ def compute_totals(columns: list[ColumnSpec], rows: list[dict]) -> dict[str, Any
     data_rows = [r for r in rows if r.get("_kind") not in _STRUCTURAL]
     totals: dict[str, Any] = {}
     for c in wanted:
-        vals = [r[c.key] for r in data_rows if isinstance(r.get(c.key), (int, float)) and not isinstance(r.get(c.key), bool)]
+        vals = [
+            r[c.key] for r in data_rows if isinstance(r.get(c.key), (int, float)) and not isinstance(r.get(c.key), bool)
+        ]
         if c.total == "count":
             totals[c.key] = len([r for r in data_rows if r.get(c.key) not in (None, "")])
         elif not vals:
@@ -116,11 +119,22 @@ def run_report(request, spec: ReportSpec, query, purpose: str = "screen") -> Run
 
     columns = list(result.columns) if result.columns else list(spec.columns)
     rows = normalise_rows(columns, result.rows)
-    total_rows = len(rows)
-    truncated = total_rows > limit
+    # The limit counts DATA rows: subtotal/total lines are furniture and must not push a complete list over it.
+    data_rows = sum(1 for r in rows if r.get("_kind") not in _STRUCTURAL)
+    truncated = data_rows > limit
     if truncated:
-        rows = rows[:limit]
-    if result.totals is not None:
+        kept, n = [], 0
+        for r in rows:
+            if r.get("_kind") not in _STRUCTURAL:
+                if n >= limit:
+                    break
+                n += 1
+            kept.append(r)
+        rows = kept
+    has_data = any(r.get("_kind") not in _STRUCTURAL for r in rows)
+    if not has_data:
+        totals = None  # a lone TOTAL row of dashes under "no records" is noise
+    elif result.totals is not None:
         totals = result.totals
     elif truncated:
         totals = None  # a sum over a cut-off list would silently under-state the real figure
@@ -141,11 +155,10 @@ def run_report(request, spec: ReportSpec, query, purpose: str = "screen") -> Run
         totals=totals,
         summary=summary,
         notes=list(result.notes or []),
-        filters=describe_params(spec, params),
+        filters=describe_params(spec, params, get_branch_scope(request)),
         generated_at=now.strftime("%Y-%m-%d %H:%M"),
         generated_by=hr_display_name(request),
         truncated=truncated,
         limit=limit,
         row_count=len(rows),
     )
-

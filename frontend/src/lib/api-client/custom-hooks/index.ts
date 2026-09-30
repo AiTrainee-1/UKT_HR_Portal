@@ -17,3 +17,5 @@ export * from "./reports";
 export * from "./requests";
 export * from "./system";
 export * from "./whatsapp";
+export * from "./gmail";
+export * from "./support";

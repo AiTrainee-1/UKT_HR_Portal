@@ -13,9 +13,7 @@ from xml.sax.saxutils import escape
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm
-from reportlab.pdfgen import canvas as canvas_mod
 from reportlab.platypus import (
     BaseDocTemplate,
     CondPageBreak,
@@ -37,8 +35,10 @@ from ..registry import register
 from ..runner import KIND_SUBTOTAL
 from ..types import BADGE, DATE, HOURS, INTEGER, MINUTES, NUMBER, TEXT, TIME, ColumnSpec, ReportResult, ReportSpec
 from .attendance_core_data import (
+    MAX_EMPLOYEE_DAYS,
     AttendanceData,
     build_day,
+    detection_notes,
     drop_dormant,
     emp_days_guard,
     hhmm,
@@ -47,6 +47,7 @@ from .attendance_core_data import (
     scoped_employees,
     weekday_text,
 )
+from .attendance_core_pdf import letterhead, numbered_canvas, short, style_factory, title_bar
 
 REPORT_ID = "time-card"
 LONG_RANGE_DAYS = 31
@@ -120,7 +121,9 @@ def _remarks(day, data: AttendanceData, ctx_today) -> str | None:
         out.append(flag)
     if emp.employment_type != "production" and rec is not None and day.shift is None:
         out.append("No shift assigned - late / OT cannot be judged")
-    if day.basis in ("single", "odd") and d != ctx_today:
+    if day.basis == "single" and d != ctx_today:
+        out.append("Single punch - worked hours not computed")
+    elif day.basis == "odd" and d != ctx_today:
         out.append(f"Odd punches ({len(day.punches)}) - worked hours not computed")
     if len(day.punches) > 4:
         out.append("Punches: " + ", ".join(hhmm(p.at) for p in day.punches))
@@ -152,83 +155,99 @@ def _matches(day, key: str) -> bool:
 def _run(ctx) -> ReportResult:
     days = ctx.days_in_range
     d_from, d_to = ctx.date_from, ctx.date_to
-    rows_per_emp = len(days) + 1
-    allowed = ctx.row_limit // rows_per_emp + 1
-    employees = scoped_employees(ctx, order="dept_code", limit=allowed + 1)
-    if len(days) > LONG_RANGE_DAYS and len(employees) > LONG_RANGE_MAX_EMPLOYEES:
+    everyone = scoped_employees(ctx, order="dept_code")
+    if len(days) > LONG_RANGE_DAYS and len(everyone) > LONG_RANGE_MAX_EMPLOYEES:
         raise ReportParamError(
             f"For more than {LONG_RANGE_DAYS} days choose at most {LONG_RANGE_MAX_EMPLOYEES} employees "
             "(a month is the widest range for a whole department)",
             "employee",
         )
-    employees = employees[:allowed]
-    emp_days_guard(len(employees), len(days))
-
-    data = AttendanceData(ctx, employees, d_from, d_to, punches=True, leaves=True, permissions=True, service=True)
-    employees = drop_dormant(ctx, employees, data)
     deduct = bool(ctx.params.get("deductLunch", True))
     include_off = bool(ctx.params.get("includeOffDays", True))
     want = ctx.params.get("dayStatus")
     today = ctx.today
 
+    # The roster is worked through in blocks of the size whose day rows would just fill the row limit. The day
+    # filters, "no holidays" and the dormant-leaver rule all remove rows AFTER an employee is loaded, so a block is
+    # judged by the rows it really produced: a later block is read until the limit is reached (the runner then
+    # reports "truncated") or the roster is exhausted. An employee is never dropped silently.
+    per_emp = len(days) + 1  # one row per day plus the employee's total row
+    block = max(1, ctx.row_limit // per_emp + 1)
+    blocks = [everyone[i : i + block] for i in range(0, len(everyone), block)] or [[]]
+
     rows: list[dict] = []
     cache_emps: dict[str, dict] = {}
     counts = {"present": 0, "half": 0, "absent": 0, "leave": 0, "off": 0, "late": 0, "unprocessed": 0}
-    worked_total = 0
-    for emp in employees:
-        shifts_seen: list[str] = []
-        emp_rows = 0
-        for d in days:
-            day = build_day(data, emp, d, deduct_lunch=deduct)
-            if day.kind in ("holiday", "weekly_off") and not include_off:
-                continue
-            if want and not _matches(day, want):
-                continue
-            if day.shift is not None and day.shift.name not in shifts_seen and day.in_service:
-                shifts_seen.append(day.shift.name)
-            p = day.punches
-            punch_at = [hhmm(x.at) for x in p[:4]]
-            punch_at += [None] * (4 - len(punch_at))
-            if not p and day.first_in:  # manual entry: HR typed the times
-                punch_at = [day.first_in, day.last_out, None, None]
-            rec = day.rec
-            rows.append({
-                "employeeCode": emp.employee_code,
-                "employeeName": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
-                "department": emp.department.name if emp.department_id else "Unassigned",
-                "date": d.isoformat(),
-                "day": weekday_text(d),
-                "shift": day.shift.name if day.shift is not None else None,
-                "in1": punch_at[0], "out1": punch_at[1], "in2": punch_at[2], "out2": punch_at[3],
-                "punchCount": len(p) or None,
-                "workedHours": hours(day.worked_min),
-                "lateMinutes": day.late_min,
-                "earlyOutMinutes": day.early_min,
-                "halfDay": day.half,
-                "otMinutes": day.ot_min,
-                "permissionMinutes": day.perm_min,
-                "status": day.label,
-                "shiftsEarned": float(rec.shifts_earned) if rec is not None else None,
-                "remarks": _remarks(day, data, today),
-            })
-            emp_rows += 1
-            if day.kind in ("present", "half", "absent", "leave"):
-                counts[day.kind] += 1
-            elif day.kind in ("holiday", "weekly_off"):
-                counts["off"] += 1
-            if rec is not None and rec.is_late:
-                counts["late"] += 1
-            if day.unprocessed:
-                counts["unprocessed"] += 1
-            worked_total += day.worked_min or 0
-        if emp_rows:
-            cache_emps[emp.employee_code] = {
-                "name": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
-                "department": emp.department.name if emp.department_id else "Unassigned",
-                "designation": emp.designation.title if emp.designation_id else None,
-                "type": "Production" if emp.employment_type == "production" else "Staff",
-                "shifts": shifts_seen,
-            }
+    worked_hours: list[float] = []
+    data = None
+    scanned = 0
+    for chunk in blocks:
+        scanned += len(chunk)
+        if scanned * len(days) > MAX_EMPLOYEE_DAYS:
+            emp_days_guard(len(everyone), len(days))  # the filters leave too few rows to stop early: say so
+        data = AttendanceData(ctx, chunk, d_from, d_to, punches=True, leaves=True, permissions=True, service=True)
+        for emp in drop_dormant(ctx, chunk, data):
+            shifts_seen: list[str] = []
+            emp_rows = 0
+            for d in days:
+                day = build_day(data, emp, d, deduct_lunch=deduct)
+                if day.kind in ("holiday", "weekly_off") and not include_off:
+                    continue
+                if want and not _matches(day, want):
+                    continue
+                if day.shift is not None and day.shift.name not in shifts_seen and day.in_service:
+                    shifts_seen.append(day.shift.name)
+                p = day.punches
+                punch_at = [hhmm(x.at) for x in p[:4]]
+                punch_at += [None] * (4 - len(punch_at))
+                if not p and day.first_in:  # manual entry: HR typed the times
+                    punch_at = [day.first_in, day.last_out, None, None]
+                rec = day.rec
+                rows.append(
+                    {
+                        "employeeCode": emp.employee_code,
+                        "employeeName": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
+                        "department": emp.department.name if emp.department_id else "Unassigned",
+                        "date": d.isoformat(),
+                        "day": weekday_text(d),
+                        "shift": day.shift.name if day.shift is not None else None,
+                        "in1": punch_at[0],
+                        "out1": punch_at[1],
+                        "in2": punch_at[2],
+                        "out2": punch_at[3],
+                        "punchCount": len(p) or None,
+                        "workedHours": hours(day.worked_min),
+                        "lateMinutes": day.late_min,
+                        "earlyOutMinutes": day.early_min,
+                        "halfDay": day.half,
+                        "otMinutes": day.ot_min,
+                        "permissionMinutes": day.perm_min,
+                        "status": day.label,
+                        "shiftsEarned": float(rec.shifts_earned) if rec is not None else None,
+                        "remarks": _remarks(day, data, today),
+                    }
+                )
+                emp_rows += 1
+                if day.kind in ("present", "half", "absent", "leave"):
+                    counts[day.kind] += 1
+                elif day.kind in ("holiday", "weekly_off"):
+                    counts["off"] += 1
+                if rec is not None and rec.is_late:
+                    counts["late"] += 1
+                if day.unprocessed:
+                    counts["unprocessed"] += 1
+                # the card adds the figures the rows show (rounded per day), exactly as the totals row does
+                worked_hours.append(hours(day.worked_min) or 0.0)
+            if emp_rows:
+                cache_emps[emp.employee_code] = {
+                    "name": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
+                    "department": emp.department.name if emp.department_id else "Unassigned",
+                    "designation": emp.designation.title if emp.designation_id else None,
+                    "type": "Production" if emp.employment_type == "production" else "Staff",
+                    "shifts": shifts_seen,
+                }
+        if len(rows) + len(cache_emps) >= ctx.row_limit:
+            break  # over the limit already (the runner cuts it and says so); the rest is not read
 
     rows = with_subtotals(rows, group_by=lambda r: r["employeeCode"], sum_keys=SUM_KEYS)
     ctx._cache["time_card"] = {"employees": cache_emps, "from": d_from, "to": d_to}
@@ -245,10 +264,12 @@ def _run(ctx) -> ReportResult:
         f"shown when at least the Settings threshold ({data.settings.ot_threshold_minutes or 60} min); "
         "overtime is paid only after HR announces it.",
     ]
-    if not data.settings.morning_late_in_enabled:
-        notes.append("Morning Late-In detection is switched off in Settings: no late minutes are shown.")
-    if not data.settings.evening_early_out_enabled:
-        notes.append("Evening Early-Out detection is switched off in Settings: no early-out minutes are shown.")
+    if not (data.settings.ot_detection_enabled and data.settings.compensation_feature_enabled):
+        notes.append(
+            "Overtime detection is switched off in Settings: OT minutes are shown for information only "
+            "(no overtime record is created, announced or paid from them)."
+        )
+    notes += detection_notes(data.settings)
     if counts["unprocessed"]:
         notes.append(
             f"{counts['unprocessed']} day(s) have no attendance record yet (nobody has opened them in Attendance): "
@@ -263,7 +284,7 @@ def _run(ctx) -> ReportResult:
         {"label": "Absent days", "value": counts["absent"], "format": "integer"},
         {"label": "Leave days", "value": counts["leave"], "format": "integer"},
         {"label": "Late days", "value": counts["late"], "format": "integer"},
-        {"label": "Worked hours", "value": hours(worked_total), "format": "hours"},
+        {"label": "Worked hours", "value": round(sum(worked_hours), 2), "format": "hours"},
         {"label": "Days not processed", "value": counts["unprocessed"], "format": "integer"},
     ]
     return ReportResult(rows=rows, summary=summary, notes=notes)
@@ -272,42 +293,9 @@ def _run(ctx) -> ReportResult:
 # ── printable PDF: one page per employee ────────────────────────────────────────
 
 
-def _numbered_canvas(footer_left: str, regular: str):
-    class NumberedCanvas(canvas_mod.Canvas):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self._saved: list[dict] = []
-
-        def showPage(self):
-            self._saved.append(dict(self.__dict__))
-            self._startPage()
-
-        def save(self):
-            total = len(self._saved)
-            for state in self._saved:
-                self.__dict__.update(state)
-                w, _h = self._pagesize
-                self.setStrokeColor(GRID)
-                self.setLineWidth(0.5)
-                self.line(1.2 * cm, 1.25 * cm, w - 1.2 * cm, 1.25 * cm)
-                self.setFont(regular, 7)
-                self.setFillColor(MUTED)
-                self.drawString(1.2 * cm, 0.8 * cm, footer_left)
-                self.drawRightString(w - 1.2 * cm, 0.8 * cm, f"Page {self._pageNumber} of {total}")
-                super().showPage()
-            super().save()
-
-    return NumberedCanvas
-
-
 def _short_date(iso) -> str:
     d = parse_date(iso)
     return f"{d.day:02d}-{MONTH_ABBR[d.month - 1]}-{d.year % 100:02d}" if d else ""
-
-
-def _short(text: str | None, limit: int) -> str:
-    text = text or ""
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
 def _cell(v, kind: str = "text") -> str:
@@ -322,7 +310,8 @@ def _cell(v, kind: str = "text") -> str:
 
 def build_time_card_pdf(ctx, out) -> bytes:
     """A printable time card: for every employee a page with the header block, the daily table, a totals
-    footer and signature lines (a range longer than a month flows onto further pages of the same card)."""
+    footer and signature lines. A period of up to a month fits one A4 page per employee; a longer one flows
+    onto further pages of the same card."""
     regular, bold, _rupee = ensure_fonts()
     co = company()
     cache = ctx._cache.get("time_card", {})
@@ -332,17 +321,13 @@ def build_time_card_pdf(ctx, out) -> bytes:
     page = A4
     margin = 1.2 * cm
     avail = page[0] - 2 * margin
-
-    def style(name, **kw) -> ParagraphStyle:
-        base = dict(fontName=regular, fontSize=7, leading=8.6, textColor=INK)
-        base.update(kw)
-        return ParagraphStyle(name, **base)
-
+    style = style_factory(regular, 7.0, 8.6)
     s_small = style("s", fontSize=6.3, leading=7.6)
     s_head = style("h", fontName=bold, alignment=TA_CENTER, textColor=colors.white, fontSize=6.6, leading=7.8)
     s_label = style("lb", fontSize=6.5, leading=8, textColor=MUTED)
     s_value = style("vl", fontName=bold, fontSize=8.5, leading=10.5)
     s_note = style("nt", fontSize=6.3, leading=7.8, textColor=MUTED)
+    s_foot = style("fv", fontName=bold, fontSize=9, leading=11, textColor=BRAND, alignment=TA_LEFT)
 
     # group the (already normalised) rows by employee, keeping structural rows out
     by_emp: dict[str, list[dict]] = {}
@@ -361,53 +346,72 @@ def build_time_card_pdf(ctx, out) -> bytes:
         name = meta.get("name") or rows[0].get("employeeName") or ""
         dept = meta.get("department") or rows[0].get("department") or ""
 
-        head_l = [Paragraph(f"<b>{escape(co.name)}</b>", style("co", fontName=bold, fontSize=13, leading=16, textColor=BRAND))]
-        sub = "  |  ".join(b for b in (co.address, co.contact) if b)
-        if sub:
-            head_l.append(Paragraph(escape(_short(sub, 150)), style("sub", fontSize=6.8, leading=8.5, textColor=MUTED)))
-        story.append(Table([[head_l]], colWidths=[avail], style=TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0)])))
-        story.append(Spacer(1, 4))
-        bar = Table(
-            [[Paragraph("TIME CARD", style("t", fontName=bold, fontSize=11, leading=14, textColor=colors.white)),
-              Paragraph(escape(period), style("p", fontName=bold, fontSize=9, leading=12, textColor=colors.white, alignment=2))]],
-            colWidths=[avail * 0.4, avail * 0.6],
-        )
-        bar.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), BRAND), ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-            ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ]))
-        story.append(bar)
+        story += letterhead(co, avail, regular, bold, style)
+        story.append(title_bar("TIME CARD", period, avail, bold, style))
 
         def field(label, value):
             return [Paragraph(escape(label), s_label), Paragraph(escape(value or "-"), s_value)]
 
         grid = Table(
-            [[field("Employee", name), field("Employee code", code), field("Employee type", meta.get("type"))],
-             [field("Department", dept), field("Designation", meta.get("designation")),
-              field("Shift", ", ".join(meta.get("shifts") or []) or None)]],
+            [
+                [field("Employee", name), field("Employee code", code), field("Employee type", meta.get("type"))],
+                [
+                    field("Department", dept),
+                    field("Designation", meta.get("designation")),
+                    field("Shift", ", ".join(meta.get("shifts") or []) or None),
+                ],
+            ],
             colWidths=[avail * 0.42, avail * 0.29, avail * 0.29],
         )
-        grid.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), BRAND_SOFT), ("BOX", (0, 0), (-1, -1), 0.5, GRID),
-            ("LEFTPADDING", (0, 0), (-1, -1), 8), ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ]))
+        grid.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), BRAND_SOFT),
+                    ("BOX", (0, 0), (-1, -1), 0.5, GRID),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                    ("TOPPADDING", (0, 0), (-1, -1), 2),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ]
+            )
+        )
         story.append(grid)
-        story.append(Spacer(1, 6))
+        story.append(Spacer(1, 5))
 
-        # ── daily table ──────────────────────────────────────────────────────
-        head = ["Date", "Day", "In", "Out", "In", "Out", "Hours", "Late", "Early", "OT", "Perm.", "Status", "Remarks"]
-        weights = [1.25, 0.7, 0.75, 0.75, 0.75, 0.75, 0.75, 0.65, 0.65, 0.65, 0.65, 1.15, 3.2]
+        # -- daily table ----------------------------------------------------
+        head = [
+            "Date",
+            "Day",
+            "In",
+            "Out",
+            "In",
+            "Out",
+            "Hours",
+            "Late<br/>min",
+            "Early<br/>min",
+            "OT<br/>min",
+            "Perm<br/>min",
+            "Status",
+            "Remarks",
+        ]
+        weights = [1.2, 0.65, 0.72, 0.72, 0.72, 0.72, 0.75, 0.65, 0.65, 0.65, 0.65, 1.1, 3.6]
         widths = [avail * w / sum(weights) for w in weights]
         data_rows: list[list] = [[Paragraph(h, s_head) for h in head]]
         cmds: list[tuple] = [
             ("BACKGROUND", (0, 0), (-1, 0), BRAND),
-            ("FONTNAME", (0, 1), (-1, -1), regular), ("FONTSIZE", (0, 1), (-1, -1), 7),
-            ("TEXTCOLOR", (0, 1), (-1, -1), INK), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("ALIGN", (2, 1), (10, -1), "CENTER"), ("ALIGN", (1, 1), (1, -1), "CENTER"),
-            ("LINEBELOW", (0, 0), (-1, -1), 0.25, GRID), ("BOX", (0, 0), (-1, -1), 0.5, GRID),
-            ("LEFTPADDING", (0, 0), (-1, -1), 3), ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-            ("TOPPADDING", (0, 0), (-1, -1), 1.9), ("BOTTOMPADDING", (0, 0), (-1, -1), 1.9),
+            ("FONTNAME", (0, 1), (-1, -1), regular),
+            ("FONTSIZE", (0, 1), (-1, -1), 7),
+            ("LEADING", (0, 1), (-1, -1), 8.4),
+            ("TEXTCOLOR", (0, 1), (-1, -1), INK),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ALIGN", (2, 1), (10, -1), "CENTER"),
+            ("ALIGN", (1, 1), (1, -1), "CENTER"),
+            ("LINEBELOW", (0, 0), (-1, -1), 0.25, GRID),
+            ("BOX", (0, 0), (-1, -1), 0.5, GRID),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 1.6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 1.6),
         ]
         tot = {"hours": 0.0, "late": 0, "early": 0, "ot": 0, "perm": 0, "shifts": 0.0}
         n_status = {"Present": 0, "Half Day": 0, "Absent": 0, "Leave": 0, "Off": 0}
@@ -415,16 +419,23 @@ def build_time_card_pdf(ctx, out) -> bytes:
         for r in rows:
             i = len(data_rows)
             status = r.get("status")
-            data_rows.append([
-                _short_date(r.get("date")),
-                r.get("day") or "",
-                _cell(r.get("in1")), _cell(r.get("out1")), _cell(r.get("in2")), _cell(r.get("out2")),
-                _cell(r.get("workedHours"), "hours"), _cell(r.get("lateMinutes"), "int"),
-                _cell(r.get("earlyOutMinutes"), "int"), _cell(r.get("otMinutes"), "int"),
-                _cell(r.get("permissionMinutes"), "int"),
-                status or "-",
-                Paragraph(escape(_short(r.get("remarks"), 64)), s_small),
-            ])
+            data_rows.append(
+                [
+                    _short_date(r.get("date")),
+                    r.get("day") or "",
+                    _cell(r.get("in1")),
+                    _cell(r.get("out1")),
+                    _cell(r.get("in2")),
+                    _cell(r.get("out2")),
+                    _cell(r.get("workedHours"), "hours"),
+                    _cell(r.get("lateMinutes"), "int"),
+                    _cell(r.get("earlyOutMinutes"), "int"),
+                    _cell(r.get("otMinutes"), "int"),
+                    _cell(r.get("permissionMinutes"), "int"),
+                    status or "-",
+                    Paragraph(escape(short(r.get("remarks"), 90)), s_small),
+                ]
+            )
             if status in ("Holiday", "Weekly Off"):
                 cmds.append(("BACKGROUND", (0, i), (-1, i), ZEBRA))
             elif status == "Absent":
@@ -443,85 +454,155 @@ def build_time_card_pdf(ctx, out) -> bytes:
                 n_status[status] += 1
             elif status in ("Holiday", "Weekly Off"):
                 n_status["Off"] += 1
-            if "Late" in (r.get("remarks") or "") or r.get("lateMinutes"):
+            if r.get("lateMinutes") or "Late" in (r.get("remarks") or "").split("; "):
                 late_days += 1
         table = Table(data_rows, colWidths=widths, repeatRows=1)
         table.setStyle(TableStyle(cmds))
         story.append(table)
-        story.append(Spacer(1, 6))
+        story.append(Spacer(1, 5))
 
-        # ── totals footer ────────────────────────────────────────────────────
-        story.append(CondPageBreak(6.5 * cm))
-        labels = ["Present", "Half days", "Absent", "Leave", "Holiday / off", "Late days", "Late min", "Worked hrs",
-                  "OT min", "Shift credit"]
+        # -- totals footer --------------------------------------------------
+        story.append(CondPageBreak(5.4 * cm))
+        labels = [
+            "Present",
+            "Half days",
+            "Absent",
+            "Leave",
+            "Holiday / off",
+            "Late days",
+            "Late min",
+            "Worked hrs",
+            "OT min",
+            "Shift credit",
+        ]
         values = [
-            n_status["Present"], n_status["Half Day"], n_status["Absent"], n_status["Leave"], n_status["Off"],
-            late_days, f"{tot['late']:,}", f"{tot['hours']:.2f}", f"{tot['ot']:,}", f"{tot['shifts']:.2f}",
+            n_status["Present"],
+            n_status["Half Day"],
+            n_status["Absent"],
+            n_status["Leave"],
+            n_status["Off"],
+            late_days,
+            f"{tot['late']:,}",
+            f"{tot['hours']:.2f}",
+            f"{tot['ot']:,}",
+            f"{tot['shifts']:.2f}",
         ]
         foot = Table(
-            [[Paragraph(escape(x), s_label) for x in labels], [Paragraph(f"<b>{escape(str(v))}</b>", style("fv", fontName=bold, fontSize=9, leading=11, textColor=BRAND, alignment=TA_LEFT)) for v in values]],
+            [
+                [Paragraph(escape(x), s_label) for x in labels],
+                [Paragraph(f"<b>{escape(str(v))}</b>", s_foot) for v in values],
+            ],
             colWidths=[avail / len(labels)] * len(labels),
         )
-        foot.setStyle(TableStyle([
-            ("BOX", (0, 0), (-1, -1), 0.5, GRID), ("INNERGRID", (0, 0), (-1, -1), 0.25, GRID),
-            ("BACKGROUND", (0, 0), (-1, 0), BRAND_SOFT), ("LEFTPADDING", (0, 0), (-1, -1), 5),
-            ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-        ]))
-        story.append(foot)
-        story.append(Spacer(1, 4))
-        story.append(Paragraph(
-            "Late / early / OT are minutes; hours are worked hours between punches (an odd number of punches leaves the "
-            "day's hours blank). Status is the attendance engine's verdict.", s_note,
-        ))
-        story.append(Spacer(1, 26))
-        sig = Table(
-            [["", "", ""], ["Employee signature", "Supervisor / HOD", "HR"]],
-            colWidths=[avail / 3] * 3, rowHeights=[16, 12],
+        foot.setStyle(
+            TableStyle(
+                [
+                    ("BOX", (0, 0), (-1, -1), 0.5, GRID),
+                    ("INNERGRID", (0, 0), (-1, -1), 0.25, GRID),
+                    ("BACKGROUND", (0, 0), (-1, 0), BRAND_SOFT),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                    ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+                ]
+            )
         )
-        sig.setStyle(TableStyle([
-            ("LINEABOVE", (0, 1), (0, 1), 0.6, INK), ("LINEABOVE", (1, 1), (1, 1), 0.6, INK), ("LINEABOVE", (2, 1), (2, 1), 0.6, INK),
-            ("FONTNAME", (0, 1), (-1, 1), regular), ("FONTSIZE", (0, 1), (-1, 1), 7), ("TEXTCOLOR", (0, 1), (-1, 1), MUTED),
-            ("ALIGN", (0, 1), (-1, 1), "CENTER"), ("LEFTPADDING", (0, 0), (-1, -1), 18), ("RIGHTPADDING", (0, 0), (-1, -1), 18),
-        ]))
+        story.append(foot)
+        story.append(Spacer(1, 3))
+        story.append(
+            Paragraph(
+                "Late / early / OT / permission are minutes; hours are worked hours between punches (an odd number of punches "
+                "leaves the day's hours blank). Status is the attendance engine's verdict.",
+                s_note,
+            )
+        )
+        story.append(Spacer(1, 24))
+        gap = avail * 0.06
+        sig_w = (avail - 2 * gap) / 3
+        sig = Table(
+            [["", "", "", "", ""], ["Employee signature", "", "Supervisor / HOD", "", "HR"]],
+            colWidths=[sig_w, gap, sig_w, gap, sig_w],
+            rowHeights=[8, 12],
+        )
+        sig.setStyle(
+            TableStyle(
+                [
+                    ("LINEABOVE", (0, 1), (0, 1), 0.6, INK),
+                    ("LINEABOVE", (2, 1), (2, 1), 0.6, INK),
+                    ("LINEABOVE", (4, 1), (4, 1), 0.6, INK),
+                    ("FONTNAME", (0, 1), (-1, 1), regular),
+                    ("FONTSIZE", (0, 1), (-1, 1), 7),
+                    ("TEXTCOLOR", (0, 1), (-1, 1), MUTED),
+                    ("ALIGN", (0, 1), (-1, 1), "CENTER"),
+                ]
+            )
+        )
         story.append(sig)
 
     if not by_emp:
-        story.append(Paragraph("No time-card rows match the selected filters.", style("e", fontSize=10, leading=14, textColor=MUTED)))
+        story += letterhead(co, avail, regular, bold, style)
+        story.append(title_bar("TIME CARD", period, avail, bold, style))
+        story.append(Spacer(1, 8))
+        story.append(
+            Paragraph(
+                "No time-card rows match the selected filters.", style("e", fontSize=10, leading=14, textColor=MUTED)
+            )
+        )
 
     buf = io.BytesIO()
     doc = BaseDocTemplate(
-        buf, pagesize=page, leftMargin=margin, rightMargin=margin, topMargin=margin, bottomMargin=1.6 * cm,
-        title="Time Card", author=co.name,
+        buf,
+        pagesize=page,
+        leftMargin=margin,
+        rightMargin=margin,
+        topMargin=margin,
+        bottomMargin=1.6 * cm,
+        title="Time Card",
+        author=co.name,
     )
-    frame = Frame(margin, 1.6 * cm, avail, page[1] - margin - 1.6 * cm, id="body", leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
+    frame = Frame(
+        margin,
+        1.6 * cm,
+        avail,
+        page[1] - margin - 1.6 * cm,
+        id="body",
+        leftPadding=0,
+        rightPadding=0,
+        topPadding=0,
+        bottomPadding=0,
+    )
     doc.addPageTemplates([PageTemplate(id="card", frames=[frame])])
     stamp = f"Generated {display_date(out.generated_at[:10])} {out.generated_at[11:]} by {out.generated_by}"
-    doc.build(story, canvasmaker=_numbered_canvas(f"{co.name} - Time Card  |  {stamp}", regular))
+    doc.build(story, canvasmaker=numbered_canvas(f"{co.name} - Time Card  |  {stamp}", regular, margin))
     return buf.getvalue()
 
 
-register(ReportSpec(
-    id=REPORT_ID,
-    title="Time Card",
-    description="Day-by-day punch card per employee: in / out times, worked hours, late, early-out, overtime and "
-    "permission minutes. The PDF prints one page per employee with a totals footer and signature lines.",
-    category="attendance",
-    icon="Clock",
-    tags=("timecard", "punch card", "in out", "worked hours", "late", "overtime", "muster"),
-    modules=("attendance",),
-    filters=(
-        date_range(default="thisMonth", label="Period", max_days=100),
-        *scope_filters(status="all"),
-        select("dayStatus", "Show only", DAY_STATUS_OPTIONS, placeholder="All days"),
-        boolean("includeOffDays", "Include holidays and weekly offs", default=True),
-        boolean("deductLunch", "Deduct lunch on two-punch days", default=True,
-                help="A day with only an In and an Out counts the whole span minus the shift's lunch break."),
-    ),
-    columns=COLUMNS,
-    run=_run,
-    landscape=True,
-    pdf_builder=build_time_card_pdf,
-    screen_limit=10_000,
-    pdf_max_rows=6_000,
-))
-
+register(
+    ReportSpec(
+        id=REPORT_ID,
+        title="Time Card",
+        description="Day-by-day punch card per employee: in / out times, worked hours, late, early-out, overtime and "
+        "permission minutes. The PDF prints one page per employee with a totals footer and signature lines.",
+        category="attendance",
+        icon="Clock",
+        tags=("timecard", "punch card", "in out", "worked hours", "late", "overtime", "muster"),
+        modules=("attendance",),
+        filters=(
+            date_range(default="thisMonth", label="Period", max_days=100),
+            *scope_filters(status="all"),
+            select("dayStatus", "Show only", DAY_STATUS_OPTIONS, placeholder="All days"),
+            boolean("includeOffDays", "Include holidays and weekly offs", default=True),
+            boolean(
+                "deductLunch",
+                "Deduct lunch on two-punch days",
+                default=True,
+                help="A day with only an In and an Out counts the whole span minus the shift's lunch break.",
+            ),
+        ),
+        columns=COLUMNS,
+        run=_run,
+        landscape=True,
+        pdf_builder=build_time_card_pdf,
+        screen_limit=10_000,
+        pdf_max_rows=6_000,
+    )
+)

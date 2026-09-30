@@ -1,5 +1,8 @@
 """Employee list/detail/create/update/delete, photo, status and location tracking."""
 
+from decimal import Decimal
+
+from . import salary_split
 from .audit_utils import log_action
 from .auth import get_token_employee_id, is_hr, require_auth, require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
@@ -324,6 +327,13 @@ def _create_employee_from_data(
     if relations["branch_id"] is None:
         return None, "Select a branch -an employee with no branch is hidden from every branch login", []
 
+    # The salary is always split 50% + 50% (salary_split.py): a submitted split is checked here, before anything is
+    # created, and a salary with none submitted (a bulk row, an older client) gets the automatic split.
+    salary_amount = parse_decimal(data.get("salaryAmount"))
+    breakup, split_error = salary_split.resolve(salary_amount, data.get("salaryBreakup"), None, total_changed=True)
+    if split_error:
+        return None, split_error, []
+
     unit_code = _assign_unit_code(relations["branch_id"])
 
     emp = Employee.objects.create(
@@ -341,7 +351,8 @@ def _create_employee_from_data(
         branch_id=relations["branch_id"],
         unit_code=unit_code,
         salary_type=data.get("salaryType") or "monthly",
-        salary_amount=parse_decimal(data.get("salaryAmount")),
+        salary_amount=salary_amount,
+        **({salary_split.COLUMNS[c]: breakup[c] for c in salary_split.COMPONENTS} if breakup else {}),
         salary_per_shift=parse_decimal(data.get("salaryPerShift")),
         bank_name=data.get("bankName") or None,
         bank_account=data.get("bankAccount") or None,
@@ -408,6 +419,7 @@ def _employee_update(request: Request, pk: int) -> Response:
         return _error("Employee not found", 404)
 
     original_branch_id = emp.branch_id
+    original_salary = emp.salary_amount
 
     # Handle department: prefer departmentId (int FK), fall back to name string
     if "departmentId" in request.data:
@@ -494,6 +506,23 @@ def _employee_update(request: Request, pk: int) -> Response:
             elif model_key == "date_of_birth":
                 value = value or None
             setattr(emp, model_key, value)
+
+    # Keep the 50% + 50% salary split (salary_split.py) true to the salary. A submitted split is validated; a new
+    # salary with none submitted re-scales the stored split (or creates the default one); an unchanged salary leaves
+    # the split alone, and an employee who never had a split stays without one until their salary is next saved.
+    if "salaryAmount" in request.data or "salaryBreakup" in request.data:
+        stored = salary_split.breakup_of(emp)
+        submitted = request.data.get("salaryBreakup")
+        total_changed = (emp.salary_amount is None) != (original_salary is None) or (
+            emp.salary_amount is not None and Decimal(str(emp.salary_amount)) != Decimal(str(original_salary))
+        )
+        if not (stored is None and not total_changed and submitted is None):
+            parts, split_error = salary_split.resolve(
+                emp.salary_amount, submitted, stored, total_changed=total_changed
+            )
+            if split_error:
+                return _error(split_error)
+            salary_split.apply_to_employee(emp, parts)
     emp.save()
     # If employee type was changed to production, try to auto-assign a production shift
     if request.data.get("employmentType") == "production":

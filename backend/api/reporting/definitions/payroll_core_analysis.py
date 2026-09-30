@@ -14,16 +14,16 @@ deduction with the same rule as the row-level reports (payroll_core_common.LATE_
 from __future__ import annotations
 
 from decimal import Decimal
-from types import SimpleNamespace
 
 from django.db.models import Case, Count, DecimalField, ExpressionWrapper, F, IntegerField, Sum, When
 
-from api.models import Employee, SalarySlip, SalaryIncrement
+from api.models import BranchSettingsOverride, Employee, PayrollSettings, SalaryIncrement, SalarySlip
+from api.ctc import ctc_figures
 from api.payroll_views import _d2
-from api.user_settings import settings_for_employee
+from api.user_settings import _SettingsOverlay
 
 from ..common import EMP_COLS, emp_cells
-from ..filters import boolean, period, scope, select
+from ..filters import ReportParamError, boolean, period, scope, select
 from ..formatting import iso, month_bounds, r2
 from ..registry import register
 from ..runner import KIND_SUBTOTAL
@@ -33,10 +33,10 @@ from .payroll_core_common import (
     EMPLOYER_PF_RATE,
     LATE_SQL,
     SLIP_TYPE_SQL,
-    ZERO,
     current_fy,
     financial_year_filter,
     fy_pairs,
+    has_module,
     legacy_filter,
     month_text,
     nat_key,
@@ -96,8 +96,24 @@ def _fy_or_default(ctx) -> str:
 #  department-salary-cost
 # ═════════════════════════════════════════════════════════════════════════════
 
-DEPT_KEYS = ("headcount", "slips", "grossEarned", "otAmount", "totalEarnings", "employeePf", "employeeEsi",
-             "employerEstimate", "employerCost", "advanceRecovered", "lateDeduction", "totalDeductions", "netPay")
+DEPT_KEYS = (
+    "headcount",
+    "slips",
+    "basic",
+    "hra",
+    "otherAllowances",
+    "grossEarned",
+    "otAmount",
+    "totalEarnings",
+    "employeePf",
+    "employeeEsi",
+    "employerEstimate",
+    "employerCost",
+    "advanceRecovered",
+    "lateDeduction",
+    "totalDeductions",
+    "netPay",
+)
 
 
 def _dept_row(a: dict, dept_label: str, type_label: str) -> dict:
@@ -114,6 +130,9 @@ def _dept_row(a: dict, dept_label: str, type_label: str) -> dict:
         "employmentType": type_label,
         "headcount": heads,
         "slips": a["slips"],
+        "basic": round(_f(a["basic_amt"]), 2),
+        "hra": round(_f(a["hra_amt"]), 2),
+        "otherAllowances": round(_f(a["other_amt"]), 2),
         "grossEarned": round(gross, 2),
         "otAmount": round(ot, 2),
         "totalEarnings": total_earnings,
@@ -133,6 +152,9 @@ def _dept_aggregates(qs, *by):
     return list(
         qs.values("employee__department_id", "employee__department__name", *by).annotate(
             headcount=Count("employee_id", distinct=True),
+            basic_amt=_sum("basic"),
+            hra_amt=_sum("hra"),
+            other_amt=ExpressionWrapper(_sum("allowances") + _sum("incentives") + _sum("bonuses"), output_field=_DEC),
             pf_base=_sum(Case(When(pf_deduction__gt=0, then=F("basic")), default=0, output_field=_DEC)),
             esi_base=_sum(Case(When(esi_deduction__gt=0, then=F("gross_salary")), default=0, output_field=_DEC)),
             **_slip_aggregates(),
@@ -162,7 +184,9 @@ def _department_cost_run(ctx) -> ReportResult:
     rows: list[dict] = []
     for a in sorted(by_dept, key=dkey):
         dname = a["employee__department__name"] or "Unassigned"
-        kinds = sorted({_type_text(t["stype"]) for t in types_by_dept.get(a["employee__department_id"], [])}, reverse=True)
+        kinds = sorted(
+            {_type_text(t["stype"]) for t in types_by_dept.get(a["employee__department_id"], [])}, reverse=True
+        )
         if breakdown == "department_type":
             parts = sorted(types_by_dept.get(a["employee__department_id"], []), key=lambda t: t["stype"])
             for t in parts:
@@ -198,15 +222,20 @@ def _department_cost_run(ctx) -> ReportResult:
         {"label": "Employer cost (estimate)", "value": totals["employerCost"] if totals else 0, "format": "currency"},
         {"label": "Net pay", "value": totals["netPay"] if totals else 0, "format": "currency"},
         {"label": "Cost per head", "value": round(total_cost / heads, 2) if heads else None, "format": "currency"},
-        {"label": f"Largest department share ({largest[0]})" if largest else "Largest department share",
-         "value": _pct(largest[1], total_cost) if largest else None, "format": "percent"},
+        {
+            "label": f"Largest department share ({largest[0]})" if largest else "Largest department share",
+            "value": _pct(largest[1], total_cost) if largest else None,
+            "format": "percent",
+        },
         {"label": "Staff net pay", "value": staff_net, "format": "currency"},
         {"label": "Production net pay", "value": prod_net, "format": "currency"},
     ]
     all_notes = [
-        f"Window: {window}." + (
+        f"Window: {window}."
+        + (
             f" Financial year runs {month_text(*pairs[0])} to {month_text(*pairs[-1])} (the Bonus financial-year start month)."
-            if fy else ""
+            if fy
+            else ""
         ),
         "Department is each employee's CURRENT department - slips store no department snapshot, so an employee who was "
         "transferred is counted wholly under the department they belong to today. Employees with no department appear "
@@ -215,8 +244,10 @@ def _department_cost_run(ctx) -> ReportResult:
         f"({EMPLOYER_PF_RATE}% of the Basic wage on slips where PF was deducted) and employer ESI ({EMPLOYER_ESI_RATE}% of "
         "gross pay on slips where ESI was deducted). Payroll does not store employer contributions: these are statutory "
         "rates applied by this report, without the Rs 15,000 PF wage cap, EDLI or admin charges.",
-        "Production slips belong to the month their pay period ends in. Late deduction = the slip's late-detection "
-        "snapshot; advance recovered = the figure stored on the slip. Share % is each row's share of total employer cost.",
+        "Production slips belong to the month their pay period ends in, and they store the whole period wage under Basic "
+        "(no HRA / allowance split), so a department with production staff shows their wages in the Basic column. Late "
+        "deduction = the slip's late-detection snapshot; advance recovered = the figure stored on the slip. Share % is "
+        "each row's share of total employer cost.",
         *notes,
     ]
     if not rows:
@@ -232,46 +263,64 @@ def company_named(dept_rows: dict) -> list[tuple[str, float]]:
     return out
 
 
-register(ReportSpec(
-    id="department-salary-cost",
-    title="Department-wise Salary Cost",
-    description="Headcount, earnings, statutory deductions, employer cost estimate and net pay by department.",
-    category=CATEGORY,
-    modules=BOTH,
-    icon="Building2",
-    tags=("department", "cost", "payroll cost", "headcount", "employer pf", "employer esi", "annual", "financial year"),
-    filters=(
-        period(default="lastMonth"),
-        financial_year_filter(help="When a financial year is chosen it replaces the month."),
-        *scope(designation=False, employee=False, status="all"),
-        legacy_filter(),
-        select(
-            "breakdown", "Break down by",
-            [("department", "Department"), ("department_type", "Department and staff / production")],
-            default="department", placeholder="Department",
+register(
+    ReportSpec(
+        id="department-salary-cost",
+        title="Department-wise Salary Cost",
+        description="Headcount, earnings, statutory deductions, employer cost estimate and net pay by department.",
+        category=CATEGORY,
+        modules=BOTH,
+        icon="Building2",
+        tags=(
+            "department",
+            "cost",
+            "payroll cost",
+            "headcount",
+            "employer pf",
+            "employer esi",
+            "annual",
+            "financial year",
         ),
-    ),
-    columns=(
-        ColumnSpec("department", "Department", TEXT, 2.0),
-        ColumnSpec("employmentType", "Type", TEXT, 1.2),
-        ColumnSpec("headcount", "Employees", INTEGER, 0.8, total="sum"),
-        ColumnSpec("slips", "Slips", INTEGER, 0.7, total="sum"),
-        _cur("grossEarned", "Gross pay"),
-        _cur("otAmount", "OT wages"),
-        _cur("totalEarnings", "Total earnings"),
-        _cur("employeePf", "Employee PF"),
-        _cur("employeeEsi", "Employee ESI"),
-        _cur("employerEstimate", "Employer PF + ESI (est.)"),
-        _cur("employerCost", "Employer cost (est.)"),
-        _cur("advanceRecovered", "Advance recovered"),
-        _cur("lateDeduction", "Late deduction"),
-        _cur("totalDeductions", "Total deductions"),
-        _cur("netPay", "Net pay"),
-        _cur("avgNetPerEmployee", "Avg net / employee", total="avg"),
-        ColumnSpec("sharePct", "Share %", PERCENT, 0.8),
-    ),
-    run=_department_cost_run,
-))
+        filters=(
+            period(default="lastMonth"),
+            financial_year_filter(help="When a financial year is chosen it replaces the month."),
+            *scope(designation=False, employee=False, status="all"),
+            legacy_filter(),
+            select(
+                "breakdown",
+                "Break down by",
+                [("department", "Department"), ("department_type", "Department and staff / production")],
+                default="department",
+                placeholder="Department",
+            ),
+        ),
+        columns=(
+            ColumnSpec("department", "Department", TEXT, 2.0),
+            ColumnSpec("employmentType", "Type", TEXT, 1.6),
+            ColumnSpec("headcount", "Employees", INTEGER, 1.1, total="sum"),
+            ColumnSpec("slips", "Slips", INTEGER, 0.7, total="sum"),
+            # 20 columns: the PDF exporter prints reports of more than 18 columns on landscape A3, which is what the money
+            # columns and their bold totals need to stay on one line.
+            _cur("basic", "Basic"),
+            _cur("hra", "HRA"),
+            _cur("otherAllowances", "Other allowances"),
+            _cur("grossEarned", "Gross pay"),
+            _cur("otAmount", "OT wages"),
+            _cur("totalEarnings", "Total earnings", 1.5),
+            _cur("employeePf", "Employee PF"),
+            _cur("employeeEsi", "Employee ESI"),
+            _cur("employerEstimate", "Employer PF + ESI (est.)"),
+            _cur("employerCost", "Employer cost (est.)", 1.5),
+            _cur("advanceRecovered", "Advance recovered"),
+            _cur("lateDeduction", "Late deduction"),
+            _cur("totalDeductions", "Total deductions"),
+            _cur("netPay", "Net pay", 1.5),
+            _cur("avgNetPerEmployee", "Avg net / employee", total="avg"),
+            ColumnSpec("sharePct", "Share %", PERCENT, 0.9),
+        ),
+        run=_department_cost_run,
+    )
+)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -299,19 +348,21 @@ def _comparison_run(ctx) -> ReportResult:
         net = round(_f(a["net"]), 2) if a else 0.0
         earnings = round(_f(a["gross"]) + _f(a["ot"]), 2) if a else 0.0
         flag = "Provisional" if month_bounds(y, m)[1] >= today else ("No payroll" if not a else None)
-        rows.append({
-            "monthLabel": month_text(y, m),
-            "employeesPaid": a["employees"] if a else 0,
-            "slips": a["slips"] if a else 0,
-            "totalEarnings": earnings,
-            "otAmount": round(_f(a["ot"]), 2) if a else 0.0,
-            "totalDeductions": round(_f(a["ded"]), 2) if a else 0.0,
-            "netPay": net,
-            "momChangeAmount": round(net - prev_net, 2) if prev_net is not None else None,
-            "momChangePct": _pct(net - prev_net, prev_net) if prev_net else None,
-            "avgNetPerEmployee": round(net / a["employees"], 2) if a and a["employees"] else None,
-            "flag": flag,
-        })
+        rows.append(
+            {
+                "monthLabel": month_text(y, m),
+                "employeesPaid": a["employees"] if a else 0,
+                "slips": a["slips"] if a else 0,
+                "totalEarnings": earnings,
+                "otAmount": round(_f(a["ot"]), 2) if a else 0.0,
+                "totalDeductions": round(_f(a["ded"]), 2) if a else 0.0,
+                "netPay": net,
+                "momChangeAmount": round(net - prev_net, 2) if prev_net is not None else None,
+                "momChangePct": _pct(net - prev_net, prev_net) if prev_net else None,
+                "avgNetPerEmployee": round(net / a["employees"], 2) if a and a["employees"] else None,
+                "flag": flag,
+            }
+        )
         prev_net = net
 
     have = [r for r in rows if r["slips"]]
@@ -321,19 +372,32 @@ def _comparison_run(ctx) -> ReportResult:
         totals = {
             "employeesPaid": distinct,
             "slips": sum(r["slips"] for r in rows),
-            **{k: round(sum(r[k] for r in rows), 2) for k in ("totalEarnings", "otAmount", "totalDeductions", "netPay")},
-            "momChangeAmount": None, "momChangePct": None, "avgNetPerEmployee": None,
+            **{
+                k: round(sum(r[k] for r in rows), 2) for k in ("totalEarnings", "otAmount", "totalDeductions", "netPay")
+            },
+            "momChangeAmount": None,
+            "momChangePct": None,
+            "avgNetPerEmployee": None,
         }
     hi = max(have, key=lambda r: r["netPay"], default=None)
     lo = min(have, key=lambda r: r["netPay"], default=None)
     summary = [
         {"label": f"Net pay for FY {fy}", "value": totals["netPay"] if totals else 0, "format": "currency"},
-        {"label": f"Highest month ({hi['monthLabel']})" if hi else "Highest month", "value": hi["netPay"] if hi else None,
-         "format": "currency"},
-        {"label": f"Lowest month ({lo['monthLabel']})" if lo else "Lowest month", "value": lo["netPay"] if lo else None,
-         "format": "currency"},
-        {"label": "Average monthly net pay", "value": round(sum(r["netPay"] for r in have) / len(have), 2) if have else None,
-         "format": "currency"},
+        {
+            "label": f"Highest month ({hi['monthLabel']})" if hi else "Highest month",
+            "value": hi["netPay"] if hi else None,
+            "format": "currency",
+        },
+        {
+            "label": f"Lowest month ({lo['monthLabel']})" if lo else "Lowest month",
+            "value": lo["netPay"] if lo else None,
+            "format": "currency",
+        },
+        {
+            "label": "Average monthly net pay",
+            "value": round(sum(r["netPay"] for r in have) / len(have), 2) if have else None,
+            "format": "currency",
+        },
         {"label": "Employees paid in the year", "value": distinct, "format": "integer"},
     ]
     all_notes = [
@@ -348,32 +412,36 @@ def _comparison_run(ctx) -> ReportResult:
     return ReportResult(rows=rows, totals=totals, summary=summary, notes=all_notes)
 
 
-register(ReportSpec(
-    id="payroll-month-comparison",
-    title="Month-on-Month Payroll Comparison",
-    description="Twelve-month payroll trend: employees paid, earnings, overtime, deductions, net pay and monthly change.",
-    category=CATEGORY,
-    modules=BOTH,
-    icon="TrendingUp",
-    tags=("trend", "month on month", "comparison", "payroll cost", "financial year"),
-    filters=(
-        financial_year_filter(), *scope(designation=False, employee=False, status=None), legacy_filter(),
-    ),
-    columns=(
-        ColumnSpec("monthLabel", "Month", TEXT, 1.4),
-        ColumnSpec("employeesPaid", "Employees paid", INTEGER, 1.0, total="sum"),
-        ColumnSpec("slips", "Slips", INTEGER, 0.8, total="sum"),
-        _cur("totalEarnings", "Total earnings"),
-        _cur("otAmount", "OT wages"),
-        _cur("totalDeductions", "Total deductions"),
-        _cur("netPay", "Net pay"),
-        ColumnSpec("momChangeAmount", "Change vs previous month", CURRENCY, 1.4),
-        ColumnSpec("momChangePct", "Change %", PERCENT, 0.9),
-        _cur("avgNetPerEmployee", "Avg net / employee", total=None),
-        ColumnSpec("flag", "Flag", BADGE, 1.1),
-    ),
-    run=_comparison_run,
-))
+register(
+    ReportSpec(
+        id="payroll-month-comparison",
+        title="Month-on-Month Payroll Comparison",
+        description="Twelve-month payroll trend: employees paid, earnings, overtime, deductions, net pay and monthly change.",
+        category=CATEGORY,
+        modules=BOTH,
+        icon="TrendingUp",
+        tags=("trend", "month on month", "comparison", "payroll cost", "financial year"),
+        filters=(
+            financial_year_filter(),
+            *scope(designation=False, employee=False, status=None),
+            legacy_filter(),
+        ),
+        columns=(
+            ColumnSpec("monthLabel", "Month", TEXT, 1.4),
+            ColumnSpec("employeesPaid", "Employees paid", INTEGER, 1.0, total="sum"),
+            ColumnSpec("slips", "Slips", INTEGER, 0.8, total="sum"),
+            _cur("totalEarnings", "Total earnings"),
+            _cur("otAmount", "OT wages"),
+            _cur("totalDeductions", "Total deductions"),
+            _cur("netPay", "Net pay"),
+            ColumnSpec("momChangeAmount", "Change vs previous month", CURRENCY, 1.4),
+            ColumnSpec("momChangePct", "Change %", PERCENT, 0.9),
+            _cur("avgNetPerEmployee", "Avg net / employee", total=None),
+            ColumnSpec("flag", "Flag", BADGE, 1.1),
+        ),
+        run=_comparison_run,
+    )
+)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -403,25 +471,27 @@ def _annual_run(ctx) -> ReportResult:
         e = emps[a["employee_id"]]
         earn = round(_f(a["gross"]) + _f(a["ot"]), 2)
         net = round(_f(a["net"]), 2)
-        rows.append({
-            **emp_cells(e),
-            "employmentType": _type_text(a["stype"]),
-            "period": month_text(a["year"], a["month"]) if month_wise else f"FY {fy}",
-            "monthsPaid": a["months"],
-            "basic": round(_f(a["basic"]), 2),
-            "hra": round(_f(a["hra"]), 2),
-            "otherAllowances": round(_f(a["other"]), 2),
-            "otAmount": round(_f(a["ot"]), 2),
-            "totalEarnings": earn,
-            "pfDeduction": round(_f(a["pf"]), 2),
-            "esiDeduction": round(_f(a["esi"]), 2),
-            "advanceDeduction": round(_f(a["adv"]), 2),
-            "lateDeduction": round(_f(a["late"]), 2),
-            "totalDeductions": round(_f(a["ded"]), 2),
-            "netPay": net,
-            "avgMonthlyNet": round(net / a["months"], 2) if a["months"] else None,
-            "_sort": (nat_key(e.employee_code), a["stype"], a.get("year") or 0, a.get("month") or 0),
-        })
+        rows.append(
+            {
+                **emp_cells(e),
+                "employmentType": _type_text(a["stype"]),
+                "period": month_text(a["year"], a["month"]) if month_wise else f"FY {fy}",
+                "monthsPaid": a["months"],
+                "basic": round(_f(a["basic"]), 2),
+                "hra": round(_f(a["hra"]), 2),
+                "otherAllowances": round(_f(a["other"]), 2),
+                "otAmount": round(_f(a["ot"]), 2),
+                "totalEarnings": earn,
+                "pfDeduction": round(_f(a["pf"]), 2),
+                "esiDeduction": round(_f(a["esi"]), 2),
+                "advanceDeduction": round(_f(a["adv"]), 2),
+                "lateDeduction": round(_f(a["late"]), 2),
+                "totalDeductions": round(_f(a["ded"]), 2),
+                "netPay": net,
+                "avgMonthlyNet": round(net / a["months"], 2) if a["months"] else None,
+                "_sort": (nat_key(e.employee_code), a["stype"], a.get("year") or 0, a.get("month") or 0),
+            }
+        )
     rows.sort(key=lambda r: r["_sort"])
     for r in rows:
         r.pop("_sort")
@@ -452,47 +522,61 @@ def _annual_run(ctx) -> ReportResult:
     return ReportResult(rows=rows, summary=summary, notes=all_notes)
 
 
-register(ReportSpec(
-    id="annual-earnings-statement",
-    title="Annual Earnings Statement",
-    description="Financial-year earnings heads, PF, ESI, advance and late deductions and net pay per employee.",
-    category=CATEGORY,
-    modules=BOTH,
-    icon="CalendarDays",
-    tags=("annual", "financial year", "yearly", "earnings", "form 16", "year end", "fy"),
-    filters=(
-        financial_year_filter(), *scope(status="all"), legacy_filter(),
-        boolean("monthWise", "Month-wise rows", help="One row per month instead of one per employee (pick an employee)."),
-    ),
-    columns=(
-        *EMP_COLS,
-        ColumnSpec("employmentType", "Type", BADGE, 1.0),
-        ColumnSpec("period", "Period", TEXT, 1.2),
-        ColumnSpec("monthsPaid", "Months paid", INTEGER, 0.8, total="sum"),
-        _cur("basic", "Basic"),
-        _cur("hra", "HRA"),
-        _cur("otherAllowances", "Other allowances"),
-        _cur("otAmount", "OT wages"),
-        _cur("totalEarnings", "Total earnings"),
-        _cur("pfDeduction", "PF"),
-        _cur("esiDeduction", "ESI"),
-        _cur("advanceDeduction", "Advance"),
-        _cur("lateDeduction", "Late deduction"),
-        _cur("totalDeductions", "Total deductions"),
-        _cur("netPay", "Net pay"),
-        _cur("avgMonthlyNet", "Avg monthly net", total=None),
-    ),
-    run=_annual_run,
-))
+register(
+    ReportSpec(
+        id="annual-earnings-statement",
+        title="Annual Earnings Statement",
+        description="Financial-year earnings heads, PF, ESI, advance and late deductions and net pay per employee.",
+        category=CATEGORY,
+        modules=BOTH,
+        icon="CalendarDays",
+        tags=("annual", "financial year", "yearly", "earnings", "form 16", "year end", "fy"),
+        filters=(
+            financial_year_filter(),
+            *scope(status="all"),
+            legacy_filter(),
+            boolean(
+                "monthWise", "Month-wise rows", help="One row per month instead of one per employee (pick an employee)."
+            ),
+        ),
+        columns=(
+            *EMP_COLS,
+            ColumnSpec("employmentType", "Type", BADGE, 1.0),
+            ColumnSpec("period", "Period", TEXT, 1.2),
+            ColumnSpec("monthsPaid", "Months paid", INTEGER, 0.8, total="sum"),
+            _cur("basic", "Basic"),
+            _cur("hra", "HRA"),
+            _cur("otherAllowances", "Other allowances"),
+            _cur("otAmount", "OT wages"),
+            _cur("totalEarnings", "Total earnings"),
+            _cur("pfDeduction", "PF"),
+            _cur("esiDeduction", "ESI"),
+            _cur("advanceDeduction", "Advance"),
+            _cur("lateDeduction", "Late deduction"),
+            _cur("totalDeductions", "Total deductions"),
+            _cur("netPay", "Net pay"),
+            _cur("avgMonthlyNet", "Avg monthly net", total=None),
+        ),
+        run=_annual_run,
+    )
+)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  salary-master
 # ═════════════════════════════════════════════════════════════════════════════
 
+# PF / ESI / UAN numbers are statutory identifiers: only roles that already see payroll, salary or the employee
+# profile (which carries them) get them here. The report itself is also open to Increment-only roles.
+IDENTIFIER_MODULES = ("payroll", "production_payroll", "salary", "salary_slip", "employees")
+IDENTIFIER_FILTERS = ("no_pf", "no_esi", "no_uan")
+
 MISSING_OPTIONS = [
-    ("no_salary", "No salary / shift rate"), ("no_bank", "No bank account"), ("no_pf", "No PF number"),
-    ("no_esi", "No ESI number"), ("no_uan", "No UAN"),
+    ("no_salary", "No salary / shift rate"),
+    ("no_bank", "No bank account"),
+    ("no_pf", "No PF number"),
+    ("no_esi", "No ESI number"),
+    ("no_uan", "No UAN"),
 ]
 
 
@@ -504,7 +588,9 @@ def _missing(e, kind: str) -> bool:
     if kind == "no_salary":
         return not (e.salary_per_shift if e.employment_type == "production" else e.salary_amount)
     return {
-        "no_bank": _blank(e.bank_account), "no_pf": _blank(e.pf_number), "no_esi": _blank(e.esi_number),
+        "no_bank": _blank(e.bank_account),
+        "no_pf": _blank(e.pf_number),
+        "no_esi": _blank(e.esi_number),
         "no_uan": _blank(e.uan_number),
     }[kind]
 
@@ -517,8 +603,11 @@ def mask_account(v) -> str | None:
 
 
 def _master_run(ctx) -> ReportResult:
-    emps = sorted(ctx.employees()[: ctx.row_limit], key=lambda e: nat_key(e.employee_code))
+    show_ids = any(has_module(ctx, m) for m in IDENTIFIER_MODULES)
     kind = ctx.params.get("missingData")
+    if kind in IDENTIFIER_FILTERS and not show_ids:
+        raise ReportParamError("Filtering by PF / ESI / UAN needs Payroll, Salary or Employees access.", "missingData")
+    emps = sorted(ctx.employees()[: ctx.row_limit], key=lambda e: nat_key(e.employee_code))
     if kind:
         emps = [e for e in emps if _missing(e, kind)]
     incs: dict[int, list] = {}
@@ -533,42 +622,60 @@ def _master_run(ctx) -> ReportResult:
     for e in emps:
         history = incs.get(e.id, [])
         first, last = (history[0], history[-1]) if history else (None, None)
-        initial = e.initial_salary or (first["previous_salary"] if first else None) or (
-            e.salary_amount if e.employment_type == "staff" else None
+        initial = (
+            e.initial_salary
+            or (first["previous_salary"] if first else None)
+            or (e.salary_amount if e.employment_type == "staff" else None)
         )
-        rows.append({
-            **emp_cells(e),
-            "branch": e.branch.name if e.branch_id else None,
-            "employmentType": "Production" if e.employment_type == "production" else "Staff",
-            "joinDate": iso(e.join_date),
-            "currentSalary": r2(e.salary_amount) if e.salary_amount else None,
-            "salaryPerShift": r2(e.salary_per_shift) if e.salary_per_shift else None,
-            "initialSalary": r2(initial) if initial else None,
-            "totalIncrement": round(sum(float(i["new_salary"] - i["previous_salary"]) for i in history), 2) if history else None,
-            "incrementCount": len(history),
-            "lastIncrementDate": last["effective_date"].isoformat() if last else None,
-            "lastIncrementPct": r2(last["percent"]) if last else None,
-            "pfNumber": (e.pf_number or "").strip() or None,
-            "esiNumber": (e.esi_number or "").strip() or None,
-            "uanNumber": (e.uan_number or "").strip() or None,
-            "bankAccount": mask_account(e.bank_account),
-            "status": (e.status or "").title() or None,
-        })
+        rows.append(
+            {
+                **emp_cells(e),
+                "branch": e.branch.name if e.branch_id else None,
+                "employmentType": "Production" if e.employment_type == "production" else "Staff",
+                "joinDate": iso(e.join_date),
+                "currentSalary": r2(e.salary_amount) if e.salary_amount else None,
+                "salaryPerShift": r2(e.salary_per_shift) if e.salary_per_shift else None,
+                "initialSalary": r2(initial) if initial else None,
+                "totalIncrement": round(sum(float(i["new_salary"] - i["previous_salary"]) for i in history), 2)
+                if history
+                else None,
+                "incrementCount": len(history),
+                "lastIncrementDate": last["effective_date"].isoformat() if last else None,
+                "lastIncrementPct": r2(last["percent"]) if last else None,
+                "pfNumber": ((e.pf_number or "").strip() or None) if show_ids else None,
+                "esiNumber": ((e.esi_number or "").strip() or None) if show_ids else None,
+                "uanNumber": ((e.uan_number or "").strip() or None) if show_ids else None,
+                "bankAccount": mask_account(e.bank_account),
+                "status": (e.status or "").title() or None,
+            }
+        )
     staff = [e for e in emps if e.employment_type == "staff" and e.salary_amount]
     prod = [e for e in emps if e.employment_type == "production" and e.salary_per_shift]
     summary = [
         {"label": "Employees", "value": len(emps), "format": "integer"},
-        {"label": "Monthly salary commitment (staff)", "value": round(sum(float(e.salary_amount) for e in staff), 2),
-         "format": "currency"},
-        {"label": "Average staff salary", "value": round(sum(float(e.salary_amount) for e in staff) / len(staff), 2) if staff else None,
-         "format": "currency"},
-        {"label": "Average rate per shift", "value": round(sum(float(e.salary_per_shift) for e in prod) / len(prod), 2) if prod else None,
-         "format": "currency"},
+        {
+            "label": "Monthly salary commitment (staff)",
+            "value": round(sum(float(e.salary_amount) for e in staff), 2),
+            "format": "currency",
+        },
+        {
+            "label": "Average staff salary",
+            "value": round(sum(float(e.salary_amount) for e in staff) / len(staff), 2) if staff else None,
+            "format": "currency",
+        },
+        {
+            "label": "Average rate per shift",
+            "value": round(sum(float(e.salary_per_shift) for e in prod) / len(prod), 2) if prod else None,
+            "format": "currency",
+        },
         {"label": "No salary / rate", "value": sum(1 for e in emps if _missing(e, "no_salary")), "format": "integer"},
         {"label": "No bank account", "value": sum(1 for e in emps if _missing(e, "no_bank")), "format": "integer"},
-        {"label": "No PF number", "value": sum(1 for e in emps if _missing(e, "no_pf")), "format": "integer"},
-        {"label": "No ESI number", "value": sum(1 for e in emps if _missing(e, "no_esi")), "format": "integer"},
     ]
+    if show_ids:
+        summary += [
+            {"label": "No PF number", "value": sum(1 for e in emps if _missing(e, "no_pf")), "format": "integer"},
+            {"label": "No ESI number", "value": sum(1 for e in emps if _missing(e, "no_esi")), "format": "integer"},
+        ]
     no_uan = sum(1 for e in emps if _missing(e, "no_uan"))
     all_notes = [
         "Current salary is the staff monthly salary; production employees are paid per shift (rate per shift column). "
@@ -577,7 +684,11 @@ def _master_run(ctx) -> ReportResult:
         "Increment history covers staff salary revisions recorded on the Increment page. A revision made by editing the "
         "employee directly leaves no history row, and production rate changes are not recorded at all.",
         "The bank account is masked to its last 4 digits here - the full number is on the Bank Transfer Advice. "
-        f"{no_uan} employee(s) have no UAN; UAN cannot currently be entered in the application.",
+        + (
+            f"{no_uan} employee(s) have no UAN; UAN cannot currently be entered in the application."
+            if show_ids
+            else "PF / ESI / UAN numbers are hidden: they are shown only to roles with Payroll, Salary or Employees access."
+        ),
         "Join date is parsed from free text; it is blank where the stored text is not a recognisable date.",
     ]
     if not rows:
@@ -585,38 +696,40 @@ def _master_run(ctx) -> ReportResult:
     return ReportResult(rows=rows, summary=summary, notes=all_notes)
 
 
-register(ReportSpec(
-    id="salary-master",
-    title="Salary Master",
-    description="Current salary or shift rate, initial salary, increment history summary and PF / ESI / UAN identifiers.",
-    category=CATEGORY,
-    modules=("payroll", "salary", "increment"),
-    icon="Scale",
-    tags=("salary", "rate", "increment", "pf number", "esi number", "uan", "master", "missing data", "revision"),
-    filters=(
-        *scope(status="active"),
-        select("missingData", "Missing data", MISSING_OPTIONS, placeholder="Show everyone"),
-    ),
-    columns=(
-        *EMP_COLS,
-        ColumnSpec("branch", "Branch", TEXT, 1.2),
-        ColumnSpec("employmentType", "Type", BADGE, 1.0),
-        ColumnSpec("joinDate", "Join date", DATE, 1.1),
-        _cur("currentSalary", "Monthly salary", total=None),
-        _cur("salaryPerShift", "Rate per shift", total=None),
-        _cur("initialSalary", "Initial salary", total=None),
-        _cur("totalIncrement", "Total increment", total=None),
-        ColumnSpec("incrementCount", "Increments", INTEGER, 0.8),
-        ColumnSpec("lastIncrementDate", "Last increment", DATE, 1.1),
-        ColumnSpec("lastIncrementPct", "Last increment %", PERCENT, 0.9),
-        ColumnSpec("pfNumber", "PF number", TEXT, 1.4),
-        ColumnSpec("esiNumber", "ESI number", TEXT, 1.4),
-        ColumnSpec("uanNumber", "UAN", TEXT, 1.4),
-        ColumnSpec("bankAccount", "Bank account (masked)", TEXT, 1.5),
-        ColumnSpec("status", "Status", BADGE, 0.9),
-    ),
-    run=_master_run,
-))
+register(
+    ReportSpec(
+        id="salary-master",
+        title="Salary Master",
+        description="Current salary or shift rate, initial salary, increment history summary and PF / ESI / UAN identifiers.",
+        category=CATEGORY,
+        modules=("payroll", "salary", "increment"),
+        icon="Scale",
+        tags=("salary", "rate", "increment", "pf number", "esi number", "uan", "master", "missing data", "revision"),
+        filters=(
+            *scope(status="active"),
+            select("missingData", "Missing data", MISSING_OPTIONS, placeholder="Show everyone"),
+        ),
+        columns=(
+            *EMP_COLS,
+            ColumnSpec("branch", "Branch", TEXT, 1.2),
+            ColumnSpec("employmentType", "Type", BADGE, 1.0),
+            ColumnSpec("joinDate", "Join date", DATE, 1.1),
+            _cur("currentSalary", "Monthly salary", total=None),
+            _cur("salaryPerShift", "Rate per shift", total=None),
+            _cur("initialSalary", "Initial salary", total=None),
+            _cur("totalIncrement", "Total increment", total=None),
+            ColumnSpec("incrementCount", "Increments", INTEGER, 1.0),
+            ColumnSpec("lastIncrementDate", "Last increment", DATE, 1.2),
+            ColumnSpec("lastIncrementPct", "Last increment %", PERCENT, 1.1),
+            ColumnSpec("pfNumber", "PF number", TEXT, 1.4),
+            ColumnSpec("esiNumber", "ESI number", TEXT, 1.4),
+            ColumnSpec("uanNumber", "UAN", TEXT, 1.4),
+            ColumnSpec("bankAccount", "Bank account (masked)", TEXT, 2.0),
+            ColumnSpec("status", "Status", BADGE, 0.9),
+        ),
+        run=_master_run,
+    )
+)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -625,41 +738,47 @@ register(ReportSpec(
 
 
 def _ctc_row(e, s) -> dict:
-    """Same arithmetic as compensation_views._compensation_dict, with the branch settings passed in (that helper
-    re-reads the settings for every employee, which would be an N+1 over a whole company)."""
-    salary = e.salary_amount or ZERO
-    basic = _d2(salary * s.basic_percent / 100)
-    hra = _d2(salary * s.hra_percent / 100)
-    allowances = _d2(salary - basic - hra)
+    """The Compensation page's figures (api.ctc, one shared calculation), with the branch settings passed in (the page's
+    helper re-reads the settings for every employee, which would be an N+1 over a whole company)."""
     production = e.employment_type == Employee.EMPLOYMENT_TYPE_PRODUCTION
-    pf_rate = s.prod_pf_rate if production else s.pf_rate
-    esi_rate = s.prod_esi_rate if production else s.esi_rate
-    esi_ceiling = s.prod_esi_applicable_below if production else s.esi_applicable_below
-    employer_pf = _d2(basic * pf_rate / 100) if pf_rate else ZERO
-    employer_esi = _d2(salary * esi_rate / 100) if esi_rate and salary <= esi_ceiling else ZERO
-    gross = _d2(salary)
+    figures = ctc_figures(e, s)
     return {
         **emp_cells(e),
         "branch": e.branch.name if e.branch_id else None,
         "employmentType": "Production" if production else "Staff",
-        "basic": float(basic),
-        "hra": float(hra),
-        "allowances": float(allowances),
-        "employerPf": float(employer_pf),
-        "employerEsi": float(employer_esi),
-        "grossMonthly": float(gross),
-        "annualCtc": float(_d2((gross + employer_pf + employer_esi) * 12)),
+        # "Recorded" = saved on the employee; "Automatic" = none saved yet, so the automatic 50% + 50% split is shown
+        "splitStatus": "Recorded" if figures["splitRecorded"] else "Automatic",
+        **figures,
     }
 
 
-def _ctc_run(ctx) -> ReportResult:
-    emps = sorted(ctx.employees()[: ctx.row_limit], key=lambda e: nat_key(e.employee_code))
+def _branch_settings_resolver():
+    """``settings_for_employee`` without its side effect: that helper reads PayrollSettings.get(), which INSERTS the
+    singleton on a brand-new install, and a report must never write. The same resolution (the company row with the
+    employee's branch overrides layered on top) is rebuilt here from two plain reads - which also makes it constant
+    in queries however many branches there are."""
+    base = PayrollSettings.objects.filter(pk=1).defer("company_logo", "authorized_signature", "signature_image").first()
+    base = base or PayrollSettings()
+    overrides = dict(BranchSettingsOverride.objects.values_list("branch_id", "overrides"))
     cache: dict = {}
 
-    def settings_of(e):
-        if e.branch_id not in cache:  # one settings lookup per branch, not per employee
-            cache[e.branch_id] = settings_for_employee(SimpleNamespace(branch_id=e.branch_id))
-        return cache[e.branch_id]
+    def settings_of(employee):
+        if employee.branch_id is None:
+            return base  # an employee with no branch follows the company row
+        if employee.branch_id not in cache:
+            cache[employee.branch_id] = _SettingsOverlay(
+                base, dict(overrides.get(employee.branch_id) or {}), employee.branch_id
+            )
+        return cache[employee.branch_id]
+
+    return settings_of
+
+
+def _ctc_run(ctx) -> ReportResult:
+    # Not tied to PayrollSettings.compensation_feature_enabled: that switch stops the background OT / Compensation
+    # features, while the CTC figures (like the Compensation page's CTC Breakdown) are always available.
+    emps = sorted(ctx.employees()[: ctx.row_limit], key=lambda e: nat_key(e.employee_code))
+    settings_of = _branch_settings_resolver()
 
     rows, skipped = [], 0
     for e in emps:
@@ -676,17 +795,28 @@ def _ctc_run(ctx) -> ReportResult:
         {"label": "Employees", "value": len(rows), "format": "integer"},
         {"label": "Monthly cost to company", "value": monthly_ctc, "format": "currency"},
         {"label": "Annual cost to company", "value": col("annualCtc"), "format": "currency"},
-        {"label": "Average annual CTC", "value": round(col("annualCtc") / len(rows), 2) if rows else None, "format": "currency"},
+        {
+            "label": "Average annual CTC",
+            "value": round(col("annualCtc") / len(rows), 2) if rows else None,
+            "format": "currency",
+        },
         {"label": "Employer PF (monthly)", "value": col("employerPf"), "format": "currency"},
         {"label": "Employer ESI (monthly)", "value": col("employerEsi"), "format": "currency"},
     ]
+    automatic = sum(1 for r in rows if not r["splitRecorded"])
     all_notes = [
-        "ESTIMATE, not a statutory figure. It mirrors the Compensation page: Basic and HRA use the percentages in the "
-        "Compensation settings (which can differ from the 50% / 20% split payroll actually pays), employer PF = Basic x "
-        "the PF rate with no wage cap or EPS split, and employer ESI = salary x the EMPLOYEE ESI rate when salary is "
-        "within the ESI ceiling (the statutory employer rate is 3.25%, so this understates it).",
+        "ESTIMATE, not a statutory figure. It mirrors the Compensation page: the salary is shown as each employee's "
+        "50% + 50% split (Basic + DA + Retention Allowance, then Other + Petrol + RHA + Special Allowance + CA), employer "
+        "PF = the PF rate x the first portion (Basic + DA + Retention Allowance) with no wage cap or EPS split, and "
+        "employer ESI = salary x the EMPLOYEE ESI rate when salary is within the ESI ceiling (the statutory employer "
+        "rate is 3.25%, so this understates it).",
         "Annual CTC = (monthly salary + employer PF + employer ESI) x 12. Rates come from each employee's branch settings.",
     ]
+    if automatic:
+        all_notes.append(
+            f"{automatic} employee(s) have no salary split recorded yet (added before the split existed); their automatic "
+            "50% + 50% split is shown. Open their Edit Employee page and save to record it - the totals do not change."
+        )
     if skipped:
         all_notes.append(
             f"{skipped} employee(s) with no monthly salary are left out (production employees are paid per shift, so a "
@@ -697,26 +827,35 @@ def _ctc_run(ctx) -> ReportResult:
     return ReportResult(rows=rows, summary=summary, notes=all_notes)
 
 
-register(ReportSpec(
-    id="employer-cost-ctc",
-    title="Employer Cost / CTC Statement",
-    description="Monthly and annual cost-to-company per employee: basic, HRA, allowances and employer PF / ESI estimate.",
-    category=CATEGORY,
-    modules=("compensation", "payroll"),
-    icon="Briefcase",
-    tags=("ctc", "cost to company", "employer cost", "employer pf", "employer esi", "compensation", "annual"),
-    filters=scope(status="active"),
-    columns=(
-        *EMP_COLS,
-        ColumnSpec("branch", "Branch", TEXT, 1.2),
-        ColumnSpec("employmentType", "Type", BADGE, 1.0),
-        _cur("basic", "Basic"),
-        _cur("hra", "HRA"),
-        _cur("allowances", "Allowances"),
-        _cur("employerPf", "Employer PF (est.)"),
-        _cur("employerEsi", "Employer ESI (est.)"),
-        _cur("grossMonthly", "Gross monthly"),
-        _cur("annualCtc", "Annual CTC (est.)"),
-    ),
-    run=_ctc_run,
-))
+register(
+    ReportSpec(
+        id="employer-cost-ctc",
+        title="Employer Cost / CTC Statement",
+        description="Monthly and annual cost-to-company per employee: the 50% + 50% salary split (Basic, DA, allowances) and employer PF / ESI estimate.",
+        category=CATEGORY,
+        modules=("compensation", "payroll"),
+        icon="Briefcase",
+        tags=("ctc", "cost to company", "employer cost", "employer pf", "employer esi", "compensation", "annual"),
+        filters=scope(status="active"),
+        columns=(
+            *EMP_COLS,
+            ColumnSpec("branch", "Branch", TEXT, 1.2),
+            ColumnSpec("employmentType", "Type", BADGE, 1.0),
+            ColumnSpec("splitStatus", "Salary split", BADGE, 1.1),
+            # First portion (50%): Basic + DA + Retention Allowance. Second portion (50%): the other five.
+            _cur("basic", "Basic"),
+            _cur("da", "DA"),
+            _cur("retentionAllowance", "Retention Allowance"),
+            _cur("otherAllowance", "Other Allowance"),
+            _cur("petrolAllowance", "Petrol Allowance"),
+            _cur("rha", "RHA"),
+            _cur("specialAllowance", "Special Allowance"),
+            _cur("ca", "CA"),
+            _cur("employerPf", "Employer PF (est.)"),
+            _cur("employerEsi", "Employer ESI (est.)"),
+            _cur("grossMonthly", "Gross monthly", 1.5),
+            _cur("annualCtc", "Annual CTC (est.)", 1.7),
+        ),
+        run=_ctc_run,
+    )
+)

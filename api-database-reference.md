@@ -28,8 +28,9 @@ Auto-generated reference covering the complete Django REST backend (`backend/api
 - **GET, PATCH, DELETE /api/employees/\<pk\>** — GET returns one employee record (an employee token may only fetch their own, same 404 either way to avoid id-probing); PATCH updates any field (re-resolves department/designation/branch, re-mints unit code on branch change, re-runs production-shift auto-assignment); DELETE removes the employee. No decorator on the outer `employee_detail` function; internally GET dispatches via `require_auth`, PATCH and DELETE via `require_hr`.
 - **GET /api/employees/\<pk\>/photo** — Streams a data-URI-stored employee photo as a real image response (with 1hr cache header) — the lazy-load counterpart to list responses substituting a photo link. Access: the owning employee token, or branch-scoped HR. `@require_auth`.
 - **PATCH /api/employees/\<pk\>/status** — Updates an employee's `status` field (branch-scoped). `@require_hr`.
-- **POST /api/employees/bulk-upload** — Multipart Excel upload; validates the header row exactly matches the official template, skips "SAMPLE" rows, creates one new `Employee` per valid row (loosened required-field rules vs. the single Add form), collects per-row errors/warnings. `@require_hr`, `@parser_classes([MultiPartParser, FormParser])`.
-- **POST /api/employees/bulk-update** — Companion multipart Excel upload for *existing* employees, matched by Employee Code; only overwrites cells that are both non-blank and actually different, reports not-found codes, unchanged rows, and a per-employee changed-fields summary. `@require_hr`, `@parser_classes([MultiPartParser, FormParser])`.
+- **Salary split (`salaryBreakup`)** — Employee JSON carries `salaryBreakup` (`{basic, da, retentionAllowance, otherAllowance, petrolAllowance, rha, specialAllowance, ca}` as numbers, or `null`). `POST /api/employees` and `PATCH /api/employees/<id>` accept `salaryBreakup` (all eight keys, exact decimal text or numbers, ≥ 0, at most 2 decimals) and validate it against `salaryAmount`: Basic + DA + Retention Allowance must be 50% of the salary, the other five the other 50%, and together they must equal it to the paisa (an odd paisa may sit in either portion) → 400 with the reason, nothing saved. Omitted on create → the automatic split (equal shares, each half shared equally); omitted on PATCH with a *new* `salaryAmount` → the stored split re-scaled to it (or the automatic one if none is stored); unchanged salary → left alone; clearing the salary clears the split, and sending a split with no salary is a 400. `POST /api/increments` moves the split with the new salary too.
+- **POST /api/employees/bulk-upload** — Multipart Excel upload; validates the header row exactly matches the official template (the 27 original columns, or those plus the eight trailing salary-split columns Basic, DA, Retention Allowance, Other Allowance, Petrol Allowance, RHA, Special Allowance, CA — all blank = automatic split; any filled = blanks count as 0 and it must be a valid 50/50 split, else that row fails), skips "SAMPLE" rows, creates one new `Employee` per valid row (loosened required-field rules vs. the single Add form), collects per-row errors/warnings. `@require_hr`, `@parser_classes([MultiPartParser, FormParser])`.
+- **POST /api/employees/bulk-update** — Companion multipart Excel upload for *existing* employees, matched by Employee Code; only overwrites cells that are both non-blank and actually different (a new Salary Amount re-scales the stored split; split cells identical to what is stored count as "not edited", so an export re-uploaded with only the amount changed works; changes show as "Salary Split"), reports not-found codes, unchanged rows, and a per-employee changed-fields summary. `@require_hr`, `@parser_classes([MultiPartParser, FormParser])`.
 - **PATCH /api/employees/location-tracking/bulk** — Turns `location_tracking_enabled` on/off for many employees at once (all active employees in scope, or a given `employeeIds` list). `@require_hr`.
 
 ## Org Structure (Branches & Designations)
@@ -212,6 +213,7 @@ These four routes are registered in `config/urls.py` at the bare root (`/iclock/
 
 ## Staff Payroll Engine (Settings, Sessions, Attendance Logs, Work Sessions)
 
+- **GET `/api/support-contact`** — **Public, no login**, read-only (a stale Bearer token is ignored, so an app is never signed out by it). The HR and software-support contacts HR entered under Settings → HR Contact, for the Employee Mobile App and Employee Web App: `{ hr, support, note, companyName, configured, updatedAt }`, where `hr` / `support` are `{ label, phone, phoneDial, whatsapp, whatsappNumber, email, hours, hasContact, usesHrFallback }` (`phoneDial` is what a `tel:` link dials, `whatsappNumber` the international digits for `wa.me`; `support` is filled from `hr`, with `usesHrFallback: true`, when nothing is set for it). `hr` is for sign-in and app problems, `support` for the server being down. `Cache-Control: no-store`; the apps keep the last answer for when the server is unreachable. Nothing else from settings is exposed.
 - **GET/PUT `/api/payroll-settings`** — Reads/writes the singleton `PayrollSettings` (company profile, PF/ESI rates, attendance mode, late-detection slabs, production period config, SMTP, backup directory, etc.); non-super-admins get a personal overlay instead of the shared row, and PUT is field-by-field permission-checked against `FIELD_GROUPS` (`settings.company`, `settings.payroll`, `settings.late_detection`, etc.) unless the caller is super admin. **Auth: `@require_hr`.**
 - **GET/POST `/api/session-configs`** — GET lists all `SessionConfig` rows (production session time windows/pay amounts); POST creates one. **Auth: GET has no auth decorator at all (unauthenticated/open); POST is routed through `require_hr(_create_session_config)(request)` internally, so only POST actually enforces HR.** Flagging this because GET truly has no guard at all.
 - **PATCH/DELETE `/api/session-configs/\<int:pk\>`** — Updates or deletes one `SessionConfig` row. **Auth: `@require_hr`.**
@@ -246,6 +248,10 @@ These four routes are registered in `config/urls.py` at the bare root (`/iclock/
 - **POST /api/salary-slips/\<pk\>/email** — `@require_hr`. Emails one slip's PDF to the employee (or an explicit `toEmail` override); 400 if SMTP isn't configured.
 - **POST /api/salary-slips/\<pk\>/whatsapp** — `@require_hr`. Sends one slip's PDF via WhatsApp to the employee.
 - **GET /api/my/salary-slips** — `@require_auth`. The logged-in employee's own salary slip history.
+
+## Compensation — CTC Breakdown (compensation_views.py, ctc.py)
+
+- **GET /api/compensation** — `@require_hr`, branch-scoped. One row per active employee (filters `status`, `departmentId`, `branchId`, `employmentType`, `search`), returned as `{results, count}`. Each row carries the employee's **salary split** — `basic`, `da`, `retentionAllowance` (first portion) and `otherAllowance`, `petrolAllowance`, `rha`, `specialAllowance`, `ca` (second portion), plus `firstPortion`, `secondPortion` and `splitRecorded` — followed by `employerPf`, `employerEsi`, `grossMonthly`, `annualCtc`. `splitRecorded` is `false` when no valid split is saved for the employee (created before the split existed, or the salary has since moved away from the stored split), in which case the automatic 50% + 50% split of the salary is shown; nothing is written. The eight components and both portions are `null` for an employee with no monthly salary. Employer PF = PF rate × the first portion; employer ESI = ESI rate × salary while the salary is within the ESI ceiling; annual CTC = (salary + PF + ESI) × 12. The calculation lives in `ctc.py` (`ctc_figures`) and is shared with the Report Center's `employer-cost-ctc` statement. Display only: payroll generation never reads it. (The former `hra` / `allowances` fields and the Basic % / HRA % settings no longer drive it; `basicPercent` / `hraPercent` are still stored but unused.) Reads always work; the OT / Compensation-Day / credit writes below are refused with 403 while `compensation_feature_enabled` is off.
 
 ## Company Documents: Salary Slip & Document Theming Settings
 
@@ -548,6 +554,7 @@ The central record for a person employed by the company — staff or production 
 - `branch` — ForeignKey → `Branch`, `on_delete=SET_NULL`, null/blank, related_name `employees`
 - `reporting_manager` — ForeignKey → `"self"`, `on_delete=SET_NULL`, null/blank, related_name `subordinates`
 - `salary_type`, `salary_amount`, `salary_per_shift` — TextField / DecimalField, basis for payroll computation
+- `salary_basic`, `salary_da`, `salary_retention_allowance` (first portion) and `salary_other_allowance`, `salary_petrol_allowance`, `salary_rha`, `salary_special_allowance`, `salary_ca` (second portion) — nullable DecimalField(10,2), the mandatory **50% + 50% split** of `salary_amount` (`salary_split.py`, migration `0106_salary_split`). All null = no split recorded (no salary amount, or created before the split existed). Descriptive only: payroll, attendance and salary slips never read them. Weekly and monthly salaries are split alike (`salary_type` only says how often the amount is paid).
 - `initial_salary` — DecimalField, baseline for increment tracking
 - `status` — TextField, default `"active"`
 - `password_hash` — TextField, nullable; bcrypt hash for mobile self-service login
@@ -1299,6 +1306,45 @@ Per-document-type configuration of which pre-approved Meta WhatsApp Business tem
 - `is_enabled` — BooleanField, default False
 - `updated_at` — DateTimeField
 
+## Email (Gmail Control)
+
+Every email the HRMS sends goes through `email_service.send_email()` and is logged. Full write-up, setup and switch defaults: `gmail-integration.md`. The Gmail account itself stays in `PayrollSettings.smtp_*` (Settings → SMTP).
+
+### EmailMessageLog
+**Table name:** `email_message_log`
+
+One row per email attempt (salary slip, offer letter, ID card, resignation letter, visitor arrival, rejection / interview invite, test email), success or not.
+
+**Key fields:**
+- `employee` — ForeignKey → `Employee`, `on_delete=SET_NULL`, null/blank, related_name `email_messages` (empty for candidates and other outside recipients)
+- `recipient_name`, `recipient_email` — TextField (kept when the employee is deleted)
+- `email_type` — TextField (a key of `email_catalog.TYPES`); `related_module` — TextField; `ref_id` — IntegerField null (SalarySlip.id, ScreeningCandidate.id, ...)
+- `subject`, `message_text` (plain-text wording that went out), `attachment_name` — TextField
+- `status` — TextField: `sent` (the mail server accepted it) | `failed` (an attempt that could not complete) | `blocked` (deliberately not attempted: switched off, dev machine, daily limit, SMTP not set up); `error_message` — TextField
+- `sent_by` — ForeignKey → `HRUser`, `on_delete=SET_NULL`, null/blank, related_name `emails_sent`
+- Indexes on `(employee, email_type)`, `(status, -created_at)`, `(email_type, -created_at)`; ordering `["-created_at"]`
+
+### EmailSettings
+**Table name:** `email_settings` — singleton (pk=1) of the Gmail Control switches: `emails_enabled` (master), `document_emails_enabled`, `visitor_emails_enabled`, `recruitment_emails_enabled` (all default True) and `daily_send_limit` (0 = no limit).
+
+### EmailMessageTemplate
+**Table name:** `email_message_template` — per-type `email_type` (unique), `subject`, `message_body` (blank = the catalog default) and `is_enabled`.
+
+## Gmail Control (HR page)
+
+All `@require_hr`, module `gmail_control` (view to read, edit to change or send). A branch login sees its own branch's rows.
+
+- **GET `/api/gmail-control/overview?days=`** — totals, today / this month, per-module and per-type counts, daily series, recent failures, and the read-only Gmail configuration (password never included).
+- **GET `/api/gmail-control/messages`** — history, newest first. Filters: `status`, `category`, `type`, `employeeId`, `search`, `dateFrom`, `dateTo`; `page` / `pageSize` for the paged shape.
+- **GET `/api/gmail-control/employees`** — employee-wise email counts (`search`, paged).
+- **GET / PUT `/api/gmail-control/settings`** — the switches and `dailySendLimit` (0-5000). Non-boolean switches or out-of-range limits are a 400 and nothing is saved.
+- **GET `/api/gmail-control/templates`** — every email type with its subject, wording, defaults, variables, details table, a rendered preview (text and HTML), switch state and usage.
+- **PUT `/api/gmail-control/templates/<type>`** — `subject`, `messageBody`, `isEnabled`. Unknown `{{placeholders}}`, an over-long subject (200) or text (5,000) are a 400.
+- **POST `/api/gmail-control/templates/<type>/preview`** — renders unsaved wording with sample values.
+- **POST `/api/gmail-control/test-email`** — `{ toEmail }`. Answers 200 with `ok` / `status` / `error` whether or not it went out (a missing address is a 400).
+
+The senders behind the Documents, Visitors and Resume Screening pages keep their endpoints and response shapes; each now sends through the service, so a failure carries the service's reason (400 for a request that can't be done: no address, switched off, SMTP not set up; 502 when the mail server said no).
+
 ## Settings & Configuration
 
 ### PayrollSettings
@@ -1318,6 +1364,7 @@ Singleton (pk=1) holding essentially all org-wide configurable business rules: c
 - `prod_pf_ef_rules` — JSONField, default `list`
 - `theme_custom` — JSONField, default `dict`
 - `smtp_password` — TextField (plaintext, per codebase convention)
+- `hr_contact_name` / `_phone` / `_whatsapp` / `_email` / `_hours`, `support_contact_name` / `_phone` / `_whatsapp` / `_email` / `_hours`, `contact_note` — TextField (Settings → HR Contact; migration `0105_hr_contact_details`). Written through `PUT /api/payroll-settings` under the `settings.hr_contact` permission group and validated by `support_contact_views.clean_updates` (one phone number of 6-15 digits, a valid email, length limits of 80 / 30 / 120 / 120 / 500). **Company-wide only**: a branch login gets `403 company_wide_contact`, so no private branch copy can exist. Published through `GET /api/support-contact`.
 - `updated_at` — DateTimeField
 - Access pattern: `PayrollSettings.get()` classmethod (`get_or_create(pk=1)`)
 

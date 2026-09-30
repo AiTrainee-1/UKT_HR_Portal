@@ -14,6 +14,7 @@ import {
   ArrowLeft, Download, UploadCloud, FileSpreadsheet, CheckCircle2,
   XCircle, AlertTriangle, ListChecks, Info, Table2, X,
 } from "lucide-react";
+import { SPLIT_KEYS } from "@/lib/salary-split";
 
 // Keep in sync with EMPLOYEE_UPLOAD_HEADERS in backend/api/views.py -the
 // backend rejects the file outright if these don't match exactly.
@@ -24,7 +25,15 @@ const EMPLOYEE_TEMPLATE_HEADERS = [
   "Bank Name", "Bank Account", "Bank IFSC", "PF Number", "ESI Number",
   "Address", "ID Proof", "Father's Name", "Mother's Name",
   "Biometric Device ID", "Blood Group", "Emergency Contact",
+  // The salary split (50% + 50%): the first three add up to half the Salary Amount, the other five to the other half.
+  // They come last so a template downloaded before they existed is still accepted.
+  "Basic", "DA", "Retention Allowance", "Other Allowance", "Petrol Allowance", "RHA", "Special Allowance", "CA",
 ] as const;
+
+const SPLIT_NOTE =
+  "Salary split (optional): leave all eight split columns blank and the Salary Amount is split 50% + 50% for you. " +
+  "If you fill any, blanks count as 0 and they must give exactly 50% (Basic + DA + Retention Allowance) and 50% " +
+  "(Other + Petrol + RHA + Special Allowance + CA) of the Salary Amount.";
 
 const REQUIRED_COLUMNS = new Set(["Employee Code", "First Name"]);
 
@@ -37,6 +46,15 @@ const COLUMN_NOTES: Partial<Record<(typeof EMPLOYEE_TEMPLATE_HEADERS)[number], s
   "Salary Type": "Type exactly: Monthly or Weekly",
   "Join Date": "Format: DD-MM-YYYY (e.g. 01-06-2024)",
   "Gender": "Type exactly: Male, Female or Other",
+  "Salary Amount": "Monthly or weekly amount, as chosen in Salary Type. It is split 50% + 50% (see the Basic ... CA columns)",
+  "Basic": SPLIT_NOTE,
+  "DA": SPLIT_NOTE,
+  "Retention Allowance": SPLIT_NOTE,
+  "Other Allowance": SPLIT_NOTE,
+  "Petrol Allowance": SPLIT_NOTE,
+  "RHA": SPLIT_NOTE,
+  "Special Allowance": SPLIT_NOTE,
+  "CA": SPLIT_NOTE,
 };
 
 // Reference rows baked into every downloaded template. The backend
@@ -48,17 +66,23 @@ const SAMPLE_ROWS: (string | number)[][] = [
     "Monthly", 25000, "", "01-04-2023",
     "State Bank of India", "123456789012", "SBIN0001234", "PF12345", "ESI67890",
     "12 MG Road, Coimbatore", "Aadhaar", "Ramesh Sharma", "Sunita Sharma",
-    "101", "B+", "9876500000"],
+    "101", "B+", "9876500000",
+    // 25,000 split by hand: 12,500 in Basic / DA / Retention, 12,500 in the other five
+    "8000.00", "3000.00", "1500.00", "3000.00", "2000.00", "3500.00", "3000.00", "1000.00"],
   ["SAMPLE002", "Karthik", "Raja", "", "9123456780", "Male",
     "22-07-1998", "Production", "Stitching", "Machine Operator", "Unit1",
     "Weekly", "", 350, "15-01-2024",
     "Indian Bank", "987654321098", "IDIB000K123", "PF54321", "ESI09876",
     "45 Textile Nagar, Tirupur", "Voter ID", "Raja Mohan", "Lakshmi Raja",
-    "202", "O+", "9123400000"],
+    "202", "O+", "9123400000",
+    // paid per shift: no salary, so no split
+    "", "", "", "", "", "", "", ""],
   ["SAMPLE003", "Anitha", "Kumar", "anitha.kumar@example.com", "9988776655", "Female",
     "", "Staff", "Accounts", "", "",
     "Monthly", 22000, "", "10-02-2024",
-    "", "", "", "", "", "", "", "", "", "", "", ""],
+    "", "", "", "", "", "", "", "", "", "", "", "",
+    // split left blank: worked out automatically (11,000 + 11,000)
+    "", "", "", "", "", "", "", ""],
 ];
 
 type UploadResult = {
@@ -171,6 +195,7 @@ function employeeToRow(emp: Employee): (string | number)[] {
     e.bankName ?? "", e.bankAccount ?? "", e.bankIfsc ?? "", e.pfNumber ?? "", e.esiNumber ?? "",
     e.address ?? "", e.idProof ?? "", e.fatherName ?? "", e.motherName ?? "",
     e.biometricDeviceId ?? "", e.bloodGroup ?? "", e.emergencyContact ?? "",
+    ...SPLIT_KEYS.map((k) => e.salaryBreakup?.[k] ?? ""),
   ];
 }
 
@@ -340,6 +365,11 @@ export default function BulkUploadEmployees() {
                 The template has one column for every field on the Add Employee form -{EMPLOYEE_TEMPLATE_HEADERS.length} in
                 total -plus {SAMPLE_ROWS.length} sample rows showing how to fill it in. Columns marked with{" "}
                 <span className="font-semibold text-gray-700">*</span> are required.
+              </p>
+              <p className="text-sm text-muted-foreground">
+                <span className="font-semibold text-gray-700">Salary split:</span> the last eight columns (Basic to CA)
+                divide the Salary Amount 50% + 50%. Leave them blank and it is done for you; if you fill them in, each
+                half must add up to exactly 50% of the salary.
               </p>
               <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/60 p-4 flex items-center gap-3">
                 <div className="w-10 h-10 rounded-lg bg-teal-600/10 flex items-center justify-center shrink-0">

@@ -33,6 +33,7 @@ from .employees_master_base import (
     branch_name,
     clean,
     code_key,
+    department_labels,
     department_name,
     document_map,
     employees_qs,
@@ -63,12 +64,20 @@ def can_see_salary(request) -> bool:
     return any(permission_level(request, m) in ("view", "edit") for m in ("salary", "payroll"))
 
 
+def can_see_resignation_details(request) -> bool:
+    """Resignation reasons and approvers are HR-confidential (often health or family matters): the app gates them
+    behind the resignations module everywhere, so an exits report must not hand them to a role that lacks it."""
+    from ..access import permission_level
+
+    return permission_level(request, "recruitment.resignations") in ("view", "edit")
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # new-joinings
 # ═════════════════════════════════════════════════════════════════════════════
 
 JOINING_COLUMNS = (
-    ColumnSpec("joinDate", "Join Date", DATE, 1.1),
+    ColumnSpec("joinDate", "Join Date", DATE, 1.5),
     ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
     ColumnSpec("employeeName", "Employee", TEXT, 2.2),
     ColumnSpec("gender", "Gender", TEXT, 0.8),
@@ -76,13 +85,13 @@ JOINING_COLUMNS = (
     ColumnSpec("department", "Department", TEXT, 1.5),
     ColumnSpec("designation", "Designation", TEXT, 1.5),
     ColumnSpec("branch", "Branch", TEXT, 1.2),
-    ColumnSpec("employmentType", "Type", BADGE, 0.9),
+    ColumnSpec("employmentType", "Type", BADGE, 1.3),
     ColumnSpec("salaryAmount", "Salary (Monthly / Weekly)", CURRENCY, 1.3),
     ColumnSpec("salaryPerShift", "Per Shift", CURRENCY, 1.0),
     ColumnSpec("phone", "Phone", TEXT, 1.2),
     ColumnSpec("email", "Email", TEXT, 1.8),
-    ColumnSpec("docsMissing", "Documents Missing", INTEGER, 1.0),
-    ColumnSpec("status", "Status", BADGE, 0.8),
+    ColumnSpec("docsMissing", "Docs Missing", INTEGER, 0.9),
+    ColumnSpec("status", "Status", BADGE, 1.1),
 )
 _SALARY_KEYS = ("salaryAmount", "salaryPerShift")
 
@@ -140,7 +149,7 @@ def _joinings_run(ctx) -> ReportResult:
         {"label": "With documents pending", "value": pending_docs, "format": "integer"},
     ]  # fmt: skip
     notes = [
-        "Documents Missing counts the required documents (PAN, Aadhaar, educational certificate, voter ID / birth "
+        "Docs Missing counts the required documents (PAN, Aadhaar, educational certificate, voter ID / birth "
         "certificate, bank passbook and the staff letter or production documents) not yet uploaded.",
         "Age at Joining is worked out from the date of birth on file and the join date.",
     ]
@@ -165,7 +174,7 @@ register(ReportSpec(
     tags=("joiners", "new joinees", "recruitment", "joined", "new employees"),
     filters=(
         F.date_range(default="thisMonth", label="Joined between", max_days=LONG_RANGE_DAYS),
-        *F.scope(employee=False, status="all"),
+        *F.scope(status="all"),
     ),
     columns=JOINING_COLUMNS,
     run=_joinings_run,
@@ -177,22 +186,23 @@ register(ReportSpec(
 # ═════════════════════════════════════════════════════════════════════════════
 
 EXIT_COLUMNS = (
-    ColumnSpec("exitDate", "Exit Date", DATE, 1.1),
+    ColumnSpec("exitDate", "Exit Date", DATE, 1.5),
     ColumnSpec("exitBasis", "Exit Basis", BADGE, 1.6),
     ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
     ColumnSpec("employeeName", "Employee", TEXT, 2.2),
     ColumnSpec("department", "Department", TEXT, 1.5),
     ColumnSpec("designation", "Designation", TEXT, 1.5),
     ColumnSpec("branch", "Branch", TEXT, 1.2),
-    ColumnSpec("employmentType", "Type", BADGE, 0.9),
-    ColumnSpec("joinDate", "Join Date", DATE, 1.1),
+    ColumnSpec("employmentType", "Type", BADGE, 1.3),
+    ColumnSpec("joinDate", "Join Date", DATE, 1.5),
     ColumnSpec("tenureMonths", "Service (Months)", INTEGER, 0.9),
     ColumnSpec("reason", "Reason", TEXT, 2.2),
     ColumnSpec("approvedBy", "Approved By", TEXT, 1.3),
-    ColumnSpec("approvedOn", "Approved On", DATE, 1.1),
-    ColumnSpec("status", "Status", BADGE, 0.8),
+    ColumnSpec("approvedOn", "Approved On", DATE, 1.5),
+    ColumnSpec("status", "Status", BADGE, 1.1),
 )
 EXIT_TYPE_OPTIONS = (("resignation", "Resignation"), ("manual", "Manual deactivation"))
+_RESIGNATION_DETAIL_KEYS = ("reason", "approvedBy", "approvedOn")  # only for roles that may open Resignations
 
 
 def _exit_rows(ctx):
@@ -205,6 +215,7 @@ def _exit_rows(ctx):
 def _exits_run(ctx) -> ReportResult:
     d_from, d_to = ctx.date_from, ctx.date_to
     exit_type = ctx.params.get("exitType")
+    show_details = can_see_resignation_details(ctx.request)
     picked = []
     for e, info in _exit_rows(ctx):
         if not (d_from <= info.when <= d_to):
@@ -240,9 +251,9 @@ def _exits_run(ctx) -> ReportResult:
             "employmentType": type_label(e.employment_type),
             "joinDate": joined,
             "tenureMonths": months,
-            "reason": clean(r.reason) if r else None,
-            "approvedBy": clean(r.approved_by) if r else None,
-            "approvedOn": ist_date(r.approved_at) if r else None,
+            "reason": clean(r.reason) if r and show_details else None,
+            "approvedBy": clean(r.approved_by) if r and show_details else None,
+            "approvedOn": ist_date(r.approved_at) if r and show_details else None,
             "status": status_label(e.status),
         })  # fmt: skip
 
@@ -261,12 +272,18 @@ def _exits_run(ctx) -> ReportResult:
         "'Deactivated (approx.)' means the employee was switched to inactive without a resignation; the date shown is "
         "when the record was last modified, which moves whenever it is edited again - treat it as indicative only.",
         "Employees who were deleted from the system do not appear here.",
+        "An approved resignation dated before the employee's join date is taken to belong to an earlier stint "
+        "(the person was re-hired) and is not used to date the exit.",
     ]
     if future:
         notes.append(
             f"{future} exit(s) have a last working date after today: the employee is already inactive in the system."
         )
-    return ReportResult(rows=rows, summary=summary, notes=notes)
+    columns = list(EXIT_COLUMNS)
+    if not show_details:
+        columns = [c for c in columns if c.key not in _RESIGNATION_DETAIL_KEYS]
+        notes.append("Reason and approval columns are hidden: your role has no access to Resignations.")
+    return ReportResult(rows=rows, columns=columns, summary=summary, notes=notes)
 
 
 register(ReportSpec(
@@ -292,23 +309,23 @@ register(ReportSpec(
 # ═════════════════════════════════════════════════════════════════════════════
 
 RESIGNATION_COLUMNS = (
-    ColumnSpec("requestedOn", "Requested On", DATETIME, 1.4),
+    ColumnSpec("requestedOn", "Requested On", DATETIME, 1.6),
     ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
     ColumnSpec("employeeName", "Employee", TEXT, 2.2),
     ColumnSpec("department", "Department", TEXT, 1.5),
     ColumnSpec("designation", "Designation", TEXT, 1.5),
-    ColumnSpec("lastWorkingDate", "Last Working Date", DATE, 1.1),
-    ColumnSpec("noticeDays", "Notice (Days)", INTEGER, 0.8),
-    ColumnSpec("status", "Status", BADGE, 1.0),
+    ColumnSpec("lastWorkingDate", "Last Working Date", DATE, 1.5),
+    ColumnSpec("noticeDays", "Notice (Days)", INTEGER, 1.0),
+    ColumnSpec("status", "Status", BADGE, 1.3),
     ColumnSpec("stage", "Stage", TEXT, 1.3),
     ColumnSpec("deptHead", "Dept Head", TEXT, 1.5),
-    ColumnSpec("deptHeadStatus", "HOD Decision", BADGE, 0.9),
-    ColumnSpec("deptHeadAt", "HOD Decided On", DATETIME, 1.4),
+    ColumnSpec("deptHeadStatus", "HOD Decision", BADGE, 1.3),
+    ColumnSpec("deptHeadAt", "HOD Decided On", DATETIME, 1.6),
     ColumnSpec("deptHeadComment", "HOD Comment", TEXT, 2.0),
     ColumnSpec("approvedBy", "HR Approved By", TEXT, 1.3),
-    ColumnSpec("approvedAt", "HR Approved On", DATETIME, 1.4),
+    ColumnSpec("approvedAt", "HR Approved On", DATETIME, 1.6),
     ColumnSpec("hrComment", "HR Comment", TEXT, 2.0),
-    ColumnSpec("pendingDays", "Pending (Days)", INTEGER, 0.8),
+    ColumnSpec("pendingDays", "Pending (Days)", INTEGER, 1.0),
     ColumnSpec("reason", "Reason", TEXT, 2.2),
     ColumnSpec("surveyReason", "Exit Survey: Main Reason", TEXT, 2.0),
     ColumnSpec("surveyRecommend", "Exit Survey: Would Recommend", TEXT, 2.0),
@@ -455,6 +472,9 @@ _INT_KEYS = ("joinedStaff", "joinedProduction", "joinedTotal", "leftStaff", "lef
 def _movement_run(ctx) -> ReportResult:
     year = ctx.year
     by_month = ctx.param("groupBy", "month") == "month"
+    # The exit rate divides by today's headcount, so it only means something for the running year: for an earlier
+    # year that denominator counts people hired since and misses people who left since.
+    rate_ok = year == ctx.today.year
     emps = list(employees_qs(ctx))
 
     def blank_cell() -> dict:
@@ -464,7 +484,7 @@ def _movement_run(ctx) -> ReportResult:
         return when.month if by_month else e.department_id
 
     cells: dict = defaultdict(blank_cell)
-    labels: dict = {}  # department id -> name (department view only)
+    dept_of: dict = {}  # department id -> Department (department view only)
     active_now: dict = defaultdict(int)  # department id (or 0 for the month view) -> active employees today
 
     def add(cell: dict, e, prefix: str) -> None:
@@ -473,14 +493,16 @@ def _movement_run(ctx) -> ReportResult:
         if et in ("staff", "production"):
             cell[f"{prefix}{'Staff' if et == 'staff' else 'Production'}"] += 1
 
+    no_join_date = 0
     for e in emps:
-        if not by_month:
-            labels[e.department_id] = department_name(e)
+        if not by_month and e.department_id:
+            dept_of[e.department_id] = e.department
         if is_active(e):
             active_now[0 if by_month else e.department_id] += 1
             if not by_month:
                 cells[e.department_id]  # a department with current staff but no movement still gets its zero row
-        joined, _state = join_date_of(e)
+        joined, state = join_date_of(e)
+        no_join_date += state != "ok"
         if joined and joined.year == year:
             add(cells[key_of(e, joined)], e, "joined")
 
@@ -497,6 +519,9 @@ def _movement_run(ctx) -> ReportResult:
     left_year = sum(c["leftTotal"] for c in cells.values())
     active_total = sum(active_now.values())
 
+    # Same-named departments of two units must not read as two identical rows: say which unit each one is.
+    labels = department_labels(dept_of.values()) if not by_month else {}
+
     if by_month:
         keys = list(range(1, 13))
     else:
@@ -510,11 +535,11 @@ def _movement_run(ctx) -> ReportResult:
         rows.append({
             "group": f"{MONTH_ABBR[key - 1]} {year}" if by_month else labels.get(key, UNASSIGNED),
             **c,
-            "exitRatePct": round(c["leftTotal"] * 100 / denominator, 2) if denominator else None,
+            "exitRatePct": round(c["leftTotal"] * 100 / denominator, 2) if rate_ok and denominator else None,
         })  # fmt: skip
 
     joined_total = sum(r["joinedTotal"] for r in rows)
-    overall = round(left_year * 100 / (active_total + left_year), 2) if (active_total + left_year) else None
+    overall = round(left_year * 100 / (active_total + left_year), 2) if rate_ok and (active_total + left_year) else None
     totals = None
     if rows:
         totals = {k: sum(r[k] for r in rows) for k in _INT_KEYS}
@@ -527,16 +552,31 @@ def _movement_run(ctx) -> ReportResult:
         {"label": "Active today", "value": active_total, "format": "integer"},
     ]
     notes = [
-        "Exit rate = leavers / (employees active today + leavers in the year) x 100. It is an approximation, not an "
-        "attrition figure: the system keeps no opening or closing headcount history.",
         "Joiners are counted from the join date and include people who have since left. Leavers are dated from the "
         "approved resignation, or from the last-modified date for a plain deactivation.",
     ]
+    if rate_ok:
+        notes.insert(
+            0,
+            "Exit rate = leavers / (employees active today + leavers in the year) x 100. It is an approximation, not "
+            "an attrition figure: the system keeps no opening or closing headcount history.",
+        )
+    else:
+        notes.insert(
+            0,
+            f"Exit rate is shown for the current year only ({ctx.today.year}). The system keeps no headcount history, "
+            f"so a rate for {year} would be worked out from today's staff and would be misleading.",
+        )
     if approx_exits:
         notes.append(
             f"{approx_exits} leaver(s) have only an approximate exit month (deactivated without a resignation)."
         )
-    if not by_month:
+    if no_join_date:
+        notes.append(
+            f"{no_join_date} employee(s) have a missing or unreadable join date and cannot be counted as joiners of "
+            "any year."
+        )
+    if not by_month and rate_ok:
         notes.append("In the department view the rate uses that department's own active strength.")
     head = ColumnSpec("group", "Month" if by_month else "Department", TEXT, 2.0)
     return ReportResult(rows=rows, columns=[head, *MOVEMENT_TAIL], totals=totals, summary=summary, notes=notes)

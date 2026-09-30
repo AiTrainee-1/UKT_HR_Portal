@@ -32,6 +32,7 @@ from ..types import INTEGER, NUMBER, PERCENT, TEXT, ColumnSpec, ReportResult, Re
 from .attendance_core_data import (
     WEEKDAYS,
     AttendanceData,
+    detection_notes,
     drop_dormant,
     emp_days_guard,
     label_for,
@@ -39,22 +40,32 @@ from .attendance_core_data import (
     scope_filters,
     scoped_employees,
 )
+from .attendance_core_muster_export import PALETTE, build_muster_pdf, build_muster_xlsx
 
 # ── Attendance Sheet (muster roll) ──────────────────────────────────────────────
 
-# The colour of each code in the Report Log's Attendance Sheet (AttendanceSheet.tsx STATUS_META).
-PALETTE = {
-    "P": "C6EFCE", "CL": "C6EFCE", "CO": "C6EFCE", "½M": "FFEB9C", "½": "FFEB9C", "½E": "FED7AA",
-    "A": "FFC7CE", "L": "BDD7EE", "H": "E2E8F0", "WO": "E2E8F0",
-}
 LEGEND = [
-    ("P", "Present"), ("½M", "Half day - morning worked"), ("½E", "Half day - evening worked"),
-    ("A", "Absent"), ("L", "On leave"), ("H", "Holiday / weekly off"),
+    ("P", "Present"),
+    ("½M", "Half day - morning worked"),
+    ("½E", "Half day - evening worked"),
+    ("A", "Absent"),
+    ("L", "On leave"),
+    ("H", "Holiday / weekly off"),
 ]
 
 
 def day_key(d: dt.date) -> str:
     return f"d{d.strftime('%Y%m%d')}"
+
+
+def leave_code(lr) -> str:
+    """The cell code of an approved leave day: the first three letters of the leave type's code. A leave type whose
+    code is one of the sheet's own codes (a leave type 'CL' = Casual Leave would read as the paid casual-leave
+    present day 'CL', in the same colour) is prefixed with L (LCL) so the two can never be confused."""
+    code = (leave_type_text(lr) or "")[:3].upper()
+    if not code:
+        return "L"
+    return f"L{code[:2]}" if code in PALETTE else code
 
 
 def cell_code(data: AttendanceData, emp, d: dt.date, *, leave_codes: bool, weekly_off: bool, half_ref) -> str | None:
@@ -81,7 +92,7 @@ def cell_code(data: AttendanceData, emp, d: dt.date, *, leave_codes: bool, weekl
         if leave_codes:
             lr = data.full_leave.get((emp.id, d))
             if lr is not None:
-                return leave_type_text(lr)[:3].upper()
+                return leave_code(lr)
         return "L"
     if s == "holiday":
         return "WO" if weekly_off and d not in data.holidays else "H"
@@ -108,7 +119,9 @@ def _run_muster(ctx) -> ReportResult:
         ColumnSpec("employeeName", "Employee Name", TEXT, 2.2),
         ColumnSpec("department", "Department", TEXT, 1.4),
     ]
-    columns += [ColumnSpec(day_key(d), f"{d.day} {WEEKDAYS[d.weekday()][:2]}", TEXT, 0.45, align="center") for d in days]
+    columns += [
+        ColumnSpec(day_key(d), f"{d.day} {WEEKDAYS[d.weekday()][:2]}", TEXT, 0.45, align="center") for d in days
+    ]
     columns += [
         ColumnSpec("present", "P", INTEGER, 0.5, total="sum"),
         ColumnSpec("half", "½", INTEGER, 0.5, total="sum"),
@@ -159,22 +172,26 @@ def _run_muster(ctx) -> ReportResult:
                 else:
                     absent_extra += 1  # a saturday-off Saturday the engine stored as absent
         s = month_summary_from_records(recs)
-        row.update({
-            "present": s["present"],
-            "half": s["halfShift"],
-            "absent": s["absent"] - absent_extra,
-            "leave": s["onLeave"],
-            "holiday": s["holidays"] - holiday_days,
-            "late": s["late"],
-            "effective": float(Decimal(s["effectiveDays"])),
-            "shifts": float(Decimal(s["totalShifts"])),
-        })
+        row.update(
+            {
+                "present": s["present"],
+                "half": s["halfShift"],
+                "absent": s["absent"] - absent_extra,
+                "leave": s["onLeave"],
+                "holiday": s["holidays"] - holiday_days,
+                "late": s["late"],
+                "effective": float(Decimal(s["effectiveDays"])),
+                "shifts": float(Decimal(s["totalShifts"])),
+            }
+        )
         if weekly_off:
             row["weeklyOff"] = wo
         rows.append(row)
 
     if rows:
-        rows.append({"employeeName": "Strength", "_kind": KIND_TOTAL, **{day_key(d): strength.get(day_key(d), 0) for d in days}})
+        rows.append(
+            {"employeeName": "Strength", "_kind": KIND_TOTAL, **{day_key(d): strength.get(day_key(d), 0) for d in days}}
+        )
 
     notes = [
         "Codes: " + "  ".join(f"{c} {n}" for c, n in LEGEND) + ". '-' = no attendance record yet (or a future day). "
@@ -184,13 +201,19 @@ def _run_muster(ctx) -> ReportResult:
         "is inferred from the first punch (before the half-day cut-off = morning).",
     ]
     if not weekly_off:
-        notes.append("H covers every holiday verdict, Sundays included, and a Saturday-off Saturday shows as A - as on the "
-                     "Report Log sheet. Switch on 'Mark weekly offs as WO' to separate them.")
+        notes.append(
+            "H covers every holiday verdict, Sundays included, and a Saturday-off Saturday shows as A - as on the "
+            "Report Log sheet. Switch on 'Mark weekly offs as WO' to separate them."
+        )
     if leave_codes:
-        notes.append("CL = paid casual leave and CO = compensation off (both are paid present days in the engine); "
-                     "leave days show the leave-type code.")
+        notes.append(
+            "CL = paid casual leave and CO = compensation off (both are paid present days in the engine); "
+            "leave days show the leave-type code (a leave type whose code is one of the codes above, such as a leave "
+            "type CL, is shown with an L in front, e.g. LCL)."
+        )
     if any(e.employment_type == "production" for e in employees):
         notes.append("Production rows: ½ means 0.75 shift or less, and the Shifts column is their real measure.")
+    notes += detection_notes(data.settings, early=False)
     if missing:
         notes.append(
             f"{missing} past employee-day(s) have no attendance record yet (nobody has opened them in Attendance) and "
@@ -200,37 +223,59 @@ def _run_muster(ctx) -> ReportResult:
         notes.append("Days before an employee's joining date or after their approved last working day are blank.")
     summary = [
         {"label": "Employees", "value": len(employees), "format": "integer"},
-        {"label": "Man-days present", "value": sum(r.get("present", 0) for r in rows if not r.get("_kind")), "format": "integer"},
-        {"label": "Absent days", "value": sum(r.get("absent", 0) for r in rows if not r.get("_kind")), "format": "integer"},
+        {
+            "label": "Man-days present",
+            "value": sum(r.get("present", 0) for r in rows if not r.get("_kind")),
+            "format": "integer",
+        },
+        {
+            "label": "Absent days",
+            "value": sum(r.get("absent", 0) for r in rows if not r.get("_kind")),
+            "format": "integer",
+        },
         {"label": "Days with no record", "value": missing, "format": "integer"},
     ]
     return ReportResult(rows=rows, columns=columns, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="attendance-muster-sheet",
-    title="Attendance Sheet (Muster Roll)",
-    description="Employee x date grid of P / half-day / A / L / H codes with the Strength row and P / A / Eff. totals - "
-    "the Report Log monthly sheet, for any range up to 31 days.",
-    category="attendance",
-    icon="Grid3x3",
-    tags=("muster", "attendance sheet", "monthly report", "report log", "grid", "strength", "P A"),
-    modules=("attendance",),
-    filters=(
-        date_range(default="thisMonth", label="Dates", max_days=31),
-        *scope_filters(status="active", staff_default="staff", search=True),
-        boolean("showLeaveCodes", "Show leave and casual-leave codes", default=False),
-        boolean("weeklyOff", "Mark weekly offs as WO", default=False,
-                help="Separates Sundays and Saturday-off Saturdays from holidays and absences."),
-        boolean("maskService", "Blank days outside joining / leaving dates", default=False,
-                help="Off matches the Report Log sheet, which shows such days as A."),
-    ),
-    columns=(),
-    run=_run_muster,
-    landscape=True,
-    screen_limit=2_000,
-    pdf_max_rows=1_500,
-))
+register(
+    ReportSpec(
+        id="attendance-muster-sheet",
+        title="Attendance Sheet (Muster Roll)",
+        description="Employee x date grid of P / half-day / A / L / H codes with the Strength row and P / A / Eff. totals - "
+        "the Report Log monthly sheet, for any range up to 31 days.",
+        category="attendance",
+        icon="Grid3x3",
+        tags=("muster", "attendance sheet", "monthly report", "report log", "grid", "strength", "P A"),
+        modules=("attendance",),
+        filters=(
+            date_range(default="thisMonth", label="Dates", max_days=31),
+            *scope_filters(status="active", staff_default="staff", search=True),
+            boolean("showLeaveCodes", "Show leave and casual-leave codes", default=False),
+            boolean(
+                "weeklyOff",
+                "Mark weekly offs as WO",
+                default=False,
+                help="Separates Sundays and Saturday-off Saturdays from holidays and absences.",
+            ),
+            boolean(
+                "maskService",
+                "Blank days outside joining / leaving dates",
+                default=False,
+                help="Off matches the Report Log sheet, which shows such days as A.",
+            ),
+        ),
+        columns=(),
+        run=_run_muster,
+        landscape=True,
+        # custom exports: the generic PDF table cannot fit 31 date columns, and neither generic export can colour a
+        # cell by its code (see attendance_core_muster_export)
+        pdf_builder=build_muster_pdf,
+        xlsx_builder=build_muster_xlsx,
+        screen_limit=2_000,
+        pdf_max_rows=1_000,
+    )
+)
 
 
 # ── Monthly Attendance Summary ──────────────────────────────────────────────────
@@ -276,19 +321,24 @@ def _run_summary(ctx) -> ReportResult:
         r["employee_id"]: r["n"]
         for r in CasualLeaveRequest.objects.filter(
             employee_id__in=ids, status="approved", date__gte=m_start, date__lte=m_end
-        ).values("employee_id").annotate(n=Count("id"))
+        )
+        .values("employee_id")
+        .annotate(n=Count("id"))
     }
     perm_counts = {
         r["employee_id"]: r["n"]
         for r in EmployeePermission.objects.filter(
             employee_id__in=ids, status="approved", date__gte=m_start, date__lte=m_end
-        ).values("employee_id").annotate(n=Count("id"))
+        )
+        .values("employee_id")
+        .annotate(n=Count("id"))
     }
 
     all_days = [m_start + dt.timedelta(days=i) for i in range(calendar.monthrange(year, month)[1])]
     rows: list[dict] = []
     tot = defaultdict(float)
     staff_eff = staff_wd = staff_absent = 0.0
+    eff_by_code: dict[str, tuple[float, int]] = {}  # staff only: (effective days on working days, working days)
     for emp in employees:
         is_prod = emp.employment_type == "production"
         recs = []
@@ -344,15 +394,26 @@ def _run_summary(ctx) -> ReportResult:
             staff_eff += eff_on_working
             staff_wd += working
             staff_absent += counts["absent"]
+            eff_by_code[emp.employee_code] = (eff_on_working, working)
 
     rows = with_subtotals(rows, group_by=lambda r: r["department"], sum_keys=_SUM_KEYS)
+    # a department's attendance % is over its staff working days (production has no working-day denominator)
+    dept_eff = dept_wd = 0.0
+    for r in rows:
+        if r.get("_kind") == "subtotal":
+            r["attendancePct"] = round(dept_eff * 100.0 / dept_wd, 1) if dept_wd else None
+            dept_eff = dept_wd = 0.0
+        elif r["employeeCode"] in eff_by_code:
+            dept_eff += eff_by_code[r["employeeCode"]][0]
+            dept_wd += eff_by_code[r["employeeCode"]][1]
     totals = {k: (round(tot[k], 2) if k in _FLOAT_KEYS else int(tot[k])) for k in _SUM_KEYS}
     totals["attendancePct"] = round(staff_eff * 100.0 / staff_wd, 1) if staff_wd else None
 
     late_days = int(tot["lateDays"])
     heads = int(tot["presentDays"] + tot["halfDays"])
     notes = [
-        f"Month: {month_label(year, month)}" + (f" - counted up to {today.strftime('%d-%b-%Y')} (the month is not over)." if as_of < m_end else "."),
+        f"Month: {month_label(year, month)}"
+        + (f" - counted up to {today.strftime('%d-%b-%Y')} (the month is not over)." if as_of < m_end else "."),
         "Present / Half Days / Leave are the attendance engine's day verdicts (Present = both halves; casual-leave days are "
         "paid presents, so 'Casual Leave' is a subset of Present, not extra). Absent excludes Sundays and Saturday-off "
         "Saturdays (Weekly Off) and approved leave; Holidays are the company holiday list.",
@@ -364,6 +425,7 @@ def _run_summary(ctx) -> ReportResult:
     ]
     if mask:
         notes.append("Days before joining or after the approved last working day are not counted.")
+    notes += detection_notes(data.settings)
     if tot["notProcessed"]:
         notes.append(
             f"{int(tot['notProcessed'])} elapsed employee-day(s) have no attendance record yet and are not counted in any "
@@ -372,34 +434,43 @@ def _run_summary(ctx) -> ReportResult:
     summary = [
         {"label": "Employees", "value": len(employees), "format": "integer"},
         {"label": "Staff attendance %", "value": totals["attendancePct"], "format": "percent"},
-        {"label": "Staff absenteeism %", "value": round(staff_absent * 100.0 / staff_wd, 1) if staff_wd else None, "format": "percent"},
+        {
+            "label": "Staff absenteeism %",
+            "value": round(staff_absent * 100.0 / staff_wd, 1) if staff_wd else None,
+            "format": "percent",
+        },
         {"label": "Present days", "value": int(tot["presentDays"]), "format": "integer"},
         {"label": "Absent days", "value": int(tot["absentDays"]), "format": "integer"},
         {"label": "Leave days", "value": int(tot["leaveDays"]), "format": "integer"},
-        {"label": "Late % of worked days", "value": round(late_days * 100.0 / heads, 1) if heads else None, "format": "percent"},
+        {
+            "label": "Late % of worked days",
+            "value": round(late_days * 100.0 / heads, 1) if heads else None,
+            "format": "percent",
+        },
         {"label": "Days not processed", "value": int(tot["notProcessed"]), "format": "integer"},
     ]
     return ReportResult(rows=rows, totals=totals, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="attendance-summary-monthly",
-    title="Monthly Attendance Summary",
-    description="Per-employee month tally: present, half, absent, leave, casual leave, permissions, holidays, late, "
-    "effective days and attendance % against payroll working days, with department subtotals.",
-    category="attendance",
-    icon="BarChart3",
-    tags=("monthly", "summary", "attendance percentage", "absenteeism", "present days", "working days"),
-    modules=("attendance",),
-    filters=(
-        period(default="thisMonth", label="Month"),
-        *scope_filters(status="all"),
-        boolean("maskService", "Ignore days before joining / after leaving", default=True),
-    ),
-    columns=SUMMARY_COLUMNS,
-    run=_run_summary,
-    landscape=True,
-    screen_limit=5_000,
-    pdf_max_rows=3_000,
-))
-
+register(
+    ReportSpec(
+        id="attendance-summary-monthly",
+        title="Monthly Attendance Summary",
+        description="Per-employee month tally: present, half, absent, leave, casual leave, permissions, holidays, late, "
+        "effective days and attendance % against payroll working days, with department subtotals.",
+        category="attendance",
+        icon="BarChart3",
+        tags=("monthly", "summary", "attendance percentage", "absenteeism", "present days", "working days"),
+        modules=("attendance",),
+        filters=(
+            period(default="thisMonth", label="Month"),
+            *scope_filters(status="all"),
+            boolean("maskService", "Ignore days before joining / after leaving", default=True),
+        ),
+        columns=SUMMARY_COLUMNS,
+        run=_run_summary,
+        landscape=True,
+        screen_limit=5_000,
+        pdf_max_rows=3_000,
+    )
+)

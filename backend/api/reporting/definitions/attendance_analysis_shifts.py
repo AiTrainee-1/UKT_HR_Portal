@@ -22,13 +22,14 @@ from api.models import (
     AutoSyncRule,
     BiometricDevice,
     EmployeeShiftAssignment,
+    ShiftTemplate,
     UnmatchedPunch,
 )
 from api.payroll_views import _d2
 from api.production_period import InvalidPeriodConfig, resolve_production_period
 from api.shift_engine import _t2s
 
-from ..common import EMP_COLS, EMP_COLS_SHORT, emp_cells, with_subtotals
+from ..common import EMP_COLS, EMP_COLS_SHORT, emp_cells
 from ..filters import date_range, select, text
 from ..formatting import display_date, fmt_dt
 from ..registry import register
@@ -66,6 +67,7 @@ from .attendance_analysis_common import (
     payroll_settings,
     people,
     scope_filters,
+    subtotals_within_limit,
 )
 
 SHIFT_MODULES = ("shifts", "attendance")
@@ -95,14 +97,14 @@ def _overlaps(a, b) -> bool:
 _ROSTER_COLS = (
     *EMP_COLS,
     ColumnSpec("shiftName", "Shift", TEXT, 1.4),
-    ColumnSpec("shiftType", "Type", BADGE, 0.9),
+    ColumnSpec("shiftType", "Type", BADGE, 1.1),
     ColumnSpec("startTime", "Start", TIME, 0.7),
     ColumnSpec("endTime", "End", TIME, 0.7),
     ColumnSpec("graceMinutes", "Grace (min)", MINUTES, 0.8),
     ColumnSpec("customTimes", "Custom timings", TEXT, 1.2),
-    ColumnSpec("saturdayOff", "Saturday off", BADGE, 0.9),
-    ColumnSpec("effectiveFrom", "Effective from", DATE, 1.1),
-    ColumnSpec("effectiveTo", "Effective to", DATE, 1.1),
+    ColumnSpec("saturdayOff", "Saturday off", BADGE, 1.1),
+    ColumnSpec("effectiveFrom", "Effective from", DATE, 1.4),
+    ColumnSpec("effectiveTo", "Effective to", DATE, 1.4),
     ColumnSpec("assignedBy", "Assigned by", TEXT, 1.2),
     ColumnSpec("warning", "Warnings", TEXT, 2.2),
 )
@@ -131,7 +133,7 @@ def _roster_run(ctx):
     overlapping = set()
     for lst in per_emp.values():
         for i, a in enumerate(lst):
-            for b in lst[i + 1:]:
+            for b in lst[i + 1 :]:
                 if _overlaps(a, b):
                     overlapping.update((a.id, b.id))
 
@@ -163,22 +165,29 @@ def _roster_run(ctx):
             custom = None
             if a.custom_start_time or a.custom_end_time:
                 custom = f"{hm(a.custom_start_time) or '-'} to {hm(a.custom_end_time) or '-'}"
-            built.append((
-                (sh.name or "").lower(), emp_sort_key(emp), a.effective_from, emp, a, {
-                    **emp_cells(emp),
-                    "shiftName": sh.name,
-                    "shiftType": sh.shift_type.title(),
-                    "startTime": hm(start),
-                    "endTime": hm(end),
-                    "graceMinutes": sh.grace_period_minutes,
-                    "customTimes": custom,
-                    "saturdayOff": "Yes" if a.saturday_off else "No",
-                    "effectiveFrom": a.effective_from.isoformat(),
-                    "effectiveTo": a.effective_to.isoformat() if a.effective_to else None,
-                    "assignedBy": a.assigned_by,
-                    "warning": "; ".join(warns) or None,
-                },
-            ))
+            built.append(
+                (
+                    (sh.name or "").lower(),
+                    emp_sort_key(emp),
+                    a.effective_from,
+                    emp,
+                    a,
+                    {
+                        **emp_cells(emp),
+                        "shiftName": sh.name,
+                        "shiftType": sh.shift_type.title(),
+                        "startTime": hm(start),
+                        "endTime": hm(end),
+                        "graceMinutes": sh.grace_period_minutes,
+                        "customTimes": custom,
+                        "saturdayOff": "Yes" if a.saturday_off else "No",
+                        "effectiveFrom": a.effective_from.isoformat(),
+                        "effectiveTo": a.effective_to.isoformat() if a.effective_to else None,
+                        "assignedBy": a.assigned_by,
+                        "warning": "; ".join(warns) or None,
+                    },
+                )
+            )
     built.sort(key=lambda t: t[:3])
     rows = [t[5] for t in built][: ctx.row_limit]
 
@@ -192,8 +201,16 @@ def _roster_run(ctx):
         {"label": "Assignments", "value": len(built), "format": "integer"},
         {"label": "Employees", "value": len({t[3].id for t in built}), "format": "integer"},
         {"label": "Saturday off", "value": sum(1 for t in built if t[4].saturday_off), "format": "integer"},
-        {"label": "Overnight shifts", "value": sum(1 for t in built if t[5]["warning"] and "Overnight" in t[5]["warning"]), "format": "integer"},
-        {"label": "Overlapping assignments", "value": sum(1 for t in built if t[4].id in overlapping), "format": "integer"},
+        {
+            "label": "Overnight shifts",
+            "value": sum(1 for t in built if t[5]["warning"] and "Overnight" in t[5]["warning"]),
+            "format": "integer",
+        },
+        {
+            "label": "Overlapping assignments",
+            "value": sum(1 for t in built if t[4].id in overlapping),
+            "format": "integer",
+        },
     ]
     notes = [
         "Assignments in force at any time between the selected dates. The shift on a given day is the assignment with the latest "
@@ -212,7 +229,7 @@ register(
         title="Shift Roster / Assignments",
         description="Who is on which shift, with timings, grace, Saturday-off, effective dates and data warnings.",
         category="attendance",
-        icon="CalendarRange",
+        icon="CalendarDays",
         tags=("shift", "roster", "assignment", "timings", "saturday off"),
         modules=SHIFT_MODULES,
         filters=(
@@ -244,7 +261,7 @@ ISSUE_LABEL = dict(ISSUES)
 
 _GAP_COLS = (
     *EMP_COLS_SHORT,
-    ColumnSpec("employmentType", "Type", BADGE, 0.9),
+    ColumnSpec("employmentType", "Type", BADGE, 1.1),
     ColumnSpec("currentShift", "Shift at end of period", TEXT, 1.6),
     ColumnSpec("issue", "Issue", BADGE, 1.6),
     ColumnSpec("detail", "Detail", TEXT, 4.0),
@@ -256,7 +273,8 @@ def _uncovered_days(assignments, start: date, end: date) -> tuple[int, date | No
     if end < start:
         return 0, None
     intervals = sorted(
-        (max(a.effective_from, start), min(a.effective_to or end, end)) for a in assignments
+        (max(a.effective_from, start), min(a.effective_to or end, end))
+        for a in assignments
         if a.effective_from <= end and (a.effective_to is None or a.effective_to >= start)
     )
     cursor, missing, first = start, 0, None
@@ -298,37 +316,49 @@ def _gaps_run(ctx):
         for a in lst:
             s_time, e_time = _effective_times(a)
             if _is_overnight(s_time, e_time):
-                issues.append((
-                    "overnight",
-                    f"{a.shift.name} runs {hm(s_time)}-{hm(e_time)} (past midnight); late / half-day / early-out rules do not support overnight shifts.",
-                ))
+                issues.append(
+                    (
+                        "overnight",
+                        f"{a.shift.name} runs {hm(s_time)}-{hm(e_time)} (past midnight); late / half-day / early-out rules do not support overnight shifts.",
+                    )
+                )
             if not a.shift.is_active:
                 issues.append(("inactive_shift", f"Assigned to '{a.shift.name}', which is marked inactive."))
             if a.shift.branch_id and emp.branch_id != a.shift.branch_id:
                 issues.append(("branch_mismatch", f"'{a.shift.name}' belongs to a different branch than the employee."))
             if a.shift.shift_type != emp.employment_type:
-                issues.append((
-                    "type_mismatch",
-                    f"'{a.shift.name}' is a {a.shift.shift_type} shift but the employee is {emp.employment_type}.",
-                ))
+                issues.append(
+                    (
+                        "type_mismatch",
+                        f"'{a.shift.name}' is a {a.shift.shift_type} shift but the employee is {emp.employment_type}.",
+                    )
+                )
         for i, a in enumerate(lst):
-            for b in lst[i + 1:]:
+            for b in lst[i + 1 :]:
                 if _overlaps(a, b):
-                    issues.append((
-                        "overlap",
-                        f"'{a.shift.name}' from {display_date(a.effective_from)} overlaps '{b.shift.name}' from "
-                        f"{display_date(b.effective_from)}; the later start wins.",
-                    ))
+                    issues.append(
+                        (
+                            "overlap",
+                            f"'{a.shift.name}' from {display_date(a.effective_from)} overlaps '{b.shift.name}' from "
+                            f"{display_date(b.effective_from)}; the later start wins.",
+                        )
+                    )
         for code, detail in issues:
             if want and code != want:
                 continue
-            built.append((emp_sort_key(emp), code, {
-                **emp_cells(emp),
-                "employmentType": emp.employment_type.title(),
-                "currentShift": current.name if current else "No shift assigned",
-                "issue": ISSUE_LABEL[code],
-                "detail": detail,
-            }))
+            built.append(
+                (
+                    emp_sort_key(emp),
+                    code,
+                    {
+                        **emp_cells(emp),
+                        "employmentType": emp.employment_type.title(),
+                        "currentShift": current.name if current else "No shift assigned",
+                        "issue": ISSUE_LABEL[code],
+                        "detail": detail,
+                    },
+                )
+            )
     built.sort(key=lambda t: (t[0], [c for c, _l in ISSUES].index(t[1])))
     rows = [t[2] for t in built][: ctx.row_limit]
     by_code = Counter(t[1] for t in built)
@@ -373,7 +403,7 @@ register(
 
 _SHIFTWISE_COLS = (
     ColumnSpec("shiftName", "Shift", TEXT, 2.0),
-    ColumnSpec("date", "Date", DATE, 1.1),
+    ColumnSpec("date", "Date", DATE, 1.4),
     ColumnSpec("headcount", "Rostered", INTEGER, 0.8, total="sum"),
     ColumnSpec("present", "Present", INTEGER, 0.8, total="sum"),
     ColumnSpec("halfDay", "Half day", INTEGER, 0.8, total="sum"),
@@ -390,13 +420,37 @@ def _sw_pct(r: dict) -> float | None:
     return round((r["present"] + r["halfDay"]) * 100.0 / r["headcount"], 1) if r["headcount"] else None
 
 
+def _shift_labels(names: dict) -> dict:
+    """{shift template id: label}. The template's name; where several templates in the result share a name (one per
+    branch, say) the branch is added in brackets, and the template id when even that does not tell them apart."""
+    by_name: dict[str, list] = defaultdict(list)
+    for sid, name in names.items():
+        by_name[name].append(sid)
+    clashing = [sid for ids in by_name.values() if len(ids) > 1 for sid in ids if sid is not None]
+    branch_of = dict(
+        ShiftTemplate.objects.filter(pk__in=clashing).order_by().values_list("pk", "branch__name") if clashing else []
+    )
+    labels: dict = {}
+    for name, ids in by_name.items():
+        if len(ids) == 1:
+            labels[ids[0]] = name
+            continue
+        for sid in ids:
+            labels[sid] = f"{name} ({branch_of.get(sid) or 'no branch'})"
+    seen = Counter(labels.values())
+    return {sid: (lab if seen[lab] == 1 else f"{lab} #{sid}") for sid, lab in labels.items()}
+
+
 def _shiftwise_run(ctx):
     d_from, d_to = ctx.date_from, ctx.date_to
     name_text = (ctx.params.get("shift") or "").lower()
     roster = Roster(ctx, d_from, d_to)
     people_by_id = people(ctx)
 
-    agg: dict[tuple[str, date], dict] = {}
+    # Grouped by the shift TEMPLATE, not its name: two branches may each own a shift called "General" (timings differ
+    # by unit), and merging them would blur two different rosters into one line.
+    agg: dict[tuple[int | None, date], dict] = {}
+    names: dict[int | None, str] = {}
     for rec in day_records(ctx, d_from, d_to):
         emp = people_by_id.get(rec.employee_id)
         if emp is None:
@@ -408,7 +462,9 @@ def _shiftwise_run(ctx):
         name = shift.name if shift else UNASSIGNED
         if name_text and name_text not in name.lower():
             continue
-        a = agg.setdefault((name, rec.date), dict.fromkeys(_SW_SUM, 0))
+        shift_key = shift.pk if shift else None
+        names[shift_key] = name
+        a = agg.setdefault((shift_key, rec.date), dict.fromkeys(_SW_SUM, 0))
         a["headcount"] += 1
         if cls == PRESENT:
             a["present"] += 1
@@ -421,14 +477,17 @@ def _shiftwise_run(ctx):
         a["late"] += 1 if rec.is_late else 0
         a["shiftCredit"] += float(rec.shifts_earned or 0)
 
-    keys = sorted(agg, key=lambda k: (k[0] == UNASSIGNED, k[0].lower(), k[1]))
+    labels = _shift_labels(names)
+    keys = sorted(agg, key=lambda k: (k[0] is None, labels[k[0]].lower(), k[0] or 0, k[1]))
     data = []
-    for name, d in keys:
-        a = agg[(name, d)]
-        row = {"shiftName": name, "date": d.isoformat(), **a, "shiftCredit": round(a["shiftCredit"], 2)}
+    for shift_key, d in keys:
+        a = agg[(shift_key, d)]
+        row = {"shiftName": labels[shift_key], "date": d.isoformat(), **a, "shiftCredit": round(a["shiftCredit"], 2)}
         row["strengthPct"] = _sw_pct(row)
         data.append(row)
-    rows = with_subtotals(data, lambda r: r["shiftName"], _SW_SUM, label_key="shiftName", label=lambda g: f"{g} total")
+    rows, sub_note = subtotals_within_limit(
+        ctx, data, lambda r: r["shiftName"], _SW_SUM, what="Shift", label_key="shiftName", label=lambda g: f"{g} total"
+    )
     for r in rows:
         if r.get("_kind") == "subtotal":
             r["strengthPct"] = _sw_pct(r)
@@ -448,8 +507,15 @@ def _shiftwise_run(ctx):
         "Each stored day record is counted under the shift the employee was assigned to that day (a mid-period assignment change "
         "moves them between shifts by date). Employees with no assignment are grouped as Unassigned.",
         "Rostered excludes weekly-off, holiday, not-yet-joined and already-left days (Saturday-off Saturdays count as weekly off for "
-        "staff). Strength % = (present + half day) / rostered. Staff and production shift credit are not directly comparable.",
+        "staff). Strength % = (present + half day) / rostered. Production employees work Sundays as a normal day, so a Sunday "
+        "without punches counts as absent for them. Staff and production shift credit are not directly comparable.",
     ]
+    if len(set(labels.values())) != len({n for n in names.values()}):
+        notes.append(
+            "Shift templates that share a name (each branch keeps its own) are listed separately, with the branch in brackets."
+        )
+    if sub_note:
+        notes.append(sub_note)
     notes.extend(coverage_notes(ctx, people_by_id, d_from, d_to))
     return ReportResult(rows=rows, summary=summary, notes=notes, totals=grand)
 
@@ -478,9 +544,7 @@ register(
 #  production-shift-register
 # ═════════════════════════════════════════════════════════════════════════════
 
-_PROD_FIXED = (
-    *EMP_COLS_SHORT,
-)
+_PROD_FIXED = (*EMP_COLS_SHORT,)
 _PROD_TAIL = (
     ColumnSpec("daysWorked", "Days worked", INTEGER, 0.8, total="sum"),
     ColumnSpec("totalShifts", "Total shifts", NUMBER, 0.9, total="sum"),
@@ -490,6 +554,7 @@ _PROD_TAIL = (
     ColumnSpec("estimatedGross", "Gross (shifts x rate)", CURRENCY, 1.3, total="sum"),
 )
 _PROD_STATIC = (*_PROD_FIXED, *_PROD_TAIL)
+PDF_MAX_DAY_COLUMNS = 21
 
 
 def _production_run(ctx):
@@ -503,10 +568,19 @@ def _production_run(ctx):
     days = list(days_between(d_from, d_to))
     same_month = d_from.month == d_to.month and d_from.year == d_to.year
     day_cols = [
-        ColumnSpec(f"day_{d.isoformat()}", f"{d.day:02d}" if same_month else f"{d.day:02d}/{d.month:02d}", NUMBER, 0.55, total="sum")
+        ColumnSpec(
+            f"day_{d.isoformat()}",
+            f"{d.day:02d}" if same_month else f"{d.day:02d}/{d.month:02d}",
+            NUMBER,
+            0.55,
+            total="sum",
+        )
         for d in days
     ]
-    columns = [*_PROD_FIXED, *day_cols, *_PROD_TAIL]
+    # A PDF page cannot hold more than about this many day columns legibly (the framework's PDF writer floors every
+    # column at 1.1 cm): a longer range keeps the per-employee totals in the PDF and the days on screen / in Excel.
+    pdf_without_days = ctx.purpose == "pdf" and len(days) > PDF_MAX_DAY_COLUMNS
+    columns = [*_PROD_FIXED, *([] if pdf_without_days else day_cols), *_PROD_TAIL]
 
     data = []
     for emp_id in sorted(by_emp, key=lambda i: emp_sort_key(prod[i])):
@@ -529,24 +603,34 @@ def _production_run(ctx):
             worked += 1 if rec.status in ("present", "half_shift") else 0
             late += 1 if rec.is_late else 0
         rate = emp.salary_per_shift
-        row.update({
-            "daysWorked": worked,
-            "totalShifts": round(total, 2),
-            "extraShifts": round(extra, 2),
-            "lateDays": late,
-            "salaryPerShift": float(rate) if rate else None,
-            "estimatedGross": float(_d2(exact_total * rate)) if rate else None,
-        })
+        row.update(
+            {
+                "daysWorked": worked,
+                "totalShifts": round(total, 2),
+                "extraShifts": round(extra, 2),
+                "lateDays": late,
+                "salaryPerShift": float(rate) if rate else None,
+                "estimatedGross": float(_d2(exact_total * rate)) if rate else None,
+            }
+        )
         data.append(row)
     sum_keys = [c.key for c in day_cols] + ["daysWorked", "totalShifts", "extraShifts", "lateDays", "estimatedGross"]
-    rows = with_subtotals(data, lambda r: r["department"], sum_keys)
+    rows, sub_note = subtotals_within_limit(ctx, data, lambda r: r["department"], sum_keys)
 
     summary = [
         {"label": "Employees", "value": len(data), "format": "integer"},
         {"label": "Total shifts", "value": round(sum(r["totalShifts"] for r in data), 2), "format": "number"},
-        {"label": "Extra shifts (over 1.00)", "value": round(sum(r["extraShifts"] for r in data), 2), "format": "number"},
+        {
+            "label": "Extra shifts (over 1.00)",
+            "value": round(sum(r["extraShifts"] for r in data), 2),
+            "format": "number",
+        },
         {"label": "Late days", "value": sum(r["lateDays"] for r in data), "format": "integer"},
-        {"label": "Gross (shifts x rate)", "value": round(sum(r["estimatedGross"] or 0 for r in data), 2), "format": "currency"},
+        {
+            "label": "Gross (shifts x rate)",
+            "value": round(sum(r["estimatedGross"] or 0 for r in data), 2),
+            "format": "currency",
+        },
     ]
     notes = [
         "Shift credit is the stored value of each production day (0.25 steps up to the maximum of the active shift segments). A dash "
@@ -562,8 +646,13 @@ def _production_run(ctx):
         notes.append(f"Current production payroll period: {display_date(p_from)} to {display_date(p_to)}.")
     except InvalidPeriodConfig:
         pass  # the period hint is a courtesy: an incomplete period setting must not break the register
-    if len(days) > 31:
-        notes.append("Long ranges make a wide table; the Excel export is easier to read than the PDF.")
+    if pdf_without_days:
+        notes.append(
+            f"The range is longer than {PDF_MAX_DAY_COLUMNS} days, so the daily columns are left out of this PDF (they cannot be "
+            "printed legibly on a page); the screen and the Excel file carry every day."
+        )
+    if sub_note:
+        notes.append(sub_note)
     notes.extend(coverage_notes(ctx, prod, d_from, d_to))
     return ReportResult(rows=rows, columns=columns, summary=summary, notes=notes)
 
@@ -574,7 +663,7 @@ register(
         title="Production Shift Register",
         description="Production employees' daily shift credit (0.25 steps to 1.50), extra shifts, late days and gross for a period.",
         category="attendance",
-        icon="Factory",
+        icon="Building2",
         tags=("production", "shift credit", "shifts", "piece", "extra shift", "weekly wages"),
         modules=("production_payroll", "payroll"),
         filters=(
@@ -591,7 +680,7 @@ register(
 #  device-sync-health
 # ═════════════════════════════════════════════════════════════════════════════
 
-DEVICE_STATUS = (("live", "Live"), ("silent", "Silent"), ("never", "Never synced"), ("disabled", "Disabled"))
+DEVICE_STATUS = (("live", "Live"), ("silent", "Silent"), ("never", "No push yet"), ("disabled", "Disabled"))
 _STATUS_LABEL = dict(DEVICE_STATUS)
 
 _DEVICE_COLS = (
@@ -612,8 +701,10 @@ def _device_run(ctx):
     if get_branch_scope(ctx.request) is not None:
         return ReportResult(
             rows=[],
-            notes=["Biometric devices are shared company-wide (they have no branch), so this report is only available to "
-                   "head-office users who are not tied to a branch."],
+            notes=[
+                "Biometric devices are shared company-wide (they have no branch), so this report is only available to "
+                "head-office users who are not tied to a branch."
+            ],
         )
     d_from, d_to = ctx.date_from, ctx.date_to
     want = ctx.params.get("deviceStatus")
@@ -622,11 +713,18 @@ def _device_run(ctx):
     rules = list(AutoSyncRule.objects.filter(is_enabled=True).order_by("time", "id"))
     counts = dict(
         AttendanceLog.objects.filter(date__gte=d_from, date__lte=d_to, source__startswith="biometric")
-        .order_by().values("source").annotate(n=Count("id")).values_list("source", "n")
+        .order_by()
+        .values("source")
+        .annotate(n=Count("id"))
+        .values_list("source", "n")
     )
     many = (
         AttendanceLog.objects.filter(date__gte=d_from, date__lte=d_to)
-        .order_by().values("employee_id", "date").annotate(n=Count("id")).filter(n__gte=6).count()
+        .order_by()
+        .values("employee_id", "date")
+        .annotate(n=Count("id"))
+        .filter(n__gte=6)
+        .count()
     )
     unresolved = UnmatchedPunch.objects.filter(resolved=False).count()
 
@@ -639,24 +737,28 @@ def _device_run(ctx):
         if dev.serial_number:
             punches += counts.get(f"biometric:adms:{dev.serial_number}", 0)
         punches += counts.get(f"biometric:{dev.name}", 0)
+        # An empty selection means "every enabled device", so a switched-off device is only covered when named.
         covering = [
-            r for r in rules
-            if not r.device_selection or dev.id in r.device_selection or str(dev.id) in map(str, r.device_selection)
+            r
+            for r in rules
+            if str(dev.id) in map(str, r.device_selection) or (not r.device_selection and dev.is_active)
         ]
         ran = [r for r in covering if r.last_run_at]
         last = max(ran, key=lambda r: r.last_run_at) if ran else None
-        rows.append({
-            "deviceName": dev.name,
-            "host": dev.host or None,
-            "serialNumber": dev.serial_number or None,
-            "status": _STATUS_LABEL[status],
-            "lastPushAt": fmt_dt(dev.last_push_at),
-            "lastSyncedAt": fmt_dt(dev.last_synced_at),
-            "punchesInPeriod": punches,
-            "lastRuleRun": fmt_dt(last.last_run_at) if last else None,
-            "lastRuleStatus": (last.last_run_status or "").title() or None if last else None,
-            "lastRuleSummary": last.last_run_summary if last else None,
-        })
+        rows.append(
+            {
+                "deviceName": dev.name,
+                "host": dev.host or None,
+                "serialNumber": dev.serial_number or None,
+                "status": _STATUS_LABEL[status],
+                "lastPushAt": fmt_dt(dev.last_push_at),
+                "lastSyncedAt": fmt_dt(dev.last_synced_at),
+                "punchesInPeriod": punches,
+                "lastRuleRun": fmt_dt(last.last_run_at) if last else None,
+                "lastRuleStatus": (last.last_run_status or "").title() or None if last else None,
+                "lastRuleSummary": last.last_run_summary if last else None,
+            }
+        )
     by_status = Counter(health.values())
     summary = [
         {"label": "Devices", "value": len(devices), "format": "integer"},
@@ -666,8 +768,10 @@ def _device_run(ctx):
         {"label": "Employee-days with 6+ punches", "value": many, "format": "integer"},
     ]
     notes = [
-        f"Status: Live = pushed within the last {SILENT_AFTER_HOURS} hours; Silent = enabled but quiet for longer; Never synced = enabled "
-        "but nothing received yet; Disabled = switched off in Settings. Devices and sync rules are company-wide.",
+        f"Status follows the Attendance sync indicator (based on the last push from the device): Live = pushed within the last "
+        f"{SILENT_AFTER_HOURS} hours; Silent = enabled but quiet for longer; No push yet = enabled but nothing pushed so far (a device "
+        "that is only pulled on a schedule shows its last pull under Last pull sync); Disabled = switched off in Settings. Devices "
+        "and sync rules are company-wide.",
         "Punches in period are attributed to a device by the source tag the ingest writes (biometric:<serial> for push, biometric:<name> "
         "for pull); punches from other sources (Excel import, manual, geo) are not attributed. Employee-days with 6 or more punches "
         "usually mean two people share one device user ID.",

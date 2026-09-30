@@ -18,11 +18,17 @@ from django.db.models.functions import TruncDate
 from api.branch_scope import get_branch_scope
 from api.clock import FACTORY_TZ
 from api.models import (
-    GateDevice, OutpassGateScan, OutpassRecord, OutpassRequest, TeaBreakLog, TeaBreakRule, VisitorVisit,
+    GateDevice,
+    OutpassGateScan,
+    OutpassRecord,
+    OutpassRequest,
+    TeaBreakLog,
+    TeaBreakRule,
+    VisitorVisit,
 )
 
 from ..filters import boolean, branches, scope, select
-from ..formatting import full_name, r2
+from ..formatting import display_date, full_name, r2
 from ..registry import register
 from ..types import BADGE, DATE, DATETIME, INTEGER, PERCENT, TEXT, ColumnSpec, ReportResult, ReportSpec
 from . import gate_outpass_common as C
@@ -76,53 +82,92 @@ def _norm(name) -> str:
     return " ".join(str(name or "").split()).casefold()
 
 
-def _match_status(rec) -> str:
-    if rec.employee_id is None:
+def _visible_employee(rec, scope_branch):
+    """The employee a submission's code belongs to, as far as THIS viewer may know it.
+
+    Anyone can type any employee code on a branch's public QR form, so a submission at a Unit 1 QR can carry
+    the code of a Unit 2 employee. A branch-scoped viewer must not learn that employee's name, department or
+    designation - nor that the code exists - so such a submission is treated as if the code belonged to nobody
+    (the typed text is still shown, it is the viewer's own branch's form data)."""
+    emp = rec.employee if rec.employee_id else None
+    if emp is not None and scope_branch is not None and emp.branch_id != scope_branch:
+        return None
+    return emp
+
+
+def _match_status(rec, emp) -> str:
+    if emp is None:
         return "unmatched"
-    return "matched" if _norm(rec.employee_name) == _norm(full_name(rec.employee)) else "name_mismatch"
+    return "matched" if _norm(rec.employee_name) == _norm(full_name(emp)) else "name_mismatch"
 
 
 def _run_qr(ctx) -> ReportResult:
     p = ctx.params
     source = p.get("source") or "qr"
+    scope_branch = get_branch_scope(ctx.request)
+    link = C.employee_link_q(ctx)
+    if scope_branch is not None and link:
+        # Filtering by an employee attribute must not reach into another branch's employees either
+        # (a department id from another branch would otherwise list who typed its members' codes).
+        link &= Q(employee__branch_id=scope_branch)
     qs = (
         OutpassRecord.objects.select_related("branch", "employee__department", "employee__designation")
         .defer(*C.EMP_DEFER)
-        .filter(C.branch_q(ctx), C.employee_link_q(ctx), C.in_range("submitted_at", ctx))
+        .filter(C.branch_q(ctx), link, C.in_range("submitted_at", ctx))
     )
     if source != "all":
         qs = qs.filter(source=source)
     wanted = p.get("matchStatus")
-    picked, statuses = [], []
-    for rec in qs.order_by("-submitted_at", "-id"):
-        status = _match_status(rec)
+    if wanted == "unmatched":
+        # Codes that belong to nobody - or, for a branch-scoped viewer, to an employee outside their branch.
+        hidden = Q(employee__isnull=True)
+        if scope_branch is not None:
+            hidden |= ~Q(employee__branch_id=scope_branch)
+        qs = qs.filter(hidden)
+    elif wanted:
+        qs = qs.filter(employee__isnull=False)
+        if scope_branch is not None:
+            qs = qs.filter(employee__branch_id=scope_branch)
+    qs = qs.order_by("-submitted_at", "-id")
+    if wanted not in ("matched", "name_mismatch"):
+        # Every remaining row is kept as-is, so the limit belongs in the query.
+        qs = qs[: ctx.row_limit]
+
+    picked, employees, statuses = [], [], []
+    # Streamed (one model at a time), so a name-match filter that discards many rows never holds them all.
+    for rec in qs.iterator(chunk_size=500):
+        emp = _visible_employee(rec, scope_branch)
+        status = _match_status(rec, emp)
         if wanted and status != wanted:
             continue
         picked.append(rec)
+        employees.append(emp)
         statuses.append(status)
         if len(picked) >= ctx.row_limit:
             break
 
     rows = []
-    for rec, status in zip(picked, statuses):
-        emp = rec.employee
-        rows.append({
-            "submittedAt": C.fmt(rec.submitted_at),
-            "enteredCode": C.clean(rec.employee_code, 60),
-            "enteredName": C.clean(rec.employee_name, 120),
-            "matchedEmployee": f"{emp.employee_code} - {full_name(emp)}" if emp else None,
-            "department": (emp.department.name if emp.department_id else "Unassigned") if emp else None,
-            "designation": emp.designation.title if emp and emp.designation_id else None,
-            "destination": C.clean(rec.destination),
-            "branch": rec.branch.name if rec.branch_id else None,
-            "matchStatus": _MATCH_LABEL[status],
-            "source": _QR_SOURCE_LABEL.get(rec.source, rec.source),
-        })
+    for rec, emp, status in zip(picked, employees, statuses):
+        rows.append(
+            {
+                "submittedAt": C.fmt(rec.submitted_at),
+                "enteredCode": C.clean(rec.employee_code, 60),
+                "enteredName": C.clean(rec.employee_name, 120),
+                "matchedEmployee": f"{emp.employee_code} - {full_name(emp)}" if emp else None,
+                "department": (emp.department.name if emp.department_id else "Unassigned") if emp else None,
+                "designation": emp.designation.title if emp and emp.designation_id else None,
+                "destination": C.clean(rec.destination),
+                "branch": rec.branch.name if rec.branch_id else None,
+                "matchStatus": _MATCH_LABEL[status],
+                "source": _QR_SOURCE_LABEL.get(rec.source, rec.source),
+            }
+        )
 
     n = len(picked)
     counts = Counter(statuses)
     per_branch = Counter((r.branch.name if r.branch_id else "No branch") for r in picked)
-    per_person = Counter(f"{r.employee.employee_code} {r.employee.first_name}".strip() for r in picked if r.employee_id)
+    per_person = Counter(f"{e.employee_code} {e.first_name}".strip() for e in employees if e)
+    per_dept = Counter((e.department.name if e.department_id else "Unassigned") for e in employees if e)
     top_people = C.top(list(per_person.items()))
     summary = [
         {"label": "Submissions", "value": n, "format": "integer"},
@@ -139,34 +184,44 @@ def _run_qr(ctx) -> ReportResult:
         "none is shown. QR Branch is the branch of the QR that was scanned, which may differ from the employee's own.",
         "Department, designation, type and employee filters only match submissions linked to an employee, so "
         "unmatched submissions are hidden while any of them is set."
-        if any(p.get(k) for k in ("department_ids", "designation_ids", "employment_type", "employee_ids")) else None,
+        if any(p.get(k) for k in ("department_ids", "designation_ids", "employment_type", "employee_ids"))
+        else None,
+        "Only employees of your branch are identified here: a code that belongs to an employee of another branch is "
+        "shown as Unmatched, with no employee details."
+        if scope_branch is not None
+        else None,
         "The Outpass page's Gate QR Submissions table also lists a copy of every approved pass (and one more copy each "
         "time HR re-approves). Those copies are not gate exits: they are excluded here by default; choose 'Everything on "
-        "the Outpass page' to reproduce that table." if source == "qr" else None,
+        "the Outpass page' to reproduce that table."
+        if source == "qr"
+        else None,
         _counts_line("By QR branch", per_branch),
+        _counts_line("By department (submissions linked to an employee)", per_dept),
         ("Most submissions: " + "; ".join(f"{name} ({v})" for name, v in top_people) + ".") if top_people else None,
         C.truncated_note(ctx, n),
     )
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="outpass-qr-submissions",
-    title="Gate QR Submissions",
-    description="Anonymous exits logged through the branch QR form, checked against the employee master.",
-    category="gate",
-    icon="QrCode",
-    tags=("outpass", "qr", "gate qr", "submissions", "unverified", "mismatch"),
-    modules=MODULES,
-    filters=(
-        C.dates("Submitted between", "the time of the submission"),
-        *scope(status=None),
-        select("source", "Records", _QR_SOURCES, default="qr", placeholder="Gate QR form only"),
-        select("matchStatus", "Match result", _MATCH_OPTIONS, placeholder="All"),
-    ),
-    columns=QR_COLUMNS,
-    run=_run_qr,
-))
+register(
+    ReportSpec(
+        id="outpass-qr-submissions",
+        title="Gate QR Submissions",
+        description="Anonymous exits logged through the branch QR form, checked against the employee master.",
+        category="gate",
+        icon="QrCode",
+        tags=("outpass", "qr", "gate qr", "submissions", "unverified", "mismatch"),
+        modules=MODULES,
+        filters=(
+            C.dates("Submitted between", "the time of the submission"),
+            *scope(status=None),
+            select("source", "Records", _QR_SOURCES, default="qr", placeholder="Gate QR form only"),
+            select("matchStatus", "Match result", _MATCH_OPTIONS, placeholder="All"),
+        ),
+        columns=QR_COLUMNS,
+        run=_run_qr,
+    )
+)
 
 
 # ── 12. gate-scan-audit-log ─────────────────────────────────────────────────
@@ -234,19 +289,21 @@ def _run_scans(ctx) -> ReportResult:
     rows = []
     for s in picked:
         emp, req = s.employee, s.outpass_request
-        rows.append({
-            "scannedAt": C.fmt(s.scanned_at),
-            "gate": s.gate.name if s.gate_id else "Unknown gate",
-            "gateBranch": s.gate.branch.name if s.gate_id and s.gate.branch_id else None,
-            "scanType": C.SCAN_TYPE_LABELS.get(s.scan_type, s.scan_type),
-            "result": C.SCAN_RESULT_LABELS.get(s.result, s.result),
-            "employeeCode": emp.employee_code if emp else None,
-            "employeeName": full_name(emp) if emp else None,
-            "department": (emp.department.name if emp.department_id else "Unassigned") if emp else None,
-            "passType": C.pass_type_label(req.pass_type) if req else None,
-            "destination": C.clean(req.destination) if req else None,
-            "detail": _scan_detail(s),
-        })
+        rows.append(
+            {
+                "scannedAt": C.fmt(s.scanned_at),
+                "gate": s.gate.name if s.gate_id else "Unknown gate",
+                "gateBranch": s.gate.branch.name if s.gate_id and s.gate.branch_id else None,
+                "scanType": C.SCAN_TYPE_LABELS.get(s.scan_type, s.scan_type),
+                "result": C.SCAN_RESULT_LABELS.get(s.result, s.result),
+                "employeeCode": emp.employee_code if emp else None,
+                "employeeName": full_name(emp) if emp else None,
+                "department": (emp.department.name if emp.department_id else "Unassigned") if emp else None,
+                "passType": C.pass_type_label(req.pass_type) if req else None,
+                "destination": C.clean(req.destination) if req else None,
+                "detail": _scan_detail(s),
+            }
+        )
 
     n = len(picked)
     ok = sum(1 for s in picked if s.result == "success")
@@ -268,7 +325,11 @@ def _run_scans(ctx) -> ReportResult:
         {"label": "Successful", "value": ok, "format": "integer"},
         {"label": "Denied", "value": len(denied), "format": "integer"},
         {"label": "Denial rate", "value": r2(len(denied) * 100 / n) if n else None, "format": "percent"},
-        {"label": "Employees with 3+ denied attempts", "value": sum(1 for v in repeat.values() if v >= 3), "format": "integer"},
+        {
+            "label": "Employees with 3+ denied attempts",
+            "value": sum(1 for v in repeat.values() if v >= 3),
+            "format": "integer",
+        },
     ]
     notes = _notes(
         NOTE_TIMES,
@@ -280,33 +341,37 @@ def _run_scans(ctx) -> ReportResult:
         "time in UTC.",
         _counts_line("Denied by reason", by_reason),
         ("Denial rate by gate: " + "; ".join(f"{g} {d} of {t} ({r2(d * 100 / t)}%)" for g, d, t in gate_rates) + ".")
-        if gate_rates else None,
+        if gate_rates
+        else None,
         "Department, type and employee filters only match scans linked to an employee, so unreadable QR scans are "
         "hidden while any of them is set."
-        if any(p.get(k) for k in ("department_ids", "employment_type", "employee_ids")) else None,
+        if any(p.get(k) for k in ("department_ids", "employment_type", "employee_ids"))
+        else None,
         C.truncated_note(ctx, n),
     )
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="gate-scan-audit-log",
-    title="Gate Scan Audit Log",
-    description="Every outpass exit and return scan at every gate, including denied and forged attempts.",
-    category="gate",
-    icon="ScanLine",
-    tags=("gate", "scan", "audit", "denied", "invalid qr", "security", "expired"),
-    modules=MODULES,
-    filters=(
-        C.dates("Scanned between", "the time of the scan", default="thisWeek"),
-        *scope(designation=False, status=None),
-        C.gate_filter(),
-        select("scanType", "Leg", _SCAN_TYPES, placeholder="Exit and return"),
-        select("result", "Result", _SCAN_RESULTS, placeholder="All results"),
-    ),
-    columns=SCAN_COLUMNS,
-    run=_run_scans,
-))
+register(
+    ReportSpec(
+        id="gate-scan-audit-log",
+        title="Gate Scan Audit Log",
+        description="Every outpass exit and return scan at every gate, including denied and forged attempts.",
+        category="gate",
+        icon="ScanLine",
+        tags=("gate", "scan", "audit", "denied", "invalid qr", "security", "expired"),
+        modules=MODULES,
+        filters=(
+            C.dates("Scanned between", "the time of the scan", default="thisWeek"),
+            *scope(designation=False, status=None),
+            C.gate_filter(),
+            select("scanType", "Leg", _SCAN_TYPES, placeholder="Exit and return"),
+            select("result", "Result", _SCAN_RESULTS, placeholder="All results"),
+        ),
+        columns=SCAN_COLUMNS,
+        run=_run_scans,
+    )
+)
 
 
 # ── 13. gate-activity-summary ───────────────────────────────────────────────
@@ -330,8 +395,11 @@ ACTIVITY_COLUMNS = (
     ColumnSpec("denialPct", "Denial Rate", PERCENT, 0.9),
 )
 _DENIED_KEY = {
-    "already_scanned": "alreadyScanned", "expired": "expired", "not_approved": "notApproved",
-    "not_exited": "notExited", "invalid_qr": "invalidQr",
+    "already_scanned": "alreadyScanned",
+    "expired": "expired",
+    "not_approved": "notApproved",
+    "not_exited": "notExited",
+    "invalid_qr": "invalidQr",
 }
 
 
@@ -346,9 +414,8 @@ def _run_activity(ctx) -> ReportResult:
     ids = [g.id for g in gates]
     # Scans at a gate that no longer exists cannot be tied to a branch: only unscoped users, with no
     # branch/gate/status narrowing in force, see them (as one "Unknown / removed gate" row).
-    include_unknown = (
-        get_branch_scope(ctx.request) is None
-        and not (p.get("branch_ids") or p.get("gate") or p.get("activeOnly"))
+    include_unknown = get_branch_scope(ctx.request) is None and not (
+        p.get("branch_ids") or p.get("gate") or p.get("activeOnly")
     )
 
     def gate_q(field: str) -> Q:
@@ -357,27 +424,45 @@ def _run_activity(ctx) -> ReportResult:
 
     counts: dict = defaultdict(int)
     for r in (
-        OutpassGateScan.objects.filter(C.in_range("scanned_at", ctx)).filter(gate_q("gate_id"))
-        .order_by().values("gate_id", "scan_type", "result").annotate(n=Count("id"))
+        OutpassGateScan.objects.filter(C.in_range("scanned_at", ctx))
+        .filter(gate_q("gate_id"))
+        .order_by()
+        .values("gate_id", "scan_type", "result")
+        .annotate(n=Count("id"))
     ):
         counts[(r["gate_id"], r["scan_type"], r["result"])] += r["n"]
     tea_out = {
         r["out_gate_id"]: r["n"]
-        for r in TeaBreakLog.objects.filter(C.in_range("out_at", ctx)).filter(gate_q("out_gate_id"))
-        .order_by().values("out_gate_id").annotate(n=Count("id"))
+        for r in TeaBreakLog.objects.filter(C.in_range("out_at", ctx))
+        .filter(gate_q("out_gate_id"))
+        .order_by()
+        .values("out_gate_id")
+        .annotate(n=Count("id"))
     }
     tea_in = {
         r["in_gate_id"]: r["n"]
-        for r in TeaBreakLog.objects.filter(C.in_range("in_at", ctx)).filter(gate_q("in_gate_id"))
-        .order_by().values("in_gate_id").annotate(n=Count("id"))
+        for r in TeaBreakLog.objects.filter(C.in_range("in_at", ctx))
+        .filter(gate_q("in_gate_id"))
+        .order_by()
+        .values("in_gate_id")
+        .annotate(n=Count("id"))
     }
 
     def row_for(gate_id, name, branch, active, last_login) -> dict:
         row = {
-            "gate": name, "branch": branch, "isActive": active, "lastLoginAt": C.fmt(last_login),
-            "exitScans": counts[(gate_id, "exit", "success")], "returnScans": counts[(gate_id, "entry", "success")],
-            "alreadyScanned": 0, "expired": 0, "notApproved": 0, "notExited": 0, "invalidQr": 0,
-            "teaOut": tea_out.get(gate_id, 0), "teaIn": tea_in.get(gate_id, 0),
+            "gate": name,
+            "branch": branch,
+            "isActive": active,
+            "lastLoginAt": C.fmt(last_login),
+            "exitScans": counts[(gate_id, "exit", "success")],
+            "returnScans": counts[(gate_id, "entry", "success")],
+            "alreadyScanned": 0,
+            "expired": 0,
+            "notApproved": 0,
+            "notExited": 0,
+            "invalidQr": 0,
+            "teaOut": tea_out.get(gate_id, 0),
+            "teaIn": tea_in.get(gate_id, 0),
         }
         attempts = sum(v for (g, _t, _r), v in counts.items() if g == gate_id)
         for (g, _t, result), v in counts.items():
@@ -390,7 +475,13 @@ def _run_activity(ctx) -> ReportResult:
         return row
 
     rows = [
-        row_for(g.id, g.name, g.branch.name if g.branch_id else None, "Active" if g.is_active else "Inactive", g.last_login_at)
+        row_for(
+            g.id,
+            g.name,
+            g.branch.name if g.branch_id else None,
+            "Active" if g.is_active else "Inactive",
+            g.last_login_at,
+        )
         for g in gates
     ]
     if include_unknown:
@@ -401,7 +492,9 @@ def _run_activity(ctx) -> ReportResult:
 
     totals = C.sum_totals(rows, [c.key for c in ACTIVITY_COLUMNS if c.total == "sum"])
     attempts_all = sum(v for v in counts.values())
-    totals["denialPct"] = r2(totals["deniedScans"] * 100 / attempts_all) if attempts_all and totals["deniedScans"] is not None else None
+    totals["denialPct"] = (
+        r2(totals["deniedScans"] * 100 / attempts_all) if attempts_all and totals["deniedScans"] is not None else None
+    )
     busiest = C.top([(r["gate"], r["totalScans"]) for r in rows], 1)
     summary = [
         {"label": "Total scans", "value": totals["totalScans"], "format": "integer"},
@@ -417,29 +510,33 @@ def _run_activity(ctx) -> ReportResult:
         "one scan) and have no denial states; a failed tea-break scan shows under Invalid QR.",
         "Total Scans = outpass attempts + tea-break scans. Last Login is the only activity time a gate device records.",
         "Scans at a gate that has since been deleted are shown as Unknown / removed gate, to users who can see every "
-        "branch only." if include_unknown else None,
+        "branch only."
+        if include_unknown
+        else None,
         "Device passwords and login links are never included in reports.",
     )
     return ReportResult(rows=rows, totals=totals, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="gate-activity-summary",
-    title="Gate Activity Summary",
-    description="Per gate: outpass exits and returns, denied scans by reason and tea-break scans.",
-    category="gate",
-    icon="BarChart3",
-    tags=("gate", "activity", "throughput", "scans", "denied", "devices"),
-    modules=MODULES,
-    filters=(
-        C.dates("Scanned between", "the time of each scan"),
-        branches(),
-        C.gate_filter(),
-        boolean("activeOnly", "Active gates only"),
-    ),
-    columns=ACTIVITY_COLUMNS,
-    run=_run_activity,
-))
+register(
+    ReportSpec(
+        id="gate-activity-summary",
+        title="Gate Activity Summary",
+        description="Per gate: outpass exits and returns, denied scans by reason and tea-break scans.",
+        category="gate",
+        icon="BarChart3",
+        tags=("gate", "activity", "throughput", "scans", "denied", "devices"),
+        modules=MODULES,
+        filters=(
+            C.dates("Scanned between", "the time of each scan"),
+            branches(),
+            C.gate_filter(),
+            boolean("activeOnly", "Active gates only"),
+        ),
+        columns=ACTIVITY_COLUMNS,
+        run=_run_activity,
+    )
+)
 
 
 # ── 14. gate-daily-summary ──────────────────────────────────────────────────
@@ -462,7 +559,9 @@ DAILY_COLUMNS = (
 def _by_day(qs, field: str, **aggregates) -> dict:
     """{IST date: aggregated row} - days are cut at IST midnight, never UTC."""
     rows = (
-        qs.order_by().annotate(day=TruncDate(field, tzinfo=FACTORY_TZ)).values("day")
+        qs.order_by()
+        .annotate(day=TruncDate(field, tzinfo=FACTORY_TZ))
+        .values("day")
         .annotate(n=Count("id"), **aggregates)
     )
     return {r["day"]: r for r in rows}
@@ -475,7 +574,9 @@ def _run_daily(ctx) -> ReportResult:
     approved = _by_day(req_scope.filter(status="approved").filter(rng("approved_at")), "approved_at")
     exits = _by_day(req_scope.filter(rng("exited_at")), "exited_at")
     returns = _by_day(req_scope.filter(rng("entered_at")), "entered_at")
-    qr = _by_day(OutpassRecord.objects.filter(source="qr").filter(C.branch_q(ctx)).filter(rng("submitted_at")), "submitted_at")
+    qr = _by_day(
+        OutpassRecord.objects.filter(source="qr").filter(C.branch_q(ctx)).filter(rng("submitted_at")), "submitted_at"
+    )
     visitors = _by_day(VisitorVisit.objects.filter(C.branch_q(ctx)).filter(rng("visited_at")), "visited_at")
     denied = _by_day(
         OutpassGateScan.objects.exclude(result="success").filter(C.scan_scope_q(ctx)).filter(rng("scanned_at")),
@@ -489,7 +590,8 @@ def _run_daily(ctx) -> ReportResult:
     # round-half-even: so exactly allowed + 0.5 minutes is overtime only when `allowed` is odd.
     over = Q(taken_td__gt=tie) | Q(taken_td=tie) if allowed % 2 == 1 else Q(taken_td__gt=tie)
     tea = _by_day(
-        TeaBreakLog.objects.filter(ctx.emp_q("employee__")).filter(rng("out_at"))
+        TeaBreakLog.objects.filter(ctx.emp_q("employee__"))
+        .filter(rng("out_at"))
         .annotate(taken_td=ExpressionWrapper(F("in_at") - F("out_at"), output_field=DurationField())),
         "out_at",
         ot=Count("id", filter=over),
@@ -497,14 +599,21 @@ def _run_daily(ctx) -> ReportResult:
 
     rows = []
     for d in ctx.days_in_range:
-        rows.append({
-            "date": d.isoformat(), "weekday": d.strftime("%a"),
-            "passRequests": requested.get(d, {}).get("n", 0), "passesApproved": approved.get(d, {}).get("n", 0),
-            "exits": exits.get(d, {}).get("n", 0), "returns": returns.get(d, {}).get("n", 0),
-            "qrSubmissions": qr.get(d, {}).get("n", 0), "visitors": visitors.get(d, {}).get("n", 0),
-            "teaBreaks": tea.get(d, {}).get("n", 0), "teaOvertime": tea.get(d, {}).get("ot", 0),
-            "deniedScans": denied.get(d, {}).get("n", 0),
-        })
+        rows.append(
+            {
+                "date": d.isoformat(),
+                "weekday": d.strftime("%a"),
+                "passRequests": requested.get(d, {}).get("n", 0),
+                "passesApproved": approved.get(d, {}).get("n", 0),
+                "exits": exits.get(d, {}).get("n", 0),
+                "returns": returns.get(d, {}).get("n", 0),
+                "qrSubmissions": qr.get(d, {}).get("n", 0),
+                "visitors": visitors.get(d, {}).get("n", 0),
+                "teaBreaks": tea.get(d, {}).get("n", 0),
+                "teaOvertime": tea.get(d, {}).get("ot", 0),
+                "deniedScans": denied.get(d, {}).get("n", 0),
+            }
+        )
 
     totals = C.sum_totals(rows, [c.key for c in DAILY_COLUMNS if c.total == "sum"])
     busiest = max(rows, key=lambda r: (r["exits"], r["date"]), default=None)
@@ -517,7 +626,7 @@ def _run_daily(ctx) -> ReportResult:
         {"label": "Denied scans", "value": totals["deniedScans"], "format": "integer"},
         _text_summary(
             "Busiest day (most gate exits)",
-            f"{busiest['date']} ({busiest['exits']} exits)" if busiest and busiest["exits"] else None,
+            f"{display_date(busiest['date'])} ({busiest['exits']} exits)" if busiest and busiest["exits"] else None,
         ),
     ]
     notes = _notes(
@@ -534,18 +643,20 @@ def _run_daily(ctx) -> ReportResult:
     return ReportResult(rows=rows, totals=totals, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="gate-daily-summary",
-    title="Daily Gate Summary",
-    description="One row per day: pass requests, gate exits and returns, QR submissions, visitors, tea breaks and denied scans.",
-    category="gate",
-    icon="CalendarDays",
-    tags=("gate", "daily", "summary", "overview", "visitors", "tea break", "outpass"),
-    modules=MODULES,
-    filters=(
-        C.dates("Date range", "each figure's own timestamp", default="thisMonth"),
-        branches(),
-    ),
-    columns=DAILY_COLUMNS,
-    run=_run_daily,
-))
+register(
+    ReportSpec(
+        id="gate-daily-summary",
+        title="Daily Gate Summary",
+        description="One row per day: pass requests, gate exits and returns, QR submissions, visitors, tea breaks and denied scans.",
+        category="gate",
+        icon="CalendarDays",
+        tags=("gate", "daily", "summary", "overview", "visitors", "tea break", "outpass"),
+        modules=MODULES,
+        filters=(
+            C.dates("Date range", "each figure's own timestamp", default="thisMonth"),
+            branches(),
+        ),
+        columns=DAILY_COLUMNS,
+        run=_run_daily,
+    )
+)

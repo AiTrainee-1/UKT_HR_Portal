@@ -8,8 +8,18 @@ from datetime import date, datetime, time
 from decimal import Decimal
 
 MONTH_NAMES = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
 ]
 MONTH_ABBR = [m[:3] for m in MONTH_NAMES]
 

@@ -15,8 +15,10 @@ from ..filters import date_range, select
 from ..registry import register
 from ..types import BADGE, DATE, HOURS, INTEGER, MINUTES, NUMBER, TEXT, TIME, ColumnSpec, ReportResult, ReportSpec
 from .attendance_core_data import (
+    KIND_LABELS,
     AttendanceData,
     build_day,
+    detection_notes,
     drop_dormant,
     emp_days_guard,
     hours,
@@ -69,9 +71,13 @@ def _flag_match(day, key: str) -> bool:
         return day.kind == "half"
     if key == "permission":
         return bool(
-            rec and (
-                rec.morning_permission_applied or rec.evening_permission_applied
-                or rec.morning_permission_excess or rec.evening_permission_excess or rec.middle_permission_today
+            rec
+            and (
+                rec.morning_permission_applied
+                or rec.evening_permission_applied
+                or rec.morning_permission_excess
+                or rec.evening_permission_excess
+                or rec.middle_permission_today
             )
         )
     if key == "missing_punch":
@@ -144,30 +150,35 @@ def _run_daily(ctx) -> ReportResult:
                 continue
             rec = day.rec
             punches = day.punches
-            rows.append({
-                "date": d.isoformat(),
-                "employeeCode": emp.employee_code,
-                "employeeName": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
-                "department": emp.department.name if emp.department_id else "Unassigned",
-                "designation": emp.designation.title if emp.designation_id else None,
-                "employeeType": "Production" if emp.employment_type == "production" else "Staff",
-                "shift": day.shift.name if day.shift is not None else None,
-                "firstIn": day.first_in,
-                "lastOut": day.last_out,
-                "punchCount": len(punches) or None,
-                "workedHours": hours(day.worked_min),
-                "status": day.label,
-                "lateMinutes": day.late_min,
-                "earlyOutMinutes": day.early_min,
-                "flags": "; ".join(day.flags) or None,
-                "leaveType": leave_type_text(day.leave) if day.kind == "leave" else None,
-                "shiftsEarned": float(rec.shifts_earned) if rec is not None else None,
-                "informed": inf,
-                "source": source_text(day),
-            })
+            rows.append(
+                {
+                    "date": d.isoformat(),
+                    "employeeCode": emp.employee_code,
+                    "employeeName": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
+                    "department": emp.department.name if emp.department_id else "Unassigned",
+                    "designation": emp.designation.title if emp.designation_id else None,
+                    "employeeType": "Production" if emp.employment_type == "production" else "Staff",
+                    "shift": day.shift.name if day.shift is not None else None,
+                    "firstIn": day.first_in,
+                    "lastOut": day.last_out,
+                    "punchCount": len(punches) or None,
+                    "workedHours": hours(day.worked_min),
+                    "status": day.label,
+                    "lateMinutes": day.late_min,
+                    "earlyOutMinutes": day.early_min,
+                    "flags": "; ".join(day.flags) or None,
+                    "leaveType": leave_type_text(day.leave) if day.kind == "leave" else None,
+                    "shiftsEarned": float(rec.shifts_earned) if rec is not None else None,
+                    "informed": inf,
+                    "source": source_text(day),
+                }
+            )
             if day.kind in ("present", "half", "absent", "leave"):
                 c[day.kind] += 1
-                split["production" if emp.employment_type == "production" else "staff"] += day.kind in ("present", "half")
+                split["production" if emp.employment_type == "production" else "staff"] += day.kind in (
+                    "present",
+                    "half",
+                )
             elif day.kind in ("holiday", "weekly_off"):
                 c["off"] += 1
             if rec is not None and rec.is_late:
@@ -191,6 +202,7 @@ def _run_daily(ctx) -> ReportResult:
         "Late / early-out minutes and worked hours are derived from the raw punches and the assigned shift "
         "(see the Time Card notes); Informed is HR's note on absent / on-leave days.",
     ]
+    notes += detection_notes(data.settings)
     if any(d == today for d in days):
         notes.append("Today's Absent is provisional: the day is still in progress until the shift ends.")
     if c["unprocessed"]:
@@ -211,29 +223,36 @@ def _run_daily(ctx) -> ReportResult:
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="daily-attendance",
-    title="Daily Attendance Register",
-    description="Every employee for a day: first in, last out, hours, status and late / half-day / permission flags "
-    "with day strength. The all-status version of the Report Log daily report.",
-    category="attendance",
-    icon="CalendarCheck",
-    tags=("daily", "attendance", "strength", "present", "absent", "register"),
-    modules=("attendance",),
-    filters=(
-        date_range(default="today", label="Date", max_days=31),
-        *scope_filters(status="active", search=True),
-        select("status", "Status", STATUS_OPTIONS, placeholder="All statuses"),
-        select("flag", "Flag", FLAG_OPTIONS, placeholder="Any"),
-        select("informed", "Informed", INFORMED_OPTIONS, placeholder="Any",
-               help="HR's note on absent or on-leave days."),
-    ),
-    columns=DAILY_COLUMNS,
-    run=_run_daily,
-    landscape=True,
-    screen_limit=10_000,
-    pdf_max_rows=6_000,
-))
+register(
+    ReportSpec(
+        id="daily-attendance",
+        title="Daily Attendance Register",
+        description="Every employee for a day: first in, last out, hours, status and late / half-day / permission flags "
+        "with day strength. The all-status version of the Report Log daily report.",
+        category="attendance",
+        icon="CalendarCheck",
+        tags=("daily", "attendance", "strength", "present", "absent", "register"),
+        modules=("attendance",),
+        filters=(
+            date_range(default="today", label="Date", max_days=31),
+            *scope_filters(status="all", search=True),
+            select("status", "Status", STATUS_OPTIONS, placeholder="All statuses"),
+            select("flag", "Flag", FLAG_OPTIONS, placeholder="Any"),
+            select(
+                "informed",
+                "Informed",
+                INFORMED_OPTIONS,
+                placeholder="Any",
+                help="HR's note on absent or on-leave days.",
+            ),
+        ),
+        columns=DAILY_COLUMNS,
+        run=_run_daily,
+        landscape=True,
+        screen_limit=10_000,
+        pdf_max_rows=6_000,
+    )
+)
 
 
 # ── Daily Absentee / Leave List (Report Log, Daily Report) ──────────────────────
@@ -260,7 +279,7 @@ def _run_absentee(ctx) -> ReportResult:
 
     rows: list[dict] = []
     counts = {INFORMED: 0, NOT_INFORMED: 0, UNSET: 0}
-    weekly_off = unprocessed = provisional = 0
+    weekly_off = unprocessed = provisional = late_leave = 0
     for d in days:
         sno = 0
         for emp in employees:
@@ -272,6 +291,9 @@ def _run_absentee(ctx) -> ReportResult:
             kind = data.kind(emp, d, rec)
             if kind == "weekly_off" and rec.status == "absent":
                 weekly_off += 1  # a saturday_off Saturday: stored as absent, but not an absence
+            if kind == "absent" and data.leave_approved_late(emp, d, rec):
+                kind = "leave"  # approved after the day was stored: the next compute gives it 'on leave', not absent
+                late_leave += 1
             if kind not in kinds:
                 continue
             day = build_day(data, emp, d)
@@ -281,16 +303,18 @@ def _run_absentee(ctx) -> ReportResult:
             sno += 1
             counts[inf] += 1
             provisional += bool(day.in_progress)
-            rows.append({
-                "sno": sno,
-                "date": d.isoformat(),
-                "employeeCode": emp.employee_code,
-                "employeeName": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
-                "department": emp.department.name if emp.department_id else "Unassigned",
-                "designation": emp.designation.title if emp.designation_id else None,
-                "status": day.label,
-                "informedStatus": inf,
-            })
+            rows.append(
+                {
+                    "sno": sno,
+                    "date": d.isoformat(),
+                    "employeeCode": emp.employee_code,
+                    "employeeName": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
+                    "department": emp.department.name if emp.department_id else "Unassigned",
+                    "designation": emp.designation.title if emp.designation_id else None,
+                    "status": KIND_LABELS[kind] if kind != day.kind else day.label,
+                    "informedStatus": inf,
+                }
+            )
             if len(rows) > ctx.row_limit:
                 break
         if len(rows) > ctx.row_limit:
@@ -300,13 +324,19 @@ def _run_absentee(ctx) -> ReportResult:
         "The Report Log's Daily Report: staff who are absent for the date, with HR's Informed / Not Informed call. "
         "Informed status is set on the Report Log page; this report only reads it.",
         "Employees on approved leave are on leave, not absent; a Saturday-off Saturday and Sundays are weekly offs "
-        f"and are not listed ({weekly_off} weekly-off day(s) left out)." if weekly_off else
-        "Employees on approved leave are on leave, not absent; Sundays and Saturday-off Saturdays are weekly offs "
+        f"and are not listed ({weekly_off} weekly-off day(s) left out)."
+        if weekly_off
+        else "Employees on approved leave are on leave, not absent; Sundays and Saturday-off Saturdays are weekly offs "
         "and are not listed.",
     ]
     if len(days) == 1:
         d0 = days[0]
         notes.insert(0, f"Staff leave list for {d0.day:02d}.{d0.month:02d}.{d0.year}")
+    if late_leave:
+        notes.append(
+            f"{late_leave} employee-day(s) are stored as absent but have a leave approved since: they are treated as "
+            "on leave, not absent (the stored day is out of date - opening it in Attendance refreshes it)."
+        )
     if any(d == today for d in days) and provisional:
         notes.append(
             f"{provisional} absence(s) are for today and provisional - the engine marks everyone who has not punched "
@@ -328,25 +358,26 @@ def _run_absentee(ctx) -> ReportResult:
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="absentee-list-daily",
-    title="Daily Absentee / Leave List",
-    description="Absent staff for a date with HR's Informed / Not Informed status per employee - the Report Log "
-    "daily report, ready to print for the morning call round.",
-    category="attendance",
-    icon="UserX",
-    tags=("absent", "absentee", "leave list", "informed", "report log", "daily report"),
-    modules=("attendance",),
-    filters=(
-        date_range(default="today", label="Date", max_days=31),
-        *scope_filters(status="active", staff_default="staff", search=True),
-        select("show", "Show", SHOW_OPTIONS, default="absent", placeholder="Absent"),
-        select("informed", "Informed status", INFORMED_OPTIONS, placeholder="Any"),
-    ),
-    columns=ABSENTEE_COLUMNS,
-    run=_run_absentee,
-    landscape=False,
-    screen_limit=10_000,
-    pdf_max_rows=6_000,
-))
-
+register(
+    ReportSpec(
+        id="absentee-list-daily",
+        title="Daily Absentee / Leave List",
+        description="Absent staff for a date with HR's Informed / Not Informed status per employee - the Report Log "
+        "daily report, ready to print for the morning call round.",
+        category="attendance",
+        icon="UserX",
+        tags=("absent", "absentee", "leave list", "informed", "report log", "daily report"),
+        modules=("attendance",),
+        filters=(
+            date_range(default="today", label="Date", max_days=31),
+            *scope_filters(status="active", staff_default="staff", search=True),
+            select("show", "Show", SHOW_OPTIONS, default="absent", placeholder="Absent"),
+            select("informed", "Informed status", INFORMED_OPTIONS, placeholder="Any"),
+        ),
+        columns=ABSENTEE_COLUMNS,
+        run=_run_absentee,
+        landscape=False,
+        screen_limit=10_000,
+        pdf_max_rows=6_000,
+    )
+)

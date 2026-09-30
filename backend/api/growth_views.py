@@ -507,7 +507,14 @@ def add_increment(request: Request) -> Response:
         added_by=get_hr_display_name(request),
     )
     emp.salary_amount = new_salary
-    emp.save(update_fields=["salary_amount", "initial_salary", "updated_at"])
+    # The 50% + 50% salary split (salary_split.py) follows the new salary, keeping each portion's proportions.
+    from . import salary_split
+
+    parts, _split_error = salary_split.resolve(
+        new_salary, None, salary_split.breakup_of(emp), total_changed=True
+    )
+    salary_split.apply_to_employee(emp, parts)
+    emp.save(update_fields=["salary_amount", "initial_salary", "updated_at", *salary_split.COLUMN_NAMES])
     return Response(_increment_dict(inc), status=201)
 
 
@@ -968,12 +975,9 @@ def email_idcard(request: Request) -> Response:
     """Send an employee's ID card by email, with a real backend-rendered
     image attached (idcard_render.py) -previously this only attached
     anything if the frontend passed a client-rendered `image`, which it
-    never actually did, so ID card emails silently had no attachment."""
-    import smtplib
-    from email.mime.image import MIMEImage
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
-
+    never actually did, so ID card emails silently had no attachment.
+    Sent through the central email service, so it shows on the Gmail Control page."""
+    from . import email_service
     from .idcard_render import render_idcard_png
 
     data = request.data
@@ -990,32 +994,25 @@ def email_idcard(request: Request) -> Response:
     if not (s.smtp_username and s.smtp_password):
         return Response({"error": "SMTP is not configured in Settings"}, status=400)
 
-    msg = MIMEMultipart()
-    msg["Subject"] = f"Your Employee ID Card -{s.slip_company_name}"
-    msg["From"] = f"{s.smtp_from_name} <{s.smtp_from_email or s.smtp_username}>"
-    msg["To"] = to_email
-    msg.attach(MIMEText(
-        f"<p>Dear {emp.first_name},</p>"
-        f"<p>Please find your employee ID card attached.</p>"
-        f"<p>Regards,<br>{s.smtp_from_name}</p>",
-        "html",
-    ))
+    def idcard_attachment():
+        idcard = _idcard_dict(emp, s)
+        verify_url = f"{_public_base_url(request)}/verify/{emp.employee_code}"
+        return [(f"idcard-{emp.employee_code}.png", render_idcard_png(idcard, verify_url), "image/png")]
 
-    idcard = _idcard_dict(emp, s)
-    verify_url = f"{_public_base_url(request)}/verify/{emp.employee_code}"
-    png_bytes = render_idcard_png(idcard, verify_url)
-    part = MIMEImage(png_bytes, _subtype="png")
-    part.add_header("Content-Disposition", "attachment", filename=f"idcard-{emp.employee_code}.png")
-    msg.attach(part)
-
-    try:
-        with smtplib.SMTP(s.smtp_host, s.smtp_port, timeout=20) as server:
-            server.starttls()
-            server.login(s.smtp_username, s.smtp_password)
-            server.send_message(msg)
-    except Exception as e:  # noqa: BLE001 -report SMTP failure to the UI
-        return Response({"error": f"Email failed: {e}"}, status=502)
-
+    emp_name = f"{emp.first_name} {emp.last_name}".strip()
+    log = email_service.send_email(
+        "id_card",
+        to_email=to_email,
+        params={"employee_name": emp_name, "employee_code": emp.employee_code},
+        ps=s,
+        recipient_name=emp_name,
+        employee=emp,
+        attachments=idcard_attachment,
+        ref_id=emp.id,
+        sent_by_id=request.jwt_user.get("hrUserId"),
+    )
+    if log.status != email_service.EMAIL_SENT:
+        return Response({"error": log.error_message}, status=log.http_status)
     return Response({"ok": True, "sentTo": to_email})
 
 

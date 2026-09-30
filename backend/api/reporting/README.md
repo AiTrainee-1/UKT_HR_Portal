@@ -29,22 +29,25 @@ from ..types import INTEGER, ColumnSpec, ReportResult, ReportSpec
 
 
 def _run(ctx):
-    year, month = ctx.period                      # typed by the filter kind
+    year, month = ctx.period  # typed by the filter kind
     rows = []
-    for emp in ctx.employees():                   # employee filters + branch isolation already applied
+    for emp in ctx.employees():  # employee filters + branch isolation already applied
         rows.append({**emp_cells(emp), "days": 26})
     return ReportResult(rows=rows, notes=["Counts working days only."])
 
 
-register(ReportSpec(
-    id="example-days",                            # kebab-case, unique across ALL definitions
-    title="Example", description="One line shown on the catalog card.",
-    category="attendance",                        # see types.CATEGORIES
-    modules=("attendance",),                      # permission modules that own this data (any one of)
-    filters=(period(), *scope(status="active")),
-    columns=(*EMP_COLS, ColumnSpec("days", "Days", INTEGER, 0.8, total="sum")),
-    run=_run,
-))
+register(
+    ReportSpec(
+        id="example-days",  # kebab-case, unique across ALL definitions
+        title="Example",
+        description="One line shown on the catalog card.",
+        category="attendance",  # see types.CATEGORIES
+        modules=("attendance",),  # permission modules that own this data (any one of)
+        filters=(period(), *scope(status="active")),
+        columns=(*EMP_COLS, ColumnSpec("days", "Days", INTEGER, 0.8, total="sum")),
+        run=_run,
+    )
+)
 ```
 
 ## Rules every report must follow
@@ -69,6 +72,9 @@ register(ReportSpec(
    holidays) once, outside loops. Tests assert the query count does not grow with the row count.
 8. **Row limits.** Honour `ctx.row_limit` in the query for detail reports that can be huge (punch logs).
    Exports over the limit are refused with a "narrow the filters" message, never silently truncated.
+   `ctx.row_limit` is the ceiling **plus one** (so the runner can tell "exactly at the limit" from "over"):
+   build summary cards from the rows the runner will keep, not from `rows[:ctx.row_limit]`. Subtotal/total
+   lines (`_kind`) do not count against the limit; only data rows do.
 9. **Sensitive data.** Aadhaar numbers are masked to the last 4 digits; `password_hash`, `photo_url`,
    `id_proof` and addresses never appear. Bank/PF/ESI/UAN identifiers stay text (no float rounding).
 10. **State assumptions in `notes`** (rates used, exclusions, feature switched off) — they print under

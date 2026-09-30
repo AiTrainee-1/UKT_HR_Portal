@@ -12,6 +12,7 @@ Modules (each only imports from ones listed before it):
   system       Document/ID-card settings, stored files and backups.
   chat         Chat channels, messages and reactions.
   whatsapp     WhatsApp (WAClient) send log, message wording and media assets.
+  mail         Email (Gmail / SMTP) send log, feature switches and wording.
   gate         Outpass, gate scanners, visitors, reception and tea break.
 """
 
@@ -111,6 +112,11 @@ from .whatsapp import (
     WhatsAppMessageLog,
     WhatsAppMessageTemplate,
     WhatsAppSettings,
+)
+from .mail import (
+    EmailMessageLog,
+    EmailMessageTemplate,
+    EmailSettings,
 )
 from .gate import (
     GateQRCode,

@@ -41,6 +41,13 @@ export const WHATSAPP_STATUS_TONE: Record<string, Tone> = {
   failed: "danger",
 };
 
+/** Email log: sent (the mail server accepted it), failed (could not complete), blocked (held back by a switch or the machine). */
+export const EMAIL_STATUS_TONE: Record<string, Tone> = {
+  sent: "success",
+  failed: "danger",
+  blocked: "warning",
+};
+
 /** Tone classes for a status string in the given vocabulary; unknown -> neutral. */
 export function toneClass(map: Record<string, Tone>, status: string | null | undefined): string {
   return TONE[(status && map[status]) || "neutral"];
@@ -50,3 +57,4 @@ export const attendanceStatusClass = (status: string | null | undefined) => tone
 export const requestStatusClass = (status: string | null | undefined) => toneClass(REQUEST_STATUS_TONE, status);
 
 export const whatsappStatusClass = (status: string | null | undefined) => toneClass(WHATSAPP_STATUS_TONE, status);
+export const emailStatusClass = (status: string | null | undefined) => toneClass(EMAIL_STATUS_TONE, status);

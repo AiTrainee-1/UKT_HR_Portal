@@ -5,6 +5,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { Switch } from "@/components/ui/switch";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { Clock, IndianRupee, X, Info, Landmark } from "lucide-react";
 import { usePayrollSettings, useUpdatePayrollSettings } from "@/lib/api-client/custom-hooks";
@@ -23,9 +33,6 @@ export default function PayrollTab() {
     prodPfRate: 0,
     prodEsiRate: 0,
     prodEsiApplicableBelow: 21000,
-    // Compensation (CTC breakdown -does not affect payroll generation)
-    basicPercent: 50,
-    hraPercent: 20,
     // Statutory Bonus (Payment of Bonus Act)
     bonusPercent: 8.33,
     bonusWageCeiling: 7000,
@@ -43,6 +50,8 @@ export default function PayrollTab() {
 
   // OT / Compensation -loaded from DB
   const [compensationFeatureEnabled, setCompensationFeatureEnabled] = useState(true);
+  // Turning the background features OFF stops OT being paid in payroll, so it asks first.
+  const [confirmFeaturesOff, setConfirmFeaturesOff] = useState(false);
 
   const [otDetectionEnabled, setOtDetectionEnabled] = useState(false);
 
@@ -72,8 +81,6 @@ export default function PayrollTab() {
       prodPfRate: payrollSettingsData.prodPfRate,
       prodEsiRate: payrollSettingsData.prodEsiRate,
       prodEsiApplicableBelow: payrollSettingsData.prodEsiApplicableBelow,
-      basicPercent: payrollSettingsData.basicPercent ?? 50,
-      hraPercent: payrollSettingsData.hraPercent ?? 20,
       bonusPercent: payrollSettingsData.bonusPercent ?? 8.33,
       bonusWageCeiling: payrollSettingsData.bonusWageCeiling ?? 7000,
       bonusEligibilityCeiling: payrollSettingsData.bonusEligibilityCeiling ?? 21000,
@@ -125,21 +132,6 @@ export default function PayrollTab() {
     }
   };
 
-  const saveCompensationSettings = async () => {
-    try {
-      await updatePayrollSettings.mutateAsync({
-        basicPercent: payroll.basicPercent,
-        hraPercent: payroll.hraPercent,
-      } as never);
-      toast({
-        title: "Compensation settings saved",
-        description: "Only affects the Compensation page's CTC breakdown -actual payroll generation is unchanged.",
-      });
-    } catch {
-      toast({ title: "Failed to save compensation settings", variant: "destructive" });
-    }
-  };
-
   const saveBonusSettings = async () => {
     try {
       await updatePayrollSettings.mutateAsync({
@@ -164,6 +156,22 @@ export default function PayrollTab() {
       toast({ title: "OT / Compensation settings saved" });
     } catch {
       toast({ title: "Failed to save OT / Compensation settings", variant: "destructive" });
+    }
+  };
+
+  const applyCompensationFeatures = async (enabled: boolean) => {
+    setCompensationFeatureEnabled(enabled);
+    try {
+      await updatePayrollSettings.mutateAsync({ compensationFeatureEnabled: enabled } as never);
+      toast({
+        title: enabled ? "OT & Compensation features ON" : "OT & Compensation features OFF",
+        description: enabled
+          ? "OT detection, the Compensation-Leave exemption and OT pay in payroll are active again."
+          : "OT detection, the Compensation-Leave exemption and OT pay in payroll are switched off. The Compensation page stays available and existing records are kept.",
+      });
+    } catch {
+      setCompensationFeatureEnabled(!enabled);
+      toast({ title: "Failed to update setting", variant: "destructive" });
     }
   };
 
@@ -354,56 +362,37 @@ export default function PayrollTab() {
       )}
 
       {payrollSubTab === "compensation" && (
-        <>
-          {/* ── Compensation breakdown (Compensation page) ── */}
-          <Card className="border-0 shadow-sm mt-4">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-bold flex items-center gap-2">
-                <IndianRupee size={15} className="text-teal-500" /> Compensation Breakdown
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="p-3 rounded-lg bg-blue-50 border border-blue-100 text-xs text-blue-700">
-                Used only by the <strong>Compensation</strong> page's CTC breakdown (Basic / HRA / Allowances per
-                employee). Does <strong>not</strong> affect actual payroll generation or salary slips.
-              </div>
-              <div className="grid sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Basic (%)</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={100}
-                    step={0.01}
-                    value={payroll.basicPercent}
-                    onChange={(e) => setPayroll((p) => ({ ...p, basicPercent: Number(e.target.value) }))}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs">HRA (%)</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={100}
-                    step={0.01}
-                    value={payroll.hraPercent}
-                    onChange={(e) => setPayroll((p) => ({ ...p, hraPercent: Number(e.target.value) }))}
-                  />
-                </div>
-              </div>
-              <p className="text-[11px] text-muted-foreground">
-                Allowances is computed as the remainder (Gross − Basic − HRA) on the Compensation page.
+        <Card className="border-0 shadow-sm mt-4">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-bold flex items-center gap-2">
+              <IndianRupee size={15} className="text-teal-500" /> Compensation Breakdown
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div
+              className="p-3 rounded-lg bg-blue-50 border border-blue-100 text-xs text-blue-700 space-y-2"
+              data-testid="compensation-split-note"
+            >
+              <p>
+                Nothing to set here any more. The <strong>Compensation</strong> page's CTC Breakdown shows each
+                employee's own <strong>salary split</strong>, entered on Add / Edit Employee and Bulk Upload:
               </p>
-              <Button
-                size="sm"
-                onClick={() => saveCompensationSettings()}
-                disabled={updatePayrollSettings.isPending || psLoading}
-              >
-                {updatePayrollSettings.isPending ? "Saving…" : "Save Compensation Settings"}
-              </Button>
-            </CardContent>
-          </Card>
-        </>
+              <ul className="list-disc pl-5 space-y-0.5">
+                <li>
+                  <strong>First portion (50%)</strong> = Basic + DA + Retention Allowance
+                </li>
+                <li>
+                  <strong>Second portion (50%)</strong> = Other Allowance + Petrol Allowance + RHA + Special Allowance +
+                  CA
+                </li>
+              </ul>
+              <p>
+                Employer PF is the PF rate (Payroll Rules tab) applied to the first portion. The Basic % and HRA % boxes
+                that used to be on this tab are no longer used. None of this affects payroll generation or salary slips.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {payrollSubTab === "bonus" && (
@@ -476,51 +465,71 @@ export default function PayrollTab() {
 
       {payrollSubTab === "otCompensation" && (
         <>
-          {/* ── Compensation feature master switch ── */}
+          {/* ── OT / Compensation background features master switch ── */}
           <Card className="border-0 shadow-sm">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-bold flex items-center gap-2">
-                  <Landmark size={15} className="text-teal-600" /> Compensation Feature
+                  <Landmark size={15} className="text-teal-600" /> OT &amp; Compensation Features
                 </CardTitle>
                 <div className="flex items-center gap-2">
                   <span
                     className={`text-xs font-bold ${compensationFeatureEnabled ? "text-green-600" : "text-gray-400"}`}
                   >
-                    {compensationFeatureEnabled ? "ENABLED" : "DISABLED"}
+                    {compensationFeatureEnabled ? "ON" : "OFF"}
                   </span>
                   <Switch
                     checked={compensationFeatureEnabled}
-                    onCheckedChange={async (v) => {
-                      setCompensationFeatureEnabled(v);
-                      try {
-                        await updatePayrollSettings.mutateAsync({ compensationFeatureEnabled: v } as never);
-                        toast({
-                          title: v ? "Compensation feature enabled" : "Compensation feature disabled",
-                          description: v
-                            ? "The Compensation page is visible again, and OT detection / Compensation-Leave / OT pay in payroll are all active."
-                            : "The Compensation page is hidden from the sidebar, and OT detection, the Compensation-Leave exemption, and OT pay in payroll are all switched off -existing records are kept, not deleted.",
-                        });
-                      } catch {
-                        setCompensationFeatureEnabled(!v);
-                        toast({ title: "Failed to update setting", variant: "destructive" });
-                      }
-                    }}
+                    aria-label="OT and Compensation features"
+                    data-testid="toggle-compensation-features"
+                    onCheckedChange={(v) => (v ? applyCompensationFeatures(true) : setConfirmFeaturesOff(true))}
                   />
                 </div>
               </div>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-2">
               <p className="text-xs text-gray-500 leading-relaxed">
-                Master switch for the entire Compensation page -CTC Breakdown, OT Detection, Compensation Leave, and
-                History &amp; Reports. Turning this off hides the page from the sidebar and genuinely stops the
-                underlying calculations everywhere (OT is no longer detected, announced OT no longer adds pay to a
-                generated payslip, and Compensation-Leave announcements stop exempting Late/Permission detection) -not
-                just a cosmetic hide. Turn it back on any time; nothing is deleted while it's off. The settings below
-                only matter while this is on.
+                Master switch for what the Compensation feature <strong>does in the background</strong>: detecting OT,
+                adding announced OT pay to a generated payslip, and letting Compensation-Leave announcements exempt
+                Late/Permission detection. The <strong>Compensation page is mandatory</strong> and always stays in the
+                sidebar, whatever this says. With this off the page still opens and every record and report on it can be
+                read, but OT is no longer detected or paid and announcements are paused. Turn it back on any time;
+                nothing is deleted while it's off. The settings below only matter while this is on.
               </p>
             </CardContent>
           </Card>
+
+          <AlertDialog open={confirmFeaturesOff} onOpenChange={setConfirmFeaturesOff}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Turn off the OT &amp; Compensation features?</AlertDialogTitle>
+                <AlertDialogDescription asChild>
+                  <div className="space-y-2 text-sm text-muted-foreground">
+                    <p>While they are off:</p>
+                    <ul className="list-disc pl-5 space-y-1">
+                      <li>OT is no longer detected.</li>
+                      <li>Announced OT no longer adds pay to payslips generated from now on.</li>
+                      <li>Compensation Days stop exempting Late / Permission detection.</li>
+                      <li>Announcing OT, adding Compensation Days and redeeming credits are paused.</li>
+                    </ul>
+                    <p>
+                      The <strong>Compensation page stays in the sidebar</strong> and all existing records are kept, not
+                      deleted. You can turn this back on at any time.
+                    </p>
+                  </div>
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Keep them on</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => applyCompensationFeatures(false)}
+                  data-testid="confirm-compensation-features-off"
+                >
+                  Turn off
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
 
           <Card className="border-0 shadow-sm bg-slate-50/60">
             <CardHeader className="pb-2">

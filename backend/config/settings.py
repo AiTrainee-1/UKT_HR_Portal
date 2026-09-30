@@ -310,6 +310,13 @@ WHATSAPP_SEND_DELAY_SECONDS = float(os.environ.get("WHATSAPP_SEND_DELAY_SECONDS"
 # not message employees, and once did. Set WHATSAPP_ALLOW_SENDING=true or false to force it either way.
 _allow_sending = os.environ.get("WHATSAPP_ALLOW_SENDING", "").strip().lower()
 WHATSAPP_ALLOW_SENDING = (_allow_sending in ("1", "true", "yes")) if _allow_sending else None
+# The same rule for email (api/email_service.py): the Gmail account in Settings -> SMTP is often the live
+# one, so a development machine (DEBUG on, or `runserver`) doesn't send unless EMAIL_ALLOW_SENDING=true.
+# `manage.py test` never sends either; a test that needs the send path overrides this setting and mocks smtplib.
+_allow_email = os.environ.get("EMAIL_ALLOW_SENDING", "").strip().lower()
+EMAIL_ALLOW_SENDING = (_allow_email in ("1", "true", "yes")) if _allow_email else None
+if len(sys.argv) > 1 and sys.argv[1] == "test":
+    EMAIL_ALLOW_SENDING = False
 # Limits on the AUTOMATIC attendance alerts. A crowd who share a punch time (a hundred people on the same
 # shift) is reminded over the reminder window (15 minutes by default) instead of in one burst: each minute's
 # run sends at most PER_RUN, the rest are picked up by the following runs while still inside their window.

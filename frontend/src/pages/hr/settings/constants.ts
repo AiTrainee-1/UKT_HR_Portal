@@ -15,6 +15,7 @@
 // not a separate Settings concern.
 export const SETTINGS_TAB_MODULE: Record<string, string> = {
   company: "settings.company",
+  hr_contact: "settings.hr_contact",
   attendance: "settings.attendance",
   late_detection: "settings.late_detection",
   devices: "settings.devices",

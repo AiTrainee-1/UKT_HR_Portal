@@ -1,9 +1,4 @@
 import logging
-import smtplib
-import ssl
-from email.mime.application import MIMEApplication
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
 from django.http import HttpResponse
 from rest_framework.decorators import api_view
@@ -191,75 +186,41 @@ def salary_slip_detail(request: Request, pk: int) -> Response:
     return Response(slip_json(s, include_settings=True))
 
 
-def _send_slip_email(s: SalarySlip, ps: PayrollSettings, to_email: str | None = None) -> tuple[bool, str]:
+def _send_slip_email(
+    s: SalarySlip, ps: PayrollSettings, to_email: str | None = None, sent_by_id: int | None = None
+):
     """
-    Send one salary slip's email. Returns (ok, sentTo) on success or
-    (False, errorMessage) on failure -shared by the single-employee and
-    bulk email endpoints so they never diverge in behavior.
+    Send one salary slip's email through the central email service (email_service), which also logs it
+    for the Gmail Control page. Returns the EmailMessageLog row: `status == "sent"` on success, otherwise
+    `error_message` says why and `http_status` is what an endpoint should answer with. Shared by the
+    single-employee and bulk email endpoints so they never diverge in behavior.
     """
-    emp = s.employee
-    to_email = to_email or emp.email
-    if not to_email:
-        return False, "Employee has no email address on file"
-
-    company_name = ps.company_name or ps.slip_company_name or "UKTextiles"
-    emp_name = f"{emp.first_name} {emp.last_name}".strip()
-    subject = f"Salary Slip – {MONTHS[s.month]} {s.year} | {company_name}"
-
-    html_body = f"""
-    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1a3a2e">
-      <div style="background:#0E4B3A;padding:20px;text-align:center;border-radius:8px 8px 0 0">
-        <h1 style="color:white;margin:0;font-size:18px">{company_name.upper()}</h1>
-        <p style="color:rgba(255,255,255,0.8);margin:4px 0 0;font-size:12px">
-          Salary Slip -{MONTHS[s.month]} {s.year}
-        </p>
-      </div>
-      <div style="background:#ffffff;padding:30px;border:1px solid #d8e5df;border-top:none">
-        <p>Dear <strong>{emp_name}</strong>,</p>
-        <p>Please find attached your salary slip for <strong>{MONTHS[s.month]} {s.year}</strong>.</p>
-        <p>Net amount paid: <strong>₹{float(s.net_salary):,.2f}</strong></p>
-        <p style="color:#888;font-size:12px">
-          This is a system-generated email. For any discrepancies, please contact HR.
-        </p>
-      </div>
-    </div>
-    """
-
-    from .company_documents_views import build_salary_slip_pdf
-    pdf_bytes = build_salary_slip_pdf(s)
-
-    msg = MIMEMultipart("mixed")
-    msg["Subject"] = subject
-    msg["From"]    = f"{ps.smtp_from_name} <{ps.smtp_from_email or ps.smtp_username}>"
-    msg["To"]      = to_email
-    msg.attach(MIMEText(html_body, "html"))
-
-    attachment = MIMEApplication(pdf_bytes, _subtype="pdf")
-    attachment.add_header("Content-Disposition", "attachment", filename=f"salary_slip_{s.slip_number}.pdf")
-    msg.attach(attachment)
-
-    try:
-        context = ssl.create_default_context()
-        port = ps.smtp_port
-        if port == 465:
-            with smtplib.SMTP_SSL(ps.smtp_host, port, context=context) as server:
-                server.login(ps.smtp_username, ps.smtp_password)
-                server.sendmail(ps.smtp_from_email or ps.smtp_username, to_email, msg.as_string())
-        else:
-            with smtplib.SMTP(ps.smtp_host, port, timeout=15) as server:
-                server.ehlo()
-                server.starttls(context=context)
-                server.login(ps.smtp_username, ps.smtp_password)
-                server.sendmail(ps.smtp_from_email or ps.smtp_username, to_email, msg.as_string())
-    except smtplib.SMTPAuthenticationError:
-        return False, "SMTP authentication failed. Check username/password."
-    except Exception as exc:
-        return False, f"Failed to send email: {exc}"
-
     from django.utils import timezone
-    s.emailed_at = timezone.now()
-    s.save(update_fields=["emailed_at"])
-    return True, to_email
+
+    from . import email_service
+    from .company_documents_views import build_salary_slip_pdf
+
+    emp = s.employee
+    emp_name = f"{emp.first_name} {emp.last_name}".strip()
+    log = email_service.send_email(
+        "salary_slip",
+        to_email=to_email or emp.email,
+        params={
+            "employee_name": emp_name,
+            "month_year": f"{MONTHS[s.month]} {s.year}",
+            "net_salary": f"₹{float(s.net_salary):,.2f}",
+        },
+        ps=ps,
+        recipient_name=emp_name,
+        employee=emp,
+        attachments=lambda: [(f"salary_slip_{s.slip_number}.pdf", build_salary_slip_pdf(s), "application/pdf")],
+        ref_id=s.id,
+        sent_by_id=sent_by_id,
+    )
+    if log.status == email_service.EMAIL_SENT:
+        s.emailed_at = timezone.now()
+        s.save(update_fields=["emailed_at"])
+    return log
 
 
 @api_view(["POST"])
@@ -280,12 +241,11 @@ def email_salary_slip(request: Request, pk: int) -> Response:
         logger.warning("Salary slip %s email refused: SMTP settings not configured", pk)
         return Response({"error": "SMTP settings not configured. Please save SMTP settings first."}, status=400)
 
-    ok, result = _send_slip_email(s, ps, request.data.get("toEmail"))
-    if not ok:
-        logger.warning("Salary slip %s email failed: %s", pk, result)
-        status = 400 if result.startswith("Employee has no email") else 502
-        return Response({"error": result}, status=status)
-    return Response({"ok": True, "sentTo": result})
+    log = _send_slip_email(s, ps, request.data.get("toEmail"), sent_by_id=request.jwt_user.get("hrUserId"))
+    if log.status != "sent":
+        logger.warning("Salary slip %s email failed: %s", pk, log.error_message)
+        return Response({"error": log.error_message}, status=log.http_status)
+    return Response({"ok": True, "sentTo": log.recipient_email})
 
 
 def _send_slip_whatsapp(request: Request, s: SalarySlip, sent_by_id: int | None = None):
@@ -427,15 +387,19 @@ def salary_slip_bulk_email(request: Request) -> Response:
         return Response({"error": "SMTP settings not configured. Please save SMTP settings first."}, status=400)
 
     progress.start(len(slips), "email")
+    sent_by_id = request.jwt_user.get("hrUserId")
     sent, failed, failures = 0, 0, []
     for s in slips:
         emp_name = f"{s.employee.first_name} {s.employee.last_name}".strip()
-        ok, result = _send_slip_email(s, ps)
+        log = _send_slip_email(s, ps, sent_by_id=sent_by_id)
+        ok = log.status == "sent"
         if ok:
             sent += 1
         else:
             failed += 1
-            failures.append({"employeeName": emp_name, "employeeCode": s.employee.employee_code, "error": result})
+            failures.append(
+                {"employeeName": emp_name, "employeeCode": s.employee.employee_code, "error": log.error_message}
+            )
         progress.step(emp_name, ok)
     progress.finish()
 

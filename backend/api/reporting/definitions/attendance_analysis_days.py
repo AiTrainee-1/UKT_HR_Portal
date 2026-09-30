@@ -18,7 +18,7 @@ from django.db.models import Count, Q
 from api.models import AttendanceLog, EmployeePermission, OvertimeRecord
 from api.shift_engine import _t2s
 
-from ..common import EMP_COLS, EMP_COLS_SHORT, emp_cells, with_subtotals
+from ..common import EMP_COLS, EMP_COLS_SHORT, emp_cells
 from ..filters import boolean, date_range, period, select
 from ..formatting import display_date, month_bounds
 from ..registry import register
@@ -39,6 +39,7 @@ from .attendance_analysis_common import (
     ABSENT,
     HALF,
     LEAVE,
+    MASKED,
     OFF,
     PENDING,
     PRESENT,
@@ -52,10 +53,12 @@ from .attendance_analysis_common import (
     days_between,
     emp_sort_key,
     hm,
+    payroll_settings,
     people,
     scheduled_seconds,
     scope_filters,
     span_net_seconds,
+    subtotals_within_limit,
 )
 
 MODULES = ("attendance",)
@@ -86,20 +89,27 @@ def _scheduled(emp, d: date, roster: Roster, month_sets: dict, production_sunday
 #  absenteeism
 # ═════════════════════════════════════════════════════════════════════════════
 
-MIN_STREAK = (("2", "2 or more days"), ("3", "3 or more days"), ("5", "5 or more days"), ("7", "7 or more days"), ("10", "10 or more days"))
+MIN_STREAK = (
+    ("2", "2 or more days"),
+    ("3", "3 or more days"),
+    ("5", "5 or more days"),
+    ("7", "7 or more days"),
+    ("10", "10 or more days"),
+)
 
 _ABSENT_COLS = (
     *EMP_COLS,
     ColumnSpec("workingDays", "Working days", INTEGER, 0.9, total="sum"),
     ColumnSpec("absentDays", "Absent days", INTEGER, 0.9, total="sum"),
-    ColumnSpec("informedDays", "Informed", INTEGER, 0.8, total="sum"),
-    ColumnSpec("unauthorisedDays", "Unauthorised", INTEGER, 1.0, total="sum"),
+    ColumnSpec("leaveDays", "On leave", INTEGER, 0.8, total="sum"),
+    ColumnSpec("informedDays", "Informed", INTEGER, 1.0, total="sum"),
+    ColumnSpec("unauthorisedDays", "Unauthorised", INTEGER, 1.3, total="sum"),
     ColumnSpec("absentPct", "Absent %", PERCENT, 0.8),
     ColumnSpec("maxConsecutive", "Longest streak", INTEGER, 0.9),
-    ColumnSpec("streakFrom", "Streak from", DATE, 1.0),
-    ColumnSpec("streakTo", "Streak to", DATE, 1.0),
+    ColumnSpec("streakFrom", "Streak from", DATE, 1.4),
+    ColumnSpec("streakTo", "Streak to", DATE, 1.4),
     ColumnSpec("currentStreak", "Current streak", INTEGER, 0.9),
-    ColumnSpec("lastPresent", "Last present", DATE, 1.0),
+    ColumnSpec("lastPresent", "Last present", DATE, 1.4),
     ColumnSpec("risk", "Risk", BADGE, 0.8),
 )
 
@@ -134,7 +144,7 @@ def _absenteeism_run(ctx):
         if not recs:
             continue
         month_sets: dict = {}
-        working = absent = informed = 0
+        working = absent = informed = leave = 0
         run = 0
         run_start = None
         best = (0, None, None)
@@ -151,6 +161,7 @@ def _absenteeism_run(ctx):
             elif cls == LEAVE:
                 run, gap, run_start = 0, False, None
                 working += 1 if sched else 0
+                leave += 1 if sched else 0
             elif cls == ABSENT and sched:
                 if gap:
                     run, gap, run_start = 0, False, None
@@ -174,27 +185,38 @@ def _absenteeism_run(ctx):
         if threshold and best[0] < threshold:
             continue
         pct = _pct(absent, working)
-        rows.append((emp, {
-            **emp_cells(emp),
-            "workingDays": working,
-            "absentDays": absent,
-            "informedDays": informed,
-            "unauthorisedDays": absent - informed,
-            "absentPct": pct,
-            "maxConsecutive": best[0],
-            "streakFrom": best[1].isoformat() if best[1] else None,
-            "streakTo": best[2].isoformat() if best[2] else None,
-            "currentStreak": run,
-            "lastPresent": last_present.isoformat() if last_present else None,
-            "risk": _risk(best[0], pct),
-        }))
+        rows.append(
+            (
+                emp,
+                {
+                    **emp_cells(emp),
+                    "workingDays": working,
+                    "absentDays": absent,
+                    "leaveDays": leave,
+                    "informedDays": informed,
+                    "unauthorisedDays": absent - informed,
+                    "absentPct": pct,
+                    "maxConsecutive": best[0],
+                    "streakFrom": best[1].isoformat() if best[1] else None,
+                    "streakTo": best[2].isoformat() if best[2] else None,
+                    "currentStreak": run,
+                    "lastPresent": last_present.isoformat() if last_present else None,
+                    "risk": _risk(best[0], pct),
+                },
+            )
+        )
     rows.sort(key=lambda t: emp_sort_key(t[0]))
     data = [t[1] for t in rows]
 
     tot_work = sum(r["workingDays"] for r in data)
     tot_abs = sum(r["absentDays"] for r in data)
     tot_inf = sum(r["informedDays"] for r in data)
-    out_rows = with_subtotals(data, lambda r: r["department"], ["workingDays", "absentDays", "informedDays", "unauthorisedDays"])
+    out_rows, sub_note = subtotals_within_limit(
+        ctx,
+        data,
+        lambda r: r["department"],
+        ["workingDays", "absentDays", "leaveDays", "informedDays", "unauthorisedDays"],
+    )
     for r in out_rows:
         if r.get("_kind") == "subtotal":
             r["absentPct"] = _pct(r["absentDays"], r["workingDays"])
@@ -204,28 +226,43 @@ def _absenteeism_run(ctx):
         {"label": "Absent days", "value": tot_abs, "format": "integer"},
         {"label": "Absenteeism %", "value": _pct(tot_abs, tot_work), "format": "percent"},
         {"label": "Unauthorised days", "value": tot_abs - tot_inf, "format": "integer"},
-        {"label": f"Streak of {flag}+ days", "value": sum(1 for r in data if r["maxConsecutive"] >= flag), "format": "integer"},
+        {
+            "label": f"Streak of {flag}+ days",
+            "value": sum(1 for r in data if r["maxConsecutive"] >= flag),
+            "format": "integer",
+        },
     ]
     totals = {
-        "workingDays": tot_work, "absentDays": tot_abs, "informedDays": tot_inf, "unauthorisedDays": tot_abs - tot_inf,
+        "workingDays": tot_work,
+        "absentDays": tot_abs,
+        "leaveDays": sum(r["leaveDays"] for r in data),
+        "informedDays": tot_inf,
+        "unauthorisedDays": tot_abs - tot_inf,
         "absentPct": _pct(tot_abs, tot_work),
     }
     notes = [
         "Absent = an absent day record on a scheduled working day. Not counted: Sundays, Saturday-off Saturdays and Holiday "
-        "rows, approved leave (shown separately), days before the joining date or after an approved last working day, days "
+        "rows, approved leave (shown in the On leave column and counted as a working day, not as absent), days before the joining date or after an approved last working day, days "
         "with no stored record, and today (still running).",
         "Unauthorised = absent days not marked Informed on the Report Log daily list. Streaks are measured inside the selected "
         "dates; "
         + (
             "weekly-offs and holidays between two absences do not break a streak (sandwich rule)."
-            if bridge else "a weekly-off or holiday between two absences breaks the streak."
+            if bridge
+            else "a weekly-off or holiday between two absences breaks the streak."
         ),
         "Risk: High = 5+ consecutive days or 20%+ absent; Medium = 3+ consecutive days or 10%+ absent; otherwise Low.",
     ]
     if prod_sunday_off:
-        notes.append("Production employees: Sundays are treated as weekly off (the engine itself counts a Sunday without punches as absent).")
+        notes.append(
+            "Production employees: Sundays are treated as weekly off (the engine itself counts a Sunday without punches as absent)."
+        )
     else:
-        notes.append("Production employees: a Sunday without punches counts as absent (production payroll treats Sunday as a working day).")
+        notes.append(
+            "Production employees: a Sunday without punches counts as absent (production payroll treats Sunday as a working day)."
+        )
+    if sub_note:
+        notes.append(sub_note)
     notes.extend(coverage_notes(ctx, people_by_id, d_from, d_to))
     return ReportResult(rows=out_rows, summary=summary, notes=notes, totals=totals)
 
@@ -236,7 +273,7 @@ register(
         title="Absentee Analysis",
         description="Absent days, unauthorised absence, longest and current consecutive streak and a risk band per employee.",
         category="attendance",
-        icon="UserX",
+        icon="UserMinus",
         tags=("absent", "absenteeism", "consecutive", "unauthorised", "streak", "sandwich"),
         modules=MODULES,
         filters=(
@@ -274,7 +311,7 @@ _HOURS_SUMMARY_COLS = (
 
 _HOURS_DAILY_COLS = (
     *EMP_COLS_SHORT,
-    ColumnSpec("date", "Date", DATE, 1.1),
+    ColumnSpec("date", "Date", DATE, 1.4),
     ColumnSpec("day", "Day", TEXT, 0.6),
     ColumnSpec("shift", "Shift", TEXT, 1.3),
     ColumnSpec("scheduledHours", "Scheduled hrs", HOURS, 1.0, total="sum"),
@@ -342,7 +379,7 @@ def _hours_run(ctx):
     ).values_list("employee_id", "date", "punch_time"):
         logs[(eid, d)].append(t)
 
-    daily = []
+    every_day = []
     unknown: dict[int, int] = defaultdict(int)
     recs = day_records(ctx, d_from, d_to, status__in=("present", "half_shift"), employee__employment_type="staff")
     for rec in recs.order_by("employee_id", "date"):
@@ -350,7 +387,9 @@ def _hours_run(ctx):
         if emp is None:
             continue
         shift = roster.shift_on(emp.id, rec.date)
-        secs = _day_punch_seconds(rec, logs.get((emp.id, rec.date), []), logs.get((emp.id, rec.date + timedelta(days=1)), []))
+        secs = _day_punch_seconds(
+            rec, logs.get((emp.id, rec.date), []), logs.get((emp.id, rec.date + timedelta(days=1)), [])
+        )
         worked, basis = _worked_seconds(secs, shift, deduct)
         sched = scheduled_seconds(shift)
         if sched is not None:
@@ -360,16 +399,34 @@ def _hours_run(ctx):
         short = excess = None
         if worked is not None and sched is not None:
             short, excess = max(0.0, sched - worked), max(0.0, worked - sched)
-        if min_short and (short is None or short < min_short * 60):
-            continue
-        daily.append((emp, rec, shift, sched, worked, short, excess, basis))
-    daily.sort(key=lambda t: (emp_sort_key(t[0]), t[1].date))
+        every_day.append((emp, rec, shift, sched, worked, short, excess, basis))
+    every_day.sort(key=lambda t: (emp_sort_key(t[0]), t[1].date))
+
+    # "Shortfall of at least" chooses WHICH rows are listed, never what an employee's figures are made of: the daily
+    # view lists only the qualifying days, the summary view lists only the employees with at least one qualifying day
+    # but keeps all of their days (days measured, averages and totals must not depend on a display filter).
+    if min_short:
+
+        def qualifies(t) -> bool:
+            return t[5] is not None and t[5] >= min_short * 60
+
+        if view == "daily":
+            daily = [t for t in every_day if qualifies(t)]
+        else:
+            flagged = {t[0].id for t in every_day if qualifies(t)}
+            daily = [t for t in every_day if t[0].id in flagged]
+    else:
+        daily = every_day
 
     tot = lambda idx: sum(t[idx] for t in daily if t[idx] is not None)  # noqa: E731
     measured = [t for t in daily if t[4] is not None]
     summary = [
         {"label": "Employees", "value": len({t[0].id for t in daily}), "format": "integer"},
-        {"label": "Scheduled hours", "value": _hours(sum(t[3] for t in measured if t[3] is not None)), "format": "hours"},
+        {
+            "label": "Scheduled hours",
+            "value": _hours(sum(t[3] for t in measured if t[3] is not None)),
+            "format": "hours",
+        },
         {"label": "Worked hours", "value": _hours(sum(t[4] for t in measured)), "format": "hours"},
         {"label": "Shortfall hours", "value": _hours(tot(5)), "format": "hours"},
         {"label": "Excess hours", "value": _hours(tot(6)), "format": "hours"},
@@ -390,10 +447,13 @@ def _hours_run(ctx):
             for emp, rec, shift, sched, worked, short, excess, basis in daily[: ctx.row_limit]
         ]
         columns = list(_HOURS_DAILY_COLS)
+        sub_note = None
     else:
         per: dict[int, dict] = {}
         for emp, _rec, _shift, sched, worked, short, excess, _basis in daily:
-            a = per.setdefault(emp.id, {"emp": emp, "days": 0, "sched": 0.0, "worked": 0.0, "short": 0.0, "excess": 0.0})
+            a = per.setdefault(
+                emp.id, {"emp": emp, "days": 0, "sched": 0.0, "worked": 0.0, "short": 0.0, "excess": 0.0}
+            )
             if worked is None:
                 continue
             a["days"] += 1
@@ -414,8 +474,10 @@ def _hours_run(ctx):
             }
             for eid, a in sorted(per.items(), key=lambda kv: emp_sort_key(kv[1]["emp"]))
         ]
-        rows = with_subtotals(
-            rows, lambda r: r["department"],
+        rows, sub_note = subtotals_within_limit(
+            ctx,
+            rows,
+            lambda r: r["department"],
             ["daysWorked", "daysUnknown", "scheduledHours", "workedHours", "shortfallHours", "excessHours"],
         )
         columns = list(_HOURS_SUMMARY_COLS)
@@ -431,8 +493,19 @@ def _hours_run(ctx):
         "are summed day by day, so an excess on one day does not cancel a shortfall on another.",
         "Cross-midnight exits use the stored verdict (the engine moves a late-night punch onto the day it belongs to).",
     ]
+    if min_short:
+        notes.append(
+            f"Shortfall of at least {min_short} minutes: "
+            + (
+                "only the days with such a shortfall are listed."
+                if view == "daily"
+                else "only employees with at least one such day are listed; their figures still cover every day of the period."
+            )
+        )
     if any(t[2] is None for t in daily):
         notes.append("Days without a shift assignment have no scheduled hours, so no shortfall or excess.")
+    if sub_note:
+        notes.append(sub_note)
     notes.extend(coverage_notes(ctx, people_by_id, d_from, d_to))
     return ReportResult(rows=rows, summary=summary, notes=notes, columns=columns)
 
@@ -473,9 +546,9 @@ _OT_LABEL = {
 
 _OFFDAY_COLS = (
     *EMP_COLS_SHORT,
-    ColumnSpec("date", "Date", DATE, 1.1),
+    ColumnSpec("date", "Date", DATE, 1.4),
     ColumnSpec("day", "Day", TEXT, 0.6),
-    ColumnSpec("dayType", "Day type", BADGE, 1.0),
+    ColumnSpec("dayType", "Day type", BADGE, 1.2),
     ColumnSpec("holidayName", "Holiday", TEXT, 1.5),
     ColumnSpec("firstIn", "First in", TIME, 0.8),
     ColumnSpec("lastOut", "Last out", TIME, 0.8),
@@ -506,6 +579,7 @@ def _offday_run(ctx):
     }
 
     built = []
+    undecided = 0  # staff off-day workings HR has not announced as Overtime (pay) or relaxation: payroll pays nothing
     for rec in qs:
         emp = people_by_id.get(rec.employee_id)
         if emp is None:
@@ -529,38 +603,63 @@ def _offday_run(ctx):
             label = _OT_LABEL.get(decision) or _OT_LABEL.get((decision[0], None)) or decision[0].title()
         else:
             label = "None announced"
-        built.append((emp_sort_key(emp), d, emp, {
-            **emp_cells(emp),
-            "date": d.isoformat(),
-            "day": day_abbr(d),
-            "dayType": dict(DAY_TYPES)[dtype],
-            "holidayName": roster.holiday_name(d) if dtype == "holiday" else None,
-            "firstIn": hm(rec.first_punch),
-            "lastOut": hm(rec.last_punch),
-            "workedHours": _hours(net),
-            "status": STATUS_LABELS.get(rec.status, rec.status),
-            "compDay": "Comp day" if rec.is_compensation_day else None,
-            "compensation": label,
-            "source": "HR override" if rec.source == "manual" else rec.primary_source,
-        }))
+        # A "detected" record is only the system's suggestion (payroll pays announced pay-type overtime alone), so a
+        # detected day is as unpaid as one with no record at all.
+        if emp.employment_type == "staff" and (decision is None or decision[0] == "detected"):
+            undecided += 1
+        built.append(
+            (
+                emp_sort_key(emp),
+                d,
+                emp,
+                {
+                    **emp_cells(emp),
+                    "date": d.isoformat(),
+                    "day": day_abbr(d),
+                    "dayType": dict(DAY_TYPES)[dtype],
+                    "holidayName": roster.holiday_name(d) if dtype == "holiday" else None,
+                    "firstIn": hm(rec.first_punch),
+                    "lastOut": hm(rec.last_punch),
+                    "workedHours": _hours(net),
+                    "status": STATUS_LABELS.get(rec.status, rec.status),
+                    "compDay": "Comp day" if rec.is_compensation_day else None,
+                    "compensation": label,
+                    "source": "HR override" if rec.source == "manual" else rec.primary_source,
+                },
+            )
+        )
     built.sort(key=lambda t: (t[0], t[1]))
     rows = [t[3] for t in built][: ctx.row_limit]
-    unpaid = sum(1 for t in built if t[2].employment_type == "staff" and t[3]["compensation"] == "None announced")
     summary = [
         {"label": "Off-day workings", "value": len(rows), "format": "integer"},
         {"label": "Employees", "value": len({t[2].id for t in built}), "format": "integer"},
         {"label": "Hours worked", "value": round(sum(r["workedHours"] or 0 for r in rows), 2), "format": "hours"},
-        {"label": "Staff days with no OT / comp decision", "value": unpaid, "format": "integer"},
+        {"label": "Staff days with no OT / comp decision", "value": undecided, "format": "integer"},
     ]
-    rows = with_subtotals(rows, lambda r: r["department"], ["workedHours"])
+    rows, sub_note = subtotals_within_limit(ctx, rows, lambda r: r["department"], ["workedHours"])
     notes = [
         "Days a person worked on a Sunday or a Saturday-off Saturday (staff) or on a company Holiday (staff and production), from "
         "the stored day records. Production employees work Sundays as a normal day, so only their Holiday work is listed.",
         "Staff payroll pays only working days: work on a weekly-off or holiday is unpaid unless HR announces Overtime (pay) or a "
-        "compensation day (relaxation). The OT / comp column shows that decision when one exists.",
+        "compensation day (relaxation). The OT / comp column shows that decision when one exists; a merely Detected overtime "
+        "record is not a decision and stays unpaid until HR announces it, so it is counted with the days that have no decision.",
         "Hours = first to last punch less the shift's lunch break when the span covers the first-half end. Holiday rows apply company-wide "
         "(the engine ignores their branch / department scope).",
     ]
+    settings = payroll_settings()
+    if not settings.compensation_feature_enabled:
+        notes.append(
+            "The Compensation feature is switched off in Settings > Payroll, so overtime is not detected or paid and no "
+            "compensation credit is issued: every staff day listed here is unpaid, whatever decision the column shows "
+            "(decisions recorded while the feature was on are kept but have no effect)."
+        )
+    elif not settings.ot_detection_enabled:
+        notes.append(
+            "Overtime detection is switched off in Settings > Payroll: no new Detected overtime is recorded, so a worked "
+            "weekly-off or holiday only turns into pay when HR announces it by hand."
+        )
+    if sub_note:
+        notes.append(sub_note)
     notes.extend(coverage_notes(ctx, people_by_id, d_from, d_to))
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
@@ -589,23 +688,38 @@ register(
 #  department-strength
 # ═════════════════════════════════════════════════════════════════════════════
 
-_GROUP_BY = (("date", "Date (departments listed under each day)"), ("department", "Department (days listed under each department)"))
+_GROUP_BY = (
+    ("date", "Date (departments listed under each day)"),
+    ("department", "Department (days listed under each department)"),
+)
 
 _STRENGTH_COLS = (
     ColumnSpec("department", "Department", TEXT, 2.0),
-    ColumnSpec("date", "Date", DATE, 1.1),
+    ColumnSpec("date", "Date", DATE, 1.4),
     ColumnSpec("onRoll", "On roll", INTEGER, 0.8, total="sum"),
     ColumnSpec("present", "Present", INTEGER, 0.8, total="sum"),
     ColumnSpec("halfDay", "Half day", INTEGER, 0.8, total="sum"),
     ColumnSpec("absent", "Absent", INTEGER, 0.8, total="sum"),
     ColumnSpec("onLeave", "On leave", INTEGER, 0.8, total="sum"),
+    ColumnSpec("onDuty", "On duty (in present)", INTEGER, 1.1, total="sum"),
     ColumnSpec("weeklyOffHoliday", "Weekly off / holiday", INTEGER, 1.1, total="sum"),
     ColumnSpec("notComputed", "No record yet", INTEGER, 0.9, total="sum"),
     ColumnSpec("late", "Late", INTEGER, 0.7, total="sum"),
     ColumnSpec("strengthPct", "Strength %", PERCENT, 0.9),
     ColumnSpec("shiftCredit", "Shift credit", NUMBER, 0.9, total="sum"),
 )
-_STRENGTH_SUM = ["onRoll", "present", "halfDay", "absent", "onLeave", "weeklyOffHoliday", "notComputed", "late", "shiftCredit"]
+_STRENGTH_SUM = [
+    "onRoll",
+    "present",
+    "halfDay",
+    "absent",
+    "onLeave",
+    "onDuty",
+    "weeklyOffHoliday",
+    "notComputed",
+    "late",
+    "shiftCredit",
+]
 
 
 def _strength_pct(row: dict) -> float | None:
@@ -623,6 +737,15 @@ def _strength_run(ctx):
     roster = Roster(ctx, d_from, d_to)
     people_by_id = people(ctx)
     recs = {(r.employee_id, r.date): r for r in day_records(ctx, d_from, d_to) if r.employee_id in people_by_id}
+    # Days on which an approved On-Duty punch exists (people working off-site): one query, no per-row lookups.
+    on_duty = set(
+        AttendanceLog.objects.filter(
+            ctx.emp_q("employee__"), date__gte=d_from, date__lte=d_to, source="on_duty:approved"
+        )
+        .order_by()
+        .values_list("employee_id", "date")
+        .distinct()
+    )
 
     agg: dict[tuple, dict] = {}
     dept_names: dict = {}
@@ -653,13 +776,17 @@ def _strength_run(ctx):
                 a["onLeave"] += 1
             elif cls == OFF:
                 a["weeklyOffHoliday"] += 1
+            if cls in (PRESENT, HALF) and (emp.id, d) in on_duty:
+                a["onDuty"] += 1
             a["late"] += 1 if rec.is_late else 0
             a["shiftCredit"] += float(rec.shifts_earned or 0)
 
     def dept_key(dept_id):
         return (1, "", 0) if dept_id is None else (0, dept_names[dept_id].lower(), dept_id)
 
-    keys = sorted(agg, key=(lambda k: (k[0], dept_key(k[1]))) if group_by == "date" else (lambda k: (dept_key(k[1]), k[0])))
+    keys = sorted(
+        agg, key=(lambda k: (k[0], dept_key(k[1]))) if group_by == "date" else (lambda k: (dept_key(k[1]), k[0]))
+    )
     data = []
     for d, dept_id in keys:
         a = agg[(d, dept_id)]
@@ -668,11 +795,24 @@ def _strength_run(ctx):
         data.append(row)
 
     if group_by == "date":
-        rows = with_subtotals(data, lambda r: r["date"], _STRENGTH_SUM, label_key="department",
-                              label=lambda g: f"{display_date(g)} total")
+        rows, sub_note = subtotals_within_limit(
+            ctx,
+            data,
+            lambda r: r["date"],
+            _STRENGTH_SUM,
+            what="Day",
+            label_key="department",
+            label=lambda g: f"{display_date(g)} total",
+        )
     else:
-        rows = with_subtotals(data, lambda r: r["department"], _STRENGTH_SUM, label_key="department",
-                              label=lambda g: f"{g} total")
+        rows, sub_note = subtotals_within_limit(
+            ctx,
+            data,
+            lambda r: r["department"],
+            _STRENGTH_SUM,
+            label_key="department",
+            label=lambda g: f"{g} total",
+        )
     for r in rows:
         if r.get("_kind") == "subtotal":
             r["strengthPct"] = _strength_pct(r)
@@ -694,11 +834,17 @@ def _strength_run(ctx):
         "the engine records them as absent. Today's absences are provisional while the day is running.",
         "No record yet = employees on roll whose day nobody has opened in Attendance; they are neither present nor absent until computed. "
         "Future dates are not shown.",
+        "On duty counts present / half-day employees who have an approved On-Duty punch that day (working away from the "
+        "branch); they are already included in Present / Half day, so it is not added to the strength.",
+        "Production employees work Sundays as a normal day, so a Sunday without punches counts as absent for them; staff "
+        "Sundays are weekly off.",
         "Shift credit is the stored shift value (staff 0 / 0.5 / 1; production up to 1.5), so staff and production credits are not "
         "directly comparable.",
     ]
     if ctx.date_to > ctx.today:
         notes.append("Dates after today are omitted.")
+    if sub_note:
+        notes.append(sub_note)
     return ReportResult(rows=rows, summary=summary, notes=notes, totals={k: v for k, v in grand.items()})
 
 
@@ -732,12 +878,12 @@ _PERFECT_COLS = (
     *EMP_COLS_SHORT,
     ColumnSpec("workingDays", "Working days", INTEGER, 0.9),
     ColumnSpec("presentDays", "Full days present", INTEGER, 1.0),
-    ColumnSpec("absentDays", "Absent", INTEGER, 0.7),
+    ColumnSpec("absentDays", "Absent", INTEGER, 0.9),
     ColumnSpec("halfDays", "Half days", INTEGER, 0.8),
     ColumnSpec("leaveDays", "Leave", INTEGER, 0.7),
     ColumnSpec("lateCount", "Late / early-out days", INTEGER, 1.1),
-    ColumnSpec("permissions", "Permissions", INTEGER, 0.9),
-    ColumnSpec("eligible", "Eligible", BADGE, 0.9),
+    ColumnSpec("permissions", "Permissions", INTEGER, 1.1),
+    ColumnSpec("eligible", "Eligible", BADGE, 1.2),
     ColumnSpec("reasonNot", "Why not", TEXT, 3.0),
 )
 
@@ -755,24 +901,42 @@ def _perfect_run(ctx):
     for rec in day_records(ctx, m_from, m_to):
         if rec.employee_id in staff:
             by_emp[rec.employee_id][rec.date] = rec
+    # Only people who were on the rolls during the month are judged: not someone who joins after it (their
+    # month has no working day at all) nor someone who left before it, whatever the status filter says.
+    staff = {
+        i: e
+        for i, e in staff.items()
+        if roster.employed_between(
+            e, m_from, m_to, worked=any(r.status in ("present", "half_shift") for r in by_emp.get(i, {}).values())
+        )
+    }
     perms = dict(
         EmployeePermission.objects.filter(ctx.emp_q("employee__"), status="approved", date__gte=m_from, date__lte=m_to)
-        .values("employee_id").annotate(n=Count("id")).values_list("employee_id", "n")
+        .values("employee_id")
+        .annotate(n=Count("id"))
+        .values_list("employee_id", "n")
     )
 
     out = []
     for emp_id, emp in staff.items():
         recs = by_emp.get(emp_id, {})
         working = sorted(roster.working_days(emp_id, year, month))
-        n_pres = n_abs = n_half = n_leave = n_late = n_missing = 0
+        n_pres = n_abs = n_half = n_leave = n_late = n_missing = n_after_exit = 0
+        left = roster.exits.get(emp_id)
         for d in working:
             if d >= ctx.today:
                 continue  # today and later are not judged yet
             rec = recs.get(d)
             if rec is None:
-                n_missing += 1
+                if roster.outside_employment(emp, d):
+                    n_after_exit += 1 if (left and d > left) else 0  # before joining: the "joined" reason covers it
+                else:
+                    n_missing += 1
                 continue
             cls = classify_day(rec, emp, roster, ctx.today)
+            if cls == MASKED:
+                n_after_exit += 1 if (left and d > left) else 0
+                continue
             if cls == PRESENT:
                 n_pres += 1
             elif cls == HALF:
@@ -788,6 +952,8 @@ def _perfect_run(ctx):
         reasons = []
         if joined and joined > m_from:
             reasons.append(f"joined {display_date(joined)} (mid-month)")
+        if n_after_exit:
+            reasons.append(f"left {display_date(left)} (mid-month)")
         if n_abs:
             reasons.append(f"{n_abs} absent")
         if n_half:
@@ -804,18 +970,23 @@ def _perfect_run(ctx):
             eligible = "Not eligible"
         else:
             eligible = "Eligible" if complete else "On track"
-        out.append((emp, {
-            **emp_cells(emp),
-            "workingDays": len(working),
-            "presentDays": n_pres,
-            "absentDays": n_abs,
-            "halfDays": n_half,
-            "leaveDays": n_leave,
-            "lateCount": n_late,
-            "permissions": n_perm,
-            "eligible": eligible,
-            "reasonNot": "; ".join(reasons) or None,
-        }))
+        out.append(
+            (
+                emp,
+                {
+                    **emp_cells(emp),
+                    "workingDays": len(working),
+                    "presentDays": n_pres,
+                    "absentDays": n_abs,
+                    "halfDays": n_half,
+                    "leaveDays": n_leave,
+                    "lateCount": n_late,
+                    "permissions": n_perm,
+                    "eligible": eligible,
+                    "reasonNot": "; ".join(reasons) or None,
+                },
+            )
+        )
     out.sort(key=lambda t: emp_sort_key(t[0]))
     rows = [t[1] for t in out]
     total = len(rows)
@@ -831,10 +1002,13 @@ def _perfect_run(ctx):
         f"no more than {allow_late} late / early-out day(s)"
         + ("" if allow_perm else ", and no approved permission")
         + ". Casual-leave days are recorded as paid present days by the attendance engine and therefore count as present.",
-        "Employees who joined after the first of the month are never eligible for that month.",
+        "Employees who joined after the first of the month, or who left before its last working day, are never eligible for "
+        "that month. Someone who joined after the month ended, or left before it began, is not listed.",
     ]
     if not complete:
-        notes.append("The month is still running: 'On track' means no disqualifying day so far; eligibility is final only after the last day.")
+        notes.append(
+            "The month is still running: 'On track' means no disqualifying day so far; eligibility is final only after the last day."
+        )
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
@@ -844,7 +1018,7 @@ register(
         title="Perfect Attendance",
         description="Staff with no absence, half day, leave or late in the month (incentive eligibility), with the reason for the rest.",
         category="attendance",
-        icon="Award",
+        icon="BadgeCheck",
         tags=("perfect attendance", "incentive", "attendance bonus", "award", "eligibility"),
         modules=MODULES,
         filters=(
@@ -869,14 +1043,14 @@ _FORM12_COLS = (
     ColumnSpec("employeeName", "Name of worker", TEXT, 2.2),
     ColumnSpec("fatherName", "Father's name", TEXT, 1.8),
     ColumnSpec("gender", "Sex", TEXT, 0.6),
-    ColumnSpec("dob", "Date of birth", DATE, 1.1),
+    ColumnSpec("dob", "Date of birth", DATE, 1.4),
     ColumnSpec("designation", "Nature of work", TEXT, 1.5),
-    ColumnSpec("joinDate", "Date of joining", DATE, 1.1),
+    ColumnSpec("joinDate", "Date of joining", DATE, 1.4),
     ColumnSpec("shift", "Shift / relay", TEXT, 1.8),
     ColumnSpec("weeklyOffDay", "Weekly off", TEXT, 1.2),
-    ColumnSpec("daysWorked", "Days worked", INTEGER, 0.8, total="sum"),
+    ColumnSpec("daysWorked", "Days worked", INTEGER, 1.0, total="sum"),
     ColumnSpec("totalHours", "Hours worked", HOURS, 0.9, total="sum"),
-    ColumnSpec("otHours", "Overtime hrs", HOURS, 0.9, total="sum"),
+    ColumnSpec("otHours", "Overtime hrs", HOURS, 1.1, total="sum"),
     ColumnSpec("remarks", "Remarks", TEXT, 3.0),
 )
 
@@ -895,15 +1069,21 @@ def _form12_run(ctx):
         if rec.employee_id in staff:
             by_emp[rec.employee_id].append(rec)
     ot_min: dict[int, int] = defaultdict(int)
-    for eid, minutes in OvertimeRecord.objects.filter(
-        ctx.emp_q("employee__"), date__gte=m_from, date__lte=m_to
-    ).exclude(status="rejected").values_list("employee_id", "ot_minutes"):
+    for eid, minutes in (
+        OvertimeRecord.objects.filter(ctx.emp_q("employee__"), date__gte=m_from, date__lte=m_to)
+        .exclude(status="rejected")
+        .values_list("employee_id", "ot_minutes")
+    ):
         ot_min[eid] += minutes or 0
 
     data = []
     for emp_id in sorted(staff, key=lambda i: emp_sort_key(staff[i])):
         emp = staff[emp_id]
         recs = by_emp.get(emp_id, [])
+        # A month's register lists the people employed in that month: a leaver who worked part of it stays,
+        # someone who joins after it (or left before it) is not part of it.
+        if not roster.employed_between(emp, m_from, m_to, worked=bool(recs)):
+            continue
         secs = 0
         for rec in recs:
             net = span_net_seconds(rec.first_punch, rec.last_punch, roster.shift_on(emp_id, rec.date))
@@ -931,26 +1111,39 @@ def _form12_run(ctx):
             remarks.append("joining date not recorded")
         elif joined > m_from:
             remarks.append("joined this month")
-        data.append({
-            "employeeCode": emp.employee_code,
-            "employeeName": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
-            "fatherName": emp.father_name or None,
-            "gender": (emp.gender or "").title() or None,
-            "dob": dob.isoformat() if dob else None,
-            "designation": emp.designation.title if emp.designation_id else None,
-            "joinDate": joined.isoformat() if joined else None,
-            "shift": shift_text,
-            "weeklyOffDay": weekly,
-            "daysWorked": len(recs),
-            "totalHours": _hours(secs) if recs else None,
-            "otHours": round(ot_min[emp_id] / 60, 2) if emp_id in ot_min else None,
-            "remarks": "; ".join(remarks) or None,
-            "department": emp.department.name if emp.department_id else UNASSIGNED,
-        })
+        left = roster.exits.get(emp_id)
+        if left is not None and m_from <= left <= m_to:
+            remarks.append(f"left {display_date(left)}")
+        elif left is None and emp.status != "active":
+            remarks.append("no longer active (no leaving date recorded)")
+        data.append(
+            {
+                "employeeCode": emp.employee_code,
+                "employeeName": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
+                "fatherName": emp.father_name or None,
+                "gender": (emp.gender or "").title() or None,
+                "dob": dob.isoformat() if dob else None,
+                "designation": emp.designation.title if emp.designation_id else None,
+                "joinDate": joined.isoformat() if joined else None,
+                "shift": shift_text,
+                "weeklyOffDay": weekly,
+                "daysWorked": len(recs),
+                "totalHours": _hours(secs) if recs else None,
+                "otHours": round(ot_min[emp_id] / 60, 2) if emp_id in ot_min else None,
+                "remarks": "; ".join(remarks) or None,
+                "department": emp.department.name if emp.department_id else UNASSIGNED,
+            }
+        )
     for i, r in enumerate(data, start=1):
         r["sno"] = i
-    rows = with_subtotals(data, lambda r: r["department"], ["daysWorked", "totalHours", "otHours"],
-                          label_key="employeeName", label=lambda g: f"{g} total")
+    rows, sub_note = subtotals_within_limit(
+        ctx,
+        data,
+        lambda r: r["department"],
+        ["daysWorked", "totalHours", "otHours"],
+        label_key="employeeName",
+        label=lambda g: f"{g} total",
+    )
     summary = [
         {"label": "Workers", "value": len(data), "format": "integer"},
         {"label": "Days worked", "value": sum(r["daysWorked"] for r in data), "format": "integer"},
@@ -965,7 +1158,11 @@ def _form12_run(ctx):
         "overtime records only (pay is per day, so hours are informational) and show a dash when none exist.",
         "Weekly off: the system treats Sunday (and Saturday for Saturday-off staff) as the weekly off; production employees work "
         "Sundays as a normal day, so no weekly-off day is shown for them.",
+        "Everyone employed at any time in the month is listed, including people who left during it; someone who joined after "
+        "the month, or left before it, is not. Set Employee status to Active to list current employees only.",
     ]
+    if sub_note:
+        notes.append(sub_note)
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
@@ -977,10 +1174,11 @@ register(
         category="attendance",
         icon="ClipboardList",
         tags=("form 12", "factories act", "adult workers", "statutory", "register", "inspection"),
-        modules=("attendance", "employees"),
+        modules=("employees",),  # father's name and date of birth are employee-master data
         filters=(
             period("lastMonth"),
-            *scope_filters(status="active"),
+            # a register of a past month must show the people who worked it and have since left
+            *scope_filters(status="all"),
         ),
         columns=_FORM12_COLS,
         run=_form12_run,

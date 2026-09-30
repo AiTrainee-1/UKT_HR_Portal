@@ -35,6 +35,7 @@ from .employees_master_base import (
     branch_scope_id,
     clean,
     code_key,
+    department_labels,
     department_name,
     employees_qs,
     gender_bucket,
@@ -45,6 +46,7 @@ from .employees_master_base import (
     months_between,
     name_key,
     pick_columns,
+    service_end_dates,
     status_label,
     tenure_text,
     type_label,
@@ -70,16 +72,16 @@ MASTER_COLUMNS = (
     ColumnSpec("unitCode", "Unit Code", TEXT, 1.0),
     ColumnSpec("employeeName", "Employee", TEXT, 2.2),
     ColumnSpec("gender", "Gender", TEXT, 0.8),
-    ColumnSpec("dateOfBirth", "Date of Birth", DATE, 1.1),
+    ColumnSpec("dateOfBirth", "Date of Birth", DATE, 1.5),
     ColumnSpec("age", "Age", INTEGER, 0.5),
     ColumnSpec("fatherName", "Father's Name", TEXT, 1.6),
     ColumnSpec("department", "Department", TEXT, 1.5),
     ColumnSpec("designation", "Designation", TEXT, 1.5),
     ColumnSpec("branch", "Branch", TEXT, 1.2),
-    ColumnSpec("employmentType", "Type", BADGE, 0.9),
-    ColumnSpec("joinDate", "Join Date", DATE, 1.1),
+    ColumnSpec("employmentType", "Type", BADGE, 1.3),
+    ColumnSpec("joinDate", "Join Date", DATE, 1.5),
     ColumnSpec("tenure", "Tenure", TEXT, 0.8),
-    ColumnSpec("status", "Status", BADGE, 0.8),
+    ColumnSpec("status", "Status", BADGE, 1.1),
     ColumnSpec("phone", "Phone", TEXT, 1.2),
     ColumnSpec("email", "Email", TEXT, 1.8),
     ColumnSpec("emergencyContact", "Emergency Contact", TEXT, 1.6),
@@ -101,6 +103,7 @@ def _master_run(ctx) -> ReportResult:
         emps = [e for e in emps if gender_bucket(e.gender) == gender_filter]
     emps.sort(key=lambda e: code_key(e.employee_code))
     hods = hod_name_map(emps) if layout == "full" else {}
+    served_to = service_end_dates(emps, today)  # today for the active, the exit date for people who have left
 
     rows = []
     unreadable = missing_dob = 0
@@ -108,7 +111,7 @@ def _master_run(ctx) -> ReportResult:
         joined, state = join_date_of(e)
         unreadable += state == "unreadable"
         missing_dob += e.date_of_birth is None
-        months = months_between(joined, today) if joined else None
+        months = months_between(joined, served_to[e.id]) if joined else None
         rows.append(
             {
                 "employeeCode": e.employee_code,
@@ -128,7 +131,7 @@ def _master_run(ctx) -> ReportResult:
                 "phone": clean(e.phone),
                 "email": clean(e.email),
                 "emergencyContact": clean(e.emergency_contact),
-                "bloodGroup": clean(e.blood_group),
+                "bloodGroup": blood_group_of(e.blood_group) or clean(e.blood_group),
                 "hod": hods.get(e.id),
             }
         )
@@ -150,6 +153,10 @@ def _master_run(ctx) -> ReportResult:
         "(see Statutory & KYC Compliance for the statutory numbers).",
         "Age and tenure are as on " + today.strftime("%d-%b-%Y") + ".",
     ]
+    if active != len(emps):
+        notes.append(
+            "Tenure of an employee who has left is counted up to the exit date (as in the Exits Register), not to today."
+        )
     if layout == "full":
         notes.append(
             "HOD is the department head this employee's approvals route to (one active HOD per employee); "
@@ -195,7 +202,7 @@ CONTACT_COLUMNS = (
     ColumnSpec("employeeName", "Employee", TEXT, 2.2),
     ColumnSpec("department", "Department", TEXT, 1.5),
     ColumnSpec("designation", "Designation", TEXT, 1.5),
-    ColumnSpec("employmentType", "Type", BADGE, 0.9),
+    ColumnSpec("employmentType", "Type", BADGE, 1.3),
     ColumnSpec("phone", "Phone", TEXT, 1.3),
     ColumnSpec("email", "Email", TEXT, 2.0),
     ColumnSpec("emergencyContact", "Emergency Contact", TEXT, 2.0),
@@ -301,7 +308,7 @@ def _strength_run(ctx) -> ReportResult:
     from api.models import Branch, Department, Designation
 
     group_by = ctx.param("groupBy", "department")
-    emps = list(ctx.employees())
+    emps = list(employees_qs(ctx))  # photo_url / password_hash deferred: a photo is a ~40 KB data URI per row
     scope = branch_scope_id(ctx)
     p = ctx.params
 
@@ -346,7 +353,7 @@ def _strength_run(ctx) -> ReportResult:
             d = desigs.get(e.designation_id)
             return (
                 e.designation_id, d.title if d else "No designation",
-                {"department": (d.department.name if d and d.department_id else UNASSIGNED), "level": (d.level if d else None)},
+                {"dept": (d.department if d and d.department_id else None), "level": (d.level if d else None)},
             )  # fmt: skip
     else:
 
@@ -391,7 +398,7 @@ def _strength_run(ctx) -> ReportResult:
             if p.get("designation_ids"):
                 qs = qs.filter(id__in=p["designation_ids"])
             for d in qs:
-                touch(d.id, d.title, department=(d.department.name if d.department_id else UNASSIGNED), level=d.level)
+                touch(d.id, d.title, dept=(d.department if d.department_id else None), level=d.level)
         else:
             qs = Branch.objects.all()
             if scope is not None:
@@ -408,9 +415,13 @@ def _strength_run(ctx) -> ReportResult:
     )
     grand = sum(g["total"] for _, g in ordered)
     head = STRENGTH_HEAD[group_by]
+    # Two 'Operator' designations of two units' SEWING departments must not read as the same row.
+    dept_label = department_labels({g["dept"].id: g["dept"] for _, g in ordered if g.get("dept") is not None}.values())
     rows = []
     for _key, g in ordered:
         row = {c.key: g.get(c.key) for c in head}
+        if group_by == "designation":
+            row["department"] = dept_label[g["dept"].id] if g.get("dept") is not None else UNASSIGNED
         row["group"] = g["label"]
         row.update({
             "staff": g["staff"], "production": g["production"], "male": g["male"], "female": g["female"],
@@ -427,7 +438,8 @@ def _strength_run(ctx) -> ReportResult:
         {"label": "Production", "value": production, "format": "integer"},
         {"label": "Male", "value": sum(g["male"] for _, g in ordered), "format": "integer"},
         {"label": "Female", "value": sum(g["female"] for _, g in ordered), "format": "integer"},
-        {"label": {"department": "Departments", "designation": "Designations", "branch": "Branches"}[group_by], "value": len(rows), "format": "integer"},
+        # the Unassigned / No designation / No branch bucket is a catch-all, not a department / designation / branch
+        {"label": {"department": "Departments", "designation": "Designations", "branch": "Branches"}[group_by], "value": sum(1 for key, _g in ordered if key is not None), "format": "integer"},
     ]  # fmt: skip
     notes = [
         "Strength is as on the report date - the system keeps no headcount history, so past dates cannot be reproduced.",
@@ -496,6 +508,11 @@ def _profile_run(ctx) -> ReportResult:
     today = ctx.today
     dimension = ctx.param("dimension", "ageBand")
     emps = list(employees_qs(ctx))
+    served_to = service_end_dates(emps, today)  # a leaver's service stops at the exit, it does not keep growing
+
+    def service_months(e):
+        joined, _state = join_date_of(e)
+        return months_between(joined, served_to[e.id]) if joined else None
 
     ages, service_years = [], []
     unknown_dob = unknown_join = 0
@@ -505,8 +522,7 @@ def _profile_run(ctx) -> ReportResult:
             unknown_dob += 1
         else:
             ages.append(a)
-        joined, _state = join_date_of(e)
-        m = months_between(joined, today) if joined else None
+        m = service_months(e)
         if m is None or m < 0:
             unknown_join += 1
         else:
@@ -516,8 +532,7 @@ def _profile_run(ctx) -> ReportResult:
         if dimension == "ageBand":
             return _age_band(age_on(e.date_of_birth, today))
         if dimension == "tenureBand":
-            joined, _s = join_date_of(e)
-            return _tenure_band(months_between(joined, today) if joined else None)
+            return _tenure_band(service_months(e))
         if dimension == "gender":
             return {"male": "Male", "female": "Female", "other": "Other", "unspecified": "Not set"}[
                 gender_bucket(e.gender)
@@ -564,6 +579,11 @@ def _profile_run(ctx) -> ReportResult:
         + ". 'Unknown' means the date of birth / join date "
         "is missing or could not be read.",
     ]
+    if any(not is_active(e) for e in emps):
+        notes.append(
+            "Length of service of an employee who has left is counted up to the exit date (as in the Exits Register), "
+            "not to today."
+        )
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
@@ -602,13 +622,14 @@ ORG_COLUMNS = (
     ColumnSpec("branch", "Branch", TEXT, 1.6),
     ColumnSpec("branchCode", "Code", TEXT, 0.8),
     ColumnSpec("department", "Department", TEXT, 2.0),
+    ColumnSpec("hods", "HOD(s)", TEXT, 2.2),
     ColumnSpec("designations", "Designations", INTEGER, 1.0, total="sum"),
     ColumnSpec("staff", "Active Staff", INTEGER, 1.0, total="sum"),
     ColumnSpec("production", "Active Production", INTEGER, 1.2, total="sum"),
-    ColumnSpec("hods", "HOD(s)", TEXT, 2.2),
     ColumnSpec("required", "Required (Plan)", INTEGER, 1.1, total="sum"),
     ColumnSpec("vacancy", "Vacancy", INTEGER, 0.9, total="sum"),
 )
+OUTSIDE_DEPARTMENTS = "Departments outside this listing (legacy data)"
 
 
 def _org_run(ctx) -> ReportResult:
@@ -633,20 +654,24 @@ def _org_run(ctx) -> ReportResult:
         qs = qs.filter(id__in=p["department_ids"])
     depts = {d.id: d for d in qs}
 
-    # Active strength: per department, and (for people with no department) per branch. Branch isolation and the
-    # declared filters come from ctx.emp_q(), so a branch user only ever counts their own branch's people.
-    counts: dict[tuple, int] = defaultdict(int)
+    # Active strength: per department, and per branch for people with no department or in a department this listing
+    # does not cover. Branch isolation and the declared filters come from ctx.emp_q(), so a branch user only ever
+    # counts their own branch's people.
+    in_dept: dict[tuple, int] = defaultdict(int)  # (department_id, employment type)
+    elsewhere: dict[tuple, int] = defaultdict(int)  # (employee's branch_id, has no department, employment type)
     people = Employee.objects.filter(ctx.emp_q(), status="active").values_list(
         "department_id", "branch_id", "employment_type"
     )
     for dept_id, branch_id, et in people:
-        counts[(dept_id, None if dept_id else branch_id, (et or "").strip())] += 1
-    # A department the employees sit in but that the branch filter did not list (legacy data with a mismatched or
-    # empty branch) still has to appear, or the totals would not add up to the headcount.
-    stray = {k[0] for k in counts if k[0] is not None and k[0] not in depts}
-    if stray:
-        for d in Department.objects.select_related("branch").filter(id__in=stray):
-            depts[d.id] = d
+        et = (et or "").strip()
+        if dept_id in depts:
+            in_dept[(dept_id, et)] += 1
+        else:
+            # Either no department at all, or (legacy data) a department of another unit / with no unit that the
+            # branch scope or filter left out. Their headcount must not vanish, but that department's own manpower
+            # plan, HODs and designations are never read: they belong to somebody else's scope, and a vacancy worked
+            # out from only part of a department's people would differ depending on who asks.
+            elsewhere[(branch_id, dept_id is None, et)] += 1
 
     dept_ids = list(depts)
     designations = dict(
@@ -674,35 +699,58 @@ def _org_run(ctx) -> ReportResult:
             return NO_BRANCH, None
         return (branch.name if branch.is_active else f"{branch.name} (inactive)"), branch.code
 
+    real_branches: set[int] = set()  # branches that appear in the listing (the 'No branch' bucket is not one)
     rows = []
     for d in depts.values():
         label, code = branch_label(branches.get(d.branch_id) if d.branch_id else None)
-        staff = counts.get((d.id, None, "staff"), 0)
+        if d.branch_id:
+            real_branches.add(d.branch_id)
+        staff = in_dept.get((d.id, "staff"), 0)
         plan = required.get(d.id) or None  # a missing row and 0 both mean "not planned"
         rows.append({
             "branch": label, "branchCode": code, "department": d.name,
             "designations": designations.get(d.id, 0),
-            "staff": staff, "production": counts.get((d.id, None, "production"), 0),
+            "staff": staff, "production": in_dept.get((d.id, "production"), 0),
             "hods": ", ".join(hods.get(d.id, [])) or None,
             "required": plan, "vacancy": max(0, plan - staff) if plan else None,
         })  # fmt: skip
-    # Active employees with no department, per branch, so the strength still reconciles with the headcount.
-    loose: dict[int | None, dict[str, int]] = {}
-    for (dept_id, branch_id, et), n in counts.items():
-        if dept_id is None and et in ("staff", "production"):
-            loose.setdefault(branch_id, {"staff": 0, "production": 0})[et] += n
-    for branch_id, c in loose.items():
+    # Active employees with no department (or in a department outside this listing), per branch, so the strength
+    # still reconciles with the headcount.
+    loose: dict[tuple, dict[str, int]] = {}
+    for (branch_id, no_department, et), n in elsewhere.items():
+        if et in ("staff", "production"):
+            loose.setdefault((branch_id, no_department), {"staff": 0, "production": 0})[et] += n
+    outside = 0
+    for (branch_id, no_department), c in loose.items():
         label, code = branch_label(branches.get(branch_id) if branch_id else None)
+        if branch_id:
+            real_branches.add(branch_id)
+        if not no_department:
+            outside += c["staff"] + c["production"]
         rows.append({
-            "branch": label, "branchCode": code, "department": "Unassigned (no department)",
+            "branch": label, "branchCode": code,
+            "department": "Unassigned (no department)" if no_department else OUTSIDE_DEPARTMENTS,
             "designations": None, "staff": c["staff"], "production": c["production"],
             "hods": None, "required": None, "vacancy": None,
         })  # fmt: skip
+    # A branch that has no department yet (a newly opened unit) is still part of the structure.
+    if not p.get("department_ids"):
+        for b in branches.values():
+            if b.id in real_branches or (scope is not None and b.id != scope):
+                continue
+            if p.get("branch_ids") and b.id not in p["branch_ids"]:
+                continue
+            real_branches.add(b.id)
+            label, code = branch_label(b)
+            rows.append({
+                "branch": label, "branchCode": code, "department": "No departments set up",
+                "designations": None, "staff": 0, "production": 0, "hods": None, "required": None, "vacancy": None,
+            })  # fmt: skip
     rows.sort(
         key=lambda r: (
             r["branch"] == NO_BRANCH,
             r["branch"].lower(),
-            r["department"].startswith("Unassigned"),
+            r["department"].startswith(("Unassigned", OUTSIDE_DEPARTMENTS)),
             r["department"].lower(),
         )
     )
@@ -713,7 +761,7 @@ def _org_run(ctx) -> ReportResult:
     )  # fmt: skip
 
     summary = [
-        {"label": "Branches", "value": len({r["branch"] for r in data_rows}), "format": "integer"},
+        {"label": "Branches", "value": len(real_branches), "format": "integer"},
         {"label": "Departments", "value": len(depts), "format": "integer"},
         {"label": "Active employees", "value": sum((r["staff"] or 0) + (r["production"] or 0) for r in data_rows), "format": "integer"},
         {"label": "Planned positions", "value": sum(r["required"] or 0 for r in data_rows), "format": "integer"},
@@ -724,6 +772,12 @@ def _org_run(ctx) -> ReportResult:
         "(production is not part of the manpower plan); blank where no plan is set.",
         "HOD(s) are the department heads holding the whole department; individually assigned employees are not listed here.",
     ]
+    if outside:
+        notes.append(
+            f"{outside} active employee(s) are recorded in a department that is not part of this listing (a department "
+            "of another branch, or one with no branch). They are counted on the 'Departments outside this listing' "
+            "line; that department's own plan, HODs and designations are not shown here."
+        )
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 

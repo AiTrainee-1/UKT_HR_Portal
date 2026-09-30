@@ -91,6 +91,24 @@ export const EmployeeStatus = {
   inactive: 'inactive',
 } as const;
 
+/**
+ * The salary split: Basic + DA + Retention Allowance is 50% of the salary, Other + Petrol + RHA + Special Allowance
+ * + CA the other 50%. Descriptive only: payroll runs on salaryAmount.
+ */
+export interface SalaryBreakup {
+  basic: number;
+  da: number;
+  retentionAllowance: number;
+  otherAllowance: number;
+  petrolAllowance: number;
+  rha: number;
+  specialAllowance: number;
+  ca: number;
+}
+
+/** A salary split as sent to the API: every amount as exact decimal text. */
+export type SalaryBreakupInput = { [K in keyof SalaryBreakup]: string };
+
 export interface Employee {
   id: number;
   employeeCode: string;
@@ -133,6 +151,11 @@ export interface Employee {
   salaryType: EmployeeSalaryType;
   /** @nullable */
   salaryAmount?: number | null;
+  /**
+   * The mandatory 50% + 50% split of salaryAmount, or null when none is recorded.
+   * @nullable
+   */
+  salaryBreakup?: SalaryBreakup | null;
   /** @nullable */
   salaryPerShift?: number | null;
   status: EmployeeStatus;
@@ -181,6 +204,8 @@ export interface EmployeeInput {
   branchId?: number;
   salaryType: EmployeeInputSalaryType;
   salaryAmount?: number;
+  /** The salary split as exact decimal text; worked out automatically when omitted. */
+  salaryBreakup?: SalaryBreakupInput;
   salaryPerShift?: number;
   bankName?: string;
   bankAccount?: string;
@@ -213,6 +238,8 @@ export interface EmployeeUpdate {
   branchId?: number;
   salaryType?: EmployeeUpdateSalaryType;
   salaryAmount?: number;
+  /** The salary split as exact decimal text; re-scaled automatically when the salary changes and this is omitted. */
+  salaryBreakup?: SalaryBreakupInput;
   salaryPerShift?: number;
   bankName?: string;
   bankAccount?: string;

@@ -19,7 +19,7 @@ import calendar
 from collections import defaultdict
 from datetime import date, time, timedelta
 
-from django.db.models import Q
+from django.db.models import Q, TimeField
 
 from api.models import (
     AttendanceDayRecord,
@@ -34,6 +34,7 @@ from api.models import (
 from api.payroll_views import _build_working_days
 from api.shift_engine import _get_assignment_for_date, _get_shift_for_date, _t2s, _t2s_minute
 
+from ..common import with_subtotals
 from ..filters import (
     EMPLOYMENT_TYPE_OPTIONS,
     branches,
@@ -77,7 +78,11 @@ _PEOPLE_ONLY = (
 
 
 def scope_filters(
-    *, status: str | None = None, employment_default: str | None = None, designation: bool = True, employee: bool = True,
+    *,
+    status: str | None = None,
+    employment_default: str | None = None,
+    designation: bool = True,
+    employee: bool = True,
     employment: bool = True,
 ) -> tuple[FilterSpec, ...]:
     """Branch / department / designation / employee-type / employee (+ status) filters.
@@ -90,8 +95,12 @@ def scope_filters(
     if employment:
         out.append(
             FilterSpec(
-                "employmentType", F_EMPLOYMENT_TYPE, "Employee type", options=EMPLOYMENT_TYPE_OPTIONS,
-                placeholder="All types", default=employment_default,
+                "employmentType",
+                F_EMPLOYMENT_TYPE,
+                "Employee type",
+                options=EMPLOYMENT_TYPE_OPTIONS,
+                placeholder="All types",
+                default=employment_default,
             )
         )
     if employee:
@@ -105,15 +114,20 @@ def scope_filters(
 
 
 def payroll_settings() -> PayrollSettings:
-    """The universal settings row payroll reads (company-wide late / half-day rules). Looked up once per
-    run without the base64 logo blobs. Falls back to ``PayrollSettings.get()`` only on a brand-new
-    install where the row does not exist yet."""
-    obj = (
-        PayrollSettings.objects.filter(pk=1)
-        .defer("company_logo", "signature_image", "authorized_signature")
-        .first()
-    )
-    return obj or PayrollSettings.get()
+    """The universal settings row payroll reads (company-wide late / half-day rules) -- payroll itself
+    resolves the late pool from ``PayrollSettings.get()``, never from a branch overlay. Looked up once per
+    run without the base64 logo blobs. On a brand-new install where the row does not exist yet the model
+    defaults are used WITHOUT saving them (``PayrollSettings.get()`` would insert the row, and a report
+    never writes)."""
+    obj = PayrollSettings.objects.filter(pk=1).defer("company_logo", "signature_image", "authorized_signature").first()
+    if obj is not None:
+        return obj
+    obj = PayrollSettings()
+    for field in obj._meta.get_fields():
+        # An unsaved instance keeps TimeField defaults declared as text ("14:30") verbatim.
+        if isinstance(field, TimeField) and isinstance(getattr(obj, field.attname), str):
+            setattr(obj, field.attname, time.fromisoformat(getattr(obj, field.attname)))
+    return obj
 
 
 def production_config() -> ProductionShiftConfig:
@@ -170,6 +184,32 @@ def full_name(emp) -> str:
     return f"{emp.first_name or ''} {emp.last_name or ''}".strip()
 
 
+# ── subtotals vs the row limit ──────────────────────────────────────────────
+
+
+def subtotals_within_limit(ctx, rows, group_by, sum_keys, *, what: str = "Department", **kwargs):
+    """``with_subtotals`` that never pushes a complete list over the row limit.
+
+    The runner counts every emitted row, subtotal rows included, against the screen / export limit and
+    refuses ("narrow the filters") or cuts off a result over it. A list that fits by itself must therefore
+    not lose (or be refused) because of the extra subtotal lines: they are only added while data rows plus
+    subtotal rows still fit. Returns ``(rows, note)``; ``note`` explains an omission (None when added)."""
+    data = list(rows)
+    limit = ctx.row_limit - 1  # row_limit is the real limit + 1 so a definition can tell "cut off" from "exactly full"
+    groups, prev = 0, object()
+    for r in data:
+        g = group_by(r)
+        if g != prev:
+            groups, prev = groups + 1, g
+    if len(data) + groups <= limit:
+        return with_subtotals(data, group_by, sum_keys, **kwargs), None
+    if len(data) > limit:
+        return data, f"{what} subtotals are omitted because the list was cut off; narrow the filters."
+    return data, (
+        f"{what} subtotals are omitted: with them the list would be over the row limit; narrow the filters to see them."
+    )
+
+
 # ── employees / records ─────────────────────────────────────────────────────
 
 
@@ -188,9 +228,7 @@ def people(ctx, *extra_fields: str) -> dict[int, Employee]:
 def day_records(ctx, date_from: date, date_to: date, **extra):
     """Stored day verdicts of the scoped employees. Branch isolation and employee filters ride on the
     employee join; the caller adds ordering / limits."""
-    return AttendanceDayRecord.objects.filter(
-        ctx.emp_q("employee__"), date__gte=date_from, date__lte=date_to, **extra
-    )
+    return AttendanceDayRecord.objects.filter(ctx.emp_q("employee__"), date__gte=date_from, date__lte=date_to, **extra)
 
 
 def coverage_notes(ctx, people_by_id: dict[int, Employee], date_from: date, date_to: date) -> list[str]:
@@ -240,9 +278,7 @@ class Roster:
     def assignments(self) -> dict[int, list]:
         if self._assignments is None:
             qs = (
-                EmployeeShiftAssignment.objects.filter(
-                    self.ctx.emp_q("employee__"), effective_from__lte=self.month_end
-                )
+                EmployeeShiftAssignment.objects.filter(self.ctx.emp_q("employee__"), effective_from__lte=self.month_end)
                 .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=self.month_start))
                 .select_related("shift")
                 .order_by("effective_from", "id")
@@ -270,7 +306,9 @@ class Roster:
     def holidays(self) -> dict[date, list[str]]:
         if self._holidays is None:
             by: dict[date, list[str]] = defaultdict(list)
-            for h in Holiday.objects.filter(date__gte=self.month_start, date__lte=self.month_end).order_by("date", "id"):
+            for h in Holiday.objects.filter(date__gte=self.month_start, date__lte=self.month_end).order_by(
+                "date", "id"
+            ):
                 by[h.date].append(h.name)
             self._holidays = dict(by)
         return self._holidays
@@ -306,6 +344,23 @@ class Roster:
         if emp.id not in self._join:
             self._join[emp.id] = parse_date(emp.join_date)
         return self._join[emp.id]
+
+    def employed_between(self, emp, d_from: date, d_to: date, worked: bool = False) -> bool:
+        """Was the employee on the rolls at any time in ``d_from .. d_to``? For a month's register: someone who joins
+        after the month, or who left before it, is not part of it (whatever the status filter says).
+
+        ``worked`` = the employee has a stored present / half day inside the period, which is proof enough of
+        employment when the leaving date is missing (an inactive employee with no approved resignation) or stale
+        (a re-hire whose old resignation is still on file)."""
+        j = self.join_date(emp)
+        if j and j > d_to:
+            return False
+        x = self.exits.get(emp.id)
+        if x is not None:
+            return x >= d_from or worked
+        if emp.status == "active":
+            return True
+        return worked
 
     def outside_employment(self, emp, d: date) -> bool:
         """True for a day before the joining date or after the last working day (the engine ignores both)."""
@@ -355,27 +410,43 @@ def classify_day(rec, emp, roster: Roster, today: date, production_sunday_off: b
 PERMISSION_SHIFT_SECONDS = EmployeePermission.FIXED_DURATION_MINUTES * 60
 
 
-def morning_lateness(first_punch: time | None, start: time | None, grace_minutes: int, permission_applied: bool):
+def _ceil_minutes(seconds: int) -> int:
+    return -(-seconds // 60)
+
+
+def morning_lateness(
+    first_punch: time | None,
+    start: time | None,
+    grace_minutes: int,
+    permission_applied: bool,
+    exact_seconds: bool = False,
+):
     """(effective start seconds, deadline seconds, minutes past effective start, minutes past deadline) or
     None when it cannot be worked out or the punch is not actually late under this start time (the shift
     was edited after the day was computed).
 
-    Same rule as ``shift_engine.morning_late_in``: the arrival is compared at minute granularity to
-    start + grace, and an in-cap Morning Late-In permission moves the start by 60 minutes."""
+    Staff rule, same as ``shift_engine.morning_late_in``: the arrival is compared at minute granularity to
+    start + grace, and an in-cap Morning Late-In permission moves the start by 60 minutes.
+    ``exact_seconds=True`` is the production rule (``attendance_final._compute_production`` compares the
+    punch to the second and never applies permissions); minutes are then rounded up so a day the engine
+    flagged never shows "0 minutes past the deadline"."""
     if first_punch is None or start is None:
         return None
     eff = _t2s(start) + (PERMISSION_SHIFT_SECONDS if permission_applied else 0)
     deadline = eff + (grace_minutes or 0) * 60
-    fp = _t2s_minute(first_punch)
+    fp = _t2s(first_punch) if exact_seconds else _t2s_minute(first_punch)
     if fp <= deadline:
         return None
+    if exact_seconds:
+        return eff, deadline, _ceil_minutes(fp - eff), _ceil_minutes(fp - deadline)
     return eff, deadline, (fp - eff) // 60, (fp - deadline) // 60
 
 
 def evening_earliness(last_punch: time | None, end: time | None, grace_minutes: int, permission_applied: bool):
     """(effective end seconds, deadline seconds, minutes before effective end) or None; mirrors
     ``shift_engine.evening_early_out`` (seconds granularity; the deadline is end - grace, and an in-cap
-    Evening Early-Out permission moves the end 60 minutes earlier)."""
+    Evening Early-Out permission moves the end 60 minutes earlier). Minutes are rounded up so a flagged
+    day never shows 0."""
     if last_punch is None or end is None:
         return None
     eff = max(0, _t2s(end) - (PERMISSION_SHIFT_SECONDS if permission_applied else 0))
@@ -383,7 +454,7 @@ def evening_earliness(last_punch: time | None, end: time | None, grace_minutes: 
     lp = _t2s(last_punch)
     if lp >= deadline:
         return None
-    return eff, deadline, (eff - lp) // 60
+    return eff, deadline, _ceil_minutes(eff - lp)
 
 
 def punch_span_seconds(first_punch: time | None, last_punch: time | None) -> int | None:

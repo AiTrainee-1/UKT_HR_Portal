@@ -688,6 +688,19 @@ export type PayrollSettingsItem = {
   smtpPassword: string;
   smtpFromEmail: string;
   smtpFromName: string;
+  // HR / software-support contacts (Settings -> HR Contact); blank = not set. Company-wide: a branch login
+  // sees them but the server refuses (403 company_wide_contact) if one is sent.
+  hrContactName: string;
+  hrContactPhone: string;
+  hrContactWhatsapp: string;
+  hrContactEmail: string;
+  hrContactHours: string;
+  supportContactName: string;
+  supportContactPhone: string;
+  supportContactWhatsapp: string;
+  supportContactEmail: string;
+  supportContactHours: string;
+  contactNote: string;
   updatedAt: string | null;
 };
 

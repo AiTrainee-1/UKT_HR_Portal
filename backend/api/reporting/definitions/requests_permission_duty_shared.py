@@ -111,6 +111,12 @@ def base_cells(emp) -> dict:
 
 
 BRANCH_COL = ColumnSpec("branch", "Branch", TEXT, 1.1)
+# Same cells as EMP_COLS[:3]; the department column is a little wider so its header never breaks in the PDF.
+LEAD_COLS: tuple[ColumnSpec, ...] = (
+    ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
+    ColumnSpec("employeeName", "Employee", TEXT, 2.1),
+    ColumnSpec("department", "Department", TEXT, 1.7),
+)
 
 
 # ── grouping / subtotals ────────────────────────────────────────────────────
@@ -126,8 +132,20 @@ def department_subtotals(rows: list[dict], sum_keys: Iterable[str]) -> list[dict
         dept = r.get("department") or "Unassigned"
         return f"{dept} ({r.get('_branch') or 'no branch'})" if multi_branch else dept
 
-    ordered = sorted(rows, key=lambda r: (group(r), r.get("employeeCode") or "", r.get("month") or "", r.get("_seq", 0)))
-    return with_subtotals(ordered, group, sum_keys)
+    keys = list(sum_keys)
+    ordered = sorted(rows, key=lambda r: (group(r), r.get("employeeCode") or "", r.get("month") or ""))
+    out = with_subtotals(ordered, group, keys)
+    # A subtotal of values that are all unknown stays unknown (a dash), never 0.
+    members: list[dict] = []
+    for r in out:
+        if r.get("_kind") == "subtotal":
+            for k in keys:
+                if all(m.get(k) is None for m in members):
+                    r[k] = None
+            members = []
+        else:
+            members.append(r)
+    return out
 
 
 def limited(rows: Iterable, limit: int) -> list:
@@ -138,6 +156,23 @@ def limited(rows: Iterable, limit: int) -> list:
         if len(out) >= limit:
             break
     return out
+
+
+def shown(items: list, ctx) -> list:
+    """The items the runner will actually display. ``ctx.row_limit`` is one MORE than the screen / export ceiling so
+    that ``run()`` can hand back the extra row and the runner can tell the list was cut; the summary cards must
+    describe only the rows that stay, never that extra one."""
+    return items[: max(0, ctx.row_limit - 1)]
+
+
+def cut_note(items: list, ctx) -> list[str]:
+    """A note (as a list, to splice into ``notes``) when ``items`` is longer than what will be displayed."""
+    if len(items) <= max(0, ctx.row_limit - 1):
+        return []
+    return [
+        f"The list was cut at {max(0, ctx.row_limit - 1):,} rows and the summary cards count only those rows. "
+        "Narrow the filters to see the rest."
+    ]
 
 
 def yes_no(flag: bool) -> str:

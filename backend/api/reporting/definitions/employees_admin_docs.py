@@ -15,7 +15,14 @@ from ..formatting import fmt_dt
 from ..registry import register
 from ..types import BADGE, DATE, DATETIME, INTEGER, PERCENT, TEXT, ColumnSpec, ReportResult, ReportSpec
 from .employees_admin_util import (
-    employee_qs, ist_date, ist_range_q, label, natural_key, pct, status_label, type_label,
+    employee_qs,
+    ist_date,
+    ist_range_q,
+    label,
+    natural_key,
+    pct,
+    status_label,
+    type_label,
 )
 
 DOC_LABEL = dict(EmployeeDocument.CATEGORY_CHOICES)
@@ -100,41 +107,47 @@ def _run_compliance(ctx):
     )
 
 
-register(ReportSpec(
-    id="document-compliance",
-    title="Employee Document Compliance",
-    description="Per-employee matrix of the required documents uploaded vs missing, with completion percentage.",
-    category="employees",
-    icon="FolderOpen",
-    tags=("documents", "kyc", "pan", "aadhaar", "passbook", "pending documents"),
-    family="employee-documents",
-    variant="Compliance",
-    modules=("recruitment.documents",),
-    filters=(
-        *scope(status="active", employee=True),
-        select("state", "Show", _COMPLIANCE_STATES, default="pending"),
-        select("missingCategory", "Missing document", _MISSING_OPTIONS, placeholder="Any"),
-    ),
-    columns=(
-        *EMP_COLS,
-        ColumnSpec("employmentType", "Type", BADGE, 0.9),
-        ColumnSpec("pan_card", "PAN", BADGE, 0.9),
-        ColumnSpec("aadhaar_card", "Aadhaar", BADGE, 0.9),
-        ColumnSpec("educational_certificate", "Education Cert.", BADGE, 0.9),
-        ColumnSpec("voter_id_or_birth_certificate", "Voter ID / Birth Cert.", BADGE, 0.9),
-        ColumnSpec("bank_passbook", "Passbook", BADGE, 0.9),
-        ColumnSpec("typeSpecific", "Staff Letter / Production Docs", BADGE, 1.0),
-        ColumnSpec("uploadedCount", "Uploaded", INTEGER, 0.8, total="sum"),
-        ColumnSpec("missingCount", "Missing", INTEGER, 0.8, total="sum"),
-        ColumnSpec("missing", "Missing Documents", TEXT, 2.4),
-        ColumnSpec("lastUploadedOn", "Last Upload", DATE, 1.1),
-        ColumnSpec("completionPct", "Complete %", PERCENT, 0.9, total="avg"),
-    ),
-    run=_run_compliance,
-))
+register(
+    ReportSpec(
+        id="document-compliance",
+        title="Employee Document Compliance",
+        description="Per-employee matrix of the required documents uploaded vs missing, with completion percentage.",
+        category="employees",
+        icon="FolderOpen",
+        tags=("documents", "kyc", "pan", "aadhaar", "passbook", "pending documents"),
+        family="employee-documents",
+        variant="Compliance",
+        modules=("recruitment.documents",),
+        filters=(
+            *scope(status="active", employee=True),
+            select("state", "Show", _COMPLIANCE_STATES, default="pending"),
+            select("missingCategory", "Missing document", _MISSING_OPTIONS, placeholder="Any"),
+        ),
+        columns=(
+            # widths are tuned so no badge, date or header word breaks mid-word on the printed page (16 columns)
+            ColumnSpec("employeeCode", "Emp Code", TEXT, 0.9),
+            ColumnSpec("employeeName", "Employee", TEXT, 2.0),
+            ColumnSpec("department", "Department", TEXT, 1.4),
+            ColumnSpec("employmentType", "Type", BADGE, 1.2),
+            ColumnSpec("pan_card", "PAN", BADGE, 1.1),
+            ColumnSpec("aadhaar_card", "Aadhaar", BADGE, 1.1),
+            ColumnSpec("educational_certificate", "Education Cert.", BADGE, 1.3),
+            ColumnSpec("voter_id_or_birth_certificate", "Voter ID / Birth Cert.", BADGE, 1.1),
+            ColumnSpec("bank_passbook", "Passbook", BADGE, 1.2),
+            ColumnSpec("typeSpecific", "Staff Letter / Production Docs", BADGE, 1.3),
+            ColumnSpec("uploadedCount", "Uploaded", INTEGER, 1.2, total="sum"),
+            ColumnSpec("missingCount", "Missing", INTEGER, 1.0, total="sum"),
+            ColumnSpec("missing", "Missing Documents", TEXT, 2.4),
+            ColumnSpec("lastUploadedOn", "Last Upload", DATE, 1.4),
+            ColumnSpec("completionPct", "Complete %", PERCENT, 1.2, total="avg"),
+        ),
+        run=_run_compliance,
+    )
+)
 
 
 # ── Document Upload Log ─────────────────────────────────────────────────────
+
 
 def _run_upload_log(ctx):
     q = ctx.emp_q("employee__") & ist_range_q("uploaded_at", ctx.date_from, ctx.date_to)
@@ -153,18 +166,18 @@ def _run_upload_log(ctx):
     )
     rows = []
     for d in docs:
-        rows.append({
-            "uploadedAt": fmt_dt(d.uploaded_at),
-            **emp_cells(d.employee),
-            "category": DOC_LABEL.get(d.category, label(d.category)),
-            "originalFilename": d.original_filename,
-            "uploadedBy": d.uploaded_by or None,
-        })
+        rows.append(
+            {
+                "uploadedAt": fmt_dt(d.uploaded_at),
+                **emp_cells(d.employee),
+                "category": DOC_LABEL.get(d.category, label(d.category)),
+                "originalFilename": d.original_filename,
+                "uploadedBy": d.uploaded_by or None,
+            }
+        )
 
     agg = base.order_by().aggregate(files=Count("id"), people=Count("employee_id", distinct=True))
-    top = (
-        base.order_by().values("uploaded_by").annotate(n=Count("id")).order_by("-n", "uploaded_by").first()
-    )
+    top = base.order_by().values("uploaded_by").annotate(n=Count("id")).order_by("-n", "uploaded_by").first()
     top_text = None
     if top:
         top_text = f"{top['uploaded_by'] or 'Unknown'} ({top['n']})"
@@ -182,31 +195,33 @@ def _run_upload_log(ctx):
     )
 
 
-register(ReportSpec(
-    id="document-upload-log",
-    title="Document Upload Log",
-    description="Who uploaded which employee document and when.",
-    category="employees",
-    icon="History",
-    tags=("documents", "uploads", "audit"),
-    family="employee-documents",
-    variant="Upload log",
-    modules=("recruitment.documents",),
-    filters=(
-        date_range("thisMonth", label="Uploaded between"),
-        select("category", "Document type", EmployeeDocument.CATEGORY_CHOICES, multi=True, placeholder="All types"),
-        text("uploadedBy", "Uploaded by", "Name"),
-        *scope(status=None),
-    ),
-    columns=(
-        ColumnSpec("uploadedAt", "Uploaded At", DATETIME, 1.4),
-        *EMP_COLS,
-        ColumnSpec("category", "Document", TEXT, 1.8),
-        ColumnSpec("originalFilename", "File Name", TEXT, 2.2),
-        ColumnSpec("uploadedBy", "Uploaded By", TEXT, 1.4),
-    ),
-    run=_run_upload_log,
-))
+register(
+    ReportSpec(
+        id="document-upload-log",
+        title="Document Upload Log",
+        description="Who uploaded which employee document and when.",
+        category="employees",
+        icon="History",
+        tags=("documents", "uploads", "audit"),
+        family="employee-documents",
+        variant="Upload log",
+        modules=("recruitment.documents",),
+        filters=(
+            date_range("thisMonth", label="Uploaded between"),
+            select("category", "Document type", EmployeeDocument.CATEGORY_CHOICES, multi=True, placeholder="All types"),
+            text("uploadedBy", "Uploaded by", "Name"),
+            *scope(status=None),
+        ),
+        columns=(
+            ColumnSpec("uploadedAt", "Uploaded At", DATETIME, 1.4),
+            *EMP_COLS,
+            ColumnSpec("category", "Document", TEXT, 1.8),
+            ColumnSpec("originalFilename", "File Name", TEXT, 2.2),
+            ColumnSpec("uploadedBy", "Uploaded By", TEXT, 1.4),
+        ),
+        run=_run_upload_log,
+    )
+)
 
 
 # ── Mobile App Access ───────────────────────────────────────────────────────
@@ -235,7 +250,10 @@ def _run_mobile_access(ctx):
     )
     devices = {
         r["employee_id"]: r["n"]
-        for r in PushToken.objects.filter(ctx.emp_q("employee__")).order_by().values("employee_id").annotate(n=Count("id"))
+        for r in PushToken.objects.filter(ctx.emp_q("employee__"))
+        .order_by()
+        .values("employee_id")
+        .annotate(n=Count("id"))
     }
     has_access = [e for e in emps if e.has_pw]
     no_access = [e for e in emps if not e.has_pw]
@@ -254,18 +272,20 @@ def _run_mobile_access(ctx):
 
     rows = []
     for e in shown:
-        rows.append({
-            **emp_cells(e),
-            "employmentType": type_label(e.employment_type),
-            "phone": e.phone or None,
-            "status": status_label(e.status),
-            "appPassword": "Set" if e.has_pw else "Not set",
-            "passwordUpdatedAt": fmt_dt(e.password_updated_at),
-            "lastAppLogin": fmt_dt(e.last_mobile_login_at),
-            "devices": devices.get(e.id, 0),
-            "liveTracking": "On" if e.location_tracking_enabled else "Off",
-            "coEmp": "On" if e.co_emp_enabled else "Off",
-        })
+        rows.append(
+            {
+                **emp_cells(e),
+                "employmentType": type_label(e.employment_type),
+                "phone": e.phone or None,
+                "status": status_label(e.status),
+                "appPassword": "Set" if e.has_pw else "Not set",
+                "passwordUpdatedAt": fmt_dt(e.password_updated_at),
+                "lastAppLogin": fmt_dt(e.last_mobile_login_at),
+                "devices": devices.get(e.id, 0),
+                "liveTracking": "On" if e.location_tracking_enabled else "Off",
+                "coEmp": "On" if e.co_emp_enabled else "Off",
+            }
+        )
     return ReportResult(
         rows=rows,
         summary=[
@@ -273,7 +293,11 @@ def _run_mobile_access(ctx):
             {"label": "Has app access", "value": len(has_access), "format": "integer"},
             {"label": "No access", "value": len(no_access), "format": "integer"},
             {"label": "Signed in", "value": len(signed_in), "format": "integer"},
-            {"label": "Active without access", "value": sum(1 for e in no_access if e.status == "active"), "format": "integer"},
+            {
+                "label": "Active without access",
+                "value": sum(1 for e in no_access if e.status == "active"),
+                "format": "integer",
+            },
         ],
         notes=[
             "Passwords are never shown: 'Set' only means an app password exists.",
@@ -286,29 +310,31 @@ def _run_mobile_access(ctx):
     )
 
 
-register(ReportSpec(
-    id="mobile-app-access",
-    title="Mobile App Access",
-    description="Who can and does sign in to the employee app: password state, last sign-in, devices, live tracking.",
-    category="employees",
-    icon="Smartphone",
-    tags=("mobile app", "login", "password", "employee app"),
-    modules=("mobile_app_login",),
-    filters=(
-        *scope(status="all", designation=True),
-        select("access", "App access", _ACCESS, default="all"),
-    ),
-    columns=(
-        *EMP_COLS,
-        ColumnSpec("employmentType", "Type", BADGE, 0.9),
-        ColumnSpec("phone", "Phone", TEXT, 1.2),
-        ColumnSpec("status", "Status", BADGE, 0.9),
-        ColumnSpec("appPassword", "App Password", BADGE, 0.9),
-        ColumnSpec("passwordUpdatedAt", "Password Updated", DATETIME, 1.3),
-        ColumnSpec("lastAppLogin", "Last App Sign-in", DATETIME, 1.3),
-        ColumnSpec("devices", "Devices", INTEGER, 0.7, total="sum"),
-        ColumnSpec("liveTracking", "Live Tracking", BADGE, 0.9),
-        ColumnSpec("coEmp", "Co Emp", BADGE, 0.7),
-    ),
-    run=_run_mobile_access,
-))
+register(
+    ReportSpec(
+        id="mobile-app-access",
+        title="Mobile App Access",
+        description="Who can and does sign in to the employee app: password state, last sign-in, devices, live tracking.",
+        category="employees",
+        icon="Smartphone",
+        tags=("mobile app", "login", "password", "employee app"),
+        modules=("mobile_app_login",),
+        filters=(
+            *scope(status="all", designation=True),
+            select("access", "App access", _ACCESS, default="all"),
+        ),
+        columns=(
+            *EMP_COLS,
+            ColumnSpec("employmentType", "Type", BADGE, 0.9),
+            ColumnSpec("phone", "Phone", TEXT, 1.2),
+            ColumnSpec("status", "Status", BADGE, 0.9),
+            ColumnSpec("appPassword", "App Password", BADGE, 0.9),
+            ColumnSpec("passwordUpdatedAt", "Password Updated", DATETIME, 1.3),
+            ColumnSpec("lastAppLogin", "Last App Sign-in", DATETIME, 1.3),
+            ColumnSpec("devices", "Devices", INTEGER, 0.7, total="sum"),
+            ColumnSpec("liveTracking", "Live Tracking", BADGE, 0.9),
+            ColumnSpec("coEmp", "Co Emp", BADGE, 0.7),
+        ),
+        run=_run_mobile_access,
+    )
+)

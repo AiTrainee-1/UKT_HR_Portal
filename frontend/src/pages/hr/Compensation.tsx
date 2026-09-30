@@ -23,7 +23,9 @@ import {
   usePayrollSettings,
 } from "@/lib/api-client/custom-hooks";
 import { useAuth } from "@/contexts/AuthContext";
-import { Search, Download, Landmark, Clock, CalendarPlus, History, X, Trash2 } from "lucide-react";
+import { Search, Download, Landmark, Clock, CalendarPlus, History, X, Trash2, PauseCircle } from "lucide-react";
+import { Link } from "wouter";
+import { FIRST_PORTION, SECOND_PORTION } from "@/lib/salary-split";
 
 const fmt = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -37,15 +39,22 @@ async function exportCompensation(rows: CompensationRow[]) {
     { key: "employeeName", label: "Name", width: 22 },
     { key: "department", label: "Department", width: 18 },
     { key: "employmentType", label: "Type", width: 12 },
-    { key: "basic", label: "Basic", width: 14 },
-    { key: "hra", label: "HRA", width: 14 },
-    { key: "allowances", label: "Allowances", width: 14 },
+    // First portion (50%), then the second portion (50%): each component, then the portion's total
+    ...FIRST_PORTION.map((f) => ({ key: f.key as string, label: f.label, width: 14 })),
+    { key: "firstPortion", label: "First Portion (50%)", width: 18 },
+    ...SECOND_PORTION.map((f) => ({ key: f.key as string, label: f.label, width: 14 })),
+    { key: "secondPortion", label: "Second Portion (50%)", width: 20 },
     { key: "employerPf", label: "Employer PF", width: 14 },
     { key: "employerEsi", label: "Employer ESI", width: 14 },
     { key: "grossMonthly", label: "Gross Monthly", width: 16 },
     { key: "annualCtc", label: "Annual CTC", width: 16 },
-  ] as const;
-  const currencyKeys = new Set(["basic", "hra", "allowances", "employerPf", "employerEsi", "grossMonthly", "annualCtc"]);
+    { key: "splitRecorded", label: "Salary Split", width: 14 },
+  ];
+  const currencyKeys = new Set([
+    ...FIRST_PORTION.map((f) => f.key as string),
+    ...SECOND_PORTION.map((f) => f.key as string),
+    "firstPortion", "secondPortion", "employerPf", "employerEsi", "grossMonthly", "annualCtc",
+  ]);
 
   ws.columns = columns.map(c => ({ key: c.key, width: c.width }));
   const headerRow = ws.getRow(1);
@@ -61,7 +70,10 @@ async function exportCompensation(rows: CompensationRow[]) {
     columns.forEach((col, ci) => {
       const cell = wsRow.getCell(ci + 1);
       const raw = (row as any)[col.key];
-      if (currencyKeys.has(col.key)) {
+      if (col.key === "splitRecorded") {
+        // no split at all (no monthly salary) reads blank; otherwise say whether it is saved or the automatic one
+        cell.value = row.firstPortion === null ? "" : raw ? "Recorded" : "Automatic";
+      } else if (currencyKeys.has(col.key)) {
         cell.value = raw !== null && raw !== undefined ? Number(raw) : null;
         cell.numFmt = "₹#,##0.00";
       } else {
@@ -79,10 +91,11 @@ export default function Compensation() {
   const isBranchScoped = !!user?.branchId;
   const [tab, setTab] = useState<"ctc" | "ot" | "leave" | "history">("ctc");
   const { data: payrollSettingsData } = usePayrollSettings();
-  // Treat "not loaded yet" as enabled so the page doesn't flash a disabled
-  // message before Settings has even come back -same convention as the
-  // sidebar's own gate on this same flag.
-  const featureDisabled = payrollSettingsData?.compensationFeatureEnabled === false;
+  // The page itself is mandatory and never hidden. The Settings switch only turns the background OT / Compensation
+  // features off (detection, OT pay in payroll, Compensation-Day exemptions), so with it off everything stays
+  // readable and only the changes that would have no effect are paused. "Not loaded yet" counts as on, so the
+  // notice doesn't flash before Settings has come back.
+  const featuresOff = payrollSettingsData?.compensationFeatureEnabled === false;
 
   return (
     <HrLayout>
@@ -96,45 +109,49 @@ export default function Compensation() {
           </p>
         </div>
 
-        {featureDisabled ? (
-          <Card className="border-dashed">
-            <CardContent className="py-16 text-center space-y-2">
-              <Landmark size={32} className="mx-auto text-muted-foreground" />
-              <p className="font-semibold text-gray-700">Compensation feature is currently disabled</p>
-              <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                An HR admin turned this off in Settings → Payroll → OT / Compensation. Turn it back on there to
-                use CTC Breakdown, OT Detection, Compensation Leave, and History &amp; Reports again -nothing
-                has been deleted while it's off.
-              </p>
-            </CardContent>
-          </Card>
-        ) : (
-          <>
-            <PillTabs
-              items={[
-                { value: "ctc", label: "CTC Breakdown", icon: <Landmark size={13} /> },
-                { value: "ot", label: "OT Detection", icon: <Clock size={13} /> },
-                { value: "leave", label: "Compensation Leave", icon: <CalendarPlus size={13} /> },
-                { value: "history", label: "History & Reports", icon: <History size={13} /> },
-              ]}
-              value={tab}
-              onChange={(v) => setTab(v as any)}
-              baseColor="#0f172a"
-              pillBg="#f1f5f9"
-            />
-
-            {tab === "ctc" && <CtcBreakdownTab isBranchScoped={isBranchScoped} />}
-            {tab === "ot" && <OvertimeTab />}
-            {tab === "leave" && <CompensationLeaveTab isBranchScoped={isBranchScoped} />}
-            {tab === "history" && <HistoryTab />}
-          </>
+        {featuresOff && (
+          <div
+            className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-900"
+            role="status"
+            data-testid="compensation-features-off"
+          >
+            <PauseCircle size={16} className="mt-0.5 shrink-0 text-amber-600" />
+            <p className="leading-relaxed">
+              <strong>The OT and Compensation features are switched off.</strong> This page and every record on it stay
+              available, but OT is not being detected, announced OT no longer adds pay to payslips, and Compensation
+              Days no longer exempt Late / Permission detection. Announcing OT, adding or removing Compensation Days and
+              redeeming credits are paused until they are switched back on in{" "}
+              <Link href="/hr/settings" className="font-semibold underline">
+                Settings → Payroll → OT / Compensation
+              </Link>
+              . Nothing is deleted while they are off.
+            </p>
+          </div>
         )}
+
+        <PillTabs
+          items={[
+            { value: "ctc", label: "CTC Breakdown", icon: <Landmark size={13} /> },
+            { value: "ot", label: "OT Detection", icon: <Clock size={13} /> },
+            { value: "leave", label: "Compensation Leave", icon: <CalendarPlus size={13} /> },
+            { value: "history", label: "History & Reports", icon: <History size={13} /> },
+          ]}
+          value={tab}
+          onChange={(v) => setTab(v as any)}
+          baseColor="#0f172a"
+          pillBg="#f1f5f9"
+        />
+
+        {tab === "ctc" && <CtcBreakdownTab isBranchScoped={isBranchScoped} />}
+        {tab === "ot" && <OvertimeTab featuresOff={featuresOff} />}
+        {tab === "leave" && <CompensationLeaveTab isBranchScoped={isBranchScoped} featuresOff={featuresOff} />}
+        {tab === "history" && <HistoryTab featuresOff={featuresOff} />}
       </div>
     </HrLayout>
   );
 }
 
-// ── CTC Breakdown (existing feature, unchanged content) ─────────────────────
+// ── CTC Breakdown: the 50% + 50% salary split, then employer PF / ESI and annual CTC ────────
 
 function CtcBreakdownTab({ isBranchScoped }: { isBranchScoped: boolean }) {
   const [search, setSearch] = useState("");
@@ -159,12 +176,19 @@ function CtcBreakdownTab({ isBranchScoped }: { isBranchScoped: boolean }) {
     search: debouncedSearch || undefined,
   });
   const rows = data?.results ?? [];
+  const automaticCount = rows.filter((r) => r.firstPortion !== null && !r.splitRecorded).length;
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          {data?.count ?? 0} employee{(data?.count ?? 0) !== 1 ? "s" : ""} · HRA/Basic split configurable in Settings → Payroll
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground" data-testid="ctc-summary">
+          {data?.count ?? 0} employee{(data?.count ?? 0) !== 1 ? "s" : ""} · salary shown as the 50% + 50% split from
+          Add / Edit Employee · Employer PF is worked out on the first portion
+          {automaticCount > 0 && (
+            <>
+              {" "}· <span className="text-amber-700">{automaticCount} showing the automatic split (not recorded yet)</span>
+            </>
+          )}
         </p>
         <Button variant="outline" onClick={() => exportCompensation(rows)} disabled={rows.length === 0}>
           <Download size={16} className="mr-2" /> Export to Excel
@@ -224,37 +248,64 @@ function CtcBreakdownTab({ isBranchScoped }: { isBranchScoped: boolean }) {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="pl-4">Code</TableHead>
-                <TableHead>Name</TableHead>
-                <TableHead>Department</TableHead>
-                <TableHead>Designation</TableHead>
-                <TableHead className="text-right">Basic</TableHead>
-                <TableHead className="text-right">HRA</TableHead>
-                <TableHead className="text-right">Allowances</TableHead>
-                <TableHead className="text-right">Employer PF</TableHead>
-                <TableHead className="text-right">Employer ESI</TableHead>
-                <TableHead className="text-right">Gross Monthly</TableHead>
-                <TableHead className="pr-4 text-right">Annual CTC</TableHead>
+                <TableHead rowSpan={2} className="pl-4 align-bottom">Code</TableHead>
+                <TableHead rowSpan={2} className="align-bottom">Name</TableHead>
+                <TableHead rowSpan={2} className="align-bottom">Department</TableHead>
+                <TableHead rowSpan={2} className="align-bottom">Designation</TableHead>
+                <TableHead colSpan={FIRST_PORTION.length} className="text-center border-l bg-teal-50/60 text-teal-800">
+                  First portion · 50%
+                </TableHead>
+                <TableHead colSpan={SECOND_PORTION.length} className="text-center border-l bg-blue-50/60 text-blue-800">
+                  Second portion · 50%
+                </TableHead>
+                <TableHead rowSpan={2} className="text-right align-bottom border-l">Employer PF</TableHead>
+                <TableHead rowSpan={2} className="text-right align-bottom">Employer ESI</TableHead>
+                <TableHead rowSpan={2} className="text-right align-bottom">Gross Monthly</TableHead>
+                <TableHead rowSpan={2} className="pr-4 text-right align-bottom">Annual CTC</TableHead>
+              </TableRow>
+              <TableRow>
+                {FIRST_PORTION.map((f, i) => (
+                  <TableHead key={f.key} className={`text-right bg-teal-50/60 ${i === 0 ? "border-l" : ""}`}>{f.label}</TableHead>
+                ))}
+                {SECOND_PORTION.map((f, i) => (
+                  <TableHead key={f.key} className={`text-right bg-blue-50/60 ${i === 0 ? "border-l" : ""}`}>{f.label}</TableHead>
+                ))}
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={11} className="py-16">
+                  <TableCell colSpan={16} className="py-16">
                     <CircleLoader />
                   </TableCell>
                 </TableRow>
               ) : rows.length > 0 ? (
                 rows.map((r) => (
-                  <TableRow key={r.employeeId}>
+                  <TableRow key={r.employeeId} data-testid={`ctc-row-${r.employeeCode}`}>
                     <TableCell className="pl-4 font-mono text-xs">{r.employeeCode}</TableCell>
-                    <TableCell className="font-semibold text-sm">{r.employeeName}</TableCell>
+                    <TableCell className="whitespace-nowrap font-semibold text-sm">
+                      {r.employeeName}
+                      {r.firstPortion !== null && !r.splitRecorded && (
+                        <span
+                          className="mt-0.5 block w-fit rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-none tracking-wide text-amber-700"
+                          title="No salary split is recorded for this employee yet, so the automatic 50% + 50% split is shown. Open Edit Employee and save to record it."
+                          data-testid="ctc-auto-split"
+                        >
+                          Auto split
+                        </span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-sm text-muted-foreground">{r.department ?? "—"}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{r.designation ?? "—"}</TableCell>
-                    <TableCell className="text-right text-sm">{fmt(r.basic)}</TableCell>
-                    <TableCell className="text-right text-sm">{fmt(r.hra)}</TableCell>
-                    <TableCell className="text-right text-sm">{fmt(r.allowances)}</TableCell>
-                    <TableCell className="text-right text-sm">{fmt(r.employerPf)}</TableCell>
+                    {[...FIRST_PORTION, ...SECOND_PORTION].map((f, i) => (
+                      <TableCell
+                        key={f.key}
+                        className={`text-right text-sm tabular-nums ${i === 0 || i === FIRST_PORTION.length ? "border-l" : ""}`}
+                      >
+                        {r[f.key] === null ? "—" : fmt(r[f.key] as number)}
+                      </TableCell>
+                    ))}
+                    <TableCell className="text-right text-sm border-l">{fmt(r.employerPf)}</TableCell>
                     <TableCell className="text-right text-sm">{fmt(r.employerEsi)}</TableCell>
                     <TableCell className="text-right text-sm font-semibold">{fmt(r.grossMonthly)}</TableCell>
                     <TableCell className="pr-4 text-right text-sm font-bold text-teal-700">{fmt(r.annualCtc)}</TableCell>
@@ -262,7 +313,7 @@ function CtcBreakdownTab({ isBranchScoped }: { isBranchScoped: boolean }) {
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={11} className="text-center py-12 text-muted-foreground">No employees found</TableCell>
+                  <TableCell colSpan={16} className="text-center py-12 text-muted-foreground">No employees found</TableCell>
                 </TableRow>
               )}
             </TableBody>
@@ -275,7 +326,7 @@ function CtcBreakdownTab({ isBranchScoped }: { isBranchScoped: boolean }) {
 
 // ── OT Detection & Announce ──────────────────────────────────────────────────
 
-function OvertimeTab() {
+function OvertimeTab({ featuresOff }: { featuresOff: boolean }) {
   const { toast } = useToast();
   const now = new Date();
   const [month, setMonth] = useState(now.getMonth() + 1);
@@ -358,19 +409,22 @@ function OvertimeTab() {
           <div className="ml-auto flex items-center gap-2">
             <span className="text-xs text-muted-foreground">{selected.size} selected</span>
             <Button
-              size="sm" variant="outline" disabled={selected.size === 0 || announceMutation.isPending}
+              size="sm" variant="outline" disabled={featuresOff || selected.size === 0 || announceMutation.isPending}
+              title={featuresOff ? "Paused: the OT / Compensation features are switched off in Settings → Payroll" : undefined}
               onClick={() => announce("pay")}
             >
               Announce as Pay
             </Button>
             <Button
-              size="sm" variant="outline" disabled={selected.size === 0 || announceMutation.isPending}
+              size="sm" variant="outline" disabled={featuresOff || selected.size === 0 || announceMutation.isPending}
+              title={featuresOff ? "Paused: the OT / Compensation features are switched off in Settings → Payroll" : undefined}
               onClick={() => announce("relaxation")}
             >
               Announce as Relaxation
             </Button>
             <Button
-              size="sm" variant="ghost" className="text-rose-600" disabled={selected.size === 0 || rejectMutation.isPending}
+              size="sm" variant="ghost" className="text-rose-600" disabled={featuresOff || selected.size === 0 || rejectMutation.isPending}
+              title={featuresOff ? "Paused: the OT / Compensation features are switched off in Settings → Payroll" : undefined}
               onClick={reject}
             >
               Reject
@@ -434,7 +488,7 @@ function OvertimeTab() {
 
 // ── Compensation Leave (HR-announced days) ───────────────────────────────────
 
-function CompensationLeaveTab({ isBranchScoped }: { isBranchScoped: boolean }) {
+function CompensationLeaveTab({ isBranchScoped, featuresOff }: { isBranchScoped: boolean; featuresOff: boolean }) {
   const { toast } = useToast();
   const [date, setDate] = useState("");
   const [leaveUntil, setLeaveUntil] = useState("");
@@ -578,7 +632,7 @@ function CompensationLeaveTab({ isBranchScoped }: { isBranchScoped: boolean }) {
             <Textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Diwali half-day" />
           </div>
 
-          <Button onClick={submit} disabled={createMutation.isPending}>
+          <Button onClick={submit} disabled={featuresOff || createMutation.isPending} title={featuresOff ? "Paused: the OT / Compensation features are switched off in Settings → Payroll" : undefined}>
             {createMutation.isPending ? "Announcing…" : "Announce Compensation Day"}
           </Button>
         </CardContent>
@@ -604,7 +658,7 @@ function CompensationLeaveTab({ isBranchScoped }: { isBranchScoped: boolean }) {
                   </p>
                 </div>
                 {a.date > today && (
-                  <Button size="icon" variant="ghost" className="text-rose-600" onClick={() => remove(a.id)}>
+                  <Button size="icon" variant="ghost" className="text-rose-600" onClick={() => remove(a.id)} disabled={featuresOff} title={featuresOff ? "Paused: the OT / Compensation features are switched off in Settings → Payroll" : undefined}>
                     <Trash2 size={14} />
                   </Button>
                 )}
@@ -656,7 +710,7 @@ async function exportCompensationHistory(
   await downloadWorkbook(wb, `compensation-history-${year}-${String(month).padStart(2, "0")}.xlsx`);
 }
 
-function HistoryTab() {
+function HistoryTab({ featuresOff }: { featuresOff: boolean }) {
   const { toast } = useToast();
   const now = new Date();
   const [month, setMonth] = useState(now.getMonth() + 1);
@@ -773,7 +827,7 @@ function HistoryTab() {
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">{c.sourceDate ?? "—"}</TableCell>
                   <TableCell className="pr-4 text-right">
-                    <Button size="sm" variant="outline" onClick={() => redeem(c.id)} disabled={redeemMutation.isPending}>
+                    <Button size="sm" variant="outline" onClick={() => redeem(c.id)} disabled={featuresOff || redeemMutation.isPending} title={featuresOff ? "Paused: the OT / Compensation features are switched off in Settings → Payroll" : undefined}>
                       Redeem
                     </Button>
                   </TableCell>

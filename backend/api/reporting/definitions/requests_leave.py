@@ -32,7 +32,7 @@ from api.models import (
     OnDutySession,
 )
 
-from ..common import EMP_COLS_SHORT, emp_cells, with_subtotals
+from ..common import emp_cells, with_subtotals
 from ..filters import boolean, branches, date_range, departments, scope, select, text, year
 from ..formatting import MONTH_ABBR, display_date, fmt_dt, parse_date
 from ..registry import register
@@ -59,8 +59,10 @@ def _f(value) -> float | None:
 
 
 def _casual_scope_note(ctx) -> str | None:
-    return None if C.can_view(ctx, "casual_leave") else (
-        "Casual Leave (CL system) is not included: your role does not have access to the Casual Leave module."
+    return (
+        None
+        if C.can_view(ctx, "casual_leave")
+        else ("Casual Leave (CL system) is not included: your role does not have access to the Casual Leave module.")
     )
 
 
@@ -69,26 +71,26 @@ def _casual_scope_note(ctx) -> str | None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 _REGISTER_COLUMNS = (
-    *EMP_COLS_SHORT,
-    ColumnSpec("leaveType", "Leave type", TEXT, 1.4),
-    ColumnSpec("startDate", "From", DATE, 1.1),
-    ColumnSpec("endDate", "To", DATE, 1.1),
-    ColumnSpec("dayType", "Day type", BADGE, 1.3),
-    ColumnSpec("totalDays", "Total days", NUMBER, 0.8),
-    ColumnSpec("daysInPeriod", "Days in period", NUMBER, 0.8),
-    ColumnSpec("advanceDays", "Notice (days)", INTEGER, 0.8),
-    ColumnSpec("reason", "Reason", TEXT, 2.0),
-    ColumnSpec("appliedOn", "Applied on", DATETIME, 1.4),
-    ColumnSpec("status", "Status", BADGE, 1.0),
-    ColumnSpec("approvedBy", "Decided by", TEXT, 1.5),
-    ColumnSpec("approverRole", "Role", BADGE, 0.8),
-    ColumnSpec("hrComment", "Comment", TEXT, 1.6),
-    ColumnSpec("payImpact", "Pay impact", BADGE, 1.6),
+    *C.emp_columns(name=1.5, dept=1.65),
+    ColumnSpec("leaveType", "Leave type", TEXT, 1.2),
+    ColumnSpec("startDate", "From", DATE, 1.4),
+    ColumnSpec("endDate", "To", DATE, 1.4),
+    ColumnSpec("dayType", "Day type", BADGE, 1.1),
+    ColumnSpec("totalDays", "Total days", NUMBER, 0.7),
+    ColumnSpec("daysInPeriod", "Days in period", NUMBER, 0.95),
+    ColumnSpec("advanceDays", "Notice (days)", INTEGER, 0.95),
+    ColumnSpec("reason", "Reason", TEXT, 1.1),
+    ColumnSpec("appliedOn", "Applied on", DATETIME, 1.5),
+    ColumnSpec("status", "Status", BADGE, 1.1),
+    ColumnSpec("approvedBy", "Decided by", TEXT, 1.2),
+    ColumnSpec("approverRole", "Role", BADGE, 0.6),
+    ColumnSpec("hrComment", "Comment", TEXT, 1.2),
+    ColumnSpec("payImpact", "Pay impact", BADGE, 1.4),
 )
 
 
 def _pay_impact(emp, lr) -> str | None:
-    status = C.status_badge(lr.status)
+    status = C.status_key(lr.status)
     if status == "approved":
         if emp.employment_type == "production":
             return "No effect (production)"
@@ -153,7 +155,7 @@ def _run_leave_register(ctx) -> ReportResult:
     half_requests = 0
     for lr, start, end, info, dates in entries:
         emp = lr.employee
-        st = C.status_badge(lr.status)
+        st = C.status_key(lr.status)
         days_in_period = 0.5 * len(dates) if lr.is_half_day else float(len(dates))
         applied = C.ist_date(lr.created_at)
         item = (lr.employee_id, dates, lr.is_half_day, lr.half_day_slot)
@@ -164,23 +166,25 @@ def _run_leave_register(ctx) -> ReportResult:
                 lop_items.append(item)
         if lr.is_half_day:
             half_requests += 1
-        rows.append({
-            **emp_cells(emp),
-            "leaveType": info.label,
-            "startDate": start.isoformat(),
-            "endDate": end.isoformat(),
-            "dayType": _day_type(lr),
-            "totalDays": _f(lr.total_days),
-            "daysInPeriod": days_in_period,
-            "advanceDays": (start - applied).days if applied else None,
-            "reason": (lr.reason or "").strip() or None,
-            "appliedOn": fmt_dt(lr.created_at),
-            "status": st,
-            "approvedBy": lr.approved_by or None,
-            "approverRole": C.role_label(lr.approver_role),
-            "hrComment": (lr.hr_comment or "").strip() or None,
-            "payImpact": _pay_impact(emp, lr),
-        })
+        rows.append(
+            {
+                **emp_cells(emp),
+                "leaveType": info.label,
+                "startDate": start.isoformat(),
+                "endDate": end.isoformat(),
+                "dayType": _day_type(lr),
+                "totalDays": _f(lr.total_days),
+                "daysInPeriod": days_in_period,
+                "advanceDays": (start - applied).days if applied else None,
+                "reason": (lr.reason or "").strip() or None,
+                "appliedOn": fmt_dt(lr.created_at),
+                "status": C.status_label(lr.status),
+                "approvedBy": lr.approved_by or None,
+                "approverRole": C.role_label(lr.approver_role),
+                "hrComment": (lr.hr_comment or "").strip() or None,
+                "payImpact": _pay_impact(emp, lr),
+            }
+        )
 
     summary = [
         {"label": "Leave requests", "value": len(rows), "format": "integer"},
@@ -205,34 +209,39 @@ def _run_leave_register(ctx) -> ReportResult:
         "Requests deleted by HR are not recorded anywhere and therefore cannot appear here.",
     ]
     if unreadable:
-        notes.append(C.id_list_note(
-            f"{len(unreadable)} leave request(s) with unreadable start/end dates could not be placed in the date "
-            "range and are not listed", unreadable,
-        ))
+        notes.append(
+            C.id_list_note(
+                f"{len(unreadable)} leave request(s) with unreadable start/end dates could not be placed in the date "
+                "range and are not listed",
+                unreadable,
+            )
+        )
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="leave-register",
-    title="Leave Register",
-    description="Every leave application in the period with type, days, half-day, approver, decision and payroll effect.",
-    category=CATEGORY,
-    icon="CalendarOff",
-    tags=("leave", "lop", "loss of pay", "half day", "approval"),
-    family="leave",
-    variant="Register",
-    modules=("leave",),
-    filters=(
-        date_range(label="Leave falls within"),
-        *scope(status="all"),
-        select("status", "Status", STATUS_OPTIONS),
-        select("dayType", "Day type", (("full", "Full day"), ("half", "Half day"))),
-        select("approverRole", "Decided by", (("hr", "HR"), ("dept_head", "Department head"))),
-        text("leaveType", "Leave type", placeholder="Code or name, e.g. CL"),
-    ),
-    columns=_REGISTER_COLUMNS,
-    run=_run_leave_register,
-))
+register(
+    ReportSpec(
+        id="leave-register",
+        title="Leave Register",
+        description="Every leave application in the period with type, days, half-day, approver, decision and payroll effect.",
+        category=CATEGORY,
+        icon="CalendarOff",
+        tags=("leave", "lop", "loss of pay", "half day", "approval"),
+        family="leave",
+        variant="Register",
+        modules=("leave",),
+        filters=(
+            date_range(label="Leave falls within"),
+            *scope(status="all"),
+            select("status", "Status", STATUS_OPTIONS),
+            select("dayType", "Day type", (("full", "Full day"), ("half", "Half day"))),
+            select("approverRole", "Decided by", (("hr", "HR"), ("dept_head", "Department head"))),
+            text("leaveType", "Leave type", placeholder="Code or name, e.g. CL"),
+        ),
+        columns=_REGISTER_COLUMNS,
+        run=_run_leave_register,
+    )
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -240,10 +249,8 @@ register(ReportSpec(
 # ══════════════════════════════════════════════════════════════════════════════
 
 _BALANCE_COLUMNS = (
-    ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
-    ColumnSpec("employeeName", "Employee", TEXT, 2.2),
-    ColumnSpec("department", "Department", TEXT, 1.5),
-    ColumnSpec("leaveType", "Leave type", TEXT, 1.8),
+    *C.emp_columns(name=2.0, dept=1.5),
+    ColumnSpec("leaveType", "Leave type", TEXT, 1.9),
     ColumnSpec("leaveCode", "Code", TEXT, 0.7),
     ColumnSpec("isPaid", "Paid?", BADGE, 0.8),
     ColumnSpec("allocated", "Allocated", NUMBER, 0.9, total="sum"),
@@ -266,8 +273,7 @@ def _run_leave_balance(ctx) -> ReportResult:
     needle = ctx.param("leaveType")
 
     balances = list(
-        LeaveBalance.objects.select_related("employee__department", "employee__designation")
-        .filter(emp_q, year=yr)
+        LeaveBalance.objects.select_related("employee__department", "employee__designation").filter(emp_q, year=yr)
     )
     requests = (
         LeaveRequest.objects.select_related("employee__department", "employee__designation")
@@ -287,7 +293,9 @@ def _run_leave_balance(ctx) -> ReportResult:
         employees[b.employee_id] = b.employee
         ledger[(b.employee_id, info.key)] = b
 
-    usage: dict[tuple[int, str], dict[str, Decimal]] = defaultdict(lambda: {"approved": Decimal(0), "pending": Decimal(0)})
+    usage: dict[tuple[int, str], dict[str, Decimal]] = defaultdict(
+        lambda: {"approved": Decimal(0), "pending": Decimal(0)}
+    )
     unreadable: list[int] = []
     for lr in requests:
         start = parse_date(lr.start_date)
@@ -312,29 +320,30 @@ def _run_leave_balance(ctx) -> ReportResult:
         u = usage.get(key) or {"approved": Decimal(0), "pending": Decimal(0)}
         allocated = b.allocated if b else None
         approved = u["approved"]
-        rows.append({
-            **emp_cells(employees[emp_id]),
-            "leaveType": info.label,
-            "leaveCode": info.code,
-            "isPaid": None if info.is_paid is None else ("Paid" if info.is_paid else "Unpaid"),
-            "allocated": _f(allocated),
-            "carriedForward": _f(b.carried_forward) if b else None,
-            "ledgerUsed": _f(b.used) if b else None,
-            "approvedDays": _f(approved),
-            "pendingDays": _f(u["pending"]),
-            "ledgerRemaining": _f(b.remaining) if b else None,
-            "computedRemaining": _f(allocated - approved) if allocated is not None else None,
-            "variance": _f(b.used - approved) if b else None,
-            "_mismatch": bool(b and abs(b.used - approved) >= Decimal("0.05")),
-        })
+        rows.append(
+            {
+                **emp_cells(employees[emp_id]),
+                "leaveType": info.label,
+                "leaveCode": info.code,
+                "isPaid": None if info.is_paid is None else ("Paid" if info.is_paid else "Unpaid"),
+                "allocated": _f(allocated),
+                "carriedForward": _f(b.carried_forward) if b else None,
+                "ledgerUsed": _f(b.used) if b else None,
+                "approvedDays": _f(approved),
+                "pendingDays": _f(u["pending"]),
+                "ledgerRemaining": _f(b.remaining) if b else None,
+                "computedRemaining": _f(allocated - approved) if allocated is not None else None,
+                "variance": _f(b.used - approved) if b else None,
+                "_mismatch": bool(b and abs(b.used - approved) >= Decimal("0.05")),
+            }
+        )
 
     notes: list[str] = []
     include_casual = bool(ctx.param("includeCasual", True))
     if include_casual and C.can_view(ctx, "casual_leave"):
         cl: dict[int, dict] = {}
-        for r in (
-            CasualLeaveRequest.objects.select_related("employee__department", "employee__designation")
-            .filter(emp_q, date__year=yr, status__in=("approved", "pending"))
+        for r in CasualLeaveRequest.objects.select_related("employee__department", "employee__designation").filter(
+            emp_q, date__year=yr, status__in=("approved", "pending")
         ):
             slot = cl.setdefault(r.employee_id, {"emp": r.employee, "approved": 0, "pending": 0})
             slot[r.status] += 1
@@ -342,21 +351,23 @@ def _run_leave_balance(ctx) -> ReportResult:
         if C.type_matches(cl_info, needle):
             for emp_id, slot in cl.items():
                 employees[emp_id] = slot["emp"]
-                rows.append({
-                    **emp_cells(slot["emp"]),
-                    "leaveType": CL_SYSTEM_LABEL,
-                    "leaveCode": None,
-                    "isPaid": "Paid",
-                    "allocated": float(CL_YEARLY_ENTITLEMENT),
-                    "carriedForward": None,
-                    "ledgerUsed": None,
-                    "approvedDays": float(slot["approved"]),
-                    "pendingDays": float(slot["pending"]),
-                    "ledgerRemaining": None,
-                    "computedRemaining": float(max(0, CL_YEARLY_ENTITLEMENT - slot["approved"])),
-                    "variance": None,
-                    "_mismatch": False,
-                })
+                rows.append(
+                    {
+                        **emp_cells(slot["emp"]),
+                        "leaveType": CL_SYSTEM_LABEL,
+                        "leaveCode": None,
+                        "isPaid": "Paid",
+                        "allocated": float(CL_YEARLY_ENTITLEMENT),
+                        "carriedForward": None,
+                        "ledgerUsed": None,
+                        "approvedDays": float(slot["approved"]),
+                        "pendingDays": float(slot["pending"]),
+                        "ledgerRemaining": None,
+                        "computedRemaining": float(max(0, CL_YEARLY_ENTITLEMENT - slot["approved"])),
+                        "variance": None,
+                        "_mismatch": False,
+                    }
+                )
         notes.append(
             f"Casual Leave (CL system) rows use the fixed yearly entitlement of {CL_YEARLY_ENTITLEMENT} days, "
             "which is a constant in the app rather than a LeaveBalance record; they have no ledger figures."
@@ -366,8 +377,7 @@ def _run_leave_balance(ctx) -> ReportResult:
 
     if ctx.param("onlyMismatch"):
         rows = [
-            r for r in rows
-            if r["_mismatch"] or (r["computedRemaining"] is not None and r["computedRemaining"] < 0)
+            r for r in rows if r["_mismatch"] or (r["computedRemaining"] is not None and r["computedRemaining"] < 0)
         ]
     rows.sort(key=lambda r: (r["employeeCode"], r["leaveType"]))
 
@@ -378,17 +388,28 @@ def _run_leave_balance(ctx) -> ReportResult:
     summary = [
         {"label": "Employees with an allocation", "value": len(employees_with_allocation), "format": "integer"},
         {"label": "Days allocated", "value": round(sum(r["allocated"] or 0 for r in rows), 2), "format": "number"},
-        {"label": "Approved days taken", "value": round(sum(r["approvedDays"] or 0 for r in rows), 2), "format": "number"},
-        {"label": "Remaining (computed)", "value": round(sum(r["computedRemaining"] or 0 for r in rows), 2), "format": "number"},
+        {
+            "label": "Approved days taken",
+            "value": round(sum(r["approvedDays"] or 0 for r in rows), 2),
+            "format": "number",
+        },
+        {
+            "label": "Remaining (computed)",
+            "value": round(sum(r["computedRemaining"] or 0 for r in rows), 2),
+            "format": "number",
+        },
         {"label": "Employees over-drawn", "value": len(overdrawn), "format": "integer"},
         {"label": "Ledger mismatches", "value": mismatches, "format": "integer"},
     ]
 
     if not balances:
-        notes.insert(0, (
-            f"No leave balances have been allocated for {yr} in this selection; the usage shown is computed "
-            "from approved and pending leave requests only."
-        ))
+        notes.insert(
+            0,
+            (
+                f"No leave balances have been allocated for {yr} in this selection; the usage shown is computed "
+                "from approved and pending leave requests only."
+            ),
+        )
     notes += [
         "'Ledger' columns are the LeaveBalance figures HR maintains. 'Approved days' and 'Pending days' are "
         "computed independently from leave requests that start in the year (each request's stored total days, "
@@ -406,30 +427,39 @@ def _run_leave_balance(ctx) -> ReportResult:
     if unassigned > 0 and not ctx.param("onlyMismatch") and not needle:
         notes.append(f"{unassigned} employee(s) in this selection have no allocation and no leave in {yr}.")
     if unreadable:
-        notes.append(C.id_list_note(
-            f"{len(unreadable)} leave request(s) with unreadable dates are not counted", unreadable,
-        ))
+        notes.append(
+            C.id_list_note(
+                f"{len(unreadable)} leave request(s) with unreadable dates are not counted",
+                unreadable,
+            )
+        )
     return ReportResult(rows=rows, summary=summary, notes=[n for n in notes if n])
 
 
-register(ReportSpec(
-    id="leave-balance-statement",
-    title="Leave Balance Statement",
-    description="Allocation, carry-forward, ledger usage and independently computed usage per employee and leave type.",
-    category=CATEGORY,
-    icon="Scale",
-    tags=("leave balance", "allocation", "entitlement", "carry forward"),
-    modules=("leave",),
-    filters=(
-        year(),
-        *scope(status="active"),
-        text("leaveType", "Leave type", placeholder="Code or name, e.g. CL"),
-        boolean("onlyMismatch", "Only rows needing attention", help="Ledger differs from approved leave, or the balance is overdrawn."),
-        boolean("includeCasual", "Include Casual Leave (CL system)", default=True),
-    ),
-    columns=_BALANCE_COLUMNS,
-    run=_run_leave_balance,
-))
+register(
+    ReportSpec(
+        id="leave-balance-statement",
+        title="Leave Balance Statement",
+        description="Allocation, carry-forward, ledger usage and independently computed usage per employee and leave type.",
+        category=CATEGORY,
+        icon="Scale",
+        tags=("leave balance", "allocation", "entitlement", "carry forward"),
+        modules=("leave",),
+        filters=(
+            year(),
+            *scope(status="active"),
+            text("leaveType", "Leave type", placeholder="Code or name, e.g. CL"),
+            boolean(
+                "onlyMismatch",
+                "Only rows needing attention",
+                help="Ledger differs from approved leave, or the balance is overdrawn.",
+            ),
+            boolean("includeCasual", "Include Casual Leave (CL system)", default=True),
+        ),
+        columns=_BALANCE_COLUMNS,
+        run=_run_leave_balance,
+    )
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -437,10 +467,8 @@ register(ReportSpec(
 # ══════════════════════════════════════════════════════════════════════════════
 
 _MONTHLY_COLUMNS = (
-    ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
-    ColumnSpec("employeeName", "Employee", TEXT, 2.2),
-    ColumnSpec("department", "Department", TEXT, 1.4),
-    ColumnSpec("leaveType", "Leave type", TEXT, 1.6),
+    *C.emp_columns(name=2.0, dept=1.4),
+    ColumnSpec("leaveType", "Leave type", TEXT, 1.9),
     *(ColumnSpec(k, MONTH_ABBR[i], NUMBER, 0.6, total="sum") for i, k in enumerate(MONTH_KEYS)),
     ColumnSpec("total", "Total", NUMBER, 0.8, total="sum"),
 )
@@ -503,9 +531,8 @@ def _run_leave_monthly(ctx) -> ReportResult:
     if include_casual and C.can_view(ctx, "casual_leave"):
         if C.type_matches(C.TypeInfo("cl-system", CL_SYSTEM_LABEL, None, True), needle):
             per_emp: dict[int, tuple] = {}
-            for r in (
-                CasualLeaveRequest.objects.select_related("employee__department", "employee__designation")
-                .filter(emp_q, status="approved", date__year=yr)
+            for r in CasualLeaveRequest.objects.select_related("employee__department", "employee__designation").filter(
+                emp_q, status="approved", date__year=yr
             ):
                 emp, months = per_emp.setdefault(r.employee_id, (r.employee, [0.0] * 12))
                 months[r.date.month - 1] += 1
@@ -514,9 +541,13 @@ def _run_leave_monthly(ctx) -> ReportResult:
     elif include_casual:
         notes.append(_casual_scope_note(ctx))
 
-    grid.sort(key=lambda g: (
-        g[0].department.name if g[0].department_id else "Unassigned", g[0].employee_code, g[1],
-    ))
+    grid.sort(
+        key=lambda g: (
+            g[0].department.name if g[0].department_id else "Unassigned",
+            g[0].employee_code,
+            g[1],
+        )
+    )
     rows = []
     for emp, label, months in grid:
         row = {**emp_cells(emp), "leaveType": label, "total": round(sum(months), 2)}
@@ -533,11 +564,22 @@ def _run_leave_monthly(ctx) -> ReportResult:
     summary = [
         {"label": "Leave days in the year", "value": total_days, "format": "number"},
         {"label": "Employees with leave", "value": len(employees), "format": "integer"},
-        {"label": "Average days per employee", "value": round(total_days / len(employees), 2) if employees else None,
-         "format": "number"},
-        {"label": "Department with most leave", "value": f"{top[0]} ({top[1]:g} days)" if top else None, "format": "text"},
+        {
+            "label": "Average days per employee",
+            "value": round(total_days / len(employees), 2) if employees else None,
+            "format": "number",
+        },
+        {
+            "label": "Department with most leave",
+            "value": f"{top[0]} ({top[1]:g} days)" if top else None,
+            "format": "text",
+        },
     ]
     rows = with_subtotals(rows, lambda r: r["department"], [*MONTH_KEYS, "total"])
+    for r in rows:
+        if r.get("_kind"):  # a dash, not a 0, for a month with no leave -- as on the employee rows
+            for k in MONTH_KEYS:
+                r[k] = r[k] or None
     notes = [
         "Approved leave only, split across months by date. Sundays are not counted and public holidays are "
         "not excluded (the same convention as the stored total days); a half-day counts 0.5. A dash means no "
@@ -547,31 +589,36 @@ def _run_leave_monthly(ctx) -> ReportResult:
         *notes,
     ]
     if unreadable:
-        notes.append(C.id_list_note(
-            f"{len(unreadable)} approved leave request(s) with unreadable dates are not counted", unreadable,
-        ))
+        notes.append(
+            C.id_list_note(
+                f"{len(unreadable)} approved leave request(s) with unreadable dates are not counted",
+                unreadable,
+            )
+        )
     return ReportResult(rows=rows, summary=summary, notes=[n for n in notes if n])
 
 
-register(ReportSpec(
-    id="leave-summary-monthly",
-    title="Monthly Leave Summary",
-    description="Approved leave days per employee and leave type for each month of the year, with department subtotals.",
-    category=CATEGORY,
-    icon="CalendarRange",
-    tags=("leave", "annual", "monthly", "grid"),
-    family="leave",
-    variant="Monthly Summary",
-    modules=("leave",),
-    filters=(
-        year(),
-        *scope(status="all"),
-        text("leaveType", "Leave type", placeholder="Code or name, e.g. CL"),
-        boolean("includeCasual", "Include Casual Leave (CL system)", default=True),
-    ),
-    columns=_MONTHLY_COLUMNS,
-    run=_run_leave_monthly,
-))
+register(
+    ReportSpec(
+        id="leave-summary-monthly",
+        title="Monthly Leave Summary",
+        description="Approved leave days per employee and leave type for each month of the year, with department subtotals.",
+        category=CATEGORY,
+        icon="BarChart3",
+        tags=("leave", "annual", "monthly", "grid"),
+        family="leave",
+        variant="Monthly Summary",
+        modules=("leave",),
+        filters=(
+            year(),
+            *scope(status="all"),
+            text("leaveType", "Leave type", placeholder="Code or name, e.g. CL"),
+            boolean("includeCasual", "Include Casual Leave (CL system)", default=True),
+        ),
+        columns=_MONTHLY_COLUMNS,
+        run=_run_leave_monthly,
+    )
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -584,12 +631,12 @@ _CALENDAR_COLUMNS = (
     ColumnSpec("dayType", "Day type", BADGE, 1.0),
     ColumnSpec("department", "Department", TEXT, 1.8),
     ColumnSpec("strength", "Strength", INTEGER, 0.8),
-    ColumnSpec("onLeaveFull", "Full-day leave", NUMBER, 0.9),
-    ColumnSpec("onLeaveHalf", "Half-day leave", NUMBER, 0.9),
-    ColumnSpec("casualLeave", "Casual leave", NUMBER, 0.9),
-    ColumnSpec("onDuty", "On duty", NUMBER, 0.8),
-    ColumnSpec("permission", "Permission", NUMBER, 0.8),
-    ColumnSpec("absentUnexplained", "Absent (no leave)", NUMBER, 1.0),
+    ColumnSpec("onLeaveFull", "Full-day leave", INTEGER, 0.9),
+    ColumnSpec("onLeaveHalf", "Half-day leave", INTEGER, 0.9),
+    ColumnSpec("casualLeave", "Casual leave", INTEGER, 0.9),
+    ColumnSpec("onDuty", "On duty", INTEGER, 0.8),
+    ColumnSpec("permission", "Permission", INTEGER, 1.0),
+    ColumnSpec("absentUnexplained", "Absent (no leave)", INTEGER, 1.0),
     ColumnSpec("leavePct", "Leave %", PERCENT, 0.8),
 )
 
@@ -635,32 +682,37 @@ def _run_leave_calendar(ctx) -> ReportResult:
                 full[d].add(lr.employee_id)
                 d += timedelta(days=1)
     if can["casual"]:
-        for eid, d in CasualLeaveRequest.objects.filter(emp_q, active, status="approved", date__range=(lo, hi)).values_list(
-            "employee_id", "date"
-        ):
+        for eid, d in CasualLeaveRequest.objects.filter(
+            emp_q, active, status="approved", date__range=(lo, hi)
+        ).values_list("employee_id", "date"):
             cl[d].add(eid)
     if can["duty"]:
         start_dt, end_dt = C.ist_bounds(lo, hi)
         for eid, created in OnDutySession.objects.filter(
-            emp_q, active, status__in=("active", "completed"), created_at__gte=start_dt, created_at__lt=end_dt,
+            emp_q,
+            active,
+            status__in=("active", "completed"),
+            created_at__gte=start_dt,
+            created_at__lt=end_dt,
         ).values_list("employee_id", "created_at"):
             duty[C.ist_date(created)].add(eid)
     if can["permission"]:
-        for eid, d in EmployeePermission.objects.filter(emp_q, active, status="approved", date__range=(lo, hi)).values_list(
-            "employee_id", "date"
-        ):
+        for eid, d in EmployeePermission.objects.filter(
+            emp_q, active, status="approved", date__range=(lo, hi)
+        ).values_list("employee_id", "date"):
             perm[d].add(eid)
     if can["absent"]:
-        for eid, d in AttendanceDayRecord.objects.filter(emp_q, active, status="absent", date__range=(lo, hi)).values_list(
-            "employee_id", "date"
-        ):
+        for eid, d in AttendanceDayRecord.objects.filter(
+            emp_q, active, status="absent", date__range=(lo, hi)
+        ).values_list("employee_id", "date"):
             absent[d].add(eid)
 
     by_dept: dict[int | None, list] = defaultdict(list)
     for e in roster:
         by_dept[e.department_id].append(e)
     dept_rows = {
-        d.id: d for d in Department.objects.select_related("branch").filter(id__in=[k for k in by_dept if k is not None])
+        d.id: d
+        for d in Department.objects.select_related("branch").filter(id__in=[k for k in by_dept if k is not None])
     }
     labels: dict[int | None, str] = {}
     for dept_id in by_dept:
@@ -680,15 +732,20 @@ def _run_leave_calendar(ctx) -> ReportResult:
         day_expected = 0
         for dept_id in order:
             present = [e for e in by_dept[dept_id] if joined[e.id] is None or joined[e.id] <= d]
-            working = [
-                e for e in present
-                if not (is_holiday or (d.weekday() == 6 and e.employment_type == "staff"))
-            ]
+            working = [e for e in present if not (is_holiday or (d.weekday() == 6 and e.employment_type == "staff"))]
             row = {
-                "date": d.isoformat(), "weekday": d.strftime("%a"), "dayType": day_type,
-                "department": labels[dept_id], "strength": len(present),
-                "onLeaveFull": None, "onLeaveHalf": None, "casualLeave": None, "onDuty": None,
-                "permission": None, "absentUnexplained": None, "leavePct": None,
+                "date": d.isoformat(),
+                "weekday": d.strftime("%a"),
+                "dayType": day_type,
+                "department": labels[dept_id],
+                "strength": len(present),
+                "onLeaveFull": None,
+                "onLeaveHalf": None,
+                "casualLeave": None,
+                "onDuty": None,
+                "permission": None,
+                "absentUnexplained": None,
+                "leavePct": None,
             }
             if working:
                 n_full = n_cl = n_half = n_duty = n_perm = n_abs = 0
@@ -705,15 +762,15 @@ def _run_leave_calendar(ctx) -> ReportResult:
                     n_abs += eid in absent[d] and not (is_full or is_cl or is_half)
                 leave_eq = n_full + n_cl + 0.5 * n_half
                 if can["leave"]:
-                    row["onLeaveFull"], row["onLeaveHalf"] = float(n_full), float(n_half)
+                    row["onLeaveFull"], row["onLeaveHalf"] = n_full, n_half
                 if can["casual"]:
-                    row["casualLeave"] = float(n_cl)
+                    row["casualLeave"] = n_cl
                 if can["duty"]:
-                    row["onDuty"] = float(n_duty)
+                    row["onDuty"] = n_duty
                 if can["permission"]:
-                    row["permission"] = float(n_perm)
+                    row["permission"] = n_perm
                 if can["absent"]:
-                    row["absentUnexplained"] = float(n_abs)
+                    row["absentUnexplained"] = n_abs
                 if can["leave"] or can["casual"]:
                     row["leavePct"] = round(leave_eq / len(working) * 100, 1)
                     day_leave += leave_eq
@@ -727,8 +784,11 @@ def _run_leave_calendar(ctx) -> ReportResult:
     summary = [
         {"label": "Days in range", "value": len(days), "format": "integer"},
         {"label": "Departments", "value": len(order), "format": "integer"},
-        {"label": "Peak leave day",
-         "value": f"{display_date(peak[0])} ({peak[1]:g} on leave)" if peak and peak[1] > 0 else None, "format": "text"},
+        {
+            "label": "Peak leave day",
+            "value": f"{display_date(peak[0])} ({peak[1]:g} on leave)" if peak and peak[1] > 0 else None,
+            "format": "text",
+        },
         {"label": "Average daily leave %", "value": avg_pct, "format": "percent"},
     ]
     notes = [
@@ -741,34 +801,48 @@ def _run_leave_calendar(ctx) -> ReportResult:
         "'Absent (no leave)' counts stored attendance records marked Absent that no approved leave covers; days "
         "that were never computed have no record, so it can under-state absence.",
     ]
-    hidden = [name for key, name in (
-        ("leave", "leave"), ("casual", "casual leave"), ("duty", "on-duty"), ("permission", "permission"),
-        ("absent", "attendance"),
-    ) if not can[key]]
+    hidden = [
+        name
+        for key, name in (
+            ("leave", "leave"),
+            ("casual", "casual leave"),
+            ("duty", "on-duty"),
+            ("permission", "permission"),
+            ("absent", "attendance"),
+        )
+        if not can[key]
+    ]
     if hidden:
-        notes.append("Columns left blank because your role cannot open that module elsewhere: " + ", ".join(hidden) + ".")
+        notes.append(
+            "Columns left blank because your role cannot open that module elsewhere: " + ", ".join(hidden) + "."
+        )
     if unreadable:
-        notes.append(C.id_list_note(
-            f"{len(unreadable)} approved leave request(s) with unreadable dates are not counted", unreadable,
-        ))
+        notes.append(
+            C.id_list_note(
+                f"{len(unreadable)} approved leave request(s) with unreadable dates are not counted",
+                unreadable,
+            )
+        )
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="leave-department-calendar",
-    title="Daily Leave Load by Department",
-    description="Per day and department: strength, employees on leave, casual leave, on duty, permission and unexplained absence.",
-    category=CATEGORY,
-    icon="CalendarClock",
-    tags=("leave calendar", "absence", "strength", "department"),
-    modules=("leave", "casual_leave", "requests", "geo_attendance", "attendance"),
-    filters=(
-        date_range(max_days=31, label="Dates"),
-        *scope(designation=False, employee=False, status=None),
-    ),
-    columns=_CALENDAR_COLUMNS,
-    run=_run_leave_calendar,
-))
+register(
+    ReportSpec(
+        id="leave-department-calendar",
+        title="Daily Leave Load by Department",
+        description="Per day and department: strength, employees on leave, casual leave, on duty, permission and unexplained absence.",
+        category=CATEGORY,
+        icon="CalendarClock",
+        tags=("leave calendar", "absence", "strength", "department"),
+        modules=("leave", "casual_leave", "requests", "geo_attendance", "attendance"),
+        filters=(
+            date_range(max_days=31, label="Dates"),
+            *scope(designation=False, employee=False, status=None),
+        ),
+        columns=_CALENDAR_COLUMNS,
+        run=_run_leave_calendar,
+    )
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -782,10 +856,13 @@ _HOLIDAY_COLUMNS = (
     ColumnSpec("holidayType", "Type", BADGE, 1.0),
     ColumnSpec("scope", "Applies to", TEXT, 1.5),
     ColumnSpec("department", "Department", TEXT, 1.5),
-    ColumnSpec("isRecurring", "Recurring", BADGE, 0.9),
-    ColumnSpec("onSunday", "On a Sunday", BADGE, 0.9),
+    ColumnSpec("isRecurring", "Recurring", TEXT, 0.9, align="center"),
+    ColumnSpec("onSunday", "On a Sunday", TEXT, 0.9, align="center"),
     ColumnSpec("description", "Notes", TEXT, 2.4),
 )
+
+
+_HOLIDAY_TYPE_LABELS = dict(Holiday.HOLIDAY_TYPES)
 
 
 def _run_holiday_list(ctx) -> ReportResult:
@@ -811,17 +888,19 @@ def _run_holiday_list(ctx) -> ReportResult:
     for h in qs.order_by("date", "id"):
         date_counts[h.date] += 1
         type_counts[h.holiday_type] += 1
-        rows.append({
-            "date": h.date.isoformat(),
-            "weekday": h.date.strftime("%A"),
-            "name": h.name,
-            "holidayType": h.holiday_type,
-            "scope": h.branch.name if h.branch_id else "All branches",
-            "department": h.department.name if h.department_id else "All departments",
-            "isRecurring": "Yes" if h.is_recurring else "No",
-            "onSunday": "Yes" if h.date.weekday() == 6 else "No",
-            "description": (h.description or "").strip() or None,
-        })
+        rows.append(
+            {
+                "date": h.date.isoformat(),
+                "weekday": h.date.strftime("%A"),
+                "name": h.name,
+                "holidayType": _HOLIDAY_TYPE_LABELS.get(h.holiday_type, str(h.holiday_type).title()),
+                "scope": h.branch.name if h.branch_id else "All branches",
+                "department": h.department.name if h.department_id else "All departments",
+                "isRecurring": "Yes" if h.is_recurring else "No",
+                "onSunday": "Yes" if h.date.weekday() == 6 else "No",
+                "description": (h.description or "").strip() or None,
+            }
+        )
     on_sunday = sum(1 for d in date_counts if d.weekday() == 6)
     summary = [
         {"label": "Holidays listed", "value": len(rows), "format": "integer"},
@@ -844,21 +923,26 @@ def _run_holiday_list(ctx) -> ReportResult:
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-register(ReportSpec(
-    id="holiday-list",
-    title="Holiday Calendar",
-    description="The year's holiday list with weekday, type, branch / department scope and whether it falls on a Sunday.",
-    category=CATEGORY,
-    icon="CalendarDays",
-    tags=("holiday", "calendar", "festival", "weekly off"),
-    modules=("leave",),
-    landscape=False,
-    filters=(
-        year(),
-        select("holidayType", "Holiday type", (("national", "National"), ("regional", "Regional"), ("company", "Company"))),
-        branches(),
-        departments(),
-    ),
-    columns=_HOLIDAY_COLUMNS,
-    run=_run_holiday_list,
-))
+register(
+    ReportSpec(
+        id="holiday-list",
+        title="Holiday Calendar",
+        description="The year's holiday list with weekday, type, branch / department scope and whether it falls on a Sunday.",
+        category=CATEGORY,
+        icon="CalendarDays",
+        tags=("holiday", "calendar", "festival", "weekly off"),
+        modules=("leave",),
+        filters=(
+            year(),
+            select(
+                "holidayType",
+                "Holiday type",
+                (("national", "National"), ("regional", "Regional"), ("company", "Company")),
+            ),
+            branches(),
+            departments(),
+        ),
+        columns=_HOLIDAY_COLUMNS,
+        run=_run_holiday_list,
+    )
+)

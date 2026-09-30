@@ -61,7 +61,7 @@ test("the button is on data pages and left off the pages that don't need it", as
   }
 
   // Pages with their own Refresh keep exactly one.
-  for (const path of ["/hr/requests", "/hr/whatsapp-control", "/hr/attendance/search"]) {
+  for (const path of ["/hr/requests", "/hr/whatsapp-control", "/hr/gmail-control", "/hr/attendance/search"]) {
     await page.goto(path);
     await expect(page.getByRole("button", { name: /^\s*Refresh( this page)?\s*$/ }), path).toHaveCount(1);
     await expect(page.getByTestId("page-refresh-bar"), path).toHaveCount(0);

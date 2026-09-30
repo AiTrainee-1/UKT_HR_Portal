@@ -20,7 +20,17 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 
 from django.db.models import (
-    Count, F, Func, IntegerField, Max, OuterRef, Q, Subquery, Sum, TextField, Value,
+    Count,
+    F,
+    Func,
+    IntegerField,
+    Max,
+    OuterRef,
+    Q,
+    Subquery,
+    Sum,
+    TextField,
+    Value,
 )
 from django.db.models.functions import Cast, Concat, Lower, Trim
 from django.utils import timezone
@@ -121,7 +131,11 @@ def emp_cells_from_values(row: dict, prefix: str = "employee__") -> dict:
 
 
 EMP_VALUE_FIELDS = (
-    "employee_code", "first_name", "last_name", "department__name", "designation__title",
+    "employee_code",
+    "first_name",
+    "last_name",
+    "department__name",
+    "designation__title",
 )
 
 
@@ -228,7 +242,11 @@ def tea_rule():
 
 
 def rule_note(allowed: int, updated_at) -> str:
-    when = f" (rule last changed {to_ist(updated_at).strftime('%d-%b-%Y')})" if updated_at else " (default; no rule saved yet)"
+    when = (
+        f" (rule last changed {to_ist(updated_at).strftime('%d-%b-%Y')})"
+        if updated_at
+        else " (default; no rule saved yet)"
+    )
     return (
         f"Allowed minutes used: {allowed}{when}. The allowance is applied to every break in the period as it "
         "stands today (it is not stored per break), so re-running an old report after the rule changes can "
@@ -385,7 +403,10 @@ def ist_hour_expr(field: str = "out_at"):
 def employee_day_key():
     """One distinct value per (employee, IST day) -- Count(..., distinct=True) of it = employee-days."""
     return Concat(
-        Cast("employee_id", TextField()), Value("|"), Cast(ist_day_expr(), TextField()), output_field=TextField(),
+        Cast("employee_id", TextField()),
+        Value("|"),
+        Cast(ist_day_expr(), TextField()),
+        output_field=TextField(),
     )
 
 
