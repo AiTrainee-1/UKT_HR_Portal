@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import EmployeeLayout from "@/components/EmployeeLayout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -101,6 +101,13 @@ export default function EmployeeLeave() {
     );
   };
 
+  // Pressing Submit starts a new attempt, so the server's answer to the last one goes at once. This cannot wait for
+  // onSubmit: react-hook-form only calls it when the zod check passes, and a failed check would leave the old error up.
+  const submitForm = (e: FormEvent<HTMLFormElement>) => {
+    setServerError(null);
+    return form.handleSubmit(onSubmit)(e);
+  };
+
   if (isLoading) {
     return (
       <EmployeeLayout>
@@ -167,7 +174,7 @@ export default function EmployeeLeave() {
           <DialogHeader><DialogTitle>Apply for Leave</DialogTitle></DialogHeader>
           <Form {...form}>
             {/* noValidate: the date inputs carry min/max, and the browser's own bubble would replace our messages */}
-            <form onSubmit={form.handleSubmit(onSubmit)} noValidate className="space-y-4">
+            <form onSubmit={submitForm} noValidate className="space-y-4">
               <FormField control={form.control} name="type" render={({ field }) => (
                 <FormItem><FormLabel>Leave Type</FormLabel>
                   <Select onValueChange={field.onChange} value={field.value}>

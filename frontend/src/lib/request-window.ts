@@ -1,7 +1,7 @@
 // The request date window: which dates an employee may pick on the request forms (Leave, Casual Leave, Permission /
-// Late-In, Missing Punch). The SAME rule is applied by the backend (backend/api/request_window.py), the Employee Web App
-// (src/lib/request-window.ts), the HR portal's employee Leave page (frontend/src/lib/request-window.ts) and the Mobile
-// App (src/lib/requestWindow.ts), and all of them are tested against the same vectors, so change them together.
+// Late-In, Missing Punch). The SAME rule is shared by the backend (backend/api/request_window.py), the Employee Web App
+// (src/lib/request-window.ts), the Mobile App (src/lib/requestWindow.ts) and the HR portal's employee page
+// (frontend/src/lib/request-window.ts), and all four are tested against the same vectors, so change them together.
 //
 //   * An employee may request dates in the CURRENT calendar month only: from the 1st to the last day of this month.
 //   * Grace: on the first GRACE_DAYS (2) days of a month, the PREVIOUS month is still open as well, so on the 1st and the

@@ -12,7 +12,8 @@ Missing Punch.
 Run via: python manage.py test api.tests_request_window -v 2
 """
 
-from datetime import date
+import time
+from datetime import date, timedelta
 from types import SimpleNamespace
 from unittest import mock
 
@@ -21,6 +22,7 @@ from django.test import SimpleTestCase, TestCase
 from . import approval_workflow as approval
 from . import request_window as rw
 from .jwt_utils import sign_token
+from .leave_request_views import _count_leave_days
 from .models import (
     CasualLeaveRequest,
     DepartmentManager,
@@ -861,6 +863,292 @@ class LeaveWindowTests(_EndpointCases, _Base):
         )
         self.assertEqual(r.status_code, 201, r.content)
         self.assertEqual(r.json()["employeeId"], self.emp.id)
+
+
+class LeaveCanonicalDateTests(_Base):
+    """What the Leave endpoint STORES and COUNTS for an employee. startDate / endDate are free text columns, and the window
+    check reads a date by its first ten characters, so the date that is checked has to be the date that is stored (it used to
+    be the raw text: a date-time range was counted as one day and then crashed the attendance pages)."""
+
+    PATH = "/api/leave-requests"
+    TODAY = "2026-10-15"
+
+    def send(self, body, who=None):
+        with clock(self.TODAY):
+            return self.client.post(self.PATH, body, content_type="application/json", **(who or self.emp_auth))
+
+    def range(self, start, end, who=None, **extra):
+        body = {"employeeId": self.emp.id, "startDate": start, "endDate": end, "reason": "Family function", **extra}
+        return self.send(body, who)
+
+    def raw(self, text, who=None):
+        """A raw JSON text, for what json.dumps cannot write: a lone surrogate, 1e999."""
+        return self.send(text, who)
+
+    def only_row(self) -> LeaveRequest:
+        return LeaveRequest.objects.get()
+
+    def count(self) -> int:
+        return LeaveRequest.objects.count()
+
+    def forget(self):
+        LeaveRequest.objects.all().delete()
+
+    def assert_window_400(self, r, message=ONLY_OCTOBER_2026):
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertEqual((r.json()["error"], r.json()["code"]), (message, "request_window_closed"))
+
+    # -- the stored text --
+
+    def test_the_stored_dates_are_canonical_whatever_the_employee_typed(self):
+        for text in (
+            " 2026-10-20",
+            "2026-10-20 ",
+            "\t2026-10-20\n",
+            " 2026-10-20 ",
+            "2026-10-20T00:00:00",
+            "2026-10-20T23:59:59+05:30",
+            "2026-10-20 10:30:00",
+            "2026-10-20junk",
+            "2026-10-20/2026-09-30",
+            "2026-10-20\x00",
+            "2026-10-20\x00junk",
+        ):
+            with self.subTest(text=text):
+                r = self.range(text, text)
+                self.assertEqual(r.status_code, 201, r.content)
+                row = self.only_row()
+                self.assertEqual(
+                    (row.start_date, row.end_date, float(row.total_days)), ("2026-10-20", "2026-10-20", 1.0)
+                )
+                self.assertEqual((r.json()["startDate"], r.json()["endDate"]), ("2026-10-20", "2026-10-20"))
+                self.forget()
+
+    def test_each_end_is_made_canonical_on_its_own(self):
+        r = self.range(" 2026-10-20", "2026-10-22T00:00:00")
+        self.assertEqual(r.status_code, 201, r.content)
+        row = self.only_row()
+        self.assertEqual((row.start_date, row.end_date, float(row.total_days)), ("2026-10-20", "2026-10-22", 3.0))
+
+    def test_an_end_left_out_is_the_canonical_start(self):
+        r = self.send({"employeeId": self.emp.id, "startDate": "2026-10-20T00:00:00"})
+        self.assertEqual(r.status_code, 201, r.content)
+        row = self.only_row()
+        self.assertEqual((row.start_date, row.end_date), ("2026-10-20", "2026-10-20"))
+
+    def test_a_date_time_range_is_counted_like_the_plain_range(self):
+        r = self.range("2026-10-01", "2026-10-31")
+        self.assertEqual(r.status_code, 201, r.content)
+        plain = self.only_row().total_days
+        self.assertEqual(float(plain), 27.0)  # 31 days less the four Sundays
+        self.forget()
+        for start, end in (
+            ("2026-10-01T00:00:00", "2026-10-31T00:00:00"),
+            (" 2026-10-01 ", "\t2026-10-31T23:59:59"),
+            ("2026-10-01junk", "2026-10-31/2026-09-30"),
+        ):
+            with self.subTest(start=start, end=end):
+                r = self.range(start, end)
+                self.assertEqual(r.status_code, 201, r.content)
+                row = self.only_row()
+                self.assertEqual((row.start_date, row.end_date, row.total_days), ("2026-10-01", "2026-10-31", plain))
+                self.forget()
+
+    def test_what_is_stored_can_be_read_back_by_the_attendance_pages(self):
+        # employee-shift-stats reads an approved leave's dates with date.fromisoformat: a stored date-time was an HTTP 500
+        r = self.range("2026-10-01T00:00:00", "2026-10-31T00:00:00")
+        self.assertEqual(r.status_code, 201, r.content)
+        LeaveRequest.objects.update(status="approved")
+        for who in (self.hr, self.emp_auth):
+            stats = self.client.get(
+                "/api/attendance/employee-shift-stats",
+                {"employee_id": self.emp.id, "month": 10, "year": 2026},
+                **who,
+            )
+            self.assertEqual(stats.status_code, 200, stats.content)
+
+    # -- a NUL or a lone surrogate --
+
+    def test_a_nul_or_a_lone_surrogate_after_the_date_cannot_crash_it(self):
+        # json.dumps cannot write a lone surrogate, so these go in as raw JSON escapes
+        for suffix in ("\\u0000", "\\ud800", "\\udfff", "x\\u0000\\ud800"):
+            with self.subTest(suffix=suffix):
+                body = '{"employeeId": %d, "startDate": "2026-10-20%s", "endDate": "2026-10-21%s"}'
+                r = self.raw(body % (self.emp.id, suffix, suffix))
+                self.assertEqual(r.status_code, 201, r.content)
+                row = self.only_row()
+                self.assertEqual(
+                    (row.start_date, row.end_date, float(row.total_days)), ("2026-10-20", "2026-10-21", 2.0)
+                )
+                self.forget()
+
+    def test_a_nul_or_a_lone_surrogate_inside_the_date_is_not_a_date(self):
+        for text in ("\\ud800026-10-20", "2026-10-\\ud800", "2026-10-2\\u0000", "\\u00002026-10-2"):
+            with self.subTest(text=text):
+                body = '{"employeeId": %d, "startDate": "%s", "endDate": "2026-10-20"}'
+                self.assert_window_400(self.raw(body % (self.emp.id, text)), INVALID)
+        self.assertEqual(self.count(), 0)
+
+    # -- the far end of the calendar --
+
+    def test_the_far_end_of_the_calendar_answers_the_window_400_not_a_500(self):
+        started = time.monotonic()
+        with mock.patch("api.leave_request_views._count_leave_days") as counted:
+            for start, end in (
+                ("9999-12-31", "9999-12-31"),
+                ("2026-10-20", "9999-12-31"),
+                ("9999-12-31", "2026-10-20"),
+                ("2026-10-01", "9999-12-30"),
+                ("0001-01-01", "9999-12-30"),
+                ("0001-01-01", "0001-01-01"),
+            ):
+                with self.subTest(start=start, end=end):
+                    self.assert_window_400(self.range(start, end))
+            half = {"isHalfDay": True, "halfDaySlot": "morning"}
+            self.assert_window_400(self.range("9999-12-31", "9999-12-31", **half))
+            # the days of a refused range are never counted
+            counted.assert_not_called()
+        self.assertEqual(self.count(), 0)
+        self.assertLess(time.monotonic() - started, 3.0)  # the widest of these used to burn 2.2 s on its own
+
+    def test_a_switched_off_workflow_answers_403_before_the_days_are_counted(self):
+        approval.save_config("leave", enabled=False, actor="test")
+        with mock.patch("api.leave_request_views._count_leave_days") as counted:
+            for who in (self.emp_auth, self.hr):
+                r = self.range("9999-12-31", "9999-12-31", who=who)
+                self.assertEqual((r.status_code, r.json()["code"]), (403, "workflow_disabled"), r.content)
+            counted.assert_not_called()
+        self.assertEqual(self.count(), 0)
+
+    def test_an_allowed_range_is_counted_once_after_the_checks(self):
+        with mock.patch("api.leave_request_views._count_leave_days", return_value=4) as counted:
+            r = self.range("2026-10-20", "2026-10-22")
+        self.assertEqual(r.status_code, 201, r.content)
+        counted.assert_called_once_with("2026-10-20", "2026-10-22")
+        self.assertEqual(float(self.only_row().total_days), 4.0)
+
+    # -- an employeeId that is not an integer --
+
+    def test_an_employee_id_too_big_to_be_an_integer_is_a_400_not_a_500(self):
+        for key in ("employeeId", "employee_id"):
+            for number in ("1e999", "-1e999", "1E999"):
+                with self.subTest(key=key, number=number):
+                    r = self.raw('{"%s": %s, "startDate": "2026-10-20", "endDate": "2026-10-20"}' % (key, number))
+                    self.assertEqual((r.status_code, r.json()), (400, {"error": "employeeId must be a number"}))
+        self.assertEqual(self.count(), 0)
+
+    # -- the half-day rule --
+
+    def test_the_half_day_rule_reads_the_canonical_dates(self):
+        half = {"isHalfDay": True, "halfDaySlot": "morning"}
+        for start, end in (
+            ("2026-10-20", "2026-10-20T00:00:00"),
+            (" 2026-10-20", "2026-10-20junk"),
+            ("2026-10-20T08:00:00", "2026-10-20 18:00:00"),
+        ):
+            with self.subTest(start=start, end=end):
+                r = self.range(start, end, **half)
+                self.assertEqual(r.status_code, 201, r.content)
+                row = self.only_row()
+                self.assertEqual(
+                    (row.start_date, row.end_date, float(row.total_days)), ("2026-10-20", "2026-10-20", 0.5)
+                )
+                self.forget()
+        for start, end in (("2026-10-20", "2026-10-21T00:00:00"), ("2026-10-20T00:00:00", " 2026-10-21")):
+            with self.subTest(start=start, end=end):
+                r = self.range(start, end, **half)
+                self.assertEqual(
+                    (r.status_code, r.json()["error"]), (400, "A half-day leave request must be for a single day")
+                )
+        self.assertEqual(self.count(), 0)
+
+    # -- HR keeps today's behaviour --
+
+    def test_hr_is_stored_and_counted_exactly_as_typed(self):
+        # the canonical rewrite is for an employee token only: HR filing on someone's behalf is untouched
+        r = self.range("2026-10-01T00:00:00", "2026-10-31T00:00:00", who=self.hr)
+        self.assertEqual(r.status_code, 201, r.content)
+        row = self.only_row()
+        self.assertEqual(
+            (row.start_date, row.end_date, float(row.total_days)), ("2026-10-01T00:00:00", "2026-10-31T00:00:00", 1.0)
+        )
+        self.forget()
+        r = self.range(" 2026-10-20", "2026-10-22junk", who=self.hr)
+        self.assertEqual(r.status_code, 201, r.content)
+        row = self.only_row()
+        self.assertEqual((row.start_date, row.end_date, float(row.total_days)), (" 2026-10-20", "2026-10-22junk", 1.0))
+        self.forget()
+        r = self.range("2020-01-06", "2020-01-12", who=self.hr)  # Monday to Sunday
+        self.assertEqual(r.status_code, 201, r.content)
+        row = self.only_row()
+        self.assertEqual((row.start_date, row.end_date, float(row.total_days)), ("2020-01-06", "2020-01-12", 6.0))
+
+    def test_hr_half_day_still_compares_the_text_as_typed(self):
+        half = {"isHalfDay": True, "halfDaySlot": "morning"}
+        r = self.range("2026-10-20", "2026-10-20T00:00:00", who=self.hr, **half)
+        self.assertEqual((r.status_code, r.json()["error"]), (400, "A half-day leave request must be for a single day"))
+        r = self.range("2026-10-20", "2026-10-20", who=self.hr, **half)
+        self.assertEqual(r.status_code, 201, r.content)
+
+    def test_hr_is_no_longer_crashed_by_the_last_day_of_the_calendar(self):
+        r = self.range("9999-12-31", "9999-12-31", who=self.hr)
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual((self.only_row().start_date, float(self.only_row().total_days)), ("9999-12-31", 1.0))
+
+
+class CountLeaveDaysTests(SimpleTestCase):
+    """_count_leave_days: working days (Monday to Saturday) from the start to the end, both included, at least 1."""
+
+    @staticmethod
+    def day_by_day(start: date, end: date) -> int:
+        # the original day-by-day count, on ordinals so that it cannot overflow at the end of the calendar
+        count = sum(1 for o in range(start.toordinal(), end.toordinal() + 1) if date.fromordinal(o).weekday() != 6)
+        return max(1, count)
+
+    def test_it_counts_like_the_day_by_day_count(self):
+        first = date(2026, 10, 1)
+        for offset in range(14):  # a start on every weekday, twice
+            start = first + timedelta(days=offset)
+            for length in range(-3, 45):  # an end before the start too
+                end = start + timedelta(days=length)
+                self.assertEqual(
+                    _count_leave_days(start.isoformat(), end.isoformat()),
+                    self.day_by_day(start, end),
+                    f"{start} .. {end}",
+                )
+
+    def test_a_sunday_on_its_own_is_one_day(self):
+        self.assertEqual(_count_leave_days("2026-10-04", "2026-10-04"), 1)
+        self.assertEqual(_count_leave_days("2026-10-05", "2026-10-04"), 1)  # end before start
+        self.assertEqual(_count_leave_days("2026-10-01", "2026-10-31"), 27)
+
+    def test_the_last_day_of_the_calendar_does_not_overflow(self):
+        for start, end in (("9999-12-31", "9999-12-31"), ("9999-12-25", "9999-12-31"), ("9990-01-01", "9999-12-31")):
+            with self.subTest(start=start, end=end):
+                self.assertEqual(
+                    _count_leave_days(start, end), self.day_by_day(date.fromisoformat(start), date.fromisoformat(end))
+                )
+
+    def test_the_widest_range_is_counted_at_once(self):
+        started = time.monotonic()
+        counted = _count_leave_days("0001-01-01", "9999-12-31")
+        self.assertLess(time.monotonic() - started, 0.5)  # a day-by-day loop took 2.2 s
+        first, last = date.min.toordinal(), date.max.toordinal()
+        sundays = last // 7 - (first - 1) // 7  # an ordinal that is a multiple of 7 is a Sunday
+        self.assertEqual(counted, (last - first + 1) - sundays)
+
+    def test_what_is_not_a_pair_of_dates_is_one_day(self):
+        for start, end in (
+            (None, None),
+            ("", ""),
+            ("garbage", "2026-10-20"),
+            ("2026-10-20", "garbage"),
+            ("2026-10-20T00:00:00", "2026-10-31T00:00:00"),
+            ("2026-10-20", "\ud800"),
+            ("2026-10-20\x00", "2026-10-21"),
+        ):
+            with self.subTest(start=start, end=end):
+                self.assertEqual(_count_leave_days(start, end), 1)
 
 
 class PermissionWindowTests(_EndpointCases, _Base):

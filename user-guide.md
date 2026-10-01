@@ -918,7 +918,15 @@ This applies to every request that asks for a date: **Leave** (a single day, sev
 - **Missing Punch can never be in the future.** A punch cannot be missed tomorrow, so the latest date is today.
 - **Casual Leave is still one per calendar month**, counted by the month of the date asked for. On the 1st or 2nd an employee who has already taken this month's Casual Leave can still ask for one for last month, if last month's is unused.
 - **The app tells the employee** which days are open, and if a day outside them is entered it shows a message such as *"You can only request dates in October 2026."* The system (not the phone) decides using India's date, so changing the phone's clock does not help.
-- **HR is not limited.** When HR enters a request on an employee's behalf (a correction, a back-dated entry) any date is accepted. This is the way to deal with a request that missed its window.
+- **HR is not limited by the window, but the HR portal has an entry form for only two of the four requests.** The server accepts any date from HR, and these two can be added by HR for an employee:
+  - **Permission:** **Leave & Holiday → Permissions** tab → **Add Permission**.
+  - **Casual Leave:** **Casual Leave → Eligibility Board** tab → **Apply CL** beside the employee → pick the CL Date → **Submit Request**. The employee must still be eligible for Casual Leave (the Casual Leave rules above are not waived), and the request starts as *Pending*.
+- **There is no "Add Leave" screen and no "Add Missing Punch" screen** (the **Attendance → Missing Punch** page only lists the requests employees made, for HR to approve or reject). When a Leave day, or a missed punch, can no longer be requested by the employee, HR corrects the attendance itself:
+  1. Open **Attendance → Staff Attendance** (or **Production Attendance**) and scroll to the **Employee Attendance Search** card (the separate *Attendance Search* menu item only looks up punches and has no edit).
+  2. Enter the employee code and choose the month, then click the pencil (*Propose an edit*) on the day.
+  3. In **Propose Attendance Change** choose the status (*Present*, *Absent*, *On Leave* or *Holiday*; for *Present* also Full or Half Shift, First In, Last Out, Late and Early Out), write the **Reason**, and press **Submit for Approval**.
+  4. This does **not** change the day straight away. It becomes an *Attendance correction* request that the employee's **Department Head must approve** (HR → Department Head; the Department Head needs the **Attendance edits** switch on in HOD Assignment). Only the approval overwrites the day that payroll uses; the card lists the request as *Pending*, *Approved* or *Rejected* under *Submitted Attendance Requests*. If *Attendance correction* is switched off in Approval Workflow Control, HR cannot raise corrections at all.
+  5. It corrects the attendance only: it does not create a Leave or Missing Punch request, and it does not use up any leave balance.
 - **Not affected:** a resignation's last working day, Outpass, On-Duty and Geo punch (no date is picked), general requests, and the From/To filters on the leave list.
 
 ---
@@ -1042,7 +1050,7 @@ flowchart TD
     K --> M([Employee can resubmit\nor accept decision])
 ```
 
-> **Which dates can be requested?** An employee can only request dates in the current month (plus last month on the 1st and 2nd); a Missing Punch can never be in the future. HR entering a request for an employee is never limited. See *5.2 Leave Management*.
+> **Which dates can be requested?** An employee can only request dates in the current month (plus last month on the 1st and 2nd); a Missing Punch can never be in the future. The window does not apply to HR, but the HR portal can only add a Permission (*Leave & Holiday → Permissions → Add Permission*) or a Casual Leave (*Casual Leave → Eligibility Board → Apply CL*) for an employee; there is no Add Leave or Add Missing Punch screen, so a missed Leave day or punch is corrected as an attendance edit (*Attendance → Staff / Production Attendance → Employee Attendance Search*), which the Department Head must approve. See *5.2 Leave Management*.
 
 ---
 

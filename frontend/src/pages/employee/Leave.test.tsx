@@ -201,6 +201,32 @@ describe("employee Leave page request window", () => {
     expect(messages()).toContain("You can only request dates in October 2026.");
   });
 
+  it("reads the clock on every render: the limits follow it across a month end without remounting the page", async () => {
+    setToday(2026, 10, 31, 23, 59);
+    await render();
+    await openDialog();
+
+    const start = byTestId<HTMLInputElement>("input-start-date")!;
+    const end = byTestId<HTMLInputElement>("input-end-date")!;
+    expect([start.min, start.max, end.max]).toEqual(["2026-10-01", "2026-10-31", "2026-10-31"]);
+    expect(byTestId("text-date-window-hint")!.textContent).toBe("Any day in October 2026");
+
+    // midnight: November 1st. The page stays mounted and nothing remounts it; the next render (here a date edit) must
+    // read the new clock, so the window now runs 1 October (grace) to 30 November.
+    vi.setSystemTime(new Date(2026, 10, 1, 0, 0));
+    await type("input-start-date", "2026-10-31");
+    expect([start.min, start.max, end.max]).toEqual(["2026-10-01", "2026-11-30", "2026-11-30"]);
+    expect(byTestId("text-date-window-hint")!.textContent).toBe("1 October 2026 to 30 November 2026");
+
+    // the 3rd: the grace is over, so the window starts on 1 November
+    vi.setSystemTime(new Date(2026, 10, 3, 0, 0));
+    await type("input-start-date", "2026-11-04");
+    expect([start.min, start.max, end.min, end.max]).toEqual(["2026-11-01", "2026-11-30", "2026-11-04", "2026-11-30"]);
+    expect(byTestId("text-date-window-hint")!.textContent).toBe("Any day in November 2026");
+    // it is still the same input elements: the page was never remounted
+    expect(byTestId("input-start-date")).toBe(start);
+  });
+
   it("shows the server's 400 {error} in the form (as well as the toast) and clears it on edit, close and reopen", async () => {
     setToday(2026, 10, 15);
     await render();
@@ -236,6 +262,25 @@ describe("employee Leave page request window", () => {
       byTestId("button-cancel")!.click();
     });
     await openDialog();
+    expect(byTestId("text-form-error")).toBeNull();
+  });
+
+  it("clears the server's error when Submit is pressed again, even if the form's own checks stop that submit", async () => {
+    setToday(2026, 10, 15);
+    await render();
+    await openDialog();
+    await fill("2026-10-20", "2026-10-22");
+    await submit();
+    await act(async () => {
+      mutate.mock.calls[0][1].onError({ data: { error: "You already have leave on those dates." } });
+    });
+    expect(byTestId("text-form-error")!.textContent).toBe("You already have leave on those dates.");
+
+    // blank the reason: the zod check stops the submit before onSubmit runs, and the old server error must still go
+    await type("input-reason", "");
+    await submit();
+    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(messages()).toContain("Please provide a reason");
     expect(byTestId("text-form-error")).toBeNull();
   });
 

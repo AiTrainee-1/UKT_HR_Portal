@@ -322,6 +322,11 @@ class Base(ConfigCacheMixin, TestCase):
         ManagerEmployeeAssignment.objects.create(manager=self.manager, employee=self.emp)
         self.emp_auth = _bearer({"role": "employee", "employeeId": self.emp.id})
         self.hod = _bearer({"role": "employee", "employeeId": self.boss.id})
+        # An employee may only request dates in the current month (api/request_window.py), and these tests file
+        # dates in September 2026: pin India's "today" for the window inside that month.
+        pin = mock.patch("api.request_window.ist_today", return_value=date(2026, 9, 28))
+        pin.start()
+        self.addCleanup(pin.stop)
 
     def configure(self, key, steps=None, enabled=None):
         return approval.save_config(key, steps=steps, enabled=enabled, actor="test")

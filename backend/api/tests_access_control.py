@@ -12,6 +12,7 @@ Run via: python manage.py test api.tests_access_control -v 2
 
 from datetime import date, timedelta
 from decimal import Decimal
+from unittest import mock
 
 import bcrypt
 from django.test import TestCase
@@ -129,6 +130,14 @@ class PayrollAndAttendanceIsolationTests(_Base):
 
 
 class LeaveIsolationTests(_Base):
+    def setUp(self):
+        super().setUp()
+        # An employee may only request dates in the current month (api/request_window.py), and these tests file
+        # dates in March 2026: pin India's "today" for the window inside that month.
+        pin = mock.patch("api.request_window.ist_today", return_value=date(2026, 3, 15))
+        pin.start()
+        self.addCleanup(pin.stop)
+
     def test_leave_list_only_returns_own_requests(self):
         r = self.client.get("/api/leave-requests", **_emp(self.alice.id))
         self.assertEqual(r.status_code, 200)

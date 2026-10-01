@@ -11,6 +11,7 @@ Shift 09:00-18:00, 15 min grace, first half ends 13:30. Half-Day cut-offs at the
 
 from datetime import date, time, timedelta
 from decimal import Decimal
+from unittest import mock
 
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
@@ -752,6 +753,14 @@ class PermissionApiTests(TestCase):
             shift=cls.shift,
             effective_from=date(2020, 1, 1),
         )
+
+    def setUp(self):
+        super().setUp()
+        # An employee may only request dates in the current month (api/request_window.py), and these tests file
+        # dates in April 2026: pin India's "today" for the window inside that month.
+        pin = mock.patch("api.request_window.ist_today", return_value=date(2026, 4, 28))
+        pin.start()
+        self.addCleanup(pin.stop)
 
     def _post(self, body, token=None):
         body = {"employeeId": self.emp.id, "reason": "test", **body}

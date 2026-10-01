@@ -5,10 +5,10 @@ from .auth import get_hr_display_name, get_token_employee_id, require_auth, requ
 from .branch_scope import scope_to_branch
 from .clock import ist_today
 from .models import Employee, LeaveBalance, LeaveRequest, LeaveType, Notification
-from .request_window import enforce_employee_range
+from .request_window import enforce_employee_range, parse_request_date
 from .serializers import leave_request_json
 from .view_common import _employee_name, _error, paginate
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
@@ -108,19 +108,22 @@ def _leave_requests_list(request: Request) -> Response:
 
 
 def _count_leave_days(start_str, end_str) -> int:
-    """Count working days (Mon–Sat) between start and end inclusive."""
+    """Count working days (Mon–Sat) between start and end inclusive.
+
+    Counted arithmetically, not day by day, so a range of any length costs the same and one that ends on date.max cannot
+    overflow; the count is the same one the day-by-day loop gave. Anything that is not a pair of dates, or cannot be
+    counted, is 1 day."""
     try:
         start = date.fromisoformat(str(start_str))
         end   = date.fromisoformat(str(end_str))
-    except Exception:
+        days = (end - start).days + 1
+        if days <= 0:
+            return 1
+        first_sunday = (6 - start.weekday()) % 7  # days from the start to its first Sunday
+        sundays = 0 if first_sunday >= days else (days - 1 - first_sunday) // 7 + 1
+        return max(1, days - sundays)
+    except Exception:  # not dates, or out of the calendar's range
         return 1
-    count = 0
-    cur = start
-    while cur <= end:
-        if cur.weekday() != 6:   # skip Sunday
-            count += 1
-        cur += timedelta(days=1)
-    return max(1, count)
 
 
 def _leave_requests_create(request: Request) -> Response:
@@ -137,7 +140,7 @@ def _leave_requests_create(request: Request) -> Response:
         if employee_id:
             try:
                 other_employee = int(employee_id) != token_emp_id
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):  # OverflowError: a JSON number like 1e999
                 return _error("employeeId must be a number", 400)
             if other_employee:
                 return _error("You can only apply for leave on your own behalf", 403)
@@ -162,15 +165,26 @@ def _leave_requests_create(request: Request) -> Response:
     if not employee_id or not start_date:
         return Response({"error": "employeeId and startDate are required"}, status=400)
 
+    # What an employee's two dates MEAN, as canonical 'YYYY-MM-DD' (None when either is not a date: the window check
+    # below then refuses it). The window check reads each date by its first ten characters, so an employee's raw text
+    # (' 2026-10-20', '2026-10-20T00:00:00', '2026-10-20junk') is never stored: the canonical date is, and the half-day
+    # and day-count rules below read the same value the window check passed.
+    employee_dates = None
+    if token_emp_id is not None:
+        first, last = parse_request_date(start_date), parse_request_date(end_date)
+        if first is not None and last is not None:
+            employee_dates = (first.isoformat(), last.isoformat())
+
     if is_half_day:
         if half_day_slot not in (LeaveRequest.HALF_DAY_MORNING, LeaveRequest.HALF_DAY_AFTERNOON):
             return Response({"error": "halfDaySlot must be 'morning' or 'afternoon'"}, status=400)
-        if end_date != start_date:
+        one_day = employee_dates[0] == employee_dates[1] if employee_dates else end_date == start_date
+        if not one_day:
             return Response({"error": "A half-day leave request must be for a single day"}, status=400)
         total_days = Decimal("0.5")
     else:
         half_day_slot = None
-        total_days = _count_leave_days(start_date, end_date)
+        total_days = None  # counted below, once the workflow is on and the dates are accepted
 
     try:
         approval.require_enabled(WORKFLOW)
@@ -180,6 +194,10 @@ def _leave_requests_create(request: Request) -> Response:
     # HR filing on someone's behalf is never limited (api/request_window.py).
     if refused := enforce_employee_range(request, start_date, end_date):
         return refused
+    if token_emp_id is not None:
+        start_date, end_date = employee_dates  # an accepted employee date is always a date (never None here)
+    if total_days is None:
+        total_days = _count_leave_days(start_date, end_date)
     record = LeaveRequest.objects.create(
         employee_id=employee_id,
         type=leave_type,

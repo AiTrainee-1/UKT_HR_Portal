@@ -1,6 +1,6 @@
-// The shared request-window test vectors, copied unchanged from the product-owner reference (request-window-vectors.json).
-// The backend, the Employee Web App, the Mobile App and this portal all assert the SAME vectors, so do not edit them
-// here: change the rule in every codebase together and regenerate this file from the shared JSON.
+// A copy of the master request-window test vectors (request-window-vectors.json, 83 cases). The copy is kept identical in
+// the four codebases (the backend, the Employee Web App, the Mobile App and this portal's employee page): edit all copies
+// together, never just this one.
 //
 // Each probe's `today` is a local date; the test builds a Date at 13:30 local time on that day.
 
