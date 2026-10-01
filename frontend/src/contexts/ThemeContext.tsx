@@ -2,6 +2,7 @@ import {
   createContext, useCallback, useContext, useEffect, useMemo, useState,
   type ReactNode,
 } from "react";
+import { useAuth } from "@/contexts/AuthContext";
 import { customFetch } from "@/lib/api-client/custom-fetch";
 import { DEFAULT_THEME, isThemeId, type ThemeId } from "@/lib/themes";
 
@@ -91,9 +92,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveTheme, effectiveCustom]);
 
-  // Pull the server's copy once on mount. A failure here is non-fatal: the
-  // locally cached theme stays in effect rather than snapping to default.
+  // Pull the server's copy as soon as someone is signed in (and again after the next sign-in). The endpoint needs a token,
+  // so asking before login only produced a 401 in the server log, and asking once at start-up meant a browser that was not
+  // signed in yet kept the default palette until the page was reloaded. A failure is non-fatal: the locally cached theme
+  // stays in effect rather than snapping to default.
+  const { token } = useAuth();
   useEffect(() => {
+    if (!token) return;
     let cancelled = false;
     customFetch<{ themeName: string; themeCustom: ThemeCustom }>("/api/theme-settings")
       .then((r) => {
@@ -106,9 +111,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
           localStorage.setItem(STORAGE_CUSTOM_KEY, JSON.stringify(r.themeCustom ?? {}));
         } catch { /* ignore */ }
       })
-      .catch(() => { /* not signed in yet, or offline -keep cached theme */ });
+      .catch(() => { /* offline or a bad token -keep cached theme */ });
     return () => { cancelled = true; };
-  }, []);
+  }, [token]);
 
   const preview = useCallback((t: ThemeId | null, c?: ThemeCustom | null) => {
     setPreviewTheme(t);

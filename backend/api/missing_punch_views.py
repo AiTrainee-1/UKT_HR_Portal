@@ -30,6 +30,7 @@ from .auth import require_hr, require_auth, get_token_employee_id, get_hr_displa
 from .branch_scope import scope_to_branch
 from .hod_scope import managers_to_notify
 from .models import AttendanceLog, Employee, MissingPunchRequest, Notification
+from .request_window import enforce_employee_date
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -218,6 +219,10 @@ def missing_punch_requests(request: Request) -> Response:
         approval.require_enabled(WORKFLOW)
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
+    # An employee may only request a date in the current month (plus last month on its 1st and 2nd) and never a future one
+    # (a punch cannot be missed tomorrow); HR is never limited.
+    if refused := enforce_employee_date(request, req_date.isoformat(), no_future=True):
+        return refused
     cfg = approval.get_config(WORKFLOW)
     first = cfg.steps[0].roles  # the request starts with whoever the pipeline's first step names
     req = MissingPunchRequest.objects.create(

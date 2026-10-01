@@ -8,6 +8,7 @@ from . import approval_workflow as approval, whatsapp_approvals
 from .auth import require_hr, require_auth, get_token_employee_id, is_hr, get_hr_display_name
 from .branch_scope import scope_to_branch
 from .models import LeaveType, LeaveBalance, Holiday, Employee, Notification, EmployeePermission
+from .request_window import enforce_employee_date
 from .view_common import paginate
 
 
@@ -554,6 +555,9 @@ def employee_permissions(request: Request) -> Response:
         approval.require_enabled(PERMISSION_WORKFLOW)
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
+    # An employee may only request a date in the current month (plus last month on its 1st and 2nd); HR is never limited.
+    if refused := enforce_employee_date(request, parsed_date.isoformat()):
+        return refused
     p = EmployeePermission.objects.create(
         employee=emp,
         date=parsed_date,

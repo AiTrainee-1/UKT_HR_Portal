@@ -11,6 +11,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/contexts/AuthContext";
 import { useListLeaveRequests, useCreateLeaveRequest, getListLeaveRequestsQueryKey } from "@/lib/api-client";
+import { checkRequestDate, checkRequestRange, getRequestWindow, isIsoDate, windowHint } from "@/lib/request-window";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
@@ -35,6 +36,8 @@ function statusBadge(status: string) {
 
 export default function EmployeeLeave() {
   const [open, setOpen] = useState(false);
+  // The server's 400 {error} for the last submit, shown inside the dialog (a toast alone is gone in a few seconds).
+  const [serverError, setServerError] = useState<string | null>(null);
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -49,8 +52,37 @@ export default function EmployeeLeave() {
     defaultValues: { type: "casual" },
   });
 
+  // Employees may only request dates in the current month (the 1st and 2nd also keep last month open). The clock is
+  // read on every render, so the limits are fresh whenever the dialog is opened or edited, and read again in onSubmit.
+  // Never once at module load: this page can stay open across midnight or a month end. The server has the last word.
+  const requestWindow = getRequestWindow(new Date());
+  const startDate = form.watch("startDate");
+  const endMin = isIsoDate(startDate) && startDate > requestWindow.min ? startDate : requestWindow.min;
+
+  const openDialog = () => {
+    // A fresh attempt: errors from an earlier one must not greet it.
+    setServerError(null);
+    form.clearErrors();
+    setOpen(true);
+  };
+
+  // Editing a date makes the messages about the old dates (this form's and the server's) stale; submitting re-checks.
+  const dateEdited = () => {
+    setServerError(null);
+    form.clearErrors(["startDate", "endDate"]);
+  };
+
   const onSubmit = (data: FormData) => {
     if (!user?.employeeId) return;
+    setServerError(null);
+    const now = new Date();
+    const rangeError = checkRequestRange(data.startDate, data.endDate, now);
+    if (rangeError) {
+      // Put the message under the end that is at fault (the start when it is outside the window, otherwise the end).
+      const field = checkRequestDate(data.startDate, now) ? "startDate" : "endDate";
+      form.setError(field, { type: "validate", message: rangeError }, { shouldFocus: true });
+      return;
+    }
     mutation.mutate(
       { data: { ...data, employeeId: user.employeeId } },
       {
@@ -62,6 +94,7 @@ export default function EmployeeLeave() {
         },
         onError: (err: unknown) => {
           const msg = (err as { data?: { error?: string } })?.data?.error ?? "Failed to submit leave request.";
+          setServerError(msg);
           toast({ title: "Error", description: msg, variant: "destructive" });
         },
       }
@@ -86,7 +119,7 @@ export default function EmployeeLeave() {
             <h2 className="text-2xl font-black">My Leave</h2>
             <p className="text-muted-foreground text-sm mt-0.5">Apply and track your leave requests</p>
           </div>
-          <Button onClick={() => setOpen(true)} data-testid="button-apply-leave">
+          <Button onClick={openDialog} data-testid="button-apply-leave">
             <Plus size={16} className="mr-2" /> Apply for Leave
           </Button>
         </div>
@@ -123,7 +156,7 @@ export default function EmployeeLeave() {
             <CardContent className="flex flex-col items-center justify-center py-16 text-muted-foreground">
               <Calendar size={32} className="mb-3 opacity-30" />
               <p className="font-medium">No leave requests yet</p>
-              <Button className="mt-4" onClick={() => setOpen(true)} variant="outline">Apply for Leave</Button>
+              <Button className="mt-4" onClick={openDialog} variant="outline">Apply for Leave</Button>
             </CardContent>
           </Card>
         )}
@@ -133,7 +166,8 @@ export default function EmployeeLeave() {
         <DialogContent className="max-w-md">
           <DialogHeader><DialogTitle>Apply for Leave</DialogTitle></DialogHeader>
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            {/* noValidate: the date inputs carry min/max, and the browser's own bubble would replace our messages */}
+            <form onSubmit={form.handleSubmit(onSubmit)} noValidate className="space-y-4">
               <FormField control={form.control} name="type" render={({ field }) => (
                 <FormItem><FormLabel>Leave Type</FormLabel>
                   <Select onValueChange={field.onChange} value={field.value}>
@@ -148,15 +182,25 @@ export default function EmployeeLeave() {
               )} />
               <div className="grid grid-cols-2 gap-3">
                 <FormField control={form.control} name="startDate" render={({ field }) => (
-                  <FormItem><FormLabel>From</FormLabel><FormControl><Input type="date" data-testid="input-start-date" {...field} /></FormControl><FormMessage /></FormItem>
+                  <FormItem><FormLabel>From</FormLabel><FormControl>
+                    <Input type="date" min={requestWindow.min} max={requestWindow.max} data-testid="input-start-date" {...field}
+                      onChange={(e) => { dateEdited(); field.onChange(e); }} />
+                  </FormControl><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="endDate" render={({ field }) => (
-                  <FormItem><FormLabel>To</FormLabel><FormControl><Input type="date" data-testid="input-end-date" {...field} /></FormControl><FormMessage /></FormItem>
+                  <FormItem><FormLabel>To</FormLabel><FormControl>
+                    <Input type="date" min={endMin} max={requestWindow.max} data-testid="input-end-date" {...field}
+                      onChange={(e) => { dateEdited(); field.onChange(e); }} />
+                  </FormControl><FormMessage /></FormItem>
                 )} />
+                <p className="col-span-2 text-xs text-muted-foreground" data-testid="text-date-window-hint">{windowHint(requestWindow)}</p>
               </div>
               <FormField control={form.control} name="reason" render={({ field }) => (
                 <FormItem><FormLabel>Reason</FormLabel><FormControl><Textarea rows={3} placeholder="Describe the reason for your leave..." data-testid="input-reason" {...field} /></FormControl><FormMessage /></FormItem>
               )} />
+              {serverError && (
+                <p role="alert" className="text-[0.8rem] font-medium text-destructive" data-testid="text-form-error">{serverError}</p>
+              )}
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setOpen(false)} data-testid="button-cancel">Cancel</Button>
                 <Button type="submit" disabled={mutation.isPending} data-testid="button-submit">

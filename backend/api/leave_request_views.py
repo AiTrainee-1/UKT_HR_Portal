@@ -5,6 +5,7 @@ from .auth import get_hr_display_name, get_token_employee_id, require_auth, requ
 from .branch_scope import scope_to_branch
 from .clock import ist_today
 from .models import Employee, LeaveBalance, LeaveRequest, LeaveType, Notification
+from .request_window import enforce_employee_range
 from .serializers import leave_request_json
 from .view_common import _employee_name, _error, paginate
 from datetime import date, timedelta
@@ -133,8 +134,13 @@ def _leave_requests_create(request: Request) -> Response:
         employee_id = data.get("employeeId") or data.get("employee_id")
     # Employees can only file leave for themselves.
     if (token_emp_id := get_token_employee_id(request)) is not None:
-        if employee_id and int(employee_id) != token_emp_id:
-            return _error("You can only apply for leave on your own behalf", 403)
+        if employee_id:
+            try:
+                other_employee = int(employee_id) != token_emp_id
+            except (TypeError, ValueError):
+                return _error("employeeId must be a number", 400)
+            if other_employee:
+                return _error("You can only apply for leave on your own behalf", 403)
         employee_id = token_emp_id
     start_date  = data.get("startDate")  or data.get("start_date")
     end_date    = data.get("endDate")    or data.get("end_date") or start_date
@@ -170,6 +176,10 @@ def _leave_requests_create(request: Request) -> Response:
         approval.require_enabled(WORKFLOW)
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
+    # An employee may only request dates in the current month (plus last month on its 1st and 2nd): both ends of the range.
+    # HR filing on someone's behalf is never limited (api/request_window.py).
+    if refused := enforce_employee_range(request, start_date, end_date):
+        return refused
     record = LeaveRequest.objects.create(
         employee_id=employee_id,
         type=leave_type,

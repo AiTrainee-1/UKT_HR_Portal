@@ -25,6 +25,7 @@ from .auth import require_hr, require_auth, get_token_employee_id, get_hr_displa
 from .branch_scope import scope_to_branch
 from .clock import ist_today
 from .models import AttendanceDayRecord, CasualLeaveRequest, Employee, Notification
+from .request_window import enforce_employee_date, request_window
 
 ELIGIBILITY_MONTHS = 6
 
@@ -235,6 +236,9 @@ def casual_leaves(request: Request) -> Response:
         approval.require_enabled(WORKFLOW)
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
+    # An employee may only request a date in the current month (plus last month on its 1st and 2nd); HR is never limited.
+    if refused := enforce_employee_date(request, cl_date.isoformat()):
+        return refused
     cl = CasualLeaveRequest.objects.create(
         employee=emp,
         date=cl_date,
@@ -360,4 +364,19 @@ def my_casual_leave_eligibility(request: Request) -> Response:
         "yearlyEntitlement": CL_YEARLY_ENTITLEMENT,
         "usedThisYear": used,
         "remainingThisYear": max(0, CL_YEARLY_ENTITLEMENT - used),
+        "months": _request_window_months(emp),
     })
+
+
+def _request_window_months(emp: Employee) -> list[dict]:
+    """Eligibility for each month an employee may request a date in right now (request_window.py): last month ONLY while
+    its grace days are open (the 1st and 2nd), then this month. Casual Leave is one per calendar month of the requested
+    DATE, so on the 1st/2nd someone who has used this month's may still be eligible for last month's."""
+    window = request_window()
+    this_month = (window.max.replace(day=1), window.current_month)
+    open_months = [(window.min, window.previous_month), this_month] if window.grace_open else [this_month]
+    months = []
+    for first, label in open_months:
+        ok, why = check_cl_eligibility(emp, first)
+        months.append({"month": f"{first.year:04d}-{first.month:02d}", "label": label, "eligible": ok, "reason": why})
+    return months

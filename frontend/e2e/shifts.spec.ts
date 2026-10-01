@@ -239,7 +239,7 @@ test("a shift in use keeps its type, cannot be deleted or disabled, and an unuse
   await expect(page.getByTestId("delete-shift-confirm")).toHaveCount(0);
   await page.getByRole("button", { name: "Close" }).click();
   await page.getByTestId(`shift-toggle-${w.morning}`).click();
-  await expect(page.getByText("Could not change the shift")).toBeVisible();
+  await expect(page.getByText("Could not change the shift", { exact: true })).toBeVisible();
   expect(((await api(page, "GET", `/api/shifts/${w.morning}`)).body as any).isActive).toBe(true);
 
   // an unused one: disable (it can no longer be assigned), enable, delete
