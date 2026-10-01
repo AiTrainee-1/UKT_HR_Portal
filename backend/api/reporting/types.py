@@ -94,6 +94,12 @@ CATEGORIES: list[tuple[str, str, str, str]] = [
     ("leave", "Leave & Requests", "Leave, permission, on-duty, missing punch and other requests", "CalendarOff"),
     ("gate", "Gate & Visitors", "Outpass, visitor and tea-break registers", "DoorOpen"),
     ("employees", "Employees", "Master data, headcount, joiners, exits and compliance", "Users"),
+    (
+        "hr",
+        "HR Reports",
+        "Ready-made HR lists that bring employee, salary, HOD and shift details together",
+        "Briefcase",
+    ),
     ("finance", "Loans & Bonus", "Advances, loans, bonus, increments and promotions", "Banknote"),
     ("admin", "Administration", "Audit trail, user access and system activity", "ShieldCheck"),
 ]

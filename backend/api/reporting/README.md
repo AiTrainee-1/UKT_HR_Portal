@@ -50,6 +50,14 @@ register(
 )
 ```
 
+## A new category (a new group in the catalog)
+
+Add one tuple to `types.CATEGORIES` (`id, label, description, lucide icon name`; the order is the display order, the icon
+must be one of those listed in the frontend's `report-center/report-icons.ts`) and give the reports `category="<id>"`.
+The catalog, the category chips and the group heading appear on their own. A colour for the group is optional: add the
+id to `CATEGORY_STYLE` in `report-icons.ts`, otherwise it uses the neutral admin colour. Example: `hr` (HR Reports,
+`definitions/hr_reports.py`).
+
 ## Rules every report must follow
 
 1. **Branch isolation is not optional.** Filter employee-linked rows with `ctx.emp_q("employee__")`

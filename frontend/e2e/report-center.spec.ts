@@ -95,6 +95,56 @@ test("opening a report shows its records, keeps the filters in the URL and downl
   ).toBe("%PDF-");
 });
 
+test("HR Reports holds Employee Confo Details: the requested columns, an employee-type filter, both downloads", async ({
+  page,
+}) => {
+  await loginAsHr(page);
+  await page.goto("/hr/reports");
+  await expect(page.getByRole("heading", { name: "HR Reports", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: /HR Reports\s*1/ })).toBeVisible(); // the chip row
+  await page.getByRole("link", { name: /Employee Confo Details/ }).click();
+  await expect(page).toHaveURL(/report=employee-confo-details/);
+
+  // run it with the default filters (active employees, every type)
+  await page.getByTestId("report-show").click();
+  const headers = page.locator("thead th");
+  await expect(headers).toHaveText([
+    "Employee Code",
+    "Name",
+    "Department",
+    "Designation",
+    "Salary",
+    "Assigned HOD",
+    "Date of Joining",
+    "Shift Assign",
+  ]);
+  const asha = page.getByRole("row", { name: /Asha Kumar/ });
+  await expect(asha).toContainText("₹24,000.00 / month");
+  await expect(asha).toContainText("Not Assigned"); // no HOD and no shift in the seed data
+  await expect(page.getByRole("row", { name: /Meena Nosalary/ })).toContainText("—"); // no salary entered: a dash
+
+  // Staff keeps everyone (the seed is all staff); Production leaves nobody
+  await page.getByRole("combobox", { name: "Employee type" }).click();
+  await page.getByRole("checkbox", { name: "Production" }).check();
+  await page.keyboard.press("Escape");
+  await page.getByTestId("report-show").click();
+  await expect(page.getByText("No records for these filters")).toBeVisible();
+  await expect(page.getByTestId("report-applied-filters")).toContainText("Production");
+
+  await page.getByRole("combobox", { name: "Employee type" }).click();
+  await page.getByRole("checkbox", { name: "Production" }).uncheck();
+  await page.getByRole("checkbox", { name: "Staff" }).check();
+  await page.keyboard.press("Escape");
+  await page.getByTestId("report-show").click();
+  await expect(page.getByRole("row", { name: /Asha Kumar/ })).toBeVisible();
+  await expect(page.getByTestId("report-applied-filters")).toContainText("Staff");
+
+  const [xlsx] = await Promise.all([page.waitForEvent("download"), page.getByTestId("report-download-xlsx").click()]);
+  expect(xlsx.suggestedFilename()).toMatch(/^employee_confo_details_.*\.xlsx$/);
+  const [pdf] = await Promise.all([page.waitForEvent("download"), page.getByTestId("report-download-pdf").click()]);
+  expect(pdf.suggestedFilename()).toMatch(/^employee_confo_details_.*\.pdf$/);
+});
+
 test("a report link with filters opens straight into the same result", async ({ page }) => {
   await loginAsHr(page);
   const t = await token(page);

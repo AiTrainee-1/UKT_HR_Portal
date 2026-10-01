@@ -66,6 +66,7 @@ api/reporting/definitions/gate_visitor_tea_common.py
 api/reporting/definitions/gate_visitor_tea_overview.py
 api/reporting/definitions/gate_visitor_tea_tea.py
 api/reporting/definitions/gate_visitor_tea_visitors.py
+api/reporting/definitions/hr_reports.py
 api/reporting/definitions/payroll_core_analysis.py
 api/reporting/definitions/payroll_core_common.py
 api/reporting/definitions/payroll_core_payments.py
@@ -120,6 +121,7 @@ api/tests_reporting_finance.py
 api/tests_reporting_framework.py
 api/tests_reporting_gate_outpass.py
 api/tests_reporting_gate_visitor_tea.py
+api/tests_reporting_hr_reports.py
 api/tests_reporting_payroll_core.py
 api/tests_reporting_payroll_statutory.py
 api/tests_reporting_requests_leave.py
