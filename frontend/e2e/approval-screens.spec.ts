@@ -13,6 +13,10 @@ const EMPLOYEE_PASSWORD = "employee-pass-1";
 
 type Reply = { status: number; body: Record<string, unknown> | null };
 
+// An employee may only request a date in the current month, and a Missing Punch never one in the future, so the spec
+// asks for today (in India, the clock the server uses) rather than a fixed date that falls out of the window.
+const todayInIndia = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+
 async function api(page: Page, method: string, url: string, data?: unknown, token?: string): Promise<Reply> {
   const bearer = token ?? (await page.evaluate(() => localStorage.getItem("uk_textile_token")));
   const res = await page.request.fetch(url, { method, headers: { Authorization: `Bearer ${bearer}` }, data });
@@ -194,7 +198,7 @@ test("Missing Punch: HR decides only on its turn; a request waiting for the HOD 
     page,
     "POST",
     "/api/missing-punch-requests",
-    { date: "2026-03-17", punchTime: "09:05", punchSlot: "morning_in", reason: "e2e pipeline" },
+    { date: todayInIndia(), punchTime: "09:05", punchSlot: "morning_in", reason: "e2e pipeline" },
     employee,
   );
   expect(created.status, JSON.stringify(created.body)).toBe(201);

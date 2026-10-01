@@ -149,6 +149,8 @@ The most heavily-configurable area -see Section 6 for full mechanics.
 ### 4.4 Leave & Holiday
 Configurable leave types, per-employee/year balances with carry-forward, request approval (HR and/or department head as the approval pipeline says, attributed), Permission requests (also feed the Late Detection pool), Holiday calendar, automatic attendance reflection.
 
+**Request date window** (`api/request_window.py`): on Leave, Permission, Casual Leave and Missing Punch an *employee token* may only request dates in the current month (plus last month on the 1st and 2nd; a Missing Punch never in the future), enforced server-side in India time with a 400 `request_window_closed`, never for HR; the same rule and 83 shared vectors live in the web/mobile clients (`tests_request_window.py`).
+
 ### 4.5 Casual Leave (CL)
 Paid, staff-only, one per calendar month, eligible after 6 months of service. Separate table/flow from Leave/Permission. Approving/rejecting writes the attendance record directly -payroll picks it up automatically.
 

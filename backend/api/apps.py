@@ -1,9 +1,38 @@
 import logging
 import os
+import sys
+import threading
 
-from django.apps import AppConfig
+from django.apps import AppConfig, apps
 
 logger = logging.getLogger(__name__)
+
+
+def run_after_apps_ready(name: str, *jobs) -> threading.Thread:
+    """Run ``jobs`` (in order, each isolated from the others' failures) once Django has finished loading every app.
+
+    Django refuses queries while the app registry is still loading and warns "Accessing the database during app
+    initialization is discouraged" on every process start (the migrate step and each gunicorn worker). The work that
+    needs the database (creating the admin account, loading the scheduled jobs) therefore waits on a short-lived
+    thread until ``apps.ready_event`` is set, which Django does after the last ``ready()`` has returned. The thread
+    closes its own database connection when it is done. A daemon thread, so it never holds a process open."""
+
+    def runner() -> None:
+        apps.ready_event.wait()
+        try:
+            for job in jobs:
+                try:
+                    job()
+                except Exception:
+                    logger.exception("Startup task %s failed", getattr(job, "__name__", job))
+        finally:
+            from django.db import connections
+
+            connections.close_all()
+
+    thread = threading.Thread(target=runner, name=name, daemon=True)
+    thread.start()
+    return thread
 
 
 class ApiConfig(AppConfig):
@@ -16,8 +45,8 @@ class ApiConfig(AppConfig):
 
         approval_workflow._connect_cache_invalidation()
 
-        self._bootstrap_admin_account()
-        self._start_scheduler()
+        # Both of these read or write the database, which is not allowed while apps are loading: see run_after_apps_ready.
+        run_after_apps_ready("api-startup", self._bootstrap_admin_account, self._start_scheduler)
 
     def _bootstrap_admin_account(self):
         """
@@ -29,6 +58,11 @@ class ApiConfig(AppConfig):
         the hr_users table exists (e.g. during the very first `migrate`).
         """
         from django.conf import settings
+
+        # Not under the test runner: it would act on whichever database is configured at that instant (the runner
+        # swaps in the test database a moment later), and no test wants an account created behind its back.
+        if len(sys.argv) > 1 and sys.argv[1] == "test":
+            return
 
         username = getattr(settings, "ADMIN_USERNAME", "")
         password = getattr(settings, "ADMIN_PASSWORD", "")
@@ -68,8 +102,6 @@ class ApiConfig(AppConfig):
         # without this guard the scheduler would start twice in dev, firing
         # every job twice. Any other entrypoint (--noreload, gunicorn/waitress
         # in production, where RUN_MAIN is never set at all) starts normally.
-        import sys
-
         # Never under the test runner: a job that fires mid-test (the WhatsApp alert job runs every
         # minute) would act on the test database while tests hold global mocks and settings overrides,
         # and its open connection would block dropping the test database afterwards.

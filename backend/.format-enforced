@@ -1,6 +1,7 @@
 api/__init__.py
 api/approval_workflow.py
 api/approval_workflow_views.py
+api/apps.py
 api/arrival_rules.py
 api/attendance_records_views.py
 api/auto_sync_views.py
@@ -91,10 +92,12 @@ api/reporting/registry.py
 api/reporting/runner.py
 api/reporting/types.py
 api/reporting/views.py
+api/request_window.py
 api/salary_split.py
 api/shift_planner.py
 api/support_contact_views.py
 api/tests_access_control.py
+api/tests_app_startup.py
 api/tests_approval_workflow.py
 api/tests_arrival_rules.py
 api/tests_compensation_page.py
@@ -121,6 +124,7 @@ api/tests_reporting_payroll_core.py
 api/tests_reporting_payroll_statutory.py
 api/tests_reporting_requests_leave.py
 api/tests_reporting_requests_permission_duty.py
+api/tests_request_window.py
 api/tests_salary_split.py
 api/tests_shift_assignment_plan.py
 api/tests_support_contact.py

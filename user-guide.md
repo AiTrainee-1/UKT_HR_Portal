@@ -909,6 +909,18 @@ Employees submit leave requests through the mobile app, not the web portal. The 
 
 **Leave Balances:** The portal shows the current balance for each leave type.
 
+#### Which dates can an employee request?
+
+This applies to every request that asks for a date: **Leave** (a single day, several days or a half-day), **Casual Leave**, **Permission** (Late-In, Early-Out and the middle one-hour permission) and **Missing Punch**.
+
+- **Only the current month.** An employee can pick any day from the 1st to the last day of **this month**. Last month's days and next month's days are not accepted. A leave of several days must start *and* end inside the month; one that runs past the month end has to be split into two requests, the second one made next month.
+- **A little grace at the start of the month.** On the **1st and 2nd** of a month, last month is still open, so the employee can still request (or correct) a day from last month. From the **3rd** it is closed.
+- **Missing Punch can never be in the future.** A punch cannot be missed tomorrow, so the latest date is today.
+- **Casual Leave is still one per calendar month**, counted by the month of the date asked for. On the 1st or 2nd an employee who has already taken this month's Casual Leave can still ask for one for last month, if last month's is unused.
+- **The app tells the employee** which days are open, and if a day outside them is entered it shows a message such as *"You can only request dates in October 2026."* The system (not the phone) decides using India's date, so changing the phone's clock does not help.
+- **HR is not limited.** When HR enters a request on an employee's behalf (a correction, a back-dated entry) any date is accepted. This is the way to deal with a request that missed its window.
+- **Not affected:** a resignation's last working day, Outpass, On-Duty and Geo punch (no date is picked), general requests, and the From/To filters on the leave list.
+
 ---
 
 ### 5.3 Salary Slips
@@ -1029,6 +1041,8 @@ flowchart TD
     J --> L[Reflected in payroll\nas Leave Not LOP]
     K --> M([Employee can resubmit\nor accept decision])
 ```
+
+> **Which dates can be requested?** An employee can only request dates in the current month (plus last month on the 1st and 2nd); a Missing Punch can never be in the future. HR entering a request for an employee is never limited. See *5.2 Leave Management*.
 
 ---
 

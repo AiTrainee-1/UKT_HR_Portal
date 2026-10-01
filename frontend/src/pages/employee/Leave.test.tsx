@@ -22,6 +22,8 @@ vi.mock("@/lib/api-client", () => ({
 import EmployeeLeave from "./Leave";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+// The first render pulls in the dialog/select libraries and takes over a second on a cold or busy machine.
+vi.setConfig({ testTimeout: 20_000 });
 
 let container: HTMLDivElement;
 let root: Root;
