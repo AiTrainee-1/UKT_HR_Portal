@@ -276,6 +276,10 @@ class AttendanceOverrideRequest(models.Model):
     reviewed_by = models.TextField(null=True, blank=True, db_column="reviewed_by")
     review_comment = models.TextField(null=True, blank=True, db_column="review_comment")
     reviewed_at = models.DateTimeField(null=True, blank=True, db_column="reviewed_at")
+    # Who has approved this request so far under the approval pipeline (approval_workflow.py): a list of
+    # {"role": "hod"|"hr", "decision", "by", "at", "comment", "skipped"}. Null on requests made before it existed;
+    # approval_workflow.trail_of() derives it from the older per-role stamps then.
+    approval_trail = models.JSONField(null=True, blank=True, db_column="approval_trail")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
 
     class Meta:
@@ -358,6 +362,10 @@ class OnDutySession(models.Model):
     hod_reviewed_by = models.TextField(null=True, blank=True, db_column="hod_reviewed_by")
     hod_review_comment = models.TextField(null=True, blank=True, db_column="hod_review_comment")
     hod_reviewed_at = models.DateTimeField(null=True, blank=True, db_column="hod_reviewed_at")
+    # Who has approved this request so far under the approval pipeline (approval_workflow.py): a list of
+    # {"role": "hod"|"hr", "decision", "by", "at", "comment", "skipped"}. Null on requests made before it existed;
+    # approval_workflow.trail_of() derives it from the older per-role stamps then.
+    approval_trail = models.JSONField(null=True, blank=True, db_column="approval_trail")
     hr_reviewed_by = models.TextField(null=True, blank=True, db_column="hr_reviewed_by")
     hr_review_comment = models.TextField(null=True, blank=True, db_column="hr_review_comment")
     hr_reviewed_at = models.DateTimeField(null=True, blank=True, db_column="hr_reviewed_at")
@@ -508,6 +516,10 @@ class MissingPunchRequest(models.Model):
     hod_reviewed_by = models.TextField(null=True, blank=True, db_column="hod_reviewed_by")
     hod_review_comment = models.TextField(null=True, blank=True, db_column="hod_review_comment")
     hod_reviewed_at = models.DateTimeField(null=True, blank=True, db_column="hod_reviewed_at")
+    # Who has approved this request so far under the approval pipeline (approval_workflow.py): a list of
+    # {"role": "hod"|"hr", "decision", "by", "at", "comment", "skipped"}. Null on requests made before it existed;
+    # approval_workflow.trail_of() derives it from the older per-role stamps then.
+    approval_trail = models.JSONField(null=True, blank=True, db_column="approval_trail")
     hr_reviewed_by = models.TextField(null=True, blank=True, db_column="hr_reviewed_by")
     hr_review_comment = models.TextField(null=True, blank=True, db_column="hr_review_comment")
     hr_reviewed_at = models.DateTimeField(null=True, blank=True, db_column="hr_reviewed_at")

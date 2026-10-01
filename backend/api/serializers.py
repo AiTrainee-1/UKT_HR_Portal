@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from . import salary_split
+from . import approval_workflow as approval, salary_split
 
 if TYPE_CHECKING:
     from .models import Employee
@@ -185,7 +185,7 @@ def salary_record_json(record, employee_name: str | None = None) -> dict:
     }
 
 
-def leave_request_json(record, employee_name: str | None = None) -> dict:
+def leave_request_json(record, employee_name: str | None = None, cfg=None) -> dict:
     emp = getattr(record, "employee", None)
     # Auto-derive name from the joined employee when caller doesn't supply it
     resolved_name = employee_name or (
@@ -210,6 +210,8 @@ def leave_request_json(record, employee_name: str | None = None) -> dict:
         "approvedBy": record.approved_by,
         "approverRole": record.approver_role,
         "createdAt": _dt(record.created_at),
+        # The approval pipeline: who it waits for now and how far it has got (approval_workflow.py)
+        "approval": approval.progress("leave", record, cfg),
     }
 
 

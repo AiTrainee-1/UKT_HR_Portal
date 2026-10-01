@@ -5,7 +5,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import whatsapp_approvals
+from . import approval_workflow as approval, whatsapp_approvals
 from .auth import require_hr, require_auth, get_token_employee_id, is_hr
 from .clock import ist_today
 from .models import Advance, AdvanceRepayment, Employee
@@ -153,6 +153,11 @@ def advances(request: Request) -> Response:
         emp = Employee.objects.get(pk=data["employeeId"])
     except Employee.DoesNotExist:
         return Response({"error": "Employee not found"}, status=404)
+
+    try:
+        approval.require_enabled("advance")  # HR can switch new advances off in Approval Workflow Control
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
 
     amount = float(data["amount"])
     repayment_months = int(data["repaymentMonths"]) if data.get("repaymentMonths") else None

@@ -13,7 +13,7 @@ from collections import defaultdict
 from django.db.models import Q
 
 from api.branch_scope import get_branch_scope
-from api.hod_scope import effective_owner_map
+from api.hod_scope import effective_owner_map, excluded_pairs
 from api.models import (
     DepartmentManager,
     Employee,
@@ -86,12 +86,16 @@ def _run_directory(ctx):
                 dept_members[dept_id].append(emp_id)
 
     # Everyone each HOD is LISTED against (before the one-HOD rule), then the rule applied once for all.
+    # Employees HR carved out of a department's coverage are not listed through that department.
+    carved: dict[int, set[int]] = defaultdict(set)
+    for mgr_id, emp_id in excluded_pairs(manager_ids=mgr_ids):
+        carved[mgr_id].add(emp_id)
     raw: dict[int, set[int]] = {}
     for m in mgrs:
-        ids = set(direct[m.id])
+        through_departments: set[int] = set()
         for d in dept_assigned[m.id]:
-            ids.update(dept_members[d])
-        raw[m.id] = ids
+            through_departments.update(dept_members[d])
+        raw[m.id] = set(direct[m.id]) | (through_departments - carved[m.id])
     owner = effective_owner_map({e for ids in raw.values() for e in ids})
 
     dept_names: dict[int, tuple[str, int | None, str | None]] = {}
@@ -382,13 +386,15 @@ def _run_conflicts(ctx):
         holders[dept_id].append(mgr_id)
     hod_employee_ids = {m.employee_id for m in mgrs.values()}
 
+    carved_out = excluded_pairs(manager_ids=list(mgrs))
     listed: dict[int, dict[int, str]] = {}
     for emp in emps:
         if emp.id in hod_employee_ids:
             continue  # a head's own coverage is not something to warn about (same rule as the assignment screens)
         via: dict[int, str] = {}
         for mgr_id in holders.get(emp.department_id, ()):
-            via[mgr_id] = "department"
+            if (mgr_id, emp.id) not in carved_out:  # HR took them out of this HOD's department coverage
+                via[mgr_id] = "department"
         for mgr_id in direct.get(emp.id, ()):
             via[mgr_id] = "direct"  # an individual listing under the same HOD is the stronger one
         if len(via) >= 2:

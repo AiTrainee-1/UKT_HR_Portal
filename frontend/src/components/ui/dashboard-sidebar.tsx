@@ -6,6 +6,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { SidebarToggle } from '@/components/ui/sidebar-toggle';
 import { useAuth, canView, canViewRoute } from '@/contexts/AuthContext';
 import { moduleForPath } from '@/lib/permission-modules';
+import { hrCanAct } from '@/lib/approval-workflow';
 import { useListLeaveRequests, useListPermissions, useListResignations, useListAdvances, useListNotifications } from '@/lib/api-client';
 import { usePayrollSettings, useOnDutySessionsHR, useOnDutyPunchVerificationsHR, useListOutpassRequests } from '@/lib/api-client/custom-hooks';
 import {
@@ -616,10 +617,14 @@ export function HrSidebar({
     { query: { refetchInterval: 12_000, enabled: canSeeNotifications } } as any
   );
   const unreadNotificationCount = (unreadNotifications ?? []).length;
-  const pendingOutpassCount = (outpassData ?? []).length;
+  // A badge counts what HR can decide now under the approval pipelines (User Management -> Approval Workflow Control):
+  // a request that is only waiting for a Department Head is not HR's to act on. An older backend sends no pipeline, and
+  // then every pending request counts, as before.
+  const hrActs = (x: any) => hrCanAct(x.approval, true);
+  const pendingOutpassCount = (outpassData ?? []).filter(hrActs).length;
   const pendingCount =
-    ((leaveData ?? []).filter((l: any) => l.status === 'pending').length) +
-    ((permData  ?? []).filter((p: any) => p.status === 'pending').length) +
+    ((leaveData ?? []).filter((l: any) => l.status === 'pending' && hrActs(l)).length) +
+    ((permData  ?? []).filter((p: any) => p.status === 'pending' && hrActs(p)).length) +
     pendingOutpassCount;
   const activeResignationsCount = (resignData ?? []).filter(
     (r: any) => r.status === 'pending' || r.status === 'dept_approved'
@@ -628,7 +633,7 @@ export function HrSidebar({
     (a: any) => a.status === 'pending'
   ).length;
   const pendingOnDutyCount = canSeeGeoAttendance
-    ? (onDutySessionData ?? []).length + (onDutyPunchData ?? []).length
+    ? (onDutySessionData ?? []).filter(hrActs).length + (onDutyPunchData ?? []).length
     : 0;
 
   const initials = (user?.name ?? 'H')

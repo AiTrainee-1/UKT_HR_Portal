@@ -25,6 +25,7 @@ from .core import (
     DepartmentManager,
     ManagerDepartmentAssignment,
     ManagerEmployeeAssignment,
+    ManagerEmployeeExclusion,
 )
 from .leave import (
     ShiftTemplate,
@@ -94,6 +95,7 @@ from .recruitment import (
     EmployeeDocument,
 )
 from .system import (
+    ApprovalWorkflowConfig,
     FileBlob,
     IdCardSettings,
     CompanyDocumentSettings,

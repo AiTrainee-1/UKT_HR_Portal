@@ -28,6 +28,10 @@ export const ATTENDANCE_STATUS_TONE: Record<string, Tone> = {
 /** Approval workflow (leave, permission, casual leave, outpass, missing punch...). */
 export const REQUEST_STATUS_TONE: Record<string, Tone> = {
   pending: "warning",
+  // waiting on one particular role (missing punch, On-Duty, resignation): the amber / blue of "whose turn it is"
+  pending_hod: "warning",
+  pending_hr: "info",
+  dept_approved: "info",
   approved: "success",
   rejected: "danger",
 };

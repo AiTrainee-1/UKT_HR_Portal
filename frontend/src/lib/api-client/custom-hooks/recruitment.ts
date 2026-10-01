@@ -2,6 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UseQueryOptions } from "@tanstack/react-query";
 import { customFetch, getApiOrigin } from "../custom-fetch";
+import type { ApprovalProgress } from "../../approval-workflow";
 
 // ── New Joinees ─────────────────────────────────────────────────────────
 
@@ -109,6 +110,8 @@ export type ResignationRequest = {
   approvedAt?: string | null;
   rejectedBy?: "dept_head" | "hr" | null;
   createdAt?: string | null;
+  /** Where the request is in its approval pipeline and who can act on it (see lib/approval-workflow.ts). */
+  approval?: ApprovalProgress | null;
 };
 
 export type DepartmentHeadcountItem = {

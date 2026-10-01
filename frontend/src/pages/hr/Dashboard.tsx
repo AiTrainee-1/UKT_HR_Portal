@@ -22,6 +22,7 @@ import {
   useListScreeningCandidates,
 } from "@/lib/api-client/custom-hooks";
 import { useBiometricSync } from "@/contexts/BiometricSyncContext";
+import { hrCanAct } from "@/lib/approval-workflow";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   CartesianGrid, PieChart, Pie, Cell, Legend,
@@ -265,13 +266,15 @@ export default function HrDashboard() {
   const salaryTrend = (trends ?? []).slice(-12);
 
   const pendingLeaves    = summary?.pendingLeaves ?? 0;
-  const pendingPermCount = (pendingPerms ?? []).length;
+  // What HR can decide now under the approval pipelines (User Management -> Approval Workflow Control); an older
+  // backend sends no pipeline and then every pending request counts, as before.
+  const pendingPermCount = (pendingPerms ?? []).filter((p) => hrCanAct(p.approval, true)).length;
   const monthlyPayroll   = summary?.monthlySalaryTotal ?? 0;
 
   const openJobs         = summary?.openJobs ?? 0;
   const pendingApplicants = summary?.pendingApplicants ?? 0;
-  const missingPunchPending = (missingPunches ?? []).length;
-  const casualLeavePending  = (casualLeaves ?? []).length;
+  const missingPunchPending = (missingPunches ?? []).filter((r) => hrCanAct(r.approval, true)).length;
+  const casualLeavePending  = (casualLeaves ?? []).filter((l) => hrCanAct(l.approval, true)).length;
   const screeningAwaitingReview = (screeningCandidates ?? []).length;
   const docsTotal    = (staffDocStats?.totalCount ?? 0) + (productionDocStats?.totalCount ?? 0);
   const docsUploaded = (staffDocStats?.uploadedCount ?? 0) + (productionDocStats?.uploadedCount ?? 0);

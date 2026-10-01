@@ -382,6 +382,8 @@ export interface LeaveRequest {
   /** @nullable */
   approverRole?: string | null;
   createdAt: string;
+  /** Hand-added -the approval pipeline this request follows (backend/api/approval_workflow.py::progress). */
+  approval?: import("../../approval-workflow").ApprovalProgress | null;
 }
 
 export type LeaveRequestInputType = typeof LeaveRequestInputType[keyof typeof LeaveRequestInputType];

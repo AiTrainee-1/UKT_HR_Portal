@@ -5,7 +5,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import email_service, whatsapp_approvals
+from . import approval_workflow as approval, email_service, whatsapp_approvals
 from .view_common import error_response as _error
 from .auth import get_token_employee_id, require_auth, require_hr
 from .user_settings import settings_for
@@ -26,7 +26,10 @@ from .models import (
 
 # ── Serializers ───────────────────────────────────────────────────────────────
 
-def _resignation_json(r: ResignationRequest) -> dict:
+WORKFLOW = "resignation"
+
+
+def _resignation_json(r: ResignationRequest, cfg: approval.Config | None = None) -> dict:
     emp = r.employee
     dept_name = None
     if emp and emp.department_id:
@@ -66,6 +69,8 @@ def _resignation_json(r: ResignationRequest) -> dict:
         "approvedAt": r.approved_at.isoformat() if r.approved_at else None,
         "rejectedBy": r.rejected_by,
         "createdAt": r.created_at.isoformat() if r.created_at else None,
+        # Who the request waits for under the approval pipeline (approval_workflow.py) and how far it has got.
+        "approval": approval.progress(WORKFLOW, r, cfg),
     }
 
 
@@ -98,6 +103,60 @@ def _notify_dept_heads(resignation: ResignationRequest) -> None:
             type="resignation",
             message=f"{emp.first_name} {emp.last_name} has submitted a resignation request. Please review it.",
         )
+
+
+def resolve_resignation(
+    r: ResignationRequest, role: str, decision: str, actor_name: str, comment: str | None, hod_employee=None
+) -> approval.Outcome:
+    """One decision by `role` ('hod' or 'hr') on a resignation, under the "resignation" pipeline (approval_workflow.py).
+    Raises approval.ApprovalError when that role may not decide it now.
+
+    An intermediate approval only passes the request on. The FINAL approval makes the employee inactive (there is no
+    undo). Any rejection is final; HR may reject at any stage, even before the Department Head has decided, but may
+    only approve when it is HR's turn."""
+    outcome = approval.decide(WORKFLOW, r, role, decision, actor=actor_name, comment=comment)
+    now = timezone.now()
+    if role == approval.HOD:
+        r.dept_head_status = decision
+        r.dept_head = hod_employee
+        r.dept_head_comment = comment
+        r.dept_head_approved_at = now
+    else:
+        r.hr_comment = comment
+    if outcome.final:
+        r.status = "approved"
+        r.approved_at = now
+        r.approved_by = actor_name
+    elif outcome.rejected:
+        r.status = "rejected"
+        r.rejected_by = approval.LEGACY_ROLE[role]
+    else:
+        r.status = outcome.status
+    r.save()
+    who = approval.ROLE_PHRASE[role]
+    if outcome.final:
+        Employee.objects.filter(id=r.employee_id).update(status="inactive")
+        message = f"Your resignation has been approved by {who}. Your account has been deactivated."
+    elif outcome.rejected:
+        message = (
+            "Your resignation request has been reviewed by HR and was not approved. Please contact HR for more information."
+            if role == approval.HR
+            else "Your resignation request has been rejected by your Department Head. Please contact them for more information."
+        )
+    else:
+        message = (
+            f"Your resignation request has been reviewed and approved by {who}. "
+            f"It is now with {approval.phrase(outcome.waiting)} for final approval."
+        )
+    Notification.objects.create(employee_id=r.employee_id, type="resignation", message=message)
+    if outcome.kind == "advanced" and approval.HOD in outcome.waiting and role != approval.HOD:
+        _notify_dept_heads(r)  # it has just reached the Department Head's step
+    if outcome.final or outcome.rejected:
+        # An approval that only passes the request on stays quiet until the final decision.
+        whatsapp_approvals.notify_decision(
+            WORKFLOW, r, decision, approver=actor_name, role=approval.LEGACY_ROLE[role], comment=comment
+        )
+    return outcome
 
 
 # ── Recruitment Dashboard ─────────────────────────────────────────────────────
@@ -262,7 +321,8 @@ def _resignations_list(request: Request) -> Response:
     ).order_by("-created_at")
     if status_filter:
         qs = qs.filter(status=status_filter)
-    return Response([_resignation_json(r) for r in qs])
+    cfg = approval.get_config(WORKFLOW)
+    return Response([_resignation_json(r, cfg) for r in qs])
 
 
 def _resignation_submit(request: Request) -> Response:
@@ -279,6 +339,11 @@ def _resignation_submit(request: Request) -> Response:
     if ResignationRequest.objects.filter(employee_id=employee_id, status__in=["pending", "dept_approved"]).exists():
         return _error("You already have an active resignation request", 400)
 
+    try:
+        approval.require_enabled(WORKFLOW)
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
+
     data = request.data
     last_date_raw = data.get("lastWorkingDate")
     last_date = None
@@ -288,6 +353,7 @@ def _resignation_submit(request: Request) -> Response:
         except ValueError:
             pass
 
+    first = approval.get_config(WORKFLOW).steps[0].roles  # the request starts with whoever the first step names
     r = ResignationRequest.objects.create(
         employee_id=employee_id,
         reason=data.get("reason"),
@@ -295,11 +361,14 @@ def _resignation_submit(request: Request) -> Response:
         survey_q1_answer=data.get("surveyQ1Answer"),
         survey_q2_answer=data.get("surveyQ2Answer"),
         survey_q3_answer=data.get("surveyQ3Answer"),
+        status=approval.project_status(WORKFLOW, first),
+        approval_trail=[],
     )
     r = ResignationRequest.objects.select_related(
         "employee", "employee__department", "dept_head",
     ).get(pk=r.pk)
-    _notify_dept_heads(r)
+    if approval.HOD in first:
+        _notify_dept_heads(r)
     return Response(_resignation_json(r), status=201)
 
 
@@ -322,48 +391,16 @@ def resignation_action(request: Request, pk: int) -> Response:
     if action not in ("approve", "reject"):
         return _error("action must be 'approve' or 'reject'", 400)
 
-    if r.status == "approved":
-        return _error("This resignation has already been approved", 400)
-    if r.status == "rejected":
-        return _error("This resignation has already been rejected", 400)
-
-    # HR can only APPROVE if dept head has already approved
-    if action == "approve" and r.status != "dept_approved":
-        return _error(
-            "Cannot approve yet -the Department Head must review first. HR can only give final approval after the Department Head approves.",
-            400,
+    try:
+        resolve_resignation(
+            r,
+            approval.HR,
+            "approved" if action == "approve" else "rejected",
+            request.jwt_user.get("name", "HR"),
+            hr_comment,
         )
-
-    if action == "approve":
-        r.status = "approved"
-        r.approved_at = timezone.now()
-        r.approved_by = request.jwt_user.get("name", "HR")
-        r.hr_comment = hr_comment
-        r.save()
-        Employee.objects.filter(id=r.employee_id).update(status="inactive")
-        Notification.objects.create(
-            employee_id=r.employee_id,
-            type="resignation",
-            message="Your resignation has been approved by HR. Your account has been deactivated.",
-        )
-        whatsapp_approvals.notify_decision(
-            "resignation", r, "approved", approver=r.approved_by or "", role="hr", comment=hr_comment
-        )
-    else:
-        # HR can reject at any stage (pending or dept_approved)
-        r.status = "rejected"
-        r.rejected_by = "hr"
-        r.hr_comment = hr_comment
-        r.save()
-        Notification.objects.create(
-            employee_id=r.employee_id,
-            type="resignation",
-            message="Your resignation request has been reviewed by HR and was not approved. Please contact HR for more information.",
-        )
-        whatsapp_approvals.notify_decision(
-            "resignation", r, "rejected", approver=request.jwt_user.get("name", ""), role="hr", comment=hr_comment
-        )
-
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
     return Response(_resignation_json(r))
 
 
@@ -408,6 +445,11 @@ def my_resignation(request: Request) -> Response:
     if existing:
         return _error("You already have a resignation request in progress.", 400)
 
+    try:
+        approval.require_enabled(WORKFLOW)
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
+
     data = request.data
     reason = data.get("reason") or data.get("reason")
     if not reason:
@@ -422,6 +464,7 @@ def my_resignation(request: Request) -> Response:
         except Exception:
             pass
 
+    first = approval.get_config(WORKFLOW).steps[0].roles  # the request starts with whoever the first step names
     r = ResignationRequest.objects.create(
         employee_id=employee_id,
         reason=reason,
@@ -429,13 +472,15 @@ def my_resignation(request: Request) -> Response:
         survey_q1_answer=data.get("survey_q1_answer") or data.get("surveyQ1Answer"),
         survey_q2_answer=data.get("survey_q2_answer") or data.get("surveyQ2Answer"),
         survey_q3_answer=data.get("survey_q3_answer") or data.get("surveyQ3Answer"),
-        status="pending",
+        status=approval.project_status(WORKFLOW, first),
+        approval_trail=[],
     )
     r.refresh_from_db()
     r = ResignationRequest.objects.select_related(
         "employee", "employee__department", "dept_head"
     ).get(pk=r.pk)
-    _notify_dept_heads(r)
+    if approval.HOD in first:
+        _notify_dept_heads(r)
     return Response(_resignation_json(r), status=201)
 
 
@@ -480,9 +525,6 @@ def manager_resignation_action(request: Request, pk: int) -> Response:
     if not r:
         return _error("Resignation request not found or not in your scope", 404)
 
-    if r.status != "pending":
-        return _error("This resignation has already been reviewed", 400)
-
     action = request.data.get("action")
     comment = request.data.get("comment")
 
@@ -490,38 +532,13 @@ def manager_resignation_action(request: Request, pk: int) -> Response:
         return _error("action must be 'approve' or 'reject'", 400)
 
     dept_head_emp = Employee.objects.filter(id=token_emp_id).first()
-
-    if action == "approve":
-        r.dept_head_status = "approved"
-        r.dept_head = dept_head_emp
-        r.dept_head_comment = comment
-        r.dept_head_approved_at = timezone.now()
-        r.status = "dept_approved"
-        r.save()
-        Notification.objects.create(
-            employee_id=r.employee_id,
-            type="resignation",
-            message="Your resignation request has been reviewed and approved by your Department Head. It is now with HR for final approval.",
+    actor = f"{dept_head_emp.first_name} {dept_head_emp.last_name}".strip() if dept_head_emp else ""
+    try:
+        resolve_resignation(
+            r, approval.HOD, "approved" if action == "approve" else "rejected", actor, comment, hod_employee=dept_head_emp
         )
-    else:
-        r.dept_head_status = "rejected"
-        r.dept_head = dept_head_emp
-        r.dept_head_comment = comment
-        r.dept_head_approved_at = timezone.now()
-        r.status = "rejected"
-        r.rejected_by = "dept_head"
-        r.save()
-        Notification.objects.create(
-            employee_id=r.employee_id,
-            type="resignation",
-            message="Your resignation request has been rejected by your Department Head. Please contact them for more information.",
-        )
-        whatsapp_approvals.notify_decision(
-            "resignation", r, "rejected",
-            approver=f"{dept_head_emp.first_name} {dept_head_emp.last_name}".strip() if dept_head_emp else "",
-            role="dept_head", comment=comment,
-        )
-
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
     return Response(_resignation_json(r))
 
 
@@ -547,16 +564,25 @@ def manager_pending_resignations(request: Request) -> Response:
     from .hod_scope import managed_employee_ids
 
     emp_filter = Q(employee_id__in=managed_employee_ids(m))
+    # A head never decides their own request (the action endpoint refuses it), so it is not listed for them either.
+    emp_filter &= ~Q(employee_id=token_emp_id)
 
     status_filter = request.query_params.get("status", "pending")
     qs = ResignationRequest.objects.select_related(
         "employee", "employee__department", "dept_head"
     ).filter(emp_filter)
+    cfg = approval.get_config(WORKFLOW)
+    if status_filter == "pending":
+        # what this Department Head can decide right now under the pipeline (not just the "pending" status label)
+        rows = approval.filter_actionable(
+            WORKFLOW, qs.filter(status__in=["pending", "dept_approved"]).order_by("-created_at"), approval.HOD, cfg
+        )
+        return Response([_resignation_json(r, cfg) for r in rows])
     if status_filter != "all":
         qs = qs.filter(status=status_filter)
     qs = qs.order_by("-created_at")
 
-    return Response([_resignation_json(r) for r in qs])
+    return Response([_resignation_json(r, cfg) for r in qs])
 
 
 # ── PDF Generation ────────────────────────────────────────────────────────────

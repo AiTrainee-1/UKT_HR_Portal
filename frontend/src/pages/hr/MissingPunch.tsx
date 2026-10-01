@@ -7,6 +7,8 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { PipelineNote, WaitingChip } from "@/components/ApprovalTrail";
+import { explainsWaiting, hrCanAct, hrCanReject, waitingText } from "@/lib/approval-workflow";
 import {
   useMissingPunchRequestsHR, useUpdateMissingPunchHR,
   type MissingPunchItem, type MissingPunchSlot,
@@ -50,14 +52,23 @@ export default function MissingPunch() {
   const approved   = all.filter(r => r.status === "approved");
   const rejected   = all.filter(r => r.status === "rejected");
 
+  // What HR may decide follows the approval pipeline (User Management -> Approval Workflow Control), not the status
+  // label: an older backend sends no pipeline, and then HR decides at "Awaiting HR" only, as it always did.
+  const hrDecides = (r: MissingPunchItem) => hrCanAct(r.approval, r.status === "pending_hr");
+  const hrRejects = (r: MissingPunchItem) => hrCanReject(r.approval, r.status === "pending_hr");
+  const awaitingHr = pending.filter(hrDecides);
+
   const decide = async (r: MissingPunchItem, status: "approved" | "rejected") => {
     try {
-      await updateMutation.mutateAsync({ id: r.id, status });
+      const result = await updateMutation.mutateAsync({ id: r.id, status });
+      const passedOn = status === "approved" && result?.status !== "approved";
       toast({
-        title: `Missing Punch ${status}`,
-        description: status === "approved"
-          ? `${punchLabel(r)} at ${r.punchTime} on ${r.date} has been added to ${r.employeeName}'s attendance.`
-          : `${r.employeeName}'s Missing Punch request for ${r.date} was rejected.`,
+        title: passedOn ? "Missing Punch approved" : `Missing Punch ${status}`,
+        description: passedOn
+          ? `${waitingText(result?.approval) ?? "Waiting for the next approval"}: it is added to attendance once that is done.`
+          : status === "approved"
+            ? `${punchLabel(r)} at ${r.punchTime} on ${r.date} has been added to ${r.employeeName}'s attendance.`
+            : `${r.employeeName}'s Missing Punch request for ${r.date} was rejected.`,
       });
     } catch (err: any) {
       toast({ title: err?.data?.error ?? err?.message ?? "Failed to update", variant: "destructive" });
@@ -65,7 +76,10 @@ export default function MissingPunch() {
   };
 
   const Row = ({ r }: { r: MissingPunchItem }) => (
-    <div className="flex items-start gap-4 p-4 border rounded-xl hover:bg-gray-50 transition-colors flex-wrap">
+    <div
+      className="flex items-start gap-4 p-4 border rounded-xl hover:bg-gray-50 transition-colors flex-wrap"
+      data-testid={`missing-punch-${r.id}`}
+    >
       <div className="w-9 h-9 rounded-lg bg-violet-50 flex items-center justify-center shrink-0">
         <Fingerprint size={15} className="text-violet-500" />
       </div>
@@ -74,15 +88,19 @@ export default function MissingPunch() {
           <p className="text-sm font-bold text-gray-900">{r.employeeName}</p>
           <span className="text-xs font-mono text-gray-400">{r.employeeCode}</span>
           {r.department && <span className="text-xs text-gray-400">· {r.department}</span>}
-          <span className={`flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded ${
-            r.status === "approved" ? "bg-green-50 text-green-700"
-            : r.status === "rejected" ? "bg-red-50 text-red-600"
-            : r.status === "pending_hr" ? "bg-blue-50 text-blue-700"
-            : "bg-amber-50 text-amber-700"
-          }`}>
-            {r.status === "pending_hod" ? <ShieldAlert size={10} /> : r.status === "pending_hr" ? <ShieldCheck size={10} /> : null}
-            {STAGE_LABEL[r.status]}
-          </span>
+          {explainsWaiting(r.approval) ? (
+            <WaitingChip approval={r.approval} className="rounded" />
+          ) : (
+            <span className={`flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded ${
+              r.status === "approved" ? "bg-green-50 text-green-700"
+              : r.status === "rejected" ? "bg-red-50 text-red-600"
+              : r.status === "pending_hr" ? "bg-blue-50 text-blue-700"
+              : "bg-amber-50 text-amber-700"
+            }`}>
+              {r.status === "pending_hod" ? <ShieldAlert size={10} /> : r.status === "pending_hr" ? <ShieldCheck size={10} /> : null}
+              {STAGE_LABEL[r.status]}
+            </span>
+          )}
         </div>
         <p className="text-xs text-gray-500 mt-1">
           <strong className="font-mono">{r.date}</strong> · {punchLabel(r)} at{" "}
@@ -101,9 +119,14 @@ export default function MissingPunch() {
             {r.hrReviewComment ? ` -"${r.hrReviewComment}"` : ""}
           </p>
         )}
-        {r.status === "pending_hod" && (
+        {!r.approval && r.status === "pending_hod" && (
           <p className="text-[11px] text-amber-600 mt-1">
             No Department Head has acted yet -HR can only approve once the Department Head approves first.
+          </p>
+        )}
+        {r.approval && r.approval.currentStep !== null && !hrDecides(r) && (
+          <p className="text-[11px] text-amber-600 mt-1">
+            {waitingText(r.approval)}: HR cannot decide this request until that step is done.
           </p>
         )}
         {r.status === "approved" && (
@@ -112,22 +135,26 @@ export default function MissingPunch() {
           </p>
         )}
       </div>
-      {r.status === "pending_hr" && (
+      {(hrDecides(r) || hrRejects(r)) && (
         <div className="flex items-center gap-2 shrink-0">
-          <Button
-            size="sm" className="h-8 gap-1.5 text-xs bg-green-600 hover:bg-green-700"
-            disabled={updateMutation.isPending}
-            onClick={() => decide(r, "approved")}
-          >
-            <CheckCircle2 size={12} /> Approve
-          </Button>
-          <Button
-            size="sm" variant="destructive" className="h-8 gap-1.5 text-xs"
-            disabled={updateMutation.isPending}
-            onClick={() => decide(r, "rejected")}
-          >
-            <XCircle size={12} /> Reject
-          </Button>
+          {hrDecides(r) && (
+            <Button
+              size="sm" className="h-8 gap-1.5 text-xs bg-green-600 hover:bg-green-700"
+              disabled={updateMutation.isPending}
+              onClick={() => decide(r, "approved")}
+            >
+              <CheckCircle2 size={12} /> Approve
+            </Button>
+          )}
+          {hrRejects(r) && (
+            <Button
+              size="sm" variant="destructive" className="h-8 gap-1.5 text-xs"
+              disabled={updateMutation.isPending}
+              onClick={() => decide(r, "rejected")}
+            >
+              <XCircle size={12} /> Reject
+            </Button>
+          )}
         </div>
       )}
     </div>
@@ -140,8 +167,9 @@ export default function MissingPunch() {
           <div>
             <h2 className="text-2xl font-black text-gray-900">Missing Punch</h2>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Employee-reported forgotten punches -Department Head approves first, then HR gives final approval.
+              Employee-reported forgotten punches.
             </p>
+            <PipelineNote workflow="missing_punch" className="mt-1" />
           </div>
           <RefreshButton />
         </div>
@@ -149,7 +177,7 @@ export default function MissingPunch() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {[
             { label: "Pending", value: pending.length, icon: Hourglass, cls: "text-amber-700", iconCls: "bg-amber-500" },
-            { label: "Awaiting HR", value: pendingHr.length, icon: ShieldCheck, cls: "text-blue-700", iconCls: "bg-blue-600" },
+            { label: "HR can decide", value: awaitingHr.length, icon: ShieldCheck, cls: "text-blue-700", iconCls: "bg-blue-600" },
             { label: "Approved", value: approved.length, icon: CheckCircle2, cls: "text-green-700", iconCls: "bg-green-600" },
             { label: "Rejected", value: rejected.length, icon: XCircle, cls: "text-red-600", iconCls: "bg-red-500" },
           ].map(({ label, value, icon: Icon, cls, iconCls }) => (
@@ -171,10 +199,11 @@ export default function MissingPunch() {
           <Info size={14} className="shrink-0 mt-0.5" />
           <span>
             Requests are submitted from the employee mobile/web app with a date, time and reason.
-            The <strong>Department Head</strong> approves first (mobile, when "Can approve missing punch" is
-            enabled in User Management) -only after that can <strong>HR</strong> give final approval here.
-            Once HR approves, the punch is written to attendance and flows through the normal engine
-            (punch-order rules, punctuality window, cross-midnight logic) exactly like a real biometric punch.
+            Who approves them, and in what order, is set in <strong>User Management → Approval Workflow Control</strong>
+            (shown above); a Department Head decides from the mobile app when "Can approve missing punch" is switched
+            on for them in HOD Assignment. Once the final approval is given, the punch is written to attendance and
+            flows through the normal engine (punch-order rules, punctuality window, cross-midnight logic) exactly like
+            a real biometric punch.
           </span>
         </div>
 

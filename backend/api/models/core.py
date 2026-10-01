@@ -309,3 +309,27 @@ class ManagerEmployeeAssignment(models.Model):
     class Meta:
         db_table = "manager_employee_assignments"
         unique_together = [["manager", "employee"]]
+
+
+class ManagerEmployeeExclusion(models.Model):
+    """HR took this employee OUT of the department(s) an HOD covers.
+
+    A department assignment covers everyone in the department (and whoever joins it later). This row
+    carves one person back out of that coverage without un-assigning the department: they stop
+    reporting to this HOD through it, and their requests go to the next active HOD who holds the
+    department, or to HR when there is none. An individual ManagerEmployeeAssignment still beats
+    it (that is an explicit choice to cover them). See hod_scope.py."""
+
+    manager = models.ForeignKey(
+        DepartmentManager, on_delete=models.CASCADE,
+        related_name="employee_exclusions", db_column="manager_id",
+    )
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE,
+        related_name="hod_exclusions", db_column="employee_id",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "manager_employee_exclusions"
+        unique_together = [["manager", "employee"]]

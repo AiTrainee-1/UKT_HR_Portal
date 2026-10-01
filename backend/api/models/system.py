@@ -4,6 +4,25 @@ from datetime import time
 from django.db import models
 
 
+class ApprovalWorkflowConfig(models.Model):
+    """The approval pipeline HR has set for one workflow (User Management -> Approval Workflow Control).
+
+    One row per workflow key, and ONLY for workflows HR has actually changed: no row means "the built-in
+    default", which reproduces the pipeline the HRMS always had, so nothing changes until HR edits one.
+    `steps` is an ordered list of {"roles": ["hod"|"hr", ...], "mandatory": bool}; null means the default steps
+    (a row that only switches the workflow ON/OFF). See api/approval_workflow.py for the rules.
+    """
+
+    key = models.CharField(max_length=40, unique=True, db_column="key")
+    enabled = models.BooleanField(default=True, db_default=True, db_column="enabled")
+    steps = models.JSONField(null=True, blank=True, db_column="steps")
+    updated_by = models.TextField(null=True, blank=True, db_column="updated_by")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "approval_workflow_configs"
+
+
 class FileBlob(models.Model):
     """Backing store for api.db_file_storage.HybridFileStorage.
 

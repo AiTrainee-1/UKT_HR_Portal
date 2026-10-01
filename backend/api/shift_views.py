@@ -1,11 +1,14 @@
-from datetime import date
+from datetime import date, time as time_type
 from typing import Optional
 
+from django.db import transaction
+from django.db.models import Count, Q
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from .auth import require_hr, require_auth, get_token_employee_id, is_hr
+from . import shift_planner
+from .auth import require_hr, require_auth, get_token_employee_id, is_hr, get_hr_display_name
 from .branch_scope import get_branch_scope, scope_to_branch
 from .clock import ist_today
 from .models import ShiftTemplate, EmployeeShiftAssignment, Employee
@@ -65,8 +68,161 @@ def shift_json(shift):
         "departmentName": shift.department.name if shift.department else None,
         "isDefault": shift.is_default,
         "isActive": shift.is_active,
+        "branchId": shift.branch_id,
+        # active employees on it right now (the list annotates it; elsewhere it is counted on demand)
+        "assignedCount": shift.assigned_count if hasattr(shift, "assigned_count") else _assigned_count(shift),
         "createdAt": shift.created_at.isoformat() if shift.created_at else None,
     }
+
+
+def _assigned_count(shift) -> int:
+    return shift.assignments.filter(effective_to__isnull=True, employee__status="active").count()
+
+
+# ── Shift template validation ────────────────────────────────────────────────
+
+SHIFT_TYPES = ("staff", "production")
+GENDER_RULES = ("all", "male", "female")
+MIN_SHIFT_MINUTES = 60
+
+
+def _minutes(t: time_type) -> int:
+    return t.hour * 60 + t.minute
+
+
+def _int_in(raw, lo: int, hi: int, label: str, errors: dict, key: str, default=None):
+    if raw in (None, ""):
+        return default
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        errors[key] = f"{label} must be a whole number"
+        return default
+    if not lo <= n <= hi:
+        errors[key] = f"{label} must be between {lo} and {hi}"
+    return n
+
+
+def _time_of(raw, label: str, errors: dict, key: str):
+    if raw in (None, ""):
+        return None
+    if isinstance(raw, time_type):
+        return raw
+    try:
+        return time_type.fromisoformat(str(raw))
+    except ValueError:
+        errors[key] = f"{label} must be a time like 09:30"
+        return None
+
+
+def validate_template(request, data, instance=None):
+    """(values, field_errors) for creating a shift template or editing ``instance``.
+
+    ``values`` holds model attribute names, merged over the instance's current ones so a partial PUT is validated as the
+    whole template it will become. Everything the attendance engine and the Report Center treat as a data problem is
+    refused here instead: overnight shifts, a lunch break outside the shift, a duplicate name, a shift type that
+    would contradict the people already on it."""
+    errors: dict[str, str] = {}
+    cur = instance
+    v: dict = {
+        "name": cur.name if cur else None,
+        "shift_type": cur.shift_type if cur else None,
+        "start_time": cur.start_time if cur else None,
+        "end_time": cur.end_time if cur else None,
+        "gender_rule": cur.gender_rule if cur else "all",
+        "grace_period_minutes": cur.grace_period_minutes if cur else 15,
+        "first_half_end": cur.first_half_end if cur else None,
+        "lunch_duration_minutes": cur.lunch_duration_minutes if cur else 60,
+        "lunch_grace_minutes": cur.lunch_grace_minutes if cur else 10,
+        "department_id": cur.department_id if cur else None,
+        "is_default": cur.is_default if cur else False,
+        "is_active": cur.is_active if cur else True,
+    }
+    if "name" in data:
+        v["name"] = str(data["name"] or "").strip()
+    if "shiftType" in data:
+        v["shift_type"] = data["shiftType"]
+    if "startTime" in data:
+        v["start_time"] = _time_of(data["startTime"], "Start time", errors, "startTime")
+    if "endTime" in data:
+        v["end_time"] = _time_of(data["endTime"], "End time", errors, "endTime")
+    if "genderRule" in data:
+        v["gender_rule"] = data["genderRule"] or "all"
+    if "gracePeriodMinutes" in data:
+        v["grace_period_minutes"] = _int_in(data["gracePeriodMinutes"], 0, 60, "Grace period", errors, "gracePeriodMinutes", 15)
+    if "firstHalfEnd" in data:
+        v["first_half_end"] = _time_of(data["firstHalfEnd"], "First half end", errors, "firstHalfEnd")
+    if "lunchDurationMinutes" in data:
+        v["lunch_duration_minutes"] = _int_in(data["lunchDurationMinutes"], 15, 120, "Lunch duration", errors, "lunchDurationMinutes", 60)
+    if "lunchGraceMinutes" in data:
+        v["lunch_grace_minutes"] = _int_in(data["lunchGraceMinutes"], 0, 30, "Lunch grace", errors, "lunchGraceMinutes", 10)
+    if "departmentId" in data:
+        v["department_id"] = data["departmentId"] or None
+    if "isDefault" in data:
+        v["is_default"] = bool(data["isDefault"])
+    if "isActive" in data:
+        v["is_active"] = bool(data["isActive"])
+
+    # name
+    if not v["name"]:
+        errors["name"] = "Shift name is required"
+    elif len(v["name"]) > 80:
+        errors["name"] = "Shift name can be at most 80 characters"
+    # type and gender
+    if v["shift_type"] not in SHIFT_TYPES:
+        errors["shiftType"] = "Shift type must be staff or production"
+    if v["gender_rule"] not in GENDER_RULES:
+        errors["genderRule"] = "Gender rule must be all, male or female"
+    elif v["shift_type"] == "production" and v["gender_rule"] != "all":
+        errors["genderRule"] = "Production shifts apply to every gender"
+    # times
+    st, en = v["start_time"], v["end_time"]
+    if st is None and "startTime" not in errors:
+        errors["startTime"] = "Start time is required"
+    if en is None and "endTime" not in errors:
+        errors["endTime"] = "End time is required"
+    if st is not None and en is not None:
+        if _minutes(en) <= _minutes(st):
+            errors["endTime"] = "A shift cannot end before it starts. Overnight shifts are not supported"
+        elif _minutes(en) - _minutes(st) < MIN_SHIFT_MINUTES:
+            errors["endTime"] = f"A shift must be at least {MIN_SHIFT_MINUTES // 60} hour long"
+    # the staff lunch structure
+    if v["shift_type"] == "staff":
+        fh = v["first_half_end"]
+        if fh is not None and st is not None and en is not None and not (_minutes(st) < _minutes(fh) < _minutes(en)):
+            errors["firstHalfEnd"] = "The first half must end between the start and the end of the shift"
+    else:
+        v["first_half_end"] = None
+    # a name is unique per branch and type
+    if v["name"] and "name" not in errors and v["shift_type"] in SHIFT_TYPES:
+        branch_id = cur.branch_id if cur else get_branch_scope(request)
+        clash = ShiftTemplate.objects.filter(branch_id=branch_id, shift_type=v["shift_type"], name__iexact=v["name"])
+        if cur:
+            clash = clash.exclude(pk=cur.pk)
+        if clash.exists():
+            errors["name"] = f"A {v['shift_type']} shift called '{v['name']}' already exists"
+
+    # an edit must not contradict the people already on the shift
+    if cur is not None and not errors:
+        if v["shift_type"] != cur.shift_type and cur.assignments.exists():
+            errors["shiftType"] = "Employees have been assigned to this shift, so its type cannot change. Create a new shift instead"
+        active = cur.assignments.filter(effective_to__isnull=True, employee__status="active")
+        if v["gender_rule"] != cur.gender_rule and v["gender_rule"] != "all":
+            wrong = active.exclude(employee__gender=v["gender_rule"]).count()
+            if wrong:
+                errors["genderRule"] = (
+                    f"{wrong} employee{'s' if wrong != 1 else ''} on this shift {'are' if wrong != 1 else 'is'} not {v['gender_rule']}. "
+                    "Move them to another shift first"
+                )
+        if cur.is_active and not v["is_active"]:
+            n = active.count()
+            if n:
+                errors["isActive"] = f"{n} employee{'s are' if n != 1 else ' is'} on this shift. Move them to another shift before deactivating it"
+    return v, errors
+
+
+def _invalid(errors: dict) -> Response:
+    return Response({"error": next(iter(errors.values())), "fieldErrors": errors}, status=400)
 
 
 def assignment_json(a):
@@ -124,36 +280,26 @@ def shift_templates(request: Request) -> Response:
         # own; templates predating the branch column are admin-only.
         qs = scope_to_branch(
             ShiftTemplate.objects, request, field="branch_id"
-        ).select_related("department").order_by("shift_type", "name")
+        ).select_related("department").annotate(
+            assigned_count=Count(
+                "assignments",
+                filter=Q(assignments__effective_to__isnull=True, assignments__employee__status="active"),
+                distinct=True,
+            )
+        ).order_by("shift_type", "name")
         if shift_type:
             qs = qs.filter(shift_type=shift_type)
         if dept_id:
             qs = qs.filter(department_id=dept_id)
         return Response([shift_json(s) for s in qs])
 
-    data = request.data
-    required = ["name", "shiftType", "startTime", "endTime"]
-    for field in required:
-        if not data.get(field):
-            return Response({"error": f"{field} is required"}, status=400)
+    values, errors = validate_template(request, request.data)
+    if errors:
+        return _invalid(errors)
 
-    first_half_end_raw = data.get("firstHalfEnd")
     # Stamped from the creator, so a branch admin's new shift is theirs and
     # an unscoped admin creates a template no branch owns until assigned.
-    shift = ShiftTemplate.objects.create(
-        branch_id=get_branch_scope(request),
-        name=data["name"],
-        shift_type=data["shiftType"],
-        start_time=data["startTime"],
-        end_time=data["endTime"],
-        gender_rule=data.get("genderRule", "all"),
-        grace_period_minutes=int(data.get("gracePeriodMinutes", 15)),
-        first_half_end=first_half_end_raw if first_half_end_raw else None,
-        lunch_duration_minutes=int(data.get("lunchDurationMinutes", 60)),
-        lunch_grace_minutes=int(data.get("lunchGraceMinutes", 10)),
-        department_id=data.get("departmentId"),
-        is_default=bool(data.get("isDefault", False)),
-    )
+    shift = ShiftTemplate.objects.create(branch_id=get_branch_scope(request), **values)
     # reload so TimeField strings are converted to datetime.time objects
     shift.refresh_from_db()
     return Response(shift_json(shift), status=201)
@@ -173,24 +319,33 @@ def shift_template_detail(request: Request, pk: int) -> Response:
         return Response(shift_json(shift))
 
     if request.method == "PUT":
-        data = request.data
-        for field, attr in [
-            ("name", "name"), ("shiftType", "shift_type"), ("startTime", "start_time"),
-            ("endTime", "end_time"), ("genderRule", "gender_rule"),
-            ("gracePeriodMinutes", "grace_period_minutes"), ("departmentId", "department_id"),
-            ("isDefault", "is_default"), ("isActive", "is_active"),
-            ("lunchDurationMinutes", "lunch_duration_minutes"),
-            ("lunchGraceMinutes", "lunch_grace_minutes"),
-        ]:
-            if field in data:
-                setattr(shift, attr, data[field])
-        if "firstHalfEnd" in data:
-            raw = data["firstHalfEnd"]
-            shift.first_half_end = raw if raw else None
+        values, errors = validate_template(request, request.data, instance=shift)
+        if errors:
+            return _invalid(errors)
+        for attr, val in values.items():
+            setattr(shift, attr, val)
         shift.save()
         shift.refresh_from_db()
         return Response(shift_json(shift))
 
+    # Deleting a shift deletes every assignment on it, and with them the shift attendance and payroll used for the
+    # days those employees worked. Refuse while any exist; the shift can be deactivated instead.
+    total = shift.assignments.count()
+    if total:
+        active = _assigned_count(shift)
+        return Response(
+            {
+                "error": (
+                    f"'{shift.name}' is used by {active} employee{'s' if active != 1 else ''} now"
+                    + (" and by past assignments" if total > active else "")
+                    + ". Move them to another shift, then deactivate this one to keep the history."
+                ),
+                "code": "shift_in_use",
+                "activeAssignments": active,
+                "totalAssignments": total,
+            },
+            status=409,
+        )
     shift.delete()
     return Response(status=204)
 
@@ -341,6 +496,86 @@ def bulk_shift_assignments(request: Request) -> Response:
 
 @api_view(["POST"])
 @require_hr
+def shift_assignment_plan(request: Request) -> Response:
+    """Preview: what assigning a shift to a selection of employees / departments / designations would do, employee by
+    employee, without writing anything. See shift_planner.py for the selection and conflict rules."""
+    req = shift_planner.parse_request(request.data)
+    return Response(shift_planner.plan(request, req).as_json())
+
+
+@api_view(["POST"])
+@require_hr
+def shift_assignment_apply(request: Request) -> Response:
+    """Do what ``shift_assignment_plan`` shows. The plan is made again inside a transaction, so it is the fresh plan
+    (never the one the screen showed a minute ago) that is written; with any error nothing is."""
+    req = shift_planner.parse_request(request.data)
+    result = shift_planner.apply(request, req, get_hr_display_name(request))
+    body = result.as_json()
+    if not result.ok:
+        return Response(body, status=400)
+    applied = shift_planner.applied_counts(result)
+    body["applied"] = applied
+    return Response(body, status=201 if applied["assigned"] else 200)
+
+
+@api_view(["POST"])
+@require_hr
+def end_shift_assignments(request: Request) -> Response:
+    """Take employees off their shift: ``assignmentIds`` and ``lastDay`` (the last day they are on it, default today).
+    Days before ``lastDay`` keep the shift, so past attendance and payroll are unchanged. An assignment that has not
+    started yet is cancelled. Nothing is changed if any assignment cannot be ended."""
+    data = request.data
+    raw_ids = data.get("assignmentIds")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        return Response({"error": "assignmentIds is required"}, status=400)
+    try:
+        ids = list(dict.fromkeys(int(i) for i in raw_ids))
+    except (TypeError, ValueError):
+        return Response({"error": "assignmentIds must be ids"}, status=400)
+    today = ist_today()
+    try:
+        last_day = date.fromisoformat(str(data["lastDay"])[:10]) if data.get("lastDay") else today
+    except ValueError:
+        return Response({"error": "lastDay is not a valid date"}, status=400)
+
+    with transaction.atomic():
+        found = {
+            a.id: a
+            for a in scope_to_branch(EmployeeShiftAssignment.objects, request, field="employee__branch_id")
+            .select_related("employee", "shift")
+            .select_for_update(of=("self",))
+            .filter(pk__in=ids)
+        }
+        problems = []
+        for i in ids:
+            a = found.get(i)
+            name = f"{a.employee.first_name} {a.employee.last_name}".strip() if a else None
+            if a is None:
+                problems.append({"assignmentId": i, "message": "Assignment not found"})
+            elif a.effective_from > last_day and a.effective_from <= today:
+                problems.append({
+                    "assignmentId": i,
+                    "message": f"{name} has been on '{a.shift.name}' since {a.effective_from.isoformat()}; "
+                               f"the last day cannot be before that",
+                })
+        if problems:
+            return Response({"error": problems[0]["message"], "problems": problems}, status=400)
+        ended = cancelled = unchanged = 0
+        for a in found.values():
+            if a.effective_from > last_day:  # not started yet: nothing to keep
+                a.delete()
+                cancelled += 1
+            elif a.effective_to is not None and a.effective_to <= last_day:
+                unchanged += 1
+            else:
+                a.effective_to = last_day
+                a.save(update_fields=["effective_to"])
+                ended += 1
+    return Response({"ended": ended, "cancelled": cancelled, "unchanged": unchanged, "lastDay": last_day.isoformat()})
+
+
+@api_view(["POST"])
+@require_hr
 def sync_production_shifts(request: Request) -> Response:
     """
     Silently assign the production shift to all unassigned active production employees.
@@ -369,22 +604,49 @@ def shift_assignment_detail(request: Request, pk: int) -> Response:
         return Response({"error": "Assignment not found"}, status=404)
 
     if request.method == "PUT":
-        from datetime import time as time_type
         data = request.data
-        for field, attr in [
-            ("shiftId", "shift_id"), ("effectiveFrom", "effective_from"),
-            ("effectiveTo", "effective_to"), ("notes", "notes"),
+        errors: dict[str, str] = {}
+        if "shiftId" in data and str(data["shiftId"]) != str(assignment.shift_id):
+            new_shift = scope_to_branch(ShiftTemplate.objects, request, field="branch_id").filter(pk=data["shiftId"]).first()
+            emp = assignment.employee
+            if new_shift is None:
+                errors["shiftId"] = "That shift was not found"
+            elif not new_shift.is_active:
+                errors["shiftId"] = "That shift is inactive"
+            elif new_shift.shift_type != emp.employment_type:
+                errors["shiftId"] = f"{new_shift.shift_type.title()} shifts are for {new_shift.shift_type} employees"
+            elif new_shift.gender_rule != "all" and emp.gender != new_shift.gender_rule:
+                errors["shiftId"] = f"That shift is {new_shift.gender_rule} only"
+            else:
+                assignment.shift = new_shift
+        for field, attr in [("effectiveFrom", "effective_from"), ("effectiveTo", "effective_to")]:
+            if field in data:
+                raw = data[field]
+                try:
+                    setattr(assignment, attr, date.fromisoformat(str(raw)[:10]) if raw else None)
+                except ValueError:
+                    errors[field] = "Not a valid date"
+        if "notes" in data:
+            assignment.notes = (str(data["notes"]).strip()[:500] or None) if data["notes"] else None
+        for field, attr, label in [
+            ("customStartTime", "custom_start_time", "Custom start time"),
+            ("customEndTime", "custom_end_time", "Custom end time"),
         ]:
             if field in data:
-                setattr(assignment, attr, data[field])
-        if "customStartTime" in data:
-            raw = data["customStartTime"]
-            assignment.custom_start_time = time_type.fromisoformat(raw) if raw else None
-        if "customEndTime" in data:
-            raw = data["customEndTime"]
-            assignment.custom_end_time = time_type.fromisoformat(raw) if raw else None
+                setattr(assignment, attr, _time_of(data[field], label, errors, field))
         if "saturdayOff" in data:
             assignment.saturday_off = bool(data["saturdayOff"])
+        if not errors:
+            start = assignment.custom_start_time or assignment.shift.start_time
+            end = assignment.custom_end_time or assignment.shift.end_time
+            if (assignment.custom_start_time or assignment.custom_end_time) and end <= start:
+                errors["customEndTime"] = "A shift cannot end before it starts. Overnight shifts are not supported"
+            if assignment.saturday_off and assignment.shift.shift_type != "staff":
+                errors["saturdayOff"] = "Saturday off applies to staff shifts only"
+            if assignment.effective_to and assignment.effective_to < assignment.effective_from:
+                errors["effectiveTo"] = "The last day cannot be before the start date"
+        if errors:
+            return _invalid(errors)
         assignment.save()
         return Response(assignment_json(assignment))
 

@@ -48,7 +48,11 @@ export const MODULE_TREE: ModuleNode[] = [
   { key: "salary_slip", label: "Salary Slip" },
   { key: "settlement", label: "Settlement" },
   { key: "reports", label: "Reports" },
-  { key: "user_management", label: "User Management" },
+  {
+    key: "user_management",
+    label: "User Management",
+    children: [{ key: "user_management.approval_workflow", label: "Approval Workflow Control" }],
+  },
   // Activity Logs is admin-only and has no per-role grant -see the
   // isSuperAdmin guard in App.tsx and @require_super_admin on the API.
   { key: "login_devices", label: "Login Devices" },
@@ -189,6 +193,9 @@ export const ROUTE_MODULE_MAP: Record<string, string> = {
 // relationship, so they need their own OR-list here instead.
 export const ROUTE_OR_MODULES: Record<string, string[]> = {
   "/hr/payroll": ["payroll", "salary", "salary_slip"],
+  // User Management's two tabs (HOD Assignment, Approval Workflow Control) carry their own levels, so a role can be
+  // given one tab as View and the other as Edit: the page-wide lock must only fire when neither tab is editable.
+  "/hr/user-management": ["user_management", "user_management.approval_workflow"],
 };
 
 export function moduleForPath(path: string): string | null {

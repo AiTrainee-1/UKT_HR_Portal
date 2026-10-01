@@ -22,6 +22,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
+import { PipelineNote, WaitingChip } from "@/components/ApprovalTrail";
+import { explainsWaiting, hrCanAct, hrCanReject, waitingText } from "@/lib/approval-workflow";
 import { useListEmployees, useListBranches, type Employee } from "@/lib/api-client";
 import {
   useOnDutySessionsHR, useUpdateOnDutySessionHR,
@@ -478,10 +480,22 @@ function ApprovalsTab() {
   const { data: sessions, isLoading } = useOnDutySessionsHR(statusFilter);
   const updateMutation = useUpdateOnDutySessionHR();
 
+  // What HR may decide follows the approval pipeline (User Management -> Approval Workflow Control), not the status
+  // label; an older backend sends no pipeline and HR then decides any waiting session, as it always did.
+  const isWaiting = (s: OnDutySessionItem) => s.status === "pending_hod" || s.status === "pending_hr";
+  const hrDecides = (s: OnDutySessionItem) => hrCanAct(s.approval, isWaiting(s));
+  const hrRejects = (s: OnDutySessionItem) => hrCanReject(s.approval, isWaiting(s));
+
   const handleDecision = async (session: OnDutySessionItem, status: "approved" | "rejected") => {
     try {
-      await updateMutation.mutateAsync({ id: session.id, status });
-      toast({ title: `Session ${status}`, description: `${session.employeeName}'s On-Duty request for ${session.destination}.` });
+      const result = await updateMutation.mutateAsync({ id: session.id, status });
+      const passedOn = status === "approved" && result != null && (result.status === "pending_hod" || result.status === "pending_hr");
+      toast({
+        title: passedOn ? "Session approved" : `Session ${status}`,
+        description: passedOn
+          ? `${waitingText(result.approval) ?? "Waiting for the next approval"} before it is final.`
+          : `${session.employeeName}'s On-Duty request for ${session.destination}.`,
+      });
     } catch (err: any) {
       toast({ title: "Failed to update session", description: err?.message, variant: "destructive" });
     }
@@ -489,6 +503,7 @@ function ApprovalsTab() {
 
   return (
     <div className="space-y-3">
+      <PipelineNote workflow="on_duty" />
       <PillTabs
         items={[
           { value: "pending", label: "Pending" },
@@ -519,16 +534,20 @@ function ApprovalsTab() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="font-bold text-gray-900">{session.employeeName}</p>
                     <span className="text-[11px] font-mono text-gray-400">({session.employeeCode})</span>
-                    <span className={`flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                      session.status === "active" ? "bg-teal-50 text-teal-700"
-                      : session.status === "completed" ? "bg-green-50 text-green-700"
-                      : session.status === "rejected" ? "bg-red-50 text-red-600"
-                      : session.status === "pending_hr" ? "bg-blue-50 text-blue-700"
-                      : "bg-amber-50 text-amber-700"
-                    }`}>
-                      {session.status === "pending_hod" ? <ShieldAlert size={10} /> : session.status === "pending_hr" ? <ShieldCheck size={10} /> : null}
-                      {STAGE_LABEL[session.status]}
-                    </span>
+                    {explainsWaiting(session.approval) ? (
+                      <WaitingChip approval={session.approval} className="rounded" />
+                    ) : (
+                      <span className={`flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                        session.status === "active" ? "bg-teal-50 text-teal-700"
+                        : session.status === "completed" ? "bg-green-50 text-green-700"
+                        : session.status === "rejected" ? "bg-red-50 text-red-600"
+                        : session.status === "pending_hr" ? "bg-blue-50 text-blue-700"
+                        : "bg-amber-50 text-amber-700"
+                      }`}>
+                        {session.status === "pending_hod" ? <ShieldAlert size={10} /> : session.status === "pending_hr" ? <ShieldCheck size={10} /> : null}
+                        {STAGE_LABEL[session.status]}
+                      </span>
+                    )}
                   </div>
                   <p className="text-xs text-gray-500 mt-1">{session.department ?? "—"} · {session.branchName ?? "no branch"}</p>
                   <p className="text-xs text-gray-700 mt-1.5 italic">Destination: "{session.destination}"</p>
@@ -550,8 +569,14 @@ function ApprovalsTab() {
                       {session.completedAt ? ` at ${new Date(session.completedAt).toLocaleString()}` : ""}
                     </p>
                   )}
-                  {session.status === "pending_hod" && (
+                  {!session.approval && session.status === "pending_hod" && (
                     <p className="text-[11px] text-amber-600 mt-1">No Department Head has acted yet -approving here finalizes it directly.</p>
+                  )}
+                  {session.approval && session.approval.currentStep !== null && session.approval.canAct.hr && session.approval.waitingFor.includes("hod") && (
+                    <p className="text-[11px] text-amber-600 mt-1">The Department Head has not acted yet -approving here decides it directly.</p>
+                  )}
+                  {session.approval && session.approval.currentStep !== null && !session.approval.canAct.hr && (
+                    <p className="text-[11px] text-amber-600 mt-1">{waitingText(session.approval)}: HR cannot decide this session until that step is done.</p>
                   )}
                   {/* The employee is already out working under this request —
                       HR is deciding after the fact, so the stakes of the
@@ -573,22 +598,26 @@ function ApprovalsTab() {
                     </div>
                   )}
                 </div>
-                {(session.status === "pending_hod" || session.status === "pending_hr") && (
+                {(hrDecides(session) || hrRejects(session)) && (
                   <div className="flex items-center gap-2 shrink-0">
-                    <Button
-                      size="sm" className="h-8 gap-1.5 text-xs bg-green-600 hover:bg-green-700"
-                      disabled={updateMutation.isPending}
-                      onClick={() => handleDecision(session, "approved")}
-                    >
-                      <CheckCircle2 size={12} /> Approve
-                    </Button>
-                    <Button
-                      size="sm" variant="destructive" className="h-8 gap-1.5 text-xs"
-                      disabled={updateMutation.isPending}
-                      onClick={() => handleDecision(session, "rejected")}
-                    >
-                      <XCircle size={12} /> Reject
-                    </Button>
+                    {hrDecides(session) && (
+                      <Button
+                        size="sm" className="h-8 gap-1.5 text-xs bg-green-600 hover:bg-green-700"
+                        disabled={updateMutation.isPending}
+                        onClick={() => handleDecision(session, "approved")}
+                      >
+                        <CheckCircle2 size={12} /> Approve
+                      </Button>
+                    )}
+                    {hrRejects(session) && (
+                      <Button
+                        size="sm" variant="destructive" className="h-8 gap-1.5 text-xs"
+                        disabled={updateMutation.isPending}
+                        onClick={() => handleDecision(session, "rejected")}
+                      >
+                        <XCircle size={12} /> Reject
+                      </Button>
+                    )}
                   </div>
                 )}
               </CardContent>

@@ -51,13 +51,26 @@ frontend/src/
 ├── pages/
 │   ├── hr/                       # ~40+ page components -one per HR Portal sidebar item
 │   │   ├── Dashboard.tsx / Employees.tsx / Attendance.tsx / GeoAttendance.tsx
-│   │   ├── ManageShift.tsx / MissingPunch.tsx / ManualPunchImport.tsx / AttendancePunchSearch.tsx
+│   │   ├── ManageShift.tsx + shifts/   # Shifts / Assignments / Unassigned tabs; ShiftCard, ShiftFormDialog (live validation),
+│   │   │                               #   AssignDialog (SelectionBuilder include/exclude chips + PlanPreview), AssignmentsTab,
+│   │   │                               #   UnassignedTab, ManageAssignmentDialogs, shift-logic.ts (pure, tested)
+│   │   ├── MissingPunch.tsx / ManualPunchImport.tsx / AttendancePunchSearch.tsx
 │   │   ├── LeaveHoliday.tsx / CasualLeave.tsx / Requests.tsx
 │   │   ├── StaffPayroll.tsx / ProductionPayroll.tsx / Settlement.tsx
 │   │   ├── IdCards.tsx / Promotion.tsx / Increment.tsx / Bonus.tsx
 │   │   ├── Reports.tsx + report-center/   # Report Center: catalog, workspace, schema-driven filters, result table
 │   │   ├── recruitment/          # NewJoinees, Resignations, Interviews, ResumeScreening, Documents, ...
 │   │   ├── AccountManagement.tsx / ActivityLogs.tsx / LoginDevices.tsx
+│   │   ├── BulkUploadEmployees.tsx + bulk-upload/   # Staff ⇄ Production workspace: templates, check-first upload flow,
+│   │   │                                            #   per-row ResultsPanel, RemovalPanel (leave / make Inactive / delete)
+│   │   ├── UserManagement.tsx + user-management/   # Two tabs: HodAssignmentTab (who the HODs are: HodCard list,
+│   │   │                                            #   CreateUserDialog) and ApprovalWorkflowControl (every approval's
+│   │   │                                            #   pipeline, ON/OFF, editor). Shared ApprovalPermissionPicker +
+│   │   │                                            #   approval-permissions.ts (the 7 HOD switches, pipeline hints);
+│   │   │                                            #   roster.ts (filter/summarise a department's people)
+│   │   ├── ManagerDetail.tsx + user-management/manager-detail/   # One HOD: ManagerHero, permission cards (save on press),
+│   │   │                                            #   DepartmentsCard -> DepartmentSection (employees listed automatically,
+│   │   │                                            #   Remove / Restore / bulk / Undo), IndividualCard, ConflictDialogs
 │   │   └── Settings.tsx          # Every tab: Company/Attendance/Late Detection/Devices/Documents/
 │   │                             #   Payroll/Production Payroll/Salary Slip/WhatsApp/SMTP/Backup
 │   └── employee/                 # Small in-portal employee self-service section, see Section 4
@@ -65,6 +78,10 @@ frontend/src/
 ├── components/
 │   ├── EmployeeSearchSelect.tsx  # Dynamic employee search by code
 │   ├── HrLayout.tsx              # View-only fieldset lock per permission level
+│   ├── status/                   # "Aurora Midnight" status screens (StatusScreen kit + ErrorBoundary): connection lost / database
+│   │                             #   offline (ConnectivityOverlay), 404 (pages/not-found), server error (pages/ServerError, /server-error)
+│   ├── ApprovalTrail.tsx         # How an HR screen shows a request's place in ITS approval pipeline:
+│   │                             #   WaitingChip, ApprovalTrail stepper, ApprovalTrailLine, PipelineNote/Summary
 │   ├── ui/dashboard-sidebar.tsx  # Sidebar, pending badges, permission-filtered nav
 │   ├── payroll/BreakdownDrawer.tsx  # Shared day-by-day payroll breakdown, staff + production
 │   ├── SalarySlipBulkPipeline.tsx / WhatsAppBulkPipeline.tsx / PayrollGenerationPipeline.tsx
@@ -80,6 +97,8 @@ frontend/src/
 └── lib/
     ├── permission-modules.ts     # Frontend mirror of backend/api/permission_registry.py -keep
     │                             #   these two in lockstep whenever a module/permission changes
+    ├── approval-workflow.ts      # Twin of backend/api/approval_workflow.py for the UI: pipeline editing rules,
+    │                             #   the per-request `approval` block helpers (hrCanAct, waitingText, wouldFinish, ...)
     └── api-client/
         ├── custom-hooks.ts       # Hand-written hooks for endpoints off the OpenAPI spec
         └── index.ts              # Orval-generated hooks
@@ -94,6 +113,16 @@ frontend/src/
 A implementation blueprint exists for extending this section toward parity with the mobile app's self-service surface (Attendance view, Approvals for department heads, Permission Requests, My Shift, Digital ID Card, Holidays, Settlement, Casual Leave, Chat, Resignation) -all currently **unbuilt** in this section. If picked up, each new page should follow the same reusable layout/component patterns, role/permission handling, and validation conventions as the five pages already shipped, and call the same backend endpoints documented in `backend.md`.
 
 ---
+
+### Approval pipelines in the HR portal
+Who may approve a request, and in what order, is **not** hard-coded in any screen: it is configured in User Management → Approval Workflow Control and every HR screen reads it from the request's `approval` block (see `backend.md` Section 4.13 and `api-database-reference.md`). The rules for a screen that shows or decides a request:
+
+- Gate **Approve** with `hrCanAct(item.approval, <older rule>)` and **Reject** with `hrCanReject(...)` (`lib/approval-workflow.ts`); the second argument is what an older backend without the block would have allowed, so a rolling deploy never strands a screen.
+- Show a waiting request with `WaitingChip` when `explainsWaiting(approval)` (more than one step, or HR is not who decides it), a step trail (`ApprovalTrail` / `ApprovalTrailLine`) in details and rows, and `PipelineNote workflow="..."` (or `PipelineSummary`) under the page title so the current pipeline is on screen with a **Change** link (`/hr/user-management?tab=approvals`).
+- Say whether an approval is final with `wouldFinish` / `remainingAfter` (a resignation approval by HR is not final when the Department Head still has to decide).
+- Show the server's reason when a decision is refused (`err.message`), never a bare "Failed".
+- Sidebar badges count only what HR can decide now.
+- Interactive controls on the configuration page carry a mutating verb in their accessible name (`lib/view-only-lock.ts` only disables buttons it can classify by name), e.g. the ON/OFF switch is "Enable or disable Leave".
 
 ## 5. Notable Frontend-Specific Fixes & Patterns
 

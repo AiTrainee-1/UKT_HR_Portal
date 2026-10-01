@@ -12,6 +12,9 @@ class ApiConfig(AppConfig):
 
     def ready(self):
         from . import signals  # noqa: F401 -registers the push-notification signal receiver
+        from . import approval_workflow
+
+        approval_workflow._connect_cache_invalidation()
 
         self._bootstrap_admin_account()
         self._start_scheduler()

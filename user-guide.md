@@ -227,6 +227,14 @@ On the employee list, select multiple employees using the checkboxes to:
 - **Bulk update** department or designation
 - **Deactivate** employees who have left
 
+#### Employee Bulk Upload (Employees → Bulk Upload)
+Add many employees at once, or fix many existing ones, with Excel. **Staff and Production are separate**: pick one first, and everything below it is for that kind only.
+
+- **Add new employees:** download the **Staff** or **Production** template (each has its own columns: Staff has Salary Type, Salary Amount and the 50%+50% split; Production has Salary Per Shift), fill it in and upload it. Rows starting with `SAMPLE` are examples and are always skipped. Only Employee Code and First Name are required. A Production sheet uploaded in the Staff section (or the other way round) is refused with a clear message.
+- **Active employees / Inactive employees:** download the active (or inactive) employees of that kind, edit the cells you want to change, and upload the file back. Rows are matched by Employee Code, a blank cell never erases stored data, and a **Status** column (Active / Inactive) lets you retire someone or bring them back. A row from another list (for example a Production employee in the Staff file) is refused.
+- **Every file is checked first.** Nothing is saved when you choose the file: you see every row and what would happen to it, then press **Import / Apply**. The result shows the tallies and, for every row, the Excel row number, the employee code and name, the outcome (Created, Updated, Unchanged, Duplicate, Invalid, Failed, Not found, Skipped) and the reason or the fields that changed. **Needs attention** lists only the rows that did not go through. **Report** downloads the same as an Excel file.
+- **Employees missing from an update file:** if people of that kind are not in the file you uploaded, you are asked what to do with them: **leave them as they are** (the default), **make them Inactive**, or **delete them and all their data**. You can decide one by one, and deleting asks you to type DELETE. Nothing is ever removed on its own.
+
 #### Separating an Employee (Making Inactive)
 When an employee resigns or is terminated:
 1. Go to their profile.
@@ -321,6 +329,36 @@ Use the **Export** button to download the full monthly attendance register as an
 - ❌ Do not manually change attendance for future dates.
 
 ---
+
+#### Manage Shifts (HR Operations → Manage Shift)
+
+**What it's for:** Create the shifts (working hours) and choose who works each one. Attendance, late marks and payroll all follow the shift each person is on.
+
+The page has three tabs and four numbers at the top (shifts, employees on a shift, employees **without** a shift, and shifts nobody is on).
+
+- **Shifts:** one card per shift with its hours on a 24-hour bar, grace period, lunch break (staff), and how many people are on it. Filter by **Staff / Production**. Each card has **Assign people**, **Edit**, **Disable/Enable** and **Delete**.
+- **Assignments:** who is on which shift, grouped by shift. Open a shift to see its people. Per person: view their attendance on the shift, **assign them to another shift**, **edit their own hours** (a custom start/end, Saturday off) or **remove them from the shift**. Tick several people to move or remove them together.
+- **Unassigned:** active employees on no shift. Tick several and press **Assign selected**.
+
+**Creating or editing a shift.** The form checks as you type: the name is required and unique within staff or production shifts (any capitalisation), the shift must be at least 1 hour long and **cannot end before it starts** (overnight shifts are not supported), the grace period is 0–60 minutes, and a staff lunch break must fall inside the shift. A shift that has people on it cannot change from Staff to Production, cannot be switched to Male/Female only while someone of the other gender is on it, and cannot be disabled or deleted until they are moved. A shift that anybody has ever been on cannot be deleted at all (attendance and payroll for those days depend on it); **Disable** it instead.
+
+**Assigning a shift** (any **Assign people** or **Assign selected** button) opens one window:
+1. **Shift and start date.** Pick the shift (when you came from a shift's card it is already chosen) and the day it starts. Days before it keep the old shift.
+2. **Who gets it?** Add any number of **employees, departments and designations**, and mark each one **Include** or **Exclude**. A person is picked if they match **any** included item; anything **excluded is always left out**, even if an included department contains them. "Everyone on staff pay / production pay" starts from all of that type, then you exclude what you don't want. Employees already on a shift show a small "on …" tag.
+3. **Read the preview** on the right before you press anything. It lists every person and why, with these totals:
+   - **New to assign:** nobody covers them yet.
+   - **Already assigned:** already on this shift (nothing to do), or on another shift (a conflict).
+   - **Will be reassigned / Keeping current shift:** for people on another shift you choose **Keep** (nothing changes for them) or **Reassign** (move them to this shift). One choice covers everyone, and you can still decide person by person.
+   - **Skipped:** left out by an exclusion, or the shift can't go to them (a staff shift for a production employee, a Male/Female-only shift for the other gender, a shift of another branch).
+   - **Needs attention:** for example the start date is before a shift the person has already been on, or an invalid custom schedule.
+
+Nothing is saved until you press the button, which names exactly what it will do ("Assign 9 and reassign 3"). Reassigning asks once more. The shift the person is on now **ends the day before** the new one starts, so no day belongs to two shifts and past attendance and payroll do not change. Pressing the button twice does nothing the second time. An optional **custom schedule** (start/end, Saturday off) and note apply to everyone in that assignment.
+
+**Removing people from a shift** asks for the **last day on the shift** (today by default). They keep the shift up to and including that day, and have no shift after it until you assign one.
+
+#### What NOT to do in Manage Shifts
+- ❌ Don't backdate an assignment across a period you have already run payroll for unless you intend those days to be recalculated with the new shift (the preview warns you when the date is in the past).
+- ❌ Don't create a second shift with a different name for the same hours; assign the one that exists.
 
 ### 4.4 Geo Attendance & On-Duty Tracking
 
@@ -579,27 +617,30 @@ Click the Pending Resignations card — it will tell you to go to the **Resignat
 
 ### 4.9 User Management (Department Approvers)
 
-**What it's for:** Designating certain employees as **Department Approvers** who can action leave, permission, and other requests through the mobile app — without giving them full HR portal access.
+**What it's for:** Two things, on two tabs:
 
-This is how the system enables a **Department Head workflow** without creating separate HR accounts for every manager.
+- **HOD Assignment** — designating certain employees as **Department Approvers** who can action leave, permission, and other requests through the mobile app, without giving them full HR portal access. This is how the system enables a **Department Head workflow** without creating separate HR accounts for every manager.
+- **Approval Workflow Control** — deciding **how every kind of request is approved**: who is responsible for each step (HR, the Department Head, or either), in what order, and whether the approval is switched on. See [Approval Workflow Control](#approval-workflow-control) below.
 
-#### The Three-Step Setup
+#### HOD Assignment — The Three-Step Setup
 
 **Step 1: Create User**
-- Click **Create User**.
-- Search for and select the employee who should become an approver.
-- Choose which approval types they can handle (all are enabled by default):
-  - ✅ Approve leave requests
-  - ✅ Approve permission requests
-  - ✅ Approve resignations
-  - ✅ Approve attendance edits
-  - ✅ Approve casual leave
-  - ✅ Approve On-Duty requests
+- Click **Create User**. The **Add Department User** window has three parts: who, what they can approve, and an optional note.
+- Search for and select the employee who should become an approver (anyone who already is an approver is not offered). Their name, designation and department are shown once chosen.
+- Choose what they can approve. Each kind of request is a card you switch on or off (all seven are on by default), with **Enable all** / **Disable all** shortcuts and a count of how many are on:
+  - Leave · Permissions & Outpass · Casual leave · Attendance edits · Missing punch · On-Duty (geo punch) · Resignations
+  - Under each card you see **how that request is routed** (for example *Employee → HOD or HR*). If the Department Head has **no step** in that request's pipeline, or the approval is switched **off**, the card says so, because the switch would then change nothing. The routing itself is set in Approval Workflow Control.
+- Press **Add User**, or **Add & choose departments** to go straight to the next step.
 
 **Step 2: Assign Departments / Employees**
-- Click on the approver to open their detail dialog.
-- Under **Assigned Departments**, add the departments they are responsible for — they will then see all requests from employees in those departments.
-- Under **Individual Employees**, assign specific employees from other departments (cross-department assignments).
+- Open the approver's page (click their card).
+- The top of the page shows who they are, an **Active** switch (pause or resume their approvals) and four counts: departments, employees reporting to them, employees removed from their departments, and employees who report to another HOD.
+- **Approval permissions** are the same cards as above. Each switch **saves as soon as you press it**.
+- Under **Departments & employees**, choose a department and press **Add Department**. **Everyone in that department is listed automatically**, including people who join it later, so there is nothing to type or pick. Each department shows a summary such as *9 reporting · 2 removed* and can be searched and filtered (**Everyone / Reporting / Removed / Another HOD**).
+- **To take someone out of a department, press Remove on their row** (or tick several people and press **Remove selected**). They stay in the department; they simply stop reporting to this approver, so their requests go to the next approver who holds the department, or to HR. A message offers **Undo**, and a removed person has a **Restore** button, so nothing is permanent. Anyone you have not removed keeps reporting to the approver.
+- Removing a whole department (the **×** on its header) asks first: everyone in it stops reporting to the approver, and the people you had removed from it earlier are cleared too.
+- An employee reports to **one** approver. If someone in the department already reports to another approver, they are shown as **Another HOD** (with that approver's name) and an **Assign here** button moves them across. When you add a department whose people already have an approver, you are asked what to do with them first.
+- Under **Individual employees**, assign specific employees from other departments (cross-department assignments). An individual assignment wins over department coverage, and assigning someone individually also cancels an earlier "removed".
 
 **Step 3: They Act via Mobile App**
 - The assigned approver logs into the mobile app.
@@ -610,14 +651,57 @@ This is how the system enables a **Department Head workflow** without creating s
 
 | Action | How |
 |--------|-----|
-| Temporarily disable | Click **Deactivate** on the approver card |
-| Restore | Click **Activate** |
-| Remove permanently | Click the 🗑️ trash icon |
-| Change permissions | Open the approver detail, click permission buttons to toggle |
+| Temporarily disable | Switch **Active** off on the approver card (or on their page) |
+| Restore | Switch **Active** on |
+| Remove permanently | Click the 🗑️ trash icon and confirm; their departments and employees go back to HR |
+| Change permissions | Open the approver's page and switch the permission cards |
+| Take an employee out of a department | Open the approver's page, find them under the department and press **Remove** (Undo / Restore puts them back) |
 
-#### What NOT to do in User Management
+#### What NOT to do in HOD Assignment
 - ❌ Do not give someone Department Approver access if they haven't been briefed on the approval workflow — unapproved or incorrectly approved requests affect payroll.
 - ❌ Do not forget to assign departments after creating the user — without a department or individual employee assignment, they won't see any requests.
+
+#### Approval Workflow Control
+
+**What it's for:** One place that says how each kind of request is approved. Whatever you set here is followed by the HR portal, the Employee Web App, the mobile app and the backend alike, so a request can never be approved one way on one screen and another way on another. **Nothing is assigned on this tab**: which Department Head an employee reports to is still set in HOD Assignment.
+
+Open **User Management → Approval Workflow Control**. Every approval in the system is listed as a card, grouped as *Leave & attendance*, *Requests* and *Recruitment & payroll*:
+
+| Approval | Built-in pipeline | Can it be changed? |
+|----------|-------------------|--------------------|
+| Leave, Permission, Casual Leave, Gate Outpass | Employee → HOD or HR (whoever acts first) | Yes |
+| Missing Punch | Employee → HOD → HR | Yes |
+| On-Duty (Geo Attendance) | Employee → HOD (optional) → HR | Yes |
+| Resignation | Employee → HOD → HR (HR can always reject) | Yes |
+| On-Duty punch verification | Employee → HR | No — only HR sees the punch photos; it follows On-Duty |
+| Attendance correction | HR → HOD | No — HR asks for the change, the Department Head must approve it |
+| Other requests (tickets) | Employee → HR | No — there is no Department Head screen for them |
+| Advance | HR → HR | No — advances are entered and approved by HR only |
+
+Each card shows what the request is for, the **current approval pipeline**, an **ON/OFF switch** and warnings or hints (for example that a Department Head can only decide a request when the matching switch on their profile in HOD Assignment is on).
+
+**To change a pipeline:** click **Edit pipeline** on the card, then
+
+- pick the responsible role for each step: **HOD**, **HR**, or **HOD or HR** (whoever acts first — only when it is the only step);
+- use the **↑ ↓** buttons to change the order (Employee → HOD → HR becomes Employee → HR → HOD), **Add step** to add the other role after the current one, or the bin icon to remove a step (a pipeline has one or two steps, and a role can appear only once);
+- switch a step **Mandatory** or optional. A *mandatory* step cannot be skipped. An *optional* step is skipped when the next step's role decides first (for On-Duty, HR can approve straight away when the Department Head has not acted). The last step is always mandatory;
+- press **Save pipeline**. **Back to the built-in pipeline** undoes every change to that approval.
+
+**ON / OFF:** switching an approval **OFF** stops **new** requests of that kind (the employee, or HR, sees "…requests are switched off right now. Please contact HR."). Requests that are already waiting can still be approved or rejected. Switching it ON accepts new requests again. You are asked to confirm before anything is switched off.
+
+**Requests that are already waiting:** if you save a change while requests are waiting, you are told how many. Nothing is approved or rejected by the change: each waiting request simply follows the new pipeline from where it is (a step already approved stays approved; a request the Department Head already approved does not go back to them).
+
+**Where you will see the pipeline:**
+- Each HR screen for a request kind (Leave & Holiday, Requests, Casual Leave, Missing Punch, Resignations, On-Duty approvals, Outpass) shows **Approval pipeline: Employee → HOD → HR** with a **Change** link back to this tab.
+- A request that is waiting for someone else says so (*Waiting for HOD*), with a step trail in its details, and HR only gets **Approve / Reject** when it is HR's turn (HR can always reject a resignation). The sidebar badges count only what HR can decide.
+- Employees see who their request is waiting for in the Employee Web App and the mobile app; a Department Head only sees requests they can decide now.
+
+**Who can use it:** the role permission **User Management → Approval Workflow Control** (set under Account Management). A role can be given HOD Assignment without it, or the other way round; *View only* shows the pipelines but cannot change them.
+
+#### What NOT to do in Approval Workflow Control
+- ❌ Do not make a Department Head step **mandatory** if some employees have no Department Head (or are Department Heads themselves): their requests would wait until that changes. Make the step optional, or leave HR able to decide.
+- ❌ Do not remove HR from a pipeline unless you mean it: HR then sees those requests but can no longer approve or reject them.
+- ❌ Do not switch an approval OFF just to hide it: employees get an error when they try to submit.
 
 ---
 

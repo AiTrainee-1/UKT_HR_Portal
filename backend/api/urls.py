@@ -14,6 +14,7 @@ from .shift_views import (
     shift_templates, shift_template_detail,
     shift_assignments, shift_assignment_detail,
     bulk_shift_assignments, sync_production_shifts,
+    shift_assignment_plan, shift_assignment_apply, end_shift_assignments,
 )
 from .leave_views import (
     leave_types, leave_type_detail,
@@ -25,6 +26,7 @@ from .leave_views import (
 from .settlement_views import (
     advances, advance_detail, advance_repayments,
 )
+from .approval_workflow_views import approval_summary, approval_workflow_detail, approval_workflows
 from .login_sessions_views import login_sessions, revoke_login_session
 from .mobile_app_version_views import (
     mobile_app_latest_version, mobile_app_version_detail, mobile_app_versions,
@@ -94,6 +96,7 @@ from .employee_documents_views import (
 from .manager_views import (
     department_managers, department_manager_detail,
     manager_department_assignments, manager_employee_assignments,
+    manager_department_employees, manager_excluded_employees,
     manager_me, manager_pending_requests,
     manager_update_leave_status, manager_update_permission_status,
     manager_update_attendance_status, manager_update_casual_leave_status,
@@ -233,6 +236,9 @@ urlpatterns = [
     path("shifts/<int:pk>", shift_template_detail),
     path("shift-assignments", shift_assignments),
     path("shift-assignments/bulk", bulk_shift_assignments),
+    path("shift-assignments/plan", shift_assignment_plan),
+    path("shift-assignments/apply", shift_assignment_apply),
+    path("shift-assignments/end", end_shift_assignments),
     path("shift-assignments/sync-production", sync_production_shifts),
     path("shift-assignments/<int:pk>", shift_assignment_detail),
 
@@ -556,10 +562,15 @@ urlpatterns = [
     path("hr-users/<int:pk>", hr_user_detail),
 
     # ── Department Managers ──────────────────────────────────────────────────
+    path("approval-workflows", approval_workflows),
+    path("approval-workflows/<str:key>", approval_workflow_detail),
+    path("approval-summary", approval_summary),
     path("department-managers", department_managers),
     path("department-managers/<int:pk>", department_manager_detail),
     path("department-managers/<int:pk>/departments", manager_department_assignments),
     path("department-managers/<int:pk>/employees", manager_employee_assignments),
+    path("department-managers/<int:pk>/department-employees", manager_department_employees),
+    path("department-managers/<int:pk>/excluded-employees", manager_excluded_employees),
 
     # ── Mobile: Manager profile + approvals ──────────────────────────────────
     path("manager/me", manager_me),

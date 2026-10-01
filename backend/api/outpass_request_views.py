@@ -20,7 +20,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import whatsapp_approvals
+from . import approval_workflow as approval, whatsapp_approvals
 from .auth import get_hr_display_name, get_token_employee_id, require_auth, require_hr
 from .branch_scope import scope_to_branch
 from .jwt_utils import sign_token
@@ -49,7 +49,10 @@ def _outpass_scan_status(req: OutpassRequest, expires_at, now) -> str:
     return "pending_exit"
 
 
-def _outpass_request_json(req: OutpassRequest, with_employee: bool = False) -> dict:
+WORKFLOW = "outpass"
+
+
+def _outpass_request_json(req: OutpassRequest, with_employee: bool = False, cfg: approval.Config | None = None) -> dict:
     expires_at = req.approved_at + timedelta(minutes=60) if req.approved_at else None
     now = timezone.now()
     scan_status = _outpass_scan_status(req, expires_at, now)
@@ -102,6 +105,9 @@ def _outpass_request_json(req: OutpassRequest, with_employee: bool = False) -> d
         "returnQrExpiresAt": return_qr_expires_at.isoformat() if return_qr_expires_at else None,
         "canGenerateReturnQr": bool(req.exited_at and not req.entered_at),
         "scanStatus": scan_status,
+        # The approval pipeline: who it waits for now and how far it has got (approval_workflow.py). A pass raised by an
+        # On-Duty approval is born approved by the system and has no pipeline of its own.
+        "approval": approval.progress(WORKFLOW, req, cfg) if req.source == OutpassRequest.SOURCE_MANUAL else None,
     }
     if with_employee:
         emp = req.employee
@@ -121,28 +127,37 @@ def _outpass_request_json(req: OutpassRequest, with_employee: bool = False) -> d
 
 def resolve_outpass_request(
     req: OutpassRequest, decision: str, reviewer_name: str, approver_role: str, comment: str | None,
-) -> None:
-    """Single-stage resolution -unlike On-Duty's two-stage HOD-then-HR chain,
-    whichever of HOD/HR acts first on an OutpassRequest is final, matching
-    EmployeePermission's "approval from either side is sufficient" shape."""
-    req.status = OutpassRequest.STATUS_APPROVED if decision == "approved" else OutpassRequest.STATUS_REJECTED
-    req.approver_role = approver_role
-    req.approved_by = reviewer_name
+) -> approval.Outcome:
+    """One decision on an Outpass request, under the "outpass" pipeline (approval_workflow.py): `approver_role` is
+    'hr' or 'dept_head', as stored. Out of the box either side is sufficient and whoever acts first is final; HR may
+    change that. Raises approval.ApprovalError when that role may not decide it now (or it was already decided).
+
+    The FINAL approval issues the pass (one OutpassRecord); a rejection is final."""
+    role = approval.HR if approver_role == "hr" else approval.HOD
+    outcome = approval.decide(WORKFLOW, req, role, decision, actor=reviewer_name, comment=comment)
+    if outcome.final or outcome.rejected:
+        req.approver_role = approver_role
+        req.approved_by = reviewer_name
     if comment:
         req.review_comment = comment
-    if decision == "approved":
+    req.status = outcome.status
+    if outcome.final:
         req.approved_at = timezone.now()
         req.outpass_record = _create_outpass_record_for(req.employee, req.destination, source="request")
     req.save()
-    Notification.objects.create(
-        employee=req.employee,
-        type="outpass",
-        message=f"Your Outpass request for {req.destination} was "
-                f"{'Approved' if decision == 'approved' else 'Not Approved'}.",
-    )
-    whatsapp_approvals.notify_decision(
-        "outpass", req, decision, approver=reviewer_name, role=approver_role, comment=comment
-    )
+    what = f"Outpass request for {req.destination}"
+    if outcome.final or outcome.rejected:
+        message = f"Your {what} was {'Approved' if outcome.final else 'Not Approved'}."
+    else:
+        message = approval.notice_for(what, outcome)
+    Notification.objects.create(employee=req.employee, type="outpass", message=message)
+    if outcome.kind == "advanced" and approval.HOD in outcome.waiting and role != approval.HOD:
+        approval.notify_hod_of_request(WORKFLOW, req.employee, "Outpass request")
+    if outcome.final or outcome.rejected:
+        whatsapp_approvals.notify_decision(
+            "outpass", req, decision, approver=reviewer_name, role=approver_role, comment=comment
+        )
+    return outcome
 
 
 @api_view(["GET", "POST"])
@@ -165,7 +180,8 @@ def outpass_requests(request: Request) -> Response:
         # An employee only ever sees their own -no employee{} block needed.
         # HR's list (no token_emp_id) includes it, same convention as
         # manager_pending_requests' *_with_emp() serializers.
-        return paginate(request, qs, lambda r: _outpass_request_json(r, with_employee=not token_emp_id))
+        cfg = approval.get_config(WORKFLOW)
+        return paginate(request, qs, lambda r: _outpass_request_json(r, with_employee=not token_emp_id, cfg=cfg))
 
     data = request.data
     token_emp_id = get_token_employee_id(request)
@@ -199,10 +215,15 @@ def outpass_requests(request: Request) -> Response:
     except Employee.DoesNotExist:
         return Response({"error": "Employee not found"}, status=404)
 
+    try:
+        approval.require_enabled(WORKFLOW)
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
     req = OutpassRequest.objects.create(
         employee=emp, destination=destination, reason=reason,
-        pass_type=pass_type, expected_return_at=expected_return_at,
+        pass_type=pass_type, expected_return_at=expected_return_at, approval_trail=[],
     )
+    approval.notify_new_request(WORKFLOW, emp, "Outpass request")
     return Response(_outpass_request_json(req), status=201)
 
 
@@ -218,7 +239,10 @@ def outpass_request_hr_status(request: Request, pk: int) -> Response:
     if status not in ("approved", "rejected"):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
 
-    resolve_outpass_request(req, status, get_hr_display_name(request), "hr", request.data.get("comment"))
+    try:
+        resolve_outpass_request(req, status, get_hr_display_name(request), "hr", request.data.get("comment"))
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
     return Response(_outpass_request_json(req))
 
 

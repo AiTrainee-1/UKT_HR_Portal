@@ -21,6 +21,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from . import approval_workflow as approval
 from .audit_utils import log_action
 from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name
 from .user_settings import settings_for, settings_for_employee
@@ -228,7 +229,7 @@ def apply_override_values(record: AttendanceDayRecord, values: dict, reviewer_na
     return record
 
 
-def _override_request_dict(req: AttendanceOverrideRequest) -> dict:
+def _override_request_dict(req: AttendanceOverrideRequest, cfg: approval.Config | None = None) -> dict:
     emp = req.employee
     return {
         "id": req.id,
@@ -246,6 +247,7 @@ def _override_request_dict(req: AttendanceOverrideRequest) -> dict:
         "reviewComment": req.review_comment,
         "reviewedAt": req.reviewed_at.isoformat() if req.reviewed_at else None,
         "createdAt": req.created_at.isoformat() if req.created_at else None,
+        "approval": approval.progress("attendance_correction", req, cfg),
     }
 
 
@@ -284,6 +286,11 @@ def attendance_day_override(request: Request) -> Response:
         record = compute_day_record(emp, d)
         return Response({"ok": True, "record": _record_dict(record), "reset": True})
 
+    try:
+        approval.require_enabled("attendance_correction")
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
+
     record = AttendanceDayRecord.objects.filter(employee=emp, date=d).first()
     if record is None:
         record = compute_day_record(emp, d)
@@ -305,6 +312,7 @@ def attendance_day_override(request: Request) -> Response:
         requested_values=resolved,
         reason=data.get("note"),
         requested_by=hr_name,
+        approval_trail=[],
     )
     return Response({
         "ok": True,
@@ -326,7 +334,8 @@ def attendance_override_requests(request: Request) -> Response:
     if status_filter := request.query_params.get("status"):
         qs = qs.filter(status=status_filter)
     qs = qs.order_by("-created_at")[:200]
-    return Response([_override_request_dict(r) for r in qs])
+    cfg = approval.get_config("attendance_correction")
+    return Response([_override_request_dict(r, cfg) for r in qs])
 
 
 # ── Promotions ──────────────────────────────────────────────────────────────

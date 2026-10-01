@@ -21,6 +21,8 @@ import { ResumeScreeningProvider } from "@/contexts/ResumeScreeningContext";
 import GlobalResumeScreeningBanner from "@/components/GlobalResumeScreeningBanner";
 import { CircleLoader } from "@/components/ui/CircleLoader";
 import NotFound from "@/pages/not-found";
+import ServerError from "@/pages/ServerError";
+import ErrorBoundary from "@/components/status/ErrorBoundary";
 
 // Public pages
 import Landing from "@/pages/Landing";
@@ -230,6 +232,7 @@ function Router() {
       <Route path="/apply/job/:id" component={JobApply} />
       <Route path="/verify/:code" component={VerifyEmployee} />
       <Route path="/db-offline" component={DatabaseOffline} />
+      <Route path="/server-error">{() => <ServerError />}</Route>
       <Route path="/gate/outpass/:token" component={OutpassGate} />
       <Route path="/gate/visitor/:token" component={VisitorGate} />
       {/* Gate Scanner kiosk -literal /console route must be registered
@@ -472,7 +475,9 @@ function App() {
                 <WhatsAppBulkProvider>
                   <ResumeScreeningProvider>
                     <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-                      <Router />
+                      <ErrorBoundary>
+                        <Router />
+                      </ErrorBoundary>
                     </WouterRouter>
                     <GlobalSyncBanner />
                     <GlobalPayrollBanner />

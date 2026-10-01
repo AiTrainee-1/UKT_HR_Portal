@@ -34,6 +34,16 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { CircleLoader } from "@/components/ui/CircleLoader";
+import { ApprovalTrail, PipelineNote, WaitingChip } from "@/components/ApprovalTrail";
+import {
+  explainsWaiting,
+  hrCanAct,
+  hrCanReject,
+  remainingAfter,
+  stepLabel,
+  waitingText,
+  wouldFinish,
+} from "@/lib/approval-workflow";
 import {
   Clock,
   CheckCircle2,
@@ -55,7 +65,9 @@ const SURVEY_QUESTIONS = [
   "Is there anything we could have done to retain you?",
 ];
 
-// ── 3-Step Progress Indicator ────────────────────────────────────────────────
+// ── Progress Indicator ───────────────────────────────────────────────────────
+// The stepper follows the pipeline HR configured (User Management -> Approval Workflow Control): whatever steps and order
+// it has. LegacyResignationProgress is only for an older backend that sends no pipeline (Employee -> Dept Head -> HR).
 
 type StepState = "done" | "active" | "rejected" | "waiting";
 
@@ -120,6 +132,10 @@ function Step({
 }
 
 function ResignationProgress({ r }: { r: ResignationRequest }) {
+  return r.approval ? <ApprovalTrail approval={r.approval} /> : <LegacyResignationProgress r={r} />;
+}
+
+function LegacyResignationProgress({ r }: { r: ResignationRequest }) {
   const step1State: StepState = "done";
 
   let step2State: StepState;
@@ -179,6 +195,19 @@ function statusBadge(status: string) {
   return <Badge className="text-[10px] bg-amber-50 text-amber-700 border border-amber-200">Pending</Badge>;
 }
 
+// A waiting resignation says who it waits for under the pipeline; every other status keeps its badge.
+function resignationStatus(r: ResignationRequest) {
+  return explainsWaiting(r.approval) ? <WaitingChip approval={r.approval} /> : statusBadge(r.status);
+}
+
+// What HR may do follows the pipeline (an older backend sends none, and HR then approves at "Dept Approved" and
+// rejects while pending / dept approved, as it always did). HR can reject a resignation out of turn.
+const hrApproves = (r: ResignationRequest) => hrCanAct(r.approval, r.status === "dept_approved");
+const hrRejects = (r: ResignationRequest) =>
+  hrCanReject(r.approval, r.status === "pending" || r.status === "dept_approved");
+// HR's approval is final unless a mandatory step is still waiting after it.
+const finalForHr = (r?: ResignationRequest | null) => !r?.approval || wouldFinish(r.approval, "hr");
+
 // ── Resignation Table ─────────────────────────────────────────────────────────
 
 function ResignationTable({
@@ -235,7 +264,12 @@ function ResignationTable({
       </TableHeader>
       <TableBody>
         {rows.map((r) => (
-          <TableRow key={r.id} style={{ borderColor: "rgba(0,100,150,0.05)" }} className="hover:bg-[#006496]/[0.02]">
+          <TableRow
+            key={r.id}
+            data-testid={`resignation-${r.id}`}
+            style={{ borderColor: "rgba(0,100,150,0.05)" }}
+            className="hover:bg-[#006496]/[0.02]"
+          >
             <TableCell>
               <div>
                 <p className="font-semibold text-sm text-[#1a3a4a]">{r.employeeName ?? "—"}</p>
@@ -296,7 +330,7 @@ function ResignationTable({
                   </Button>
                 )}
 
-                {showApproveReject && r.status === "dept_approved" && (
+                {showApproveReject && hrApproves(r) && (
                   <Button
                     size="sm"
                     className="h-7 px-2 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
@@ -306,7 +340,7 @@ function ResignationTable({
                     Approve
                   </Button>
                 )}
-                {showApproveReject && (r.status === "pending" || r.status === "dept_approved") && (
+                {showApproveReject && hrRejects(r) && (
                   <Button size="sm" variant="destructive" className="h-7 px-2 text-xs" onClick={() => onReject(r)}>
                     Reject
                   </Button>
@@ -364,20 +398,30 @@ export default function Resignations() {
   const approved = all.filter((r) => r.status === "approved");
   const rejected = all.filter((r) => r.status === "rejected");
 
-  const pendingCount = all.filter((r) => r.status === "pending").length;
-  const deptApproved = all.filter((r) => r.status === "dept_approved").length;
+  const waitingOnDeptHead = active.filter((r) =>
+    r.approval ? r.approval.waitingFor.includes("hod") : r.status === "pending",
+  ).length;
+  const hrCanDecide = active.filter(hrApproves).length;
 
   const handleAction = () => {
     if (!selected || !actionType) return;
     actionMutation.mutate(
       { id: selected.id, action: actionType, hrComment: hrComment || undefined },
       {
-        onSuccess: () => {
+        onSuccess: (result) => {
+          const finished = actionType === "approve" && (result?.status ?? "approved") === "approved";
           toast({
-            title: actionType === "approve" ? "Resignation Approved" : "Resignation Rejected",
+            title:
+              actionType === "approve"
+                ? finished
+                  ? "Resignation Approved"
+                  : "Approval recorded"
+                : "Resignation Rejected",
             description:
               actionType === "approve"
-                ? `${selected.employeeName}'s account has been deactivated.`
+                ? finished
+                  ? `${selected.employeeName}'s account has been deactivated.`
+                  : `${waitingText(result?.approval) ?? "Waiting for the next approval"}: the resignation is final once that is done.`
                 : `${selected.employeeName}'s resignation was rejected.`,
           });
           setConfirmOpen(false);
@@ -486,9 +530,8 @@ export default function Resignations() {
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
             <h1 className="text-2xl font-black text-[#1a3a4a] tracking-tight">Resignations</h1>
-            <p className="text-sm text-[#006496]/60 mt-0.5">
-              Three-stage workflow: Employee submits → Department Head reviews → HR gives final approval.
-            </p>
+            <p className="text-sm text-[#006496]/60 mt-0.5">Staff resignation requests and their approvals.</p>
+            <PipelineNote workflow="resignation" className="mt-1" />
           </div>
           <RefreshButton />
         </div>
@@ -496,13 +539,19 @@ export default function Resignations() {
         {/* Stats */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
-            { label: "Dept Head Review", value: pendingCount, icon: Clock, color: "#d97706", urgent: pendingCount > 0 },
             {
-              label: "Awaiting HR",
-              value: deptApproved,
+              label: "Dept Head Review",
+              value: waitingOnDeptHead,
+              icon: Clock,
+              color: "#d97706",
+              urgent: waitingOnDeptHead > 0,
+            },
+            {
+              label: "HR can decide",
+              value: hrCanDecide,
               icon: AlertTriangle,
               color: "#0891b2",
-              urgent: deptApproved > 0,
+              urgent: hrCanDecide > 0,
             },
             { label: "Approved", value: approved.length, icon: CheckCircle2, color: "#059669" },
             { label: "Rejected", value: rejected.length, icon: XCircle, color: "#dc2626" },
@@ -536,20 +585,14 @@ export default function Resignations() {
           className="rounded-2xl px-4 py-3 flex items-start gap-4"
           style={{ background: "rgba(0,100,150,0.04)", border: "1px solid rgba(0,100,150,0.1)" }}
         >
-          <div className="flex items-center gap-1.5 pt-0.5 shrink-0">
-            <Step label="Employee" state="done" />
-            <Step label="Dept Head" state="active" />
-            <Step label="HR Final" state="waiting" last />
-          </div>
           <div className="text-xs text-[#006496]/70 leading-relaxed">
             <p>
-              <strong>Pending</strong> -Waiting for Department Head to review.
+              <strong>Waiting for …</strong> -who has to decide next under the approval pipeline above. Who approves,
+              and in what order, is set in User Management → Approval Workflow Control.
             </p>
             <p>
-              <strong>Dept Approved</strong> -Dept Head approved, HR can now give final decision.
-            </p>
-            <p>
-              <strong>HR can reject at any stage.</strong> HR can only approve after Dept Head approves.
+              <strong>HR can reject at any stage.</strong> HR approves only when it is HR's turn in the pipeline; the
+              final approval makes the employee Inactive immediately.
             </p>
           </div>
         </div>
@@ -644,7 +687,7 @@ export default function Resignations() {
                 </div>
                 <div>
                   <p className="text-[10px] text-[#006496]/50 uppercase tracking-wider font-semibold mb-0.5">Status</p>
-                  {statusBadge(selected.status)}
+                  {resignationStatus(selected)}
                 </div>
               </div>
 
@@ -711,9 +754,9 @@ export default function Resignations() {
                 </p>
               )}
 
-              {(selected.status === "dept_approved" || selected.status === "pending") && (
+              {(hrApproves(selected) || hrRejects(selected)) && (
                 <div className="flex gap-2 pt-1">
-                  {selected.status === "dept_approved" && (
+                  {hrApproves(selected) && (
                     <Button
                       className="flex-1 bg-emerald-600 hover:bg-emerald-700"
                       onClick={() => {
@@ -721,19 +764,21 @@ export default function Resignations() {
                         setConfirmOpen(true);
                       }}
                     >
-                      Final Approve
+                      {finalForHr(selected) ? "Final Approve" : "Approve"}
                     </Button>
                   )}
-                  <Button
-                    variant="destructive"
-                    className="flex-1"
-                    onClick={() => {
-                      setActionType("reject");
-                      setConfirmOpen(true);
-                    }}
-                  >
-                    Reject
-                  </Button>
+                  {hrRejects(selected) && (
+                    <Button
+                      variant="destructive"
+                      className="flex-1"
+                      onClick={() => {
+                        setActionType("reject");
+                        setConfirmOpen(true);
+                      }}
+                    >
+                      Reject
+                    </Button>
+                  )}
                 </div>
               )}
 
@@ -786,18 +831,38 @@ export default function Resignations() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {actionType === "approve" ? "Final Approve Resignation?" : "Reject Resignation?"}
+              {actionType === "approve"
+                ? finalForHr(selected)
+                  ? "Final Approve Resignation?"
+                  : "Approve Resignation?"
+                : "Reject Resignation?"}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {actionType === "approve" ? (
-                <>
-                  This will give <strong>HR final approval</strong> for <strong>{selected?.employeeName}</strong>'s
-                  resignation. Their account will be set to <strong>Inactive</strong> immediately.
-                </>
+                finalForHr(selected) ? (
+                  <>
+                    This will give <strong>HR final approval</strong> for <strong>{selected?.employeeName}</strong>'s
+                    resignation. Their account will be set to <strong>Inactive</strong> immediately.
+                  </>
+                ) : (
+                  <>
+                    This records <strong>HR's approval</strong> of <strong>{selected?.employeeName}</strong>'s
+                    resignation. It still needs{" "}
+                    {selected?.approval ? remainingAfter(selected.approval, "hr").map(stepLabel).join(" and ") : "the next approval"}{" "}
+                    before it is final; the account stays Active until then.
+                  </>
+                )
               ) : (
                 <>
                   This will reject <strong>{selected?.employeeName}</strong>'s resignation
-                  {selected?.status === "dept_approved" ? " (overriding the Department Head's approval)" : ""}.
+                  {(
+                    selected?.approval
+                      ? selected.approval.steps.some((s) => s.state === "approved")
+                      : selected?.status === "dept_approved"
+                  )
+                    ? " (overriding an approval already given)"
+                    : ""}
+                  .
                 </>
               )}
             </AlertDialogDescription>

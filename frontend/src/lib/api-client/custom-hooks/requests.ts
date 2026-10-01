@@ -2,6 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UseQueryOptions } from "@tanstack/react-query";
 import { customFetch } from "../custom-fetch";
+import type { ApprovalProgress } from "../../approval-workflow";
 
 export type EmployeeRequest = {
   id: number;
@@ -223,6 +224,8 @@ export type PermissionItem = {
   monthlyUsed?: number | null;
   // The HR-editable monthly cap (Settings → Late Detection → Permission Policy).
   monthlyLimit: number;
+  /** Where the request is in its approval pipeline and who can act on it (see lib/approval-workflow.ts). */
+  approval?: ApprovalProgress | null;
 };
 
 export const getListPermissionsQueryKey = (params?: {
@@ -315,6 +318,8 @@ export type CasualLeaveItem = {
   reviewComment?: string | null;
   reviewedAt?: string | null;
   createdAt?: string | null;
+  /** Where the request is in its approval pipeline and who can act on it (see lib/approval-workflow.ts). */
+  approval?: ApprovalProgress | null;
 };
 
 export type CasualLeaveEligibility = {

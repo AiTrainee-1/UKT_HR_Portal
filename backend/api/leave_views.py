@@ -4,7 +4,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import whatsapp_approvals
+from . import approval_workflow as approval, whatsapp_approvals
 from .auth import require_hr, require_auth, get_token_employee_id, is_hr, get_hr_display_name
 from .branch_scope import scope_to_branch
 from .models import LeaveType, LeaveBalance, Holiday, Employee, Notification, EmployeePermission
@@ -281,6 +281,11 @@ def _employee_request_create(request: Request) -> Response:
     except Employee.DoesNotExist:
         return Response({"error": "Employee not found"}, status=404)
 
+    try:
+        approval.require_enabled("request")  # HR can switch general requests off in Approval Workflow Control
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
+
     er = EmployeeRequest.objects.create(
         employee=emp,
         request_type=data["requestType"],
@@ -370,7 +375,36 @@ class _CapStatusCache:
         return "within_cap" if position.get(p.id, len(position)) < self.cap else "excess"
 
 
-def _permission_json(p, monthly_used=None, settings=None, cap_cache=None):
+PERMISSION_WORKFLOW = "permission"
+
+
+def resolve_permission(p, role: str, decision: str, actor: str, comment: str | None) -> approval.Outcome:
+    """One decision by `role` ('hod' or 'hr') on a permission request, under the "permission" pipeline
+    (approval_workflow.py). Raises approval.ApprovalError when that role may not decide it now.
+
+    An intermediate approval only passes the request on (status stays pending); a final approval or a rejection is
+    what attendance reads (an approved, in-cap permission protects the day). Any type or comment change the caller made
+    on `p` in memory is saved with the decision."""
+    outcome = approval.decide(PERMISSION_WORKFLOW, p, role, decision, actor=actor, comment=comment)
+    if comment is not None:
+        p.hr_comment = comment
+    if outcome.final or outcome.rejected:
+        p.approved_by = actor  # always server-derived, never client-supplied
+        p.approver_role = approval.LEGACY_ROLE[role]
+    p.status = outcome.status
+    p.save()
+    what = f"permission request for {p.date.isoformat()}"
+    Notification.objects.create(employee=p.employee, type="permission", message=approval.notice_for(what, outcome))
+    if outcome.kind == "advanced" and approval.HOD in outcome.waiting and role != approval.HOD:
+        approval.notify_hod_of_request(PERMISSION_WORKFLOW, p.employee, "permission request")
+    if outcome.final or outcome.rejected:
+        whatsapp_approvals.notify_decision(
+            PERMISSION_WORKFLOW, p, decision, approver=actor, role=approval.LEGACY_ROLE[role], comment=p.hr_comment
+        )
+    return outcome
+
+
+def _permission_json(p, monthly_used=None, settings=None, cap_cache=None, cfg=None):
     if settings is None:
         from .models import PayrollSettings
         settings = PayrollSettings.get()
@@ -419,6 +453,8 @@ def _permission_json(p, monthly_used=None, settings=None, cap_cache=None):
         # the monthly cap -the loosest true upper bound- rather than a stale 1 / 2.
         "dailyLimit": settings.permission_monthly_cap,
         "weeklyLimit": settings.permission_monthly_cap,
+        # The approval pipeline: who it waits for now and how far it has got (approval_workflow.py)
+        "approval": approval.progress(PERMISSION_WORKFLOW, p, cfg),
     }
 
 
@@ -449,7 +485,8 @@ def employee_permissions(request: Request) -> Response:
         from .models import PayrollSettings
         settings = PayrollSettings.get()
         cap_cache = _CapStatusCache(settings.permission_monthly_cap)
-        return paginate(request, qs, lambda p: _permission_json(p, settings=settings, cap_cache=cap_cache))
+        cfg = approval.get_config(PERMISSION_WORKFLOW)
+        return paginate(request, qs, lambda p: _permission_json(p, settings=settings, cap_cache=cap_cache, cfg=cfg))
 
     data = request.data
     # Accept employeeCode, camelCase, or snake_case
@@ -513,10 +550,15 @@ def employee_permissions(request: Request) -> Response:
             "error": f"A {EmployeePermission.TYPE_LABELS[perm_type]} request already exists for {parsed_date.isoformat()}",
         }, status=409)
 
+    try:
+        approval.require_enabled(PERMISSION_WORKFLOW)
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
     p = EmployeePermission.objects.create(
         employee=emp,
         date=parsed_date,
         permission_time=perm_time,
+        approval_trail=[],
         reason=data.get("reason"),
         type=perm_type,
         # Every permission is a fixed 60 minutes now -a client-supplied
@@ -526,6 +568,9 @@ def employee_permissions(request: Request) -> Response:
         # Only HR may create a permission that is already decided.
         status=data.get("status", "pending") if is_hr(request) else "pending",
     )
+
+    if p.status == "pending":
+        approval.notify_new_request(PERMISSION_WORKFLOW, emp, "permission request")
 
     month_used_after = EmployeePermission.objects.filter(
         employee=emp,
@@ -551,10 +596,17 @@ def employee_permission_detail(request: Request, pk: int) -> Response:
 
     data = request.data
     prev_status = p.status
-    if "status" in data:
-        p.status = data["status"]
-    if "hrComment" in data:
-        p.hr_comment = data["hrComment"]
+    new_status = data.get("status", prev_status)
+    if new_status not in ("pending", "approved", "rejected"):
+        return Response({"error": "status must be 'pending', 'approved' or 'rejected'"}, status=400)
+    hr_name = get_hr_display_name(request)  # always server-derived: a client-supplied name could be spoofed
+    comment = data["hrComment"] if "hrComment" in data else None
+    deciding = approval.is_pending(PERMISSION_WORKFLOW, p) and new_status in ("approved", "rejected")
+    if new_status != prev_status and not deciding and not approval.role_takes_part(PERMISSION_WORKFLOW, approval.HR):
+        return Response(
+            {"error": "HR is not part of the approval pipeline for Permission, so it cannot change this decision."},
+            status=403,
+        )
     # HR can classify a request that arrived untyped (older web-app submissions) or correct a
     # mis-picked type -it decides whether an approved permission shifts a boundary at all.
     if "type" in data:
@@ -568,7 +620,7 @@ def employee_permission_detail(request: Request, pk: int) -> Response:
     # one day: each burns one of the month's allowed permissions and, if one is in-cap and the other
     # excess, the day would be charged twice. Only checked when this request changes status or type,
     # so an HR comment on a pre-existing duplicate is never blocked.
-    if (("status" in data and p.status != prev_status) or "type" in data) and p.status in ("pending", "approved"):
+    if (("status" in data and new_status != prev_status) or "type" in data) and new_status in ("pending", "approved"):
         kind = p.type_key
         if kind and EmployeePermission.objects.filter(
             employee=p.employee, date=p.date, status__in=["pending", "approved"],
@@ -577,13 +629,25 @@ def employee_permission_detail(request: Request, pk: int) -> Response:
             return Response({
                 "error": f"A {EmployeePermission.TYPE_LABELS[kind]} request already exists for {p.date.isoformat()}",
             }, status=409)
-    # approvedBy is always server-derived from the logged-in HR user -never
-    # trust a client-supplied value here (a caller could spoof any name).
-    if p.status != prev_status and p.status in ("approved", "rejected"):
-        p.approved_by = get_hr_display_name(request)
+    if deciding:
+        try:
+            resolve_permission(p, approval.HR, new_status, hr_name, comment)
+        except approval.ApprovalError as exc:
+            return approval.refusal(exc)
+        return Response(_permission_json(p))
+
+    # A comment / type edit, or a correction of a decision already made (approved <-> rejected).
+    p.status = new_status
+    if comment is not None:
+        p.hr_comment = comment
+    if new_status != prev_status and new_status in ("approved", "rejected"):
+        p.approved_by = hr_name
         p.approver_role = "hr"
+        p.approval_trail = approval.trail_of(PERMISSION_WORKFLOW, p) + [
+            {"role": approval.HR, "decision": new_status, "by": hr_name, "comment": comment, "revised": True}
+        ]
     p.save()
-    if p.status != prev_status and p.status in ("approved", "rejected"):
+    if new_status != prev_status and new_status in ("approved", "rejected"):
         Notification.objects.create(
             employee=p.employee,
             type="permission",

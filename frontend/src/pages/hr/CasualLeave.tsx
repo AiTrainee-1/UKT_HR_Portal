@@ -13,6 +13,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { CircleLoader } from "@/components/ui/CircleLoader";
+import { ApprovalTrailLine, PipelineNote, WaitingChip } from "@/components/ApprovalTrail";
+import { explainsWaiting, hrCanAct, hrCanReject, waitingText } from "@/lib/approval-workflow";
 import {
   useListCasualLeaves,
   useCasualLeaveEligibility,
@@ -65,11 +67,13 @@ export default function CasualLeave() {
 
   const decide = async (l: CasualLeaveItem, status: "approved" | "rejected") => {
     try {
-      await decideMutation.mutateAsync({ id: l.id, status });
+      const result = await decideMutation.mutateAsync({ id: l.id, status });
+      const passedOn = status === "approved" && result != null && result.status === "pending";
       toast({
-        title: `Casual leave ${status}`,
-        description:
-          status === "approved"
+        title: passedOn ? "Casual leave approved" : `Casual leave ${status}`,
+        description: passedOn
+          ? `${waitingText(result.approval) ?? "Waiting for the next approval"} before it is final.`
+          : status === "approved"
             ? `${l.employeeName}'s attendance for ${l.date} is now marked Present (paid full day).`
             : `${l.employeeName}'s attendance for ${l.date} is marked as Leave.`,
       });
@@ -95,6 +99,11 @@ export default function CasualLeave() {
     }
   };
 
+  // What HR may decide follows the approval pipeline (User Management -> Approval Workflow Control); an older
+  // backend sends none and HR then decides any pending request, as it always did.
+  const hrDecides = (l: CasualLeaveItem) => hrCanAct(l.approval, l.status === "pending");
+  const hrRejects = (l: CasualLeaveItem) => hrCanReject(l.approval, l.status === "pending");
+
   const CLRow = ({ l, showActions }: { l: CasualLeaveItem; showActions?: boolean }) => (
     <div className="flex items-center gap-3 p-3 border rounded-xl hover:bg-gray-50 transition-colors">
       <div className="w-9 h-9 rounded-lg bg-pink-50 flex items-center justify-center shrink-0">
@@ -117,32 +126,41 @@ export default function CasualLeave() {
             {l.reviewComment ? ` -${l.reviewComment}` : ""}
           </p>
         )}
+        <ApprovalTrailLine approval={l.approval} className="mt-0.5" />
       </div>
-      <StatusBadge
-        tone={REQUEST_STATUS_TONE[l.status] ?? "neutral"}
-        className="text-xs font-semibold shrink-0 capitalize"
-      >
-        {l.status}
-      </StatusBadge>
-      {showActions && l.status === "pending" && (
+      {explainsWaiting(l.approval) ? (
+        <WaitingChip approval={l.approval} className="text-xs font-semibold shrink-0" />
+      ) : (
+        <StatusBadge
+          tone={REQUEST_STATUS_TONE[l.status] ?? "neutral"}
+          className="text-xs font-semibold shrink-0 capitalize"
+        >
+          {l.status}
+        </StatusBadge>
+      )}
+      {showActions && l.status === "pending" && (hrDecides(l) || hrRejects(l)) && (
         <div className="flex items-center gap-1.5 shrink-0">
-          <Button
-            size="sm"
-            className="h-8 gap-1 bg-green-600 hover:bg-green-700 text-xs"
-            onClick={() => decide(l, "approved")}
-            disabled={decideMutation.isPending}
-          >
-            <CheckCircle2 size={12} /> Approve
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-8 gap-1 text-red-500 border-red-200 text-xs"
-            onClick={() => decide(l, "rejected")}
-            disabled={decideMutation.isPending}
-          >
-            <XCircle size={12} /> Reject
-          </Button>
+          {hrDecides(l) && (
+            <Button
+              size="sm"
+              className="h-8 gap-1 bg-green-600 hover:bg-green-700 text-xs"
+              onClick={() => decide(l, "approved")}
+              disabled={decideMutation.isPending}
+            >
+              <CheckCircle2 size={12} /> Approve
+            </Button>
+          )}
+          {hrRejects(l) && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 gap-1 text-red-500 border-red-200 text-xs"
+              onClick={() => decide(l, "rejected")}
+              disabled={decideMutation.isPending}
+            >
+              <XCircle size={12} /> Reject
+            </Button>
+          )}
         </div>
       )}
       {l.status !== "pending" && (
@@ -174,6 +192,7 @@ export default function CasualLeave() {
             <p className="text-sm text-muted-foreground mt-0.5">
               Paid leave · staff only · 1 per month · eligible after 6 months of service
             </p>
+            <PipelineNote workflow="casual_leave" className="mt-1" />
           </div>
           <div className="flex items-center gap-2">
             <RefreshButton />

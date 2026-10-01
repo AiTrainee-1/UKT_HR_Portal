@@ -306,7 +306,7 @@ test("the bulk-upload template carries the eight split columns, and the upload w
   await page.goto("/hr/employees/bulk-upload");
   const [download] = await Promise.all([
     page.waitForEvent("download"),
-    page.getByRole("button", { name: "Download Template" }).click(),
+    page.getByTestId("download-template-staff").click(), // the Staff sheet is the one with the salary columns
   ]);
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile((await download.path())!);
@@ -314,7 +314,8 @@ test("the bulk-upload template carries the eight split columns, and the upload w
   const headers = (ws.getRow(1).values as (string | undefined)[])
     .slice(1)
     .map((h) => String(h ?? "").replace(/ \*$/, ""));
-  expect(headers.slice(-8)).toEqual([
+  // the Staff sheet carries the eight split columns right after the salary amount
+  const split = [
     "Basic",
     "DA",
     "Retention Allowance",
@@ -323,11 +324,14 @@ test("the bulk-upload template carries the eight split columns, and the upload w
     "RHA",
     "Special Allowance",
     "CA",
-  ]);
+  ];
+  const first = headers.indexOf("Basic");
+  expect(headers.slice(first - 2, first)).toEqual(["Salary Type", "Salary Amount"]);
+  expect(headers.slice(first, first + 8)).toEqual(split);
   expect(headers.slice(0, 5)).toEqual(["Employee Code", "First Name", "Last Name", "Email", "Phone"]);
   // the first sample row shows a hand-made split that adds up to 25,000
   const sample = (ws.getRow(2).values as unknown[]).slice(1);
-  const splitCells = sample.slice(-8).map(Number);
+  const splitCells = sample.slice(first, first + 8).map(Number);
   expect(splitCells.reduce((a, b) => a + b, 0)).toBeCloseTo(25000, 2);
 
   // upload two rows built on the downloaded headers: one leaves the split blank, one types a bad split

@@ -28,6 +28,7 @@ AUDIT_MODULES = (
     ("auth", "Login / auth"),
     ("employees", "Employees"),
     ("user_management", "User management"),
+    ("approval_workflow", "Approval workflow"),
     ("settings", "Settings"),
     ("attendance", "Attendance"),
     ("bonus", "Bonus"),

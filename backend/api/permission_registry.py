@@ -57,7 +57,9 @@ MODULE_TREE: list[dict] = [
     {"key": "salary_slip", "label": "Salary Slip"},
     {"key": "settlement", "label": "Settlement"},
     {"key": "reports", "label": "Reports"},
-    {"key": "user_management", "label": "User Management"},
+    {"key": "user_management", "label": "User Management", "children": [
+        {"key": "user_management.approval_workflow", "label": "Approval Workflow Control"},
+    ]},
     # Activity Logs is intentionally NOT here: it is admin-only and
     # enforced by @require_super_admin on the view, not by a per-role
     # grant. Listing it would show a checkbox that cannot grant access.
@@ -221,6 +223,9 @@ URL_MODULE_MAP: dict[str, str] = {
     "bonus": "bonus",
 
     "department-managers": "user_management",
+    # Approval Workflow Control (a User Management sub-tab): changes who approves every kind of request, so it has its own
+    # permission. "approval-summary" (the pipelines, read-only, for the apps) is deliberately left ungated.
+    "approval-workflows": "user_management.approval_workflow",
 
     "audit-logs": "activity_logs",
 

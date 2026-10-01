@@ -133,27 +133,27 @@ Every module is gated per-role by the hierarchical permission system (Section 4.
 Live attendance summary, pending-action tiles (leave/permission/casual leave/missing punch/resume screening/documents), recruitment snapshot, monthly salary totals, on-demand biometric sync.
 
 ### 4.2 Employees
-Directory with search/filters/Excel-like bulk view; add/edit; **Production** (daily/weekly wage, segment attendance) vs **Staff** (monthly salary, Strict/Simple attendance); Bulk Upload (separate Staff/Production flows plus an Update-existing-by-code flow); per-employee Documents checklist; Branch/Department/Designation sub-pages.
+Directory with search/filters/Excel-like bulk view; add/edit; **Production** (daily/weekly wage, segment attendance) vs **Staff** (monthly salary, Strict/Simple attendance); Bulk Upload (separate Staff/Production sheets, a check-first preview, a per-row result report, and an Update-existing-by-code flow for the active and inactive lists of each kind with explicit handling of employees missing from the file); per-employee Documents checklist; Branch/Department/Designation sub-pages.
 
 ### 4.3 Attendance & Shift Management
 The most heavily-configurable area -see Section 6 for full mechanics.
 - **Staff:** Strict Mode (all 4 punches, plus lunch-break policing) or Simple Mode (first/last punch only) -both share the same Full/Half-Shift decision.
 - **Production:** separate segment-based engine; Sunday is a normal working day (unlike staff).
-- **Manage Shift:** templates, bulk/per-employee assignment, Assigned/Unassigned view, per-employee time overrides.
+- **Manage Shift:** validated templates (no overnight shifts, unique names, a shift in use cannot be deleted), a planner (`shift_planner.py`) that previews and applies an assignment for any mix of included/excluded employees, departments and designations with keep-or-reassign for people already on a shift, ending people off a shift from a chosen day, Assigned/Unassigned views, per-employee time overrides.
 - **Late Detection & Without Permission policy:** fully HR-configurable free-allowance + slab-table deduction rules (Section 6).
 - **Geo Attendance & On-Duty:** geofenced punch-in/out, destination-based field-work sessions with department-head approval and live location tracking.
-- **Missing Punch:** employee-submitted forgotten-punch correction (4 slots), HOD/HR approval.
+- **Missing Punch:** employee-submitted forgotten-punch correction (4 slots), HOD/HR approval (Section 4.13).
 - **Manual Punch Import:** bulk Excel import for device outages/backfill.
 - **Auto Sync Rules, Attendance Search, Report Log, Night Shift Relaxation.**
 
 ### 4.4 Leave & Holiday
-Configurable leave types, per-employee/year balances with carry-forward, request approval (HR or department head, attributed), Permission requests (also feed the Late Detection pool), Holiday calendar, automatic attendance reflection.
+Configurable leave types, per-employee/year balances with carry-forward, request approval (HR and/or department head as the approval pipeline says, attributed), Permission requests (also feed the Late Detection pool), Holiday calendar, automatic attendance reflection.
 
 ### 4.5 Casual Leave (CL)
 Paid, staff-only, one per calendar month, eligible after 6 months of service. Separate table/flow from Leave/Permission. Approving/rejecting writes the attendance record directly -payroll picks it up automatically.
 
 ### 4.6 Recruitment
-New Joinees (offer letter + email/WhatsApp), Resignations (department-head then HR approval), Required Roles, Interviews, Resume Screening (spaCy NLP scoring against an HR-defined rule set, explainable per-candidate scoring, 4-stage pipeline; uploaded resumes for non-selected candidates are **auto-purged after 10 days** -see Section 7), Documents (Company Documents theming + per-employee Employee Documents checklist).
+New Joinees (offer letter + email/WhatsApp), Resignations (department-head then HR approval by default, configurable), Required Roles, Interviews, Resume Screening (spaCy NLP scoring against an HR-defined rule set, explainable per-candidate scoring, 4-stage pipeline; uploaded resumes for non-selected candidates are **auto-purged after 10 days** -see Section 7), Documents (Company Documents theming + per-employee Employee Documents checklist).
 
 ### 4.7 Payroll, Salary & Settlement
 Full engine for both employment types:
@@ -181,10 +181,20 @@ A registry-driven reporting system (`backend/api/reporting/`, developer guide in
 - `reports_views.py` (the old ten endpoints) is deprecated and unused; delete it with its routes next release.
 
 ### 4.11 Account Management & RBAC
-**Account Management** creates HR users and assigns roles from a hierarchical module tree (a parent module cascades its permission level to children unless a child overrides it). **User Management** assigns employees as department-level approvers for the mobile app's Approvals tab (Leave/Permission/Casual Leave/Missing Punch/Resignation/On-Duty, independently toggled). Plus Activity Logs, Login Devices (active-session view + remote revoke), Chat, Notifications.
+**Account Management** creates HR users and assigns roles from a hierarchical module tree (a parent module cascades its permission level to children unless a child overrides it). **User Management** has two tabs: HOD Assignment assigns employees as department-level approvers for the mobile app's Approvals tab (Leave/Permission/Casual Leave/Missing Punch/Resignation/On-Duty, independently toggled), and Approval Workflow Control decides how every kind of request is approved (Section 4.13). Plus Activity Logs, Login Devices (active-session view + remote revoke), Chat, Notifications.
 
 ### 4.12 Settings
 Tabbed, each tab independently permissioned: Company, Attendance (Staff/Production sub-tabs), Late Detection, Devices, Company Documents, Payroll, Production Payroll, Salary Slip, **WhatsApp** (Section 8 -credential status is read-only here, message-template selection is editable), SMTP/Email, Backup.
+
+### 4.13 Approval Workflow Control
+One engine, `backend/api/approval_workflow.py`, decides who may approve every request; HR configures it in **User Management → Approval Workflow Control** (`approval_workflow_views.py`, table `approval_workflow_configs`, permission `user_management.approval_workflow`). The full contract (endpoints, the per-request `approval` block, `workflow_disabled`) is in `api-database-reference.md`; the rules in short:
+
+- **Pipeline:** 1–2 ordered steps; a step's responsible role is `hod`, `hr` or both (whoever acts first, only as the single step); mandatory or optional (an optional step is skipped when the next role decides first; the last step is always mandatory); a role appears once. Built-in pipelines reproduce the old behaviour, so nothing changes until HR edits one. Eleven workflows (`DEFINITIONS`); `leave, permission, casual_leave, outpass, missing_punch, on_duty, resignation` are editable, the HR-only ones and `attendance_correction` are fixed; each can be switched OFF (no new requests; requests already waiting can still be decided).
+- **Deciding:** modules never route on their own any more. Each module's resolver (`resolve_leave`, `resolve_permission`, `resolve_casual_leave`, `resolve_outpass_request`, `resolve_missing_punch`, `resolve_on_duty_session`, `resolve_resignation`) calls `approval.decide(key, obj, role, decision, actor=...)`, which checks the request is pending and that this role has a turn (`check_can_act`), appends to `approval_trail` and returns an `Outcome` (`advanced` / `approved` / `rejected`); the module then stamps its own fields, saves, and runs its side effects exactly once when the outcome is final, whichever role gave the last approval. Creation endpoints call `approval.require_enabled(key)` (403 `workflow_disabled`); `ApprovalError` + `approval.refusal(exc)` is the one error shape.
+- **Position is derived, not stored:** progress lives in `approval_trail` (`None` = a row from before the feature, derived from the old HOD/HR stamps; `[]` = a real empty trail) and the request's position is recomputed against the pipeline in force, so a pending request follows an edited pipeline from where it is. `resync_pending(key)` re-projects the legacy `status` label after an edit (`pending`, `pending_hod`, `pending_hr`, `dept_approved` only mean "waiting for X now") and never approves or rejects anything.
+- **Lists and counts** (HOD pending lists and counts, HR dashboards, sidebar badges) use `filter_actionable` / `can_act`, so each role sees a count of what it can decide now. Configs are memoized per request (thread-local) and cleared on `request_started` and on any config save/delete.
+- **Behaviour changes to know about:** the leave balance is deducted at the final approval whichever role gives it (the HOD path used to skip it); HR can no longer re-decide a decided outpass; re-deciding a decided leave/permission is a revision that needs HR in the pipeline (comment-only edits always allowed).
+- **Tests:** `api/tests_approval_workflow.py` (rule tables, step validation, catalog, config API + permissions, one scenario class per workflow, resync and cache). Browser coverage: `frontend/e2e/approval-workflow.spec.ts` (the page) and `approval-screens.spec.ts` (the HR screens).
 
 ---
 
@@ -213,6 +223,8 @@ backend/
 │   ├── email_catalog.py / email_service.py / email_control_views.py   # Every email goes through email_service; Gmail Control page (gmail-integration.md)
 │   ├── salary_split.py                 # The mandatory 50% + 50% salary split (Basic/DA/Retention | Other/Petrol/RHA/Special/CA); descriptive, payroll ignores it
 │   ├── ctc.py                          # Employer PF / ESI / annual CTC from the salary split; shared by the Compensation page and the Report Center CTC statement
+│   ├── approval_workflow.py            # Approval pipelines: the 11 workflows, step rules, decide()/can_act(), per-request `approval` block, ON/OFF guard (Section 4.13)
+│   ├── approval_workflow_views.py      # Approval Workflow Control API: GET/PUT/DELETE /approval-workflows, GET /approval-summary
 │   ├── arrival_rules.py                # The morning arrival timeline (on time / Late / excused / quarter shift / second half) from each shift's start + grace; pure, shared by the engine, the WhatsApp late alert and the Settings preview
 │   ├── settlement_views.py             # Advances and repayments
 │   ├── recruitment_views.py            # Jobs, applicants, new joinees, resignations
@@ -328,7 +340,7 @@ All endpoints prefixed `/api/`. JWT in `Authorization: Bearer <token>`. This cov
 | Leave | `leave_types`, `leave_balances`, `leave_requests`, `employee_permissions`, `casual_leaves`, `holidays` |
 | Shift & Payroll | `shift_templates`, `employee_shift_assignments`, `production_shift_config`/`production_shift_segments`, `payroll`, `payroll_settings`, `salary_slips`, `whatsapp_message_log`, `whatsapp_message_template`, `email_message_log`, `email_settings`, `email_message_template` |
 | Settlement | `advances`, `advance_repayments` |
-| User Management & Auth | `department_managers`, `manager_department_assignments`, `manager_employee_assignments`, `hr_users`, `roles`, `login_sessions`, `audit_logs` |
+| User Management & Auth | `department_managers`, `manager_department_assignments`, `manager_employee_assignments`, `manager_employee_exclusions`, `hr_users`, `roles`, `login_sessions`, `audit_logs` |
 | Recruitment & Documents | `jobs`/`applicants`, `hiring_rule_sets`/`screening_candidates`, `company_document_settings`, `employee_documents` |
 | Other | `notifications`, `employee_requests`, `backup_schedules`/`backup_drive_configs`, `chat_messages` |
 

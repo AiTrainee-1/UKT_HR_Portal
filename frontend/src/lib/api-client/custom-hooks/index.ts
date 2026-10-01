@@ -2,6 +2,7 @@
 // (or the "@/lib/api-client" barrel) exactly as before -the split is organisational.
 export * from "./shared";
 export * from "./accounts";
+export * from "./approval";
 export * from "./attendance";
 export * from "./biometric";
 export * from "./chat";
@@ -15,6 +16,7 @@ export * from "./payroll";
 export * from "./recruitment";
 export * from "./reports";
 export * from "./requests";
+export * from "./shifts";
 export * from "./system";
 export * from "./whatsapp";
 export * from "./gmail";

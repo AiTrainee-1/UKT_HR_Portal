@@ -459,6 +459,8 @@ export type DepartmentManagerItem = {
   canApproveAttendance: boolean;
   canApproveCasualLeave: boolean;
   canApproveOnDuty: boolean;
+  /** Older backends do not send it; the switch defaults to on. */
+  canApproveMissingPunch?: boolean;
   isActive: boolean;
   notes?: string | null;
   createdAt?: string | null;
@@ -471,6 +473,8 @@ export type DepartmentManagerItem = {
   assignedEmployees?: AssignedEmployee[];
   /** How many employees listed against this HOD really report to another one. */
   overlapCount?: number;
+  /** People HR took out of this HOD's departments (still in the department, no longer reporting here). */
+  removedCount?: number;
   /** The employees themselves (detail view only). */
   overlaps?: ManagerOverlap[];
   // mobile-only fields
@@ -508,6 +512,7 @@ export const useCreateDepartmentManager = () => {
       canApproveAttendance?: boolean;
       canApproveCasualLeave?: boolean;
       canApproveOnDuty?: boolean;
+      canApproveMissingPunch?: boolean;
       notes?: string;
     }) =>
       customFetch<DepartmentManagerItem>("/api/department-managers", {
@@ -535,6 +540,7 @@ export const useUpdateDepartmentManager = () => {
         canApproveAttendance: boolean;
         canApproveCasualLeave: boolean;
         canApproveOnDuty: boolean;
+        canApproveMissingPunch: boolean;
         isActive: boolean;
         notes: string;
       }>;
@@ -666,6 +672,81 @@ export const useRemoveEmployeeFromManager = () => {
       queryClient.invalidateQueries({ queryKey: getDepartmentManagerQueryKey(managerId) });
       queryClient.invalidateQueries({ queryKey: getDepartmentManagersQueryKey() });
     },
+  });
+};
+
+// ── The employees of an HOD's departments: listed automatically, removable ────
+// Assigning a department covers everyone in it, people who join later too. HR can take one person out of that
+// coverage (they stay in the department; they just stop reporting to this HOD) and put them back.
+
+/** reporting: really reports to this HOD · removed: HR took them out of this HOD's coverage · elsewhere: in the
+ *  department but reports to a different active HOD · self: the HOD (a head never approves their own requests). */
+export type RosterState = "reporting" | "removed" | "elsewhere" | "self";
+
+export type RosterEmployee = {
+  employeeId: number;
+  employeeCode: string;
+  name: string;
+  designation: string | null;
+  status: string;
+  state: RosterState;
+  /** Also assigned to this HOD individually (removing them from the department list removes that too). */
+  individual: boolean;
+  /** "elsewhere": who they report to · "removed": who picked them up (null: nobody, HR decides). */
+  manager: { id: number; employeeId: number; employeeName: string; employeeCode: string } | null;
+  via: "direct" | "department" | null;
+};
+
+export type RosterDepartment = {
+  id: number;
+  name: string;
+  counts: Record<RosterState, number>;
+  employees: RosterEmployee[];
+};
+
+export type ManagerRoster = { managerId: number; departments: RosterDepartment[] };
+
+export const getDepartmentRosterQueryKey = (id: number) => ["department-managers", id, "roster"] as const;
+
+export const useDepartmentRoster = (id: number | null) =>
+  useQuery({
+    queryKey: getDepartmentRosterQueryKey(id!),
+    queryFn: () => customFetch<ManagerRoster>(`/api/department-managers/${id}/department-employees`),
+    enabled: !!id,
+  });
+
+const useRefreshManager = () => {
+  const queryClient = useQueryClient();
+  // ["department-managers", id] is a prefix of the roster key, so one call refreshes the detail and the roster.
+  return (managerId: number) => {
+    queryClient.invalidateQueries({ queryKey: getDepartmentManagerQueryKey(managerId) });
+    queryClient.invalidateQueries({ queryKey: getDepartmentManagersQueryKey() });
+  };
+};
+
+/** Take employees out of the departments this HOD covers. */
+export const useExcludeEmployees = () => {
+  const refresh = useRefreshManager();
+  return useMutation({
+    mutationFn: ({ managerId, employeeIds }: { managerId: number; employeeIds: number[] }) =>
+      customFetch<{ message: string; removed: number; alsoUnassigned: number }>(
+        `/api/department-managers/${managerId}/excluded-employees`,
+        { method: "POST", body: JSON.stringify({ employeeIds }) },
+      ),
+    onSuccess: (_r, { managerId }) => refresh(managerId),
+  });
+};
+
+/** Put employees back under this HOD. `reportingElsewhere` lists the ones another HOD has taken meanwhile. */
+export const useRestoreEmployees = () => {
+  const refresh = useRefreshManager();
+  return useMutation({
+    mutationFn: ({ managerId, employeeIds }: { managerId: number; employeeIds: number[] }) =>
+      customFetch<{ message: string; restored: number; reportingElsewhere: number[] }>(
+        `/api/department-managers/${managerId}/excluded-employees`,
+        { method: "DELETE", body: JSON.stringify({ employeeIds }) },
+      ),
+    onSuccess: (_r, { managerId }) => refresh(managerId),
   });
 };
 

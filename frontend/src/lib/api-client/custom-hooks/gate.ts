@@ -1,6 +1,7 @@
 // gate: hooks/types split out of the former single custom-hooks.ts (see ./index.ts).
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
 import { customFetch } from "../custom-fetch";
+import type { ApprovalProgress } from "../../approval-workflow";
 
 // ── Outpass / Visitors -pure gate data-collection, see backend/api/outpass_visitor_views.py ──
 
@@ -208,6 +209,8 @@ export type OutpassRequestItem = {
   approvedAt?: string | null;
   expiresAt?: string | null;
   createdAt: string;
+  /** Where the request is in its approval pipeline and who can act on it (see lib/approval-workflow.ts). */
+  approval?: ApprovalProgress | null;
   // Gate Scanner fields -see backend/api/gate_scanner_views.py. qrToken is
   // only ever present while the pass is actually presentable at a gate
   // (approved, unexpired, not yet exited); HR never needs it, only the

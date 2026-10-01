@@ -1,772 +1,279 @@
-import { useRef, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useLocation } from "wouter";
-import type ExcelJS from "exceljs";
-import { downloadWorkbook, newWorkbook, solidFill, styleHeaderCell, todayStamp } from "@/lib/exportUtils";
-import HrLayout from "@/components/HrLayout";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
-import { useListEmployees, getListEmployeesQueryKey, type Employee } from "@/lib/api-client";
+import { ArrowLeft, Download, Info, ListChecks, UserCheck, UserMinus, UserPlus, UploadCloud } from "lucide-react";
+import HrLayout from "@/components/HrLayout";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { PillTabs } from "@/components/ui/pill-tabs";
 import { useAuth } from "@/contexts/AuthContext";
-import { getApiOrigin } from "@/lib/api-client/custom-fetch";
-import {
-  ArrowLeft, Download, UploadCloud, FileSpreadsheet, CheckCircle2,
-  XCircle, AlertTriangle, ListChecks, Info, Table2, X,
-} from "lucide-react";
-import { SPLIT_KEYS } from "@/lib/salary-split";
+import { useToast } from "@/hooks/use-toast";
+import { getListEmployeesQueryKey, useListEmployees } from "@/lib/api-client";
+import { todayStamp } from "@/lib/exportUtils";
+import { cn } from "@/lib/utils";
+import CategorySwitch from "./bulk-upload/CategorySwitch";
+import { CATEGORIES, STATUS_LABEL } from "./bulk-upload/config";
+import EmployeesTable from "./bulk-upload/EmployeesTable";
+import { downloadEmployees, downloadTemplate, scopeLabel } from "./bulk-upload/excel";
+import { employeesOf, tally } from "./bulk-upload/logic";
+import TemplateCard from "./bulk-upload/TemplateCard";
+import type { Category, ListStatus } from "./bulk-upload/types";
+import UploadFlow from "./bulk-upload/UploadFlow";
 
-// Keep in sync with EMPLOYEE_UPLOAD_HEADERS in backend/api/views.py -the
-// backend rejects the file outright if these don't match exactly.
-const EMPLOYEE_TEMPLATE_HEADERS = [
-  "Employee Code", "First Name", "Last Name", "Email", "Phone", "Gender",
-  "Date of Birth", "Employment Type", "Department", "Designation", "Branch",
-  "Salary Type", "Salary Amount", "Salary Per Shift", "Join Date",
-  "Bank Name", "Bank Account", "Bank IFSC", "PF Number", "ESI Number",
-  "Address", "ID Proof", "Father's Name", "Mother's Name",
-  "Biometric Device ID", "Blood Group", "Emergency Contact",
-  // The salary split (50% + 50%): the first three add up to half the Salary Amount, the other five to the other half.
-  // They come last so a template downloaded before they existed is still accepted.
-  "Basic", "DA", "Retention Allowance", "Other Allowance", "Petrol Allowance", "RHA", "Special Allowance", "CA",
-] as const;
+type Tab = "add" | ListStatus;
 
-const SPLIT_NOTE =
-  "Salary split (optional): leave all eight split columns blank and the Salary Amount is split 50% + 50% for you. " +
-  "If you fill any, blanks count as 0 and they must give exactly 50% (Basic + DA + Retention Allowance) and 50% " +
-  "(Other + Petrol + RHA + Special Allowance + CA) of the Salary Amount.";
-
-const REQUIRED_COLUMNS = new Set(["Employee Code", "First Name"]);
-
-const COLUMN_NOTES: Partial<Record<(typeof EMPLOYEE_TEMPLATE_HEADERS)[number], string>> = {
-  "Date of Birth": "Format: DD-MM-YYYY (e.g. 15-01-1995)",
-  "Employment Type": "Type exactly: Staff or Production",
-  "Department": "Must match an existing department name -created automatically if new",
-  "Designation": "Must match an existing designation title, or leave blank",
-  "Branch": "Must match an existing branch name exactly, or leave blank",
-  "Salary Type": "Type exactly: Monthly or Weekly",
-  "Join Date": "Format: DD-MM-YYYY (e.g. 01-06-2024)",
-  "Gender": "Type exactly: Male, Female or Other",
-  "Salary Amount": "Monthly or weekly amount, as chosen in Salary Type. It is split 50% + 50% (see the Basic ... CA columns)",
-  "Basic": SPLIT_NOTE,
-  "DA": SPLIT_NOTE,
-  "Retention Allowance": SPLIT_NOTE,
-  "Other Allowance": SPLIT_NOTE,
-  "Petrol Allowance": SPLIT_NOTE,
-  "RHA": SPLIT_NOTE,
-  "Special Allowance": SPLIT_NOTE,
-  "CA": SPLIT_NOTE,
-};
-
-// Reference rows baked into every downloaded template. The backend
-// recognises the "SAMPLE" prefix on Employee Code and skips these rows
-// outright -they're never imported, whether or not the user deletes them.
-const SAMPLE_ROWS: (string | number)[][] = [
-  ["SAMPLE001", "Priya", "Sharma", "priya.sharma@example.com", "9876543210", "Female",
-    "12-03-1995", "Staff", "Human Resources", "HR Executive", "Head Office",
-    "Monthly", 25000, "", "01-04-2023",
-    "State Bank of India", "123456789012", "SBIN0001234", "PF12345", "ESI67890",
-    "12 MG Road, Coimbatore", "Aadhaar", "Ramesh Sharma", "Sunita Sharma",
-    "101", "B+", "9876500000",
-    // 25,000 split by hand: 12,500 in Basic / DA / Retention, 12,500 in the other five
-    "8000.00", "3000.00", "1500.00", "3000.00", "2000.00", "3500.00", "3000.00", "1000.00"],
-  ["SAMPLE002", "Karthik", "Raja", "", "9123456780", "Male",
-    "22-07-1998", "Production", "Stitching", "Machine Operator", "Unit1",
-    "Weekly", "", 350, "15-01-2024",
-    "Indian Bank", "987654321098", "IDIB000K123", "PF54321", "ESI09876",
-    "45 Textile Nagar, Tirupur", "Voter ID", "Raja Mohan", "Lakshmi Raja",
-    "202", "O+", "9123400000",
-    // paid per shift: no salary, so no split
-    "", "", "", "", "", "", "", ""],
-  ["SAMPLE003", "Anitha", "Kumar", "anitha.kumar@example.com", "9988776655", "Female",
-    "", "Staff", "Accounts", "", "",
-    "Monthly", 22000, "", "10-02-2024",
-    "", "", "", "", "", "", "", "", "", "", "", "",
-    // split left blank: worked out automatically (11,000 + 11,000)
-    "", "", "", "", "", "", "", ""],
-];
-
-type UploadResult = {
-  message: string;
-  created: number;
-  failed: number;
-  sampleRowsSkipped?: number;
-  errors: string[];
-  warnings: string[];
-};
-
-type UpdateResult = {
-  message: string;
-  updated: number;
-  unchanged: number;
-  failed: number;
-  notFound: string[];
-  sampleRowsSkipped?: number;
-  errors: string[];
-  warnings: string[];
-  changes: string[];
-};
-
-/** "Unit1", "Head Office" for a branch-scoped login; "Admin" for the super admin; "AllBranches" for any other unscoped role (MD, Directors, branch-less HR). Used in downloaded filenames so it's obvious whose data a sheet belongs to. */
-function scopeLabel(user: ReturnType<typeof useAuth>["user"]): string {
-  if (user?.branchName) return user.branchName.replace(/[^a-zA-Z0-9]+/g, "");
-  if (user?.isSuperAdmin) return "Admin";
-  return "AllBranches";
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function styleHeaderRow(headerRow: ExcelJS.Row) {
-  EMPLOYEE_TEMPLATE_HEADERS.forEach((h, i) => {
-    const cell = headerRow.getCell(i + 1);
-    const isRequired = REQUIRED_COLUMNS.has(h);
-    cell.value = isRequired ? `${h} *` : h;
-    styleHeaderCell(cell, {
-      fill: isRequired ? "FF0F4C63" : "FF1B4B6E",
-      size: 11,
-      border: { bottom: { style: "medium", color: { argb: "FF0A2E3E" } } },
-    });
-    const note = COLUMN_NOTES[h];
-    if (note) cell.note = { texts: [{ text: note }] };
-  });
-  headerRow.height = 32;
-}
-
-async function downloadTemplate(user: ReturnType<typeof useAuth>["user"]) {
-  const wb = newWorkbook();
-  const ws = wb.addWorksheet("Employees");
-
-  ws.columns = EMPLOYEE_TEMPLATE_HEADERS.map((h) => ({ key: h, width: Math.max(16, h.length + 4) }));
-
-  styleHeaderRow(ws.getRow(1));
-
-  // Sample rows -distinct amber fill so they read as "example", not "data".
-  SAMPLE_ROWS.forEach((values) => {
-    const row = ws.addRow(values);
-    row.eachCell((cell) => {
-      cell.fill = solidFill("FFFDF3D6");
-      cell.font = { italic: true, color: { argb: "FF8A6D1D" } };
-      cell.border = {
-        top: { style: "thin", color: { argb: "FFE8D69A" } },
-        bottom: { style: "thin", color: { argb: "FFE8D69A" } },
-        left: { style: "thin", color: { argb: "FFE8D69A" } },
-        right: { style: "thin", color: { argb: "FFE8D69A" } },
-      };
-    });
-  });
-
-  // Banner row separating the sample block from where real data should start.
-  // Its own Employee Code cell also starts with "SAMPLE" so the backend's
-  // sample-row filter skips it too, instead of it being read as a (failing)
-  // real data row with a very strange name.
-  const bannerRow = ws.addRow([]);
-  ws.mergeCells(bannerRow.number, 1, bannerRow.number, EMPLOYEE_TEMPLATE_HEADERS.length);
-  const bannerCell = bannerRow.getCell(1);
-  bannerCell.value = `SAMPLE ROWS ABOVE (2–${1 + SAMPLE_ROWS.length}) -for reference only, skipped automatically on upload. Enter your real employees starting from row ${bannerRow.number + 1} ⬇`;
-  bannerCell.fill = solidFill("FF1B4B6E");
-  bannerCell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 10 };
-  bannerCell.alignment = { horizontal: "center", vertical: "middle" };
-  bannerRow.height = 22;
-
-  ws.views = [{ state: "frozen", ySplit: 1 }];
-
-  await downloadWorkbook(wb, `Employee_Bulk_Upload_Template_${scopeLabel(user)}_${todayStamp()}.xlsx`);
-}
-
-function employeeToRow(emp: Employee): (string | number)[] {
-  const e = emp as Employee & {
-    fatherName?: string | null; motherName?: string | null;
-    biometricDeviceId?: string | null; emergencyContact?: string | null;
-  };
-  const dmy = (iso?: string | null) => {
-    if (!iso) return "";
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) return iso;
-    return `${String(d.getDate()).padStart(2, "0")}-${String(d.getMonth() + 1).padStart(2, "0")}-${d.getFullYear()}`;
-  };
-  const cap = (s?: string | null) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : "");
-  return [
-    e.employeeCode, e.firstName, e.lastName, e.email ?? "", e.phone ?? "", cap(e.gender),
-    dmy(e.dateOfBirth), cap(e.employmentType), e.departmentName ?? "", e.designationTitle ?? "", e.branchName ?? "",
-    cap(e.salaryType), e.salaryAmount ?? "", e.salaryPerShift ?? "", dmy(e.joinDate),
-    e.bankName ?? "", e.bankAccount ?? "", e.bankIfsc ?? "", e.pfNumber ?? "", e.esiNumber ?? "",
-    e.address ?? "", e.idProof ?? "", e.fatherName ?? "", e.motherName ?? "",
-    e.biometricDeviceId ?? "", e.bloodGroup ?? "", e.emergencyContact ?? "",
-    ...SPLIT_KEYS.map((k) => e.salaryBreakup?.[k] ?? ""),
-  ];
-}
-
-async function downloadCurrentEmployees(
-  employees: Employee[],
-  user: ReturnType<typeof useAuth>["user"],
-  employmentType?: "staff" | "production",
-) {
-  const rows = employmentType ? employees.filter((e) => e.employmentType === employmentType) : employees;
-  const typeLabel = employmentType === "staff" ? "Staff" : employmentType === "production" ? "Production" : "";
-
-  const wb = newWorkbook();
-  const ws = wb.addWorksheet("Employees");
-  ws.columns = EMPLOYEE_TEMPLATE_HEADERS.map((h) => ({ key: h, width: Math.max(16, h.length + 4) }));
-  // Employee Code is written as text (employeeToRow) so a code like "007"
-  // never loses its leading zero -but a plain-text cell that's all digits is
-  // exactly what Excel's own heuristic flags with the green "Number Stored
-  // as Text" warning triangle on open. Declaring the column format as Text
-  // tells Excel the digits-only content is deliberate, so it stops flagging
-  // it -same fix already used for the Amount column in payrollExcelExport.ts.
-  ws.getColumn(1).numFmt = "@";
-  styleHeaderRow(ws.getRow(1));
-  rows.forEach((emp) => ws.addRow(employeeToRow(emp)));
-  ws.views = [{ state: "frozen", ySplit: 1 }];
-
-  await downloadWorkbook(
-    wb,
-    `Employee_Data_Export_${typeLabel ? `${typeLabel}_` : ""}${scopeLabel(user)}_${todayStamp()}.xlsx`,
+function Step({ n, title, children, accent }: { n: number; title: string; children: ReactNode; accent: string }) {
+  return (
+    <Card className="border-0 shadow-sm">
+      <CardContent className="space-y-4 p-4 sm:p-5">
+        <div className="flex items-center gap-2.5">
+          <span
+            className={cn(
+              "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-black text-white",
+              accent,
+            )}
+          >
+            {n}
+          </span>
+          <h3 className="text-base font-bold text-gray-900">{title}</h3>
+        </div>
+        {children}
+      </CardContent>
+    </Card>
   );
 }
 
-const COLUMN_LETTERS = Array.from({ length: EMPLOYEE_TEMPLATE_HEADERS.length }, (_, i) => {
-  let n = i, s = "";
-  do { s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26) - 1; } while (n >= 0);
-  return s;
-});
+const GUIDE: Record<Tab, string[]> = {
+  add: [
+    "Pick Staff or Production first: each has its own template, because they are paid differently.",
+    "Download the template. Rows starting with SAMPLE are examples and are always skipped.",
+    "Only Employee Code and First Name are required. Everything else can be filled in later.",
+    "Upload the filled sheet. It is checked first and nothing is saved: you see every row, what would happen and why.",
+    "Fix any row that is Invalid or a Duplicate in the sheet and upload again; rows that already went through are reported as Duplicates, so nobody is created twice.",
+  ],
+  active: [
+    "Download the active employees of this kind: it is the same sheet as the template, with their real details and a Status column.",
+    "Change only the cells you want to change. A blank cell never erases what is stored.",
+    "Set Status to Inactive to retire someone. Delete a row only if you want that employee dealt with: you will be asked what to do.",
+    "Upload it back. You see which rows would be updated, unchanged or refused before anything is saved.",
+    "If employees are missing from the file you choose for each: leave them, make them Inactive, or delete them with all their data. Nothing is removed unasked.",
+  ],
+  inactive: [
+    "Download the inactive employees of this kind to keep their records tidy or to bring someone back.",
+    "Set Status to Active to make an employee active again; they move to the Active list.",
+    "Employees missing from the file are left alone unless you choose to delete them (they are already inactive).",
+    "The same check-first flow applies: you review every row before it is saved.",
+  ],
+};
 
 export default function BulkUploadEmployees() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const { user } = useAuth();
   const queryClient = useQueryClient();
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { data: employees, isLoading } = useListEmployees();
 
-  const [file, setFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [result, setResult] = useState<UploadResult | null>(null);
-  const [invalidTemplate, setInvalidTemplate] = useState<string | null>(null);
-  const [dragActive, setDragActive] = useState(false);
+  const [category, setCategory] = useState<Category>("staff");
+  const [tab, setTab] = useState<Tab>("add");
+  const cfg = CATEGORIES[category];
+  const counts = useMemo(() => tally(employees), [employees]);
+  const baseColor = category === "staff" ? "#059669" : "#d97706";
 
-  const updateFileInputRef = useRef<HTMLInputElement>(null);
-  const [updating, setUpdating] = useState(false);
-  const [updateResult, setUpdateResult] = useState<UpdateResult | null>(null);
-  const [updateError, setUpdateError] = useState<string | null>(null);
+  const listFor = (status: ListStatus) => employeesOf(employees, category, status);
+  const refresh = () => queryClient.invalidateQueries({ queryKey: getListEmployeesQueryKey() });
 
-  const { data: employees, isLoading: employeesLoading } = useListEmployees();
-
-  const pickFile = (f: File | null) => {
-    setFile(f);
-    setResult(null);
-    setInvalidTemplate(null);
-  };
-
-  const handleDrop = (e: React.DragEvent<HTMLLabelElement>) => {
-    e.preventDefault();
-    setDragActive(false);
-    const dropped = e.dataTransfer.files?.[0];
-    if (dropped) pickFile(dropped);
-  };
-
-  const handleUpload = async () => {
-    if (!file) return;
-    setUploading(true);
-    setResult(null);
-    setInvalidTemplate(null);
+  const download = async (status: ListStatus) => {
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const response = await fetch(`${getApiOrigin()}/api/employees/bulk-upload`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${localStorage.getItem("uk_textile_token")}` },
-        body: formData,
-      });
-      const body = await response.json();
-      if (!response.ok) {
-        if (body.error === "invalid_template") {
-          setInvalidTemplate(body.message);
-        } else {
-          throw new Error(body.message || body.error || "Upload failed");
-        }
-        return;
-      }
-      setResult(body as UploadResult);
-      if (body.created > 0) {
-        queryClient.invalidateQueries({ queryKey: getListEmployeesQueryKey() });
-        toast({ title: `${body.created} employee${body.created === 1 ? "" : "s"} imported` });
-      }
-      setFile(null);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    } catch (err: any) {
-      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
-    } finally {
-      setUploading(false);
+      await downloadEmployees(category, status, employees ?? [], user);
+    } catch {
+      toast({ title: "Could not create the Excel file", variant: "destructive" });
     }
   };
 
-  const handleUpdateUpload = async (updateFile: File | null) => {
-    if (!updateFile) return;
-    setUpdating(true);
-    setUpdateResult(null);
-    setUpdateError(null);
-    try {
-      const formData = new FormData();
-      formData.append("file", updateFile);
-      const response = await fetch(`${getApiOrigin()}/api/employees/bulk-update`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${localStorage.getItem("uk_textile_token")}` },
-        body: formData,
-      });
-      const body = await response.json();
-      if (!response.ok) {
-        if (body.error === "invalid_template") setUpdateError(body.message);
-        else throw new Error(body.message || body.error || "Update failed");
-        return;
-      }
-      setUpdateResult(body as UpdateResult);
-      if (body.updated > 0) {
-        queryClient.invalidateQueries({ queryKey: getListEmployeesQueryKey() });
-        toast({ title: `${body.updated} employee${body.updated === 1 ? "" : "s"} updated` });
-      } else {
-        toast({ title: "No changes found -everything already matches" });
-      }
-    } catch (err: any) {
-      toast({ title: "Update failed", description: err.message, variant: "destructive" });
-    } finally {
-      setUpdating(false);
-      if (updateFileInputRef.current) updateFileInputRef.current.value = "";
-    }
-  };
+  const status: ListStatus = tab === "inactive" ? "inactive" : "active";
+  const inList = listFor(status);
 
   return (
     <HrLayout>
-      <div className="space-y-5 pb-8">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => navigate("/hr/employees")}>
+      <div className="space-y-5 pb-10">
+        <div className="flex items-start gap-3">
+          <Button variant="ghost" size="icon" onClick={() => navigate("/hr/employees")} aria-label="Back to employees">
             <ArrowLeft size={18} />
           </Button>
-          <div>
-            <h2 className="text-2xl font-black text-gray-900">Bulk Employee Upload</h2>
-            <p className="text-muted-foreground text-sm">
-              Import many employees at once from a single Excel file.
+          <div className="min-w-0 flex-1">
+            <h2 className="text-2xl font-black text-gray-900">Employee Bulk Upload</h2>
+            <p className="mt-0.5 max-w-3xl text-sm text-muted-foreground">
+              Add many employees at once, or download your existing ones, edit them in Excel and upload them back. Staff
+              and Production have their own sheets, and every file is checked before anything is saved.
             </p>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
-          {/* ── Step 1: Template ── */}
-          <Card className="border-0 shadow-sm">
-            <CardHeader className="pb-3">
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-full bg-teal-600 text-white flex items-center justify-center text-xs font-black shrink-0">1</div>
-                <CardTitle className="text-base font-bold text-gray-900">Download the Template</CardTitle>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                The template has one column for every field on the Add Employee form -{EMPLOYEE_TEMPLATE_HEADERS.length} in
-                total -plus {SAMPLE_ROWS.length} sample rows showing how to fill it in. Columns marked with{" "}
-                <span className="font-semibold text-gray-700">*</span> are required.
-              </p>
-              <p className="text-sm text-muted-foreground">
-                <span className="font-semibold text-gray-700">Salary split:</span> the last eight columns (Basic to CA)
-                divide the Salary Amount 50% + 50%. Leave them blank and it is done for you; if you fill them in, each
-                half must add up to exactly 50% of the salary.
-              </p>
-              <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/60 p-4 flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-teal-600/10 flex items-center justify-center shrink-0">
-                  <FileSpreadsheet size={20} className="text-teal-700" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-gray-800 truncate">
-                    Employee_Bulk_Upload_Template_{scopeLabel(user)}_{todayStamp()}.xlsx
-                  </p>
-                  <p className="text-xs text-muted-foreground">Column headers are locked -don't rename, reorder, or remove any of them.</p>
-                </div>
-              </div>
-              <Button onClick={() => downloadTemplate(user)} className="w-full gap-2">
-                <Download size={15} /> Download Template
-              </Button>
-            </CardContent>
-          </Card>
+        <CategorySwitch value={category} counts={counts} loading={isLoading} onChange={setCategory} />
 
-          {/* ── Step 2: Upload ── */}
-          <Card className="border-0 shadow-sm overflow-hidden">
-            <CardHeader className="pb-3">
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-full bg-teal-600 text-white flex items-center justify-center text-xs font-black shrink-0">2</div>
-                <CardTitle className="text-base font-bold text-gray-900">Upload the Filled Sheet</CardTitle>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                Fill in employee details below the sample rows, save it, then upload it here.
-              </p>
-
-              {file ? (
-                <div className="rounded-xl border border-teal-200 bg-teal-50/60 p-4 flex items-center gap-3">
-                  <div className="w-11 h-11 rounded-lg bg-teal-600 flex items-center justify-center shrink-0">
-                    <FileSpreadsheet size={20} className="text-white" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-gray-800 truncate">{file.name}</p>
-                    <p className="text-xs text-teal-700/70">{formatFileSize(file.size)} · Ready to upload</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => { pickFile(null); if (fileInputRef.current) fileInputRef.current.value = ""; }}
-                    className="w-7 h-7 rounded-full bg-white border border-teal-200 flex items-center justify-center text-teal-700 hover:bg-teal-100 transition-colors shrink-0"
-                    aria-label="Remove selected file"
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
-              ) : (
-                <label
-                  htmlFor="bulk-emp-file"
-                  onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
-                  onDragLeave={() => setDragActive(false)}
-                  onDrop={handleDrop}
-                  className={`relative border-2 border-dashed transition-all rounded-xl p-7 flex flex-col items-center gap-2 text-center cursor-pointer block ${
-                    dragActive ? "border-teal-500 bg-teal-50" : "border-gray-200 hover:border-teal-400 bg-gray-50/50"
-                  }`}
-                >
-                  <input
-                    id="bulk-emp-file"
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".xlsx,.xls"
-                    onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                  />
-                  <div className={`w-12 h-12 rounded-full flex items-center justify-center transition-colors ${dragActive ? "bg-teal-600" : "bg-teal-600/10"}`}>
-                    <UploadCloud size={22} className={dragActive ? "text-white" : "text-teal-600"} />
-                  </div>
-                  <span className="text-sm font-semibold text-gray-700">
-                    {dragActive ? "Drop the file here" : "Drag the filled Excel file here, or click to browse"}
-                  </span>
-                  <span className="text-xs text-muted-foreground">.xlsx or .xls, using the official template</span>
-                </label>
-              )}
-
-              <Button onClick={handleUpload} disabled={!file || uploading} className="w-full gap-2">
-                <UploadCloud size={15} /> {uploading ? "Uploading…" : "Upload & Create Employees"}
-              </Button>
-
-              {invalidTemplate && (
-                <div className="rounded-lg border border-red-200 bg-red-50 p-3 flex items-start gap-2.5">
-                  <XCircle size={16} className="text-red-600 shrink-0 mt-0.5" />
-                  <p className="text-sm text-red-700 font-medium">{invalidTemplate}</p>
-                </div>
-              )}
-
-              {result && (
-                <div className="rounded-xl border border-gray-100 overflow-hidden">
-                  {/* Summary banner */}
-                  <div
-                    className={`px-4 py-3 flex items-center gap-2.5 ${
-                      result.failed === 0 && result.created > 0
-                        ? "bg-green-50"
-                        : result.created === 0
-                        ? "bg-red-50"
-                        : "bg-amber-50"
-                    }`}
-                  >
-                    {result.failed === 0 && result.created > 0 ? (
-                      <CheckCircle2 size={18} className="text-green-600 shrink-0" />
-                    ) : result.created === 0 ? (
-                      <XCircle size={18} className="text-red-600 shrink-0" />
-                    ) : (
-                      <AlertTriangle size={18} className="text-amber-600 shrink-0" />
-                    )}
-                    <p className="text-sm font-semibold text-gray-800">{result.message}</p>
-                  </div>
-
-                  {/* Stat cards */}
-                  <div className="grid grid-cols-2 gap-3 p-4">
-                    <div className="rounded-xl border border-green-100 bg-green-50/50 p-4 flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-lg bg-green-600 flex items-center justify-center shrink-0">
-                        <CheckCircle2 size={18} className="text-white" />
-                      </div>
-                      <div>
-                        <p className="text-2xl font-black text-green-700 leading-none">{result.created}</p>
-                        <p className="text-[11px] font-semibold text-green-700/70 uppercase tracking-wide mt-0.5">Created</p>
-                      </div>
-                    </div>
-                    <div className={`rounded-xl border p-4 flex items-center gap-3 ${result.failed > 0 ? "border-red-100 bg-red-50/50" : "border-gray-100 bg-gray-50/50"}`}>
-                      <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${result.failed > 0 ? "bg-red-600" : "bg-gray-300"}`}>
-                        <XCircle size={18} className="text-white" />
-                      </div>
-                      <div>
-                        <p className={`text-2xl font-black leading-none ${result.failed > 0 ? "text-red-700" : "text-gray-400"}`}>{result.failed}</p>
-                        <p className={`text-[11px] font-semibold uppercase tracking-wide mt-0.5 ${result.failed > 0 ? "text-red-700/70" : "text-gray-400"}`}>Failed</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {!!result.sampleRowsSkipped && (
-                    <p className="border-t border-gray-100 px-4 py-2.5 text-xs text-amber-700 bg-amber-50/60 flex items-center gap-2">
-                      <Info size={12} className="shrink-0" />
-                      {result.sampleRowsSkipped} reference row{result.sampleRowsSkipped === 1 ? "" : "s"} (sample data / instructions) in the file were ignored, as expected.
-                    </p>
-                  )}
-
-                  {result.errors.length > 0 && (
-                    <div className="border-t border-gray-100 p-4 space-y-2 max-h-52 overflow-y-auto">
-                      <p className="text-xs font-bold text-red-700 flex items-center gap-1.5"><XCircle size={12} /> Rows that failed ({result.errors.length})</p>
-                      {result.errors.map((e, i) => {
-                        const sep = e.indexOf(":");
-                        const rowLabel = sep === -1 ? "" : e.slice(0, sep).trim();
-                        const message = sep === -1 ? e : e.slice(sep + 1).trim();
-                        return (
-                          <div key={i} className="flex items-start gap-2 rounded-lg bg-red-50/60 border border-red-100 px-3 py-2">
-                            {rowLabel && (
-                              <span className="shrink-0 text-[10px] font-black text-red-700 bg-red-100 rounded px-1.5 py-0.5 mt-0.5">{rowLabel}</span>
-                            )}
-                            <span className="text-xs text-red-700 leading-relaxed">{message}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {result.warnings.length > 0 && (
-                    <div className="border-t border-gray-100 p-4 space-y-2 max-h-44 overflow-y-auto">
-                      <p className="text-xs font-bold text-amber-700 flex items-center gap-1.5"><AlertTriangle size={12} /> Warnings ({result.warnings.length})</p>
-                      {result.warnings.map((w, i) => {
-                        const sep = w.indexOf(":");
-                        const rowLabel = sep === -1 ? "" : w.slice(0, sep).trim();
-                        const message = sep === -1 ? w : w.slice(sep + 1).trim();
-                        return (
-                          <div key={i} className="flex items-start gap-2 rounded-lg bg-amber-50/60 border border-amber-100 px-3 py-2">
-                            {rowLabel && (
-                              <span className="shrink-0 text-[10px] font-black text-amber-700 bg-amber-100 rounded px-1.5 py-0.5 mt-0.5">{rowLabel}</span>
-                            )}
-                            <span className="text-xs text-amber-700 leading-relaxed">{message}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {result.created > 0 && (
-                    <div className="border-t border-gray-100 p-4">
-                      <Button variant="outline" size="sm" className="w-full gap-2" onClick={() => navigate("/hr/employees")}>
-                        <CheckCircle2 size={13} /> View Employees
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* ── User Guide ── */}
         <Card className="border-0 shadow-sm">
-          <CardHeader className="pb-3">
-            <div className="flex items-center gap-2">
-              <ListChecks size={16} className="text-teal-700" />
-              <CardTitle className="text-base font-bold text-gray-900">User Guide</CardTitle>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <ol className="grid sm:grid-cols-2 gap-3 text-sm">
-              {[
-                "Download the official template using the button above -don't build your own sheet from scratch.",
-                `Rows 2–${1 + SAMPLE_ROWS.length} are sample data (shaded) -they're for reference only and are always skipped, whether or not you delete them.`,
-                "Employee Code and First Name are required for every row; every other column -including Last Name and Phone -can be left blank and filled in later.",
-                "Department, Designation and Branch are matched by name -spell them exactly as they appear in Manage Branch / Departments / Designations.",
-                "Already have employees in the system? Use \"Download Current Employees\" below instead -it's the same sheet with your real data already in it, so you can just add new rows at the bottom.",
-                "Missed or mistyped something for existing employees? Download their Excel below, correct just those cells, and upload it via \"Update Employees\" -no need to redo the whole bulk upload.",
-                "After uploading, review the Created/Failed summary -failed rows list the exact reason, so you can fix just those rows and re-upload only them.",
-              ].map((step, i) => (
-                <li key={i} className="flex gap-2.5">
-                  <span className="w-5 h-5 rounded-full bg-teal-50 text-teal-700 text-[11px] font-black flex items-center justify-center shrink-0 mt-0.5">{i + 1}</span>
-                  <span className="text-gray-600">{step}</span>
-                </li>
-              ))}
-            </ol>
-            <div className="rounded-lg border border-blue-100 bg-blue-50/60 p-3 flex items-start gap-2.5">
-              <Info size={14} className="text-blue-600 shrink-0 mt-0.5" />
-              <p className="text-xs text-blue-800">
-                If the headers in your uploaded file don't match the official template exactly (renamed, reordered, or
-                removed columns), the whole file is rejected before anything is imported -download a fresh copy of the
-                template if you're unsure. Employee Code is the unique identifier for every employee -the system will
-                never let two employees share one, in this upload or anywhere else.
+          <CardContent className="space-y-5 p-4 sm:p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <PillTabs
+                value={tab}
+                onChange={(v) => setTab(v as Tab)}
+                baseColor={baseColor}
+                items={[
+                  {
+                    value: "add",
+                    label: (
+                      <>
+                        <span className="hidden sm:inline">Add new employees</span>
+                        <span className="sm:hidden">Add new</span>
+                      </>
+                    ),
+                    icon: <UserPlus size={13} />,
+                  },
+                  {
+                    value: "active",
+                    label: (
+                      <>
+                        <span className="hidden sm:inline">Active employees</span>
+                        <span className="sm:hidden">Active</span>
+                      </>
+                    ),
+                    count: counts[category].active,
+                    icon: <UserCheck size={13} />,
+                  },
+                  {
+                    value: "inactive",
+                    label: (
+                      <>
+                        <span className="hidden sm:inline">Inactive employees</span>
+                        <span className="sm:hidden">Inactive</span>
+                      </>
+                    ),
+                    count: counts[category].inactive,
+                    icon: <UserMinus size={13} />,
+                  },
+                ]}
+              />
+              <p className={cn("text-xs font-semibold", cfg.accent.text)}>
+                {cfg.label}: {cfg.tagline.toLowerCase()}
               </p>
             </div>
+
+            {tab === "add" ? (
+              <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-5">
+                <div className="min-w-0 lg:col-span-2">
+                  <Step n={1} title={`Download the ${cfg.label} template`} accent={cfg.accent.solid.split(" ")[0]}>
+                    <TemplateCard
+                      category={category}
+                      fileName={`${cfg.label}_Employee_Template_${scopeLabel(user)}_${todayStamp()}.xlsx`}
+                      onDownload={() => void downloadTemplate(category, user)}
+                    />
+                  </Step>
+                </div>
+                <div className="min-w-0 lg:col-span-3">
+                  <Step n={2} title="Upload the filled sheet" accent={cfg.accent.solid.split(" ")[0]}>
+                    <UploadFlow
+                      key={`add-${category}`}
+                      kind="create"
+                      category={category}
+                      status="active"
+                      onApplied={refresh}
+                      onViewEmployees={() => navigate("/hr/employees")}
+                    />
+                  </Step>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-5">
+                  <div className="min-w-0 lg:col-span-2">
+                    <Step
+                      n={1}
+                      title={`Download ${STATUS_LABEL[status].toLowerCase()} ${cfg.label} employees`}
+                      accent={cfg.accent.solid.split(" ")[0]}
+                    >
+                      <p className="text-sm text-muted-foreground">
+                        One Excel file with the {inList.length} {STATUS_LABEL[status].toLowerCase()}{" "}
+                        {cfg.label.toLowerCase()} employee
+                        {inList.length === 1 ? "" : "s"} you can see, in the same columns as the template plus a{" "}
+                        <b>Status</b> column. Edit it and upload it in step 2.
+                      </p>
+                      <Button
+                        className={cn("w-full gap-2 text-white", cfg.accent.solid)}
+                        disabled={inList.length === 0}
+                        onClick={() => void download(status)}
+                        data-testid={`download-${category}-${status}`}
+                      >
+                        <Download size={15} /> Download {STATUS_LABEL[status].toLowerCase()} {cfg.label.toLowerCase()}{" "}
+                        employees
+                      </Button>
+                      {inList.length === 0 && (
+                        <p className="text-xs text-gray-500">
+                          There are no {STATUS_LABEL[status].toLowerCase()} {cfg.label.toLowerCase()} employees yet.
+                        </p>
+                      )}
+                      <p className="flex items-start gap-1.5 rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                        <Info size={13} className="mt-0.5 shrink-0" />
+                        Rows are matched by Employee Code. Blank cells never erase stored data, and only cells with new
+                        values are written.
+                      </p>
+                    </Step>
+                  </div>
+                  <div className="min-w-0 lg:col-span-3">
+                    <Step n={2} title="Upload the edited file" accent={cfg.accent.solid.split(" ")[0]}>
+                      <UploadFlow
+                        key={`${status}-${category}`}
+                        kind="update"
+                        category={category}
+                        status={status}
+                        disabled={inList.length === 0}
+                        onApplied={refresh}
+                        onViewEmployees={() => navigate("/hr/employees")}
+                      />
+                    </Step>
+                  </div>
+                </div>
+
+                <div>
+                  <p className="mb-2 flex items-center gap-1.5 text-sm font-bold text-gray-900">
+                    <UploadCloud size={14} className={cfg.accent.text} /> What is in the{" "}
+                    {STATUS_LABEL[status].toLowerCase()} {cfg.label.toLowerCase()} download
+                  </p>
+                  <EmployeesTable
+                    key={`${status}-${category}`}
+                    employees={inList}
+                    category={category}
+                    loading={isLoading}
+                    emptyText={`No ${STATUS_LABEL[status].toLowerCase()} ${cfg.label.toLowerCase()} employees.`}
+                  />
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 
-        {/* ── Existing Employees ── */}
         <Card className="border-0 shadow-sm">
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div className="flex items-center gap-2">
-                <Table2 size={16} className="text-teal-700" />
-                <CardTitle className="text-base font-bold text-gray-900">Existing Employees</CardTitle>
-                <span className="text-xs text-muted-foreground">({employees?.length ?? 0} records)</span>
-              </div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <Button
-                  variant="outline" size="sm" className="gap-2"
-                  disabled={!employees?.length}
-                  onClick={() => employees && downloadCurrentEmployees(employees, user)}
-                >
-                  <Download size={13} /> Download Current Employees
-                </Button>
-                <Button
-                  variant="outline" size="sm" className="gap-2"
-                  disabled={!employees?.some((e) => e.employmentType === "staff")}
-                  onClick={() => employees && downloadCurrentEmployees(employees, user, "staff")}
-                >
-                  <Download size={13} /> Download Staff
-                </Button>
-                <Button
-                  variant="outline" size="sm" className="gap-2"
-                  disabled={!employees?.some((e) => e.employmentType === "production")}
-                  onClick={() => employees && downloadCurrentEmployees(employees, user, "production")}
-                >
-                  <Download size={13} /> Download Production
-                </Button>
-                <input
-                  ref={updateFileInputRef}
-                  type="file"
-                  accept=".xlsx,.xls"
-                  className="hidden"
-                  onChange={(e) => handleUpdateUpload(e.target.files?.[0] ?? null)}
-                />
-                <Button
-                  size="sm" className="gap-2"
-                  disabled={!employees?.length || updating}
-                  onClick={() => updateFileInputRef.current?.click()}
-                >
-                  <UploadCloud size={13} /> {updating ? "Updating…" : "Update Employees"}
-                </Button>
-              </div>
-            </div>
-            <p className="text-xs text-muted-foreground mt-2">
-              To fix or fill in details for employees already in the system: download the Excel, edit only the cells
-              you want to change, then upload it back with <span className="font-semibold">Update Employees</span>.
-              Rows are matched by Employee Code, blank cells never erase existing data, and only fields with new
-              values are written. New employees are ignored here -add those with the Bulk Upload above.
-            </p>
-          </CardHeader>
-          <CardContent className="p-0">
-            {updateError && (
-              <div className="mx-4 mb-4 rounded-lg border border-red-200 bg-red-50 p-3 flex items-start gap-2.5">
-                <XCircle size={16} className="text-red-600 shrink-0 mt-0.5" />
-                <p className="text-sm text-red-700 font-medium">{updateError}</p>
-              </div>
-            )}
-
-            {updateResult && (
-              <div className="mx-4 mb-4 rounded-xl border border-gray-100 overflow-hidden">
-                <div
-                  className={`px-4 py-3 flex items-center gap-2.5 ${
-                    updateResult.failed === 0 && updateResult.notFound.length === 0
-                      ? "bg-green-50"
-                      : updateResult.updated === 0
-                      ? "bg-red-50"
-                      : "bg-amber-50"
-                  }`}
-                >
-                  {updateResult.failed === 0 && updateResult.notFound.length === 0 ? (
-                    <CheckCircle2 size={18} className="text-green-600 shrink-0" />
-                  ) : updateResult.updated === 0 ? (
-                    <XCircle size={18} className="text-red-600 shrink-0" />
-                  ) : (
-                    <AlertTriangle size={18} className="text-amber-600 shrink-0" />
-                  )}
-                  <p className="text-sm font-semibold text-gray-800">{updateResult.message}</p>
-                </div>
-
-                <div className="grid grid-cols-3 gap-3 p-4">
-                  <div className="rounded-xl border border-green-100 bg-green-50/50 p-3 text-center">
-                    <p className="text-2xl font-black text-green-700 leading-none">{updateResult.updated}</p>
-                    <p className="text-[11px] font-semibold text-green-700/70 uppercase tracking-wide mt-1">Updated</p>
-                  </div>
-                  <div className="rounded-xl border border-gray-100 bg-gray-50/50 p-3 text-center">
-                    <p className="text-2xl font-black text-gray-500 leading-none">{updateResult.unchanged}</p>
-                    <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mt-1">Unchanged</p>
-                  </div>
-                  <div className={`rounded-xl border p-3 text-center ${updateResult.failed + updateResult.notFound.length > 0 ? "border-red-100 bg-red-50/50" : "border-gray-100 bg-gray-50/50"}`}>
-                    <p className={`text-2xl font-black leading-none ${updateResult.failed + updateResult.notFound.length > 0 ? "text-red-700" : "text-gray-400"}`}>
-                      {updateResult.failed + updateResult.notFound.length}
-                    </p>
-                    <p className={`text-[11px] font-semibold uppercase tracking-wide mt-1 ${updateResult.failed + updateResult.notFound.length > 0 ? "text-red-700/70" : "text-gray-400"}`}>
-                      Failed / Not Found
-                    </p>
-                  </div>
-                </div>
-
-                {updateResult.changes.length > 0 && (
-                  <div className="border-t border-gray-100 p-4 space-y-2 max-h-52 overflow-y-auto">
-                    <p className="text-xs font-bold text-green-700 flex items-center gap-1.5">
-                      <CheckCircle2 size={12} /> What changed ({updateResult.changes.length})
-                    </p>
-                    {updateResult.changes.map((c, i) => (
-                      <p key={i} className="text-xs text-gray-600 rounded-lg bg-green-50/60 border border-green-100 px-3 py-2 leading-relaxed">{c}</p>
-                    ))}
-                  </div>
-                )}
-
-                {[...updateResult.notFound, ...updateResult.errors].length > 0 && (
-                  <div className="border-t border-gray-100 p-4 space-y-2 max-h-52 overflow-y-auto">
-                    <p className="text-xs font-bold text-red-700 flex items-center gap-1.5">
-                      <XCircle size={12} /> Rows skipped ({updateResult.notFound.length + updateResult.errors.length})
-                    </p>
-                    {[...updateResult.notFound, ...updateResult.errors].map((e, i) => (
-                      <p key={i} className="text-xs text-red-700 rounded-lg bg-red-50/60 border border-red-100 px-3 py-2 leading-relaxed">{e}</p>
-                    ))}
-                  </div>
-                )}
-
-                {updateResult.warnings.length > 0 && (
-                  <div className="border-t border-gray-100 p-4 space-y-2 max-h-44 overflow-y-auto">
-                    <p className="text-xs font-bold text-amber-700 flex items-center gap-1.5">
-                      <AlertTriangle size={12} /> Warnings ({updateResult.warnings.length})
-                    </p>
-                    {updateResult.warnings.map((w, i) => (
-                      <p key={i} className="text-xs text-amber-700 rounded-lg bg-amber-50/60 border border-amber-100 px-3 py-2 leading-relaxed">{w}</p>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-            {employeesLoading ? (
-              <p className="text-sm text-muted-foreground p-4">Loading…</p>
-            ) : !employees?.length ? (
-              <p className="text-sm text-muted-foreground p-6 text-center">No employees yet -upload your first batch above.</p>
-            ) : (
-              <div className="overflow-auto border-t border-gray-100 max-h-[480px]" style={{ fontFamily: "ui-monospace, monospace" }}>
-                <table className="border-collapse text-[11px]" style={{ minWidth: "max-content" }}>
-                  <thead className="sticky top-0 z-10">
-                    <tr>
-                      <th className="sticky left-0 z-20 bg-gray-100 border border-gray-200 w-9 text-gray-400 font-normal" />
-                      {COLUMN_LETTERS.map((l) => (
-                        <th key={l} className="bg-gray-100 border border-gray-200 px-2 py-0.5 text-gray-400 font-normal min-w-[110px]">{l}</th>
-                      ))}
-                    </tr>
-                    <tr>
-                      <th className="sticky left-0 z-20 bg-gray-50 border border-gray-200 text-gray-400 font-normal" />
-                      {EMPLOYEE_TEMPLATE_HEADERS.map((h) => (
-                        <th key={h} className="bg-[#eaf2f7] border border-gray-200 px-2 py-1.5 text-[#0F4C63] font-bold text-left whitespace-nowrap">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {employees.map((emp, ri) => (
-                      <tr key={emp.id}>
-                        <td className="sticky left-0 z-10 bg-gray-50 border border-gray-200 text-center text-gray-400">{ri + 1}</td>
-                        {employeeToRow(emp).map((v, ci) => (
-                          <td key={ci} className="border border-gray-200 px-2 py-1 whitespace-nowrap text-gray-700 bg-white">{v === "" ? "" : String(v)}</td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+          <CardContent className="p-4 sm:p-5">
+            <details className="group" open={false}>
+              <summary className="flex cursor-pointer list-none items-center gap-2 text-base font-bold text-gray-900">
+                <ListChecks size={16} className={cfg.accent.text} /> How this works
+              </summary>
+              <ol className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+                {GUIDE[tab].map((step, i) => (
+                  <li key={i} className="flex gap-2.5">
+                    <span
+                      className={cn(
+                        "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-black",
+                        cfg.accent.soft,
+                        cfg.accent.text,
+                      )}
+                    >
+                      {i + 1}
+                    </span>
+                    <span className="text-gray-600">{step}</span>
+                  </li>
+                ))}
+              </ol>
+            </details>
           </CardContent>
         </Card>
       </div>

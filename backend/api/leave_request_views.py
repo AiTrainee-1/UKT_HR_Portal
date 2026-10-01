@@ -1,6 +1,6 @@
 """Leave requests: list/create, approve/reject, delete."""
 
-from . import whatsapp_approvals
+from . import approval_workflow as approval, whatsapp_approvals
 from .auth import get_hr_display_name, get_token_employee_id, require_auth, require_hr
 from .branch_scope import scope_to_branch
 from .clock import ist_today
@@ -17,10 +17,60 @@ from rest_framework.response import Response
 # --- Leave ---
 
 
-def _leave_with_name(record: LeaveRequest) -> dict:
+WORKFLOW = "leave"
+
+
+def _leave_with_name(record: LeaveRequest, cfg: approval.Config | None = None) -> dict:
     emp = getattr(record, "employee", None)
     name = f"{emp.first_name} {emp.last_name}" if emp else _employee_name(record.employee_id)
-    return leave_request_json(record, name)
+    return leave_request_json(record, name, cfg)
+
+
+def _deduct_leave_balance(record: LeaveRequest) -> None:
+    """Use up the days of an approved leave from the employee's balance for the year (the specific leave type's row
+    when the request names one)."""
+    days = Decimal(str(record.total_days or 1))
+    try:
+        year = int(record.start_date[:4])
+    except Exception:
+        year = ist_today().year
+    qs = LeaveBalance.objects.filter(employee_id=record.employee_id, year=year)
+    if record.leave_type_ref_id:
+        qs = qs.filter(leave_type_id=record.leave_type_ref_id)
+    for lb in qs:
+        lb.used = Decimal(str(lb.used)) + days
+        lb.remaining = max(Decimal("0"), Decimal(str(lb.remaining)) - days)
+        lb.save()
+
+
+def resolve_leave(
+    record: LeaveRequest, role: str, decision: str, actor: str, comment: str | None
+) -> approval.Outcome:
+    """One decision by `role` ('hod' or 'hr') on a leave request, under the "leave" pipeline (approval_workflow.py).
+    Raises approval.ApprovalError when that role may not decide it now.
+
+    An intermediate approval only passes the request on (status stays pending); the FINAL approval uses up the leave
+    balance, whichever role gave it, so HR and the Department Head can never leave the balance different. Any
+    rejection is final. WhatsApp goes out for a final decision or any rejection only."""
+    outcome = approval.decide(WORKFLOW, record, role, decision, actor=actor, comment=comment)
+    if comment is not None:
+        record.hr_comment = comment
+    if outcome.final or outcome.rejected:
+        record.approved_by = actor
+        record.approver_role = approval.LEGACY_ROLE[role]
+    record.status = outcome.status
+    record.save()
+    what = f"leave request ({record.start_date} → {record.end_date})"
+    if outcome.final:
+        _deduct_leave_balance(record)
+    Notification.objects.create(employee_id=record.employee_id, type="leave", message=approval.notice_for(what, outcome))
+    if outcome.kind == "advanced" and approval.HOD in outcome.waiting and role != approval.HOD:
+        approval.notify_hod_of_request(WORKFLOW, record.employee, "leave request")
+    if outcome.final or outcome.rejected:
+        whatsapp_approvals.notify_decision(
+            WORKFLOW, record, decision, approver=actor, role=approval.LEGACY_ROLE[role], comment=record.hr_comment
+        )
+    return outcome
 
 
 @api_view(["GET", "POST"])
@@ -52,7 +102,8 @@ def _leave_requests_list(request: Request) -> Response:
         qs = qs.filter(employee_id=employee_id)
     if leave_status:
         qs = qs.filter(status=leave_status)
-    return paginate(request, qs, _leave_with_name)
+    cfg = approval.get_config(WORKFLOW)
+    return paginate(request, qs, lambda r: _leave_with_name(r, cfg))
 
 
 def _count_leave_days(start_str, end_str) -> int:
@@ -115,6 +166,10 @@ def _leave_requests_create(request: Request) -> Response:
         half_day_slot = None
         total_days = _count_leave_days(start_date, end_date)
 
+    try:
+        approval.require_enabled(WORKFLOW)
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
     record = LeaveRequest.objects.create(
         employee_id=employee_id,
         type=leave_type,
@@ -125,40 +180,52 @@ def _leave_requests_create(request: Request) -> Response:
         is_half_day=is_half_day,
         half_day_slot=half_day_slot,
         reason=data.get("reason"),
+        approval_trail=[],
     )
+    approval.notify_new_request(WORKFLOW, record.employee, "leave request")
     return Response(_leave_with_name(record), status=201)
 
 
 @api_view(["PATCH"])
 @require_hr
 def update_leave_status(request: Request, pk: int) -> Response:
+    """HR decides a pending leave request (under the "leave" pipeline), edits its comment, or revises a decision that was
+    already made (approved <-> rejected), which is a correction outside the pipeline and needs HR to be part of it."""
     record = LeaveRequest.objects.filter(pk=pk).first()
     if not record:
         return _error("Not found", 404)
 
     old_status = record.status
     new_status = request.data.get("status", old_status)
+    if new_status not in ("pending", "approved", "rejected"):
+        return _error("status must be 'pending', 'approved' or 'rejected'", 400)
+    hr_name = get_hr_display_name(request)
+    comment = request.data["hrComment"] if "hrComment" in request.data else None
+
+    if approval.is_pending(WORKFLOW, record) and new_status in ("approved", "rejected"):
+        try:
+            resolve_leave(record, approval.HR, new_status, hr_name, comment)
+        except approval.ApprovalError as exc:
+            return approval.refusal(exc)
+        return Response(_leave_with_name(record))
+
+    if new_status != old_status and not approval.role_takes_part(WORKFLOW, approval.HR):
+        return _error("HR is not part of the approval pipeline for Leave, so it cannot change this decision.", 403)
+
+    # A comment edit, or a correction of a decision already made.
     record.status = new_status
-    if "hrComment" in request.data:
-        record.hr_comment = request.data["hrComment"]
+    if comment is not None:
+        record.hr_comment = comment
     if new_status in ("approved", "rejected") and old_status != new_status:
-        record.approved_by = get_hr_display_name(request)
+        record.approved_by = hr_name
         record.approver_role = "hr"
+        record.approval_trail = approval.trail_of(WORKFLOW, record) + [
+            {"role": approval.HR, "decision": new_status, "by": hr_name, "comment": comment, "revised": True}
+        ]
     record.save()
 
     if new_status == "approved" and old_status != "approved":
-        days = Decimal(str(record.total_days or 1))
-        try:
-            year = int(record.start_date[:4])
-        except Exception:
-            year = ist_today().year
-        qs = LeaveBalance.objects.filter(employee_id=record.employee_id, year=year)
-        if record.leave_type_ref_id:
-            qs = qs.filter(leave_type_id=record.leave_type_ref_id)
-        for lb in qs:
-            lb.used = Decimal(str(lb.used)) + days
-            lb.remaining = max(Decimal("0"), Decimal(str(lb.remaining)) - days)
-            lb.save()
+        _deduct_leave_balance(record)
         Notification.objects.create(
             employee_id=record.employee_id,
             type="leave",

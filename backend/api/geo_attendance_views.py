@@ -64,7 +64,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import whatsapp_notifications
+from . import approval_workflow as approval, whatsapp_notifications
 from .view_common import error_response as _error
 from .auth import get_token_employee_id, is_hr, require_auth, require_hr
 from .biometric_sync import _ingest_punches
@@ -350,7 +350,12 @@ def _current_on_duty_session(emp: Employee) -> OnDutySession | None:
     ).order_by("-created_at").first()
 
 
-def _on_duty_session_dict(session: OnDutySession, *, for_employee: bool = False) -> dict:
+WORKFLOW = "on_duty"
+
+
+def _on_duty_session_dict(
+    session: OnDutySession, *, for_employee: bool = False, cfg: approval.Config | None = None
+) -> dict:
     """HR/HOD callers get the literal database status. Employee-facing
     callers (for_employee=True) get a provisional session presented as
     "active", because the employee is cleared to work the moment they
@@ -397,6 +402,8 @@ def _on_duty_session_dict(session: OnDutySession, *, for_employee: bool = False)
         "completedBy": session.completed_by,
         "completionReason": session.completion_reason,
         "createdAt": session.created_at.isoformat() if session.created_at else None,
+        # Who the request waits for under the approval pipeline, and how far it has got (approval_workflow.py).
+        "approval": approval.progress(WORKFLOW, session, cfg),
     }
 
 
@@ -434,7 +441,7 @@ def _on_duty_punch_verification_dict(v: OnDutyPunchVerification) -> dict:
 
 
 def _create_outpass_from_on_duty(session: OnDutySession, reviewer_name: str) -> None:
-    """Called once, only from resolve_on_duty_session_hr's approved branch —
+    """Called once, only from resolve_on_duty_session's final-approval branch —
     On-Duty's own status/fields are never touched here, this only ever adds a
     new, already-approved OutpassRequest + its matching OutpassRecord (the
     same row shape a QR-scan or a manual Outpass request produces) so the
@@ -456,43 +463,31 @@ def _create_outpass_from_on_duty(session: OnDutySession, reviewer_name: str) -> 
     )
 
 
-def resolve_on_duty_session_hod(session: OnDutySession, decision: str, reviewer_name: str, comment: str | None) -> None:
+def resolve_on_duty_session(
+    session: OnDutySession, role: str, decision: str, reviewer_name: str, comment: str | None
+) -> approval.Outcome:
     """
-    Stage 1 -Department Head decision on the destination request. Called
-    from manager_views.py::manager_update_on_duty_status. Approval moves the
-    session to pending_hr; rejection is terminal -HR never sees it.
+    One decision by `role` ('hod' or 'hr') on an On-Duty request, under the "on_duty" pipeline (approval_workflow.py).
+    Raises approval.ApprovalError when that role may not decide it now.
+
+    An intermediate approval only passes the request to the next step (the employee keeps working under it).
+    The FINAL approval starts the session (status=active, started_at=now) -this is what live_location_ping and the
+    mobile on-duty punch flow key off of -accepts every punch captured under it and issues the outpass; a
+    rejection at any step is terminal and voids the pending punches. Out of the box HR may decide straight away,
+    without waiting for a Department Head who has not acted (that step is optional).
     """
-    session.status = OnDutySession.STATUS_PENDING_HR if decision == "approved" else OnDutySession.STATUS_REJECTED
-    session.hod_reviewed_by = reviewer_name
-    session.hod_reviewed_at = timezone.now()
-    if comment:
-        session.hod_review_comment = comment
-    session.save()
-    if decision == "approved":
-        message = f"Your On-Duty request for {session.destination} was approved by your Department Head and is now awaiting HR approval."
+    outcome = approval.decide(WORKFLOW, session, role, decision, actor=reviewer_name, comment=comment)
+    now = timezone.now()
+    if role == approval.HOD:
+        session.hod_reviewed_by, session.hod_reviewed_at = reviewer_name, now
+        if comment:
+            session.hod_review_comment = comment
     else:
-        # Terminal rejection -the employee may already have worked and
-        # punched all day under this request. Those punches never reached
-        # AttendanceLog, and now never will.
-        voided = _void_session_punches(session, reviewer_name, "your Department Head")
-        message = f"Your On-Duty request for {session.destination} was rejected by your Department Head."
-        if voided:
-            message += f" The {voided} punch(es) you recorded under it are not valid and have not been counted."
-    Notification.objects.create(employee=session.employee, type="on_duty", message=message)
-    if decision == "rejected":
-        # An approval at this stage only passes the request on to HR; a rejection is final.
-        whatsapp_notifications.notify_geo_session_rejected(session, reviewer_name, "dept_head", comment, voided)
-
-
-def resolve_on_duty_session_hr(session: OnDutySession, decision: str, reviewer_name: str, comment: str | None) -> None:
-    """
-    Stage 2 -HR's final decision. Called both for a session already at
-    pending_hr (the normal path) and directly on a still-pending_hod session
-    (HR's fallback when there's no Department Head to act, or they haven't).
-    Approval starts the session (status=active, started_at=now) -this is
-    what live_location_ping and the mobile on-duty punch flow key off of.
-    """
-    if decision == "approved":
+        session.hr_reviewed_by, session.hr_reviewed_at = reviewer_name, now
+        if comment:
+            session.hr_review_comment = comment
+    what = f"On-Duty request for {session.destination}"
+    if outcome.final:
         session.started_at = session.started_at or session.created_at
         if session.employee_ended_at:
             # The employee already worked and closed out the day while this
@@ -505,13 +500,9 @@ def resolve_on_duty_session_hr(session: OnDutySession, decision: str, reviewer_n
         else:
             session.status = OnDutySession.STATUS_ACTIVE
     else:
-        session.status = OnDutySession.STATUS_REJECTED
-    session.hr_reviewed_by = reviewer_name
-    session.hr_reviewed_at = timezone.now()
-    if comment:
-        session.hr_review_comment = comment
+        session.status = outcome.status
     session.save()
-    if decision == "approved":
+    if outcome.final:
         # One decision, one card: approving the request accepts every punch
         # captured under it as real attendance.
         approved = _approve_session_punches(session, reviewer_name)
@@ -521,19 +512,38 @@ def resolve_on_duty_session_hr(session: OnDutySession, decision: str, reviewer_n
         # requirement that an Outpass must not appear before the On-Duty
         # request itself has actually been approved.
         _create_outpass_from_on_duty(session, reviewer_name)
-        message = f"Your On-Duty request for {session.destination} was approved by HR."
+        message = approval.notice_for(what, outcome)
         message += (
             f" Your {approved} recorded punch(es) have been accepted as attendance."
             if approved else " You can now begin."
         )
         whatsapp_notifications.notify_geo_session_approved(session, reviewer_name, comment)
-    else:
-        voided = _void_session_punches(session, reviewer_name, "HR")
-        message = f"Your On-Duty request for {session.destination} was rejected by HR."
+    elif outcome.rejected:
+        # Terminal rejection -the employee may already have worked and
+        # punched all day under this request. Those punches never reached
+        # AttendanceLog, and now never will.
+        voided = _void_session_punches(session, reviewer_name, approval.ROLE_PHRASE[role])
+        message = approval.notice_for(what, outcome)
         if voided:
             message += f" The {voided} punch(es) you recorded under it are not valid and have not been counted."
-        whatsapp_notifications.notify_geo_session_rejected(session, reviewer_name, "hr", comment, voided)
+        whatsapp_notifications.notify_geo_session_rejected(session, reviewer_name, approval.LEGACY_ROLE[role], comment, voided)
+    else:
+        # An approval that only passes the request on stays quiet on WhatsApp until the final decision.
+        message = approval.notice_for(what, outcome)
+        if approval.HOD in outcome.waiting and role != approval.HOD:
+            _notify_hod_approvers(session)  # it has just reached the Department Head's step
     Notification.objects.create(employee=session.employee, type="on_duty", message=message)
+    return outcome
+
+
+def resolve_on_duty_session_hod(session: OnDutySession, decision: str, reviewer_name: str, comment: str | None):
+    """The Department Head's decision (kept under its old name for callers that predate the pipeline)."""
+    return resolve_on_duty_session(session, approval.HOD, decision, reviewer_name, comment)
+
+
+def resolve_on_duty_session_hr(session: OnDutySession, decision: str, reviewer_name: str, comment: str | None):
+    """HR's decision (kept under its old name for callers that predate the pipeline)."""
+    return resolve_on_duty_session(session, approval.HR, decision, reviewer_name, comment)
 
 
 def resolve_on_duty_punch_hr(
@@ -772,8 +782,17 @@ def on_duty_session_request(request: Request) -> Response:
     if not destination:
         return _error("A destination is required")
 
-    session = OnDutySession.objects.create(employee=emp, destination=destination, branch=emp.branch)
-    _notify_hod_approvers(session)
+    try:
+        approval.require_enabled(WORKFLOW)
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
+    first = approval.get_config(WORKFLOW).steps[0].roles  # the request starts with whoever the first step names
+    session = OnDutySession.objects.create(
+        employee=emp, destination=destination, branch=emp.branch,
+        status=approval.project_status(WORKFLOW, first), approval_trail=[],
+    )
+    if approval.HOD in first:
+        _notify_hod_approvers(session)
 
     # "active", not "pending_hod_approval" -the employee is cleared to start
     # working and punching right now. The database still says pending_hod
@@ -1048,18 +1067,18 @@ def on_duty_sessions_hr(request: Request) -> Response:
     elif status_filter != "all":
         qs = qs.filter(status=status_filter)
     qs = qs.order_by("-created_at")[:200]
-    return Response([_on_duty_session_dict(s) for s in qs])
+    cfg = approval.get_config(WORKFLOW)
+    return Response([_on_duty_session_dict(s, cfg=cfg) for s in qs])
 
 
 @api_view(["PATCH"])
 @require_hr
 def on_duty_session_hr_status(request: Request, pk: int) -> Response:
     """
-    PATCH /api/on-duty-sessions/<pk>/status -HR's decision. Works on a
-    session at EITHER stage: if it's still pending_hod (Department Head
-    hasn't acted, or there isn't one), HR's decision finalizes it directly
-    in one step; if it's pending_hr, this is the normal second-stage
-    approval.
+    PATCH /api/on-duty-sessions/<pk>/status -HR's decision. Under the default pipeline the Department Head step is
+    optional, so HR may decide a session at EITHER stage: still pending_hod (the Department Head hasn't acted, or
+    there isn't one) HR's decision finalizes it in one step; pending_hr is the normal second-stage approval. If HR has
+    made the Department Head step mandatory, HR waits for it (approval_workflow.py).
     """
     session = scope_to_branch(
         OnDutySession.objects.select_related("employee__department", "employee__designation", "branch"),
@@ -1067,15 +1086,16 @@ def on_duty_session_hr_status(request: Request, pk: int) -> Response:
     ).filter(pk=pk).first()
     if not session:
         return _error("On-Duty session not found", 404)
-    if session.status not in (OnDutySession.STATUS_PENDING_HOD, OnDutySession.STATUS_PENDING_HR):
-        return _error(f"This session was already {session.status}")
 
     status_val = request.data.get("status")
-    if status_val not in ("approved", "rejected"):
+    if status_val not in ("approved", "rejected") and approval.is_pending(WORKFLOW, session):
         return _error("status must be 'approved' or 'rejected'")
 
     reviewer_name = request.jwt_user.get("name") or "HR"
-    resolve_on_duty_session_hr(session, status_val, reviewer_name, request.data.get("comment"))
+    try:
+        resolve_on_duty_session(session, approval.HR, status_val, reviewer_name, request.data.get("comment"))
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
     return Response(_on_duty_session_dict(session))
 
 

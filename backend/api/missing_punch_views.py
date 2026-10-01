@@ -1,16 +1,14 @@
 """
 Missing Punch Module
 =====================
-Employee self-service "I forgot to punch" request -date + time + reason,
-two-stage approval: the Department Head approves first, then HR gives the
-final approval (same two-stage status machine as OnDutySession, the only
-other genuine HOD-then-HR workflow in this codebase -see models.py).
+Employee self-service "I forgot to punch" request -date + time + reason.
 
-A HOD rejection is terminal -HR never sees it. HR only ever acts on a
-request already at pending_hr (deliberately stricter than OnDutySession's
-HR-fallback behavior: HR cannot short-circuit past a Department Head here).
+Who decides, and in what order, is the "missing_punch" pipeline of approval_workflow.py (User Management ->
+Approval Workflow Control). Out of the box it is the two-stage chain it always was: the Department Head approves
+first, then HR gives the final approval, and HR cannot short-circuit past a Department Head (that step is mandatory).
+`status` is pending_hod / pending_hr according to who the request is waiting for now, and rejected / approved when done.
 
-On HR approval, resolve_missing_punch_hr() creates one ordinary
+A rejection by whoever may decide is terminal. On the FINAL approval, resolve_missing_punch() creates one ordinary
 AttendanceLog row (source="missing_punch:approved") instead of overwriting
 the day's AttendanceDayRecord directly -it becomes just another punch that
 day and flows through the normal engine (punch-order combination rule,
@@ -27,7 +25,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import whatsapp_approvals
+from . import approval_workflow as approval, whatsapp_approvals
 from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name
 from .branch_scope import scope_to_branch
 from .hod_scope import managers_to_notify
@@ -36,7 +34,10 @@ from .models import AttendanceLog, Employee, MissingPunchRequest, Notification
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
-def _missing_punch_dict(r: MissingPunchRequest) -> dict:
+WORKFLOW = "missing_punch"
+
+
+def _missing_punch_dict(r: MissingPunchRequest, cfg: approval.Config | None = None) -> dict:
     emp = r.employee
     return {
         "id": r.id,
@@ -58,6 +59,7 @@ def _missing_punch_dict(r: MissingPunchRequest) -> dict:
         "hrReviewComment": r.hr_review_comment,
         "hrReviewedAt": r.hr_reviewed_at.isoformat() if r.hr_reviewed_at else None,
         "createdAt": r.created_at.isoformat() if r.created_at else None,
+        "approval": approval.progress(WORKFLOW, r, cfg),
     }
 
 
@@ -77,50 +79,54 @@ def _notify_hod_approvers(req: MissingPunchRequest) -> None:
         )
 
 
-def resolve_missing_punch_hod(req: MissingPunchRequest, decision: str, reviewer_name: str, comment: str | None) -> None:
-    """Stage 1 -Department Head decision. Approval moves the request to
-    pending_hr; rejection is terminal, HR never sees it."""
-    req.status = MissingPunchRequest.STATUS_PENDING_HR if decision == "approved" else MissingPunchRequest.STATUS_REJECTED
-    req.hod_reviewed_by = reviewer_name
-    req.hod_reviewed_at = timezone.now()
-    if comment:
-        req.hod_review_comment = comment
-    req.save()
-    if decision == "approved":
-        message = f"Your Missing Punch request for {req.date.isoformat()} was approved by your Department Head and is now awaiting HR approval."
+def resolve_missing_punch(
+    req: MissingPunchRequest, role: str, decision: str, reviewer_name: str, comment: str | None
+) -> approval.Outcome:
+    """One decision by `role` ('hod' or 'hr') on a request, under the pipeline in force. Raises approval.ApprovalError
+    when that role may not decide it now (already decided, or still waiting for someone else).
+
+    An intermediate approval only passes the request to the next step; the FINAL approval creates the actual punch;
+    a rejection writes nothing to attendance. WhatsApp goes out for a final decision or any rejection only."""
+    outcome = approval.decide(WORKFLOW, req, role, decision, actor=reviewer_name, comment=comment)
+    now = timezone.now()
+    if role == approval.HOD:
+        req.hod_reviewed_by, req.hod_reviewed_at = reviewer_name, now
+        if comment:
+            req.hod_review_comment = comment
     else:
-        message = f"Your Missing Punch request for {req.date.isoformat()} was rejected by your Department Head."
-    Notification.objects.create(employee=req.employee, type="missing_punch", message=message)
-    if decision == "rejected":
-        # An approval here only passes the request on to HR, so it stays quiet until HR decides.
-        whatsapp_approvals.notify_decision(
-            "missing_punch", req, "rejected", approver=reviewer_name, role="dept_head", comment=comment
-        )
-
-
-def resolve_missing_punch_hr(req: MissingPunchRequest, decision: str, reviewer_name: str, comment: str | None) -> None:
-    """Stage 2 -HR's final decision. Only ever called on a request already
-    at pending_hr. Approval creates the actual punch; rejection writes
-    nothing to attendance."""
-    if decision == "approved":
+        req.hr_reviewed_by, req.hr_reviewed_at = reviewer_name, now
+        if comment:
+            req.hr_review_comment = comment
+    if outcome.final:
         AttendanceLog.objects.get_or_create(
             employee=req.employee, date=req.date, punch_time=req.punch_time, punch_type=req.punch_type,
             defaults={"source": "missing_punch:approved"},
         )
-        req.status = MissingPunchRequest.STATUS_APPROVED
-    else:
-        req.status = MissingPunchRequest.STATUS_REJECTED
-    req.hr_reviewed_by = reviewer_name
-    req.hr_reviewed_at = timezone.now()
-    if comment:
-        req.hr_review_comment = comment
+    req.status = outcome.status
     req.save()
-    if decision == "approved":
-        message = f"Your Missing Punch request for {req.date.isoformat()} was approved by HR and has been added to your attendance."
-    else:
-        message = f"Your Missing Punch request for {req.date.isoformat()} was rejected by HR."
-    Notification.objects.create(employee=req.employee, type="missing_punch", message=message)
-    whatsapp_approvals.notify_decision("missing_punch", req, decision, approver=reviewer_name, role="hr", comment=comment)
+    what = f"Missing Punch request for {req.date.isoformat()}"
+    Notification.objects.create(
+        employee=req.employee,
+        type="missing_punch",
+        message=approval.notice_for(what, outcome, final_tail=" and has been added to your attendance"),
+    )
+    if outcome.kind == "advanced" and approval.HOD in outcome.waiting and role != approval.HOD:
+        _notify_hod_approvers(req)  # the request has just reached the Department Head's step
+    if outcome.final or outcome.rejected:
+        whatsapp_approvals.notify_decision(
+            WORKFLOW, req, decision, approver=reviewer_name, role=approval.LEGACY_ROLE[role], comment=comment
+        )
+    return outcome
+
+
+def resolve_missing_punch_hod(req: MissingPunchRequest, decision: str, reviewer_name: str, comment: str | None):
+    """The Department Head's decision (kept under its old name for callers that predate the pipeline)."""
+    return resolve_missing_punch(req, approval.HOD, decision, reviewer_name, comment)
+
+
+def resolve_missing_punch_hr(req: MissingPunchRequest, decision: str, reviewer_name: str, comment: str | None):
+    """HR's decision (kept under its old name for callers that predate the pipeline)."""
+    return resolve_missing_punch(req, approval.HR, decision, reviewer_name, comment)
 
 
 # ── List / submit ────────────────────────────────────────────────────────────
@@ -151,7 +157,8 @@ def missing_punch_requests(request: Request) -> Response:
             qs = qs.filter(date__month=int(month))
         if year := request.query_params.get("year"):
             qs = qs.filter(date__year=int(year))
-        return Response([_missing_punch_dict(r) for r in qs.order_by("-created_at")[:300]])
+        cfg = approval.get_config(WORKFLOW)
+        return Response([_missing_punch_dict(r, cfg) for r in qs.order_by("-created_at")[:300]])
 
     # POST -submit a Missing Punch request (mobile/web app only, self-bound).
     # The mobile app's shared axios client decamelizes every JSON body to
@@ -207,15 +214,23 @@ def missing_punch_requests(request: Request) -> Response:
     except Exception:
         return Response({"error": "Invalid punchTime format (HH:MM)"}, status=400)
 
+    try:
+        approval.require_enabled(WORKFLOW)
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
+    cfg = approval.get_config(WORKFLOW)
+    first = cfg.steps[0].roles  # the request starts with whoever the pipeline's first step names
     req = MissingPunchRequest.objects.create(
         employee=emp, date=req_date, punch_time=punch_time, punch_type=punch_type,
-        punch_slot=punch_slot or None, reason=data["reason"],
+        punch_slot=punch_slot or None, reason=data["reason"], status=approval.project_status(WORKFLOW, first),
+        approval_trail=[],
     )
-    _notify_hod_approvers(req)
-    return Response(_missing_punch_dict(req), status=201)
+    if approval.HOD in first:
+        _notify_hod_approvers(req)
+    return Response(_missing_punch_dict(req, cfg), status=201)
 
 
-# ── HR decision (stage 2 only) ───────────────────────────────────────────────
+# ── HR decision ──────────────────────────────────────────────────────────────
 
 @api_view(["PATCH", "DELETE"])
 @require_hr
@@ -228,15 +243,13 @@ def missing_punch_request_hr_status(request: Request, pk: int) -> Response:
         req.delete()
         return Response({"ok": True})
 
-    if req.status != MissingPunchRequest.STATUS_PENDING_HR:
-        if req.status == MissingPunchRequest.STATUS_PENDING_HOD:
-            return Response({"error": "This request is still awaiting Department Head approval"}, status=400)
-        return Response({"error": f"This request was already {req.status}"}, status=400)
-
     status_val = request.data.get("status")
-    if status_val not in ("approved", "rejected"):
+    if status_val not in ("approved", "rejected") and approval.is_pending(WORKFLOW, req):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
 
     reviewer = get_hr_display_name(request)
-    resolve_missing_punch_hr(req, status_val, reviewer, request.data.get("comment"))
+    try:
+        resolve_missing_punch(req, approval.HR, status_val, reviewer, request.data.get("comment"))
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
     return Response(_missing_punch_dict(req))

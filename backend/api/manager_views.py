@@ -6,13 +6,13 @@ from rest_framework.response import Response
 
 from django.db import transaction
 
-from . import whatsapp_approvals
+from . import approval_workflow as approval, whatsapp_approvals
 from .auth import require_hr, require_auth, get_token_employee_id
 from .branch_scope import scope_to_branch
-from .hod_scope import coverage, department_conflicts, managed_employee_ids
+from .hod_scope import coverage, department_conflicts, department_roster, effective_owner_map, managed_employee_ids
 from .models import (
     Employee, Department,
-    DepartmentManager, ManagerDepartmentAssignment, ManagerEmployeeAssignment,
+    DepartmentManager, ManagerDepartmentAssignment, ManagerEmployeeAssignment, ManagerEmployeeExclusion,
     ResignationRequest, AttendanceOverrideRequest, AttendanceDayRecord,
     CasualLeaveRequest, Notification, OnDutySession,
 )
@@ -63,6 +63,14 @@ def _manager_json(m, include_assignments=False):
         "assignedEmployeeIds": all_assigned_employee_ids,
         # Listed against this HOD but reporting to a different one -see the comment above.
         "overlapCount": len(overridden),
+        # People HR took OUT of this HOD's departments (still in the department, no longer reporting here).
+        "removedCount": (
+            ManagerEmployeeExclusion.objects.filter(
+                manager=m, employee__department_id__in=[da.department_id for da in dept_assignments]
+            ).count()
+            if dept_assignments
+            else 0
+        ),
     }
     if include_assignments:
         owners = {
@@ -302,6 +310,7 @@ def _apply_department_assignment(m, dept, conflicts, holders, move_whole_departm
             ).exclude(manager=m).delete()
 
         ManagerDepartmentAssignment.objects.get_or_create(manager=m, department=dept)
+        ManagerEmployeeExclusion.objects.filter(manager=m, employee__department=dept).delete()
 
     kept = len([c for c in conflicts if c.employee.id not in reassign_ids])
     message = f"Department '{dept.name}' assigned"
@@ -359,9 +368,13 @@ def manager_department_assignments(request: Request, pk: int) -> Response:
     dept_id = request.data.get("departmentId")
     if not dept_id:
         return Response({"error": "departmentId is required"}, status=400)
-    deleted, _ = ManagerDepartmentAssignment.objects.filter(manager=m, department_id=dept_id).delete()
-    if not deleted:
-        return Response({"error": "Assignment not found"}, status=404)
+    with transaction.atomic():
+        deleted, _ = ManagerDepartmentAssignment.objects.filter(manager=m, department_id=dept_id).delete()
+        if not deleted:
+            return Response({"error": "Assignment not found"}, status=404)
+        # The carve-outs only mean something while the department is assigned; a fresh assignment later
+        # starts with everyone in it.
+        ManagerEmployeeExclusion.objects.filter(manager=m, employee__department_id=dept_id).delete()
     return Response(status=204)
 
 
@@ -482,7 +495,10 @@ def manager_employee_assignments(request: Request, pk: int) -> Response:
 
         # Always a genuine create at this point -the "already assigned to
         # this manager" case returned early above.
-        ManagerEmployeeAssignment.objects.create(manager=m, employee=emp)
+        with transaction.atomic():
+            ManagerEmployeeAssignment.objects.create(manager=m, employee=emp)
+            # Covering someone on purpose supersedes an earlier "removed from the department list".
+            ManagerEmployeeExclusion.objects.filter(manager=m, employee=emp).delete()
         return Response({"message": f"{emp.first_name} {emp.last_name} assigned"}, status=201)
 
     emp_id = request.data.get("employeeId") or request.data.get("employee_id")
@@ -494,7 +510,170 @@ def manager_employee_assignments(request: Request, pk: int) -> Response:
     return Response(status=204)
 
 
+# ─── The employees of the HOD's departments: listed automatically, removable ──
+
+def _roster_json(m, roster) -> dict:
+    """Every employee of every department assigned to `m`, grouped by department, each with where they
+    stand (see hod_scope.RosterEntry)."""
+    departments = []
+    for dept, entries in roster:
+        counts = {"reporting": 0, "removed": 0, "elsewhere": 0, "self": 0}
+        employees = []
+        for en in entries:
+            counts[en.state] += 1
+            e = en.employee
+            employees.append({
+                "employeeId": e.id,
+                "employeeCode": e.employee_code,
+                "name": f"{e.first_name} {e.last_name}".strip(),
+                "designation": e.designation.title if e.designation_id and e.designation else None,
+                "status": e.status,
+                "state": en.state,
+                "individual": en.individual,
+                "manager": _conflict_manager_json(en.manager) if en.manager else None,
+                "via": en.via,
+            })
+        departments.append({"id": dept.id, "name": dept.name, "counts": counts, "employees": employees})
+    return {"managerId": m.id, "departments": departments}
+
+
+@api_view(["GET"])
+@require_hr
+def manager_department_employees(request: Request, pk: int) -> Response:
+    try:
+        m = scope_to_branch(
+            DepartmentManager.objects, request, field="employee__branch_id"
+        ).select_related("employee").get(pk=pk)
+    except DepartmentManager.DoesNotExist:
+        return Response({"error": "Manager not found"}, status=404)
+    return Response(_roster_json(m, department_roster(m)))
+
+
+def _employee_ids_from(data) -> list[int] | None:
+    """`employeeIds` (a list) or `employeeId` (one) from the body, as ints; None if absent or malformed."""
+    raw = data.get("employeeIds")
+    if raw is None:
+        one = data.get("employeeId") or data.get("employee_id")
+        raw = [one] if one else None
+    if not isinstance(raw, list) or not raw:
+        return None
+    try:
+        return list(dict.fromkeys(int(i) for i in raw))
+    except (TypeError, ValueError):
+        return None
+
+
+@api_view(["POST", "DELETE"])
+@require_hr
+def manager_excluded_employees(request: Request, pk: int) -> Response:
+    """POST: take employees out of the departments this HOD covers (they stay in the department; they just
+    stop reporting to this HOD, so their requests go to the next HOD who holds it, or to HR).
+    DELETE: put them back. Both take `employeeId` or `employeeIds`; nothing changes if any id is invalid."""
+    try:
+        m = scope_to_branch(
+            DepartmentManager.objects, request, field="employee__branch_id"
+        ).get(pk=pk)
+    except DepartmentManager.DoesNotExist:
+        return Response({"error": "Manager not found"}, status=404)
+
+    ids = _employee_ids_from(request.data)
+    if ids is None:
+        return Response({"error": "employeeId or employeeIds is required"}, status=400)
+    employees = list(scope_to_branch(Employee.objects, request).filter(pk__in=ids))
+    if len(employees) != len(ids):
+        return Response({"error": "Employee not found"}, status=404)
+
+    if request.method == "POST":
+        dept_ids = set(m.department_assignments.values_list("department_id", flat=True))
+        for emp in employees:
+            name = f"{emp.first_name} {emp.last_name}".strip()
+            if emp.id == m.employee_id:
+                return Response({"error": f"{name} is this department head, so there is nothing to remove."}, status=400)
+            if emp.department_id not in dept_ids:
+                return Response({"error": f"{name} is not in a department assigned to this HOD."}, status=400)
+        with transaction.atomic():
+            # An individual assignment would keep them under this HOD regardless, so it goes too.
+            unassigned = ManagerEmployeeAssignment.objects.filter(manager=m, employee__in=employees).delete()[0]
+            made = 0
+            for emp in employees:
+                made += ManagerEmployeeExclusion.objects.get_or_create(manager=m, employee=emp)[1]
+        n = len(employees)
+        return Response({
+            "message": f"{n} employee{'s' if n != 1 else ''} removed from this HOD",
+            "removed": n,
+            "alsoUnassigned": unassigned,
+        }, status=201 if made else 200)
+
+    deleted, _ = ManagerEmployeeExclusion.objects.filter(manager=m, employee__in=employees).delete()
+    if not deleted:
+        return Response({"error": "Those employees were not removed from this HOD"}, status=404)
+    # Putting them back does not guarantee they report here: another HOD may hold them individually, or
+    # hold the department ahead of this one. Say where each one ended up.
+    owner = effective_owner_map([e.id for e in employees])
+    return Response({
+        "message": f"{deleted} employee{'s' if deleted != 1 else ''} restored to this HOD",
+        "restored": deleted,
+        "reportingElsewhere": [e.id for e in employees if owner.get(e.id, m.id) != m.id],
+    })
+
+
 # ─── Mobile App: Manager profile + approval endpoints ─────────────────────────
+
+
+def _hod_pending_counts(m, emp_filter) -> dict[str, int]:
+    """How many requests this Department Head can decide RIGHT NOW, per workflow, under the approval pipelines HR has
+    configured (approval_workflow.py): a request only counts while it is this role's turn (or every step before it can
+    be skipped), so switching a pipeline from 'HOD then HR' to 'HR then HOD' moves the counts by itself. The per-person
+    switches (can_approve_*) still apply on top, exactly as before."""
+    from .models import EmployeePermission, LeaveRequest, MissingPunchRequest, OutpassRequest
+
+    cfgs = approval.all_configs()
+
+    def mine(key, qs):
+        return len(approval.filter_actionable(key, qs, approval.HOD, cfgs[key]))
+
+    return {
+        "leave": mine("leave", LeaveRequest.objects.filter(emp_filter, status="pending")),
+        "permission": mine("permission", EmployeePermission.objects.filter(emp_filter, status="pending")),
+        "resignation": (
+            mine("resignation", ResignationRequest.objects.filter(emp_filter, status__in=["pending", "dept_approved"]))
+            if m.can_approve_resignations else 0
+        ),
+        "attendance_correction": (
+            mine("attendance_correction", AttendanceOverrideRequest.objects.filter(emp_filter, status="pending"))
+            if m.can_approve_attendance else 0
+        ),
+        "casual_leave": (
+            mine("casual_leave", CasualLeaveRequest.objects.filter(emp_filter, status="pending"))
+            if m.can_approve_casual_leave else 0
+        ),
+        "on_duty": (
+            mine(
+                "on_duty",
+                OnDutySession.objects.filter(
+                    emp_filter, status__in=[OnDutySession.STATUS_PENDING_HOD, OnDutySession.STATUS_PENDING_HR]
+                ),
+            )
+            if m.can_approve_on_duty else 0
+        ),
+        "missing_punch": (
+            mine(
+                "missing_punch",
+                MissingPunchRequest.objects.filter(
+                    emp_filter,
+                    status__in=[MissingPunchRequest.STATUS_PENDING_HOD, MissingPunchRequest.STATUS_PENDING_HR],
+                ),
+            )
+            if m.can_approve_missing_punch else 0
+        ),
+        "outpass": (
+            mine(
+                "outpass",
+                OutpassRequest.objects.filter(emp_filter, source=OutpassRequest.SOURCE_MANUAL, status="pending"),
+            )
+            if m.can_approve_permissions else 0
+        ),
+    }
 
 @api_view(["GET"])
 @require_auth
@@ -517,35 +696,21 @@ def manager_me(request: Request) -> Response:
     except DepartmentManager.DoesNotExist:
         return Response({"isManager": False, "canSubmitLeave": False, "pendingApprovalsCount": 0})
 
-    from .models import LeaveRequest, EmployeePermission
     dept_ids, direct_ids = _get_manager_employee_ids(m)
     emp_filter = Q(employee_id__in=direct_ids)
     if dept_ids:
         emp_filter |= Q(employee__department_id__in=dept_ids)
+    # A head never decides their own request (the decision endpoints refuse it), so it is not counted for them either.
+    emp_filter &= ~Q(employee_id=token_emp_id)
 
-    pending_leaves = LeaveRequest.objects.filter(emp_filter, status="pending").count()
-    pending_perms = EmployeePermission.objects.filter(emp_filter, status="pending").count()
-    pending_resignations = (
-        ResignationRequest.objects.filter(emp_filter, status="pending").count()
-        if m.can_approve_resignations else 0
-    )
-    pending_attendance = (
-        AttendanceOverrideRequest.objects.filter(emp_filter, status="pending").count()
-        if m.can_approve_attendance else 0
-    )
-    pending_casual = (
-        CasualLeaveRequest.objects.filter(emp_filter, status="pending").count()
-        if m.can_approve_casual_leave else 0
-    )
-    pending_on_duty = (
-        OnDutySession.objects.filter(emp_filter, status=OnDutySession.STATUS_PENDING_HOD).count()
-        if m.can_approve_on_duty else 0
-    )
-    from .models import MissingPunchRequest
-    pending_missing_punch = (
-        MissingPunchRequest.objects.filter(emp_filter, status=MissingPunchRequest.STATUS_PENDING_HOD).count()
-        if m.can_approve_missing_punch else 0
-    )
+    counts = _hod_pending_counts(m, emp_filter)
+    pending_leaves = counts["leave"]
+    pending_perms = counts["permission"]
+    pending_resignations = counts["resignation"]
+    pending_attendance = counts["attendance_correction"]
+    pending_casual = counts["casual_leave"]
+    pending_on_duty = counts["on_duty"]
+    pending_missing_punch = counts["missing_punch"]
     pending_count = (
         pending_leaves + pending_perms + pending_resignations
         + pending_attendance + pending_casual + pending_on_duty + pending_missing_punch
@@ -567,6 +732,9 @@ def manager_me(request: Request) -> Response:
         "pendingCasualLeaveCount": pending_casual,
         "pendingOnDutyCount": pending_on_duty,
         "pendingMissingPunchCount": pending_missing_punch,
+        # The approval pipelines HR has configured, so the app can explain each request's path and hide a category whose
+        # workflow is off or has no Department Head step (approval_workflow.py).
+        "approvalWorkflows": approval.summary(),
         **_manager_json(m, include_assignments=True),
     })
 
@@ -594,8 +762,18 @@ def manager_pending_requests(request: Request) -> Response:
     emp_filter = Q(employee_id__in=direct_ids)
     if dept_ids:
         emp_filter |= Q(employee__department_id__in=dept_ids)
+    # A head never decides their own request (the decision endpoints refuse it), so it is not listed for them either.
+    emp_filter &= ~Q(employee_id=token_emp_id)
 
     status_filter = request.query_params.get("status", "pending")
+    cfgs = approval.all_configs()
+
+    def mine(key, qs):
+        """The rows to send. Asked for the pending ones, that is only what this Department Head can decide NOW under the
+        approval pipeline HR configured (approval_workflow.py); any other status filter is just a history view."""
+        if status_filter != "pending":
+            return list(qs)
+        return approval.filter_actionable(key, qs, approval.HOD, cfgs[key])
 
     leave_qs = LeaveRequest.objects.select_related(
         "employee__department", "employee__designation"
@@ -612,7 +790,7 @@ def manager_pending_requests(request: Request) -> Response:
     perm_qs = perm_qs.order_by("-created_at")
 
     def _leave_with_emp(r):
-        data = leave_request_json(r)
+        data = leave_request_json(r, cfg=cfgs["leave"])
         emp = r.employee
         # Include nested employee object so mobile can read either flat or nested fields
         data["employee"] = {
@@ -634,7 +812,7 @@ def manager_pending_requests(request: Request) -> Response:
     _cap_cache = _CapStatusCache(_ps.permission_monthly_cap)
 
     def _perm_with_emp(p):
-        data = _permission_json(p, settings=_ps, cap_cache=_cap_cache)
+        data = _permission_json(p, settings=_ps, cap_cache=_cap_cache, cfg=cfgs["permission"])
         emp = p.employee
         data["employee"] = {
             "id": emp.id,
@@ -651,7 +829,9 @@ def manager_pending_requests(request: Request) -> Response:
     resign_qs = ResignationRequest.objects.select_related(
         "employee", "employee__department", "employee__designation", "dept_head"
     ).filter(emp_filter)
-    if status_filter != "all" and m.can_approve_resignations:
+    if status_filter == "pending" and m.can_approve_resignations:
+        resign_qs = resign_qs.filter(status__in=["pending", "dept_approved"])  # whoever holds it; mine() narrows
+    elif status_filter != "all" and m.can_approve_resignations:
         resign_qs = resign_qs.filter(status=status_filter)
     elif not m.can_approve_resignations:
         resign_qs = ResignationRequest.objects.none()
@@ -683,7 +863,9 @@ def manager_pending_requests(request: Request) -> Response:
     ).filter(emp_filter)
     if m.can_approve_on_duty:
         if status_filter == "pending":
-            on_duty_qs = on_duty_qs.filter(status=OnDutySession.STATUS_PENDING_HOD)
+            on_duty_qs = on_duty_qs.filter(
+                status__in=[OnDutySession.STATUS_PENDING_HOD, OnDutySession.STATUS_PENDING_HR]  # mine() narrows
+            )
         elif status_filter != "all":
             on_duty_qs = on_duty_qs.filter(status=status_filter)
     else:
@@ -697,7 +879,9 @@ def manager_pending_requests(request: Request) -> Response:
     ).filter(emp_filter)
     if m.can_approve_missing_punch:
         if status_filter == "pending":
-            missing_punch_qs = missing_punch_qs.filter(status=MissingPunchRequest.STATUS_PENDING_HOD)
+            missing_punch_qs = missing_punch_qs.filter(
+                status__in=[MissingPunchRequest.STATUS_PENDING_HOD, MissingPunchRequest.STATUS_PENDING_HR]  # mine() narrows
+            )
         elif status_filter != "all":
             missing_punch_qs = missing_punch_qs.filter(status=status_filter)
     else:
@@ -715,25 +899,24 @@ def manager_pending_requests(request: Request) -> Response:
         outpass_qs = OutpassRequest.objects.none()
     outpass_qs = outpass_qs.order_by("-created_at")
 
+    counts = _hod_pending_counts(m, emp_filter)
     return Response({
-        "leaveRequests": [_leave_with_emp(r) for r in leave_qs],
-        "permissions": [_perm_with_emp(p) for p in perm_qs],
-        "resignations": [_resignation_json(r) for r in resign_qs],
-        "attendanceRequests": [_override_request_dict(r) for r in attendance_qs],
-        "casualLeaves": [_cl_dict(r) for r in casual_qs],
-        "onDutySessions": [_on_duty_session_dict(s) for s in on_duty_qs],
-        "missingPunchRequests": [_missing_punch_dict(r) for r in missing_punch_qs],
-        "outpassRequests": [_outpass_request_json(r, with_employee=True) for r in outpass_qs],
-        "totalPending": (
-            LeaveRequest.objects.filter(emp_filter, status="pending").count()
-            + EmployeePermission.objects.filter(emp_filter, status="pending").count()
-            + (ResignationRequest.objects.filter(emp_filter, status="pending").count() if m.can_approve_resignations else 0)
-            + (AttendanceOverrideRequest.objects.filter(emp_filter, status="pending").count() if m.can_approve_attendance else 0)
-            + (CasualLeaveRequest.objects.filter(emp_filter, status="pending").count() if m.can_approve_casual_leave else 0)
-            + (OnDutySession.objects.filter(emp_filter, status=OnDutySession.STATUS_PENDING_HOD).count() if m.can_approve_on_duty else 0)
-            + (MissingPunchRequest.objects.filter(emp_filter, status=MissingPunchRequest.STATUS_PENDING_HOD).count() if m.can_approve_missing_punch else 0)
-            + (OutpassRequest.objects.filter(emp_filter, source=OutpassRequest.SOURCE_MANUAL, status="pending").count() if m.can_approve_permissions else 0)
-        ),
+        "leaveRequests": [_leave_with_emp(r) for r in mine("leave", leave_qs)],
+        "permissions": [_perm_with_emp(p) for p in mine("permission", perm_qs)],
+        "resignations": [_resignation_json(r, cfgs["resignation"]) for r in mine("resignation", resign_qs)],
+        "attendanceRequests": [
+            _override_request_dict(r, cfgs["attendance_correction"]) for r in mine("attendance_correction", attendance_qs)
+        ],
+        "casualLeaves": [_cl_dict(r, cfgs["casual_leave"]) for r in mine("casual_leave", casual_qs)],
+        "onDutySessions": [_on_duty_session_dict(s, cfg=cfgs["on_duty"]) for s in mine("on_duty", on_duty_qs)],
+        "missingPunchRequests": [
+            _missing_punch_dict(r, cfgs["missing_punch"]) for r in mine("missing_punch", missing_punch_qs)
+        ],
+        "outpassRequests": [
+            _outpass_request_json(r, with_employee=True, cfg=cfgs["outpass"]) for r in mine("outpass", outpass_qs)
+        ],
+        "totalPending": sum(counts.values()),
+        "approvalWorkflows": approval.summary(),
     })
 
 
@@ -779,27 +962,18 @@ def manager_update_leave_status(request: Request, pk: int) -> Response:
             return Response({"error": "This leave request is not in your approval scope"}, status=403)
         return Response({"error": "Leave request not found"}, status=404)
 
-    if leave.status != "pending":
-        return Response({"error": f"This leave request was already {leave.status}"}, status=400)
-
     status = request.data.get("status")
-    if status not in ["approved", "rejected"]:
+    if status not in ["approved", "rejected"] and approval.is_pending("leave", leave):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
 
-    leave.status = status
-    if comment := request.data.get("comment"):
-        leave.hr_comment = comment
-    leave.approved_by = f"{m.employee.first_name} {m.employee.last_name}"
-    leave.approver_role = "dept_head"
-    leave.save()
-    Notification.objects.create(
-        employee=leave.employee,
-        type="leave",
-        message=f"Your leave request ({leave.start_date} to {leave.end_date}) was {status}.",
-    )
-    whatsapp_approvals.notify_decision(
-        "leave", leave, status, approver=leave.approved_by or "", role="dept_head", comment=request.data.get("comment")
-    )
+    from .leave_request_views import resolve_leave
+
+    try:
+        resolve_leave(
+            leave, approval.HOD, status, f"{m.employee.first_name} {m.employee.last_name}", request.data.get("comment")
+        )
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
     return Response(leave_request_json(leave))
 
 
@@ -844,27 +1018,18 @@ def manager_update_permission_status(request: Request, pk: int) -> Response:
             return Response({"error": "This permission request is not in your approval scope"}, status=403)
         return Response({"error": "Permission request not found"}, status=404)
 
-    if perm.status != "pending":
-        return Response({"error": f"This permission request was already {perm.status}"}, status=400)
-
     status = request.data.get("status")
-    if status not in ["approved", "rejected"]:
+    if status not in ["approved", "rejected"] and approval.is_pending("permission", perm):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
 
-    perm.status = status
-    if comment := request.data.get("comment"):
-        perm.hr_comment = comment
-    perm.approved_by = f"{m.employee.first_name} {m.employee.last_name}"
-    perm.approver_role = "dept_head"
-    perm.save()
-    Notification.objects.create(
-        employee=perm.employee,
-        type="permission",
-        message=f"Your permission request for {perm.date.isoformat()} was {status}.",
-    )
-    whatsapp_approvals.notify_decision(
-        "permission", perm, status, approver=perm.approved_by or "", role="dept_head", comment=request.data.get("comment")
-    )
+    from .leave_views import resolve_permission
+
+    try:
+        resolve_permission(
+            perm, approval.HOD, status, f"{m.employee.first_name} {m.employee.last_name}", request.data.get("comment")
+        )
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
     return Response(_permission_json(perm))
 
 
@@ -912,15 +1077,15 @@ def manager_update_outpass_status(request: Request, pk: int) -> Response:
             return Response({"error": "This outpass request is not in your approval scope"}, status=403)
         return Response({"error": "Outpass request not found"}, status=404)
 
-    if req.status != OutpassRequest.STATUS_PENDING:
-        return Response({"error": f"This outpass request was already {req.status}"}, status=400)
-
     status = request.data.get("status")
-    if status not in ["approved", "rejected"]:
+    if status not in ["approved", "rejected"] and approval.is_pending("outpass", req):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
 
     reviewer_name = f"{m.employee.first_name} {m.employee.last_name}"
-    resolve_outpass_request(req, status, reviewer_name, "dept_head", request.data.get("comment"))
+    try:
+        resolve_outpass_request(req, status, reviewer_name, "dept_head", request.data.get("comment"))
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
     return Response(_outpass_request_json(req))
 
 
@@ -969,23 +1134,27 @@ def manager_update_attendance_status(request: Request, pk: int) -> Response:
             return Response({"error": "This request is not in your approval scope"}, status=403)
         return Response({"error": "Attendance override request not found"}, status=404)
 
-    if req.status != "pending":
-        return Response({"error": f"This request was already {req.status}"}, status=400)
-
     status_val = request.data.get("status")
-    if status_val not in ["approved", "rejected"]:
+    if status_val not in ["approved", "rejected"] and approval.is_pending("attendance_correction", req):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
 
-    from django.utils import timezone
     reviewer_name = f"{m.employee.first_name} {m.employee.last_name}"
+    try:
+        outcome = approval.decide(
+            "attendance_correction", req, approval.HOD, status_val, actor=reviewer_name, comment=request.data.get("comment")
+        )
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
 
-    if status_val == "approved":
+    if outcome.final:
         record = AttendanceDayRecord.objects.filter(employee=req.employee, date=req.date).first()
         if record is None:
             record = compute_day_record(req.employee, req.date)
         apply_override_values(record, req.requested_values, reviewer_name)
 
-    req.status = status_val
+    from django.utils import timezone
+
+    req.status = outcome.status
     req.reviewed_by = reviewer_name
     req.reviewed_at = timezone.now()
     if comment := request.data.get("comment"):
@@ -994,11 +1163,12 @@ def manager_update_attendance_status(request: Request, pk: int) -> Response:
     Notification.objects.create(
         employee=req.employee,
         type="attendance",
-        message=f"Your attendance correction request for {req.date} was {status_val}.",
+        message=f"Your attendance correction request for {req.date} was {outcome.status}.",
     )
-    whatsapp_approvals.notify_decision(
-        "attendance_correction", req, status_val, approver=reviewer_name, role="dept_head", comment=req.review_comment
-    )
+    if outcome.final or outcome.rejected:
+        whatsapp_approvals.notify_decision(
+            "attendance_correction", req, status_val, approver=reviewer_name, role="dept_head", comment=req.review_comment
+        )
     return Response(_override_request_dict(req))
 
 
@@ -1006,14 +1176,13 @@ def manager_update_attendance_status(request: Request, pk: int) -> Response:
 @require_auth
 def manager_update_on_duty_status(request: Request, pk: int) -> Response:
     """
-    Department Head -stage 1 of the On-Duty approval chain, deciding on the
-    employee's destination request. Approval moves the session to pending_hr
-    (HR still has to approve before the session goes active); rejection is
-    terminal. Shares resolve_on_duty_session_hod() with nothing else -it's
-    the only caller of stage 1 -but writes the same session row HR's
-    endpoints (geo_attendance_views.py) read from.
+    Department Head decision on the employee's On-Duty destination request. Under the default pipeline
+    (approval_workflow.py) this is stage 1: approval moves the session to pending_hr (HR still has to approve
+    before the session goes active); rejection is terminal. It writes the same session row HR's endpoints
+    (geo_attendance_views.py) read from, through the same resolver, so HR and the Department Head always
+    follow one pipeline.
     """
-    from .geo_attendance_views import _on_duty_session_dict, resolve_on_duty_session_hod
+    from .geo_attendance_views import _on_duty_session_dict, resolve_on_duty_session
 
     token_emp_id = get_token_employee_id(request)
     if not token_emp_id:
@@ -1049,15 +1218,15 @@ def manager_update_on_duty_status(request: Request, pk: int) -> Response:
             return Response({"error": "This session is not in your approval scope"}, status=403)
         return Response({"error": "On-Duty session not found"}, status=404)
 
-    if session.status != OnDutySession.STATUS_PENDING_HOD:
-        return Response({"error": f"This session was already actioned (status: {session.status})"}, status=400)
-
     status_val = request.data.get("status")
-    if status_val not in ("approved", "rejected"):
+    if status_val not in ("approved", "rejected") and approval.is_pending("on_duty", session):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
 
     reviewer_name = f"{m.employee.first_name} {m.employee.last_name}"
-    resolve_on_duty_session_hod(session, status_val, reviewer_name, request.data.get("comment"))
+    try:
+        resolve_on_duty_session(session, approval.HOD, status_val, reviewer_name, request.data.get("comment"))
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
     return Response(_on_duty_session_dict(session))
 
 
@@ -1065,13 +1234,13 @@ def manager_update_on_duty_status(request: Request, pk: int) -> Response:
 @require_auth
 def manager_update_missing_punch_status(request: Request, pk: int) -> Response:
     """
-    Department Head -stage 1 of the Missing Punch approval chain. Approval
-    moves the request to pending_hr (HR still has to give the final
-    approval before the punch is actually added to attendance); rejection
-    is terminal -HR never sees it.
+    Department Head decision on a Missing Punch request. Under the default pipeline (approval_workflow.py) this is
+    stage 1: approval moves the request to pending_hr (HR still has to give the final approval before the punch is
+    actually added to attendance); rejection is terminal -HR never sees it. If HR has changed the pipeline the
+    Department Head decides only when it is their step (or every step before theirs can be skipped).
     """
     from .models import MissingPunchRequest
-    from .missing_punch_views import _missing_punch_dict, resolve_missing_punch_hod
+    from .missing_punch_views import _missing_punch_dict, resolve_missing_punch
 
     token_emp_id = get_token_employee_id(request)
     if not token_emp_id:
@@ -1107,15 +1276,15 @@ def manager_update_missing_punch_status(request: Request, pk: int) -> Response:
             return Response({"error": "This request is not in your approval scope"}, status=403)
         return Response({"error": "Missing Punch request not found"}, status=404)
 
-    if req.status != MissingPunchRequest.STATUS_PENDING_HOD:
-        return Response({"error": f"This request was already actioned (status: {req.status})"}, status=400)
-
     status_val = request.data.get("status")
-    if status_val not in ("approved", "rejected"):
+    if status_val not in ("approved", "rejected") and approval.is_pending("missing_punch", req):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
 
     reviewer_name = f"{m.employee.first_name} {m.employee.last_name}"
-    resolve_missing_punch_hod(req, status_val, reviewer_name, request.data.get("comment"))
+    try:
+        resolve_missing_punch(req, approval.HOD, status_val, reviewer_name, request.data.get("comment"))
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
     return Response(_missing_punch_dict(req))
 
 
@@ -1159,13 +1328,13 @@ def manager_update_casual_leave_status(request: Request, pk: int) -> Response:
             return Response({"error": "This request is not in your approval scope"}, status=403)
         return Response({"error": "Casual leave request not found"}, status=404)
 
-    if cl.status != "pending":
-        return Response({"error": f"This request was already {cl.status}"}, status=400)
-
     status_val = request.data.get("status")
-    if status_val not in ["approved", "rejected"]:
+    if status_val not in ["approved", "rejected"] and approval.is_pending("casual_leave", cl):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
 
     reviewer_name = f"{m.employee.first_name} {m.employee.last_name}"
-    apply_cl_decision(cl, status_val, reviewer_name, "dept_head", request.data.get("comment"))
+    try:
+        apply_cl_decision(cl, status_val, reviewer_name, "dept_head", request.data.get("comment"))
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
     return Response(_cl_dict(cl))

@@ -1,5 +1,6 @@
 """HR/employee dashboard summaries, interview summary and salary trends."""
 
+from . import approval_workflow as approval
 from .auth import get_token_employee_id, require_auth, require_hr
 from .branch_scope import scope_to_branch
 from .clock import ist_today
@@ -50,9 +51,15 @@ def hr_dashboard_summary(request: Request) -> Response:
         active=Count("id", filter=Q(status="active")),
         inactive=Count("id", filter=Q(status="inactive")),
     )
-    pending_leaves = scope_to_branch(
-        LeaveRequest.objects, request, field="employee__branch_id"
-    ).filter(status="pending").count()
+    # Requests HR can act on RIGHT NOW under the approval pipelines HR configured (approval_workflow.py): identical to
+    # "everything pending" out of the box, and follows the pipeline if HR has moved or removed its own step.
+    pending_leaves = len(
+        approval.filter_actionable(
+            "leave",
+            scope_to_branch(LeaveRequest.objects, request, field="employee__branch_id").filter(status="pending"),
+            approval.HR,
+        )
+    )
     unread_notifications = scope_to_branch(
         Notification.objects, request, field="employee__branch_id"
     ).filter(is_read=False).count()
@@ -83,9 +90,13 @@ def hr_dashboard_summary(request: Request) -> Response:
         AttendanceLog.objects, request, field="employee__branch_id"
     ).filter(date=today, source="geo:auto").count()
     scoped_on_duty = scope_to_branch(OnDutySession.objects, request)  # OnDutySession.branch_id is a direct field
-    on_duty_pending = scoped_on_duty.filter(
-        status__in=[OnDutySession.STATUS_PENDING_HOD, OnDutySession.STATUS_PENDING_HR]
-    ).count()
+    on_duty_pending = len(
+        approval.filter_actionable(
+            "on_duty",
+            scoped_on_duty.filter(status__in=[OnDutySession.STATUS_PENDING_HOD, OnDutySession.STATUS_PENDING_HR]),
+            approval.HR,
+        )
+    )
     on_duty_sessions_active = scoped_on_duty.filter(status=OnDutySession.STATUS_ACTIVE).count()
     on_duty_completed_today = scoped_on_duty.filter(
         status=OnDutySession.STATUS_COMPLETED, completed_at__date=today
@@ -201,9 +212,12 @@ def employee_dashboard_summary(request: Request) -> Response:
         # The employees this HOD REALLY oversees: one HOD per employee (hod_scope.py).
         from .hod_scope import managed_employee_ids
         emp_filter = DQ(employee_id__in=managed_employee_ids(manager_profile))
-        pending_approvals_count = (
-            LeaveRequest.objects.filter(emp_filter, status="pending").count()
-            + EmployeePermission.objects.filter(emp_filter, status="pending").count()
+        pending_approvals_count = len(
+            approval.filter_actionable("leave", LeaveRequest.objects.filter(emp_filter, status="pending"), approval.HOD)
+        ) + len(
+            approval.filter_actionable(
+                "permission", EmployeePermission.objects.filter(emp_filter, status="pending"), approval.HOD
+            )
         )
 
     return Response({

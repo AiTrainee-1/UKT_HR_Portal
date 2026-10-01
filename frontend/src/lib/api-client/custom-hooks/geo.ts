@@ -1,6 +1,7 @@
 // geo: hooks/types split out of the former single custom-hooks.ts (see ./index.ts).
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { customFetch, getApiOrigin } from "../custom-fetch";
+import type { ApprovalProgress } from "../../approval-workflow";
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Geo Attendance (Office Geo Punch + On-Duty two-stage approval + live tracking)
@@ -43,6 +44,8 @@ export type OnDutySessionItem = {
   completedBy: string | null;
   completionReason: "manual" | "auto_4th_punch" | null;
   createdAt: string | null;
+  /** Where the request is in its approval pipeline and who can act on it (see lib/approval-workflow.ts). */
+  approval?: ApprovalProgress | null;
 };
 
 export const useOnDutySessionsHR = (

@@ -22,6 +22,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Calendar, Clock, CheckCircle, XCircle, RefreshCw, Bell, DoorOpen, MapPin, User, FileText, Building2, Briefcase } from "lucide-react";
 import { CircleLoader } from "@/components/ui/CircleLoader";
+import { ApprovalTrail, ApprovalTrailLine, PipelineSummary, WaitingChip } from "@/components/ApprovalTrail";
+import { explainsWaiting, hrCanAct, hrCanReject, type ApprovalProgress } from "@/lib/approval-workflow";
 
 type Period = "today" | "week" | "all";
 
@@ -39,6 +41,8 @@ type UnifiedItem = {
   // approval can shift anything -done on the Permissions tab, not with the quick Approve button).
   outcome?: { label: string; className: string };
   needsType?: boolean;
+  // Where the request stands in its approval pipeline (User Management -> Approval Workflow Control) and who can act.
+  approval?: ApprovalProgress | null;
 };
 
 const STATUS_CLS: Record<string, string> = {
@@ -97,6 +101,7 @@ export default function ApprovedRequests() {
         ? `Half Day Leave (${l.halfDaySlot === "afternoon" ? "Afternoon" : "Morning"})`
         : `${l.type.charAt(0).toUpperCase() + l.type.slice(1)} Leave`,
       meta:         `${l.startDate} → ${l.endDate}${l.reason ? ` · ${l.reason}` : ""}`,
+      approval:     l.approval,
     })),
     ...(perms ?? []).map(p => ({
       kind:         "permission" as const,
@@ -109,6 +114,7 @@ export default function ApprovedRequests() {
       meta:         `${p.date}${p.permissionTime ? ` at ${p.permissionTime}` : ""}${p.reason ? ` · ${p.reason}` : ""}`,
       outcome:      permissionOutcome(p),
       needsType:    permissionTypeKey(p) == null,
+      approval:     p.approval,
     })),
     ...(outpasses ?? []).filter(o => o.source === "manual").map(o => ({
       kind:         "outpass" as const,
@@ -119,10 +125,20 @@ export default function ApprovedRequests() {
       status:       o.status,
       label:        "Outpass Request",
       meta:         `${o.destination} · ${o.reason}`,
+      approval:     o.approval,
     })),
   ]
     .filter(item => item.createdAt && isWithinPeriod(item.createdAt, period))
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+  const hrDecides = (item: { status: string; approval?: ApprovalProgress | null }) =>
+    hrCanAct(item.approval, item.status === "pending");
+  const hrRejects = (item: { status: string; approval?: ApprovalProgress | null }) =>
+    hrCanReject(item.approval, item.status === "pending");
+
+  // The server's reason when it refuses (not this role's turn, workflow switched off, ...) beats a bare "Failed".
+  const failed = (title: string, err: unknown) =>
+    toast({ title, description: err instanceof Error ? err.message : undefined, variant: "destructive" });
 
   const pendingCount  = unified.filter(i => i.status === "pending").length;
   const approvedCount = unified.filter(i => i.status === "approved").length;
@@ -133,8 +149,8 @@ export default function ApprovedRequests() {
       await updateLeaveMutation.mutateAsync({ id, data: { status: "approved" as any } });
       toast({ title: "Leave approved" });
       queryClient.invalidateQueries({ queryKey: getListLeaveRequestsQueryKey() });
-    } catch {
-      toast({ title: "Failed to approve", variant: "destructive" });
+    } catch (err) {
+      failed("Failed to approve", err);
     }
   };
 
@@ -143,8 +159,8 @@ export default function ApprovedRequests() {
       await updateLeaveMutation.mutateAsync({ id, data: { status: "rejected" as any } });
       toast({ title: "Leave rejected" });
       queryClient.invalidateQueries({ queryKey: getListLeaveRequestsQueryKey() });
-    } catch {
-      toast({ title: "Failed to reject", variant: "destructive" });
+    } catch (err) {
+      failed("Failed to reject", err);
     }
   };
 
@@ -153,8 +169,8 @@ export default function ApprovedRequests() {
       await updatePermMutation.mutateAsync({ id, data: { status: "approved" } });
       toast({ title: "Permission approved" });
       queryClient.invalidateQueries({ queryKey: getListPermissionsQueryKey() });
-    } catch {
-      toast({ title: "Failed to approve", variant: "destructive" });
+    } catch (err) {
+      failed("Failed to approve", err);
     }
   };
 
@@ -163,8 +179,8 @@ export default function ApprovedRequests() {
       await updatePermMutation.mutateAsync({ id, data: { status: "rejected" } });
       toast({ title: "Permission rejected" });
       queryClient.invalidateQueries({ queryKey: getListPermissionsQueryKey() });
-    } catch {
-      toast({ title: "Failed to reject", variant: "destructive" });
+    } catch (err) {
+      failed("Failed to reject", err);
     }
   };
 
@@ -173,8 +189,8 @@ export default function ApprovedRequests() {
       await updateOutpassMutation.mutateAsync({ id, data: { status: "approved" } });
       toast({ title: "Outpass approved" });
       queryClient.invalidateQueries({ queryKey: getListOutpassRequestsQueryKey() });
-    } catch {
-      toast({ title: "Failed to approve", variant: "destructive" });
+    } catch (err) {
+      failed("Failed to approve", err);
     }
   };
 
@@ -183,8 +199,8 @@ export default function ApprovedRequests() {
       await updateOutpassMutation.mutateAsync({ id, data: { status: "rejected" } });
       toast({ title: "Outpass rejected" });
       queryClient.invalidateQueries({ queryKey: getListOutpassRequestsQueryKey() });
-    } catch {
-      toast({ title: "Failed to reject", variant: "destructive" });
+    } catch (err) {
+      failed("Failed to reject", err);
     }
   };
 
@@ -219,6 +235,7 @@ export default function ApprovedRequests() {
             <p className="text-muted-foreground text-sm mt-0.5">
               Leave, Permission & Outpass requests from the Employee App -auto-refreshes every 30 s
             </p>
+            <PipelineSummary workflows={["leave", "permission", "outpass"]} className="mt-1" />
           </div>
           <Button variant="outline" size="sm" className="gap-2" onClick={refresh}>
             <RefreshCw size={14} /> Refresh
@@ -277,6 +294,7 @@ export default function ApprovedRequests() {
 
               return (
                 <Card key={`${item.kind}-${item.id}`}
+                  data-testid={`request-${item.kind}-${item.id}`}
                   className="border hover:shadow-sm transition-shadow cursor-pointer"
                   onClick={() => goToDetail(item)}>
                   <CardContent className="p-4">
@@ -290,27 +308,35 @@ export default function ApprovedRequests() {
                           <Badge className={`text-xs border ${item.outcome?.className ?? statusCls}`}>
                             {item.outcome?.label ?? item.status}
                           </Badge>
+                          {item.status === "pending" && explainsWaiting(item.approval) && (
+                            <WaitingChip approval={item.approval} className="text-xs" />
+                          )}
                           <span className="text-xs font-medium text-gray-500">{item.label}</span>
                         </div>
                         <p className="text-xs text-gray-500 mt-0.5 truncate">{item.meta}</p>
+                        <ApprovalTrailLine approval={item.approval} className="mt-0.5" />
                         <p className="text-xs text-gray-300 mt-1">{dateStr} · {timeStr}</p>
                       </div>
-                      {item.status === "pending" && (
+                      {item.status === "pending" && (hrDecides(item) || hrRejects(item)) && (
                         <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
-                          <Button size="sm" variant="outline"
-                            className="h-7 gap-1 text-green-700 border-green-200 hover:bg-green-50 text-xs px-2"
-                            onClick={() => item.kind === "leave" ? approveLeave(item.id)
-                              : item.kind === "permission" ? (item.needsType ? goToDetail(item) : approvePerm(item.id))
-                              : approveOutpass(item.id)}
-                            disabled={updateLeaveMutation.isPending || updatePermMutation.isPending || updateOutpassMutation.isPending}>
-                            <CheckCircle size={12} /> {item.kind === "permission" && item.needsType ? "Set type & approve" : "Approve"}
-                          </Button>
-                          <Button size="sm" variant="outline"
-                            className="h-7 gap-1 text-red-600 border-red-200 hover:bg-red-50 text-xs px-2"
-                            onClick={() => item.kind === "leave" ? rejectLeave(item.id) : item.kind === "permission" ? rejectPerm(item.id) : rejectOutpass(item.id)}
-                            disabled={updateLeaveMutation.isPending || updatePermMutation.isPending || updateOutpassMutation.isPending}>
-                            <XCircle size={12} /> Reject
-                          </Button>
+                          {hrDecides(item) && (
+                            <Button size="sm" variant="outline"
+                              className="h-7 gap-1 text-green-700 border-green-200 hover:bg-green-50 text-xs px-2"
+                              onClick={() => item.kind === "leave" ? approveLeave(item.id)
+                                : item.kind === "permission" ? (item.needsType ? goToDetail(item) : approvePerm(item.id))
+                                : approveOutpass(item.id)}
+                              disabled={updateLeaveMutation.isPending || updatePermMutation.isPending || updateOutpassMutation.isPending}>
+                              <CheckCircle size={12} /> {item.kind === "permission" && item.needsType ? "Set type & approve" : "Approve"}
+                            </Button>
+                          )}
+                          {hrRejects(item) && (
+                            <Button size="sm" variant="outline"
+                              className="h-7 gap-1 text-red-600 border-red-200 hover:bg-red-50 text-xs px-2"
+                              onClick={() => item.kind === "leave" ? rejectLeave(item.id) : item.kind === "permission" ? rejectPerm(item.id) : rejectOutpass(item.id)}
+                              disabled={updateLeaveMutation.isPending || updatePermMutation.isPending || updateOutpassMutation.isPending}>
+                              <XCircle size={12} /> Reject
+                            </Button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -380,8 +406,18 @@ export default function ApprovedRequests() {
                   </div>
                   <div>
                     <p className="text-xs text-gray-400">Status</p>
-                    <Badge className={`text-xs border ${STATUS_CLS[selectedOutpass.status] ?? STATUS_CLS.pending}`}>{selectedOutpass.status}</Badge>
+                    {explainsWaiting(selectedOutpass.approval) ? (
+                      <WaitingChip approval={selectedOutpass.approval} className="text-xs" />
+                    ) : (
+                      <Badge className={`text-xs border ${STATUS_CLS[selectedOutpass.status] ?? STATUS_CLS.pending}`}>{selectedOutpass.status}</Badge>
+                    )}
                   </div>
+                  {selectedOutpass.approval && (
+                    <div>
+                      <p className="text-xs text-gray-400 mb-2">Approval</p>
+                      <ApprovalTrail approval={selectedOutpass.approval} />
+                    </div>
+                  )}
                   {selectedOutpass.reason && (
                     <div>
                       <p className="text-xs text-gray-400 mb-1">Reason</p>
@@ -429,18 +465,22 @@ export default function ApprovedRequests() {
                   </p>
                 </div>
 
-                {selectedOutpass.status === "pending" && (
+                {selectedOutpass.status === "pending" && (hrDecides(selectedOutpass) || hrRejects(selectedOutpass)) && (
                   <div className="flex gap-2 pt-1">
-                    <Button className="flex-1 gap-1 bg-green-600 hover:bg-green-700"
-                      onClick={() => { approveOutpass(selectedOutpass.id); setSelectedOutpassId(null); }}
-                      disabled={updateOutpassMutation.isPending}>
-                      <CheckCircle size={14} /> Approve
-                    </Button>
-                    <Button variant="outline" className="flex-1 gap-1 text-red-600 border-red-200 hover:bg-red-50"
-                      onClick={() => { rejectOutpass(selectedOutpass.id); setSelectedOutpassId(null); }}
-                      disabled={updateOutpassMutation.isPending}>
-                      <XCircle size={14} /> Reject
-                    </Button>
+                    {hrDecides(selectedOutpass) && (
+                      <Button className="flex-1 gap-1 bg-green-600 hover:bg-green-700"
+                        onClick={() => { approveOutpass(selectedOutpass.id); setSelectedOutpassId(null); }}
+                        disabled={updateOutpassMutation.isPending}>
+                        <CheckCircle size={14} /> Approve
+                      </Button>
+                    )}
+                    {hrRejects(selectedOutpass) && (
+                      <Button variant="outline" className="flex-1 gap-1 text-red-600 border-red-200 hover:bg-red-50"
+                        onClick={() => { rejectOutpass(selectedOutpass.id); setSelectedOutpassId(null); }}
+                        disabled={updateOutpassMutation.isPending}>
+                        <XCircle size={14} /> Reject
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>

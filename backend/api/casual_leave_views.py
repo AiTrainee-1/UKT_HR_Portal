@@ -20,7 +20,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import whatsapp_approvals
+from . import approval_workflow as approval, whatsapp_approvals
 from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name
 from .branch_scope import scope_to_branch
 from .clock import ist_today
@@ -81,7 +81,10 @@ def check_cl_eligibility(emp: Employee, for_date: date_type) -> tuple[bool, str 
     return True, None
 
 
-def _cl_dict(r: CasualLeaveRequest) -> dict:
+WORKFLOW = "casual_leave"
+
+
+def _cl_dict(r: CasualLeaveRequest, cfg: approval.Config | None = None) -> dict:
     emp = r.employee
     return {
         "id": r.id,
@@ -98,6 +101,7 @@ def _cl_dict(r: CasualLeaveRequest) -> dict:
         "reviewComment": r.review_comment,
         "reviewedAt": r.reviewed_at.isoformat() if r.reviewed_at else None,
         "createdAt": r.created_at.isoformat() if r.created_at else None,
+        "approval": approval.progress(WORKFLOW, r, cfg),
     }
 
 
@@ -130,24 +134,40 @@ def _write_attendance_for_cl(cl: CasualLeaveRequest, reviewer: str) -> None:
     record.save()
 
 
-def apply_cl_decision(cl: CasualLeaveRequest, status: str, reviewer: str,
-                      reviewer_role: str, comment: str | None) -> CasualLeaveRequest:
-    """Shared by HR and Department Head endpoints."""
-    cl.status = status
+def resolve_casual_leave(
+    cl: CasualLeaveRequest, role: str, decision: str, reviewer: str, comment: str | None
+) -> approval.Outcome:
+    """One decision by `role` ('hod' or 'hr') on a Casual Leave request, under the "casual_leave" pipeline
+    (approval_workflow.py). Raises approval.ApprovalError when that role may not decide it now.
+
+    An intermediate approval only passes the request on. The FINAL approval marks the day present (paid) and a
+    rejection marks it as leave, both as source=manual so payroll treats them as authoritative."""
+    outcome = approval.decide(WORKFLOW, cl, role, decision, actor=reviewer, comment=comment)
+    if outcome.final or outcome.rejected:
+        cl.reviewer_role = approval.LEGACY_ROLE[role]
     cl.reviewed_by = reviewer
-    cl.reviewer_role = reviewer_role
     cl.review_comment = comment
     cl.reviewed_at = timezone.now()
+    cl.status = outcome.status
     cl.save()
-    _write_attendance_for_cl(cl, reviewer)
-    Notification.objects.create(
-        employee=cl.employee,
-        type="casual_leave",
-        message=f"Your Casual Leave request for {cl.date.isoformat()} was {status}.",
-    )
-    whatsapp_approvals.notify_decision(
-        "casual_leave", cl, status, approver=reviewer, role=reviewer_role, comment=comment
-    )
+    what = f"Casual Leave request for {cl.date.isoformat()}"
+    if outcome.final or outcome.rejected:
+        _write_attendance_for_cl(cl, reviewer)
+    Notification.objects.create(employee=cl.employee, type="casual_leave", message=approval.notice_for(what, outcome))
+    if outcome.kind == "advanced" and approval.HOD in outcome.waiting and role != approval.HOD:
+        approval.notify_hod_of_request(WORKFLOW, cl.employee, "Casual Leave request")
+    if outcome.final or outcome.rejected:
+        whatsapp_approvals.notify_decision(
+            "casual_leave", cl, decision, approver=reviewer, role=approval.LEGACY_ROLE[role], comment=comment
+        )
+    return outcome
+
+
+def apply_cl_decision(cl: CasualLeaveRequest, status: str, reviewer: str,
+                      reviewer_role: str, comment: str | None) -> CasualLeaveRequest:
+    """Shared by HR and Department Head endpoints (kept under its old name and signature)."""
+    role = approval.HR if reviewer_role == "hr" else approval.HOD
+    resolve_casual_leave(cl, role, status, reviewer, comment)
     return cl
 
 
@@ -176,7 +196,8 @@ def casual_leaves(request: Request) -> Response:
             qs = qs.filter(date__month=month)
         if year := request.query_params.get("year"):
             qs = qs.filter(date__year=year)
-        return Response([_cl_dict(r) for r in qs[:300]])
+        cfg = approval.get_config(WORKFLOW)
+        return Response([_cl_dict(r, cfg) for r in qs[:300]])
 
     # POST -submit a CL request (mobile app or HR on behalf)
     data = request.data
@@ -210,11 +231,17 @@ def casual_leaves(request: Request) -> Response:
     if not eligible:
         return Response({"error": reason}, status=400)
 
+    try:
+        approval.require_enabled(WORKFLOW)
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
     cl = CasualLeaveRequest.objects.create(
         employee=emp,
         date=cl_date,
         reason=data.get("reason"),
+        approval_trail=[],
     )
+    approval.notify_new_request(WORKFLOW, emp, "Casual Leave request")
     return Response(_cl_dict(cl), status=201)
 
 
@@ -234,11 +261,12 @@ def casual_leave_detail(request: Request, pk: int) -> Response:
     status_val = request.data.get("status")
     if status_val not in ("approved", "rejected"):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
-    if cl.status != "pending":
-        return Response({"error": f"This request was already {cl.status}"}, status=400)
 
     reviewer = get_hr_display_name(request)
-    apply_cl_decision(cl, status_val, reviewer, "hr", request.data.get("comment"))
+    try:
+        resolve_casual_leave(cl, approval.HR, status_val, reviewer, request.data.get("comment"))
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
     return Response(_cl_dict(cl))
 
 

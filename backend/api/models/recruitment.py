@@ -78,6 +78,10 @@ class ResignationRequest(models.Model):
     approved_at = models.DateTimeField(null=True, blank=True, db_column="approved_at")
     # Track which stage rejected
     rejected_by = models.TextField(null=True, blank=True, db_column="rejected_by")
+    # Who has approved this request so far under the approval pipeline (approval_workflow.py): a list of
+    # {"role": "hod"|"hr", "decision", "by", "at", "comment", "skipped"}. Null on requests made before it existed;
+    # approval_workflow.trail_of() derives it from the older per-role stamps then.
+    approval_trail = models.JSONField(null=True, blank=True, db_column="approval_trail")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
 
     class Meta:

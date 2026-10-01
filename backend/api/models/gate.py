@@ -119,6 +119,10 @@ class OutpassRequest(models.Model):
     approver_role = models.TextField(null=True, blank=True, db_column="approver_role")
     approved_by = models.TextField(null=True, blank=True, db_column="approved_by")
     review_comment = models.TextField(null=True, blank=True, db_column="review_comment")
+    # Who has approved this request so far under the approval pipeline (approval_workflow.py): a list of
+    # {"role": "hod"|"hr", "decision", "by", "at", "comment", "skipped"}. Null on requests made before it existed;
+    # approval_workflow.trail_of() derives it from the older per-role stamps then.
+    approval_trail = models.JSONField(null=True, blank=True, db_column="approval_trail")
     # Pass validity window is approved_at + 60 minutes -computed at read time,
     # not stored, so there's nothing to keep in sync if that window ever changes.
     approved_at = models.DateTimeField(null=True, blank=True, db_column="approved_at")

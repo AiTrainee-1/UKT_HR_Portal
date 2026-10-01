@@ -42,6 +42,12 @@ describe("statusTones", () => {
     expect(requestStatusClass("rejected")).toBe(TONE.danger);
   });
 
+  it("tells the two roles a waiting request can be with apart", () => {
+    expect(requestStatusClass("pending_hod")).toBe(TONE.warning);
+    expect(requestStatusClass("pending_hr")).toBe(TONE.info);
+    expect(requestStatusClass("dept_approved")).toBe(TONE.info);
+  });
+
   it("colours every WhatsApp message state", () => {
     expect(whatsappStatusClass("pending")).toBe(TONE.warning);
     expect(whatsappStatusClass("sent")).toBe(TONE.info);

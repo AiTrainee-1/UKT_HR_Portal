@@ -36,10 +36,10 @@ const ACTION_CONFIG: Record<string, {
 const MODULE_LABELS: Record<string, string> = {
   auth: "Auth", employees: "Employees", payroll: "Payroll", leave: "Leave",
   attendance: "Attendance", shifts: "Shifts", reports: "Reports",
-  settings: "Settings", user_management: "User Mgmt",
+  settings: "Settings", user_management: "User Mgmt", approval_workflow: "Approvals",
 };
 
-const MODULES = ["all", "auth", "employees", "payroll", "leave", "attendance", "shifts", "reports", "settings", "user_management"];
+const MODULES = ["all", "auth", "employees", "payroll", "leave", "attendance", "shifts", "reports", "settings", "user_management", "approval_workflow"];
 const ACTIONS = ["all", "login", "login_failed", "create", "update", "delete", "approve", "reject", "export"];
 const PAGE_SIZE = 50;
 

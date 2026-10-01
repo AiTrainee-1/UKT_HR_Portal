@@ -3,6 +3,7 @@ import {
   MODULE_LABELS,
   MODULE_TREE,
   ROUTE_MODULE_MAP,
+  ROUTE_OR_MODULES,
   allModuleKeys,
   moduleForPath,
   resolvePermission,
@@ -51,6 +52,31 @@ describe("resolvePermissionOrChildren", () => {
   it("behaves like resolvePermission for a key without children", () => {
     expect(resolvePermissionOrChildren({ payroll: "view" }, "payroll")).toBe("view");
     expect(resolvePermissionOrChildren({}, "payroll")).toBe("hidden");
+  });
+});
+
+describe("Approval Workflow Control permission", () => {
+  const KEY = "user_management.approval_workflow";
+
+  it("is a child of User Management, like the backend tree", () => {
+    const parent = MODULE_TREE.find((n) => n.key === "user_management");
+    expect(parent?.children?.map((c) => c.key)).toEqual([KEY]);
+  });
+
+  it("inherits User Management's level until a role overrides it", () => {
+    expect(resolvePermission({ user_management: "edit" }, KEY)).toBe("edit");
+    expect(resolvePermission({ user_management: "edit", [KEY]: "view" }, KEY)).toBe("view");
+    expect(resolvePermission({ user_management: "edit", [KEY]: "hidden" }, KEY)).toBe("hidden");
+    expect(resolvePermission({ user_management: "view", [KEY]: "edit" }, KEY)).toBe("edit");
+  });
+
+  it("does not open the HOD Assignment tab for a role that only has the workflow permission", () => {
+    expect(resolvePermission({ [KEY]: "edit" }, "user_management")).toBe("hidden");
+    expect(resolvePermissionOrChildren({ [KEY]: "edit" }, "user_management")).toBe("edit");
+  });
+
+  it("makes the page-wide View-only lock depend on both tabs", () => {
+    expect(ROUTE_OR_MODULES["/hr/user-management"]).toEqual(["user_management", KEY]);
   });
 });
 

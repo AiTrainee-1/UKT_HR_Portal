@@ -619,8 +619,12 @@ export default function Settlement() {
       await updateMutation.mutateAsync({ id, data: { status } });
       toast({ title: `Advance ${status}` });
       queryClient.invalidateQueries({ queryKey: getListAdvancesQueryKey() });
-    } catch {
-      toast({ title: "Failed to update advance", variant: "destructive" });
+    } catch (err) {
+      toast({
+        title: "Failed to update advance",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
     }
   };
 
@@ -658,8 +662,13 @@ export default function Settlement() {
         repaymentStartMonth: form.repaymentStartMonth,
         repaymentStartYear: form.repaymentStartYear,
       });
-    } catch {
-      toast({ title: "Failed to create advance", variant: "destructive" });
+    } catch (err) {
+      // e.g. "Advance requests are switched off right now" when HR has turned the workflow OFF (Approval Workflow Control)
+      toast({
+        title: "Failed to create advance",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
       return;
     }
     toast({ title: "Advance created" });

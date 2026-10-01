@@ -16,6 +16,7 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 
 from . import whatsapp_service
+from .approval_workflow import ApprovalError
 from .attendance_final import _holiday_dates_for_month
 from .biometric_sync import _ingest_punches
 from .clock import FACTORY_TZ
@@ -1556,8 +1557,7 @@ class GeoApprovalTests(TestCase):
         self.assertEqual(log.dedupe_key, f"geo:{self.session.id}:rejected")
 
     def test_a_rejection_that_voided_punches_says_how_many(self):
-        self.session.status = OnDutySession.STATUS_ACTIVE
-        self.session.save()
+        # the punches were captured while the request was still waiting (provisional), then HR rejected it
         OnDutyPunchVerification.objects.create(
             session=self.session,
             employee=self.emp,
@@ -1618,7 +1618,8 @@ class GeoApprovalTests(TestCase):
 
     def test_approving_twice_confirms_once(self):
         resolve_on_duty_session_hr(self.session, "approved", "Priya (HR)", None)
-        resolve_on_duty_session_hr(self.session, "approved", "Priya (HR)", None)
+        with self.assertRaises(ApprovalError):  # the pipeline refuses a second decision on an approved request
+            resolve_on_duty_session_hr(self.session, "approved", "Priya (HR)", None)
         self.assertEqual(self.post.call_count, 1)
 
     def _punch(self):

@@ -32,6 +32,7 @@ from .models import (
     Employee,
     ManagerDepartmentAssignment,
     ManagerEmployeeAssignment,
+    ManagerEmployeeExclusion,
 )
 
 
@@ -52,26 +53,42 @@ def effective_owner_map(employee_ids) -> dict[int, int]:
     ):
         owner[emp_id] = mgr_id
 
-    # 2) Everyone else falls to the HOD who holds their department (earliest holder wins).
+    # 2) Everyone else falls to the HOD who holds their department (earliest holder wins), skipping any
+    #    HOD whose coverage HR has carved this employee out of (ManagerEmployeeExclusion): they go to the
+    #    next holder of the department, or to nobody (HR decides).
     rest = [i for i in ids if i not in owner]
     if rest:
         dept_of = dict(
             Employee.objects.filter(id__in=rest, department_id__isnull=False).values_list("id", "department_id")
         )
-        holder: dict[int, int] = {}
+        holders: dict[int, list[int]] = {}  # department -> active holders, earliest first
         if dept_of:
             for dept_id, mgr_id in (
                 ManagerDepartmentAssignment.objects.filter(
                     department_id__in=set(dept_of.values()), manager__is_active=True
                 )
-                .order_by("-created_at", "-id")
+                .order_by("created_at", "id")
                 .values_list("department_id", "manager_id")
             ):
-                holder[dept_id] = mgr_id
+                holders.setdefault(dept_id, []).append(mgr_id)
+        carved_out = excluded_pairs(employee_ids=list(dept_of)) if holders else set()
         for emp_id, dept_id in dept_of.items():
-            if dept_id in holder:
-                owner[emp_id] = holder[dept_id]
+            for mgr_id in holders.get(dept_id, ()):
+                if (mgr_id, emp_id) not in carved_out:
+                    owner[emp_id] = mgr_id
+                    break
     return owner
+
+
+def excluded_pairs(manager_ids=None, employee_ids=None) -> set[tuple[int, int]]:
+    """{(manager_id, employee_id)} HR has carved out of a department's coverage, for the given HODs and/or
+    employees (both None = every one)."""
+    qs = ManagerEmployeeExclusion.objects.all()
+    if manager_ids is not None:
+        qs = qs.filter(manager_id__in=list(manager_ids))
+    if employee_ids is not None:
+        qs = qs.filter(employee_id__in=list(employee_ids))
+    return set(qs.values_list("manager_id", "employee_id"))
 
 
 def effective_manager_id(emp) -> int | None:
@@ -92,7 +109,12 @@ def raw_covered_employee_ids(m: DepartmentManager) -> set[int]:
     ids = set(m.employee_assignments.values_list("employee_id", flat=True))
     dept_ids = list(m.department_assignments.values_list("department_id", flat=True))
     if dept_ids:
-        ids |= set(Employee.objects.filter(department_id__in=dept_ids).values_list("id", flat=True))
+        # Everyone in an assigned department, except the people HR carved out of it. (An individual
+        # assignment above is an explicit choice and stays, exclusion or not.)
+        carved_out = {e for _m, e in excluded_pairs(manager_ids=[m.id])}
+        ids |= set(
+            Employee.objects.filter(department_id__in=dept_ids).exclude(id__in=carved_out).values_list("id", flat=True)
+        )
     return ids
 
 
@@ -177,3 +199,64 @@ def department_conflicts(m: DepartmentManager, dept) -> tuple[list[DepartmentCon
         .distinct()
     )
     return conflicts, holders
+
+
+# ── The employees of an HOD's departments, as the HOD page lists them ──────────
+
+
+@dataclass
+class RosterEntry:
+    employee: Employee
+    # "reporting"  -really reports to this HOD (counts toward their headcount and approvals)
+    # "removed"    -HR carved them out of this HOD's coverage (ManagerEmployeeExclusion)
+    # "elsewhere"  -in the department but really reports to a different active HOD
+    # "self"       -the HOD themselves (a head never approves their own requests)
+    state: str
+    individual: bool = False  # also assigned to this HOD individually (survives leaving the department list)
+    manager: DepartmentManager | None = None  # "elsewhere": who they report to; "removed": who picked them up
+    via: str | None = None  # how `manager` has them: "direct" | "department"
+
+
+def department_roster(m: DepartmentManager) -> list[tuple[object, list[RosterEntry]]]:
+    """[(department, entries)] for each department assigned to `m`, earliest first: every employee in
+    it, with where they stand under the one-HOD-per-employee rule. This is the list the HOD page shows
+    automatically when a department is added, and the one HR removes people from (and restores them to)."""
+    assignments = list(m.department_assignments.select_related("department").order_by("created_at", "id"))
+    dept_ids = [a.department_id for a in assignments]
+    if not dept_ids:
+        return []
+    employees = list(
+        Employee.objects.filter(department_id__in=dept_ids)
+        .select_related("designation")
+        .order_by("first_name", "last_name", "employee_code")
+    )
+    ids = [e.id for e in employees]
+    carved_out = {e for _m, e in excluded_pairs(manager_ids=[m.id], employee_ids=ids)}
+    direct_here = set(m.employee_assignments.filter(employee_id__in=ids).values_list("employee_id", flat=True))
+    owner = effective_owner_map(ids)
+    others = {
+        mgr.id: mgr
+        for mgr in DepartmentManager.objects.select_related("employee").filter(pk__in=set(owner.values()) - {m.id})
+    }
+    direct_pairs = set(
+        ManagerEmployeeAssignment.objects.filter(employee_id__in=ids, manager_id__in=list(others)).values_list(
+            "employee_id", "manager_id"
+        )
+    )
+
+    by_dept: dict[int, list[RosterEntry]] = {d: [] for d in dept_ids}
+    for e in employees:
+        mgr_id = owner.get(e.id)
+        other = others.get(mgr_id) if mgr_id and mgr_id != m.id else None
+        via = ("direct" if (e.id, mgr_id) in direct_pairs else "department") if other else None
+        individual = e.id in direct_here
+        if e.id == m.employee_id:
+            entry = RosterEntry(e, "self", individual)
+        elif e.id in carved_out and not individual:
+            entry = RosterEntry(e, "removed", False, other, via)
+        elif other is not None:
+            entry = RosterEntry(e, "elsewhere", individual, other, via)
+        else:
+            entry = RosterEntry(e, "reporting", individual)
+        by_dept[e.department_id].append(entry)
+    return [(a.department, by_dept[a.department_id]) for a in assignments]

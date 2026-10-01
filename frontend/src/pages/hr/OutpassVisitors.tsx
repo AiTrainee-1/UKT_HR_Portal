@@ -42,6 +42,8 @@ import {
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { inGateRange } from "@/lib/gate-range";
+import { ApprovalTrailLine, PipelineNote, WaitingChip } from "@/components/ApprovalTrail";
+import { explainsWaiting, hrCanAct, hrCanReject } from "@/lib/approval-workflow";
 
 const PAGE_SIZE = 20;
 const RANGE_LABEL: Record<GateRange, string> = { today: "Today", week: "This Week", month: "This Month" };
@@ -1002,14 +1004,23 @@ function OutpassRequestsSection() {
   const pageSafe = Math.min(page, pageCount);
   const pageItems = pending.slice((pageSafe - 1) * REQUESTS_PAGE_SIZE, pageSafe * REQUESTS_PAGE_SIZE);
 
+  // What HR may decide follows the approval pipeline (User Management -> Approval Workflow Control); an older
+  // backend sends none and HR then decides any pending request, as it always did.
+  const hrDecides = (r: OutpassRequestItem) => hrCanAct(r.approval, true);
+  const hrRejects = (r: OutpassRequestItem) => hrCanReject(r.approval, true);
+
   const act = async (id: number, status: "approved" | "rejected") => {
     try {
       await updateStatus.mutateAsync({ id, data: { status } });
       toast({ title: status === "approved" ? "Outpass approved" : "Outpass rejected" });
       queryClient.invalidateQueries({ queryKey: getListOutpassRequestsQueryKey() });
       queryClient.invalidateQueries({ queryKey: getListOutpassRequestsQueryKey("pending") });
-    } catch {
-      toast({ title: "Failed to update the request", variant: "destructive" });
+    } catch (err) {
+      toast({
+        title: "Failed to update the request",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
     }
   };
 
@@ -1018,9 +1029,8 @@ function OutpassRequestsSection() {
       <CardContent className="p-0">
         <div className="px-4 pt-4 pb-2">
           <p className="font-bold text-sm">Pending Outpass Requests</p>
-          <p className="text-xs text-muted-foreground">
-            Submitted from the Mobile App / Employee Web App -approval from either the employee's HOD or HR is enough.
-          </p>
+          <p className="text-xs text-muted-foreground">Submitted from the Mobile App / Employee Web App.</p>
+          <PipelineNote workflow="outpass" className="mt-1" />
         </div>
         <div className="divide-y">
           {isLoading ? (
@@ -1046,24 +1056,30 @@ function OutpassRequestsSection() {
                   </p>
                   <p className="truncate text-xs text-muted-foreground">{r.destination} · {r.reason}</p>
                   <p className="text-[11px] text-muted-foreground/70">{fmtDateTime(r.createdAt)}</p>
+                  <ApprovalTrailLine approval={r.approval} className="mt-0.5" />
                 </div>
+                {explainsWaiting(r.approval) && <WaitingChip approval={r.approval} className="shrink-0" />}
                 <div className="flex shrink-0 items-center gap-1.5">
-                  <Button
-                    size="sm" variant="outline"
-                    className="h-8 gap-1 border-green-200 text-green-700 hover:bg-green-50"
-                    onClick={() => act(r.id, "approved")}
-                    disabled={updateStatus.isPending}
-                  >
-                    <CheckCircle2 size={14} /> Approve
-                  </Button>
-                  <Button
-                    size="sm" variant="outline"
-                    className="h-8 gap-1 border-red-200 text-red-600 hover:bg-red-50"
-                    onClick={() => act(r.id, "rejected")}
-                    disabled={updateStatus.isPending}
-                  >
-                    <XCircle size={14} /> Reject
-                  </Button>
+                  {hrDecides(r) && (
+                    <Button
+                      size="sm" variant="outline"
+                      className="h-8 gap-1 border-green-200 text-green-700 hover:bg-green-50"
+                      onClick={() => act(r.id, "approved")}
+                      disabled={updateStatus.isPending}
+                    >
+                      <CheckCircle2 size={14} /> Approve
+                    </Button>
+                  )}
+                  {hrRejects(r) && (
+                    <Button
+                      size="sm" variant="outline"
+                      className="h-8 gap-1 border-red-200 text-red-600 hover:bg-red-50"
+                      onClick={() => act(r.id, "rejected")}
+                      disabled={updateStatus.isPending}
+                    >
+                      <XCircle size={14} /> Reject
+                    </Button>
+                  )}
                 </div>
               </div>
             ))
@@ -1102,7 +1118,11 @@ function OutpassTab({ isBranchScoped }: { isBranchScoped: boolean }) {
         size="sm"
         items={[
           { value: "overview", label: "Overview" },
-          { value: "requests", label: "Requests", count: pendingRequests?.length || undefined },
+          {
+            value: "requests",
+            label: "Requests",
+            count: (pendingRequests ?? []).filter((r) => hrCanAct(r.approval, true)).length || undefined,
+          },
           { value: "inout", label: "In/Out" },
         ]}
         value={section}

@@ -12,7 +12,10 @@ test("the monthly attendance sheet shows each employee's days and totals", async
 
   // The sheet opens on the current month; step back to February 2026.
   const prev = page.getByRole("button", { name: "Previous period" });
-  for (let i = 0; i < 7; i++) await prev.click();
+  // however many months ago that is today (it was a fixed 7, which broke when the calendar rolled over)
+  const today = new Date();
+  const back = (today.getFullYear() - 2026) * 12 + today.getMonth() - 1;
+  for (let i = 0; i < back; i++) await prev.click();
   await expect(page.getByRole("button", { name: /Feb 2026/ })).toBeVisible();
 
   const asha = page.getByRole("row", { name: /Asha Kumar/ });

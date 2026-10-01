@@ -1,6 +1,7 @@
 // attendance: hooks/types split out of the former single custom-hooks.ts (see ./index.ts).
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { customFetch, getApiOrigin } from "../custom-fetch";
+import type { ApprovalProgress } from "../../approval-workflow";
 import { SyncResult } from "./shared";
 
 // ── Attendance (enhanced) ─────────────────────────────────────────────────────
@@ -1069,6 +1070,8 @@ export type MissingPunchItem = {
   hrReviewComment: string | null;
   hrReviewedAt: string | null;
   createdAt: string | null;
+  /** Where the request is in its approval pipeline and who can act on it (see lib/approval-workflow.ts). */
+  approval?: ApprovalProgress | null;
 };
 
 export const getMissingPunchRequestsQueryKey = () => ["/api/missing-punch-requests"] as const;

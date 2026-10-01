@@ -24,6 +24,7 @@ import {
   useDeletePermission,
   useListEmployees,
   usePayrollSettings,
+  useApprovalSummary,
   type PermissionItem,
   type PermissionType,
 } from "@/lib/api-client";
@@ -59,12 +60,16 @@ import {
 import EmployeeSearchSelect from "@/components/EmployeeSearchSelect";
 import { Separator } from "@/components/ui/separator";
 import { CircleLoader } from "@/components/ui/CircleLoader";
+import { ApprovalTrail, ApprovalTrailLine, PipelineNote, WaitingChip } from "@/components/ApprovalTrail";
+import { explainsWaiting, hrCanAct, hrCanReject, type ApprovalProgress } from "@/lib/approval-workflow";
 
 const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
   pending: { label: "Pending", className: TONE.warning },
   approved: { label: "Approved", className: TONE.success },
   rejected: { label: "Rejected", className: TONE.danger },
 };
+
+type Decidable = { status: string; approval?: ApprovalProgress | null };
 
 const HALF_DAY_LABEL: Record<string, string> = {
   morning: "Morning (First Half)",
@@ -141,6 +146,16 @@ export default function LeaveHoliday() {
   const updatePermMutation = useUpdatePermissionStatus();
   const deletePermMutation = useDeletePermission();
 
+  // What HR may decide follows the approval pipeline (User Management -> Approval Workflow Control); an older backend
+  // sends none and HR then decides any pending request, as it always did.
+  const hrDecides = (item: Decidable) => hrCanAct(item.approval, item.status === "pending");
+  const hrRejects = (item: Decidable) => hrCanReject(item.approval, item.status === "pending");
+  // Re-typing a permission that is already decided is a revision, which the server only allows when HR is in its pipeline.
+  const { data: pipelines } = useApprovalSummary();
+  const hrRevisesPermissions = pipelines?.permission
+    ? pipelines.permission.steps.some((s) => s.roles.includes("hr"))
+    : true;
+
   // Half-Day Leave requests get their own dedicated tab below -excluded here
   // so they aren't listed twice.
   const filteredLeaves = (leaves ?? []).filter(
@@ -154,8 +169,12 @@ export default function LeaveHoliday() {
   const updateLeaveStatus = async (id: number, status: string) => {
     try {
       await updateLeaveMutation.mutateAsync({ id, data: { status: status as any } });
-    } catch {
-      toast({ title: "Failed to update leave request", variant: "destructive" });
+    } catch (err) {
+      toast({
+        title: "Failed to update leave request",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
       return;
     }
     toast({ title: `Leave request ${status}` });
@@ -257,8 +276,12 @@ export default function LeaveHoliday() {
   const updatePermStatus = async (id: number, status: string, type?: PermissionType) => {
     try {
       await updatePermMutation.mutateAsync({ id, data: { status, ...(type ? { type: permissionTypeWire(type) } : {}) } });
-    } catch {
-      toast({ title: "Failed to update permission", variant: "destructive" });
+    } catch (err) {
+      toast({
+        title: "Failed to update permission",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
       return;
     }
     toast({ title: `Permission ${status}` });
@@ -270,8 +293,12 @@ export default function LeaveHoliday() {
     let updated: PermissionItem;
     try {
       updated = await updatePermMutation.mutateAsync({ id: p.id, data: { type: permissionTypeWire(type) } });
-    } catch {
-      toast({ title: "Failed to update permission type", variant: "destructive" });
+    } catch (err) {
+      toast({
+        title: "Failed to update permission type",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
       return;
     }
     setSelectedPerm(updated);
@@ -429,6 +456,7 @@ export default function LeaveHoliday() {
           />
 
           <TabsContent value="leaves" className="mt-4 space-y-4">
+            <PipelineNote workflow="leave" />
             <div className="flex items-center gap-2 flex-wrap">
               <PillTabs
                 items={["all", "pending", "approved", "rejected"].map((s) => ({
@@ -460,6 +488,7 @@ export default function LeaveHoliday() {
                   return (
                     <Card
                       key={leave.id}
+                      data-testid={`leave-${leave.id}`}
                       className="border hover:shadow-sm transition-shadow cursor-pointer"
                       onClick={() => setSelectedLeave({ ...leave, totalDays: days })}
                     >
@@ -470,7 +499,11 @@ export default function LeaveHoliday() {
                               <p className="font-bold text-sm text-gray-900">
                                 {leave.employeeName ?? (leave as any).employeeCode ?? `#${leave.employeeId}`}
                               </p>
-                              <Badge className={`text-xs border ${cfg.className}`}>{cfg.label}</Badge>
+                              {explainsWaiting(leave.approval) ? (
+                                <WaitingChip approval={leave.approval} className="text-xs" />
+                              ) : (
+                                <Badge className={`text-xs border ${cfg.className}`}>{cfg.label}</Badge>
+                              )}
                               <Badge variant="outline" className="text-xs capitalize">
                                 {leave.type}
                               </Badge>
@@ -487,6 +520,7 @@ export default function LeaveHoliday() {
                               &nbsp;·&nbsp; {days} day{days !== 1 ? "s" : ""}
                             </p>
                             {leave.reason && <p className="text-xs text-gray-400 mt-0.5 truncate">{leave.reason}</p>}
+                            <ApprovalTrailLine approval={leave.approval} className="mt-0.5" />
                             {(leave as any).approvedBy && (
                               <p className="text-[11px] text-gray-400 mt-0.5">
                                 {leave.status === "rejected" ? "Rejected By" : "Approved By"}:{" "}
@@ -496,27 +530,27 @@ export default function LeaveHoliday() {
                             )}
                           </div>
                           <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-                            {leave.status === "pending" && (
-                              <>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-8 gap-1 text-green-700 border-green-200 hover:bg-green-50"
-                                  onClick={() => updateLeaveStatus(leave.id, "approved")}
-                                  disabled={updateLeaveMutation.isPending}
-                                >
-                                  <CheckCircle size={13} /> Approve
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-8 gap-1 text-red-600 border-red-200 hover:bg-red-50"
-                                  onClick={() => updateLeaveStatus(leave.id, "rejected")}
-                                  disabled={updateLeaveMutation.isPending}
-                                >
-                                  <XCircle size={13} /> Reject
-                                </Button>
-                              </>
+                            {leave.status === "pending" && hrDecides(leave) && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 gap-1 text-green-700 border-green-200 hover:bg-green-50"
+                                onClick={() => updateLeaveStatus(leave.id, "approved")}
+                                disabled={updateLeaveMutation.isPending}
+                              >
+                                <CheckCircle size={13} /> Approve
+                              </Button>
+                            )}
+                            {leave.status === "pending" && hrRejects(leave) && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 gap-1 text-red-600 border-red-200 hover:bg-red-50"
+                                onClick={() => updateLeaveStatus(leave.id, "rejected")}
+                                disabled={updateLeaveMutation.isPending}
+                              >
+                                <XCircle size={13} /> Reject
+                              </Button>
                             )}
                             <Button
                               variant="ghost"
@@ -538,6 +572,7 @@ export default function LeaveHoliday() {
           </TabsContent>
 
           <TabsContent value="halfDay" className="mt-4 space-y-4">
+            <PipelineNote workflow="leave" />
             <div className="flex items-center gap-2 flex-wrap">
               <PillTabs
                 items={["all", "pending", "approved", "rejected"].map((s) => ({
@@ -561,6 +596,7 @@ export default function LeaveHoliday() {
                   return (
                     <Card
                       key={leave.id}
+                      data-testid={`leave-${leave.id}`}
                       className="border hover:shadow-sm transition-shadow cursor-pointer"
                       onClick={() => setSelectedLeave({ ...leave, totalDays: leave.totalDays ?? 0.5 })}
                     >
@@ -571,7 +607,11 @@ export default function LeaveHoliday() {
                               <p className="font-bold text-sm text-gray-900">
                                 {leave.employeeName ?? (leave as any).employeeCode ?? `#${leave.employeeId}`}
                               </p>
-                              <Badge className={`text-xs border ${cfg.className}`}>{cfg.label}</Badge>
+                              {explainsWaiting(leave.approval) ? (
+                                <WaitingChip approval={leave.approval} className="text-xs" />
+                              ) : (
+                                <Badge className={`text-xs border ${cfg.className}`}>{cfg.label}</Badge>
+                              )}
                               <Badge className="text-xs bg-sky-50 text-sky-700 border-sky-200 gap-1">
                                 <Sunrise size={11} /> {leave.halfDaySlot === "afternoon" ? "Afternoon" : "Morning"}
                               </Badge>
@@ -586,6 +626,7 @@ export default function LeaveHoliday() {
                               &nbsp;·&nbsp; Half day
                             </p>
                             {leave.reason && <p className="text-xs text-gray-400 mt-0.5 truncate">{leave.reason}</p>}
+                            <ApprovalTrailLine approval={leave.approval} className="mt-0.5" />
                             {(leave as any).approvedBy && (
                               <p className="text-[11px] text-gray-400 mt-0.5">
                                 {leave.status === "rejected" ? "Rejected By" : "Approved By"}:{" "}
@@ -595,27 +636,27 @@ export default function LeaveHoliday() {
                             )}
                           </div>
                           <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-                            {leave.status === "pending" && (
-                              <>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-8 gap-1 text-green-700 border-green-200 hover:bg-green-50"
-                                  onClick={() => updateLeaveStatus(leave.id, "approved")}
-                                  disabled={updateLeaveMutation.isPending}
-                                >
-                                  <CheckCircle size={13} /> Approve
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-8 gap-1 text-red-600 border-red-200 hover:bg-red-50"
-                                  onClick={() => updateLeaveStatus(leave.id, "rejected")}
-                                  disabled={updateLeaveMutation.isPending}
-                                >
-                                  <XCircle size={13} /> Reject
-                                </Button>
-                              </>
+                            {leave.status === "pending" && hrDecides(leave) && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 gap-1 text-green-700 border-green-200 hover:bg-green-50"
+                                onClick={() => updateLeaveStatus(leave.id, "approved")}
+                                disabled={updateLeaveMutation.isPending}
+                              >
+                                <CheckCircle size={13} /> Approve
+                              </Button>
+                            )}
+                            {leave.status === "pending" && hrRejects(leave) && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 gap-1 text-red-600 border-red-200 hover:bg-red-50"
+                                onClick={() => updateLeaveStatus(leave.id, "rejected")}
+                                disabled={updateLeaveMutation.isPending}
+                              >
+                                <XCircle size={13} /> Reject
+                              </Button>
                             )}
                             <Button
                               variant="ghost"
@@ -637,6 +678,7 @@ export default function LeaveHoliday() {
           </TabsContent>
 
           <TabsContent value="permissions" className="mt-4">
+            <PipelineNote workflow="permission" className="mb-3" />
             <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
               <div className="flex items-center gap-2 flex-wrap">
                 <PillTabs
@@ -716,6 +758,9 @@ export default function LeaveHoliday() {
                               <Badge className={`text-xs border ${outcome.className}`} title={outcome.explanation || undefined}>
                                 {outcome.label}
                               </Badge>
+                              {p.status === "pending" && explainsWaiting(p.approval) && (
+                                <WaitingChip approval={p.approval} className="text-xs" />
+                              )}
                               {typeLabel ? (
                                 <Badge variant="outline" className="text-xs">
                                   {typeLabel}
@@ -748,6 +793,7 @@ export default function LeaveHoliday() {
                             )}
                             {p.reason && <p className="text-xs text-gray-400 mt-0.5 truncate">{p.reason}</p>}
                             {p.hrComment && <p className="text-xs text-blue-600 mt-0.5 italic">HR: {p.hrComment}</p>}
+                            <ApprovalTrailLine approval={p.approval} className="mt-0.5" />
                             {p.approvedBy && (
                               <p className="text-[11px] text-gray-400 mt-0.5">
                                 {p.status === "rejected" ? "Rejected By" : "Approved By"}: {p.approvedBy}
@@ -771,30 +817,30 @@ export default function LeaveHoliday() {
                             )}
                           </div>
                           <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-                            {p.status === "pending" && (
-                              <>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-8 gap-1 text-green-700 border-green-200 hover:bg-green-50"
-                                  // A request with no type at all (not merely no typeKey: an older backend sends the
-                                  // type only in the legacy field) cannot move any boundary, so it opens the details
-                                  // where HR can pick one -and still approve without.
-                                  onClick={() => (typed ? updatePermStatus(p.id, "approved") : openPerm(p))}
-                                  disabled={updatePermMutation.isPending}
-                                >
-                                  <CheckCircle size={13} /> {typed ? "Approve" : "Set type & approve"}
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-8 gap-1 text-red-600 border-red-200 hover:bg-red-50"
-                                  onClick={() => updatePermStatus(p.id, "rejected")}
-                                  disabled={updatePermMutation.isPending}
-                                >
-                                  <XCircle size={13} /> Reject
-                                </Button>
-                              </>
+                            {p.status === "pending" && hrDecides(p) && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 gap-1 text-green-700 border-green-200 hover:bg-green-50"
+                                // A request with no type at all (not merely no typeKey: an older backend sends the
+                                // type only in the legacy field) cannot move any boundary, so it opens the details
+                                // where HR can pick one -and still approve without.
+                                onClick={() => (typed ? updatePermStatus(p.id, "approved") : openPerm(p))}
+                                disabled={updatePermMutation.isPending}
+                              >
+                                <CheckCircle size={13} /> {typed ? "Approve" : "Set type & approve"}
+                              </Button>
+                            )}
+                            {p.status === "pending" && hrRejects(p) && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 gap-1 text-red-600 border-red-200 hover:bg-red-50"
+                                onClick={() => updatePermStatus(p.id, "rejected")}
+                                disabled={updatePermMutation.isPending}
+                              >
+                                <XCircle size={13} /> Reject
+                              </Button>
                             )}
                             <Button
                               variant="ghost"
@@ -1092,11 +1138,15 @@ export default function LeaveHoliday() {
                     </div>
                     <div>
                       <p className="text-xs text-gray-400">Status</p>
-                      <Badge
-                        className={`text-xs border ${(STATUS_CONFIG[selectedLeave.status] ?? STATUS_CONFIG.pending).className}`}
-                      >
-                        {(STATUS_CONFIG[selectedLeave.status] ?? STATUS_CONFIG.pending).label}
-                      </Badge>
+                      {explainsWaiting(selectedLeave.approval) ? (
+                        <WaitingChip approval={selectedLeave.approval} className="text-xs" />
+                      ) : (
+                        <Badge
+                          className={`text-xs border ${(STATUS_CONFIG[selectedLeave.status] ?? STATUS_CONFIG.pending).className}`}
+                        >
+                          {(STATUS_CONFIG[selectedLeave.status] ?? STATUS_CONFIG.pending).label}
+                        </Badge>
+                      )}
                     </div>
                     {selectedLeave.isHalfDay ? (
                       <div className="col-span-2">
@@ -1186,30 +1236,41 @@ export default function LeaveHoliday() {
                   </p>
                 </div>
 
+                {selectedLeave.approval && (
+                  <div>
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Approval</p>
+                    <ApprovalTrail approval={selectedLeave.approval} />
+                  </div>
+                )}
+
                 {/* Actions */}
-                {selectedLeave.status === "pending" && (
+                {selectedLeave.status === "pending" && (hrDecides(selectedLeave) || hrRejects(selectedLeave)) && (
                   <div className="flex gap-2 pt-1">
-                    <Button
-                      className="flex-1 gap-1 bg-green-600 hover:bg-green-700"
-                      onClick={() => {
-                        updateLeaveStatus(selectedLeave.id, "approved");
-                        setSelectedLeave(null);
-                      }}
-                      disabled={updateLeaveMutation.isPending}
-                    >
-                      <CheckCircle size={14} /> Approve
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="flex-1 gap-1 text-red-600 border-red-200 hover:bg-red-50"
-                      onClick={() => {
-                        updateLeaveStatus(selectedLeave.id, "rejected");
-                        setSelectedLeave(null);
-                      }}
-                      disabled={updateLeaveMutation.isPending}
-                    >
-                      <XCircle size={14} /> Reject
-                    </Button>
+                    {hrDecides(selectedLeave) && (
+                      <Button
+                        className="flex-1 gap-1 bg-green-600 hover:bg-green-700"
+                        onClick={() => {
+                          updateLeaveStatus(selectedLeave.id, "approved");
+                          setSelectedLeave(null);
+                        }}
+                        disabled={updateLeaveMutation.isPending}
+                      >
+                        <CheckCircle size={14} /> Approve
+                      </Button>
+                    )}
+                    {hrRejects(selectedLeave) && (
+                      <Button
+                        variant="outline"
+                        className="flex-1 gap-1 text-red-600 border-red-200 hover:bg-red-50"
+                        onClick={() => {
+                          updateLeaveStatus(selectedLeave.id, "rejected");
+                          setSelectedLeave(null);
+                        }}
+                        disabled={updateLeaveMutation.isPending}
+                      >
+                        <XCircle size={14} /> Reject
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>
@@ -1342,6 +1403,7 @@ export default function LeaveHoliday() {
                         data-testid="permission-type-select"
                         value={permTypeDraft}
                         onChange={(e) => setPermTypeDraft(e.target.value as PermissionType | "")}
+                        disabled={selectedPerm.status !== "pending" && !hrRevisesPermissions}
                         className="h-9 rounded-md border px-2 text-sm bg-background"
                       >
                         {!selectedKey && (
@@ -1355,7 +1417,10 @@ export default function LeaveHoliday() {
                           </option>
                         ))}
                       </select>
-                      {selectedPerm.status !== "pending" && permTypeDraft && permTypeDraft !== selectedKey && (
+                      {selectedPerm.status !== "pending" &&
+                        hrRevisesPermissions &&
+                        permTypeDraft &&
+                        permTypeDraft !== selectedKey && (
                         <Button
                           size="sm"
                           variant="outline"
@@ -1400,35 +1465,46 @@ export default function LeaveHoliday() {
                   </p>
                 </div>
 
+                {selectedPerm.approval && (
+                  <div>
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Approval</p>
+                    <ApprovalTrail approval={selectedPerm.approval} />
+                  </div>
+                )}
+
                 {/* Actions */}
-                {selectedPerm.status === "pending" && (
+                {selectedPerm.status === "pending" && (hrDecides(selectedPerm) || hrRejects(selectedPerm)) && (
                   <div className="flex gap-2 pt-1">
-                    <Button
-                      className="flex-1 gap-1 bg-green-600 hover:bg-green-700"
-                      onClick={() => {
-                        // Sent only when HR picked or changed it; an untouched, already-typed request is not re-typed.
-                        updatePermStatus(
-                          selectedPerm.id,
-                          "approved",
-                          permTypeDraft && permTypeDraft !== selectedKey ? permTypeDraft : undefined,
-                        );
-                        setSelectedPerm(null);
-                      }}
-                      disabled={updatePermMutation.isPending}
-                    >
-                      <CheckCircle size={14} /> Approve
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="flex-1 gap-1 text-red-600 border-red-200 hover:bg-red-50"
-                      onClick={() => {
-                        updatePermStatus(selectedPerm.id, "rejected");
-                        setSelectedPerm(null);
-                      }}
-                      disabled={updatePermMutation.isPending}
-                    >
-                      <XCircle size={14} /> Reject
-                    </Button>
+                    {hrDecides(selectedPerm) && (
+                      <Button
+                        className="flex-1 gap-1 bg-green-600 hover:bg-green-700"
+                        onClick={() => {
+                          // Sent only when HR picked or changed it; an untouched, already-typed request is not re-typed.
+                          updatePermStatus(
+                            selectedPerm.id,
+                            "approved",
+                            permTypeDraft && permTypeDraft !== selectedKey ? permTypeDraft : undefined,
+                          );
+                          setSelectedPerm(null);
+                        }}
+                        disabled={updatePermMutation.isPending}
+                      >
+                        <CheckCircle size={14} /> Approve
+                      </Button>
+                    )}
+                    {hrRejects(selectedPerm) && (
+                      <Button
+                        variant="outline"
+                        className="flex-1 gap-1 text-red-600 border-red-200 hover:bg-red-50"
+                        onClick={() => {
+                          updatePermStatus(selectedPerm.id, "rejected");
+                          setSelectedPerm(null);
+                        }}
+                        disabled={updatePermMutation.isPending}
+                      >
+                        <XCircle size={14} /> Reject
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>
