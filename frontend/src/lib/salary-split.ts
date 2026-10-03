@@ -1,7 +1,7 @@
 // Salary split: the mandatory 50% + 50% breakdown of an employee's salary.
 //
-//   First portion  (50% of the salary)  Basic + DA + Retention Allowance
-//   Second portion (50% of the salary)  Other Allowance + Petrol Allowance + RHA + Special Allowance + CA
+//   First portion  (50% of the salary)  Basic + DA + Retaining Allowance
+//   Second portion (50% of the salary)  Other Allowance + Petrol Allowance + HRA + Special Allowance + CA
 //
 // It applies to whatever the Salary Amount is, Monthly or Weekly alike. The eight amounts are filled in from the
 // salary (`defaultSplit`), can be edited one by one, and must always obey the rule (`checkSplit`): each portion is
@@ -12,20 +12,20 @@
 // The split is descriptive: payroll and attendance still run on the salary amount and never read it.
 
 export type SplitKey =
-  "basic" | "da" | "retentionAllowance" | "otherAllowance" | "petrolAllowance" | "rha" | "specialAllowance" | "ca";
+  "basic" | "da" | "retainingAllowance" | "otherAllowance" | "petrolAllowance" | "hra" | "specialAllowance" | "ca";
 
 export type SplitField = { key: SplitKey; label: string };
 
 export const FIRST_PORTION: SplitField[] = [
   { key: "basic", label: "Basic" },
   { key: "da", label: "DA" },
-  { key: "retentionAllowance", label: "Retention Allowance" },
+  { key: "retainingAllowance", label: "Retaining Allowance" },
 ];
 
 export const SECOND_PORTION: SplitField[] = [
   { key: "otherAllowance", label: "Other Allowance" },
   { key: "petrolAllowance", label: "Petrol Allowance" },
-  { key: "rha", label: "RHA" },
+  { key: "hra", label: "HRA" },
   { key: "specialAllowance", label: "Special Allowance" },
   { key: "ca", label: "CA" },
 ];
@@ -36,8 +36,8 @@ export const SPLIT_LABEL: Record<SplitKey, string> = Object.fromEntries(
   SPLIT_FIELDS.map((f) => [f.key, f.label]),
 ) as Record<SplitKey, string>;
 
-export const FIRST_LABEL = "First portion (Basic + DA + Retention Allowance)";
-export const SECOND_LABEL = "Second portion (Other + Petrol + RHA + Special Allowance + CA)";
+export const FIRST_LABEL = "First portion (Basic + DA + Retaining Allowance)";
+export const SECOND_LABEL = "Second portion (Other + Petrol + HRA + Special Allowance + CA)";
 
 /** The split as the form holds it (text, so a half-typed amount is never rewritten under the user's cursor). */
 export type SplitValues = Record<SplitKey, string>;

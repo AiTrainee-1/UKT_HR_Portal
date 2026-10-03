@@ -5,10 +5,10 @@ import { checkSplit, type SplitValues } from "./salary-split";
 export const splitSchema = z.object({
   basic: z.string(),
   da: z.string(),
-  retentionAllowance: z.string(),
+  retainingAllowance: z.string(),
   otherAllowance: z.string(),
   petrolAllowance: z.string(),
-  rha: z.string(),
+  hra: z.string(),
   specialAllowance: z.string(),
   ca: z.string(),
 });

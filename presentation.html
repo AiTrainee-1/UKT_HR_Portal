@@ -1,0 +1,793 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HRMS Guide for the Processing Coordinator</title>
+<style>
+:root{
+  --bg:#f5f7fb; --card:#ffffff; --ink:#18212f; --muted:#5b6678; --line:#e1e6ef;
+  --brand:#0b5fa5; --brand-soft:#e6f1fb; --good:#177a4b; --good-soft:#e5f6ec;
+  --warn:#9a5b00; --warn-soft:#fff4dc; --bad:#b3261e; --bad-soft:#fdeceb;
+  --code:#eef2f8; --shadow:0 1px 2px rgba(16,24,40,.06),0 4px 14px rgba(16,24,40,.05);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f1520; --card:#171f2d; --ink:#e8edf5; --muted:#9aa6b8; --line:#2a3447;
+    --brand:#6db3f2; --brand-soft:#16293f; --good:#5fd39a; --good-soft:#12301f;
+    --warn:#f0b958; --warn-soft:#352a10; --bad:#f08b84; --bad-soft:#3a1816; --code:#1e2840;
+    --shadow:none;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f1520; --card:#171f2d; --ink:#e8edf5; --muted:#9aa6b8; --line:#2a3447;
+  --brand:#6db3f2; --brand-soft:#16293f; --good:#5fd39a; --good-soft:#12301f;
+  --warn:#f0b958; --warn-soft:#352a10; --bad:#f08b84; --bad-soft:#3a1816; --code:#1e2840; --shadow:none;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:76px}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
+a{color:var(--brand)}
+header.top{position:sticky;top:0;z-index:20;background:var(--card);border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:12px;padding:10px 16px}
+header.top .t{font-weight:700;font-size:15px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+button.ctl{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:6px 12px;font:inherit;font-size:14px;cursor:pointer}
+button.ctl:hover{background:var(--brand-soft)}
+.layout{display:grid;grid-template-columns:280px minmax(0,1fr);gap:28px;max-width:1280px;margin:0 auto;padding:24px 16px 80px}
+nav.toc{position:sticky;top:72px;align-self:start;max-height:calc(100vh - 90px);overflow:auto;background:var(--card);
+  border:1px solid var(--line);border-radius:12px;padding:12px;box-shadow:var(--shadow)}
+nav.toc h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:4px 8px 8px}
+nav.toc a{display:block;padding:6px 10px;border-radius:8px;color:var(--ink);text-decoration:none;font-size:14px;line-height:1.35}
+nav.toc a:hover{background:var(--brand-soft)}
+nav.toc a.on{background:var(--brand);color:#fff}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) nav.toc a.on{color:#0b1220}}
+:root[data-theme="dark"] nav.toc a.on{color:#0b1220}
+main{min-width:0}
+.hero{background:linear-gradient(135deg,#0b5fa5,#0a3d6b);color:#fff;border-radius:16px;padding:32px 28px;margin-bottom:24px}
+.hero h1{margin:0 0 8px;font-size:clamp(24px,4vw,34px);line-height:1.2}
+.hero p{margin:4px 0;opacity:.92}
+.hero .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.chip{display:inline-block;background:rgba(255,255,255,.16);border-radius:999px;padding:3px 12px;font-size:13px}
+section.s{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px 26px;margin:0 0 22px;box-shadow:var(--shadow)}
+section.s>h2{margin:0 0 14px;font-size:24px;line-height:1.25;display:flex;gap:12px;align-items:baseline}
+section.s>h2 .n{flex:none;background:var(--brand);color:#fff;border-radius:8px;min-width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;font-size:16px;padding:0 8px}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) section.s>h2 .n{color:#0b1220}}
+:root[data-theme="dark"] section.s>h2 .n{color:#0b1220}
+h3{font-size:18px;margin:26px 0 8px;color:var(--brand)}
+h4{font-size:16px;margin:18px 0 6px}
+p{margin:8px 0}
+ul,ol{padding-left:22px;margin:8px 0}
+li{margin:4px 0}
+.tw{overflow-x:auto;margin:12px 0;border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:560px}
+th,td{padding:9px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{background:var(--brand-soft);font-weight:650;position:sticky;top:0}
+tr:last-child td{border-bottom:none}
+tbody tr:nth-child(even) td{background:color-mix(in srgb,var(--code) 55%,transparent)}
+.call{border-left:5px solid var(--brand);background:var(--brand-soft);border-radius:8px;padding:12px 16px;margin:14px 0}
+.call.warn{border-color:var(--warn);background:var(--warn-soft)}
+.call.good{border-color:var(--good);background:var(--good-soft)}
+.call.bad{border-color:var(--bad);background:var(--bad-soft)}
+.call b.l{display:block;font-size:12px;letter-spacing:.07em;text-transform:uppercase;margin-bottom:2px}
+.tag{display:inline-block;font-size:12px;font-weight:650;border-radius:6px;padding:1px 8px;margin-right:4px;vertical-align:1px}
+.tag.rec{background:var(--warn-soft);color:var(--warn)}
+.tag.chk{background:var(--brand-soft);color:var(--brand)}
+.flow{display:flex;flex-direction:column;align-items:stretch;gap:6px;margin:14px 0;max-width:520px}
+.flow div{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
+.flow i{align-self:center;font-style:normal;color:var(--muted);line-height:1}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;margin:12px 0}
+.card{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--card)}
+.card h4{margin:0 0 6px;color:var(--brand)}
+.card ul{margin:4px 0;padding-left:18px}
+.item{border:1px solid var(--line);border-radius:12px;margin:12px 0;overflow:hidden}
+.item>h4{margin:0;padding:10px 16px;background:var(--brand-soft)}
+.item dl{margin:0;padding:6px 16px 12px;display:grid;grid-template-columns:90px 1fr;gap:4px 14px}
+.item dt{font-weight:650;color:var(--muted);font-size:13px;text-transform:uppercase;letter-spacing:.04em;padding-top:2px}
+.item dd{margin:0}
+@media (max-width:560px){.item dl{grid-template-columns:1fr;gap:0}.item dt{margin-top:8px}}
+.msg{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:8px 0;white-space:pre-wrap;font-size:14.5px}
+.msg .h{display:flex;justify-content:space-between;gap:10px;align-items:center;font-weight:650;margin-bottom:6px;white-space:normal}
+.msg button{font-size:12px;padding:3px 10px}
+details{border:1px solid var(--line);border-radius:10px;margin:8px 0;background:var(--card)}
+summary{cursor:pointer;padding:10px 14px;font-weight:650}
+details>div{padding:0 14px 12px}
+.rules{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin-top:12px}
+.rules div{border-radius:12px;padding:14px;background:var(--good-soft);border:1px solid var(--line)}
+.rules b{display:block;font-size:26px;color:var(--good);line-height:1}
+.q{font-weight:650}
+@media (max-width:900px){
+  .layout{grid-template-columns:1fr}
+  nav.toc{position:static;max-height:none}
+}
+@media print{
+  header.top,nav.toc,button{display:none!important}
+  .layout{display:block;padding:0}
+  body{background:#fff;color:#000;font-size:11pt}
+  section.s,.hero{box-shadow:none;break-inside:auto;border-color:#bbb}
+  .hero{background:#0b5fa5!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .item,.card,.call,.tw{break-inside:avoid}
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="t">HRMS Working Guide &middot; Processing Coordinator</div>
+  <button class="ctl" id="theme" type="button" aria-label="Switch between light and dark theme">Theme</button>
+  <button class="ctl" type="button" onclick="window.print()">Print</button>
+</header>
+
+<div class="layout">
+<nav class="toc" aria-label="Contents">
+  <h2>Contents</h2>
+  <a href="#s1">1. What the HRMS is used for</a>
+  <a href="#s2">2. Why follow the process</a>
+  <a href="#s3">3. Parts of the HRMS</a>
+  <a href="#s4">4. Feature list</a>
+  <a href="#s5">5. Mobile App or Web App</a>
+  <a href="#s6">6. Approval workflow</a>
+  <a href="#s7">7. Rules everyone must know</a>
+  <a href="#s8">8. Employee responsibilities</a>
+  <a href="#s9">9. HOD responsibilities</a>
+  <a href="#s10">10. Coordinator follow-up</a>
+  <a href="#s11">11. How to verify in the HRMS</a>
+  <a href="#s12">12. When to escalate to HR</a>
+  <a href="#s13">13. Follow-up messages</a>
+  <a href="#s14">14. Questions and answers</a>
+  <a href="#s15">15. Settings that change answers</a>
+  <a href="#s16">16. Quick reference</a>
+</nav>
+
+<main>
+<div class="hero">
+  <h1>UK Textiles HRMS &ndash; Working Guide for the Processing Coordinator</h1>
+  <p>What the HRMS is, what every person must do in it, where they must do it, and why.</p>
+  <p>Use this as a daily working guide to follow up with Employees and HODs, and to know when to escalate to HR.</p>
+  <div class="meta">
+    <span class="chip">Prepared for: Processing Coordinator</span>
+    <span class="chip">Based on how the system works today</span>
+  </div>
+</div>
+
+<div class="call">
+  <b class="l">How to read this guide</b>
+  Where something is my recommendation and not a system rule, it is marked <span class="tag rec">Recommended</span>.
+  Where the answer depends on a setting HR can change, it is marked <span class="tag chk">Check setting</span>.
+</div>
+
+<!-- 1 -->
+<section class="s" id="s1">
+<h2><span class="n">1</span>What the HRMS is used for</h2>
+<p>The UK Textiles HRMS is the single system that runs the people side of the company. It records and controls:</p>
+<div class="grid">
+  <div class="card"><h4>Employee records</h4>Who works here, department, designation, shift, HOD, salary details</div>
+  <div class="card"><h4>Attendance</h4>Fingerprint/biometric punches, GPS punches, shifts, late, half-day</div>
+  <div class="card"><h4>Leave and permissions</h4>Leave, casual leave, late-in / early-out / middle permission</div>
+  <div class="card"><h4>Requests and approvals</h4>Missing punch, on-duty, outpass, attendance corrections, resignation</div>
+  <div class="card"><h4>Payroll</h4>Staff monthly salary, production pay per shift, deductions, advances</div>
+  <div class="card"><h4>Gate control</h4>Outpass QR, tea break QR, visitors</div>
+  <div class="card"><h4>Documents and salary slips</h4>ID card, offer letter, salary slips</div>
+</div>
+<div class="call warn"><b class="l">The most important point</b>
+Salary is calculated from the attendance and requests in the HRMS. If a punch is missing, a request is pending, or an approval is late, the salary of that employee can be wrong or delayed. Your follow-up work protects the accuracy of payroll.</div>
+</section>
+
+<!-- 2 -->
+<section class="s" id="s2">
+<h2><span class="n">2</span>Why everyone must follow the process</h2>
+<ul>
+  <li><b>Payroll uses the HRMS only.</b> Anything not recorded or not approved in the HRMS is treated as not happened (absent, late, no leave).</li>
+  <li><b>Every deduction must be explainable</b> to the employee. The HRMS keeps the reason for each day. That only works if requests are raised correctly and on time.</li>
+  <li><b>Requests can only be raised for the current month</b> (plus last month on the 1st and 2nd). If an employee waits, the system refuses the request and HR has to correct it by a longer route.</li>
+  <li><b>A request waiting with an HOD cannot be finished.</b> Late approvals delay payroll for the whole company at month end.</li>
+  <li><b>Everything is logged</b> (who did it, when, with what comment). This protects the company and the employee in any dispute.</li>
+</ul>
+</section>
+
+<!-- 3 -->
+<section class="s" id="s3">
+<h2><span class="n">3</span>The parts of the HRMS and who uses which</h2>
+<div class="tw"><table>
+<thead><tr><th>Part</th><th>Who uses it</th><th>What for</th></tr></thead>
+<tbody>
+<tr><td>Fingerprint (biometric) devices at the premises</td><td>Every employee</td><td>Daily punches (the main attendance source)</td></tr>
+<tr><td>Employee Mobile App</td><td>Employees and HODs</td><td>Apply for things, check attendance, GPS punch, On-Duty, ID card QR, approvals (HOD)</td></tr>
+<tr><td>Employee Web App</td><td>Employees and HODs</td><td>Same self-service on a browser, plus approvals (HOD)</td></tr>
+<tr><td>HR Portal (web)</td><td>HR team (and you, with the access HR gives you)</td><td>Full control: employees, attendance, approvals, payroll, settings, reports</td></tr>
+<tr><td>Gate scanners</td><td>Security / gate login</td><td>Scan outpass QR and tea break QR</td></tr>
+<tr><td>WhatsApp messages</td><td>Employees, HODs</td><td>Login codes, approval decisions and (if HR switches them on) attendance alerts</td></tr>
+</tbody></table></div>
+<h3>Logging in</h3>
+<p>Mobile App and Employee Web App: <b>Employee Code + Password</b>. First time: the employee sets a password (a one-time code is sent on WhatsApp). Forgot password: use &ldquo;Forgot password&rdquo; and the code that comes on WhatsApp. If the code does not come, or the account says inactive / not registered, the employee must contact HR (the contact details are shown inside both apps on the Help / login screens).</p>
+<div class="call"><b class="l">HODs</b>HODs are normal employees whom HR has made approvers. They use the same Mobile App and Employee Web App; they get an extra <b>Approvals</b> area. HODs do <b>not</b> have HR Portal access.</div>
+</section>
+
+<!-- 4 -->
+<section class="s" id="s4">
+<h2><span class="n">4</span>Feature list &ndash; everything available</h2>
+<h3>4.1 For employees (Mobile App and Employee Web App)</h3>
+<div class="tw"><table><thead><tr><th>Feature</th><th>What it does</th></tr></thead><tbody>
+<tr><td>Dashboard / Home</td><td>Summary of the month: working days, present, absent, leave, pending</td></tr>
+<tr><td>Attendance</td><td>Month calendar with Present / Half Day / Absent / Leave / Late</td></tr>
+<tr><td>My Shift</td><td>Own shift timings, late count, permission count, rules and deduction preview</td></tr>
+<tr><td>Apply Leave</td><td>Full day, several days, or half day (morning / afternoon)</td></tr>
+<tr><td>Casual Leave</td><td>One per calendar month, after minimum service (see section 7)</td></tr>
+<tr><td>Permission</td><td>Late-In, Early-Out and Middle One-Hour permission</td></tr>
+<tr><td>Missing Punch</td><td>Report a forgotten / failed punch</td></tr>
+<tr><td>Attendance Request (GPS)</td><td>GPS punch inside the company area, and the On-Duty flow (field visit)</td></tr>
+<tr><td>On-Duty</td><td>Request to work outside; selfie + GPS punches while on duty</td></tr>
+<tr><td>Gate Outpass</td><td>Request to leave the premises during work time; QR for the gate</td></tr>
+<tr><td>Digital ID Card</td><td>ID with QR &ndash; also used for tea break scanning at the gate</td></tr>
+<tr><td>Live Tracking</td><td>Location sharing, only for employees HR has enabled</td></tr>
+<tr><td>Notifications</td><td>Decisions and alerts</td></tr>
+<tr><td>Salary Slips</td><td>View / download</td></tr>
+<tr><td>Advances / Settlement</td><td>View own advance or loan and repayment status</td></tr>
+<tr><td>Documents</td><td>Own documents (offer letter, etc.)</td></tr>
+<tr><td>Holidays</td><td>Company holiday calendar</td></tr>
+<tr><td>Profile</td><td>Own details (view only &ndash; corrections go through HR)</td></tr>
+<tr><td>Company</td><td>About the company</td></tr>
+<tr><td>Chat</td><td>In-app chat</td></tr>
+<tr><td>Resignation</td><td>Submit resignation (goes through HOD and HR)</td></tr>
+<tr><td>Help</td><td>HR contact and IT support contact</td></tr>
+</tbody></table></div>
+<h3>4.2 For HODs (extra, in the same apps) &ndash; &ldquo;Approvals&rdquo;</h3>
+<p>Leave &middot; Permission &middot; Casual Leave &middot; Attendance (corrections raised by HR) &middot; Missing Punch &middot; Outpass &middot; Resignation (plus On-Duty approvals in the Employee Web App Approvals page). Each can be approved or rejected with a comment.</p>
+<h3>4.3 For HR / Processing Coordinator (HR Portal)</h3>
+<ul>
+  <li><b>Dashboard</b> &ndash; present today, on leave, pending approvals, biometric sync status</li>
+  <li><b>Employees</b> &ndash; records, bulk upload, HOD assignment</li>
+  <li><b>Attendance</b> &ndash; Staff and Production attendance, punch search, corrections</li>
+  <li><b>Manage Shift</b> &ndash; create shifts and assign people</li>
+  <li><b>Leave &amp; Holiday, Casual Leave, Requests, Missing Punch, Outpass / Visitors, Geo Attendance</b> &ndash; where requests are seen, approved or rejected</li>
+  <li><b>User Management</b> &ndash; HOD assignment and the Approval Workflow Control</li>
+  <li><b>Payroll</b> (Staff / Production), Settlement (advances and loans), Compensation, Bonus, Increment</li>
+  <li><b>Reports</b> &ndash; about 140 ready-made reports with PDF and Excel download, including: Daily Attendance Register, Daily Absentee / Leave List, Late Coming Detail, Late Coming Summary, Punch Exceptions, Missing Punch Records, Permission Records, Pending Approvals Ageing, Approver Workload &amp; Turnaround, Employee to HOD Mapping, Shift Assignment Gaps, Outpass Pending / Not Returned, Tea Break Register and Exceptions, On-Duty Records, and <b>Employee Confo Details</b> (see section 10)</li>
+  <li><b>Settings</b> &ndash; attendance rules, late policy, devices, WhatsApp, HR contact, backup</li>
+</ul>
+</section>
+
+<!-- 5 -->
+<section class="s" id="s5">
+<h2><span class="n">5</span>Mobile App or Employee Web App &ndash; which one, and when</h2>
+<p>Both apps are connected to the same data. Whatever is done in one is visible in the other. The rules (dates allowed, approval route, wording) are the same in both.</p>
+<div class="grid">
+  <div class="card"><h4>Use the Mobile App when it needs location, camera or QR</h4>
+    <ul>
+      <li>GPS punch (&ldquo;Attendance Request&rdquo;) &ndash; needs the phone&rsquo;s location</li>
+      <li>On-Duty punches &ndash; need location + selfie camera</li>
+      <li>Live tracking (if HR enabled it for the employee)</li>
+      <li>Showing the Digital ID Card QR at the gate (outpass and tea break)</li>
+      <li>HODs approving on the move (quick approve / reject)</li>
+      <li>Any time the employee is away from a computer</li>
+    </ul></div>
+  <div class="card"><h4>Use the Employee Web App at a computer</h4>
+    <ul>
+      <li>Longer forms: leave, permission, casual leave, missing punch, outpass</li>
+      <li>Reviewing the month&rsquo;s attendance on a larger screen</li>
+      <li>Downloading salary slips and documents</li>
+      <li>HOD reviewing many approvals together (the web Approvals page includes On-Duty approvals too)</li>
+    </ul></div>
+</div>
+<div class="call good"><b class="l">Rule of thumb</b>Anything involving location, camera or the gate = Mobile App. Everything else can be done in either; do it wherever the person is comfortable, but do it the same day.</div>
+<div class="call warn"><b class="l">Important</b>Attendance punches at the factory/office are on the fingerprint device; the apps are for requests, checking and (where enabled) GPS punching. An employee must not depend on the app instead of the device unless HR has told them to use GPS punch.</div>
+</section>
+
+<!-- 6 -->
+<section class="s" id="s6">
+<h2><span class="n">6</span>The approval workflow (Employee &rarr; HOD &rarr; HR)</h2>
+<h3>6.1 The standard route</h3>
+<div class="flow">
+  <div><b>Employee</b> raises the request in the app</div><i>&darr;</i>
+  <div><b>HOD</b> reviews and approves / rejects (in the app)</div><i>&darr;</i>
+  <div><b>HR</b> gives the final approval (HR Portal) where the route requires it</div><i>&darr;</i>
+  <div>Employee is notified; attendance / balances / payroll update automatically</div>
+</div>
+<h3>6.2 What the system is built with by default (HR can change it)</h3>
+<div class="tw"><table><thead><tr><th>Request</th><th>Built-in route</th></tr></thead><tbody>
+<tr><td>Leave</td><td>Employee &rarr; HOD or HR (whoever acts first)</td></tr>
+<tr><td>Permission (Late-In / Early-Out / Middle)</td><td>Employee &rarr; HOD or HR (whoever acts first)</td></tr>
+<tr><td>Casual Leave</td><td>Employee &rarr; HOD or HR (whoever acts first)</td></tr>
+<tr><td>Gate Outpass</td><td>Employee &rarr; HOD or HR (whoever acts first)</td></tr>
+<tr><td>Missing Punch</td><td>Employee &rarr; HOD &rarr; HR</td></tr>
+<tr><td>On-Duty (field visit)</td><td>Employee &rarr; HOD (optional) &rarr; HR</td></tr>
+<tr><td>Resignation</td><td>Employee &rarr; HOD &rarr; HR (HR can always reject)</td></tr>
+<tr><td>On-Duty punch verification (selfie/GPS)</td><td>Employee &rarr; HR only (HR checks the photo and location)</td></tr>
+<tr><td>Attendance correction</td><td>HR &rarr; HOD (HR asks, the HOD must approve)</td></tr>
+<tr><td>Advance / loan</td><td>Entered and approved by HR only</td></tr>
+<tr><td>Other requests (tickets)</td><td>Employee &rarr; HR</td></tr>
+</tbody></table></div>
+<h3>6.3 What HODs and the Coordinator must understand</h3>
+<div class="call bad"><b class="l">The company expectation</b>The configured route is followed. HODs must not bypass it, hold requests back, or tell employees to &ldquo;just ask HR directly&rdquo;. If the route is Employee &rarr; HOD &rarr; HR, HR cannot finish a request that is still waiting for the HOD.</div>
+<ul>
+  <li>Every request shows who it is waiting for: <b>&ldquo;Waiting for HOD&rdquo;</b> or <b>&ldquo;Waiting for HR&rdquo;</b>. Use this to know whom to chase.</li>
+  <li>Leave balance is deducted at the <b>final</b> approval, whoever gives it.</li>
+  <li>A rejection should always carry a reason in the comment. The employee receives the reason.</li>
+  <li>An HOD cannot approve their own request. A department head&rsquo;s own requests, and requests of employees who have no HOD at all, go to HR. Check the HOD list (section 11) so nobody is left without an approver.</li>
+  <li>Requests already waiting follow the route that is in force now. If HR changes the route, nothing is approved or rejected by the change itself.</li>
+  <li>If HR switches a request type OFF, employees cannot raise new ones (&ldquo;&hellip;requests are switched off right now. Please contact HR.&rdquo;) but waiting ones can still be decided.</li>
+</ul>
+<h3>6.4 <span class="tag chk">Check setting</span> Where the live route is shown</h3>
+<p>The HR Portal shows &ldquo;Approval pipeline: Employee &rarr; HOD &rarr; HR&rdquo; at the top of each request screen (Leave &amp; Holiday, Requests, Casual Leave, Missing Punch, Outpass, Resignations, On-Duty approvals). The full set is in <b>User Management &rarr; Approval Workflow Control</b>. Always follow what is shown there.</p>
+</section>
+
+<!-- 7 -->
+<section class="s" id="s7">
+<h2><span class="n">7</span>The rules everyone must know</h2>
+
+<h3>7.1 Shift timing and punches</h3>
+<ul>
+  <li>Each employee is on a shift (start, end, grace minutes). Late and half-day are judged against <b>their own shift</b>, not a company-wide clock time.</li>
+  <li>Staff normally punch <b>4 times a day</b>: In, Lunch Out, Lunch In, Out. Two taps within 5 minutes count as <b>one</b> punch, so tapping twice does not &ldquo;do&rdquo; the next punch.</li>
+  <li>Production employees are paid per shift (segments such as first half, second half, extra time); the punches decide which segments count.</li>
+  <li>An employee with <b>no shift assigned</b> is never marked late and has no timeline &ndash; HR must assign one (the Coordinator looks for these &ndash; section 10).</li>
+  <li>Punch only for yourself. Never punch for another person.</li>
+</ul>
+
+<h3>7.2 What the first punch of the morning means (staff)</h3>
+<p>Example: 09:00 shift, 10 minutes grace.</p>
+<div class="tw"><table><thead><tr><th>First punch</th><th>What it is</th><th>What the day earns</th></tr></thead><tbody>
+<tr><td>up to 09:10</td><td>On time</td><td>Full day (1.00)</td></tr>
+<tr><td>09:11 &ndash; 10:10</td><td><b>Late</b> (late window 60 min)</td><td>Full day, and 1 late counted for the month</td></tr>
+<tr><td>10:11 &ndash; 11:10</td><td>Permission window (60 min)</td><td>With an approved Late-In permission: full day, no late. Without it: quarter-shift deduction (0.75)</td></tr>
+<tr><td>11:11 &ndash; 11:30</td><td>Extra minutes (20 min)</td><td>Quarter-shift deduction (0.75); a permission does <b>not</b> cover these minutes</td></tr>
+<tr><td>after 11:30</td><td>First half missed</td><td>Absent until a punch at/after 2:30 PM, then Half Day (0.50)</td></tr>
+</tbody></table></div>
+<p><span class="tag chk">Check setting</span> The 60 / 60 / 20 minutes, the 0.25 deduction and the 2:30 PM second-half start are company settings (Settings &rarr; Attendance). Each day&rsquo;s reason in the HR Portal tells which zone the employee fell in.</p>
+
+<h3>7.3 Late policy and deductions</h3>
+<ul>
+  <li>Late-ins, early-outs and &ldquo;excess&rdquo; permissions all go into one monthly <b>late pool</b>.</li>
+  <li>The first few in the pool each month are free (default allowance: 3). After that, the deduction slabs set in Settings &rarr; Late Detection apply (for example 0.5 shift per extra late).</li>
+  <li>Late Detection can also warn employees on WhatsApp if HR has switched the alert on.</li>
+</ul>
+
+<h3>7.4 Permissions (Late-In, Early-Out, Middle One-Hour)</h3>
+<ul>
+  <li>Three types, 60 minutes each: <b>Morning Late-In, Evening Early-Out, Middle One-Hour</b>.</li>
+  <li>Employees must raise the permission request and get it <b>approved</b>. Approval is what protects them.</li>
+  <li>Only the <b>first 3 approved</b> permissions in a month (default cap, all types together) are &ldquo;Allowed&rdquo;. Any approved permission beyond the cap is &ldquo;Overdue / Excess&rdquo;: it does not excuse anything and counts as one late occurrence. A rejected permission is &ldquo;Not Allowed&rdquo;.</li>
+  <li>A permission cannot be duplicated for the same day and type.</li>
+  <li><span class="tag chk">Check setting</span> Early-Out detection can be switched on or off by HR (default off). Morning Late-In detection is on by default.</li>
+</ul>
+
+<h3>7.5 Leave</h3>
+<ul>
+  <li>Full day, several days or half day (morning / afternoon).</li>
+  <li>Approved leave is marked on the attendance automatically and is not Loss of Pay (while balance lasts).</li>
+  <li>Absent with no request = absent / Loss of Pay (and &ldquo;without permission&rdquo; deduction where set).</li>
+</ul>
+
+<h3>7.6 Casual Leave</h3>
+<ul>
+  <li>One casual leave per calendar month, counted by the month of the date requested.</li>
+  <li>The employee must have completed the minimum service (6 months). The app shows eligibility.</li>
+</ul>
+
+<h3>7.7 Dates that can be requested</h3>
+<div class="call warn"><b class="l">This causes many follow-ups &ndash; read carefully</b>
+<ul>
+  <li>Leave, Casual Leave, Permission and Missing Punch can only be requested for days in the <b>current month</b> (1st to last day).</li>
+  <li>On the <b>1st and 2nd</b> of a month, last month is still open (grace). From the <b>3rd</b> it is closed.</li>
+  <li>A leave of several days must start <b>and</b> end inside the month (split it if it crosses month end).</li>
+  <li>Missing Punch can never be in the future (latest date is today).</li>
+  <li>The system uses India date, so changing the phone clock does not help.</li>
+  <li>If a day is already closed, the employee cannot fix it. HR raises an Attendance correction in the HR Portal and the HOD must approve it. This is slow &ndash; so the rule for everyone is: <b>do it the same day or the next day</b>.</li>
+</ul></div>
+
+<h3>7.8 Missing punch</h3>
+<ul>
+  <li>Employee reports the missed punch (date, which punch, reason). Route: Employee &rarr; HOD &rarr; HR.</li>
+  <li>Until approved, the day may show wrongly (absent / half day / late).</li>
+</ul>
+
+<h3>7.9 On-Duty (working outside)</h3>
+<ul>
+  <li>Employee requests with destination &rarr; HOD &rarr; HR approves &rarr; session becomes Active.</li>
+  <li>While active, punches are taken in the Mobile App with a selfie and GPS (up to 4 per day). HR verifies each punch. Fake/simulated GPS location is rejected and investigated.</li>
+  <li>The employee must tap &ldquo;Mark as Done&rdquo; at the end (or the 4th approved punch ends it).</li>
+</ul>
+
+<h3>7.10 Gate: Outpass and Tea Break</h3>
+<div class="grid">
+  <div class="card"><h4>Outpass</h4>Request in the app <b>before</b> leaving during work time. After approval the app shows a QR. Security scans it when the employee goes out and again on return. Late returns and not-returned outpasses are reported.</div>
+  <div class="card"><h4>Tea break</h4>No request and no approval. The employee&rsquo;s permanent QR (Digital ID Card in the Mobile App) is scanned at the gate on going out and again on coming back. HR sets the allowed minutes. Breaks over the allowed time are reported as overtime; no return scan within 60 minutes is reported as &ldquo;not returned&rdquo;. A forgotten scan reverses the next scan and creates false long breaks &ndash; so <b>always scan both ways</b>.</div>
+</div>
+</section>
+
+<!-- 8 -->
+<section class="s" id="s8">
+<h2><span class="n">8</span>Employee responsibilities</h2>
+<p>For each item: what to do, where (<b>M</b> = Mobile App, <b>W</b> = Employee Web App), and why.</p>
+
+<div class="item"><h4>8.1 Attendance / punch</h4><dl>
+<dt>What</dt><dd>Punch on the fingerprint device at the correct times: In at shift start, Lunch Out, Lunch In, Out at shift end &ndash; all 4 punches. If HR has allowed GPS punch, punch inside the company area through the Mobile App (&ldquo;Attendance Request&rdquo;).</dd>
+<dt>Where</dt><dd>Fingerprint device; GPS punch in M.</dd>
+<dt>Why</dt><dd>Attendance is the base of salary. A missing punch can turn a full day into a half day or absent day. Late and early-out are judged from the punches.</dd></dl></div>
+
+<div class="item"><h4>8.2 Following shift timings</h4><dl>
+<dt>What</dt><dd>Reach before shift start + grace. Know own shift in &ldquo;My Shift&rdquo;. Do not leave before shift end. Do not punch on the shift of another group.</dd>
+<dt>Where</dt><dd>M or W &rarr; My Shift.</dd>
+<dt>Why</dt><dd>Late, half-day and early-out are measured against the employee&rsquo;s own shift. Repeated lates beyond the free allowance reduce salary.</dd></dl></div>
+
+<div class="item"><h4>8.3 Checking attendance</h4><dl>
+<dt>What</dt><dd>Check the Attendance calendar every day (or at least every 2&ndash;3 days). Any day that looks wrong (absent, half day, late although on time) must be reported through the right request the same day.</dd>
+<dt>Where</dt><dd>M or W &rarr; Attendance.</dd>
+<dt>Why</dt><dd>Requests are only allowed in the current month (and the 1st&ndash;2nd of next). Errors found late cannot be corrected by the employee and delay salary.</dd></dl></div>
+
+<div class="item"><h4>8.4 Leave</h4><dl>
+<dt>What</dt><dd>Apply before the leave (or the same day if unplanned). Choose the correct type, dates and half-day option if needed, and write a clear reason. Stay inside the current month.</dd>
+<dt>Where</dt><dd>M or W &rarr; Apply Leave. (Casual Leave: Casual Leave screen.)</dd>
+<dt>Why</dt><dd>Approved leave is not Loss of Pay. Unapproved absence is. The HOD needs time to decide.</dd></dl></div>
+
+<div class="item"><h4>8.5 Permission (including Late-In and Early-Out requests)</h4><dl>
+<dt>What</dt><dd>Raise the permission request before the late arrival or early exit when possible (same day at the latest). Choose the right type: Morning Late-In, Evening Early-Out, Middle One-Hour. Wait for approval &ndash; do not assume.</dd>
+<dt>Where</dt><dd>M &rarr; Permission, or W &rarr; Permissions.</dd>
+<dt>Why</dt><dd>An approved Late-In permission (within the monthly cap of 3) removes the late mark for arrivals inside the permission window. Without it the day can lose a quarter shift or count as late. Excess permissions beyond the cap do not protect the employee.</dd></dl></div>
+
+<div class="item"><h4>8.6 Missing punch</h4><dl>
+<dt>What</dt><dd>The same day a punch is missed or the device failed, submit Missing Punch with the date, the punch that is missing and the reason. Never for future dates.</dd>
+<dt>Where</dt><dd>M or W &rarr; Missing Punch.</dd>
+<dt>Why</dt><dd>Without it the attendance stays incomplete. It must pass HOD and HR, so it needs time.</dd></dl></div>
+
+<div class="item"><h4>8.7 On-Duty</h4><dl>
+<dt>What</dt><dd>Request On-Duty before leaving for work outside, with the destination. Start only after it is approved. Take every punch with the selfie and real location. Tap &ldquo;Mark as Done&rdquo; at the end. Never use fake-location apps.</dd>
+<dt>Where</dt><dd>M (needs location and camera).</dd>
+<dt>Why</dt><dd>It makes outside work count as Present. HR checks each selfie and location; a fake location gets the punch rejected.</dd></dl></div>
+
+<div class="item"><h4>8.8 Outpass</h4><dl>
+<dt>What</dt><dd>Request the outpass before leaving, with reason and time. Leave only after approval. Show the QR to security when going out and when coming back. Return on time.</dd>
+<dt>Where</dt><dd>M or W to request; M to show the QR.</dd>
+<dt>Why</dt><dd>Leaving without it is unauthorised absence during working hours. Gate scans create the record of how long the employee was out.</dd></dl></div>
+
+<div class="item"><h4>8.9 Tea break / tea time</h4><dl>
+<dt>What</dt><dd>Keep the Digital ID Card QR ready. Scan when going out for tea and scan again when returning. Stay within the allowed minutes.</dd>
+<dt>Where</dt><dd>M &rarr; Digital ID Card, scanned at the gate.</dd>
+<dt>Why</dt><dd>Tea break times are recorded and reviewed. A missing return scan makes the next scan wrong and shows false long breaks.</dd></dl></div>
+
+<div class="item"><h4>8.10 Checking request status</h4><dl>
+<dt>What</dt><dd>After submitting, open the request list and see its status. Each request shows who it is waiting for (&ldquo;Waiting for HOD&rdquo; / &ldquo;Waiting for HR&rdquo;) and the step trail. If it waits more than a day, remind the HOD, then tell the Coordinator.</dd>
+<dt>Where</dt><dd>M or W &rarr; the same screen where it was raised (Leave, Permission, Missing Punch, Outpass, Casual Leave) and Notifications.</dd>
+<dt>Why</dt><dd>An approved request is what protects the day from deduction. A request nobody decides protects nothing.</dd></dl></div>
+
+<div class="item"><h4>8.11 Following the approval process / correctly submitting requests</h4><dl>
+<dt>What</dt><dd>Raise every request in the app (never only by phone or verbal). Choose the correct type and date. Write the real reason. Do not submit duplicates. Do not ask HR to approve something the HOD has not yet seen unless the process allows it.</dd>
+<dt>Where</dt><dd>M or W.</dd>
+<dt>Why</dt><dd>The route is fixed so that each person with authority sees the request, and everything is auditable.</dd></dl></div>
+
+<div class="item"><h4>8.12 Checking notifications and alerts</h4><dl>
+<dt>What</dt><dd>Open Notifications daily. Read approval / rejection messages and rejection reasons. Act on them (resubmit correctly if needed). If WhatsApp alerts are on, respond to late / missing-punch alerts the same day.</dd>
+<dt>Where</dt><dd>M or W &rarr; Notifications; WhatsApp on the registered number.</dd>
+<dt>Why</dt><dd>Decisions and alerts have time limits (the month window), so late reading means lost corrections.</dd></dl></div>
+
+<div class="item"><h4>8.13 Contacting HR for a system or login issue</h4><dl>
+<dt>What</dt><dd>Cannot log in, code not coming, account inactive, wrong profile detail, app not opening, attendance not showing &rarr; use the Help screen: <b>HR Department</b> contact for login / account / app problems; <b>Software / IT Support</b> contact if the server or app cannot connect. Give employee code, what happened and the time.</dd>
+<dt>Where</dt><dd>M or W &rarr; Help (contact details shown there).</dd>
+<dt>Why</dt><dd>These cannot be fixed by the employee or HOD. Delay means missed request deadlines.</dd></dl></div>
+
+<h3>8.14 Other things employees can do (no deadline, but useful)</h3>
+<ul>
+  <li>Download salary slips (M or W &rarr; Salary)</li>
+  <li>View holidays, documents, own advance/loan status, company information</li>
+  <li>Check Profile and report any wrong detail to HR (employees cannot edit it)</li>
+  <li>Resignation (M or W &rarr; Resignation) goes through HOD and HR</li>
+</ul>
+</section>
+
+<!-- 9 -->
+<section class="s" id="s9">
+<h2><span class="n">9</span>HOD responsibilities</h2>
+<div class="call"><b class="l">Where an HOD works</b>Mobile App &rarr; <b>Approvals</b> tab, or Employee Web App &rarr; <b>Approvals</b> page. HODs do not use the HR Portal. They only see requests of the employees assigned to them (their department, plus any individually assigned people).</div>
+
+<div class="item"><h4>9.1 Reviewing and deciding requests (daily)</h4><dl>
+<dt>What</dt><dd>Open Approvals at least <b>twice a day</b> (start and end of the day). <span class="tag rec">Recommended</span> decide every request on the same working day; never leave one past the next working day. Tabs: Leave | Permission | Casual Leave | Attendance | Missing Punch | Outpass | Resignation (On-Duty is in the Employee Web App Approvals page).</dd>
+<dt>Why</dt><dd>Waiting requests block HR and payroll. Employees&rsquo; days stay unprotected while they wait.</dd></dl></div>
+
+<div class="item"><h4>9.2 Leave requests</h4><dl>
+<dt>Check</dt><dd>Is the date inside the month window? Is team coverage acceptable? Is the reason genuine? Does it match what the employee told you?</dd>
+<dt>Do</dt><dd>Approve or reject with a comment. A rejection must have a reason.</dd></dl></div>
+
+<div class="item"><h4>9.3 Permission requests (Late-In, Early-Out, Middle)</h4><dl>
+<dt>Check</dt><dd>Was the employee really late / leaving early on that date (compare with what you saw)? The permission type must match. Remember only the first 3 approved per month protect the employee; the rest count as late anyway.</dd>
+<dt>Do</dt><dd>Approve genuine ones; reject false ones with a reason.</dd></dl></div>
+
+<div class="item"><h4>9.4 Late-In requests and Early-Out requests</h4><dl>
+<dt>What</dt><dd>These are the Permission types &ldquo;Morning Late-In&rdquo; and &ldquo;Evening Early-Out&rdquo;. Handle as 9.3. Be consistent &ndash; the same rule for everyone in the team.</dd></dl></div>
+
+<div class="item"><h4>9.5 Missing punch</h4><dl>
+<dt>Check</dt><dd>Was the employee present that day? Is the claimed punch time believable (shift timing)?</dd>
+<dt>Do</dt><dd>Approve if true. It then goes to HR for the final approval. Reject if you cannot confirm.</dd></dl></div>
+
+<div class="item"><h4>9.6 On-Duty requests</h4><dl>
+<dt>Check</dt><dd>Is the destination and purpose work-related, and did you send them?</dd>
+<dt>Do</dt><dd>Approve or reject. HR then does the final approval and checks each selfie and GPS punch.</dd></dl></div>
+
+<div class="item"><h4>9.7 Outpass requests</h4><dl>
+<dt>Check</dt><dd>Reason valid, time reasonable, work covered. Decide <b>before</b> the planned time &ndash; an outpass approved after the employee already left is useless.</dd>
+<dt>Do</dt><dd>Approve or reject quickly (these are time-sensitive, within minutes).</dd></dl></div>
+
+<div class="item"><h4>9.8 Attendance correction (raised by HR)</h4><dl>
+<dt>What</dt><dd>HR proposes a change to a day&rsquo;s attendance (for example when an employee could not request in time). You must approve or reject it.</dd>
+<dt>Check</dt><dd>Does it match what really happened? You are certifying it.</dd>
+<dt>Why</dt><dd>It changes what payroll pays. Only you know the truth about your team&rsquo;s day.</dd></dl></div>
+
+<div class="item"><h4>9.9 Casual leave and resignation</h4><dl>
+<dt>Casual Leave</dt><dd>Check that the single casual leave of the month is genuine.</dd>
+<dt>Resignation</dt><dd>The HOD review comes before HR; record the comment honestly and quickly.</dd></dl></div>
+
+<div class="item"><h4>9.10 Following up with employees when clarification is required</h4><dl>
+<dt>What</dt><dd>If you need an explanation, ask the employee directly (phone / in person) <b>before</b> deciding, and write the outcome in the comment. Do not leave the request waiting while you &ldquo;think&rdquo;.</dd>
+<dt>Why</dt><dd>The comment is part of the record; HR and the employee see it.</dd></dl></div>
+
+<div class="item"><h4>9.11 Monitoring attendance, late attendance and missing punches</h4><dl>
+<dt>Important</dt><dd>The HOD screens in the apps show <b>approvals</b>, not a team attendance sheet. HODs therefore know about lates, absences and missing punches from (a) what they see on the floor / office, (b) the requests that arrive, and (c) the daily list the Processing Coordinator sends them.</dd>
+<dt>What</dt><dd>Each day, compare your team on the floor with the attendance list you receive. Tell employees to raise the missing punch / permission / leave the same day. Tell the Coordinator about any employee who is present but shows absent.</dd>
+<dt>Why</dt><dd>Attendance errors must be corrected within the month window.</dd></dl></div>
+
+<div class="item"><h4>9.12 Monitoring pending requests</h4><dl>
+<dt>What</dt><dd>Keep the Approvals tabs at zero. The tabs show counts. Anything left is yours.</dd>
+<dt>Why</dt><dd>Your pending count is visible to HR (Pending Approvals Ageing, Approver Workload reports).</dd></dl></div>
+
+<div class="item"><h4>9.13 Escalating to HR</h4><dl>
+<dt>When</dt><dd>An employee in your list is not yours (wrong HOD assignment); a request type is blocked or switched off; an employee has no shift or the wrong shift; suspected fake location or false punch; repeated misuse by one employee; you will be on leave and nobody covers approvals; or you cannot see a request an employee says they raised.</dd>
+<dt>How</dt><dd>Through the Coordinator, or directly to HR.</dd></dl></div>
+
+<div class="call bad"><b class="l">9.14 The configured route must be followed</b>HODs must follow the approval route set by HR in the system. They must not approve outside it, ask employees to send requests to someone else, or sit on requests. If the HOD will be absent, inform HR so approvals can be reassigned (an inactive HOD approves nothing).</div>
+</section>
+
+<!-- 10 -->
+<section class="s" id="s10">
+<h2><span class="n">10</span>Processing Coordinator &ndash; how to follow up</h2>
+<div class="call"><b class="l">What you need</b>An HR Portal login. HR decides which pages each login can open. If a page below is missing from your sidebar, ask HR for <b>view</b> access to it. You do not need edit access to follow up.</div>
+
+<h3>10.1 Daily routine <span class="tag rec">Recommended</span> timing &ndash; adjust to your shift times</h3>
+
+<h4>A. Start of day &ndash; after morning grace and extra minutes have passed (about 11:30 for a 09:00 shift)</h4>
+<ol>
+  <li><b>HR Portal &rarr; Dashboard:</b> note Present Today, On Leave, Pending Approvals, Biometric Sync. If Biometric Sync shows an error or is old, tell HR / IT immediately: no punch means no attendance. (Report: Biometric Device Sync Health.)</li>
+  <li><b>Reports &rarr; Daily Absentee / Leave List</b> for today: everyone absent. For each, check whether a leave / permission / On-Duty request exists. No request and no reason = call the employee.</li>
+  <li><b>Reports &rarr; Late Coming Detail</b> (today): list of late arrivals. Check whether a Late-In permission was raised. If not, remind the employee to raise it today.</li>
+</ol>
+<h4>B. Mid-day</h4>
+<ol start="4">
+  <li><b>Pending requests:</b> Reports &rarr; Pending Approvals Ageing (or the Leave &amp; Holiday / Requests / Missing Punch / Casual Leave / Outpass screens). Note each pending request, how old it is and &ldquo;Waiting for HOD&rdquo; or &ldquo;Waiting for HR&rdquo;.</li>
+  <li>Contact each HOD with pending items (section 13 has the message).</li>
+  <li><b>Outpass:</b> pending outpass requests are time-sensitive &ndash; chase HODs first.</li>
+</ol>
+<h4>C. End of day &ndash; about 30 minutes after shift end</h4>
+<ol start="7">
+  <li><b>Reports &rarr; Punch Exceptions</b> and <b>Daily Attendance Register:</b> employees with missing punches (for example no Lunch In or no Out). Message each: raise Missing Punch today.</li>
+  <li><b>Reports &rarr; Gate group:</b> Outpass Not Returned, Tea Break Exceptions (overtime, not returned): list for HR.</li>
+  <li><b>Reports &rarr; Shift Assignment Gaps</b> or <b>Employee Confo Details:</b> employees with &ldquo;Shift Assign = Not Assigned&rdquo; &ndash; tell HR to assign a shift (without a shift, late and half-day cannot be judged).</li>
+  <li>Send the HODs the day list (section 13.5).</li>
+</ol>
+<h4>D. Next morning</h4>
+<ol start="11"><li>Re-check what you chased. Anything still open: second reminder; if the HOD is the blocker, escalate (section 12).</li></ol>
+
+<h3>10.2 Which attendance issues need follow-up</h3>
+<div class="tw"><table><thead><tr><th>Issue</th><th>Who to contact</th><th>What they must do</th></tr></thead><tbody>
+<tr><td>Absent, no request</td><td>Employee (+ HOD)</td><td>Raise leave / permission / On-Duty, or confirm absence</td></tr>
+<tr><td>Late, no permission</td><td>Employee</td><td>Raise Late-In permission (same day)</td></tr>
+<tr><td>Repeated lates (see Late Coming Summary)</td><td>Employee, HOD, HR</td><td>HR may counsel; deduction slabs apply after the free allowance</td></tr>
+<tr><td>Missing punch</td><td>Employee, then HOD</td><td>Raise Missing Punch; HOD approves</td></tr>
+<tr><td>Half-day / quarter-shift arrival</td><td>Employee</td><td>Understand the rule; raise permission next time</td></tr>
+<tr><td>Punch not appearing at all</td><td>HR / IT</td><td>Device or sync problem; unmatched device ID (Report: Unmatched Device IDs)</td></tr>
+<tr><td>No shift assigned</td><td>HR</td><td>Assign a shift</td></tr>
+<tr><td>Wrong HOD / no HOD</td><td>HR</td><td>Fix HOD assignment (Report: Employee to HOD Mapping)</td></tr>
+<tr><td>Tea break over time / not returned</td><td>Employee, HOD</td><td>Remind rules; HR decides action</td></tr>
+<tr><td>Outpass not returned / late return</td><td>Employee, HOD</td><td>Explain; HR decides action</td></tr>
+<tr><td>Many manual overrides on one person</td><td>HR</td><td>Review (Report: Manual Attendance Overrides)</td></tr>
+</tbody></table></div>
+
+<h3>10.3 Which requests are pending and what to do</h3>
+<ul>
+  <li>HR Portal &rarr; Leave &amp; Holiday (leave and permissions), Casual Leave, Requests, Attendance &rarr; Missing Punch, Outpass / Visitors, Geo Attendance &rarr; On-Duty Approvals.</li>
+  <li>Each screen shows &ldquo;Approval pipeline: &hellip;&rdquo; and, for each request, who it waits for.</li>
+</ul>
+<div class="tw"><table><thead><tr><th>Status</th><th>Your action</th></tr></thead><tbody>
+<tr><td>Waiting for HOD</td><td>Follow up with that HOD (you cannot approve in their place)</td></tr>
+<tr><td>Waiting for HR</td><td>Tell the HR approver; it is their turn</td></tr>
+<tr><td>Older than 2 working days <span class="tag rec">Recommended</span></td><td>Escalate (section 12)</td></tr>
+</tbody></table></div>
+<p>Report <b>Approver Workload &amp; Turnaround</b> shows which HODs are slow.</p>
+
+<h3>10.4 Which employees need to be contacted (daily list)</h3>
+<ol>
+  <li>Absent with no request</li>
+  <li>Late today with no permission</li>
+  <li>Missing punch today</li>
+  <li>Request rejected but the issue is still open</li>
+  <li>Request raised for a closed date (they got an error) &ndash; they need an HR correction</li>
+  <li>Cannot log in / no WhatsApp code &ndash; send them to the Help contact</li>
+  <li>Outpass / tea break over time</li>
+</ol>
+
+<h3>10.5 Which HOD approvals are pending</h3>
+<ul>
+  <li>Use Pending Approvals Ageing, grouped by approver.</li>
+  <li>To know <b>who the HOD of an employee is</b>: Reports &rarr; <b>Employee Confo Details</b> (HR Reports group). For every employee it gives: code, name, department, designation, salary, <b>assigned HOD</b>, date of joining and <b>shift assign</b> (&ldquo;Not Assigned&rdquo; if none). Filter by Staff, Production or Other. Use it as your call list: employee &rarr; HOD &rarr; shift in one sheet.</li>
+  <li>It needs Salary or Payroll access because it shows salary. If you cannot open it, ask HR for access, or use &ldquo;Employee to HOD Mapping&rdquo;.</li>
+</ul>
+
+<h3>10.6 Weekly routine <span class="tag rec">Recommended</span> &ndash; for example every Monday and Friday</h3>
+<ul>
+  <li><b>Late Coming Summary (Counts)</b> for the month so far: employees who have crossed the free allowance; remind them and their HOD.</li>
+  <li><b>Permission Counts:</b> employees at 3 permissions (cap reached &ndash; further ones do not protect them).</li>
+  <li><b>Missing Punch Frequency:</b> employees who miss punches repeatedly.</li>
+  <li><b>Approver Workload &amp; Turnaround:</b> HODs with a backlog.</li>
+  <li><b>Shift Assignment Gaps</b> and <b>Employee to HOD Mapping:</b> data problems for HR.</li>
+  <li><b>Casual Leave Eligibility &amp; Usage</b> if employees ask.</li>
+</ul>
+
+<h3>10.7 Month-end routine (the most important days)</h3>
+<div class="tw"><table><thead><tr><th>When</th><th>What to do</th></tr></thead><tbody>
+<tr><td>3 to 5 working days before month end</td><td>Announce to employees and HODs: &ldquo;Raise ALL pending leave / permission / missing punch requests now. Requests are only possible for this month (plus last month on the 1st and 2nd).&rdquo; Clear the full pending list with every HOD.</td></tr>
+<tr><td>Last working day</td><td>Zero pending approvals is the target. Escalate whatever remains. Check Biometric sync is complete up to the last day.</td></tr>
+<tr><td>1st and 2nd of next month (grace days)</td><td>Last chance for employees to raise last month&rsquo;s requests. Chase every open item and every employee with an unexplained absent / missing punch.</td></tr>
+<tr><td>From the 3rd</td><td>Last month is closed to employees. Anything missed must be fixed by HR as an Attendance correction (HR raises, the HOD must approve). Give HR the list as early as possible on the 3rd. Payroll for the month should only be generated after this is cleared.</td></tr>
+</tbody></table></div>
+</section>
+
+<!-- 11 -->
+<section class="s" id="s11">
+<h2><span class="n">11</span>How to verify things in the HRMS</h2>
+<div class="tw"><table><thead><tr><th>To check</th><th>Where (HR Portal)</th><th>What to look for</th></tr></thead><tbody>
+<tr><td>Today&rsquo;s overall position</td><td>Dashboard</td><td>Present / on leave / pending / biometric sync status</td></tr>
+<tr><td>Attendance of one person</td><td>Attendance &rarr; Staff or Production Attendance &rarr; Employee Attendance Search (employee code + month)</td><td>Month grid; click a day to see status and the reason (late zone, half-day cause)</td></tr>
+<tr><td>Raw punches</td><td>Attendance &rarr; Attendance Search / Report: Punch Log</td><td>Actual punch times, device source</td></tr>
+<tr><td>Daily list of everyone</td><td>Reports: Daily Attendance Register</td><td>Present / absent / late / half</td></tr>
+<tr><td>Absent today</td><td>Reports: Daily Absentee / Leave List</td><td>Who is absent or on leave</td></tr>
+<tr><td>Late arrivals</td><td>Reports: Late Coming Detail</td><td>First punch, minutes late, permission effect</td></tr>
+<tr><td>Missing / odd punches</td><td>Reports: Punch Exceptions</td><td>Days with incomplete punches</td></tr>
+<tr><td>Leave</td><td>Leave &amp; Holiday (Leaves tab); Reports: Leave Register</td><td>Status, dates, balance, who it waits for</td></tr>
+<tr><td>Permission</td><td>Leave &amp; Holiday (Permissions tab); Reports: Permission Records</td><td>Type, date, status (Allowed / Not Allowed / Overdue-Excess)</td></tr>
+<tr><td>Casual leave</td><td>Casual Leave; Reports: Casual Leave Eligibility &amp; Usage</td><td>Eligibility and usage</td></tr>
+<tr><td>Missing punch requests</td><td>Attendance &rarr; Missing Punch; Reports: Missing Punch Records</td><td>Status and age</td></tr>
+<tr><td>On-Duty</td><td>Geo Attendance &rarr; On-Duty Approvals / Punch Verifications</td><td>Session status, punch photos and GPS</td></tr>
+<tr><td>Outpass</td><td>Outpass / Visitors; Reports: Outpass Pending Requests, Not Returned</td><td>Pending, not returned, late return</td></tr>
+<tr><td>Tea break</td><td>Reports: Tea Break Register / Exceptions</td><td>Overtime and non-return</td></tr>
+<tr><td>Who is the HOD</td><td>Reports: Employee Confo Details, Employee to HOD Mapping, HOD Directory</td><td>Assigned HOD per employee</td></tr>
+<tr><td>Which shift</td><td>Reports: Employee Confo Details, Shift Roster, Shift Assignment Gaps</td><td>Shift per employee; gaps</td></tr>
+<tr><td>Pending approvals by HOD</td><td>Reports: Pending Approvals Ageing, Approver Workload &amp; Turnaround</td><td>Age and approver</td></tr>
+<tr><td>Manual changes</td><td>Reports: Manual Attendance Overrides</td><td>Who changed which day and why</td></tr>
+</tbody></table></div>
+<div class="call good"><b class="l">Tip</b>Every report on the Reports page has filters and downloads as Excel or PDF. Keep the daily Excel files; they are your evidence of what you chased and when.</div>
+<div class="call"><b class="l">Request status words</b>Pending / Waiting for HOD / Waiting for HR = not finished. Approved = final. Rejected = final (read the reason; the employee may resubmit if still inside the month window).</div>
+</section>
+
+<!-- 12 -->
+<section class="s" id="s12">
+<h2><span class="n">12</span>When to escalate to HR</h2>
+<p><span class="tag rec">Recommended</span> triggers:</p>
+<div class="grid">
+  <div class="card"><h4>Employee side</h4><ul>
+    <li>Cannot log in, no WhatsApp code, account says inactive / not registered</li>
+    <li>Request refused because the date is closed (needs an Attendance correction)</li>
+    <li>Attendance wrong although the employee punched correctly (device / sync / wrong shift)</li>
+    <li>Suspected false GPS location, punching for someone else, or tea / outpass misuse</li>
+    <li>Repeated policy breaches by the same employee after reminders</li></ul></div>
+  <div class="card"><h4>HOD side</h4><ul>
+    <li>Request waiting more than 2 working days after two reminders</li>
+    <li>Outpass or Missing Punch left undecided while it matters</li>
+    <li>HOD on leave / not reachable and nobody can approve</li>
+    <li>Employee has no HOD, or the wrong HOD (Employee to HOD Mapping)</li>
+    <li>HOD refuses to follow the configured route</li></ul></div>
+  <div class="card"><h4>System side</h4><ul>
+    <li>Biometric Sync error or no punches coming in</li>
+    <li>Unmatched Device IDs (a fingerprint ID not linked to an employee)</li>
+    <li>Employees with no shift assigned</li>
+    <li>App cannot connect to the server &rarr; Software / IT Support contact</li>
+    <li>Month-end: any pending approvals still open on the last working day</li></ul></div>
+</div>
+<div class="call"><b class="l">How</b>Give HR a short written list: employee code, name, issue, date, what you already did, and when. Attach the Excel report if useful.</div>
+</section>
+
+<!-- 13 -->
+<section class="s" id="s13">
+<h2><span class="n">13</span>Ready-to-use follow-up messages</h2>
+<p><span class="tag rec">Recommended</span> wording &ndash; copy and adjust.</p>
+
+<div class="msg"><div class="h"><span>13.1 To an employee &ndash; absent / no request</span><button class="ctl copy" type="button">Copy</button></div><span class="t">Hello &lt;Name&gt;, the HRMS shows you absent on &lt;date&gt; and no leave request. Please apply for leave in the app today (Apply Leave) or tell me the reason. Requests are only possible for this month.</span></div>
+<div class="msg"><div class="h"><span>13.2 To an employee &ndash; late, no permission</span><button class="ctl copy" type="button">Copy</button></div><span class="t">Hello &lt;Name&gt;, you came late on &lt;date&gt; and there is no permission request. Please raise a Late-In permission in the app today. Approved permissions protect your attendance (first 3 each month).</span></div>
+<div class="msg"><div class="h"><span>13.3 To an employee &ndash; missing punch</span><button class="ctl copy" type="button">Copy</button></div><span class="t">Hello &lt;Name&gt;, your &lt;In / Lunch Out / Lunch In / Out&gt; punch is missing on &lt;date&gt;. Please raise a Missing Punch request in the app today and write the reason.</span></div>
+<div class="msg"><div class="h"><span>13.4 To an HOD &ndash; pending requests</span><button class="ctl copy" type="button">Copy</button></div><span class="t">Dear &lt;HOD&gt;, you have &lt;N&gt; requests waiting in Approvals (&lt;names / types&gt;, oldest &lt;date&gt;). Please approve or reject them today. Payroll cannot be finished while they are open.</span></div>
+<div class="msg"><div class="h"><span>13.5 To an HOD &ndash; daily team list</span><button class="ctl copy" type="button">Copy</button></div><span class="t">Dear &lt;HOD&gt;, attendance today for your team: absent &lt;list&gt;, late &lt;list&gt;, missing punch &lt;list&gt;. Please make sure these employees raise their requests today and tell me if anyone is wrongly shown.</span></div>
+<div class="msg"><div class="h"><span>13.6 To an HOD &ndash; rejected without a reason</span><button class="ctl copy" type="button">Copy</button></div><span class="t">Dear &lt;HOD&gt;, &lt;Employee&gt;'s &lt;request&gt; was rejected without a reason. Please add the reason in the comment so the employee can respond.</span></div>
+<div class="msg"><div class="h"><span>13.7 Month-end announcement (everyone)</span><button class="ctl copy" type="button">Copy</button></div><span class="t">Month-end reminder: raise ALL leave, permission and missing punch requests for this month now. Last month stays open only on the 1st and 2nd. HODs, please clear every pending approval by &lt;date&gt;.</span></div>
+</section>
+
+<!-- 14 -->
+<section class="s" id="s14">
+<h2><span class="n">14</span>Common questions and answers</h2>
+<details><summary>The employee says &ldquo;the app will not let me pick that date&rdquo;.</summary><div>Only the current month is allowed (plus last month on the 1st and 2nd). Missing Punch cannot be a future date. Past that, HR must correct attendance (HR raises, HOD approves).</div></details>
+<details><summary>Can I approve a request in place of an HOD?</summary><div>No. If the request is &ldquo;Waiting for HOD&rdquo;, only the HOD (or HR, where the route says &ldquo;HOD or HR&rdquo;) can decide. Chase the HOD, then escalate to HR.</div></details>
+<details><summary>The request shows &ldquo;Approved&rdquo; but attendance still looks wrong.</summary><div>Open the day in Attendance Search and read the reason. A permission beyond the monthly cap does not excuse the late. If still wrong, escalate to HR.</div></details>
+<details><summary>Why was the employee marked half day although they came at 11:00?</summary><div>The first-punch timeline (section 7.2): late window, permission window, extra minutes, and then the first half is missed. The reason is written on that day in the HR Portal.</div></details>
+<details><summary>An employee says they punched but no punch is shown.</summary><div>Check Punch Log for the day, Biometric Device Sync Health, and Unmatched Device IDs. If the punch is not there, the employee raises Missing Punch the same day; escalate device problems to HR / IT.</div></details>
+<details><summary>Employee has no HOD.</summary><div>Their requests go to HR. Tell HR to assign one (Employee to HOD Mapping / Employee Confo Details shows &ldquo;Not Assigned&rdquo;).</div></details>
+<details><summary>An HOD cannot see an employee&rsquo;s request.</summary><div>The employee may not be assigned to that HOD, or the HOD&rsquo;s approval switch for that request type is off. Escalate to HR (User Management).</div></details>
+<details><summary>Can employees punch with the app instead of the device?</summary><div>Only if HR has enabled GPS punch for them, and only inside the company area. Otherwise the fingerprint device is the punch.</div></details>
+<details><summary>What if the app says a request type is switched off?</summary><div>HR has paused it in Approval Workflow Control. Ask HR; do not tell the employee to bypass it.</div></details>
+<details><summary>Do WhatsApp alerts always go out for late / missing punch?</summary><div>Only if HR has switched them on. Do not depend on them; your daily list is the safety net.</div></details>
+</section>
+
+<!-- 15 -->
+<section class="s" id="s15">
+<h2><span class="n">15</span>Settings that change the answers</h2>
+<p><span class="tag chk">Check setting</span> Confirm these with HR before relying on them:</p>
+<ul>
+  <li>The live approval route per request type (User Management &rarr; Approval Workflow Control).</li>
+  <li>The late window, permission window, extra minutes, quarter-shift deduction and second-half start time (Settings &rarr; Attendance).</li>
+  <li>The free late allowance and the deduction slabs (Settings &rarr; Late Detection).</li>
+  <li>The monthly permission cap (default 3) and whether Early-Out detection is on (default off).</li>
+  <li>Whether GPS punch and live tracking are enabled for a person.</li>
+  <li>Whether WhatsApp attendance alerts (late, absent, missing punch, 4-punch reminders) are on.</li>
+  <li>The allowed tea break minutes.</li>
+  <li>Which HR Portal pages and reports your login can open.</li>
+</ul>
+<p>The numbers in this guide are the system&rsquo;s standard values.</p>
+</section>
+
+<!-- 16 -->
+<section class="s" id="s16">
+<h2><span class="n">16</span>One-page quick reference</h2>
+<div class="tw"><table><thead><tr><th>Who</th><th>Does what</th><th>Where</th><th>Deadline</th></tr></thead><tbody>
+<tr><td>Employee</td><td>Punch all 4 times on the device</td><td>Device</td><td>Every day</td></tr>
+<tr><td>Employee</td><td>Check attendance</td><td>M / W</td><td>Every day</td></tr>
+<tr><td>Employee</td><td>Leave / Permission / Late-In / Early-Out</td><td>M / W</td><td>Before, or same day</td></tr>
+<tr><td>Employee</td><td>Missing Punch</td><td>M / W</td><td>Same day</td></tr>
+<tr><td>Employee</td><td>Outpass request</td><td>M / W</td><td>Before leaving</td></tr>
+<tr><td>Employee</td><td>Outpass / Tea QR scan out and in</td><td>Gate (M for QR)</td><td>Every time</td></tr>
+<tr><td>Employee</td><td>On-Duty request + selfie punches</td><td>M</td><td>Before leaving</td></tr>
+<tr><td>Employee</td><td>Check status and notifications</td><td>M / W</td><td>Daily</td></tr>
+<tr><td>Employee</td><td>Login / system problem</td><td>Help screen</td><td>Same day</td></tr>
+<tr><td>HOD</td><td>Approve / reject all requests with a comment</td><td>M / W Approvals</td><td>Same working day</td></tr>
+<tr><td>HOD</td><td>Outpass decisions</td><td>M / W Approvals</td><td>Within minutes</td></tr>
+<tr><td>HOD</td><td>Confirm HR attendance corrections</td><td>M / W Approvals</td><td>Same working day</td></tr>
+<tr><td>HOD</td><td>Escalate problems</td><td>Coordinator / HR</td><td>As they arise</td></tr>
+<tr><td>Coordinator</td><td>Daily: absent, late, missing punch, pending</td><td>HR Portal</td><td>Daily</td></tr>
+<tr><td>Coordinator</td><td>Chase HODs for pending approvals</td><td>Phone / WhatsApp</td><td>Daily</td></tr>
+<tr><td>Coordinator</td><td>Weekly counts and backlog</td><td>Reports</td><td>Weekly</td></tr>
+<tr><td>Coordinator</td><td>Month-end clean-up</td><td>HR Portal</td><td>Last 3 days + 1st&ndash;2nd</td></tr>
+<tr><td>Coordinator</td><td>Escalate to HR with a written list</td><td>Message / Excel</td><td>As per section 12</td></tr>
+</tbody></table></div>
+<p><b>M</b> = Mobile App &nbsp; <b>W</b> = Employee Web App</p>
+
+<h3>The three rules to remember</h3>
+<div class="rules">
+  <div><b>1</b>If it is not raised and approved in the HRMS, it did not happen for payroll.</div>
+  <div><b>2</b>Do it the same day. Only this month (and the 1st&ndash;2nd of next) can be requested.</div>
+  <div><b>3</b>Follow the route: Employee &rarr; HOD &rarr; HR. Nobody skips a step, nobody sits on a request.</div>
+</div>
+</section>
+</main>
+</div>
+
+<script>
+(function(){
+  var root=document.documentElement;
+  try{var saved=localStorage.getItem('hrms-guide-theme');if(saved)root.setAttribute('data-theme',saved);}catch(e){}
+  document.getElementById('theme').addEventListener('click',function(){
+    var dark=root.getAttribute('data-theme')==='dark'||(!root.getAttribute('data-theme')&&matchMedia('(prefers-color-scheme: dark)').matches);
+    var next=dark?'light':'dark';
+    root.setAttribute('data-theme',next);
+    try{localStorage.setItem('hrms-guide-theme',next);}catch(e){}
+  });
+  document.querySelectorAll('button.copy').forEach(function(b){
+    b.addEventListener('click',function(){
+      var t=b.closest('.msg').querySelector('.t').textContent;
+      var done=function(){b.textContent='Copied';setTimeout(function(){b.textContent='Copy';},1500);};
+      if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(done,function(){});}
+      else{var a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();try{document.execCommand('copy');done();}catch(e){}a.remove();}
+    });
+  });
+  var links=[].slice.call(document.querySelectorAll('nav.toc a'));
+  var map={};links.forEach(function(a){map[a.getAttribute('href').slice(1)]=a;});
+  if('IntersectionObserver' in window){
+    var io=new IntersectionObserver(function(es){
+      es.forEach(function(e){if(e.isIntersecting){links.forEach(function(l){l.classList.remove('on');});var l=map[e.target.id];if(l)l.classList.add('on');}});
+    },{rootMargin:'-20% 0px -70% 0px'});
+    document.querySelectorAll('section.s').forEach(function(s){io.observe(s);});
+  }
+})();
+</script>
+</body>
+</html>

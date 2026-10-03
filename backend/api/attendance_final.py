@@ -497,6 +497,43 @@ def permission_flags_json(rec) -> dict:
     }
 
 
+def day_calendar_facts(emp, year: int, month: int) -> tuple[dict, set]:
+    """What the employee calendar needs to colour a month beyond each day's attendance verdict:
+    ({date: (holiday name, holiday type)} for the declared holidays of the month, {dates of APPROVED Casual Leave}).
+    Two queries for the whole month. Holidays are company-wide here, exactly as the attendance engine reads them
+    (``_holiday_dates_for_month``); an approved Casual Leave day is stored as a Present day, so only this tells it apart."""
+    from .models import CasualLeaveRequest
+
+    holidays: dict = {}
+    for h in Holiday.objects.filter(date__year=year, date__month=month).order_by("id"):
+        holidays.setdefault(h.date, (h.name, h.holiday_type))
+    casual = set(
+        CasualLeaveRequest.objects.filter(
+            employee=emp, date__year=year, date__month=month, status=CasualLeaveRequest.STATUS_APPROVED
+        ).values_list("date", flat=True)
+    )
+    return holidays, casual
+
+
+def day_kind_json(emp, d: date_type, holidays: dict, casual: set) -> dict:
+    """The additive calendar keys of one day (past or future), by the engine's own rule: a declared holiday, else a
+    Sunday for everyone except production (who work Sundays), is a day off. A declared holiday on a Sunday is the
+    holiday. ``dayKind`` is "holiday" | "weekly_off" | None -the day's attendance ``status`` is untouched, so a person
+    who worked that day still shows as present."""
+    kind = name = htype = None
+    if d in holidays:
+        kind = "holiday"
+        name, htype = holidays[d]
+    elif _sunday(d) and emp.employment_type != "production":
+        kind = "weekly_off"
+    return {
+        "dayKind": kind,
+        "holidayName": name,
+        "holidayType": htype,
+        "isCasualLeave": d in casual,
+    }
+
+
 def late_pool_summary(records, approved_permission_count: int, settings, counted_dates=None) -> dict:
     """
     THE one Late Detection pool for a month -payroll, MonthlyShiftSummary and the employee

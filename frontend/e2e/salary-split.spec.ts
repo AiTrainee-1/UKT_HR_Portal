@@ -2,12 +2,12 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 import ExcelJS from "exceljs";
 import { loginAsHr } from "./helpers";
 
-// The salary split: 50% (Basic + DA + Retention Allowance) + 50% (Other + Petrol + RHA + Special Allowance + CA),
+// The salary split: 50% (Basic + DA + Retaining Allowance) + 50% (Other + Petrol + HRA + Special Allowance + CA),
 // worked out from the salary, editable, and always kept at exactly 50% + 50%.
 
 const box = (page: Page, key: string) => page.getByTestId(`split-input-${key}`);
-const FIRST = ["basic", "da", "retentionAllowance"];
-const SECOND = ["otherAllowance", "petrolAllowance", "rha", "specialAllowance", "ca"];
+const FIRST = ["basic", "da", "retainingAllowance"];
+const SECOND = ["otherAllowance", "petrolAllowance", "hra", "specialAllowance", "ca"];
 
 async function values(page: Page, keys: string[]) {
   return Promise.all(keys.map((k) => box(page, k).inputValue()));
@@ -55,7 +55,7 @@ test("a split that is not 50% + 50% is flagged live and blocks Save", async ({ p
 
   await box(page, "basic").fill("9000");
   await expect(page.getByTestId("split-status")).toContainText(
-    "First portion (Basic + DA + Retention Allowance) is ₹23,333.33",
+    "First portion (Basic + DA + Retaining Allowance) is ₹23,333.33",
   );
   await expect(page.getByTestId("split-status")).toContainText("must be 50% of the salary (₹21,500.00)");
   await expect(page.getByTestId("split-first-total")).toContainText("over");
@@ -81,8 +81,8 @@ test("a manual edit that keeps both portions at 50% saves, for a weekly salary t
 
   await box(page, "basic").fill("1500");
   await box(page, "da").fill("500");
-  await box(page, "retentionAllowance").fill("1000");
-  await box(page, "rha").fill("1000");
+  await box(page, "retainingAllowance").fill("1000");
+  await box(page, "hra").fill("1000");
   await box(page, "ca").fill("200");
   await box(page, "otherAllowance").fill("400");
   await box(page, "petrolAllowance").fill("400");
@@ -100,10 +100,10 @@ test("a manual edit that keeps both portions at 50% saves, for a weekly salary t
   expect(emp.salaryBreakup).toEqual({
     basic: 1500,
     da: 500,
-    retentionAllowance: 1000,
+    retainingAllowance: 1000,
     otherAllowance: 400,
     petrolAllowance: 400,
-    rha: 1000,
+    hra: 1000,
     specialAllowance: 1000,
     ca: 200,
   });
@@ -173,7 +173,7 @@ test("an older employee with no split gets a suggestion to review, and saving re
   await page.getByRole("button", { name: "Save Changes" }).click();
   await expect(page.getByText("Employee updated successfully").first()).toBeVisible();
   const raised = await (await page.request.get(`/api/employees/${asha!.id}`, { headers })).json();
-  expect([raised.salaryAmount, raised.salaryBreakup.basic, raised.salaryBreakup.rha]).toEqual([30000, 5000, 3000]);
+  expect([raised.salaryAmount, raised.salaryBreakup.basic, raised.salaryBreakup.hra]).toEqual([30000, 5000, 3000]);
 });
 
 test("the employee page shows the split beside the salary", async ({ page }) => {
@@ -182,7 +182,7 @@ test("the employee page shows the split beside the salary", async ({ page }) => 
   await page.goto(`/hr/employees/${asha!.id}`);
   const summary = page.getByTestId("salary-split-summary");
   await expect(summary).toContainText("First portion · 50%");
-  await expect(summary).toContainText("Retention Allowance");
+  await expect(summary).toContainText("Retaining Allowance");
   await expect(summary).toContainText("Second portion · 50%");
   await expect(summary).toContainText("₹5,000.00");
 });
@@ -198,10 +198,10 @@ test("the Compensation page's CTC Breakdown shows the split: recorded, automatic
   for (const name of [
     "Basic",
     "DA",
-    "Retention Allowance",
+    "Retaining Allowance",
     "Other Allowance",
     "Petrol Allowance",
-    "RHA",
+    "HRA",
     "Special Allowance",
     "CA",
   ]) {
@@ -260,11 +260,11 @@ test("the Compensation page's CTC Breakdown shows the split: recorded, automatic
   expect(header.slice(4, 15)).toEqual([
     "BASIC",
     "DA",
-    "RETENTION ALLOWANCE",
+    "Retaining Allowance",
     "FIRST PORTION (50%)",
     "OTHER ALLOWANCE",
     "PETROL ALLOWANCE",
-    "RHA",
+    "HRA",
     "SPECIAL ALLOWANCE",
     "CA",
     "SECOND PORTION (50%)",
@@ -318,10 +318,10 @@ test("the bulk-upload template carries the eight split columns, and the upload w
   const split = [
     "Basic",
     "DA",
-    "Retention Allowance",
+    "Retaining Allowance",
     "Other Allowance",
     "Petrol Allowance",
-    "RHA",
+    "HRA",
     "Special Allowance",
     "CA",
   ];
@@ -378,6 +378,6 @@ test("the bulk-upload template carries the eight split columns, and the upload w
 
   const ok = await findEmployee(page, auth, "BULKOK");
   const emp = await (await page.request.get(`/api/employees/${ok!.id}`, { headers: auth })).json();
-  expect(emp.salaryBreakup).toMatchObject({ basic: 7166.67, da: 7166.67, retentionAllowance: 7166.66, ca: 4300 });
+  expect(emp.salaryBreakup).toMatchObject({ basic: 7166.67, da: 7166.67, retainingAllowance: 7166.66, ca: 4300 });
   expect(await findEmployee(page, auth, "BULKBAD")).toBeUndefined();
 });

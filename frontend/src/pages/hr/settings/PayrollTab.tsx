@@ -379,10 +379,10 @@ export default function PayrollTab() {
               </p>
               <ul className="list-disc pl-5 space-y-0.5">
                 <li>
-                  <strong>First portion (50%)</strong> = Basic + DA + Retention Allowance
+                  <strong>First portion (50%)</strong> = Basic + DA + Retaining Allowance
                 </li>
                 <li>
-                  <strong>Second portion (50%)</strong> = Other Allowance + Petrol Allowance + RHA + Special Allowance +
+                  <strong>Second portion (50%)</strong> = Other Allowance + Petrol Allowance + HRA + Special Allowance +
                   CA
                 </li>
               </ul>

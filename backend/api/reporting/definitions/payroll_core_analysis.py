@@ -806,8 +806,8 @@ def _ctc_run(ctx) -> ReportResult:
     automatic = sum(1 for r in rows if not r["splitRecorded"])
     all_notes = [
         "ESTIMATE, not a statutory figure. It mirrors the Compensation page: the salary is shown as each employee's "
-        "50% + 50% split (Basic + DA + Retention Allowance, then Other + Petrol + RHA + Special Allowance + CA), employer "
-        "PF = the PF rate x the first portion (Basic + DA + Retention Allowance) with no wage cap or EPS split, and "
+        "50% + 50% split (Basic + DA + Retaining Allowance, then Other + Petrol + HRA + Special Allowance + CA), employer "
+        "PF = the PF rate x the first portion (Basic + DA + Retaining Allowance) with no wage cap or EPS split, and "
         "employer ESI = salary x the EMPLOYEE ESI rate when salary is within the ESI ceiling (the statutory employer "
         "rate is 3.25%, so this understates it).",
         "Annual CTC = (monthly salary + employer PF + employer ESI) x 12. Rates come from each employee's branch settings.",
@@ -842,13 +842,13 @@ register(
             ColumnSpec("branch", "Branch", TEXT, 1.2),
             ColumnSpec("employmentType", "Type", BADGE, 1.0),
             ColumnSpec("splitStatus", "Salary split", BADGE, 1.1),
-            # First portion (50%): Basic + DA + Retention Allowance. Second portion (50%): the other five.
+            # First portion (50%): Basic + DA + Retaining Allowance. Second portion (50%): the other five.
             _cur("basic", "Basic"),
             _cur("da", "DA"),
-            _cur("retentionAllowance", "Retention Allowance"),
+            _cur("retainingAllowance", "Retaining Allowance"),
             _cur("otherAllowance", "Other Allowance"),
             _cur("petrolAllowance", "Petrol Allowance"),
-            _cur("rha", "RHA"),
+            _cur("hra", "HRA"),
             _cur("specialAllowance", "Special Allowance"),
             _cur("ca", "CA"),
             _cur("employerPf", "Employer PF (est.)"),

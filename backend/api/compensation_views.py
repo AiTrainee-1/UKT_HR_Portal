@@ -1,7 +1,7 @@
 """Compensation -read-only CTC breakdown per employee.
 
-Purely a display/reporting feature: shows each employee's 50% + 50% salary split (Basic, DA, Retention Allowance |
-Other, Petrol, RHA, Special Allowance, CA -salary_split.py) with the Employer PF / Employer ESI / Annual CTC worked
+Purely a display/reporting feature: shows each employee's 50% + 50% salary split (Basic, DA, Retaining Allowance |
+Other, Petrol, HRA, Special Allowance, CA -salary_split.py) with the Employer PF / Employer ESI / Annual CTC worked
 out from it (ctc.py, shared with the Report Center's CTC statement). Deliberately does NOT touch, read from, or feed
 back into the actual payroll generation engine (_generate_staff_payroll/_generate_production_payroll in
 payroll_views.py), which keeps its own calculation exactly as it already was.

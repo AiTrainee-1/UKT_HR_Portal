@@ -14,30 +14,47 @@ from .clock import ist_today
 from .models import ShiftTemplate, EmployeeShiftAssignment, Employee
 
 
-def auto_assign_production_shift(emp: Employee, effective_from: Optional[date] = None) -> bool:
+def auto_assign_production_shift(
+    emp: Employee,
+    effective_from: Optional[date] = None,
+    *,
+    is_new: bool = False,
+    shift_cache: Optional[dict] = None,
+) -> bool:
     """
     Assign the production shift to a production employee if they don't already
     have an active shift assignment.  Returns True if a new assignment was created.
     Production shifts are gender-agnostic -every production employee uses the
     same shift configuration regardless of gender.
+
+    A bulk upload creates hundreds of employees in one request: `is_new` says the
+    employee was created a moment ago (so there is no assignment to look for) and
+    `shift_cache` ({branch id: shift or None}, kept by the caller) remembers which
+    shift each branch uses, so the templates are searched once per branch instead
+    of once per employee.
     """
     if emp.employment_type != "production" or emp.status != "active":
         return False
-    if EmployeeShiftAssignment.objects.filter(employee=emp, effective_to__isnull=True).exists():
+    if not is_new and EmployeeShiftAssignment.objects.filter(employee=emp, effective_to__isnull=True).exists():
         return False
 
-    # Now that templates carry a branch, pick from the employee's OWN branch
-    # first -otherwise a new Unit1 joiner could silently inherit Head
-    # Office's timings, and their attendance would be graded against the
-    # wrong shift. Unbranched templates are the fallback so employees added
-    # before any per-branch shift exists still get one.
-    base = ShiftTemplate.objects.filter(shift_type="production", is_active=True)
-    shift = (
-        base.filter(branch_id=emp.branch_id).order_by("-is_default", "id").first()
-        if emp.branch_id else None
-    )
-    if shift is None:
-        shift = base.filter(branch__isnull=True).order_by("-is_default", "id").first()
+    if shift_cache is not None and emp.branch_id in shift_cache:
+        shift = shift_cache[emp.branch_id]
+    else:
+        # Now that templates carry a branch, pick from the employee's OWN branch
+        # first -otherwise a new Unit1 joiner could silently inherit Head
+        # Office's timings, and their attendance would be graded against the
+        # wrong shift. Unbranched templates are the fallback so employees added
+        # before any per-branch shift exists still get one.
+        base = ShiftTemplate.objects.filter(shift_type="production", is_active=True)
+        shift = (
+            base.filter(branch_id=emp.branch_id).order_by("-is_default", "id").first()
+            if emp.branch_id else None
+        )
+        if shift is None:
+            shift = base.filter(branch__isnull=True).order_by("-is_default", "id").first()
+        if shift_cache is not None:
+            shift_cache[emp.branch_id] = shift
     if not shift:
         return False
 

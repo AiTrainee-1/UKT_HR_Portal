@@ -21,7 +21,7 @@ from .models import (
 
 BASE = "/api/compensation"
 TODAY = date.today()
-SPLIT_KEYS = ("basic", "da", "retentionAllowance", "otherAllowance", "petrolAllowance", "rha", "specialAllowance", "ca")
+SPLIT_KEYS = ("basic", "da", "retainingAllowance", "otherAllowance", "petrolAllowance", "hra", "specialAllowance", "ca")
 
 
 def _hr(username="cp_admin", super_admin=True, role=None):
@@ -78,8 +78,8 @@ class CompensationBase(TestCase):
 
 
 class CtcBreakdownSplitTests(CompensationBase):
-    """The CTC Breakdown shows each employee's 50% + 50% salary split (Basic, DA, Retention Allowance | Other, Petrol,
-    RHA, Special Allowance, CA) and works employer PF out of the first portion. Display only: nothing is written."""
+    """The CTC Breakdown shows each employee's 50% + 50% salary split (Basic, DA, Retaining Allowance | Other, Petrol,
+    HRA, Special Allowance, CA) and works employer PF out of the first portion. Display only: nothing is written."""
 
     def setUp(self):
         super().setUp()
@@ -100,8 +100,7 @@ class CtcBreakdownSplitTests(CompensationBase):
         self.assertEqual(
             (r["employerPf"], r["employerEsi"], r["grossMonthly"], r["annualCtc"]), (1800.0, 0.0, 30000.0, 381600.0)
         )
-        # the old percentage-based columns are gone
-        self.assertNotIn("hra", r)
+        # the old percentage-based Allowances column is gone (`hra` is now the split's own HRA component, above)
         self.assertNotIn("allowances", r)
 
     def test_a_recorded_split_is_shown_as_recorded(self):
@@ -110,10 +109,10 @@ class CtcBreakdownSplitTests(CompensationBase):
             {
                 "basic": Decimal("9000"),
                 "da": Decimal("3000"),
-                "retention_allowance": Decimal("3000"),
+                "retaining_allowance": Decimal("3000"),
                 "other_allowance": Decimal("5000"),
                 "petrol_allowance": Decimal("2000"),
-                "rha": Decimal("4000"),
+                "hra": Decimal("4000"),
                 "special_allowance": Decimal("3000"),
                 "ca": Decimal("1000"),
             },

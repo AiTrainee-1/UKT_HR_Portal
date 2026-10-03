@@ -198,15 +198,15 @@ For a salaried employee (Salary Type **Monthly** or **Weekly**) the salary is al
 
 | Portion | Share | Made up of |
 |---|---|---|
-| **First portion** | 50% of the salary | Basic + DA + Retention Allowance |
-| **Second portion** | 50% of the salary | Other Allowance + Petrol Allowance + RHA + Special Allowance + CA |
+| **First portion** | 50% of the salary | Basic + DA + Retaining Allowance |
+| **Second portion** | 50% of the salary | Other Allowance + Petrol Allowance + HRA + Special Allowance + CA |
 
 - **It fills itself in.** As soon as you type the Salary Amount, all eight amounts appear (each portion is shared equally between its components, and if the salary has an odd paisa it goes to the first portion). Type a different salary and they are worked out again.
 - **You can change any amount.** For example, put most of the first portion into Basic. The two portions show a live total with a green tick when correct or how much is over / short in red.
 - **The 50% + 50% rule is mandatory.** Save is blocked until each portion is exactly half of the salary (so the two halves add up to the salary). **Reset to automatic split** puts the equal split back.
 - **Older employees** with no split on record get a suggested split on their Edit page; saving records it. Employees paid **per shift** (Production) have no monthly amount, so no split.
 - **When the salary changes** (Edit Employee, an Increment, or a bulk update) the split is re-worked to the new salary, keeping the way each half was shared.
-- **Bulk upload:** the last eight template columns (Basic … CA) hold the split. Leave them blank and it is done for you; if you fill them, blanks count as 0 and each half must be exactly 50%. A template downloaded before these columns existed still uploads.
+- **Bulk upload:** the last eight template columns (Basic … CA) hold the split. Leave them blank and it is done for you; if you fill them, blanks count as 0 and each half must be exactly 50%. A template downloaded before these columns existed still uploads. So does one downloaded before two column names were corrected (RHA is now **HRA**, Retention Allowance is now **Retaining Allowance**): the old headers are read as the new ones.
 - **Nothing else changes.** The split is a record of how the salary is made up; payroll, attendance and salary slips still calculate from the Salary Amount exactly as before.
 
 #### Employee Profile
@@ -232,6 +232,8 @@ Add many employees at once, or fix many existing ones, with Excel. **Staff and P
 
 - **Add new employees:** download the **Staff** or **Production** template (each has its own columns: Staff has Salary Type, Salary Amount and the 50%+50% split; Production has Salary Per Shift), fill it in and upload it. Rows starting with `SAMPLE` are examples and are always skipped. Only Employee Code and First Name are required. A Production sheet uploaded in the Staff section (or the other way round) is refused with a clear message.
 - **Active employees / Inactive employees:** download the active (or inactive) employees of that kind, edit the cells you want to change, and upload the file back. Rows are matched by Employee Code, a blank cell never erases stored data, and a **Status** column (Active / Inactive) lets you retire someone or bring them back. A row from another list (for example a Production employee in the Staff file) is refused.
+- **Departments and designations are created for you.** If a row names a department or a designation that does not exist yet (say "Quality Checker"), it is created and given to that employee: the designation under the employee's department, the department in the employee's branch. Spelling is matched ignoring capitals and extra spaces, and "-", "N/A" or "nil" mean *none*. The check lists what **will be created**, and after the upload what **was created**, so a typo shows up before it becomes a new designation.
+- **Big files:** up to 5,000 employees and 10 MB per file. If a file is too big to process in one go the server tells you, **changes nothing**, and says how many rows to split it into; when you upload the parts, leave *employees not in the file* on **Keep**.
 - **Every file is checked first.** Nothing is saved when you choose the file: you see every row and what would happen to it, then press **Import / Apply**. The result shows the tallies and, for every row, the Excel row number, the employee code and name, the outcome (Created, Updated, Unchanged, Duplicate, Invalid, Failed, Not found, Skipped) and the reason or the fields that changed. **Needs attention** lists only the rows that did not go through. **Report** downloads the same as an Excel file.
 - **Employees missing from an update file:** if people of that kind are not in the file you uploaded, you are asked what to do with them: **leave them as they are** (the default), **make them Inactive**, or **delete them and all their data**. You can decide one by one, and deleting asks you to type DELETE. Nothing is ever removed on its own.
 
@@ -495,12 +497,12 @@ The **Compensation** page (sidebar) has a **CTC Breakdown** tab that lists every
 
 | | Columns |
 |---|---|
-| **First portion · 50%** | Basic, DA, Retention Allowance |
-| **Second portion · 50%** | Other Allowance, Petrol Allowance, RHA, Special Allowance, CA |
+| **First portion · 50%** | Basic, DA, Retaining Allowance |
+| **Second portion · 50%** | Other Allowance, Petrol Allowance, HRA, Special Allowance, CA |
 
 followed by **Employer PF**, **Employer ESI**, **Gross Monthly** and **Annual CTC**.
 
-- **Employer PF** = the PF rate (Settings → Payroll → Payroll Rules) × the **first portion** (Basic + DA + Retention Allowance). Employer ESI = the ESI rate × the salary, only while the salary is within the ESI ceiling. Annual CTC = (monthly salary + employer PF + employer ESI) × 12.
+- **Employer PF** = the PF rate (Settings → Payroll → Payroll Rules) × the **first portion** (Basic + DA + Retaining Allowance). Employer ESI = the ESI rate × the salary, only while the salary is within the ESI ceiling. Annual CTC = (monthly salary + employer PF + employer ESI) × 12.
 - An employee whose split was never saved (added before the split existed) shows the **automatic** 50% + 50% split with an amber **AUTO SPLIT** tag; the page says how many. Open their Edit Employee page and save to record it — the totals do not change.
 - An employee with no monthly salary (paid per shift) shows dashes.
 - **Export to Excel** includes the same columns plus the two portion totals and whether the split is *Recorded* or *Automatic*. The Report Center's *Employer Cost / CTC Statement* uses the very same figures.

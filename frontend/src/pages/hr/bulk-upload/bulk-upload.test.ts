@@ -57,10 +57,10 @@ const COMMON_TAIL = [
 const SPLIT = [
   "Basic",
   "DA",
-  "Retention Allowance",
+  "Retaining Allowance",
   "Other Allowance",
   "Petrol Allowance",
-  "RHA",
+  "HRA",
   "Special Allowance",
   "CA",
 ];
@@ -169,10 +169,10 @@ describe("an employee as a row of the sheet", () => {
     salaryBreakup: {
       basic: 4000,
       da: 4000,
-      retentionAllowance: 4000,
+      retainingAllowance: 4000,
       otherAllowance: 2400,
       petrolAllowance: 2400,
-      rha: 2400,
+      hra: 2400,
       specialAllowance: 2400,
       ca: 2400,
     } as never,
@@ -248,6 +248,12 @@ describe("reviewing the rows of a result", () => {
     expect(filterRows(rows, "all", "department")[0].row).toBe(5);
     expect(filterRows(rows, "all", "person 7")[0].row).toBe(7);
     expect(filterRows(rows, "problems", "already exists")).toHaveLength(1);
+  });
+
+  it("also searches what was created on the way", () => {
+    const withNote = [...rows, row(8, "updated", { notes: ["Created designation 'Quality Checker' in Stitching"] })];
+    expect(filterRows(withNote, "all", "quality checker").map((r) => r.row)).toEqual([8]);
+    expect(filterRows(rows, "all", "quality checker")).toHaveLength(0); // an older server sends no notes at all
   });
 
   it("adds up what needs attention", () => {

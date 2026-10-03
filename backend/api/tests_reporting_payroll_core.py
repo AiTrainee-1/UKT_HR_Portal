@@ -2600,10 +2600,10 @@ class EmployerCostTests(PayrollCoreBase):
                     "splitStatus",
                     "basic",
                     "da",
-                    "retentionAllowance",
+                    "retainingAllowance",
                     "otherAllowance",
                     "petrolAllowance",
-                    "rha",
+                    "hra",
                     "specialAllowance",
                     "ca",
                     "employerPf",
@@ -2619,10 +2619,10 @@ class EmployerCostTests(PayrollCoreBase):
                 # nobody here has a recorded split, so the automatic 50% + 50% split of 24,000 is shown
                 "basic": 4000.0,
                 "da": 4000.0,
-                "retentionAllowance": 4000.0,
+                "retainingAllowance": 4000.0,
                 "otherAllowance": 2400.0,
                 "petrolAllowance": 2400.0,
-                "rha": 2400.0,
+                "hra": 2400.0,
                 "specialAllowance": 2400.0,
                 "ca": 2400.0,
                 "employerPf": 1440.0,
@@ -2659,10 +2659,10 @@ class EmployerCostTests(PayrollCoreBase):
         Employee.objects.filter(pk=self.e2.pk).update(
             salary_basic=Decimal("8000.00"),
             salary_da=Decimal("1200.00"),
-            salary_retention_allowance=Decimal("1000.00"),
+            salary_retaining_allowance=Decimal("1000.00"),
             salary_other_allowance=Decimal("2000.00"),
             salary_petrol_allowance=Decimal("3000.00"),
-            salary_rha=Decimal("1500.00"),
+            salary_hra=Decimal("1500.00"),
             salary_special_allowance=Decimal("2200.00"),
             salary_ca=Decimal("1500.00"),
         )
@@ -2670,10 +2670,10 @@ class EmployerCostTests(PayrollCoreBase):
         keys = (
             "basic",
             "da",
-            "retentionAllowance",
+            "retainingAllowance",
             "otherAllowance",
             "petrolAllowance",
-            "rha",
+            "hra",
             "specialAllowance",
             "ca",
             "employerPf",
@@ -2688,7 +2688,7 @@ class EmployerCostTests(PayrollCoreBase):
             self.assertEqual({k: row[k] for k in keys}, {k: expected[k] for k in keys}, e.employee_code)
         c = _by_code(b, "1003")
         self.assertEqual(
-            (c["basic"] + c["da"] + c["retentionAllowance"], c["employerPf"]), (15000.0, 1500.0)
+            (c["basic"] + c["da"] + c["retainingAllowance"], c["employerPf"]), (15000.0, 1500.0)
         )  # PF 10% of the first portion (half of 30,000)
         d = _by_code(b, "1002")  # the recorded split is shown as recorded, not re-worked
         self.assertEqual((d["basic"], d["petrolAllowance"], d["employerPf"]), (8000.0, 3000.0, 1224.0))
@@ -2700,10 +2700,10 @@ class EmployerCostTests(PayrollCoreBase):
         Employee.objects.filter(pk=self.e1.pk).update(
             salary_basic=Decimal("12000.00"),
             salary_da=Decimal("0"),
-            salary_retention_allowance=Decimal("0"),
+            salary_retaining_allowance=Decimal("0"),
             salary_other_allowance=Decimal("12000.00"),
             salary_petrol_allowance=Decimal("0"),
-            salary_rha=Decimal("0"),
+            salary_hra=Decimal("0"),
             salary_special_allowance=Decimal("0"),
             salary_ca=Decimal("0"),
         )
@@ -2716,10 +2716,10 @@ class EmployerCostTests(PayrollCoreBase):
         Employee.objects.filter(pk=self.e1.pk).update(
             salary_basic=Decimal("1000.00"),
             salary_da=Decimal("0"),
-            salary_retention_allowance=Decimal("0"),
+            salary_retaining_allowance=Decimal("0"),
             salary_other_allowance=Decimal("1000.00"),
             salary_petrol_allowance=Decimal("0"),
-            salary_rha=Decimal("0"),
+            salary_hra=Decimal("0"),
             salary_special_allowance=Decimal("0"),
             salary_ca=Decimal("0"),
         )  # a valid split of 2,000, but the salary is 24,000
@@ -2738,7 +2738,7 @@ class EmployerCostTests(PayrollCoreBase):
         self.assertEqual(
             (
                 row["employmentType"],
-                row["basic"] + row["da"] + row["retentionAllowance"],
+                row["basic"] + row["da"] + row["retainingAllowance"],
                 row["employerPf"],
                 row["employerEsi"],
             ),

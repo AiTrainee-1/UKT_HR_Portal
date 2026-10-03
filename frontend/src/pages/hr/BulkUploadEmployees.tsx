@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { getListEmployeesQueryKey, useListEmployees } from "@/lib/api-client";
+import { getListEmployeesQueryKey, useListEmployeesLite } from "@/lib/api-client";
 import { todayStamp } from "@/lib/exportUtils";
 import { cn } from "@/lib/utils";
 import CategorySwitch from "./bulk-upload/CategorySwitch";
@@ -71,7 +71,8 @@ export default function BulkUploadEmployees() {
   const { toast } = useToast();
   const { user } = useAuth();
   const queryClient = useQueryClient();
-  const { data: employees, isLoading } = useListEmployees();
+  // Without the photos: this page never shows one, and the full directory carries every photo's bytes.
+  const { data: employees, isLoading } = useListEmployeesLite();
 
   const [category, setCategory] = useState<Category>("staff");
   const [tab, setTab] = useState<Tab>("add");

@@ -565,7 +565,7 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
     if not emp:
         return Response({"error": "Employee not found"}, status=404)
 
-    from .attendance_final import compute_month_records, month_summary_from_records
+    from .attendance_final import compute_month_records, day_calendar_facts, day_kind_json, month_summary_from_records
 
     today = ist_today()
     month = int(request.query_params.get("month") or today.month)
@@ -618,6 +618,8 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
         except Exception:
             pass
 
+    holidays_by_date, casual_dates = day_calendar_facts(emp, year, month)
+
     records = []
     for day in range(1, days_in_month + 1):
         cur_date = date_type(year, month, day)
@@ -653,6 +655,9 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
             "permissionAfternoonWithRequest": bool(rec.permission_afternoon_with_request) if rec else False,
             "isCompensationDay": bool(rec.is_compensation_day) if rec else False,
             "isHalfDayLeave": bool(rec.is_half_day_leave) if rec else False,
+            # Additive: what kind of day it is (declared holiday / Sunday off) and approved Casual Leave -the
+            # employee calendar colours them apart. Sent for future days too, so upcoming holidays show.
+            **day_kind_json(emp, cur_date, holidays_by_date, casual_dates),
             "present":      status in ("present", "half_shift"),
             "firstPunch":   first_in,
             "lastPunch":    last_out,
@@ -2029,7 +2034,7 @@ def employee_shift_monthly_stats(request: Request) -> Response:
     days_in_month = _cal.monthrange(y, m)[1]
     today = _today()
 
-    from .attendance_final import compute_month_records, month_summary_from_records
+    from .attendance_final import compute_month_records, day_calendar_facts, day_kind_json, month_summary_from_records
 
     # The exact same day-by-day engine payroll and the HR portal's
     # Attendance Search / Attendance page use -so this endpoint (mobile My
@@ -2095,6 +2100,8 @@ def employee_shift_monthly_stats(request: Request) -> Response:
             leave_date_map[cur.isoformat()] = getattr(lr, "type", "Leave")
             cur += timedelta(days=1)
 
+    holidays_by_date, casual_dates = day_calendar_facts(emp, y, m)
+
     daily = []
     for day in range(1, days_in_month + 1):
         cur = date_type(y, m, day)
@@ -2149,6 +2156,7 @@ def employee_shift_monthly_stats(request: Request) -> Response:
             "permissionAfternoon": bool(rec.permission_afternoon) if rec else False,
             "isCompensationDay": bool(rec.is_compensation_day) if rec else False,
             "isHalfDayLeave": bool(rec.is_half_day_leave) if rec else False,
+            **day_kind_json(emp, cur, holidays_by_date, casual_dates),
         })
 
     summary = month_summary_from_records(list(day_records.values()))

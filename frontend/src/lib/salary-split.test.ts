@@ -16,7 +16,7 @@ import {
 } from "./salary-split";
 
 // The same worked examples backend/api/tests_salary_split.py checks against salary_split.py: (salary, first portion
-// Basic / DA / Retention, second portion Other / Petrol / RHA / Special / CA). If either side changes, both fail.
+// Basic / DA / Retaining, second portion Other / Petrol / HRA / Special / CA). If either side changes, both fail.
 const WORKED_EXAMPLES: [string, string[], string[]][] = [
   ["43000", ["7166.67", "7166.67", "7166.66"], ["4300.00", "4300.00", "4300.00", "4300.00", "4300.00"]],
   ["24000", ["4000.00", "4000.00", "4000.00"], ["2400.00", "2400.00", "2400.00", "2400.00", "2400.00"]],
@@ -34,11 +34,11 @@ const sum = (values: SplitValues, keys: string[]) =>
 
 describe("the fields", () => {
   it("are the ones asked for, in the two portions", () => {
-    expect(FIRST_PORTION.map((f) => f.label)).toEqual(["Basic", "DA", "Retention Allowance"]);
+    expect(FIRST_PORTION.map((f) => f.label)).toEqual(["Basic", "DA", "Retaining Allowance"]);
     expect(SECOND_PORTION.map((f) => f.label)).toEqual([
       "Other Allowance",
       "Petrol Allowance",
-      "RHA",
+      "HRA",
       "Special Allowance",
       "CA",
     ]);
@@ -123,14 +123,14 @@ describe("checkSplit", () => {
     const check = checkSplit("43000", moved);
     expect(check.ok).toBe(false);
     expect(check.message).toBe(
-      "First portion (Basic + DA + Retention Allowance) is ₹22,500.00; it must be 50% of the salary (₹21,500.00).",
+      "First portion (Basic + DA + Retaining Allowance) is ₹22,500.00; it must be 50% of the salary (₹21,500.00).",
     );
     expect(check.first).toMatchObject({ sum: 2250000, ok: false, difference: -100000 });
     expect(check.second).toMatchObject({ sum: 2050000, ok: false, difference: 100000 });
 
     const short = checkSplit("43000", { ...good, ca: "4200.00" });
     expect(short.message).toBe(
-      "Second portion (Other + Petrol + RHA + Special Allowance + CA) is ₹21,400.00; it must be 50% of the salary (₹21,500.00).",
+      "Second portion (Other + Petrol + HRA + Special Allowance + CA) is ₹21,400.00; it must be 50% of the salary (₹21,500.00).",
     );
     expect(short.second).toMatchObject({ ok: false, difference: 10000 });
   });
@@ -153,13 +153,13 @@ describe("checkSplit", () => {
   });
 
   it("flags each box that is blank, not a number, negative or too precise", () => {
-    const check = checkSplit("43000", { ...good, basic: "", da: "abc", retentionAllowance: "-5", rha: "1.234" });
+    const check = checkSplit("43000", { ...good, basic: "", da: "abc", retainingAllowance: "-5", hra: "1.234" });
     expect(check.ok).toBe(false);
     expect(check.fieldErrors).toEqual({
       basic: "Enter an amount (0 if none)",
       da: "Use a number with at most 2 decimals",
-      retentionAllowance: "Cannot be negative",
-      rha: "Use a number with at most 2 decimals",
+      retainingAllowance: "Cannot be negative",
+      hra: "Use a number with at most 2 decimals",
     });
     expect(check.message).toBe("Basic: Enter an amount (0 if none).");
   });
@@ -180,10 +180,10 @@ describe("conversion to and from the API", () => {
     const stored = {
       basic: 7166.67,
       da: 7166.67,
-      retentionAllowance: 7166.66,
+      retainingAllowance: 7166.66,
       otherAllowance: 4300,
       petrolAllowance: 4300,
-      rha: 4300,
+      hra: 4300,
       specialAllowance: 4300,
       ca: 4300,
     };

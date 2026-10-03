@@ -223,7 +223,7 @@ backend/
 │   ├── salary_slip_views.py / salary_slip_bulk_pdf.py / salary_slip_bulk_progress.py
 │   ├── whatsapp_service.py / whatsapp_views.py / whatsapp_bulk_progress.py / idcard_render.py
 │   ├── email_catalog.py / email_service.py / email_control_views.py   # Every email goes through email_service; Gmail Control page (gmail-integration.md)
-│   ├── salary_split.py                 # The mandatory 50% + 50% salary split (Basic/DA/Retention | Other/Petrol/RHA/Special/CA); descriptive, payroll ignores it
+│   ├── salary_split.py                 # The mandatory 50% + 50% salary split (Basic/DA/Retaining | Other/Petrol/HRA/Special/CA); descriptive, payroll ignores it
 │   ├── ctc.py                          # Employer PF / ESI / annual CTC from the salary split; shared by the Compensation page and the Report Center CTC statement
 │   ├── approval_workflow.py            # Approval pipelines: the 11 workflows, step rules, decide()/can_act(), per-request `approval` block, ON/OFF guard (Section 4.13)
 │   ├── approval_workflow_views.py      # Approval Workflow Control API: GET/PUT/DELETE /approval-workflows, GET /approval-summary

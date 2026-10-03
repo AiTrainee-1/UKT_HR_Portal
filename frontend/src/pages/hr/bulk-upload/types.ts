@@ -19,6 +19,8 @@ export type RowReport = {
   warnings: string[];
   /** Update only: the fields that were changed. */
   changes: string[];
+  /** What was created on the way ("Created designation 'Tailor' in Stitching"): news, not a problem. */
+  notes?: string[];
 };
 
 export type RemovalAction = "keep" | "inactive" | "delete";
@@ -64,6 +66,9 @@ export type BulkResult = {
   counts: BulkCounts;
   rows: RowReport[];
   missing?: MissingEmployee[];
+  /** Departments / designations named in the sheet that did not exist and were created (a check: would be created). */
+  newDepartments?: { name: string; rows: number }[];
+  newDesignations?: { title: string; department: string | null; rows: number }[];
   scope?: { category: Category | null; employeeStatus: ListStatus | null; total: number; inFile: number | null };
 };
 

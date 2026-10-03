@@ -27,6 +27,7 @@ api/mobile_app_version_views.py
 api/models/__init__.py
 api/models/mail.py
 api/notification_views.py
+api/org_lookup.py
 api/otp_service.py
 api/otp_views.py
 api/reporting/__init__.py
@@ -101,9 +102,11 @@ api/tests_access_control.py
 api/tests_app_startup.py
 api/tests_approval_workflow.py
 api/tests_arrival_rules.py
+api/tests_attendance_day_kinds.py
 api/tests_compensation_page.py
 api/tests_email_control.py
 api/tests_employee_bulk.py
+api/tests_employee_bulk_designations.py
 api/tests_hod_department_roster.py
 api/tests_hod_one_per_employee.py
 api/tests_late_minute_rule.py

@@ -32,6 +32,16 @@ async function removeTestEmployees(page: Page) {
   }
 }
 
+// Departments and designations the tests make (the sheets name them and they are created): all start with "BU ".
+async function removeTestOrg(page: Page) {
+  const designations = (await api(page, "GET", "/api/designations")).body as { id: number; title: string }[];
+  for (const d of designations.filter((d) => d.title.startsWith("BU ")))
+    await api(page, "DELETE", `/api/designations/${d.id}`);
+  const departments = (await api(page, "GET", "/api/departments")).body as { id: number; name: string }[];
+  for (const d of departments.filter((d) => d.name.startsWith("BU ")))
+    await api(page, "DELETE", `/api/departments/${d.id}`);
+}
+
 async function makeEmployee(
   page: Page,
   code: string,
@@ -94,12 +104,14 @@ test.describe.configure({ mode: "serial" });
 test.beforeEach(async ({ page }) => {
   await loginAsHr(page);
   await removeTestEmployees(page);
+  await removeTestOrg(page);
   await page.goto("/hr/employees/bulk-upload");
   await expect(page.getByTestId("category-staff")).toBeVisible();
 });
 
 test.afterEach(async ({ page }) => {
   await removeTestEmployees(page);
+  await removeTestOrg(page);
 });
 
 test("Staff and Production are separate, with their own counts", async ({ page }) => {
@@ -127,7 +139,7 @@ test("each kind downloads its own template, with its own columns, samples and in
   const staffHeaders = headersOf(staffSheet);
   expect(staffHeaders).toContain("Salary Amount");
   expect(staffHeaders).toContain("Salary Type");
-  expect(staffHeaders).toContain("Retention Allowance");
+  expect(staffHeaders).toContain("Retaining Allowance");
   expect(staffHeaders).not.toContain("Salary Per Shift");
   expect(staffHeaders).not.toContain("Employment Type");
   expect(String(staffSheet.getCell(2, 1).value)).toBe("SAMPLE001");
@@ -378,4 +390,112 @@ test("on a phone the page fits the screen and the results become cards", async (
   await expect(page.getByTestId("bulk-results")).toBeVisible();
   await expect(page.getByTestId("bulk-result-table")).toBeHidden(); // cards, not the wide table
   expect(await fits()).toBe(true);
+});
+
+test("updating: a department and designation that do not exist yet are created and given to the employees, and the check says so first", async ({
+  page,
+}, testInfo) => {
+  for (const code of ["BU-S1", "BU-S2"]) await makeEmployee(page, code, "staff");
+  await page.reload();
+  await tab(page, /^Active employees/).click();
+  const { wb } = await downloaded(
+    page,
+    testInfo,
+    () => page.getByTestId("download-staff-active").click(),
+    "active.xlsx",
+  );
+  const ws = wb.getWorksheet("Employees")!;
+  const codeCol = columnOf(ws, "Employee Code");
+  for (let r = 2; r <= ws.rowCount; r += 1) {
+    if (!["BU-S1", "BU-S2"].includes(String(ws.getCell(r, codeCol).value))) continue;
+    ws.getCell(r, columnOf(ws, "Department")).value = "BU Packing";
+    ws.getCell(r, columnOf(ws, "Designation")).value = "BU Quality Checker";
+  }
+  await pick(page, "update", wb);
+
+  // the check: both are named as things that WILL be created, and nothing exists yet
+  await expect(page.getByTestId("bulk-result-message")).toContainText("2 employee(s) would be updated");
+  await expect(page.getByTestId("bulk-new-records")).toContainText("These will be created");
+  await expect(page.getByTestId("bulk-new-department")).toContainText("BU Packing · 2 employees");
+  await expect(page.getByTestId("bulk-new-designation")).toContainText(
+    "BU Quality Checker in BU Packing · 2 employees",
+  );
+  await page.getByRole("button", { name: /^All/ }).click();
+  await expect(page.getByTestId("bulk-row-note").first()).toContainText("Will create");
+  const before = (await api(page, "GET", "/api/designations")).body as { title: string }[];
+  expect(before.some((d) => d.title.startsWith("BU "))).toBe(false);
+
+  await page.getByTestId("bulk-apply").click();
+  await expect(page.getByTestId("bulk-result-message")).toContainText("Updated 2 employee(s)");
+  await expect(page.getByTestId("bulk-new-records")).toContainText("Created, because");
+  const now = (await employees(page)) as unknown as {
+    employeeCode: string;
+    designationTitle: string | null;
+    departmentName: string | null;
+  }[];
+  for (const code of ["BU-S1", "BU-S2"]) {
+    const e = now.find((x) => x.employeeCode === code)!;
+    expect([e.designationTitle, e.departmentName], code).toEqual(["BU Quality Checker", "BU Packing"]);
+  }
+  const made = (
+    (await api(page, "GET", "/api/designations")).body as { title: string; departmentName: string }[]
+  ).filter((d) => d.title === "BU Quality Checker");
+  expect(made).toHaveLength(1); // one designation for both employees
+  expect(made[0].departmentName).toBe("BU Packing");
+});
+
+test("adding new employees: a designation and department that do not exist yet are created for them", async ({
+  page,
+}, testInfo) => {
+  const { wb } = await downloaded(
+    page,
+    testInfo,
+    () => page.getByTestId("download-template-staff").click(),
+    "staff.xlsx",
+  );
+  const ws = wb.getWorksheet("Employees")!;
+  for (const code of ["BU-S1", "BU-S2"]) {
+    addEmployee(ws, {
+      "Employee Code": code,
+      "First Name": "Meera",
+      Branch: "E2E Head Office",
+      Department: "BU Packing",
+      Designation: "BU Packer",
+      "Salary Amount": 20000,
+    });
+  }
+  await pick(page, "create", wb);
+  await expect(page.getByTestId("bulk-result-message")).toContainText("2 employee(s) can be imported");
+  await expect(page.getByTestId("bulk-new-designation")).toContainText("BU Packer in BU Packing · 2 employees");
+  await page.getByTestId("bulk-apply").click();
+  await expect(page.getByTestId("bulk-result-message")).toContainText("Imported 2 employee(s)");
+  const now = (await employees(page)) as unknown as {
+    employeeCode: string;
+    designationTitle: string | null;
+    departmentName: string | null;
+  }[];
+  for (const code of ["BU-S1", "BU-S2"]) {
+    const e = now.find((x) => x.employeeCode === code)!;
+    expect([e.designationTitle, e.departmentName], code).toEqual(["BU Packer", "BU Packing"]);
+  }
+});
+
+test("a sheet with formatting left on hundreds of thousands of empty rows is read at once", async ({
+  page,
+}, testInfo) => {
+  await makeEmployee(page, "BU-S1", "staff");
+  await page.reload();
+  await tab(page, /^Active employees/).click();
+  const { wb } = await downloaded(
+    page,
+    testInfo,
+    () => page.getByTestId("download-staff-active").click(),
+    "active.xlsx",
+  );
+  const ws = wb.getWorksheet("Employees")!;
+  // what a formatted column leaves behind: a styled cell a very long way down
+  ws.getCell(400000, 1).font = { bold: true };
+  await pick(page, "update", wb);
+  await expect(page.getByTestId("bulk-result-message")).toContainText("already up to date", { timeout: 20_000 });
+  await expect(page.getByTestId("bulk-tile-invalid")).toContainText("0");
 });

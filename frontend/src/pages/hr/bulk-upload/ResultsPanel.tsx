@@ -1,5 +1,15 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Download, Info, Search, XCircle } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Info,
+  Search,
+  Sparkles,
+  XCircle,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -39,7 +49,7 @@ function Tile({ label, value, tone, testId }: { label: string; value: number; to
   );
 }
 
-function Details({ r }: { r: RowReport }) {
+function Details({ r, preview }: { r: RowReport; preview: boolean }) {
   return (
     <div className="space-y-1 text-xs leading-relaxed">
       {r.messages.map((m, i) => (
@@ -57,6 +67,11 @@ function Details({ r }: { r: RowReport }) {
           <span className="font-semibold">Changed:</span> {r.changes.join(", ")}
         </p>
       )}
+      {(r.notes ?? []).map((n, i) => (
+        <p key={`n${i}`} className="flex items-start gap-1 text-emerald-700" data-testid="bulk-row-note">
+          <Sparkles size={12} className="mt-0.5 shrink-0" /> {preview ? n.replace(/^Created /, "Will create ") : n}
+        </p>
+      ))}
       {r.warnings.map((w, i) => (
         <p key={`w${i}`} className="flex items-start gap-1 text-amber-700">
           <AlertTriangle size={12} className="mt-0.5 shrink-0" /> {w}
@@ -172,6 +187,30 @@ export default function ResultsPanel({ result, context }: Props) {
         )}
       </div>
 
+      {((result.newDesignations?.length ?? 0) > 0 || (result.newDepartments?.length ?? 0) > 0) && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4" data-testid="bulk-new-records">
+          <p className="mb-2 flex items-center gap-1.5 text-sm font-bold text-emerald-900">
+            <Sparkles size={14} className="text-emerald-600" />{" "}
+            {preview
+              ? "These will be created, because the sheet names them and they do not exist yet"
+              : "Created, because the sheet names them and they did not exist yet"}
+          </p>
+          <ul className="space-y-1 text-xs text-emerald-900">
+            {(result.newDepartments ?? []).map((d) => (
+              <li key={`d-${d.name}`} data-testid="bulk-new-department">
+                Department <span className="font-semibold">{d.name}</span> · {d.rows} employee{d.rows === 1 ? "" : "s"}
+              </li>
+            ))}
+            {(result.newDesignations ?? []).map((d) => (
+              <li key={`g-${d.department ?? ""}-${d.title}`} data-testid="bulk-new-designation">
+                Designation <span className="font-semibold">{d.title}</span>
+                {d.department ? ` in ${d.department}` : ""} · {d.rows} employee{d.rows === 1 ? "" : "s"}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {rows.length === 0 ? (
         <p className="rounded-xl border border-dashed p-6 text-center text-sm text-gray-500">
           The file has no employee rows.
@@ -249,7 +288,7 @@ export default function ResultsPanel({ result, context }: Props) {
                       <StatusChip status={r.status} preview={preview} />
                     </td>
                     <td className="px-4 py-3">
-                      <Details r={r} />
+                      <Details r={r} preview={preview} />
                     </td>
                   </tr>
                 ))}
@@ -275,7 +314,7 @@ export default function ResultsPanel({ result, context }: Props) {
                   </div>
                   <StatusChip status={r.status} preview={preview} />
                 </div>
-                <Details r={r} />
+                <Details r={r} preview={preview} />
               </div>
             ))}
           </div>

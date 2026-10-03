@@ -20,7 +20,7 @@ from .payroll_views import _generate_staff_payroll
 
 D = Decimal
 
-# (salary, first portion Basic/DA/Retention, second portion Other/Petrol/RHA/Special/CA) -also in salary-split.test.ts
+# (salary, first portion Basic/DA/Retaining, second portion Other/Petrol/HRA/Special/CA) -also in salary-split.test.ts
 WORKED_EXAMPLES = [
     ("43000", ["7166.67", "7166.67", "7166.66"], ["4300.00"] * 5),
     ("24000", ["4000.00"] * 3, ["2400.00"] * 5),
@@ -41,10 +41,10 @@ def payload(first, second):
 
 class RuleTests(SimpleTestCase):
     def test_the_components_are_the_ones_asked_for_in_the_right_portions(self):
-        self.assertEqual([ss.LABELS[c] for c in ss.FIRST_PORTION], ["Basic", "DA", "Retention Allowance"])
+        self.assertEqual([ss.LABELS[c] for c in ss.FIRST_PORTION], ["Basic", "DA", "Retaining Allowance"])
         self.assertEqual(
             [ss.LABELS[c] for c in ss.SECOND_PORTION],
-            ["Other Allowance", "Petrol Allowance", "RHA", "Special Allowance", "CA"],
+            ["Other Allowance", "Petrol Allowance", "HRA", "Special Allowance", "CA"],
         )
         self.assertEqual(len(ss.COMPONENTS), 8)
         self.assertEqual(len(set(ss.COLUMN_NAMES)), 8)
@@ -70,7 +70,7 @@ class RuleTests(SimpleTestCase):
         good = parts_of(["7166.67", "7166.67", "7166.66"], ["4300.00"] * 5)
         moved = dict(good, basic=D("8166.67"), other_allowance=D("3300.00"))
         message = ss.validate(D("43000"), moved)
-        self.assertIn("First portion (Basic + DA + Retention Allowance) is ₹22,500.00", message)
+        self.assertIn("First portion (Basic + DA + Retaining Allowance) is ₹22,500.00", message)
         self.assertIn("must be 50% of the salary (₹21,500.00)", message)
         second_short = dict(good, ca=D("4200.00"))
         self.assertIn("Second portion", ss.validate(D("43000"), second_short))
@@ -99,7 +99,7 @@ class RuleTests(SimpleTestCase):
         odd = ss.rescale(old, D("41234.57"))
         self.assertIsNone(ss.validate(D("41234.57"), odd))
         self.assertGreater(odd["basic"], odd["da"])
-        self.assertEqual(odd["retention_allowance"], D("0.00"))
+        self.assertEqual(odd["retaining_allowance"], D("0.00"))
         self.assertEqual(odd["special_allowance"], D("0.00"))
 
     def test_an_unedited_automatic_split_stays_automatic_when_the_salary_changes(self):
@@ -125,8 +125,8 @@ class RuleTests(SimpleTestCase):
         cases = {
             "not an object": ("x", "must be an object"),
             "missing key": (
-                {k: v for k, v in payload(*WORKED_EXAMPLES[1][1:]).items() if k != "rha"},
-                "missing: RHA",
+                {k: v for k, v in payload(*WORKED_EXAMPLES[1][1:]).items() if k != "hra"},
+                "missing: HRA",
             ),
         }
         for name, (raw, text) in cases.items():
@@ -216,7 +216,7 @@ class CreateTests(ApiBase):
             self.assertEqual(r.status_code, 201, r.content)
             self.assertEqual(self.split_of(code), ss.default_split(D("43000")), salary_type)
             self.assertEqual(r.json()["salaryBreakup"]["basic"], 7166.67)
-            self.assertEqual(r.json()["salaryBreakup"]["retentionAllowance"], 7166.66)
+            self.assertEqual(r.json()["salaryBreakup"]["retainingAllowance"], 7166.66)
             self.assertEqual(r.json()["salaryBreakup"]["ca"], 4300.0)
             self.assertEqual(self.stored(code).salary_type, salary_type)
 
@@ -230,7 +230,7 @@ class CreateTests(ApiBase):
         first, second = ["20000.00", "0.00", "0.00"], ["4300.00"] * 5  # 20,000 + 21,500
         r = self.new("E2", salaryAmount=43000, salaryBreakup=payload(first, second))
         self.assertEqual(r.status_code, 400)
-        self.assertIn("First portion (Basic + DA + Retention Allowance) is ₹20,000.00", r.json()["error"])
+        self.assertIn("First portion (Basic + DA + Retaining Allowance) is ₹20,000.00", r.json()["error"])
         self.assertFalse(Employee.objects.filter(employee_code="E2").exists())
 
     def test_a_malformed_split_is_refused(self):
@@ -294,7 +294,7 @@ class EditTests(ApiBase):
         self.assertIsNone(ss.validate(D("41000"), split))
         self.assertEqual(split["basic"], D("15000.00"))
         self.assertEqual(split["da"], D("5000.00"))
-        self.assertEqual(split["retention_allowance"], D("500.00"))
+        self.assertEqual(split["retaining_allowance"], D("500.00"))
         self.assertEqual(split["other_allowance"], D("20500.00"))
         self.assertEqual(self.stored().salary_amount, D("41000.00"))
 
@@ -350,7 +350,7 @@ class IncrementTests(ApiBase):
         split = ss.breakup_of(emp)
         self.assertIsNone(ss.validate(D("44000"), split))
         self.assertEqual(
-            (split["basic"], split["da"], split["retention_allowance"]), (D("11000.00"), D("8800.00"), D("2200.00"))
+            (split["basic"], split["da"], split["retaining_allowance"]), (D("11000.00"), D("8800.00"), D("2200.00"))
         )
         self.assertEqual(split["other_allowance"], D("22000.00"))
         self.assertEqual(SalaryIncrement.objects.filter(employee=emp).count(), 1)
@@ -410,10 +410,10 @@ class BulkTests(ApiBase):
             [
                 "Basic",
                 "DA",
-                "Retention Allowance",
+                "Retaining Allowance",
                 "Other Allowance",
                 "Petrol Allowance",
-                "RHA",
+                "HRA",
                 "Special Allowance",
                 "CA",
             ],
@@ -432,10 +432,10 @@ class BulkTests(ApiBase):
             Basic=21500,
             DA=0,
             **{
-                "Retention Allowance": 0,
+                "Retaining Allowance": 0,
                 "Other Allowance": 4300,
                 "Petrol Allowance": 4300,
-                "RHA": 4300,
+                "HRA": 4300,
                 "Special Allowance": 4300,
                 "CA": 4300,
             },
@@ -445,10 +445,10 @@ class BulkTests(ApiBase):
             Basic=30000,
             DA=0,
             **{
-                "Retention Allowance": 0,
+                "Retaining Allowance": 0,
                 "Other Allowance": 4300,
                 "Petrol Allowance": 4300,
-                "RHA": 4300,
+                "HRA": 4300,
                 "Special Allowance": 4300,
                 "CA": 4300,
             },
@@ -479,8 +479,8 @@ class BulkTests(ApiBase):
             **{"Salary Amount": 25000},
             Basic=12500 / 3,
             DA=12500 / 3,
-            **{"Retention Allowance": 12500 - 2 * round(12500 / 3, 2)},
-            **{"Other Allowance": 2500, "Petrol Allowance": 2500, "RHA": 2500, "Special Allowance": 2500, "CA": 2500},
+            **{"Retaining Allowance": 12500 - 2 * round(12500 / 3, 2)},
+            **{"Other Allowance": 2500, "Petrol Allowance": 2500, "HRA": 2500, "Special Allowance": 2500, "CA": 2500},
         )
         r = self.upload(EMPLOYEE_UPLOAD_HEADERS, [_row(EMPLOYEE_UPLOAD_HEADERS, **cells)])
         self.assertEqual(r.json()["created"], 1, r.json())
@@ -573,17 +573,17 @@ class BulkUpdateTests(ApiBase):
             "Employee Code": "U1",
             "Basic": 21500,
             "DA": 0,
-            "Retention Allowance": 0,
+            "Retaining Allowance": 0,
             "Other Allowance": 10000,
             "Petrol Allowance": 1500,
-            "RHA": 5000,
+            "HRA": 5000,
             "Special Allowance": 3000,
             "CA": 2000,
         }
         r = self.update(EMPLOYEE_UPLOAD_HEADERS, **cells)
         self.assertEqual(r.json()["updated"], 1, r.json())
         self.assertEqual(self.split_of("U1")["basic"], D("21500.00"))
-        self.assertEqual(self.split_of("U1")["rha"], D("5000.00"))
+        self.assertEqual(self.split_of("U1")["hra"], D("5000.00"))
 
     def test_a_typed_split_that_is_not_50_50_fails_its_row_and_changes_nothing(self):
         cells = {
@@ -592,10 +592,10 @@ class BulkUpdateTests(ApiBase):
             "First Name": "Changed",
             "Basic": 1,
             "DA": 1,
-            "Retention Allowance": 1,
+            "Retaining Allowance": 1,
             "Other Allowance": 1,
             "Petrol Allowance": 1,
-            "RHA": 1,
+            "HRA": 1,
             "Special Allowance": 1,
             "CA": 1,
         }
@@ -655,3 +655,110 @@ class PayrollUnaffectedTests(TestCase):
         self.assertEqual(results["NOSPLIT"], results["ODD"])
         self.assertEqual(results["NOSPLIT"][0], D("20000.00"))
         self.assertEqual(Payroll.objects.count(), 3)
+
+
+class CorrectedNamesTests(ApiBase):
+    """RHA is HRA and Retention Allowance is Retaining Allowance everywhere, and nothing that used the old names breaks:
+    the database columns are untouched, an older client or script is still understood, and so is an older template."""
+
+    def test_the_two_components_carry_the_right_names_in_code_labels_and_json(self):
+        self.assertIn("hra", ss.SECOND_PORTION)
+        self.assertIn("retaining_allowance", ss.FIRST_PORTION)
+        self.assertEqual((ss.LABELS["hra"], ss.LABELS["retaining_allowance"]), ("HRA", "Retaining Allowance"))
+        self.assertEqual((ss.JSON_KEYS["hra"], ss.JSON_KEYS["retaining_allowance"]), ("hra", "retainingAllowance"))
+        self.assertEqual(
+            (ss.COLUMNS["hra"], ss.COLUMNS["retaining_allowance"]), ("salary_hra", "salary_retaining_allowance")
+        )
+        for old in ("rha", "retention_allowance"):
+            self.assertNotIn(old, ss.COMPONENTS)
+        self.assertNotIn("RHA", ss.LABELS.values())
+
+    def test_the_database_columns_did_not_move(self):
+        # Only the Python names changed: no data moves, and the release still running keeps reading the same columns.
+        self.assertEqual(Employee._meta.get_field("salary_hra").column, "salary_rha")
+        self.assertEqual(Employee._meta.get_field("salary_retaining_allowance").column, "salary_retention_allowance")
+
+    def test_the_api_speaks_only_the_new_names(self):
+        r = self.new("N1", salaryAmount=43000)
+        self.assertEqual(r.status_code, 201, r.content)
+        keys = set(r.json()["salaryBreakup"])
+        self.assertEqual(
+            keys,
+            {"basic", "da", "retainingAllowance", "otherAllowance", "petrolAllowance", "hra", "specialAllowance", "ca"},
+        )
+
+    def test_a_split_sent_with_the_old_names_is_still_understood(self):
+        first, second = ["21500.00", "0.00", "0.00"], ["1000.00", "1000.00", "10000.00", "9000.00", "500.00"]
+        old = {ss.JSON_KEYS[c]: str(v) for c, v in parts_of(first, second).items()}
+        old["retentionAllowance"] = old.pop("retainingAllowance")
+        old["rha"] = old.pop("hra")
+        r = self.new("O1", salaryAmount=43000, salaryBreakup=old)
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual(self.split_of("O1"), parts_of(first, second))
+        self.assertEqual(r.json()["salaryBreakup"]["hra"], 10000.0)  # and it answers in the new names
+
+    def test_when_both_names_are_sent_the_new_one_wins(self):
+        first, second = ["21500.00", "0.00", "0.00"], ["1000.00", "1000.00", "10000.00", "9000.00", "500.00"]
+        both = payload(first, second)
+        both["rha"] = "123456.00"  # stale and wrong: ignored
+        self.assertEqual(self.new("O2", salaryAmount=43000, salaryBreakup=both).status_code, 201)
+        self.assertEqual(self.split_of("O2")["hra"], D("10000.00"))
+
+    def test_an_error_names_the_component_by_its_new_name(self):
+        gone = {k: v for k, v in payload(*WORKED_EXAMPLES[1][1:]).items() if k != "hra"}
+        r = self.new("O3", salaryAmount=24000, salaryBreakup=gone)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("missing: HRA", r.json()["error"])
+
+    def test_the_stored_values_are_read_back_through_the_new_attributes(self):
+        self.new("O4", salaryAmount=43000)
+        emp = self.stored("O4")
+        self.assertEqual((emp.salary_hra, emp.salary_retaining_allowance), (D("4300.00"), D("7166.66")))
+        self.assertFalse(hasattr(emp, "salary_rha"))
+        self.assertFalse(hasattr(emp, "salary_retention_allowance"))
+
+
+class OlderTemplatesStillUploadTests(ApiBase):
+    """A sheet downloaded before the names were corrected has the headers RHA and Retention Allowance."""
+
+    upload = BulkTests.upload  # the same helpers, without re-running BulkTests' own tests
+    base_cells = BulkTests.base_cells
+
+    OLD = [{"HRA": "RHA", "Retaining Allowance": "Retention Allowance"}.get(h, h) for h in EMPLOYEE_UPLOAD_HEADERS]
+
+    def test_the_old_headers_are_read_as_the_new_ones_on_upload_and_on_update(self):
+        self.assertIn("RHA", self.OLD)
+        self.assertIn("Retention Allowance", self.OLD)
+        cells = self.base_cells(
+            "T1",
+            Basic=21500,
+            DA=0,
+            **{
+                "Retention Allowance": 0,
+                "Other Allowance": 4300,
+                "Petrol Allowance": 4300,
+                "RHA": 4300,
+                "Special Allowance": 4300,
+                "CA": 4300,
+            },
+        )
+        r = self.upload(self.OLD, [_row(self.OLD, **cells)])
+        self.assertEqual((r.status_code, r.json()["created"], r.json()["failed"]), (201, 1, 0), r.content)
+        split = ss.breakup_of(Employee.objects.get(employee_code="T1"))
+        self.assertEqual(
+            (split["hra"], split["retaining_allowance"], split["basic"]), (D("4300.00"), D("0.00"), D("21500.00"))
+        )
+
+        # the same file through "update existing" (the export of that time) changes one split cell
+        cells["RHA"] = 4400
+        cells["Other Allowance"] = 4200
+        r = self.upload(self.OLD, [_row(self.OLD, **cells)], path="/api/employees/bulk-update")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["counts"]["updated"], 1, r.json())
+        self.assertEqual(ss.breakup_of(Employee.objects.get(employee_code="T1"))["hra"], D("4400.00"))
+
+    def test_the_new_headers_are_what_a_template_has_now(self):
+        self.assertIn("HRA", EMPLOYEE_UPLOAD_HEADERS)
+        self.assertIn("Retaining Allowance", EMPLOYEE_UPLOAD_HEADERS)
+        self.assertNotIn("RHA", EMPLOYEE_UPLOAD_HEADERS)
+        self.assertNotIn("Retention Allowance", EMPLOYEE_UPLOAD_HEADERS)

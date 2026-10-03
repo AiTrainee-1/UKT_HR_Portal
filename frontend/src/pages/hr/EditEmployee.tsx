@@ -65,7 +65,7 @@ const schema = z.object({
   bloodGroup: z.string().optional(),
   emergencyContact: z.string().optional(),
 }).superRefine((data, ctx) => {
-  // A salary is always split 50% + 50% (Basic/DA/Retention | Other/Petrol/RHA/Special/CA); production pay is per shift.
+  // A salary is always split 50% + 50% (Basic/DA/Retaining | Other/Petrol/HRA/Special/CA); production pay is per shift.
   if (data.employmentType !== "production") addSplitIssue(ctx, data.salaryAmount, data.split);
 });
 

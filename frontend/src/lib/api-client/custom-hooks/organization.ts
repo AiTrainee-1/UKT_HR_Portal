@@ -820,6 +820,15 @@ export const useEmployeeCount = (
     enabled: options?.enabled ?? true,
   });
 
+/** Every employee, as `useListEmployees` returns them, except that a photo is a link to /photo instead of its
+ * bytes. For pages that list people without showing a picture (Bulk Upload): the full directory with every embedded
+ * photo is tens of MB on a real company. Same key prefix as the list, so invalidating "/api/employees" refreshes it. */
+export const useListEmployeesLite = () =>
+  useQuery<Employee[]>({
+    queryKey: ["/api/employees", "lite"] as const,
+    queryFn: () => customFetch<Employee[]>("/api/employees?lite=1"),
+  });
+
 export const useBulkUpdateLocationTracking = () => {
   const queryClient = useQueryClient();
   return useMutation({

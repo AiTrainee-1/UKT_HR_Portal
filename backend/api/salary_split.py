@@ -1,8 +1,8 @@
 """
 Salary split: the mandatory 50% + 50% breakdown of an employee's salary.
 
-    First portion  (50% of the salary)   Basic + DA + Retention Allowance
-    Second portion (50% of the salary)   Other Allowance + Petrol Allowance + RHA + Special Allowance + CA
+    First portion  (50% of the salary)   Basic + DA + Retaining Allowance
+    Second portion (50% of the salary)   Other Allowance + Petrol Allowance + HRA + Special Allowance + CA
 
 It applies to whatever the employee's Salary Amount is, Monthly or Weekly alike (`salary_type` only says how
 often that amount is paid). The eight amounts are filled in automatically from the salary (`default_split`),
@@ -21,17 +21,17 @@ the same worked examples, so a form and the server can never disagree about what
 
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
-FIRST_PORTION = ("basic", "da", "retention_allowance")
-SECOND_PORTION = ("other_allowance", "petrol_allowance", "rha", "special_allowance", "ca")
+FIRST_PORTION = ("basic", "da", "retaining_allowance")
+SECOND_PORTION = ("other_allowance", "petrol_allowance", "hra", "special_allowance", "ca")
 COMPONENTS = FIRST_PORTION + SECOND_PORTION
 
 LABELS = {
     "basic": "Basic",
     "da": "DA",
-    "retention_allowance": "Retention Allowance",
+    "retaining_allowance": "Retaining Allowance",
     "other_allowance": "Other Allowance",
     "petrol_allowance": "Petrol Allowance",
-    "rha": "RHA",
+    "hra": "HRA",
     "special_allowance": "Special Allowance",
     "ca": "CA",
 }
@@ -40,18 +40,24 @@ LABELS = {
 JSON_KEYS = {
     "basic": "basic",
     "da": "da",
-    "retention_allowance": "retentionAllowance",
+    "retaining_allowance": "retainingAllowance",
     "other_allowance": "otherAllowance",
     "petrol_allowance": "petrolAllowance",
-    "rha": "rha",
+    "hra": "hra",
     "special_allowance": "specialAllowance",
     "ca": "ca",
 }
-COLUMNS = {c: f"salary_{c}" for c in COMPONENTS}
+COLUMNS = {c: f"salary_{c}" for c in COMPONENTS}  # Employee attribute names; the database columns are in models/core.py
 COLUMN_NAMES = tuple(COLUMNS.values())
 
-FIRST_LABEL = "First portion (Basic + DA + Retention Allowance)"
-SECOND_LABEL = "Second portion (Other + Petrol + RHA + Special Allowance + CA)"
+# What two of the components were called before their names were corrected (RHA -> HRA, Retention -> Retaining).
+# Still understood wherever a split or a sheet is SUBMITTED, so an older client, a script, or a template downloaded
+# before the correction keeps working; never produced.
+LEGACY_JSON_KEYS = {"retentionAllowance": "retainingAllowance", "rha": "hra"}
+LEGACY_LABELS = {"Retention Allowance": "Retaining Allowance", "RHA": "HRA"}
+
+FIRST_LABEL = "First portion (Basic + DA + Retaining Allowance)"
+SECOND_LABEL = "Second portion (Other + Petrol + HRA + Special Allowance + CA)"
 
 _TWO_PLACES = Decimal("0.01")
 
@@ -145,6 +151,7 @@ def parse_breakup(raw) -> tuple[dict[str, Decimal] | None, str | None]:
     (None, message). Every component is required, a plain non-negative amount with at most two decimals."""
     if not isinstance(raw, dict):
         return None, "salaryBreakup must be an object with the eight salary components."
+    raw = {**raw, **{new: raw[old] for old, new in LEGACY_JSON_KEYS.items() if old in raw and new not in raw}}
     missing = [LABELS[c] for c in COMPONENTS if JSON_KEYS[c] not in raw]
     if missing:
         return None, f"The salary split is missing: {', '.join(missing)}."
@@ -208,7 +215,7 @@ def apply_to_employee(emp, parts: dict | None) -> None:
 
 
 def json_of(emp) -> dict | None:
-    """The stored split as the API returns it ({basic, da, retentionAllowance, ...}), or None."""
+    """The stored split as the API returns it ({basic, da, retainingAllowance, ...}), or None."""
     parts = breakup_of(emp)
     if parts is None:
         return None

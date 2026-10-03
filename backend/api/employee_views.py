@@ -9,7 +9,7 @@ from .branch_scope import get_branch_scope, scope_to_branch
 from .models import Department, Employee
 from .serializers import employee_json, parse_decimal
 from .view_common import _error
-from django.db.models import Q, TextField, Value
+from django.db.models import Case, F, Q, TextField, Value, When
 from django.db.models.functions import Concat
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
@@ -54,6 +54,27 @@ def _serialize_employee_for_list(emp: Employee) -> dict:
     if isinstance(photo, str) and photo.startswith("data:"):
         row["photoUrl"] = f"/api/employees/{emp.id}/photo"
     return row
+
+
+def _without_embedded_photos(qs):
+    """The employees of `qs` without the embedded photos loaded.
+
+    A photo is stored as a base64 data: URI of tens to hundreds of KB per person. The directory used to be sent to
+    pages that never show a picture (Bulk Upload: it only needs names, codes and pay) with every one of them inline:
+    on a real company that is tens of MB read from the database, copied into Python strings, rendered to JSON and
+    sent, per visit, by a worker that has nothing else to do it with. Here the column is not read at all: a database
+    expression keeps the short value of an external link and marks an embedded picture with "data:", which
+    _serialize_employee_for_list turns into the lazy /photo link, exactly as the paginated list does."""
+    rows = qs.annotate(
+        photo_lite=Case(
+            When(photo_url__startswith="data:", then=Value("data:")),
+            default=F("photo_url"),
+            output_field=TextField(),
+        )
+    ).defer("photo_url")
+    for emp in rows:
+        emp.photo_url = emp.photo_lite  # assigned, so reading it later never fetches the deferred column
+        yield emp
 
 
 @api_view(["GET"])
@@ -168,6 +189,9 @@ def _employees_list(request: Request) -> Response:
         # No `page` param: identical to every response this endpoint has
         # ever returned -a bare array. Existing callers that don't yet know
         # about pagination are completely unaffected.
+        if request.query_params.get("lite") in ("1", "true"):
+            # Same array, but an embedded photo is a /photo link instead of its bytes (see above).
+            return Response([_serialize_employee_for_list(e) for e in _without_embedded_photos(qs)])
         return Response([_serialize_employee(e) for e in qs])
 
     try:
@@ -220,18 +244,27 @@ def _assign_unit_code(branch_id: int | None) -> str | None:
         return f"{branch.code}-{branch.next_employee_seq}"
 
 
-def _resolve_employee_relations(data: dict, request: Request) -> tuple[dict, list[str]]:
+def _resolve_employee_relations(data: dict, request: Request, ctx=None) -> tuple[dict, list[str], list[str]]:
     """
     Resolve department/designation/branch from either an <field>Id (int FK —
     what the Add Employee dropdowns send) or a plain <field> name string
-    (what the bulk-upload Excel importer sends). Returns (kwargs, warnings)
-    where kwargs has department/designation/branch_id ready for
-    Employee.objects.create(), and warnings are non-fatal notes about names
-    that couldn't be matched (the row/request still succeeds).
-    """
-    from .models import Branch, Designation as _Desig
+    (what the bulk-upload Excel importer sends). Returns (kwargs, warnings,
+    notes) where kwargs has department/designation/branch_id ready for
+    Employee.objects.create(), warnings are non-fatal notes about names that
+    couldn't be used (the row/request still succeeds), and notes say what was
+    created on the way ("Created designation 'Tailor' in Stitching").
 
+    A department or designation NAMED but not found is created (org_lookup.py):
+    the employee ends up with it, rather than with a blank and a warning. `ctx`
+    is the bulk upload's ImportContext, which keeps the lookups between rows.
+    """
+    from .models import Designation as _Desig
+    from .org_lookup import ImportContext, clean_name, is_blank_name
+
+    ctx = ctx or ImportContext()
+    org = ctx.org
     warnings: list[str] = []
+    notes: list[str] = []
 
     # Branch is resolved FIRST because the department lookup depends on it:
     # department names are unique per branch, not globally, so "CUTTING"
@@ -241,9 +274,9 @@ def _resolve_employee_relations(data: dict, request: Request) -> tuple[dict, lis
         branch_id = scoped_branch_id
     elif data.get("branchId"):
         branch_id = int(data["branchId"])
-    elif str(data.get("branch") or "").strip():
-        branch_name = str(data["branch"]).strip()
-        b = Branch.objects.filter(name__iexact=branch_name).first()
+    elif clean_name(data.get("branch")):
+        branch_name = clean_name(data["branch"])
+        b = org.branch(branch_name)
         branch_id = b.id if b else None
         if b is None:
             warnings.append(f"Branch '{branch_name}' not found -left unassigned")
@@ -253,19 +286,13 @@ def _resolve_employee_relations(data: dict, request: Request) -> tuple[dict, lis
     dept = None
     if data.get("departmentId"):
         dept = Department.objects.filter(pk=int(data["departmentId"])).first()
-    elif str(data.get("department") or "").strip():
-        dept_name = str(data["department"]).strip()
-        # Prefer the department in THIS employee's branch. Falling back to a
-        # name match in any branch keeps older single-branch imports working.
-        dept = (
-            Department.objects.filter(name__iexact=dept_name, branch_id=branch_id).first()
-            if branch_id else None
-        ) or Department.objects.filter(name__iexact=dept_name).first()
-        if dept is None:
-            # Created IN the employee's branch. Creating it branch-less
-            # would hide the department, its designations and this employee
-            # from every branch login.
-            dept = Department.objects.create(name=dept_name, branch_id=branch_id)
+    elif not is_blank_name(data.get("department")):
+        found = org.department(data["department"], branch_id, ctx.row)
+        dept = found.obj
+        if found.problem:
+            warnings.append(f"{found.problem} -left blank")
+        elif found.created:
+            notes.append(f"Created department '{dept.name}'")
 
     # A row that named no branch can still inherit one from the department
     # it landed in -that is a fact about the data, not a guess.
@@ -275,19 +302,22 @@ def _resolve_employee_relations(data: dict, request: Request) -> tuple[dict, lis
     desig = None
     if data.get("designationId"):
         desig = _Desig.objects.filter(pk=int(data["designationId"])).first()
-    elif str(data.get("designation") or "").strip():
-        desig_title = str(data["designation"]).strip()
-        desig_qs = _Desig.objects.filter(title__iexact=desig_title)
-        desig = (desig_qs.filter(department=dept).first() if dept else None) or desig_qs.first()
-        if desig is None:
-            warnings.append(f"Designation '{desig_title}' not found -left blank")
+    elif not is_blank_name(data.get("designation")):
+        found = org.designation(data["designation"], dept, ctx.row)
+        desig = found.obj
+        if found.problem:
+            warnings.append(f"{found.problem} -left blank")
+        elif found.created:
+            notes.append(
+                f"Created designation '{desig.title}'" + (f" in {dept.name}" if dept is not None else "")
+            )
 
     # branch_id was resolved above, before the department lookup.
-    return {"department": dept, "designation": desig, "branch_id": branch_id}, warnings
+    return {"department": dept, "designation": desig, "branch_id": branch_id}, warnings, notes
 
 
 def _create_employee_from_data(
-    data: dict, request: Request, strict: bool = True,
+    data: dict, request: Request, strict: bool = True, ctx=None,
 ) -> tuple[Employee | None, str | None, list[str]]:
     """
     Create one Employee from a plain camelCase dict -the shape shared by
@@ -299,6 +329,10 @@ def _create_employee_from_data(
     `strict` gates Last Name / Phone as required -on for the single Add
     Employee form, off for bulk upload (where only Employee Code and First
     Name are mandatory; Last Name and Phone may be filled in later).
+
+    `ctx` is a bulk upload's ImportContext (org_lookup.py): with it the checks that would otherwise be a query per
+    row (is the code taken, the branch's next Unit Code, the production shift) are answered from memory, and what
+    was created on the row's behalf is added to ctx.notes. Without it the behaviour is the plain single-employee one.
     """
     employee_code = str(data.get("employeeCode") or "").strip()
     first_name = str(data.get("firstName") or "").strip()
@@ -313,10 +347,12 @@ def _create_employee_from_data(
         return None, "Last name is required", []
     if strict and not phone:
         return None, "Phone is required", []
-    if Employee.objects.filter(employee_code=employee_code).exists():
+    if ctx.code_taken(employee_code) if ctx else Employee.objects.filter(employee_code=employee_code).exists():
         return None, f"Employee code '{employee_code}' already exists", []
 
-    relations, warnings = _resolve_employee_relations(data, request)
+    relations, warnings, notes = _resolve_employee_relations(data, request, ctx)
+    if ctx is not None:
+        ctx.notes.extend(notes)
 
     # An employee with no branch is invisible to EVERY branch login, and so
     # is every biometric punch they generate -it looks exactly like the
@@ -334,43 +370,50 @@ def _create_employee_from_data(
     if split_error:
         return None, split_error, []
 
-    unit_code = _assign_unit_code(relations["branch_id"])
-
-    emp = Employee.objects.create(
-        employee_code=employee_code,
-        first_name=first_name,
-        last_name=last_name,
-        gender=data.get("gender") or None,
-        date_of_birth=data.get("dateOfBirth") or None,
-        email=data.get("email") or None,
-        phone=phone,
-        role=data.get("role") or None,
-        employment_type=data.get("employmentType") or "staff",
-        department=relations["department"],
-        designation=relations["designation"],
-        branch_id=relations["branch_id"],
-        unit_code=unit_code,
-        salary_type=data.get("salaryType") or "monthly",
-        salary_amount=salary_amount,
-        **({salary_split.COLUMNS[c]: breakup[c] for c in salary_split.COMPONENTS} if breakup else {}),
-        salary_per_shift=parse_decimal(data.get("salaryPerShift")),
-        bank_name=data.get("bankName") or None,
-        bank_account=data.get("bankAccount") or None,
-        bank_ifsc=data.get("bankIfsc") or None,
-        pf_number=data.get("pfNumber") or None,
-        esi_number=data.get("esiNumber") or None,
-        id_proof=data.get("idProof") or None,
-        address=data.get("address") or None,
-        join_date=data.get("joinDate") or None,
-        father_name=data.get("fatherName") or None,
-        mother_name=data.get("motherName") or None,
-        biometric_device_id=data.get("biometricDeviceId") or None,
-        photo_url=data.get("photoUrl") or None,
-        blood_group=data.get("bloodGroup") or None,
-        emergency_contact=data.get("emergencyContact") or None,
-    )
+    # One savepoint around the writes: a value the database refuses (a salary too big for the column, say) fails this
+    # employee alone, and takes neither the Unit Code number nor anything else of theirs with it.
+    from django.db import transaction
     from .shift_views import auto_assign_production_shift
-    auto_assign_production_shift(emp)
+
+    with transaction.atomic():
+        unit_code = ctx.unit_code(relations["branch_id"]) if ctx else _assign_unit_code(relations["branch_id"])
+
+        emp = Employee.objects.create(
+            employee_code=employee_code,
+            first_name=first_name,
+            last_name=last_name,
+            gender=data.get("gender") or None,
+            date_of_birth=data.get("dateOfBirth") or None,
+            email=data.get("email") or None,
+            phone=phone,
+            role=data.get("role") or None,
+            employment_type=data.get("employmentType") or "staff",
+            department=relations["department"],
+            designation=relations["designation"],
+            branch_id=relations["branch_id"],
+            unit_code=unit_code,
+            salary_type=data.get("salaryType") or "monthly",
+            salary_amount=salary_amount,
+            **({salary_split.COLUMNS[c]: breakup[c] for c in salary_split.COMPONENTS} if breakup else {}),
+            salary_per_shift=parse_decimal(data.get("salaryPerShift")),
+            bank_name=data.get("bankName") or None,
+            bank_account=data.get("bankAccount") or None,
+            bank_ifsc=data.get("bankIfsc") or None,
+            pf_number=data.get("pfNumber") or None,
+            esi_number=data.get("esiNumber") or None,
+            id_proof=data.get("idProof") or None,
+            address=data.get("address") or None,
+            join_date=data.get("joinDate") or None,
+            father_name=data.get("fatherName") or None,
+            mother_name=data.get("motherName") or None,
+            biometric_device_id=data.get("biometricDeviceId") or None,
+            photo_url=data.get("photoUrl") or None,
+            blood_group=data.get("bloodGroup") or None,
+            emergency_contact=data.get("emergencyContact") or None,
+        )
+        auto_assign_production_shift(emp, is_new=True, shift_cache=ctx.shift_cache if ctx else None)
+    if ctx is not None:
+        ctx.remember_code(employee_code)
     return emp, None, warnings
 
 
@@ -421,15 +464,11 @@ def _employee_update(request: Request, pk: int) -> Response:
     original_branch_id = emp.branch_id
     original_salary = emp.salary_amount
 
-    # Handle department: prefer departmentId (int FK), fall back to name string
+    # Handle department: prefer departmentId (int FK); a plain name is looked up
+    # (and created) below, once the branch it belongs to is known.
     if "departmentId" in request.data:
         raw = request.data.get("departmentId")
         emp.department_id = int(raw) if raw else None
-    elif "department" in request.data:
-        dept_name = request.data.get("department", "").strip()
-        if dept_name:
-            dept, _ = Department.objects.get_or_create(name=dept_name)
-            emp.department = dept
 
     # Handle designation
     if "designationId" in request.data:
@@ -523,6 +562,27 @@ def _employee_update(request: Request, pk: int) -> Response:
             if split_error:
                 return _error(split_error)
             salary_split.apply_to_employee(emp, parts)
+    # A department / designation sent as a NAME (an integration, a script; the HR forms send ids) is matched by name
+    # and created when it does not exist yet, so the employee always ends up with what was asked for. Last, after
+    # every check above, so a refused request leaves nothing behind.
+    names_dept = "departmentId" not in request.data and "department" in request.data
+    names_desig = "designationId" not in request.data and "designation" in request.data
+    if names_dept or names_desig:
+        from .org_lookup import OrgLookup
+
+        org = OrgLookup()
+        if names_dept:
+            found = org.department(request.data.get("department"), emp.branch_id)
+            if found.problem:
+                return _error(found.problem)
+            if found.obj is not None:
+                emp.department = found.obj
+        if names_desig:
+            found = org.designation(request.data.get("designation"), emp.department)
+            if found.problem:
+                return _error(found.problem)
+            if found.obj is not None:
+                emp.designation = found.obj
     emp.save()
     # If employee type was changed to production, try to auto-assign a production shift
     if request.data.get("employmentType") == "production":

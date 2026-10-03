@@ -6,6 +6,37 @@ if TYPE_CHECKING:
     from rest_framework.request import Request
 
 
+def build_log_entry(
+    request: "Request",
+    action: str,
+    module: str,
+    record_id: int | None = None,
+    description: str | None = None,
+    old_values: dict | None = None,
+    new_values: dict | None = None,
+):
+    """An unsaved AuditLog for this request's user. log_action saves one at a time; a bulk upload collects one per
+    employee and writes them together with save_log_entries."""
+    from .models import AuditLog
+    user = getattr(request, "jwt_user", {}) or {}
+    return AuditLog(
+        user_type=user.get("role", "hr"),
+        user_id=user.get("userId") or user.get("employeeId"),
+        user_name=user.get("name") or user.get("username") or "system",
+        action=action,
+        module=module,
+        record_id=record_id,
+        record_description=description,
+        old_values=old_values,
+        new_values=new_values,
+        ip_address=_get_ip(request),
+        # Stamped now because it cannot be recovered later -AuditLog has
+        # no foreign key to the actor. None for unscoped admins, which is
+        # accurate: the action was not taken on behalf of one branch.
+        branch_id=_get_branch(request),
+    )
+
+
 def log_action(
     request: "Request",
     action: str,
@@ -16,24 +47,21 @@ def log_action(
     new_values: dict | None = None,
 ) -> None:
     try:
+        build_log_entry(request, action, module, record_id, description, old_values, new_values).save()
+    except Exception:
+        pass
+
+
+def save_log_entries(entries: list) -> None:
+    """Write a batch of build_log_entry() rows in ONE query. Never raises: the insert runs in its own savepoint, so
+    a failure here can neither abort the caller's transaction nor lose the work it already did."""
+    if not entries:
+        return
+    try:
+        from django.db import transaction
         from .models import AuditLog
-        user = getattr(request, "jwt_user", {}) or {}
-        AuditLog.objects.create(
-            user_type=user.get("role", "hr"),
-            user_id=user.get("userId") or user.get("employeeId"),
-            user_name=user.get("name") or user.get("username") or "system",
-            action=action,
-            module=module,
-            record_id=record_id,
-            record_description=description,
-            old_values=old_values,
-            new_values=new_values,
-            ip_address=_get_ip(request),
-            # Stamped now because it cannot be recovered later -AuditLog has
-            # no foreign key to the actor. None for unscoped admins, which is
-            # accurate: the action was not taken on behalf of one branch.
-            branch_id=_get_branch(request),
-        )
+        with transaction.atomic():
+            AuditLog.objects.bulk_create(entries, batch_size=500)
     except Exception:
         pass
 

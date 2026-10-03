@@ -134,7 +134,7 @@ export function filterRows(rows: RowReport[], filter: RowFilter, query: string):
       return false;
     }
     if (!q) return true;
-    return [r.code, r.name, `row ${r.row}`, ...r.messages, ...r.warnings, ...r.changes].some((v) =>
+    return [r.code, r.name, `row ${r.row}`, ...r.messages, ...r.warnings, ...r.changes, ...(r.notes ?? [])].some((v) =>
       v.toLowerCase().includes(q),
     );
   });

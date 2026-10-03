@@ -2,10 +2,10 @@
 Employer cost (CTC) of one employee: the figures behind the Compensation page's CTC Breakdown and the Report
 Center's Employer Cost / CTC Statement, calculated in ONE place so the two can never disagree.
 
-    Salary split     the employee's 50% + 50% split (salary_split.py): Basic, DA, Retention Allowance | Other,
-                     Petrol, RHA, Special Allowance, CA. An employee with a salary but no recorded split shows the
+    Salary split     the employee's 50% + 50% split (salary_split.py): Basic, DA, Retaining Allowance | Other,
+                     Petrol, HRA, Special Allowance, CA. An employee with a salary but no recorded split shows the
                      automatic one (`splitRecorded` false) - nothing is written.
-    Employer PF      PF rate x the FIRST portion (Basic + DA + Retention Allowance, which is what PF wages are made of,
+    Employer PF      PF rate x the FIRST portion (Basic + DA + Retaining Allowance, which is what PF wages are made of,
                      and equal to the 50% base payroll itself uses).
     Employer ESI     ESI rate x the salary, only while the salary is within the ESI ceiling.
     Annual CTC       (monthly salary + employer PF + employer ESI) x 12.

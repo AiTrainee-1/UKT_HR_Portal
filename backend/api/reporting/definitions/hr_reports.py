@@ -60,7 +60,7 @@ def _salary_text(emp) -> str | None:
         amount, unit = emp.salary_per_shift, "shift"
     else:
         amount = emp.salary_amount
-        unit = "month"
+        unit = "week" if (emp.salary_type or "").strip().lower() == "weekly" else "month"
     if not amount:  # unset, and a 0 salary means the same: nothing has been entered yet
         return None
     return f"₹{indian_number(float(amount))} / {unit}"

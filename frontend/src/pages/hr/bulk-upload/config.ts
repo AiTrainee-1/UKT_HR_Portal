@@ -107,7 +107,7 @@ export const groupOf = (header: string): ColumnGroup => GROUPS[header] ?? "perso
 
 const SPLIT_NOTE =
   "Optional. Leave all eight split columns blank and the Salary Amount is split 50% + 50% for you. If you fill any, " +
-  "blanks count as 0 and they must give exactly 50% (Basic + DA + Retention Allowance) and 50% (Other + Petrol + RHA + " +
+  "blanks count as 0 and they must give exactly 50% (Basic + DA + Retaining Allowance) and 50% (Other + Petrol + HRA + " +
   "Special Allowance + CA) of the Salary Amount.";
 
 export const COLUMN_NOTES: Record<string, string> = {
@@ -119,7 +119,8 @@ export const COLUMN_NOTES: Record<string, string> = {
   Gender: "Type exactly: Male, Female or Other.",
   "Date of Birth": "Format DD-MM-YYYY, for example 15-01-1995.",
   Department: "Matched by name. A department that does not exist yet is created.",
-  Designation: "Matched by title. Leave blank if unsure.",
+  Designation:
+    "Matched by title in the employee's department. A designation that does not exist yet is created. Leave blank to keep the current one.",
   Branch: "Must match an existing branch name exactly. A branch login always uses its own branch.",
   "Join Date": "Format DD-MM-YYYY, for example 01-06-2024.",
   "Salary Type": "Type exactly: Monthly or Weekly.",
@@ -212,10 +213,10 @@ const staffSamples: Row[] = [
     "Salary Amount": 25000,
     Basic: "8000.00",
     DA: "3000.00",
-    "Retention Allowance": "1500.00",
+    "Retaining Allowance": "1500.00",
     "Other Allowance": "3000.00",
     "Petrol Allowance": "2000.00",
-    RHA: "3500.00",
+    HRA: "3500.00",
     "Special Allowance": "3000.00",
     CA: "1000.00",
     "Bank Name": "State Bank of India",

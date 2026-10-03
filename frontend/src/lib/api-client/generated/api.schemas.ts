@@ -92,16 +92,16 @@ export const EmployeeStatus = {
 } as const;
 
 /**
- * The salary split: Basic + DA + Retention Allowance is 50% of the salary, Other + Petrol + RHA + Special Allowance
+ * The salary split: Basic + DA + Retaining Allowance is 50% of the salary, Other + Petrol + HRA + Special Allowance
  * + CA the other 50%. Descriptive only: payroll runs on salaryAmount.
  */
 export interface SalaryBreakup {
   basic: number;
   da: number;
-  retentionAllowance: number;
+  retainingAllowance: number;
   otherAllowance: number;
   petrolAllowance: number;
-  rha: number;
+  hra: number;
   specialAllowance: number;
   ca: number;
 }

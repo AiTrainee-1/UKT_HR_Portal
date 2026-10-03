@@ -127,12 +127,15 @@ class Employee(models.Model):
         max_digits=10, decimal_places=2, null=True, blank=True, db_column="salary_amount"
     )
     # Salary split (salary_split.py): salary_amount is always divided into two mandatory 50% portions -
-    # Basic + DA + Retention Allowance, and Other + Petrol + RHA + Special Allowance + CA. All eight null = no
+    # Basic + DA + Retaining Allowance, and Other + Petrol + HRA + Special Allowance + CA. All eight null = no
     # split recorded (no salary amount, or created before the split existed). Descriptive only: payroll and
     # attendance keep running on salary_amount and never read these columns.
+    # Two of the components were first named salary_retention_allowance / salary_rha. The attributes now carry the
+    # right names; the database columns keep the old ones (db_column), so no data moves and the previous release,
+    # which still reads those columns, keeps working while the new one rolls out.
     salary_basic = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, db_column="salary_basic")
     salary_da = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, db_column="salary_da")
-    salary_retention_allowance = models.DecimalField(
+    salary_retaining_allowance = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True, db_column="salary_retention_allowance"
     )
     salary_other_allowance = models.DecimalField(
@@ -141,7 +144,7 @@ class Employee(models.Model):
     salary_petrol_allowance = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True, db_column="salary_petrol_allowance"
     )
-    salary_rha = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, db_column="salary_rha")
+    salary_hra = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, db_column="salary_rha")
     salary_special_allowance = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True, db_column="salary_special_allowance"
     )

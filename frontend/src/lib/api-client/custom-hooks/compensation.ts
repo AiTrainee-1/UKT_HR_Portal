@@ -7,8 +7,8 @@ import type { SplitKey } from "../../salary-split";
 //  Compensation -read-only CTC breakdown (Compensation.tsx)
 // ═══════════════════════════════════════════════════════════════════════════
 
-// The salary is shown as the employee's 50% + 50% split (lib/salary-split.ts): Basic, DA, Retention Allowance | Other,
-// Petrol, RHA, Special Allowance, CA. All eight are null for an employee with no monthly salary. `splitRecorded` is false
+// The salary is shown as the employee's 50% + 50% split (lib/salary-split.ts): Basic, DA, Retaining Allowance | Other,
+// Petrol, HRA, Special Allowance, CA. All eight are null for an employee with no monthly salary. `splitRecorded` is false
 // when the split shown is the automatic one because none has been saved yet. Employer PF is worked out on the first portion.
 export type CompensationRow = {
   employeeId: number;

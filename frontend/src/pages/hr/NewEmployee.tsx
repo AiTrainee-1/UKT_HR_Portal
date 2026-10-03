@@ -63,7 +63,7 @@ const schema = z.object({
   } else if (!data.salaryAmount || Number(data.salaryAmount) <= 0) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["salaryAmount"], message: "Salary amount is required" });
   } else {
-    // The salary is always split 50% + 50% (Basic/DA/Retention | Other/Petrol/RHA/Special/CA).
+    // The salary is always split 50% + 50% (Basic/DA/Retaining | Other/Petrol/HRA/Special/CA).
     addSplitIssue(ctx, data.salaryAmount, data.split);
   }
 });

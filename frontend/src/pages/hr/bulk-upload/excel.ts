@@ -132,7 +132,11 @@ export async function downloadResultReport(result: BulkResult, context: UploadCo
       r.code,
       r.name,
       ROW_STATUS_META[r.status].label,
-      [...r.messages, ...(r.changes.length ? [`Changed: ${r.changes.join(", ")}`] : [])].join("; "),
+      [
+        ...r.messages,
+        ...(r.changes.length ? [`Changed: ${r.changes.join(", ")}`] : []),
+        ...(r.notes ?? []).map((n) => (result.preview ? n.replace(/^Created /, "Will create ") : n)),
+      ].join("; "),
       r.warnings.join("; "),
     ]);
     if (r.status === "invalid" || r.status === "failed" || r.status === "duplicate" || r.status === "not_found") {
