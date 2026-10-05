@@ -1,4 +1,5 @@
 import type { ComponentType, ReactNode } from "react";
+import { Crown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { initials } from "./logic";
 
@@ -50,6 +51,17 @@ export function Chip({ children, className }: { children: ReactNode; className?:
   );
 }
 
+/** The Managing Director's chip: gold, the identity colour of the MD portal. */
+export function MdChip({ label = "MD" }: { label?: string }) {
+  return (
+    <span data-testid="md-chip" className="inline-flex">
+      <Chip className="border-[#e0a83a]/60 bg-[#fff1cc] text-[#7a5410]">
+        <Crown size={11} /> {label}
+      </Chip>
+    </span>
+  );
+}
+
 const AVATAR_TONES = [
   "bg-blue-100 text-blue-700",
   "bg-emerald-100 text-emerald-700",
@@ -69,11 +81,14 @@ export function AccountAvatar({
   username,
   fullName,
   disabled,
+  md,
   size = "md",
 }: {
   username: string;
   fullName?: string | null;
   disabled?: boolean;
+  /** The Managing Director's avatar is gold. */
+  md?: boolean;
   size?: "md" | "lg";
 }) {
   return (
@@ -82,7 +97,11 @@ export function AccountAvatar({
       className={cn(
         "flex shrink-0 items-center justify-center rounded-full font-bold",
         size === "lg" ? "h-11 w-11 text-sm" : "h-9 w-9 text-xs",
-        disabled ? "bg-gray-100 text-gray-400" : toneOf(username),
+        disabled
+          ? "bg-gray-100 text-gray-400"
+          : md
+            ? "bg-[#fff1cc] text-[#7a5410] ring-2 ring-[#e0a83a]/50"
+            : toneOf(username),
       )}
     >
       {initials({ username, fullName })}

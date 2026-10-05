@@ -1,6 +1,7 @@
 import bcrypt
 from datetime import timedelta
 
+from django.db import transaction
 from django.utils import timezone
 from django.db.models import Count
 
@@ -41,9 +42,74 @@ def hr_user_json(u):
         "isSuperAdmin": u.is_super_admin,
         "isHidden": u.is_hidden,
         "masterFeatures": u.master_features or {},
+        # The Managing Director identity (see HRUser.is_md): at most one account has it.
+        "isMd": u.is_md,
+        "mdAssignedAt": u.md_assigned_at.isoformat() if u.md_assigned_at else None,
         "lastLogin": u.last_login.isoformat() if u.last_login else None,
         "createdAt": u.created_at.isoformat() if u.created_at else None,
     }
+
+
+def _md_summary(u):
+    return {"id": u.id, "username": u.username, "fullName": u.full_name}
+
+
+def _apply_md(request, user, want: bool, replace: bool):
+    """Give `user` the Managing Director identity, or take it away. Returns an error Response, or None when it is fine.
+
+    Mutates `user` only (the caller saves it, inside a transaction); the one write it makes itself is clearing the
+    PREVIOUS MD when `replace` is true, and only after every check has passed, so a refusal never leaves anything
+    half done.
+
+    The rules, each a 400 with a plain message:
+    - a super administrator is never the MD (the MD gets the executive portal, not the control plane);
+    - the MD is company-wide: an account limited to one branch cannot be the MD, and an MD cannot be given a branch;
+    - a disabled account cannot be the MD (it could not sign in to use it).
+    A different account already being the MD is a 409 `md_exists` naming them, unless the caller sent replaceMd=true
+    (the screen asks the administrator to confirm, then retries with it)."""
+    if not want:
+        if user.is_md:
+            user.is_md = False
+            user.md_assigned_at = None
+        return None
+    if user.is_md:
+        return None  # already the MD: nothing to do
+    if user.is_super_admin:
+        return Response(
+            {"error": "A super administrator can't also be the MD. Use a separate account for the MD."}, status=400
+        )
+    if user.branch_id is not None:
+        return Response(
+            {
+                "error": "The MD sees the whole company, so the account can't be limited to one branch. "
+                "Set Branch to All branches first."
+            },
+            status=400,
+        )
+    if not user.is_active:
+        return Response(
+            {"error": "Enable the account before making it the MD: a disabled account can't sign in."}, status=400
+        )
+    previous = HRUser.objects.filter(is_md=True).exclude(pk=user.pk).first()
+    if previous is not None:
+        if not replace:
+            return Response(
+                {
+                    "error": f"{previous.username} is already the MD. "
+                    f"Making {user.username} the MD removes it from {previous.username}.",
+                    "code": "md_exists",
+                    "currentMd": _md_summary(previous),
+                },
+                status=409,
+            )
+        log_action(
+            request, "update", "user_management", record_id=previous.id,
+            description=f"Removed MD access from: {previous.username} (replaced by {user.username})",
+        )
+        HRUser.objects.filter(is_md=True).exclude(pk=user.pk).update(is_md=False, md_assigned_at=None)
+    user.is_md = True
+    user.md_assigned_at = timezone.now()
+    return None
 
 
 def audit_log_json(log):
@@ -154,16 +220,24 @@ def hr_users(request: Request) -> Response:
         return Response({"error": "Username already exists"}, status=400)
 
     pw_hash = bcrypt.hashpw(data["password"].encode(), bcrypt.gensalt()).decode()
-    user = HRUser.objects.create(
-        username=data["username"],
-        email=data.get("email"),
-        full_name=data.get("fullName"),
-        password_hash=pw_hash,
-        role_id=data.get("roleId"),
-        department_id=data.get("departmentId"),
-        branch_id=data.get("branchId"),
-    )
+    with transaction.atomic():
+        user = HRUser(
+            username=data["username"],
+            email=data.get("email"),
+            full_name=data.get("fullName"),
+            password_hash=pw_hash,
+            role_id=data.get("roleId"),
+            department_id=data.get("departmentId"),
+            branch_id=data.get("branchId"),
+        )
+        if data.get("isMd"):
+            error = _apply_md(request, user, True, bool(data.get("replaceMd")))
+            if error is not None:
+                return error
+        user.save()
     log_action(request, "create", "user_management", record_id=user.id, description=f"Created HR user: {user.username}")
+    if user.is_md:
+        log_action(request, "update", "user_management", record_id=user.id, description=f"Assigned MD: {user.username}")
     return Response(hr_user_json(user), status=201)
 
 
@@ -180,17 +254,34 @@ def hr_user_detail(request: Request, pk: int) -> Response:
 
     if request.method == "PUT":
         data = request.data
-        for field, attr in [
-            ("email", "email"), ("fullName", "full_name"),
-            ("roleId", "role_id"), ("departmentId", "department_id"),
-            ("branchId", "branch_id"), ("isActive", "is_active"),
-        ]:
-            if field in data:
-                setattr(u, attr, data[field])
-        if data.get("password"):
-            u.password_hash = bcrypt.hashpw(data["password"].encode(), bcrypt.gensalt()).decode()
-        u.save()
+        was_md = u.is_md
+        with transaction.atomic():
+            for field, attr in [
+                ("email", "email"), ("fullName", "full_name"),
+                ("roleId", "role_id"), ("departmentId", "department_id"),
+                ("branchId", "branch_id"), ("isActive", "is_active"),
+            ]:
+                if field in data:
+                    setattr(u, attr, data[field])
+            if data.get("password"):
+                u.password_hash = bcrypt.hashpw(data["password"].encode(), bcrypt.gensalt()).decode()
+            if "isMd" in data:
+                error = _apply_md(request, u, bool(data["isMd"]), bool(data.get("replaceMd")))
+                if error is not None:
+                    return error
+            elif u.is_md and u.branch_id is not None:
+                return Response(
+                    {"error": "The MD sees the whole company, so the account can't be limited to one branch."},
+                    status=400,
+                )
+            u.save()
         log_action(request, "update", "user_management", record_id=u.id, description=f"Updated HR user: {u.username}")
+        if u.is_md and not was_md:
+            log_action(request, "update", "user_management", record_id=u.id, description=f"Assigned MD: {u.username}")
+        elif was_md and not u.is_md:
+            log_action(
+                request, "update", "user_management", record_id=u.id, description=f"Removed MD access from: {u.username}"
+            )
         return Response(hr_user_json(u))
 
     if u.is_super_admin:

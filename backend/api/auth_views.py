@@ -105,7 +105,9 @@ def hr_login(request: Request) -> Response:
         ip_address=_get_ip(request),
     )
     log_action(request, "login", "auth", description=f"{label} ({account.username}) logged in")
-    return Response({"token": token, "role": "hr", "employeeId": None, "name": label})
+    # isMd lets the sign-in page send the Managing Director straight to the executive portal; it is a hint for the
+    # screen only (/auth/me and require_md decide, from the database, on every request).
+    return Response({"token": token, "role": "hr", "employeeId": None, "name": label, "isMd": account.is_md})
 
 
 @api_view(["POST"])
@@ -219,6 +221,8 @@ def auth_me(request: Request) -> Response:
         # actually enforces it (see auth.require_master_admin).
         from .auth import is_master_admin
         payload["isMasterAdmin"] = is_master_admin(hr_user)
+        # The Managing Director identity: opens /md/* in the UI (the API guard is auth.require_md).
+        payload["isMd"] = bool(hr_user and hr_user.is_md)
         payload["permissions"] = permissions
         payload["branchId"] = hr_user.branch_id if hr_user else None
         payload["branchName"] = hr_user.branch.name if hr_user and hr_user.branch else None

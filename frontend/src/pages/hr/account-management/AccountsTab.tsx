@@ -36,7 +36,7 @@ import {
   type SortDir,
   type SortKey,
 } from "./logic";
-import { AccountAvatar, Chip, StatusDot } from "./parts";
+import { AccountAvatar, Chip, MdChip, StatusDot } from "./parts";
 
 type Props = {
   users: HrUserItem[];
@@ -53,9 +53,12 @@ type Props = {
   busyId?: number | null;
 };
 
-function RoleChip({ name, admin }: { name?: string | null; admin?: boolean }) {
+function RoleChip({ name, admin, md }: { name?: string | null; admin?: boolean; md?: boolean }) {
   if (!name && admin) {
     return <Chip className="border-indigo-200 bg-indigo-50 text-indigo-700">Full access</Chip>;
+  }
+  if (!name && md) {
+    return <Chip className="border-[#e0a83a]/50 bg-[#fffaf0] text-[#7a5410]">MD portal only</Chip>;
   }
   return name ? (
     <Chip className="border-blue-200 bg-blue-50 text-blue-700">
@@ -338,7 +341,12 @@ export default function AccountsTab({
                       >
                         <TableCell>
                           <div className="flex items-center gap-3">
-                            <AccountAvatar username={u.username} fullName={u.fullName} disabled={!u.isActive} />
+                            <AccountAvatar
+                              username={u.username}
+                              fullName={u.fullName}
+                              disabled={!u.isActive}
+                              md={u.isMd}
+                            />
                             <div className="min-w-0">
                               <p
                                 className={cn(
@@ -350,6 +358,7 @@ export default function AccountsTab({
                                 {u.isSuperAdmin && (
                                   <Chip className="border-blue-200 bg-blue-50 text-blue-700">Admin</Chip>
                                 )}
+                                {u.isMd && <MdChip label="Managing Director" />}
                               </p>
                               <p className="max-w-[16rem] truncate text-xs text-gray-500">
                                 {[u.fullName, u.email].filter(Boolean).join(" · ") || "No name or email"}
@@ -358,7 +367,7 @@ export default function AccountsTab({
                           </div>
                         </TableCell>
                         <TableCell>
-                          <RoleChip name={u.roleName} admin={u.isSuperAdmin} />
+                          <RoleChip name={u.roleName} admin={u.isSuperAdmin} md={u.isMd} />
                         </TableCell>
                         <TableCell>
                           <BranchChip name={u.branchName} />
@@ -396,11 +405,18 @@ export default function AccountsTab({
                     data-testid={`account-card-${u.username}`}
                   >
                     <div className="flex items-start gap-3">
-                      <AccountAvatar username={u.username} fullName={u.fullName} disabled={!u.isActive} size="lg" />
+                      <AccountAvatar
+                        username={u.username}
+                        fullName={u.fullName}
+                        disabled={!u.isActive}
+                        md={u.isMd}
+                        size="lg"
+                      />
                       <div className="min-w-0 flex-1">
                         <p className="flex flex-wrap items-center gap-1.5 font-semibold">
                           {u.username}
                           {u.isSuperAdmin && <Chip className="border-blue-200 bg-blue-50 text-blue-700">Admin</Chip>}
+                          {u.isMd && <MdChip label="Managing Director" />}
                         </p>
                         <p className="truncate text-xs text-gray-500">
                           {[u.fullName, u.email].filter(Boolean).join(" · ") || "No name or email"}
@@ -409,7 +425,7 @@ export default function AccountsTab({
                       <StatusDot active={u.isActive} />
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <RoleChip name={u.roleName} admin={u.isSuperAdmin} />
+                      <RoleChip name={u.roleName} admin={u.isSuperAdmin} md={u.isMd} />
                       <BranchChip name={u.branchName} />
                     </div>
                     <div className="flex items-center justify-between">

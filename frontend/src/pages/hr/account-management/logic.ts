@@ -21,8 +21,10 @@ export type AccountSummary = {
   branchScoped: number;
   /** Company-wide logins. */
   companyWide: number;
-  /** Accounts that have no role and are not administrators: they can't open any module. */
+  /** Accounts that have no role and are neither administrators nor the MD: they can't open any module. */
   noRole: number;
+  /** The Managing Director's account, if one is assigned. */
+  md: HrUserItem | null;
 };
 
 export function summarizeAccounts(users: HrUserItem[]): AccountSummary {
@@ -34,8 +36,10 @@ export function summarizeAccounts(users: HrUserItem[]): AccountSummary {
     disabled: users.length - active,
     branchScoped,
     companyWide: users.length - branchScoped,
-    // An administrator has full access without a role, so is never "missing" one.
-    noRole: users.filter((u) => u.roleId == null && !u.isSuperAdmin).length,
+    // An administrator has full access without a role, so is never "missing" one. Neither is the MD: the executive
+    // portal comes from the MD identity, not from a role.
+    noRole: users.filter((u) => u.roleId == null && !u.isSuperAdmin && !u.isMd).length,
+    md: users.find((u) => u.isMd) ?? null,
   };
 }
 
@@ -64,7 +68,11 @@ export function filterAccounts(users: HrUserItem[], f: AccountFilters): HrUserIt
   return users.filter((u) => {
     if (f.status === "active" && !u.isActive) return false;
     if (f.status === "disabled" && u.isActive) return false;
-    if (f.role === NONE ? u.roleId != null || u.isSuperAdmin : f.role !== "all" && String(u.roleId ?? "") !== f.role) {
+    if (
+      f.role === NONE
+        ? u.roleId != null || u.isSuperAdmin || u.isMd
+        : f.role !== "all" && String(u.roleId ?? "") !== f.role
+    ) {
       return false;
     }
     if (f.branch === NONE ? u.branchId != null : f.branch !== "all" && String(u.branchId ?? "") !== f.branch) {

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Eye, EyeOff, UserCog } from "lucide-react";
+import { Crown, Eye, EyeOff, UserCog } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,6 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import {
   getListHrUsersQueryKey,
@@ -26,12 +27,16 @@ import {
 type Props = {
   user: HrUserItem | null;
   roles: Role[];
+  /** Every account: needed to tell who the Managing Director is now. */
+  users: HrUserItem[];
+  /** Start a new account with the Managing Director switch already on. */
+  defaultMd?: boolean;
   open: boolean;
   onClose: () => void;
 };
 
-/** Create or edit a portal login: username, name, email, password, role and branch. */
-export default function HrUserDialog({ user, roles, open, onClose }: Props) {
+/** Create or edit a portal login: username, name, email, password, role, branch and whether it is the MD. */
+export default function HrUserDialog({ user, roles, users, defaultMd = false, open, onClose }: Props) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [username, setUsername] = useState(user?.username ?? "");
@@ -41,7 +46,12 @@ export default function HrUserDialog({ user, roles, open, onClose }: Props) {
   const [showPassword, setShowPassword] = useState(false);
   const [roleId, setRoleId] = useState<string>(user?.roleId ? String(user.roleId) : "");
   const [branchId, setBranchId] = useState<string>(user?.branchId ? String(user.branchId) : "");
+  const [isMd, setIsMd] = useState<boolean>(user ? !!user.isMd : defaultMd);
+  const [replaceMd, setReplaceMd] = useState(false);
   const { data: branches } = useListBranches();
+  // Someone else already holds the MD identity: making this account the MD takes it from them.
+  const currentMd = users.find((u) => u.isMd && u.id !== user?.id) ?? null;
+  const takesOver = isMd && !!currentMd;
 
   const createMutation = useCreateHrUser();
   const updateMutation = useUpdateHrUser();
@@ -56,6 +66,14 @@ export default function HrUserDialog({ user, roles, open, onClose }: Props) {
       toast({ title: "Password is required for a new account", variant: "destructive" });
       return;
     }
+    if (takesOver && !replaceMd) {
+      toast({
+        title: `Confirm the change of Managing Director`,
+        description: `${currentMd?.username} is the MD now. Tick the box to move the MD identity to this account.`,
+        variant: "destructive",
+      });
+      return;
+    }
     try {
       if (user) {
         await updateMutation.mutateAsync({
@@ -64,11 +82,15 @@ export default function HrUserDialog({ user, roles, open, onClose }: Props) {
             fullName: fullName || undefined,
             email: email || undefined,
             roleId: roleId ? Number(roleId) : undefined,
-            branchId: branchId ? Number(branchId) : null,
+            // the MD is company-wide: any branch is cleared in the same step
+            branchId: isMd ? null : branchId ? Number(branchId) : null,
             ...(password ? { password } : {}),
+            ...(isMd !== !!user.isMd ? { isMd, ...(takesOver ? { replaceMd: true } : {}) } : {}),
           },
         });
-        toast({ title: "Account updated" });
+        toast({
+          title: isMd !== !!user.isMd ? (isMd ? "Managing Director assigned" : "MD access removed") : "Account updated",
+        });
       } else {
         await createMutation.mutateAsync({
           username: username.trim(),
@@ -76,9 +98,10 @@ export default function HrUserDialog({ user, roles, open, onClose }: Props) {
           fullName: fullName || undefined,
           email: email || undefined,
           roleId: roleId ? Number(roleId) : undefined,
-          branchId: branchId ? Number(branchId) : undefined,
+          branchId: !isMd && branchId ? Number(branchId) : undefined,
+          ...(isMd ? { isMd: true, ...(takesOver ? { replaceMd: true } : {}) } : {}),
         });
-        toast({ title: "Account created" });
+        toast({ title: isMd ? "Managing Director account created" : "Account created" });
       }
       queryClient.invalidateQueries({ queryKey: getListHrUsersQueryKey() });
       onClose();
@@ -195,7 +218,11 @@ export default function HrUserDialog({ user, roles, open, onClose }: Props) {
           </div>
           <div className="space-y-1.5">
             <Label>Branch</Label>
-            <Select value={branchId || "__all__"} onValueChange={(v) => setBranchId(v === "__all__" ? "" : v)}>
+            <Select
+              value={isMd ? "__all__" : branchId || "__all__"}
+              onValueChange={(v) => setBranchId(v === "__all__" ? "" : v)}
+              disabled={isMd}
+            >
               <SelectTrigger data-testid="acct-branch">
                 <SelectValue placeholder="All branches" />
               </SelectTrigger>
@@ -210,9 +237,72 @@ export default function HrUserDialog({ user, roles, open, onClose }: Props) {
               </SelectContent>
             </Select>
             <p className="text-xs text-gray-500">
-              Leave it on "All branches" for a company-wide login (MD, Director, HR Admin). Pick one branch to limit
-              this login to that branch's data.
+              {isMd
+                ? "The Managing Director sees the whole company, so this stays on All branches."
+                : `Leave it on "All branches" for a company-wide login (MD, Director, HR Admin). Pick one branch to limit this login to that branch's data.`}
             </p>
+          </div>
+
+          {/* ── the Managing Director identity ── */}
+          <div
+            className={`rounded-xl border p-3.5 transition-colors ${isMd ? "border-[#e0a83a]/60 bg-[#fffaf0]" : "border-gray-200 bg-gray-50/60"}`}
+            data-testid="acct-md-section"
+          >
+            <div className="flex items-start gap-3">
+              <span
+                className={`mt-0.5 rounded-lg p-1.5 ${isMd ? "bg-[#fff1cc] text-[#7a5410]" : "bg-gray-100 text-gray-500"}`}
+              >
+                <Crown size={16} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <Label htmlFor="acct-md" className="font-bold">
+                  Managing Director
+                </Label>
+                <p className="mt-0.5 text-xs leading-relaxed text-gray-600">
+                  Gives this login the executive MD portal (dashboards, analytics, reports) and the read-only AI
+                  assistant. Only one account can be the MD, and nothing changes for anyone else.
+                </p>
+              </div>
+              <Switch
+                id="acct-md"
+                checked={isMd}
+                onCheckedChange={(on) => {
+                  setIsMd(on);
+                  setReplaceMd(false);
+                }}
+                disabled={!!user?.isSuperAdmin}
+                data-testid="acct-md"
+                aria-label="Managing Director"
+              />
+            </div>
+            {user?.isSuperAdmin && (
+              <p className="mt-2 text-xs text-gray-500">
+                An administrator account cannot be the MD: make a separate account for the MD.
+              </p>
+            )}
+            {takesOver && (
+              <label
+                className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-900"
+                data-testid="acct-md-replace"
+              >
+                <input
+                  type="checkbox"
+                  checked={replaceMd}
+                  onChange={(e) => setReplaceMd(e.target.checked)}
+                  className="mt-0.5"
+                  data-testid="acct-md-replace-check"
+                />
+                <span>
+                  <b>{currentMd?.fullName || currentMd?.username}</b> is the Managing Director now. Move the MD identity
+                  to this account (they lose the MD portal and the AI assistant).
+                </span>
+              </label>
+            )}
+            {!isMd && user?.isMd && (
+              <p className="mt-2 text-xs text-amber-800">
+                Saving removes the MD portal and the AI assistant from this account.
+              </p>
+            )}
           </div>
         </div>
 

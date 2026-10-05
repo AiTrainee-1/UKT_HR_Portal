@@ -8,7 +8,9 @@ export default function Landing() {
 
   useEffect(() => {
     if (isAuthenticated && user) {
-      navigate(user.role === "hr" ? "/hr/dashboard" : "/employee/dashboard", { replace: true });
+      navigate(user.role === "hr" ? (user.isMd ? "/md/dashboard" : "/hr/dashboard") : "/employee/dashboard", {
+        replace: true,
+      });
     } else {
       navigate("/hr-login", { replace: true });
     }

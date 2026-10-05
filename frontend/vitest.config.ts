@@ -10,6 +10,9 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     include: ["src/**/*.test.{ts,tsx}"],
+    // The MD portal's page tests render a whole page (a dozen cards and charts) in jsdom: 1-4 s on a quiet machine, more
+    // on a busy CI runner. The default 5 s turned that into random failures.
+    testTimeout: 20_000,
     coverage: {
       provider: "v8",
       // The unit-testable logic layer. Page components are exercised by the
@@ -21,7 +24,7 @@ export default defineConfig({
       // A floor, not a target: set just under today's numbers so coverage can
       // only go up. Raise these as tests are added; `npm run test:coverage`
       // (and CI) fail if a change drops below.
-      thresholds: { statements: 50, branches: 80, functions: 70, lines: 50 },
+      thresholds: { statements: 85, branches: 90, functions: 90, lines: 85 },
     },
   },
 });

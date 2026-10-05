@@ -199,6 +199,43 @@ def require_super_admin(view_func):
     return wrapper
 
 
+def is_md(hr_user) -> bool:
+    """Is this THE Managing Director account (an active HRUser flagged is_md)?
+
+    A separate identity from super admin, on purpose: a super administrator
+    configures the system and is never the MD (see hr_user_views._set_md),
+    and the MD gets the executive portal only, not the control plane."""
+    return bool(hr_user is not None and hr_user.is_active and hr_user.is_md)
+
+
+def require_md(view_func):
+    """Restrict a view to the Managing Director account: every /api/md/* endpoint.
+
+    Looks the account up in the DATABASE on every request (never trusts a token
+    claim), so taking the MD flag away, disabling the account or reassigning the
+    role of MD to someone else takes effect on the very next request. A super
+    administrator, an HR user with every permission and an employee token are
+    all refused: this is the one gate to the executive data, and the permission
+    middleware does not cover these paths (it only guards modules it maps), so
+    every view under md/ must carry this decorator; tests_md_identity walks the
+    URL table to prove none is missing. The account is left on request.md_user.
+    """
+
+    @wraps(view_func)
+    @require_hr
+    def wrapper(request: Request, *args, **kwargs):
+        from .models import HRUser
+
+        hr_user_id = request.jwt_user.get("hrUserId")
+        md = HRUser.objects.filter(id=hr_user_id, is_active=True, is_md=True).first() if hr_user_id is not None else None
+        if md is None:
+            return Response({"error": "Managing Director access required"}, status=403)
+        request.md_user = md
+        return view_func(request, *args, **kwargs)
+
+    return wrapper
+
+
 def require_portal_key(view_func):
     """
     Gates the read-only /api/co-portal/* endpoints the Co HRMS Portal (a

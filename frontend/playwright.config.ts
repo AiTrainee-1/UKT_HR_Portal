@@ -10,6 +10,7 @@ const reuse = process.env.E2E_REUSE_SERVERS === "1";
 const API_PORT = 8180;
 const WEB_PORT = 5180;
 const FAKE_PORT = 8190;
+const FAKE_GEMINI_PORT = 8191;
 const backendEnv = {
   DB_NAME: process.env.E2E_DB_NAME ?? "uktex_e2e",
   // backend/.env may point DATABASE_URL at a real (even production) database, and a set DATABASE_URL wins over
@@ -36,6 +37,10 @@ const backendEnv = {
   // the only SMTP account the tests save points at 127.0.0.1:9 (gmail-control.spec.ts); until then SMTP isn't set up.
   EMAIL_ALLOW_SENDING: "true",
   EMPLOYEE_PORTAL_URL: "https://portal.e2e.test",
+  // The MD's AI assistant talks to a local fake of Google's Gemini API (e2e/fake-gemini.mjs): the real assistant runs
+  // against the e2e database, but no key, quota or network is involved and nothing leaves the machine.
+  GEMINI_API_KEY: "e2e-fake-gemini-key",
+  GEMINI_API_BASE_URL: `http://127.0.0.1:${FAKE_GEMINI_PORT}/v1beta`,
 };
 
 export default defineConfig({
@@ -51,7 +56,17 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    {
+      name: "chromium",
+      use: {
+        ...devices["Desktop Chrome"],
+        // A fake microphone for the voice tests (the MD portal's assistant records speech): Chromium plays a test tone
+        // instead of opening a real device, and does not show its permission prompt.
+        launchOptions: { args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] },
+      },
+    },
+  ],
   webServer: [
     {
       command: "node e2e/fake-waclient.mjs",
@@ -59,6 +74,13 @@ export default defineConfig({
       reuseExistingServer: reuse,
       timeout: 30_000,
       env: { FAKE_WACLIENT_PORT: String(FAKE_PORT) },
+    },
+    {
+      command: "node e2e/fake-gemini.mjs",
+      url: `http://127.0.0.1:${FAKE_GEMINI_PORT}/health`,
+      reuseExistingServer: reuse,
+      timeout: 30_000,
+      env: { FAKE_GEMINI_PORT: String(FAKE_GEMINI_PORT) },
     },
     {
       command: `python e2e_setup.py && python manage.py runserver 127.0.0.1:${API_PORT} --noreload`,

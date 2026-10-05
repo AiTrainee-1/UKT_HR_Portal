@@ -20,6 +20,7 @@
    - [4.8 Recruitment Dashboard](#48-recruitment-dashboard)
    - [4.9 User Management (Department Approvers)](#49-user-management-department-approvers)
    - [4.10 Settings](#410-settings)
+   - [4.11 Managing Director (MD) Portal & AI Assistant](#411-managing-director-md-portal--ai-assistant)
 5. [Employee Self-Service Module](#5-employee-self-service-module)
    - [5.1 Employee Dashboard](#51-employee-dashboard)
    - [5.2 Leave Management](#52-leave-management)
@@ -874,6 +875,38 @@ There are two restore paths:
 2. **Automated (Super Admin only):** The system restores the database while briefly taking the application offline. It automatically saves a safety backup of the current state before restoring.
 
 > ⚠️ Before restoring, understand that any data created **after** the backup date will be lost from the live system. If the backup you're about to restore is older than the current live data, the system shows a warning telling you exactly what will be discarded before you confirm. The system also creates a pre-restore safety backup automatically, but you should only restore when absolutely necessary.
+
+### 4.11 Managing Director (MD) Portal & AI Assistant
+
+The MD portal is a separate, **read-only** view for the Managing Director: the company at a glance, with exceptions first, trends second and detail on request. Nobody else sees it, and nothing the MD does there can change company data.
+
+**Giving someone MD access (Super Admin only).** Account Management → open the account (or **MD profile → Create MD account**) → switch on **Managing Director**. Only one account can be MD at a time (switching it on for another account asks you to confirm moving it), the account must not be a Super Admin and must not be limited to one unit. The MD signs in on the usual HR login page and lands on the MD portal. If the same account also has an HR role, a link in the MD sidebar switches between the two portals.
+
+**The pages.**
+
+| Page | What the MD learns |
+|---|---|
+| **Dashboard** | A plain-words briefing, headline cards (headcount, today's attendance, absenteeism, attrition, payroll cost, overtime, open positions, visitors), the exceptions from every page, today by unit, three trend charts. **Brief me** asks the assistant for the full briefing |
+| **Attendance** | Attendance, absenteeism, lateness and overtime for any period; weakest departments and units; weekday pattern; people who need a conversation |
+| **Employees** | Headcount, joiners, leavers, attrition, tenure, planned vs actual staff, why people leave, anniversaries and a people directory (no salary or contact details) |
+| **Outpass & Visitors** | Visits, outpasses, time out of the factory, approvals waiting, repeat users, what the gate refused |
+| **Tea Break** | Overruns and minutes lost, by department and shift, and whether it is getting better or worse |
+| **Payroll** | What the workforce costs, what changed since last month and why (a cost bridge), cost by department and unit, what the money is made of, advances outstanding, payroll exceptions |
+| **Reports** | One-page executive reports (daily brief, weekly workforce, monthly payroll, attrition and hiring, attendance exceptions, department scorecard, gate discipline) plus the whole Report Center, to view, print or export |
+| **Recruitment** | Open positions and how long they have been open, the hiring funnel, resignations waiting for a decision, hiring against attrition |
+| **Activity Logs** | What people did in the system, sensitive actions, activity at odd hours, sign-ins and new devices |
+
+On every page: the period and unit/department filters at the top; **Needs your attention** lists what stands out, worst first, each with an **Explain** button; the small **i** button on a card shows exactly how its figure is calculated; **Ask AI** on a card opens the assistant with a ready-made question about that card. Today's figures are provisional until the day ends, and the page says so.
+
+**The AI assistant.** Press **Ask the AI assistant** (or `Ctrl+J`) on any MD page. It is not available anywhere else.
+- **Ask in your own words**, by typing or by speaking (press the microphone; English, Tamil and Hindi). A spoken question gets a spoken answer; *Reading aloud* in the panel reads every answer, and every answer has a **Listen** button.
+- **It only reads.** It cannot approve, edit, delete or send anything; if asked, it points to the page where a person can do it.
+- **It shows its working.** Under each answer, **How I got this** lists what it looked up (period, unit, number of records), which data and definitions it used, what it assumed, and how confident it is. The explanation is built by the system from the lookups that really happened.
+- **It points you to the right page** ("You can check the detailed breakdown on the Payroll page"), with a button to open it, and suggests follow-up questions.
+- **Names are protected.** Employee names are replaced by codes before a question goes to Google's Gemini service, and put back in the answer you read; phone numbers, addresses, bank and government ids are never sent.
+- **Limits.** The free Gemini plan allows only a handful of questions a minute and a few hundred a day; when it runs out the panel says when it resets. Voice needs the portal opened over HTTPS (or on the server itself).
+
+**Setting it up (Super Admin).** Put the Gemini key in `backend/.env` as `GEMINI_API_KEY` and restart the backend (the key is never typed into the portal). Account Management → **MD profile** shows the assistant's settings (model, privacy mode, limits, today's usage) and **Test connection**. On Google's free plan, what is sent may be used by Google to improve its products, so enable billing on the Google project before relying on it with real company data.
 
 ---
 

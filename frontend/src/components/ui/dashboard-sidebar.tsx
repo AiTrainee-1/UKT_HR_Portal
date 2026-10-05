@@ -15,7 +15,7 @@ import {
   ChevronRight, Search, X, Command, UserCheck, UserMinus,
   CalendarCheck, Bell, Award, TrendingUp, Gift, CreditCard,
   CalendarHeart, MessageCircle, UserCog, FolderOpen, MonitorSmartphone,
-  Smartphone, Landmark, DoorOpen, Mail,
+  Smartphone, Landmark, DoorOpen, Mail, Crown,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -45,6 +45,8 @@ const navGroups: NavGroupData[] = [
   {
     items: [
       { path: '/hr/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+      // The Managing Director's own portal: shown to that one account only (filtered below).
+      { path: '/md/dashboard', label: 'MD Portal', icon: Crown },
       {
         path: '/hr/employees',
         label: 'Employees',
@@ -146,7 +148,7 @@ const navGroups: NavGroupData[] = [
 
 // ── UKT Logo SVG ───────────────────────────────────────────────────────────
 
-function UKTLogo({ className }: { className?: string }) {
+export function UKTLogo({ className }: { className?: string }) {
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -203,13 +205,16 @@ function SearchModal({ onClose }: { onClose: () => void }) {
   const [, navigate] = useLocation();
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
+  const { user: searcher } = useAuth();
 
+  // the MD portal entry is only searchable by the Managing Director
+  const searchable = searchIndex.filter((e) => e.path !== '/md/dashboard' || !!searcher?.isMd);
   const results = query.trim()
-    ? searchIndex.filter((e) =>
+    ? searchable.filter((e) =>
         e.label.toLowerCase().includes(query.toLowerCase()) ||
         (e.group ?? '').toLowerCase().includes(query.toLowerCase()),
       )
-    : searchIndex;
+    : searchable;
 
   const goTo = (path: string) => {
     navigate(path);
@@ -854,6 +859,8 @@ export function HrSidebar({
               // only turns the background OT / Compensation features off), only by the role's own permission below.
               // Account Management is admin-only, independent of Role.permissions.
               if (item.path === '/hr/account-management') return !!user?.isSuperAdmin;
+              // The MD portal link is for the Managing Director alone, independent of Role.permissions.
+              if (item.path === '/md/dashboard') return !!user?.isMd;
               // Admin-only, same as Account Management -no per-role grant.
               if (item.path === '/hr/activity-logs') return !!user?.isSuperAdmin;
               if (item.children) return item.children.length > 0;

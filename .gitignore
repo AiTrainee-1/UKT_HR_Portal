@@ -61,3 +61,6 @@ dbconfig.txt
 .coverage
 htmlcov/
 coverage/
+
+# The MD portal's demo company: which rows seed_md_demo created in a throwaway database (a machine-local record)
+backend/api/management/commands/md_demo/manifest-*.json

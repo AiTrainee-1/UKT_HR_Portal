@@ -122,8 +122,10 @@ const TONE_WORDS: Record<Tone, string[]> = {
     "sent",
     "processed",
     "eligible",
+    "green",
   ],
   warning: [
+    "amber",
     "pending",
     "late",
     "half day",
@@ -143,6 +145,7 @@ const TONE_WORDS: Record<Tone, string[]> = {
     "in progress",
   ],
   danger: [
+    "red",
     "rejected",
     "absent",
     "cancelled",

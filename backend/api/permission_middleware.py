@@ -100,7 +100,26 @@ class HrPermissionMiddleware:
             # disabled -reject immediately rather than waiting for JWT expiry.
             return JsonResponse({"error": "account_disabled", "message": "This account is disabled."}, status=401)
 
+        # The executive portal's API belongs to the Managing Director alone. The view decorator (auth.require_md) is the
+        # real gate; this is a second lock for the case where someone adds a /api/md/ view and forgets it, because the
+        # rest of this middleware lets any path it does not map straight through. Not branch-scoped, not permission
+        # gated: the MD sees the whole company by definition.
+        if rel_path == "md" or rel_path.startswith("md/"):
+            if not hr_user.is_md:
+                return JsonResponse(
+                    {"error": "permission_denied", "message": "This section is for the Managing Director."}, status=403
+                )
+            request.hr_branch_id = None
+            return None
+
         if hr_user.is_super_admin:
+            return None
+
+        # The Managing Director reads the Report Center like a super administrator does (company-wide, read-only):
+        # GETs under reports/ skip the role check, which this account usually has no role for. Every report is itself
+        # checked in reporting/access.py, and nothing else about this account's HR access changes.
+        if hr_user.is_md and request.method in SAFE_METHODS and (rel_path == "reports" or rel_path.startswith("reports/")):
+            request.hr_branch_id = None
             return None
 
         request.hr_branch_id = hr_user.branch_id

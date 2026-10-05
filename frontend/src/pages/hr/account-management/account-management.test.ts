@@ -69,6 +69,7 @@ describe("the summary above the list", () => {
       branchScoped: 2,
       companyWide: 2,
       noRole: 1,
+      md: null,
     });
   });
 
@@ -80,6 +81,7 @@ describe("the summary above the list", () => {
       branchScoped: 0,
       companyWide: 0,
       noRole: 0,
+      md: null,
     });
   });
 
@@ -87,6 +89,14 @@ describe("the summary above the list", () => {
     const withAdmin = [...users, user({ username: "root", isSuperAdmin: true })];
     expect(summarizeAccounts(withAdmin).noRole).toBe(1); // still just "temp"
     expect(filterAccounts(withAdmin, { ...NO_FILTERS, role: NONE }).map((u) => u.username)).toEqual(["temp"]);
+  });
+
+  it("knows who the Managing Director is, and does not count the MD as missing a role: the portal comes from the identity", () => {
+    const withMd = [...users, user({ username: "md.sir", fullName: "R. Murugan", isMd: true })];
+    const summary = summarizeAccounts(withMd);
+    expect(summary.md?.username).toBe("md.sir");
+    expect(summary.noRole).toBe(1); // still just "temp"
+    expect(filterAccounts(withMd, { ...NO_FILTERS, role: NONE }).map((u) => u.username)).toEqual(["temp"]);
   });
 
   it("counts how many accounts use each role", () => {

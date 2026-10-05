@@ -467,6 +467,21 @@ The Report Center. All endpoints are `@api_view(["GET"])` + `@require_hr`, branc
 - **GET /api/reports/options/employees?q=&ids=&departmentIds=** — Employee picker search (max 40 hits; `ids` resolves chips). Refused for roles that can open no report with an employee filter.
 - **Legacy (deprecated, unused)** — `/api/reports/attendance-log`, `attendance-summary`, `leave`, `leave-balance`, `payroll`, `pf-esi`, `employees`, `headcount`, `settlement`, `new-joinings` (`reports_views.py`) remain for one release only.
 
+## MD Portal & AI Assistant (api/md_portal/)
+
+Everything is for the one account with `HRUser.is_md`. Every `/api/md/*` view is GET-only, `@require_md` (re-reads the database each request) and runs inside `read_only_db()`: the database refuses writes there. Anyone else gets 401 (no token) or 403. Common query parameters: `period` (`today`, `last_7_days`, `last_30_days`, `this_month`, `last_month`, `last_90_days`, `last_12_months`, `this_year`, `this_financial_year`, `custom` with `from`/`to`), and the scope `branch` (unit id), `department` (name), `type` (`staff`/`production`). Every answer is an envelope: `{ ...data, generatedAt, period, scope, provenance[] (id, title, dataset, definition, formula, rows, filters, caveats), notes[], tookMs }`; a bad parameter is a 400 with a readable message.
+
+- **GET /api/md/me, /api/md/org** — who the MD is and which pages they have (the same list the assistant may suggest); units, departments and their unit for the filter bar.
+- **GET /api/md/dashboard/overview, trends, briefing** — the first screen: up to 8 headline cards (each module's own `headline()`), merged exceptions (`insights()` of every page), today's attendance by unit, a plain-words briefing; the three trend charts; the briefing alone. A module that fails shows as an error entry, never takes the page down.
+- **GET /api/md/attendance/summary, trend, departments, weekday, heatmap, exceptions, overtime, leave, day** — attendance %, absenteeism, late, overtime, half days, missing punches with the previous period; trend by day/week; ranking by department/unit/type; weekday pattern; department-by-day heat map; chronic absentees, late-comers, long absences, absences after a day off; overtime; leave; one day's roster. Today is provisional and never part of a rate.
+- **GET /api/md/employees/summary, composition, movement, attrition, insights, milestones, directory, employee/\<id\>** — headcount, joiners, leavers, attrition, tenure; composition by type/unit/department/designation/age/gender and planned vs actual staff; monthly movement; attrition by group, reasons, time served, early leavers; milestones; a searchable directory (no salary or contact details); one person's story.
+- **GET /api/md/visitors/summary, trend, visitors, outpass, units, exceptions, activity, day** and **GET /api/md/tea-break/summary, trend, departments, shifts, offenders, heatmap, rule, attention** — gate, visitor, outpass and tea-break analytics (visitors have no check-out, so nobody is shown as "inside").
+- **GET /api/md/payroll/summary, trend, bridge, departments, distribution, components, advances, exceptions, status, attention** — gross/net/cost per head from salary slips, the month-on-month cost bridge, cost by department/unit/type, take-home distribution (counts only), earnings and deductions by head, advances outstanding, exceptions, whether the month is generated and paid.
+- **GET /api/md/recruitment/summary, positions, funnel, joiners, resignations, sources, trend, attention** and **GET /api/md/activity/summary, trend, heatmap, users, modules, sensitive, sign-ins, after-hours, feed, attention** — hiring pipeline, open positions, resignations; what people did in the system and what looks unusual.
+- **Reports:** the MD reads the Report Center through the ordinary `/api/reports/*` endpoints (read-only; the `md_only` executive reports appear only for the MD).
+- **POST /api/md/assistant/ask** — `{ question, conversationId?, inputMode: "text"|"voice", language?, pageContext? }` stores the question and starts the answer as a background job; returns the two message ids. **GET /api/md/assistant/messages/\<id\>** polls it (status `pending|running|done|error`, live `progress[]`, then `answer`, `spokenSummary`, `explanation` {what I did, data used, assumptions, confidence}, `suggestedPages[]`, `followUps[]`). **POST /api/md/assistant/messages/\<id\>/cancel** stops a running job. **GET /api/md/assistant/status** says whether it is set up (key present, enabled, today's usage, models). **GET, DELETE /api/md/assistant/conversations** and **GET, DELETE .../conversations/\<id\>** list, read and delete the MD's own history. **POST /api/md/assistant/transcribe** (audio upload) turns a spoken question into text with Gemini when the browser cannot.
+- **GET, PUT /api/hr-users/md-assistant** and **POST /api/hr-users/md-assistant/test** — `@require_super_admin`. Read/change the assistant's settings (enabled, model, fallback models, thinking level, privacy mode, lookup rounds, requests per minute; the API key is never accepted or returned) and test the connection with one tiny request. **POST /api/hr-users** and **PUT /api/hr-users/\<pk\>** accept `isMd` (and `replaceMd` to move the identity from the current MD); the change is audited.
+
 ---
 
 # Part 2 — Database Tables
@@ -532,6 +547,7 @@ An HR-portal login account (as opposed to an `Employee`, who uses the mobile sel
 - `department` — ForeignKey → `Department`, `on_delete=SET_NULL`, null/blank, related_name `hr_users`
 - `branch` — ForeignKey → `Branch`, `on_delete=SET_NULL`, null/blank, related_name `hr_users`
 - `is_active`, `is_super_admin`, `is_hidden` — BooleanField (`is_hidden` only affects the Account Management list, never auth/permissions)
+- `is_md` — BooleanField, default False; the one Managing Director account (partial unique index `uniq_single_md` on `is_md` where true, so at most one). Only a super admin sets it, never on a super admin or a branch-scoped account. Grants `/api/md/*` and nothing else (migration `0111`)
 - `master_features` — JSONField, default `dict`; grant-only per-account capability flags (e.g. `{"co": true}`)
 - `last_login`, `created_at`, `updated_at` — DateTimeField
 
@@ -1469,3 +1485,35 @@ Singleton holding optional Google Drive offsite-copy configuration for backups (
 - `service_account_json` — TextField (plaintext service-account key, per codebase convention)
 - `last_upload_at`, `last_upload_status`, `last_upload_summary` — DateTimeField / TextField
 </content>
+
+## MD Portal Assistant (api/models/md_assistant.py)
+
+None of this is company data: it is the assistant's own bookkeeping. The Gemini API key is **never** stored (environment only).
+
+### MdAssistantSettings
+**Table name:** `md_assistant_settings`
+
+Singleton (pk=1), edited by the super admin in Account Management → MD profile.
+
+**Key fields:**
+- `enabled` — BooleanField, default True
+- `model`, `fallback_models` — TextField (comma list); defaults `gemini-3.5-flash-lite` and `gemini-3.1-flash-lite,gemini-3.8-flash`
+- `thinking_level` — TextField, default `low`
+- `privacy_mode` — BooleanField, default True (employee names become tokens before anything leaves the server)
+- `max_tool_rounds` (5), `requests_per_minute` (8) — IntegerField
+- `updated_at`, `updated_by`
+
+### MdConversation
+**Table name:** `md_conversations`
+
+A conversation of the MD with the assistant. `user` → `HRUser` (CASCADE), `title`, `created_at`, `updated_at`; index on (`user`, `-updated_at`). Only the owner can read it.
+
+### MdMessage
+**Table name:** `md_messages`
+
+One question or answer. `conversation` → `MdConversation` (CASCADE), `role` (`user`/`assistant`), `status` (`pending`/`running`/`done`/`error`), `content` (the text), `payload` (JSON: spoken summary, explanation, suggested pages, follow-ups, progress, confidence), `input_mode` (`text`/`voice`), `language`, `page_context` (JSON: what page and filters were on screen), `model_used`, `error`, `created_at`, `started_at`, `finished_at`.
+
+### MdAssistantUsage
+**Table name:** `md_assistant_usage`
+
+Gemini requests per model per **Pacific** day (when Google resets the free quota). `day`, `model` (unique together), `requests`, `prompt_tokens`, `output_tokens`, `rate_limited`, `daily_limit_hit`.

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "wouter";
 import { ChevronRight, FileSpreadsheet, FileText, Link2, Loader2, RotateCcw, Star, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -37,7 +37,7 @@ import {
 type SetParams = (next: URLSearchParams, opts?: { replace?: boolean }) => void;
 
 /** The applied filters live in the URL (shareable, survives reload): ?report=<id>&run=1&<filters>. */
-function appliedFromUrl(spec: ReportMeta, params: URLSearchParams) {
+export function appliedFromUrl(spec: ReportMeta, params: URLSearchParams) {
   const values = parseQuery(spec.filters, params);
   return { values, run: params.get("run") === "1", query: buildQuery(spec.filters, values).toString() };
 }
@@ -96,11 +96,15 @@ function Workspace({
   spec,
   params,
   setParams,
+  basePath,
+  extraActions,
 }: {
   catalog: ReportCatalog;
   spec: ReportMeta;
   params: URLSearchParams;
   setParams: SetParams;
+  basePath: string;
+  extraActions?: ReactNode;
 }) {
   const { toast } = useToast();
   const top = useRef<HTMLDivElement>(null);
@@ -218,7 +222,7 @@ function Workspace({
       {/* header */}
       <div>
         <div className="mb-1 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
-          <Link href="/hr/reports" className="hover:text-gray-900 hover:underline">
+          <Link href={basePath} className="hover:text-gray-900 hover:underline">
             Reports
           </Link>
           <ChevronRight size={12} />
@@ -307,6 +311,7 @@ function Workspace({
               <RotateCcw /> Reset filters
             </Button>
             <div className="ml-auto flex flex-wrap items-center gap-2">
+              {extraActions}
               <Button
                 type="button"
                 variant="outline"
@@ -348,17 +353,25 @@ function Workspace({
   );
 }
 
-/** One report: header, filters, actions and results. Remounts per report (fresh draft, fresh table state). */
+/**
+ * One report: header, filters, actions and results. Remounts per report (fresh draft, fresh table state).
+ * `basePath` is the page that hosts the Report Center, for the links back to it (the MD portal embeds it under
+ * /md/reports); `extraActions` adds buttons in front of the download buttons (the MD's Print).
+ */
 export function ReportWorkspace({
   reportId,
   params,
   setParams,
   catalog,
+  basePath = "/hr/reports",
+  extraActions,
 }: {
   reportId: string;
   params: URLSearchParams;
   setParams: SetParams;
   catalog: ReportCatalog;
+  basePath?: string;
+  extraActions?: ReactNode;
 }) {
   const spec = catalog.reports.find((r) => r.id === reportId);
   if (!spec) {
@@ -369,12 +382,22 @@ export function ReportWorkspace({
           <p className="text-sm text-muted-foreground">
             It may not exist, or your role does not have access to the data in it.
           </p>
-          <Link href="/hr/reports" className="inline-block text-sm font-semibold text-sky-700 hover:underline">
+          <Link href={basePath} className="inline-block text-sm font-semibold text-sky-700 hover:underline">
             Browse all reports
           </Link>
         </CardContent>
       </Card>
     );
   }
-  return <Workspace key={spec.id} catalog={catalog} spec={spec} params={params} setParams={setParams} />;
+  return (
+    <Workspace
+      key={spec.id}
+      catalog={catalog}
+      spec={spec}
+      params={params}
+      setParams={setParams}
+      basePath={basePath}
+      extraActions={extraActions}
+    />
+  );
 }

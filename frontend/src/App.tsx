@@ -23,6 +23,7 @@ import { CircleLoader } from "@/components/ui/CircleLoader";
 import NotFound from "@/pages/not-found";
 import ServerError from "@/pages/ServerError";
 import ErrorBoundary from "@/components/status/ErrorBoundary";
+import AssistantHost from "@/components/md/assistant/AssistantHost";
 
 // Public pages
 import Landing from "@/pages/Landing";
@@ -39,6 +40,17 @@ const GateScannerLogin = lazy(() => import("@/pages/gate/GateScannerLogin"));
 const ReceptionLogin = lazy(() => import("@/pages/gate/ReceptionLogin"));
 const ReceptionConsole = lazy(() => import("@/pages/gate/ReceptionConsole"));
 const GateScannerConsole = lazy(() => import("@/pages/gate/GateScannerConsole"));
+
+// Managing Director portal (executive analytics; only the account flagged MD gets in -see ProtectedRoute)
+const MdDashboard = lazy(() => import("@/pages/md/MdDashboard"));
+const MdAttendance = lazy(() => import("@/pages/md/MdAttendance"));
+const MdEmployees = lazy(() => import("@/pages/md/MdEmployees"));
+const MdVisitors = lazy(() => import("@/pages/md/MdVisitors"));
+const MdTeaBreak = lazy(() => import("@/pages/md/MdTeaBreak"));
+const MdPayroll = lazy(() => import("@/pages/md/MdPayroll"));
+const MdReports = lazy(() => import("@/pages/md/MdReports"));
+const MdRecruitment = lazy(() => import("@/pages/md/MdRecruitment"));
+const MdActivity = lazy(() => import("@/pages/md/MdActivity"));
 
 // HR pages
 const HrDashboard = lazy(() => import("@/pages/hr/Dashboard"));
@@ -165,14 +177,24 @@ function ProtectedRoute({
     return null;
   }
 
+  // Where an HR sign-in belongs when the page it asked for is not for it: the MD's own portal, else the dashboard.
+  const hrHome = user.isMd ? "/md/dashboard" : "/hr/dashboard";
+
   if (!allowedRoles.includes(user.role as any)) {
-    navigate(user.role === "hr" ? "/hr/dashboard" : "/employee/dashboard");
+    navigate(user.role === "hr" ? hrHome : "/employee/dashboard");
+    return null;
+  }
+
+  // The executive portal belongs to the Managing Director alone (the API refuses anyone else; this just avoids a dead
+  // page). Boundary-matched so a future "/mdx" can never be caught by accident.
+  if ((location === "/md" || location.startsWith("/md/")) && !user.isMd) {
+    navigate("/hr/dashboard");
     return null;
   }
 
   // Account Management is admin-only, independent of Role.permissions.
   if (location.startsWith("/hr/account-management") && !user.isSuperAdmin) {
-    navigate("/hr/dashboard");
+    navigate(hrHome);
     return null;
   }
 
@@ -180,7 +202,7 @@ function ProtectedRoute({
   // Account Management, and independent of Role.permissions. Branch users
   // do not review their own audit trail; that is an oversight tool.
   if (location.startsWith("/hr/activity-logs") && !user.isSuperAdmin) {
-    navigate("/hr/dashboard");
+    navigate(hrHome);
     return null;
   }
 
@@ -198,7 +220,7 @@ function ProtectedRoute({
   // URL directly (e.g. from a stale bookmark after their access changed).
   const moduleKey = moduleForPath(location);
   if (!canViewRoute(user, location, moduleKey)) {
-    navigate("/hr/dashboard");
+    navigate(hrHome);
     return null;
   }
 
@@ -364,6 +386,18 @@ function Router() {
       <Route path="/hr/user-management/:id">
         {() => <ProtectedRoute component={ManagerDetail} allowedRoles={["hr"]} />}
       </Route>
+      {/* ── Managing Director portal ─────────────────────────── */}
+      <Route path="/md">{() => <Redirect to="/md/dashboard" />}</Route>
+      <Route path="/md/dashboard">{() => <ProtectedRoute component={MdDashboard} allowedRoles={["hr"]} />}</Route>
+      <Route path="/md/attendance">{() => <ProtectedRoute component={MdAttendance} allowedRoles={["hr"]} />}</Route>
+      <Route path="/md/employees">{() => <ProtectedRoute component={MdEmployees} allowedRoles={["hr"]} />}</Route>
+      <Route path="/md/visitors">{() => <ProtectedRoute component={MdVisitors} allowedRoles={["hr"]} />}</Route>
+      <Route path="/md/tea-break">{() => <ProtectedRoute component={MdTeaBreak} allowedRoles={["hr"]} />}</Route>
+      <Route path="/md/payroll">{() => <ProtectedRoute component={MdPayroll} allowedRoles={["hr"]} />}</Route>
+      <Route path="/md/reports">{() => <ProtectedRoute component={MdReports} allowedRoles={["hr"]} />}</Route>
+      <Route path="/md/recruitment">{() => <ProtectedRoute component={MdRecruitment} allowedRoles={["hr"]} />}</Route>
+      <Route path="/md/activity">{() => <ProtectedRoute component={MdActivity} allowedRoles={["hr"]} />}</Route>
+
       <Route path="/hr/account-management/master">
         {() => <ProtectedRoute component={AccountManagementMaster} allowedRoles={["hr"]} />}
       </Route>
@@ -478,6 +512,9 @@ function App() {
                       <ErrorBoundary>
                         <Router />
                       </ErrorBoundary>
+                      {/* The MD's AI assistant lives here, not in a page: every page mounts its own layout, so a panel
+                          inside it would reset on each navigation. It renders only for the MD, on /md/* pages. */}
+                      <AssistantHost />
                     </WouterRouter>
                     <GlobalSyncBanner />
                     <GlobalPayrollBanner />

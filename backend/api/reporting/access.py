@@ -7,6 +7,11 @@ enough for GET). Two extra rules live here:
   a "reports" grant is not a back door to payroll, visitor or attendance data the role cannot open
   elsewhere in the app. Fails closed: an unknown module key resolves to "hidden".
 * ``super_admin_only`` -- data that is admin-only elsewhere (audit trail, user accounts).
+* ``md_only`` -- the executive reports of the Managing Director (hidden from everybody else).
+
+The Managing Director (HRUser.is_md) reads EVERY report, company-wide and read-only: ``permission_level`` gives that
+account "view" on every module, so the in-report gates (salary, payroll types, resignation details) open for it and
+nothing else changes for anyone. Reports never write, so "view" is all it needs.
 
 Role permissions are read once per request and reused, so a catalog of ~50 reports costs one query.
 """
@@ -41,6 +46,11 @@ def is_super_admin(request) -> bool:
     return bool(user and user.is_super_admin)
 
 
+def is_md(request) -> bool:
+    user = _hr_user(request)
+    return bool(user and user.is_md)
+
+
 def hr_display_name(request) -> str:
     user = _hr_user(request)
     if user is not None:
@@ -55,10 +65,16 @@ def permission_level(request, module_key: str) -> str:
         return "hidden"
     if user.is_super_admin:
         return "edit"
+    if user.is_md:
+        return "view"  # the Managing Director: read-only access to everything a report can show
     return resolve_permission(user.role.permissions if user.role else {}, module_key)
 
 
 def access_state(request, spec: ReportSpec) -> str:
+    if spec.md_only:
+        return OK if is_md(request) else HIDDEN
+    if is_md(request):
+        return OK  # the Managing Director may open every other report too, super-admin-only ones included
     if spec.super_admin_only:
         return OK if is_super_admin(request) else HIDDEN
     if not spec.modules or is_super_admin(request):

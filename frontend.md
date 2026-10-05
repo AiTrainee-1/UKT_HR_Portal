@@ -74,6 +74,8 @@ frontend/src/
 │   │   │                                            #   Remove / Restore / bulk / Undo), IndividualCard, ConflictDialogs
 │   │   └── Settings.tsx          # Every tab: Company/Attendance/Late Detection/Devices/Documents/
 │   │                             #   Payroll/Production Payroll/Salary Slip/WhatsApp/SMTP/Backup
+│   ├── md/                       # The MD portal (/md/*): Md<Page>.tsx + a folder of pieces per page (dashboard, attendance,
+│   │                             #   employees, visitors, tea-break, payroll, reports, recruitment, activity); see md-portal.md
 │   └── employee/                 # Small in-portal employee self-service section, see Section 4
 │       ├── Dashboard.tsx / Leave.tsx / Notifications.tsx / Profile.tsx / Salary.tsx
 ├── components/
@@ -84,6 +86,9 @@ frontend/src/
 │   ├── ApprovalTrail.tsx         # How an HR screen shows a request's place in ITS approval pipeline:
 │   │                             #   WaitingChip, ApprovalTrail stepper, ApprovalTrailLine, PipelineNote/Summary
 │   ├── ui/dashboard-sidebar.tsx  # Sidebar, pending badges, permission-filtered nav
+│   ├── md/                       # MD portal shell and kit: MdLayout/MdSidebar/md-nav.ts, kit/ (StatCard, SectionCard, TrendChart,
+│   │                             #   BarList, DonutChart, Heatmap, DataTable, InsightList, FilterBar...), assistant/ (the AI side panel:
+│   │                             #   Composer, MessageBubble, Explainer, voice/ input + speech output)
 │   ├── payroll/BreakdownDrawer.tsx  # Shared day-by-day payroll breakdown, staff + production
 │   ├── SalarySlipBulkPipeline.tsx / WhatsAppBulkPipeline.tsx / PayrollGenerationPipeline.tsx
 │   │                             # Inline progress bars for long-running bulk operations
@@ -96,6 +101,8 @@ frontend/src/
 │   │                             #   mounted once at the app root so progress survives navigation
 │   └── BiometricSyncContext.tsx
 └── lib/
+    ├── md/                       # format.ts (₹ lakh/crore, %), period.ts, types.ts, assistant-store.ts (module-level store so the
+    │                             #   conversation survives page changes), markdown.ts, voice.ts, access.ts
     ├── permission-modules.ts     # Frontend mirror of backend/api/permission_registry.py -keep
     │                             #   these two in lockstep whenever a module/permission changes
     ├── approval-workflow.ts      # Twin of backend/api/approval_workflow.py for the UI: pipeline editing rules,
@@ -104,6 +111,9 @@ frontend/src/
         ├── custom-hooks.ts       # Hand-written hooks for endpoints off the OpenAPI spec
         └── index.ts              # Orval-generated hooks
 ```
+
+### The MD portal front end
+`/md/*` is a second shell (`MdLayout`) for the one Managing Director account (`AuthContext.isMd`, from `/auth/me`; the route guard in `App.tsx` sends everyone else away). Pages are built from the kit in `components/md/kit/` and read `/api/md/*` through `useMdQuery`. Two rules worth knowing before touching a page: **layout answers to the page's width, not the screen's** (`MdLayout`'s `<main>` is a Tailwind v4 `@container`; use `@3xl:`/`@5xl:` variants, because the assistant panel can take 444 px of the page), and **every figure carries its provenance** ("How is this calculated?") and an Ask-AI question. The assistant panel (`AssistantHost`, mounted once in `App.tsx`) is text + voice (Web Speech API with a server-transcription fallback) and renders the server-built explanation. Full recipe and rules: `md-portal.md` sections 4 and 6.
 
 ---
 

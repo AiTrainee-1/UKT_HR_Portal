@@ -7,7 +7,8 @@ import type { ReportCatalog } from "@/lib/report-center";
 import { toggleFavorite, useReportPrefs } from "@/lib/report-prefs";
 import { categoryStyle, iconFor } from "./report-icons";
 
-export const reportHref = (id: string) => `/hr/reports?report=${encodeURIComponent(id)}`;
+/** Where a report opens. `basePath` is the page hosting the Report Center (the MD portal embeds it at /md/reports). */
+export const reportHref = (id: string, basePath = "/hr/reports") => `${basePath}?report=${encodeURIComponent(id)}`;
 
 function StarButton({ id, on }: { id: string; on: boolean }) {
   return (

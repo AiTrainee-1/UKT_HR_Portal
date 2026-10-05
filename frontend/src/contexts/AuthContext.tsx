@@ -15,6 +15,8 @@ interface UserInfo {
   /** The single ADMIN_USERNAME account -narrower than isSuperAdmin.
    *  Gates Account Management → Master. */
   isMasterAdmin?: boolean;
+  /** The Managing Director: opens the executive portal (/md/*). Decided by the server (/auth/me), never by the token. */
+  isMd?: boolean;
   permissions?: Record<string, PermissionLevel>;
   branchId?: number | null;
   branchName?: string | null;
@@ -137,6 +139,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     name: me.name,
     isSuperAdmin: (me as { isSuperAdmin?: boolean }).isSuperAdmin,
     isMasterAdmin: (me as { isMasterAdmin?: boolean }).isMasterAdmin,
+    isMd: (me as { isMd?: boolean }).isMd,
     permissions: (me as { permissions?: Record<string, PermissionLevel> }).permissions,
     branchId: (me as { branchId?: number | null }).branchId ?? null,
     branchName: (me as { branchName?: string | null }).branchName ?? null,

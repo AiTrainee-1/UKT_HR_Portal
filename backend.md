@@ -117,6 +117,11 @@ WHATSAPP_PHONE_NUMBER_ID=
 WHATSAPP_BUSINESS_ACCOUNT_ID=
 WHATSAPP_API_VERSION=v21.0
 WHATSAPP_DEFAULT_COUNTRY_CODE=91
+
+# Google Gemini API key for the MD portal's AI assistant -.env only, never in the DB, the UI or chat.
+# Create one in Google AI Studio. Without it the assistant says it is not set up; every MD page still works.
+GEMINI_API_KEY=
+# Optional: GEMINI_API_BASE_URL (tests/e2e point it at a fake), DB_TEST_NAME (a private test database for a test run)
 ```
 
 Everything else -SMTP/email, PF/ESI rates, attendance mode and every threshold in Section 6, company branding, backup destinations, WhatsApp message templates -is configured live in **Settings** from the HR Portal (backed by the `payroll_settings` table and a couple of dedicated tables), not in `.env`. This is deliberate: a Super Admin can repoint the whole system at a different company's policy without touching code or redeploying.
@@ -198,6 +203,15 @@ One engine, `backend/api/approval_workflow.py`, decides who may approve every re
 - **Behaviour changes to know about:** the leave balance is deducted at the final approval whichever role gives it (the HOD path used to skip it); HR can no longer re-decide a decided outpass; re-deciding a decided leave/permission is a revision that needs HR in the pipeline (comment-only edits always allowed).
 - **Tests:** `api/tests_approval_workflow.py` (rule tables, step validation, catalog, config API + permissions, one scenario class per workflow, resync and cache). Browser coverage: `frontend/e2e/approval-workflow.spec.ts` (the page) and `approval-screens.spec.ts` (the HR screens).
 
+### 4.14 MD Portal & AI Assistant
+A separate, read-only executive portal for **one** account, the Managing Director (`HRUser.is_md`, partial unique index `uniq_single_md`, migration `0111`), assigned by the super admin in Account Management (never the super admin themselves, always company-wide). Everything lives under `api/md_portal/` and `/api/md/*`; the full design, rules and build map are in **`md-portal.md`**. In short:
+
+- **Identity & safety:** every `/api/md/*` view is `@md_get` (GET only, `@require_md`, and the whole request runs inside `common.read_only_db()`, so the *database* refuses any write) and `permission_middleware` locks the `/md/` prefix as well (it fails open for unmapped paths). `tests_md_identity.py` walks the URL table.
+- **Pages:** Dashboard, Attendance, Employees, Outpass & Visitors, Tea Break, Payroll, Reports (executive reports `reporting/definitions/md_*.py` plus the whole Report Center, read-only), Recruitment, Activity Logs. One analytics module per page (`analytics/<page>.py`, pure read-only functions that return an `envelope` with `provenance` and `notes`), one thin route module (`routes/<page>.py`); each also exports the assistant's `TOOLS`, company-wide `insights()` and `headline()` for the Dashboard.
+- **AI assistant** (`api/md_portal/assistant/`): Google Gemini over raw REST (`gemini.py`), a tool loop (`engine.py`) that can only call the analytics tools, a whitelisted `query_data` language (`query_dsl.py`) and `find_reports`, and finishes with a structured `submit_answer`. Employee names become `@emp-<id>` tokens before anything leaves the server (`privacy.py`); the "How I got this" explanation is built by the server from the lookups that really happened (`xai.py`); answers run as a background thread the browser polls (`jobs.py`); voice questions fall back to server transcription (`/api/md/assistant/transcribe`). Tables `md_assistant_settings`, `md_conversations`, `md_messages`, `md_assistant_usage` (migration `0112`). Settings (model, privacy mode, limits, usage) are super-admin only at `/api/hr-users/md-assistant`; the key is read from `GEMINI_API_KEY` only.
+- **Demo company:** `python manage.py seed_md_demo` loads a realistic garment manufacturer (units, ~240 people, 120 days of attendance, tea breaks, visitors, outpasses, six payroll months, recruitment, an activity trail) into a throwaway database whose name ends in `_e2e` (it refuses anything else); `--purge` removes exactly what it created.
+- **Tests:** `api/tests_md_*.py` (one per module plus the assistant, query language, tool contract, consistency between pages and identity). Run one with its own database: `DB_TEST_NAME=test_uktex_<name> python manage.py test api.tests_md_<name> --noinput`.
+
 ---
 
 ## 5. Project Structure (backend)
@@ -240,13 +254,15 @@ backend/
 │   ├── backup_service.py / backup_scheduler.py / backup_views.py / google_drive.py
 │   ├── maintenance_middleware.py       # Serves a maintenance page during restore
 │   ├── org_views.py / branch_scope.py  # Branches, designations, per-branch data scoping
-│   ├── reporting/                      # Report Center: registry, filters, Excel/PDF exporters, definitions/ (one module per domain)
+│   ├── reporting/                      # Report Center: registry, filters, Excel/PDF exporters, definitions/ (one module per domain; md_*.py are the MD's executive reports)
+│   ├── md_portal/                      # The MD portal (Section 4.14, md-portal.md): common.py contract, analytics/ + routes/ per page, assistant/ (Gemini, tools, privacy, XAI)
 │   ├── reports_views.py (deprecated) / chat_views.py / growth_views.py
 │   ├── audit_utils.py                  # Activity Logs
 │   ├── apps.py                         # APScheduler startup (biometric sync, backups, retention)
 │   ├── urls.py                         # All URL routing -source of truth for the full route list
 │   └── migrations/
 ├── management/commands/
+│   ├── seed_md_demo.py (+ md_demo/)    # Demo company for the MD portal; throwaway *_e2e databases only
 │   ├── sync_biometric.py
 │   ├── restore_backup.py
 │   └── purge_screening_documents.py

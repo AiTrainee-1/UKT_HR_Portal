@@ -7,15 +7,18 @@ import type { ReportCatalog } from "@/lib/report-center";
 import { reportHref } from "./ReportCatalogView";
 import { categoryStyle } from "./report-icons";
 
-/** Left rail inside a report: hop between reports without going back to the catalog. */
+/** Left rail inside a report: hop between reports without going back to the catalog. `basePath` is the page that hosts
+ *  the Report Center (the MD portal embeds it under /md/reports). */
 export function ReportNavRail({
   catalog,
   activeId,
   onNavigate,
+  basePath = "/hr/reports",
 }: {
   catalog: ReportCatalog;
   activeId: string;
   onNavigate?: () => void;
+  basePath?: string;
 }) {
   const [query, setQuery] = useState("");
   const groups = useMemo(() => groupReports(catalog.reports), [catalog.reports]);
@@ -27,7 +30,7 @@ export function ReportNavRail({
   return (
     <nav aria-label="Reports" className="space-y-3">
       <Link
-        href="/hr/reports"
+        href={basePath}
         onClick={onNavigate}
         className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-50"
       >
@@ -61,7 +64,7 @@ export function ReportNavRail({
                 return (
                   <li key={g.key}>
                     <Link
-                      href={reportHref(active ? activeId : g.primary.id)}
+                      href={reportHref(active ? activeId : g.primary.id, basePath)}
                       onClick={onNavigate}
                       aria-current={active ? "page" : undefined}
                       className={`block truncate rounded-lg px-2 py-1.5 text-[13px] transition-colors ${

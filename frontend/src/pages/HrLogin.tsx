@@ -47,7 +47,8 @@ export default function HrLogin() {
       {
         onSuccess: (res) => {
           login(res.token, res.role as "hr", res.employeeId ?? null, res.name);
-          navigate("/hr/dashboard");
+          // The Managing Director lands in the executive portal; the server says so in the sign-in response.
+          navigate((res as { isMd?: boolean }).isMd ? "/md/dashboard" : "/hr/dashboard");
         },
         onError: () => {
           setError("Invalid username or password. Please try again.");

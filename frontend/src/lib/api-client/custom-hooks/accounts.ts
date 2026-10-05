@@ -27,6 +27,9 @@ export type HrUserItem = {
   branchName?: string | null;
   isActive: boolean;
   isSuperAdmin: boolean;
+  /** The Managing Director: the one account with the executive MD portal and the AI assistant. */
+  isMd?: boolean;
+  mdAssignedAt?: string | null;
   /** Hidden from the Account Management list. Purely presentational -a
    *  hidden account still logs in and keeps every permission. */
   isHidden?: boolean;
@@ -117,6 +120,10 @@ export const useCreateHrUser = () =>
       fullName?: string;
       roleId?: number;
       branchId?: number | null;
+      /** Make the new account the Managing Director (clears any branch: the MD is company-wide). */
+      isMd?: boolean;
+      /** Take the MD identity from the current MD in the same step. */
+      replaceMd?: boolean;
     }) =>
       customFetch<HrUserItem>("/api/hr-users", {
         method: "POST",
@@ -126,7 +133,13 @@ export const useCreateHrUser = () =>
 
 export const useUpdateHrUser = () =>
   useMutation({
-    mutationFn: ({ id, data }: { id: number; data: Partial<HrUserItem & { password?: string }> }) =>
+    mutationFn: ({
+      id,
+      data,
+    }: {
+      id: number;
+      data: Partial<HrUserItem & { password?: string; replaceMd?: boolean }>;
+    }) =>
       customFetch<HrUserItem>(`/api/hr-users/${id}`, {
         method: "PUT",
         body: JSON.stringify(data),

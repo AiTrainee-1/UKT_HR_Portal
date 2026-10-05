@@ -1,5 +1,6 @@
 from django.http import JsonResponse
-from django.urls import path
+from django.urls import include, path
+from .md_portal.assistant.admin_views import assistant_settings as md_assistant_settings, assistant_test as md_assistant_test
 
 from . import views
 
@@ -557,6 +558,8 @@ urlpatterns = [
     path("hr-users", hr_users),
     # Master page -stricter guard (ADMIN_USERNAME only), declared before
     # the <int:pk> route so "master" is never parsed as a user id.
+    path("hr-users/md-assistant", md_assistant_settings),
+    path("hr-users/md-assistant/test", md_assistant_test),
     path("hr-users/master", master_hr_users),
     path("hr-users/<int:pk>/master-flags", master_hr_user_flags),
     path("hr-users/<int:pk>", hr_user_detail),
@@ -640,4 +643,7 @@ urlpatterns = [
     path("reports/options/<str:source>",        reports_options),
     path("reports/run/<str:report_id>",         reports_run),
     path("reports/export/<str:report_id>",      reports_export),
+
+    # ── Managing Director portal (every view behind @require_md; see api/md_portal/) ──
+    path("md/", include("api.md_portal.urls")),
 ]

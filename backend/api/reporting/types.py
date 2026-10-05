@@ -102,6 +102,8 @@ CATEGORIES: list[tuple[str, str, str, str]] = [
     ),
     ("finance", "Loans & Bonus", "Advances, loans, bonus, increments and promotions", "Banknote"),
     ("admin", "Administration", "Audit trail, user access and system activity", "ShieldCheck"),
+    # Executive reports for the Managing Director only (ReportSpec.md_only): nobody else sees this category.
+    ("md", "Executive (MD)", "One-page executive summaries for the Managing Director", "Landmark"),
 ]
 CATEGORY_IDS = tuple(c[0] for c in CATEGORIES)
 
@@ -186,6 +188,9 @@ class ReportSpec:
     modules: tuple[str, ...] = ()
     # Only a super admin may see/run it (data that is admin-only elsewhere in the app).
     super_admin_only: bool = False
+    # Only the Managing Director may see/run it (the executive pack of the MD portal): hidden from everyone else,
+    # super administrators included.
+    md_only: bool = False
     # Custom document builders: (ctx, result) -> bytes. When set they replace the generic
     # table export for that format (e.g. printable salary slips, per-employee time cards).
     pdf_builder: Callable[..., bytes] | None = None

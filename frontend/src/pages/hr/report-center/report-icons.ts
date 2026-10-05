@@ -159,6 +159,13 @@ export const CATEGORY_STYLE: Record<string, { chip: string; ring: string; text: 
   hr: { chip: "bg-teal-50 text-teal-700", ring: "ring-teal-100", text: "text-teal-700", dot: "bg-teal-500" },
   finance: { chip: "bg-rose-50 text-rose-700", ring: "ring-rose-100", text: "text-rose-700", dot: "bg-rose-500" },
   admin: { chip: "bg-slate-100 text-slate-700", ring: "ring-slate-200", text: "text-slate-700", dot: "bg-slate-500" },
+  // The Managing Director's executive reports (only ever listed for the MD): the MD portal's gold.
+  md: {
+    chip: "bg-[#fbf3dc] text-[#8a5d00]",
+    ring: "ring-[#f1d890]",
+    text: "text-[#8a5d00]",
+    dot: "bg-[#e0a83a]",
+  },
 };
 
 export function categoryStyle(id: string) {

@@ -147,6 +147,13 @@ if _sslmode:
 DATABASES["default"]["CONN_MAX_AGE"] = int(os.environ.get("DB_CONN_MAX_AGE", "60"))
 DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
 
+# Several people (or agents) can run the test suite at once only if each run has its own throwaway database: the test
+# runner creates and DROPS "test_<NAME>", so two runs would delete each other's data mid-test. DB_TEST_NAME gives a run
+# its own, e.g. DB_TEST_NAME=test_uktex_attendance python manage.py test api.tests_md_attendance
+_test_db_name = os.environ.get("DB_TEST_NAME", "").strip()
+if _test_db_name:
+    DATABASES["default"]["TEST"] = {"NAME": _test_db_name}
+
 # ── Process clock ────────────────────────────────────────────────────────
 # This codebase records attendance with naive `datetime.now()` / `date.today()`
 # in ~52 places, which read the OPERATING SYSTEM clock. On the old on-premise

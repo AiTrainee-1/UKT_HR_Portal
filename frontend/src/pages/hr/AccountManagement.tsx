@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Shield, ShieldPlus, UserCog, UserPlus, Users, UserX } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Crown, Shield, ShieldPlus, UserCog, UserPlus, Users, UserX } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import HrLayout from "@/components/HrLayout";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,7 @@ import {
 } from "@/lib/api-client/custom-hooks";
 import AccountsTab from "./account-management/AccountsTab";
 import HrUserDialog from "./account-management/HrUserDialog";
+import MdProfileTab from "./account-management/MdProfileTab";
 import RoleDialog from "./account-management/RoleDialog";
 import RolesTab from "./account-management/RolesTab";
 import { NONE, NO_FILTERS, roleUsage, summarizeAccounts, type AccountFilters } from "./account-management/logic";
@@ -56,7 +57,10 @@ export default function AccountManagement() {
 
   const [tab, setTab] = useState("accounts");
   const [filters, setFilters] = useState<AccountFilters>(NO_FILTERS);
-  const [userDialog, setUserDialog] = useState<{ open: boolean; user: HrUserItem | null }>({ open: false, user: null });
+  const [userDialog, setUserDialog] = useState<{ open: boolean; user: HrUserItem | null; md?: boolean }>({
+    open: false,
+    user: null,
+  });
   const [roleDialog, setRoleDialog] = useState<{ open: boolean; role: Role | null }>({ open: false, role: null });
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -134,7 +138,7 @@ export default function AccountManagement() {
               </p>
             </div>
           </div>
-          {tab === "accounts" ? (
+          {tab === "accounts" || tab === "md" ? (
             <Button
               onClick={() => setUserDialog({ open: true, user: null })}
               className="gap-1.5"
@@ -193,6 +197,7 @@ export default function AccountManagement() {
             items={[
               { value: "accounts", label: "Accounts", icon: <Users size={14} />, count: users.length },
               { value: "roles", label: "Roles & Permissions", icon: <Shield size={14} />, count: roleList.length },
+              { value: "md", label: "MD profile", icon: <Crown size={14} />, color: "#b8801c" },
             ]}
             value={tab}
             onChange={setTab}
@@ -235,6 +240,14 @@ export default function AccountManagement() {
             />
           </TabsContent>
 
+          <TabsContent value="md">
+            <MdProfileTab
+              users={users}
+              onCreateMd={() => setUserDialog({ open: true, user: null, md: true })}
+              onEditUser={(user) => setUserDialog({ open: true, user })}
+            />
+          </TabsContent>
+
           <TabsContent value="roles">
             <RolesTab
               roles={roleList}
@@ -250,9 +263,11 @@ export default function AccountManagement() {
 
         {userDialog.open && (
           <HrUserDialog
-            key={userDialog.user?.id ?? "new"}
+            key={`${userDialog.user?.id ?? "new"}${userDialog.md ? "-md" : ""}`}
             user={userDialog.user}
             roles={roleList}
+            users={users}
+            defaultMd={userDialog.md}
             open={userDialog.open}
             onClose={() => setUserDialog({ open: false, user: null })}
           />

@@ -14,6 +14,7 @@ Modules (each only imports from ones listed before it):
   whatsapp     WhatsApp (WAClient) send log, message wording and media assets.
   mail         Email (Gmail / SMTP) send log, feature switches and wording.
   gate         Outpass, gate scanners, visitors, reception and tea break.
+  md_assistant The MD portal's AI assistant: settings, conversations, daily usage.
 """
 
 from .core import (
@@ -131,4 +132,10 @@ from .gate import (
     Visitor,
     VisitorVisit,
     ReceptionDevice,
+)
+from .md_assistant import (
+    MdAssistantSettings,
+    MdAssistantUsage,
+    MdConversation,
+    MdMessage,
 )

@@ -1,6 +1,7 @@
 """HR-portal logins, roles/permissions, sessions, audit log, notifications and push tokens."""
 
 from django.db import models
+from django.db.models import Q
 
 from .core import Branch, Department, Employee
 
@@ -61,12 +62,29 @@ class HRUser(models.Model):
         default=dict, blank=True, db_column="master_features",
     )
 
+    # ── The Managing Director (MD) identity ──────────────────────────────────
+    # At most ONE account carries it, and the database enforces that (the
+    # partial unique index below), whatever the code does. It opens the
+    # executive portal (/md/*, API /api/md/*) and nothing else: Role.permissions,
+    # branch scope and every existing HR endpoint behave exactly as before for
+    # this account, and for everyone else the flag changes nothing at all.
+    # Assigned from Account Management by a super administrator, never by a
+    # migration or at start-up; a super administrator cannot be the MD, and the
+    # MD is company-wide (no branch), see hr_user_views._set_md.
+    # db_default so the previous release, still running during a rolling
+    # deploy, can keep inserting accounts without naming the column.
+    is_md = models.BooleanField(default=False, db_default=False, db_column="is_md")
+    md_assigned_at = models.DateTimeField(null=True, blank=True, db_column="md_assigned_at")
+
     last_login = models.DateTimeField(null=True, blank=True, db_column="last_login")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
     class Meta:
         db_table = "hr_users"
+        constraints = [
+            models.UniqueConstraint(fields=["is_md"], condition=Q(is_md=True), name="uniq_single_md"),
+        ]
 
 
 class LoginSession(models.Model):
