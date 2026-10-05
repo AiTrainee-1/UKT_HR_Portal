@@ -207,7 +207,7 @@ test("the Compensation page's CTC Breakdown shows the split: recorded, automatic
   ]) {
     await expect(page.getByRole("columnheader", { name, exact: true })).toBeVisible();
   }
-  await expect(page.getByRole("columnheader", { name: "HRA", exact: true })).toHaveCount(0);
+  // the old percentage-based Allowances column is gone (HRA is now one of the eight split columns, checked above)
   await expect(page.getByRole("columnheader", { name: "Allowances", exact: true })).toHaveCount(0);
 
   // the eight component cells of a row (Code, Name, Department, Designation come first)
@@ -260,7 +260,7 @@ test("the Compensation page's CTC Breakdown shows the split: recorded, automatic
   expect(header.slice(4, 15)).toEqual([
     "BASIC",
     "DA",
-    "Retaining Allowance",
+    "RETAINING ALLOWANCE",
     "FIRST PORTION (50%)",
     "OTHER ALLOWANCE",
     "PETROL ALLOWANCE",
