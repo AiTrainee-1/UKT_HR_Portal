@@ -99,6 +99,7 @@ api/salary_split.py
 api/shift_planner.py
 api/support_contact_views.py
 api/tests_access_control.py
+api/tests_account_management.py
 api/tests_app_startup.py
 api/tests_approval_workflow.py
 api/tests_arrival_rules.py

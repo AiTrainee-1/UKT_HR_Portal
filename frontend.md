@@ -61,6 +61,7 @@ frontend/src/
 │   │   ├── Reports.tsx + report-center/   # Report Center: catalog, workspace, schema-driven filters, result table
 │   │   ├── recruitment/          # NewJoinees, Resignations, Interviews, ResumeScreening, Documents, ...
 │   │   ├── AccountManagement.tsx / ActivityLogs.tsx / LoginDevices.tsx
+│   │   │   (AccountManagement.tsx is the page; account-management/ holds its tabs, the role editor and logic.ts)
 │   │   ├── BulkUploadEmployees.tsx + bulk-upload/   # Staff ⇄ Production workspace: templates, check-first upload flow,
 │   │   │                                            #   per-row ResultsPanel, RemovalPanel (leave / make Inactive / delete)
 │   │   ├── UserManagement.tsx + user-management/   # Two tabs: HodAssignmentTab (who the HODs are: HodCard list,

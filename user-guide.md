@@ -106,6 +106,11 @@ Super Admin
 - Examples: An HR staff member may have full access to Attendance but only view-only access to Payroll.
 - Permissions are managed via **Account Management** (accessible to Admin).
 
+##### Account Management (Admin only)
+- **Summary:** cards at the top count the accounts (and how many are tied to one branch), the active and the disabled ones, and the roles. A yellow note lists accounts that have **no role**: they can't open any module until one is given (an administrator needs no role and is never counted).
+- **Accounts tab:** search by username, name, email, role or branch (every word you type has to match), narrow by **Active / Disabled**, **role** or **branch** (including "Company-wide only"), and sort by any column heading. Each row shows who the person is, their role and branch, whether the login is active, and when they last signed in. Edit, disable/enable and delete sit at the end of the row; deleting asks for confirmation first. The administrator account can be edited but not disabled or deleted.
+- **Roles & Permissions tab:** each role shows how many accounts use it (click to see them) and a bar of how much it opens up: *edit*, *view* only and *hidden* modules. Deleting a role that is in use tells you how many accounts will be left without one.
+- **Role editor:** every module has a **Hidden / View / Edit** switch. A section with sub-modules (Employees, Settings...) folds open; a sub-module with no setting of its own **follows its section**, and shows a ↺ button to go back to following it once you have set it yourself. Use the search box to find a module, **Set every module to...** for a quick start, and **Copy from another role** to begin from an existing role (nothing is saved until you press **Save**). Closing the editor with unsaved changes asks first. Role names must be unique.
 #### 🏗️ Department Head / Approver (HOD)
 - Not a separate login type — these are **regular employees** who have been designated as approvers via **User Management**.
 - They use the **mobile app** to approve or reject:

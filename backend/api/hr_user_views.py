@@ -73,9 +73,9 @@ def roles(request: Request) -> Response:
         return Response([role_json(r) for r in qs])
 
     data = request.data
-    if not data.get("name"):
+    if not str(data.get("name") or "").strip():
         return Response({"error": "name is required"}, status=400)
-    if Role.objects.filter(name=data["name"]).exists():
+    if Role.objects.filter(name__iexact=str(data["name"]).strip()).exists():
         return Response({"error": "Role already exists"}, status=400)
 
     role = Role.objects.create(
@@ -101,7 +101,13 @@ def role_detail(request: Request, pk: int) -> Response:
     if request.method == "PUT":
         data = request.data
         if "name" in data:
-            role.name = data["name"]
+            # Names are unique: renaming onto another role's name used to reach the database and come back as a 500.
+            new_name = str(data["name"] or "").strip()
+            if not new_name:
+                return Response({"error": "name is required"}, status=400)
+            if Role.objects.filter(name__iexact=new_name).exclude(pk=role.pk).exists():
+                return Response({"error": "Role already exists"}, status=400)
+            role.name = new_name
         if "description" in data:
             role.description = data["description"]
         if "permissions" in data:
