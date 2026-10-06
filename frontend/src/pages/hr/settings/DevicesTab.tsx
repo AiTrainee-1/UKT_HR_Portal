@@ -33,17 +33,19 @@ export default function DevicesTab() {
     port: "",
     apiKey: "",
     password: "",
+    serialNumber: "",
     notes: "",
   });
 
   const [editingDeviceId, setEditingDeviceId] = useState<number | null>(null);
 
-  const [editDevice, setEditDevice] = useState({ host: "", port: "", password: "" });
+  const [editDevice, setEditDevice] = useState({ host: "", port: "", password: "", serialNumber: "" });
 
   const startEditDevice = (d: {
     id: number;
     host: string;
     port: number | null;
+    serialNumber?: string;
     connectionConfig?: Record<string, unknown>;
   }) => {
     setEditingDeviceId(d.id);
@@ -51,6 +53,7 @@ export default function DevicesTab() {
       host: d.host ?? "",
       port: d.port ? String(d.port) : "",
       password: String((d.connectionConfig as any)?.password ?? ""),
+      serialNumber: d.serialNumber ?? "",
     });
   };
 
@@ -61,13 +64,14 @@ export default function DevicesTab() {
         data: {
           host: editDevice.host,
           port: editDevice.port ? Number(editDevice.port) : null,
+          serialNumber: editDevice.serialNumber.trim(),
           connectionConfig: { password: editDevice.password },
         } as any,
       });
       toast({ title: "Device updated" });
       setEditingDeviceId(null);
-    } catch {
-      toast({ title: "Failed to update device", variant: "destructive" });
+    } catch (e: any) {
+      toast({ title: "Failed to update device", description: e?.message, variant: "destructive" });
     }
   };
 
@@ -84,13 +88,23 @@ export default function DevicesTab() {
         port: newDevice.port ? Number(newDevice.port) : undefined,
         apiKey: newDevice.apiKey || undefined,
         notes: newDevice.notes || undefined,
+        serialNumber: newDevice.serialNumber.trim() || undefined,
         connectionConfig: newDevice.password ? { password: newDevice.password } : undefined,
       } as any);
       toast({ title: "Device added" });
-      setNewDevice({ name: "", deviceType: "aiface_mars", host: "", port: "", apiKey: "", password: "", notes: "" });
+      setNewDevice({
+        name: "",
+        deviceType: "aiface_mars",
+        host: "",
+        port: "",
+        apiKey: "",
+        password: "",
+        serialNumber: "",
+        notes: "",
+      });
       setShowAddDevice(false);
-    } catch {
-      toast({ title: "Failed to add device", variant: "destructive" });
+    } catch (e: any) {
+      toast({ title: "Failed to add device", description: e?.message, variant: "destructive" });
     }
   };
 
@@ -167,6 +181,15 @@ export default function DevicesTab() {
                   />
                 </div>
                 <div className="space-y-1.5">
+                  <Label className="text-xs">Serial Number (optional)</Label>
+                  <Input
+                    value={newDevice.serialNumber}
+                    onChange={(e) => setNewDevice((d) => ({ ...d, serialNumber: e.target.value }))}
+                    placeholder="shown on the device, e.g. CQIK222560204"
+                    data-testid="new-device-serial"
+                  />
+                </div>
+                <div className="space-y-1.5">
                   <Label className="text-xs">API Key / Token (optional)</Label>
                   <Input
                     type="password"
@@ -223,6 +246,7 @@ export default function DevicesTab() {
                       </div>
                       <p className="text-[11px] text-gray-400">
                         {d.deviceType} {d.host ? `· ${d.host}${d.port ? `:${d.port}` : ""}` : ""}
+                        {d.serialNumber ? ` · ${d.serialNumber}` : ""}
                         {d.isEnv ? " · configured in backend/.env" : ""}
                       </p>
                     </div>
@@ -255,7 +279,7 @@ export default function DevicesTab() {
                     )}
                   </div>
                   {editingDeviceId === d.id && (
-                    <div className="p-3 border-t bg-gray-50 grid sm:grid-cols-3 gap-3">
+                    <div className="p-3 border-t bg-gray-50 grid sm:grid-cols-4 gap-3">
                       <div className="space-y-1.5">
                         <Label className="text-xs">Host / IP Address</Label>
                         <Input
@@ -282,7 +306,16 @@ export default function DevicesTab() {
                           placeholder="0"
                         />
                       </div>
-                      <div className="sm:col-span-3 flex gap-2">
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Serial Number</Label>
+                        <Input
+                          value={editDevice.serialNumber}
+                          onChange={(e) => setEditDevice((v) => ({ ...v, serialNumber: e.target.value }))}
+                          placeholder="CQIK222560204"
+                          data-testid="edit-device-serial"
+                        />
+                      </div>
+                      <div className="sm:col-span-4 flex gap-2">
                         <Button
                           size="sm"
                           onClick={() => saveEditDevice(d.id as number)}

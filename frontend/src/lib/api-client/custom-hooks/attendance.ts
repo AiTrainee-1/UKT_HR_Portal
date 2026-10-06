@@ -532,6 +532,8 @@ export type DeviceHealthRow = {
   isActive: boolean;
   status: "live" | "silent" | "never" | "disabled";
   lastPushAt: string | null;
+  /** The newest time the server heard anything from it: a poll or a push. */
+  lastContactAt?: string | null;
   lastSyncedAt: string | null;
 };
 
@@ -541,6 +543,8 @@ export type SyncStatusLive = {
   problemCount: number;
   isLive: boolean;
   silentAfterHours: number;
+  /** How long a device that polls the server can be quiet before it counts as silent. */
+  heartbeatFreshSeconds?: number;
   checkedAt: string;
   punchesToday: number;
   lastPunchAt: string | null;

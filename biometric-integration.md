@@ -1,6 +1,6 @@
 # Biometric Integration -UKTextiles HRMS
 
-Two independent integration paths exist in the codebase today, and both can be used at once for different devices. Read the "Which path is actually running today" box first if you just need to know what's live right now.
+Three ways exist for attendance to reach the server, and they can be used at once for different devices: **Pull** (Django connects to the device), **Push** (a script or device POSTs JSON to `/api/biometric/punch`) and **ADMS push** (the terminal's own Cloud Server mode, calling `/iclock/...`). **Attendance → Biometric Device Status** shows which devices are actually connected and, when one is not, why (see the last section). Read the "Which path is actually running today" box first if you just need to know what's live right now.
 
 ---
 
@@ -18,7 +18,7 @@ Comm Pass:    ****
 
 That `Host/IP` + `Port 4370` shape means this device is wired up on the **Pull** path (below), not Push -Django connects out to the device and asks for records, the same way it always has for the older eSSL terminals. The device type is labelled "AiFace-Mars" in the dropdown (that's the only device-type option in the current schema, `Employee.DEVICE_TYPE_CHOICES` in `backend/api/models.py`), but the actual wire protocol used for polling is still the ZKTeco/ICLOCK protocol via `pyzk`, over TCP port 4370 -identical to how the original eSSL e2008 devices were integrated.
 
-So: **Pull is the live, working path for every device configured in Settings → Devices today**, including the AiFace-Mars unit. The Push endpoint (`POST /api/biometric/punch`) also exists in the code and is reachable, but nothing is currently configured to call it.
+So: **Pull is the live, working path for every device in Settings → Devices that the server can reach over the LAN**, including the AiFace-Mars unit. A device set to **ADMS** (Cloud Server Setting) instead dials out to `api.uktextiles.in` and pushes its own attendance; that path is described under "ADMS push" below, and its health is what the Biometric Device Status page reports. The JSON Push endpoint (`POST /api/biometric/punch`) also exists, but nothing is configured to call it.
 
 ---
 
@@ -265,23 +265,60 @@ Surfaced in the UI as the **Add Attendance** button on the Attendance page. Also
 
 ---
 
-## Possible future enhancement -ADMS / HTTPS Push (not implemented)
+## ADMS push -devices calling the cloud server
 
-The AiFace-Mars unit is capable of a third mode: **ADMS** (its cloud-server protocol), which pushes over HTTPS to a domain rather than a local IP:port. A device seen configured this way showed:
+ZKTeco / AiFace-Mars terminals in **ADMS** mode (the device menu calls it *Cloud Server Setting*) dial out to the server over HTTP(S) and push attendance as it happens. This is implemented in `backend/api/adms_views.py`; the routes sit at the bare root (`/iclock/cdata`, `/iclock/getrequest`, `/iclock/devicecmd`), not under `/api/`, because that is where the firmware is hardcoded to call (see `api-database-reference.md` -> Biometric Device Push (ADMS)).
 
-```
-Server Mode:       ADMS
-Enable Domain:     ON
-Server Address:    hrms.uktextiles.in
-Enable Proxy:      OFF
-HTTPS:             ON
-```
+What the server hears from a device, and what is recorded for the status page:
 
-This is a **different wire protocol from Path 2 above** -ADMS/eSSL cloud-server devices POST to their own expected paths (commonly something like `/iclock/cdata`), not a plain JSON body at an arbitrary URL, and the request shape is proprietary to the ADMS spec rather than a simple REST payload. **Nothing in this codebase currently implements an ADMS-compatible endpoint** -`/api/biometric/punch` (Path 2) uses a different, simpler JSON contract that this device is not sending.
+| Request | When | Recorded on the device row |
+|---|---|---|
+| `GET /iclock/getrequest` | the heartbeat, about every 10 seconds while the device can reach the server | `last_heartbeat_at`, `last_remote_ip` |
+| `GET /iclock/cdata?options=all` | the handshake after start-up | the device's own settings (`reported_config`) |
+| `POST /iclock/cdata?table=options` | the device reporting its settings | `reported_config` |
+| `POST /iclock/cdata?table=ATTLOG` | attendance lines | punches, `last_data_at`, newest punch time, lines that could not be read (`last_error`) |
+| `POST /iclock/devicecmd` | the result of a command | heartbeat |
 
-If this is worth building later, the recommended approach is:
-1. Confirm `hrms.uktextiles.in` actually reaches this Django deployment (it does, once deployed per `deployment-guide.md` -Nginx/Cloudflare Tunnel already route that hostname to Django).
-2. Temporarily log every incoming request path/body at the Nginx or Django level, trigger one test punch on the device, and read exactly what path and payload the specific AiFace-Mars firmware sends.
-3. Implement a parser for that specific request shape as a new endpoint (not necessarily `/api/biometric/punch` -whatever path the device actually calls), reusing the same underlying punch-ingestion logic Path 2 already has.
+The server accepts attendance from **any** device that pushes; the serial number (`SN`) is used only to tell devices apart for health tracking. A device that contacts the server under a serial no configured device carries is kept in `biometric_unknown_pushers` and listed on the status page as an **unknown sender**, so a new machine or a mistyped serial is visible instead of silent. Enter each device's serial number in **Settings -> Devices**. A blank serial is filled in automatically on first contact only when exactly one enabled device has none.
 
-Until that's built, **Path 1 (Pull, Settings → Devices) remains the correct, working way to configure this device** -it should not be switched to ADMS/HTTPS mode expecting it to work, since nothing on the server side understands that protocol yet.
+### What each device must be set to
+
+Read over the LAN from the five factory devices (HO - 1 to HO - 5 PROD) on 2026-10-06 and compared with the HO device, which does push. None of the five can reach the server today:
+
+| Setting on the device | Must be | Found on the five PROD devices |
+|---|---|---|
+| ADMS / Cloud Server | ON | ON |
+| Server address | `api.uktextiles.in` | `api.uktextiles.in` |
+| Server port | the standard web port, as on HO (no port override) | 81 on four of them, 8000 on 192.168.0.20 |
+| DNS server (Ethernet) | a working resolver, for example `8.8.8.8` or the router | `0.0.0.0`, so the device cannot turn the name into an address |
+| Gateway (Ethernet) | the router, for example `192.168.0.254` | `0.0.0.0` on 192.168.0.20 |
+
+The device's own port 4370 is for Pull only and stays as it is. A proxy should be off unless the company really routes through one. The firewall must allow the device's outbound web traffic to the server (see the outbound rule at the top of the firewall section above).
+
+---
+
+## Biometric Device Status page (Attendance -> Biometric Device Status)
+
+Route `/hr/attendance/device-status`. Backend: `device_status.py` (the payload), `device_status_views.py` (3 endpoints), `device_probe.py` (the connection check), `device_diagnosis.py` (the nine-layer reasoning), `device_health.py` (the one rule for "connected"). It answers one question: is every punching machine connected to the server, and if not, why?
+
+**Two kinds of evidence, kept apart**
+
+- *Received*: what the server hears from the device (heartbeat, attendance pushes, the device's reported settings, recorded errors). This is the truth about "connected to the deployed API". Reading it never contacts a device.
+- *Reached*: what the server can reach from where it runs (ping, the TCP port, the ZK handshake, a read of the device's own settings). It is gathered only when someone presses **Run connection check**, and a check older than 6 hours is shown but no longer used in the diagnosis. A server in the cloud cannot see `192.168.x.x`, so from Railway a LAN device is **Unreachable by design**; the page says so instead of calling the device broken. Run the check from the local app on a computer in the factory to read the device's settings.
+
+**States**
+
+| State | Meaning |
+|---|---|
+| Connected | polling the server within the last 3 minutes; or, for a device that does not poll, pushed within the last 6 hours |
+| Disconnected | silent beyond that, or never heard from ("Never connected") |
+| Error | something was recorded as going wrong in the last 24 hours (unreadable attendance lines, a failed sync, a failed check) and the device is not Connected |
+| Disabled | switched off in Settings; excluded from the counts |
+| Reachable / Unreachable / Port closed / Wrong password / Not checked | the result of the last connection check |
+| Pinging... | shown on the page while a check is running |
+
+**The nine layers.** For each device the page marks Biometric device, Local network (LAN), Firewall, Port configuration, API connection, Railway deployment, Device IP configuration, Network timeout and Authentication & configuration as OK, Warning, Problem, Unknown or Not applicable, with the exact error and what to do. When several layers have a problem the one to fix first is the headline (IP configuration, then port, authentication, firewall, API, timeout, LAN, device). A local server cannot judge a device that sends to `api.uktextiles.in`, so for such a device the Firewall and API layers read Not applicable and the headline says the device is reporting elsewhere; the Railway layer is Not applicable on a local server.
+
+**Connection check.** `POST /api/attendance/biometric-status/check` pings, opens the TCP port, performs the ZK handshake and reads a handful of options (serial, device name, MAC, IP, mask, gateway, DNS, DHCP, server URL, web port, ADMS function, proxy), then disconnects. It never disables the terminal and never changes a setting. One check runs at a time (a second request gets 409) and the whole check is held to 24 seconds. Each result is saved to `biometric_device_probes` (the latest 30 per device are kept).
+
+**Permissions.** The endpoints sit under `/api/attendance/`, so the existing Attendance module rule applies: viewing needs View, the connection check needs Edit. The check is written to the audit log.

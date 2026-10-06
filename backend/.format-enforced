@@ -8,6 +8,11 @@ api/auto_sync_views.py
 api/branch_scope.py
 api/clock.py
 api/ctc.py
+api/device_diagnosis.py
+api/device_health.py
+api/device_probe.py
+api/device_status.py
+api/device_status_views.py
 api/email_catalog.py
 api/email_control_views.py
 api/email_service.py
@@ -170,6 +175,7 @@ api/tests_approval_workflow.py
 api/tests_arrival_rules.py
 api/tests_attendance_day_kinds.py
 api/tests_compensation_page.py
+api/tests_device_status.py
 api/tests_email_control.py
 api/tests_employee_bulk.py
 api/tests_employee_bulk_designations.py

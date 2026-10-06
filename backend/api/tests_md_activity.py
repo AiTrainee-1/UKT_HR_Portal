@@ -381,6 +381,7 @@ class VocabularyGuardTests(SimpleTestCase):
     KNOWN_ACTIONS = {
         "login", "logout", "login_failed", "login_blocked", "create", "update", "delete", "export", "approve",
         "reject", "upload", "restore", "backup", "announce", "redeem", "lock", "reset",
+        "check",  # a device connection test (device_status_views.py): read-only, so routine, no sensitive rule
     }  # fmt: skip
 
     def audited(self):

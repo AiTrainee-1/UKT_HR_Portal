@@ -41,6 +41,8 @@ export type BiometricDeviceItem = {
   connectionConfig: Record<string, unknown>;
   isActive: boolean;
   isDefault: boolean;
+  /** The serial number the device pushes attendance under (shown on its Cloud Server screen); blank until known. */
+  serialNumber?: string;
   /** true for the read-only device configured via backend/.env */
   isEnv?: boolean;
   lastSyncedAt: string | null;
@@ -68,6 +70,7 @@ export const useCreateBiometricDevice = () => {
       isActive?: boolean;
       isDefault?: boolean;
       notes?: string;
+      serialNumber?: string;
       connectionConfig?: Record<string, unknown>;
     }) =>
       customFetch<BiometricDeviceItem>("/api/biometric-devices", {
@@ -95,6 +98,7 @@ export const useUpdateBiometricDevice = () => {
         isActive: boolean;
         isDefault: boolean;
         notes: string;
+        serialNumber: string;
         connectionConfig: Record<string, unknown>;
       }>;
     }) =>

@@ -33,7 +33,14 @@ from datetime import datetime
 from django.http import HttpRequest, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 
-from .device_health import record_device_push, record_unmatched_punch
+from .device_health import (
+    client_ip,
+    parse_options_body,
+    record_adms_contact,
+    record_attlog_result,
+    record_reported_config,
+    record_unmatched_punch,
+)
 from .models import Attendance, AttendanceLog, Employee
 
 logger = logging.getLogger(__name__)
@@ -138,6 +145,7 @@ def _handle_attlog(request: HttpRequest, sn: str) -> HttpResponse:
     skipped_unparsable = 0
     skipped_no_employee = 0
     duplicates = 0
+    newest_punch = None  # the latest punch in this push (the device's wall clock), for the status page
 
     for line in body.splitlines():
         if not line.strip():
@@ -146,6 +154,9 @@ def _handle_attlog(request: HttpRequest, sn: str) -> HttpResponse:
         if not parsed:
             skipped_unparsable += 1
             continue
+
+        if newest_punch is None or parsed["dt"] > newest_punch:
+            newest_punch = parsed["dt"]
 
         emp = Employee.objects.filter(employee_code=parsed["user_id"]).first()
         if not emp:
@@ -186,6 +197,7 @@ def _handle_attlog(request: HttpRequest, sn: str) -> HttpResponse:
         "ADMS ATTLOG result: SN=%s processed=%d duplicates=%d skipped_unparsable=%d skipped_no_employee=%d",
         sn, processed, duplicates, skipped_unparsable, skipped_no_employee,
     )
+    record_attlog_result(sn, processed=processed, last_punch_dt=newest_punch, unparsable=skipped_unparsable)
     return _ok()
 
 
@@ -206,15 +218,19 @@ def adms_cdata(request: HttpRequest) -> HttpResponse:
     # Any contact at all counts as a heartbeat -handshake, options, OPERLOG,
     # BIODATA, not just attendance. A device with nobody punching is quiet but
     # healthy, and the Sync indicator must not call that a failure.
-    record_device_push(sn)
+    record_adms_contact(sn, kind="push", remote_ip=client_ip(request))
 
     if request.method == "GET":
+        # The handshake query carries the device's own firmware / push-protocol facts.
+        record_reported_config(sn, request.GET.dict())
         return _handle_handshake(request)
 
     if request.method == "POST":
         table = request.GET.get("table", "")
         if table == "ATTLOG":
             return _handle_attlog(request, sn)
+        if table.lower() == "options":
+            record_reported_config(sn, parse_options_body(request.body.decode("utf-8", errors="replace")))
         # Everything else the device pushes: "options" (its own capability
         # list, sent right after handshake), OPERLOG (enrollment/admin
         # events), and any other table. None are attendance data, so they're
@@ -236,7 +252,10 @@ def adms_getrequest(request: HttpRequest) -> HttpResponse:
     any, so a bare "OK" correctly means "nothing queued for you". Must still
     exist: a 404 here makes the device treat the whole server as unreachable
     and it can stop pushing attendance entirely."""
-    logger.info("ADMS getrequest: SN=%s", request.GET.get("SN", ""))
+    sn = request.GET.get("SN", "")
+    logger.info("ADMS getrequest: SN=%s", sn)
+    # The device polls this about every 10 s while it is online: the "connected right now" signal.
+    record_adms_contact(sn, kind="heartbeat", remote_ip=client_ip(request))
     return _ok()
 
 
@@ -245,6 +264,7 @@ def adms_devicecmd(request: HttpRequest) -> HttpResponse:
     """POST /iclock/devicecmd[.aspx] -device reporting the result of a command
     it was given. Nothing issues commands here, but acknowledging keeps the
     device from retrying if it ever posts one."""
-    logger.info("ADMS devicecmd: SN=%s body=%r", request.GET.get("SN", ""),
-                request.body.decode("utf-8", errors="replace")[:500])
+    sn = request.GET.get("SN", "")
+    logger.info("ADMS devicecmd: SN=%s body=%r", sn, request.body.decode("utf-8", errors="replace")[:500])
+    record_adms_contact(sn, kind="heartbeat", remote_ip=client_ip(request))
     return _ok()

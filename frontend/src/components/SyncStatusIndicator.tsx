@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -51,6 +52,7 @@ const STATUS_META: Record<DeviceHealthRow["status"], {
 export function SyncStatusIndicator() {
   const { data, isLoading } = useSyncStatusLive();
   const [showDetail, setShowDetail] = useState(false);
+  const [, navigate] = useLocation();
 
   const isLive = data?.isLive ?? false;
   const problems = data?.problemCount ?? 0;
@@ -118,11 +120,21 @@ export function SyncStatusIndicator() {
           <div className="flex gap-2 items-start rounded-lg bg-slate-50 border p-2.5 text-[11px] leading-relaxed text-slate-600">
             <Info size={13} className="mt-0.5 shrink-0" />
             <span>
-              Devices push attendance to this server as it happens. A device counts as{" "}
-              <b>Silent</b> only after {data?.silentAfterHours ?? 6} hours with nothing received —
+              Devices push attendance to this server as it happens, and a working one calls in about every 10 seconds.
+              One that calls in counts as <b>Silent</b> after {Math.round((data?.heartbeatFreshSeconds ?? 180) / 60)} minutes
+              without a call; one that only sends when someone punches, after {data?.silentAfterHours ?? 6} hours —
               long enough that a quiet lunch hour or an early shift end doesn't raise a false alarm.
             </span>
           </div>
+
+          <button
+            type="button"
+            onClick={() => { setShowDetail(false); navigate("/hr/attendance/device-status"); }}
+            className="self-start text-xs font-semibold text-[#006496] underline underline-offset-2"
+            data-testid="open-full-device-status"
+          >
+            Open the full Biometric Device Status page: connection checks, why a device is failing, firewall help
+          </button>
 
           <div className="grid grid-cols-3 gap-2 text-center">
             <div className="rounded-xl bg-emerald-50 text-emerald-800 p-3">

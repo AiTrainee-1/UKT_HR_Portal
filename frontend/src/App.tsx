@@ -59,6 +59,7 @@ const NewEmployee = lazy(() => import("@/pages/hr/NewEmployee"));
 const BulkUploadEmployees = lazy(() => import("@/pages/hr/BulkUploadEmployees"));
 const ManualPunchImport = lazy(() => import("@/pages/hr/ManualPunchImport"));
 const PunchView = lazy(() => import("@/pages/hr/PunchView"));
+const BiometricDeviceStatus = lazy(() => import("@/pages/hr/BiometricDeviceStatus"));
 const EmployeeDetail = lazy(() => import("@/pages/hr/EmployeeDetail"));
 const EditEmployee = lazy(() => import("@/pages/hr/EditEmployee"));
 const Leave = lazy(() => import("@/pages/hr/Leave"));
@@ -319,6 +320,9 @@ function Router() {
       </Route>
       <Route path="/hr/attendance/punch-view">
         {() => <ProtectedRoute component={PunchView} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/attendance/device-status">
+        {() => <ProtectedRoute component={BiometricDeviceStatus} allowedRoles={["hr"]} />}
       </Route>
       <Route path="/hr/attendance/staff">
         {() => <ProtectedRoute component={Attendance} allowedRoles={["hr"]} />}

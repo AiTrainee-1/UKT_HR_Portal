@@ -189,6 +189,7 @@ from .punch_views import (
     skipped_punches, resolve_skipped_punch,
     punch_list, punch_export, punch_import, sync_status,
 )
+from .device_status_views import biometric_status, biometric_status_check, biometric_status_history
 from .chat_views import (
     chat_channels, chat_messages, chat_message_reactions,
 )
@@ -368,6 +369,10 @@ urlpatterns = [
     path("attendance/punches/export", punch_export),
     path("attendance/punches/import", punch_import),
     path("attendance/sync-status-live", sync_status),
+    # Biometric Device Status page: what each device sends this server, and a connection check from this server.
+    path("attendance/biometric-status", biometric_status),
+    path("attendance/biometric-status/check", biometric_status_check),
+    path("attendance/biometric-status/<int:pk>/history", biometric_status_history),
     path("attendance/report-log", attendance_report_log),
     path("attendance/report-log/sheet", attendance_report_log_sheet),
     path("attendance/day-informed", set_day_informed),

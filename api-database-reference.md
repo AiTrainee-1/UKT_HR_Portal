@@ -142,13 +142,21 @@ One engine decides who may approve every kind of request; HR configures it in **
 
 These four routes are registered in `config/urls.py` at the bare root (`/iclock/...`, no `/api/` prefix and no DRF `@api_view`) because that is the fixed path ZKTeco ADMS-mode devices are hardcoded to call. Authentication is **not JWT-based at all**: devices identify themselves only by a `SN` (serial number) query parameter, which is not a secret — there is no shared-device-key check like `biometric_punch` has, so (per the module's own docstring) this endpoint is reachable by anyone who knows the URL, bounded only by the fact that the worst outcome is spurious `AttendanceLog` rows for real employee codes.
 
-- **GET/POST /iclock/cdata and /iclock/cdata.aspx → `adms_cdata`** — No auth (device-identified by `SN` only). Single dispatch point for every ADMS request type: a GET is the device handshake/registration (responds with a config block enabling `TransFlag`/`Realtime=1` so the device starts pushing live attendance); a POST with `table=ATTLOG` is the actual attendance push (`_handle_attlog`) — parses tab-separated `UserID\tTimestamp\tStatus` lines, matches each to an `Employee` by `employee_code`, and creates `AttendanceLog`/`Attendance` rows (unmatched codes are recorded via `record_unmatched_punch` so they surface on the HR "Skipped" view instead of vanishing silently); any other POST table (options, OPERLOG, etc.) is logged and acknowledged with a bare "OK" without being parsed. Every request is also recorded as a device heartbeat via `record_device_push`.
-- **GET /iclock/getrequest and /iclock/getrequest.aspx → `adms_getrequest`** — No auth. The device polling for server-issued commands; this app never issues any, so it always replies with a bare "OK" (required to exist at all — a 404 here makes the device treat the server as unreachable and stop pushing attendance).
+- **GET/POST /iclock/cdata and /iclock/cdata.aspx → `adms_cdata`** — No auth (device-identified by `SN` only). Single dispatch point for every ADMS request type: a GET is the device handshake/registration (responds with a config block enabling `TransFlag`/`Realtime=1` so the device starts pushing live attendance); a POST with `table=ATTLOG` is the actual attendance push (`_handle_attlog`) — parses tab-separated `UserID\tTimestamp\tStatus` lines, matches each to an `Employee` by `employee_code`, and creates `AttendanceLog`/`Attendance` rows (unmatched codes are recorded via `record_unmatched_punch` so they surface on the HR "Skipped" view instead of vanishing silently); a POST with `table=options` is parsed into the device's own reported settings (`BiometricDevice.reported_config`); any other POST table (OPERLOG, etc.) is logged and acknowledged with a bare "OK" without being parsed. Every request is also recorded as a device heartbeat via `record_device_push`.
+- **GET /iclock/getrequest and /iclock/getrequest.aspx → `adms_getrequest`** — No auth. The device polling for server-issued commands; this app never issues any, so it always replies with a bare "OK" (required to exist at all — a 404 here makes the device treat the server as unreachable and stop pushing attendance). Each call is also recorded as the device's heartbeat (`last_heartbeat_at`, remote IP), which is what the Biometric Device Status page judges "connected" by; a serial no configured device has is kept in `biometric_unknown_pushers`.
 - **POST /iclock/devicecmd and /iclock/devicecmd.aspx → `adms_devicecmd`** — No auth. The device reporting the result of a command; logged and acknowledged with "OK" (nothing in this app currently issues commands to acknowledge).
+
+## Biometric Device Status (device_status_views.py)
+
+Back the Attendance -> Biometric Device Status page. All three sit under `/api/attendance/`, so the Attendance module permission applies (GET needs View, POST needs Edit). Reading never contacts a device.
+
+- **GET /api/attendance/biometric-status** — `@require_hr`. The whole picture in one payload: `server` (deployment `railway`/`local`, the address devices must be set to, the firewall/port checklist), `summary` (configured, enabled, connected, disconnected, error, unreachable, neverConnected, punchesToday), `thresholds` (heartbeat freshness, slow latency), `devices[]` (per device: name, IP, port, serial, `status` connected/disconnected/error/disabled, `reach` reachable/unreachable/refused/auth/error/unchecked, last heartbeat / data / successful sync, remote IP, errors, latest check with its steps, push delay, a nine-layer `diagnosis` with a headline, the device's reported settings and read-out) and `unknownPushers[]`.
+- **POST /api/attendance/biometric-status/check** — `@require_hr`. Body `{"deviceIds": [..]}` (omit for every device). Runs the connection check (ping, TCP port, ZK handshake, a read of a few device settings, then disconnect; the terminal is never disabled and nothing is changed on it), saves one `BiometricProbe` per device, writes an audit-log entry and returns `{ranDeviceIds, status}` where `status` is the same payload as the GET. 400 for a malformed `deviceIds`, 404 for an unknown id, 409 while another check is running.
+- **GET /api/attendance/biometric-status/\<pk\>/history** — `@require_hr`. The latest 30 connection checks of one device, newest first (404 for an unknown device).
 
 ## System Settings — Biometric Devices & ID Card Template (system_settings_views.py)
 
-- **GET, POST /api/biometric-devices** — `@require_hr`. GET lists configured `BiometricDevice` rows plus a synthetic read-only entry for the legacy `.env`-configured device (if its host isn't already duplicated by a DB row); POST creates a new device, optionally flipping it to the sole default.
+- **GET, POST /api/biometric-devices** — `@require_hr`. GET lists configured `BiometricDevice` rows plus a synthetic read-only entry for the legacy `.env`-configured device (if its host isn't already duplicated by a DB row); POST creates a new device, optionally flipping it to the sole default. Each row carries `serialNumber` (optional; rejected with 400 if another device already has it).
 - **GET, PUT, DELETE /api/biometric-devices/\<pk\>** — `@require_hr`. GET/PUT/DELETE one device; PUT can partially merge `connectionConfig`, only overwrites `apiKey` if a non-empty value is sent, and can reassign the "default" device.
 - **GET, PUT /api/idcard-settings** — `@require_auth`. GET returns the singleton ID card template config (colors, font, background, logo position, footer text) — open to any authenticated user since employees need it to render their own ID card; PUT edits it but is manually gated to HR only (403 for a plain employee token) despite the `@require_auth` decorator.
 
@@ -882,7 +890,39 @@ Configuration for a physical biometric attendance terminal (AiFace-Mars, ZKTeco,
 - `is_active`, `is_default` — BooleanField
 - `serial_number` — TextField, identifies device on ADMS push (auto-filled on first push)
 - `last_synced_at`, `last_push_at` — DateTimeField, nullable
+- `last_heartbeat_at` — DateTimeField, nullable; last time the device polled the ADMS listener (about every 10 s while online). The "connected" signal.
+- `last_data_at`, `last_punch_date`, `last_punch_time` — when an ATTLOG push last arrived and the newest punch in it (the device's clock)
+- `last_remote_ip` — TextField (db default `""`); the public address the last contact came from
+- `last_error`, `last_error_at` — what last went wrong receiving from it (e.g. unreadable attendance lines)
+- `reported_config`, `reported_config_at` — JSONField (nullable); the device's own options upload (IP, firmware, time zone...)
+- `last_sync_error`, `last_sync_error_at`, `last_reachable_at` — the pull direction: why the last attempt failed and when it last got through
 - ordering `["-is_default", "name"]`
+
+All columns added by migration `0113_biometric_device_status` are nullable or carry a database default, so a release still running the previous code keeps working.
+
+### BiometricProbe
+**Table name:** `biometric_device_probes`
+
+One connection check of one device, run from the server. Kept as a short history (the latest 30 per device) so the status page can show a slow or flapping device, not only its last state.
+
+**Key fields:**
+- `device` — ForeignKey to `BiometricDevice` (CASCADE), `related_name="probes"`
+- `checked_at` — DateTimeField; `status` — TextField (reachable / timeout / refused / unreachable / dns / auth / error)
+- `latency_ms`, `icmp_ms` — FloatField, nullable (TCP connect time and ping time)
+- `error` — TextField; `detail` — JSONField (what the device reported about itself); `steps` — JSONField (`[{key, label, ok, ms, note}]`)
+- `checked_from` — TextField, the host the check ran on
+- ordering `["-checked_at"]`; index (`device`, `-checked_at`)
+
+### BiometricUnknownPusher
+**Table name:** `biometric_unknown_pushers`
+
+A device that contacts the ADMS listener under a serial number no configured device carries: a new machine nobody added, or a configured one whose serial was mistyped.
+
+**Key fields:**
+- `serial_number` — TextField, unique
+- `first_seen_at`, `last_seen_at` — DateTimeField; `last_remote_ip` — TextField
+- `contact_count`, `punch_count` — IntegerField
+- ordering `["-last_seen_at"]`
 
 ### UnmatchedPunch
 **Table name:** `unmatched_punches`

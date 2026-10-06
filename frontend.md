@@ -55,6 +55,9 @@ frontend/src/
 │   │   │                               #   AssignDialog (SelectionBuilder include/exclude chips + PlanPreview), AssignmentsTab,
 │   │   │                               #   UnassignedTab, ManageAssignmentDialogs, shift-logic.ts (pure, tested)
 │   │   ├── MissingPunch.tsx / ManualPunchImport.tsx / AttendancePunchSearch.tsx
+│   │   ├── BiometricDeviceStatus.tsx + device-status/   # Attendance -> Biometric Device Status (/hr/attendance/device-status):
+│   │   │                               #   SummaryCards, ServerPanel, DeviceCard, DiagnosisPanel (nine layers), UnknownSenders,
+│   │   │                               #   parts.tsx, logic.ts (pure, tested); data via custom-hooks/device-status.ts (polls 15 s)
 │   │   ├── LeaveHoliday.tsx / CasualLeave.tsx / Requests.tsx
 │   │   ├── StaffPayroll.tsx / ProductionPayroll.tsx / Settlement.tsx
 │   │   ├── IdCards.tsx / Promotion.tsx / Increment.tsx / Bonus.tsx

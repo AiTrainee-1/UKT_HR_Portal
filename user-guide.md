@@ -285,6 +285,20 @@ This is a background process that automatically fetches raw punch records from t
 - You can also trigger a manual sync from the Dashboard's quick action button or from the Attendance page.
 - Always sync before generating payroll to ensure the data is current.
 
+#### Biometric Device Status
+
+**Attendance -> Biometric Device Status** (also the **Device Status** button on the Attendance page) is the one place to check whether every punching machine is connected to the server, and why one is not.
+
+- **Summary cards:** devices configured, Connected, Disconnected, Errors, Unreachable, and punches received today. Click a card to list only those devices.
+- **Each device** shows its name, IP address and serial number; a status (Connected, Disconnected, Error or Disabled); whether the server can reach it; when the server last heard from it; the last successful sync; and the connection delay in milliseconds, with slow connections marked.
+- **Why isn't it connecting?** Open a device to see nine checks: Biometric device, Local network (LAN), Firewall, Port configuration, API connection, Railway deployment, Device IP configuration, Network timeout, and Authentication & configuration. Each is marked OK, Warning, Problem, Unknown or Not applicable, with the exact error message and what to do next. The most important finding is shown at the top of the card.
+- **Run connection check** pings every enabled device, tests its port and reads its own settings. While it runs each device shows **Pinging...**. It needs permission to edit Attendance, and it never changes anything on a device.
+- **Server & firewall setup** lists the address, port and settings each device must be given, with copy buttons.
+- **Unknown senders** lists machines that are contacting the server but are not set up in Settings -> Devices.
+- The page refreshes itself every 15 seconds; switch **Auto-refresh** off to stop that.
+
+> From the cloud server, devices on the factory network (192.168.x.x) show **Unreachable**. That is expected, not a fault: what matters there is whether the device is **Connected**, meaning it is calling the server. To read a device's own settings, open the local app on a computer inside the factory and run the check there.
+
 #### Daily Attendance View
 Select a **Month** and **Year** to see the attendance calendar for all employees. Each cell shows:
 - ✅ Present
@@ -778,12 +792,12 @@ Configures the automatic late penalty rules:
 #### Biometric Devices
 
 List of all fingerprint machines connected to the system:
-- **Add a Device:** Enter the device's IP address, port, and a label name.
+- **Add a Device:** Enter the device's IP address, port, and a label name. Also enter its **serial number** (shown on the device under System Info) so the Biometric Device Status page can match what the device sends to the right row.
 - **Enable/Disable:** Toggle specific devices on or off.
 - **Delete:** Remove a device that is no longer used.
 - The attendance sync pipeline fetches data from all enabled devices.
 
-> Each device needs to be on the same network as the server for the sync to work. See `biometric-integration.md` for the technical detail on how this sync actually works.
+> A device is synced by the server (it must then be on the same network as the server) or it pushes its own attendance to the cloud server. Attendance -> Biometric Device Status shows which devices are connected and why one is not. See `biometric-integration.md` for the technical detail.
 
 ---
 

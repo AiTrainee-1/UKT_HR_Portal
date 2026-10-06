@@ -593,9 +593,76 @@ class BiometricDevice(models.Model):
     # it) -a device can be perfectly healthy on one and silent on the other.
     last_push_at = models.DateTimeField(null=True, blank=True, db_column="last_push_at")
 
+    # ── What the server has seen of this device, for the Biometric Device Status page ──────────────────────────────
+    # Every column below is written by the ADMS listener or by a connection check, and read by device_status.py.
+    # Nullable or with a database default, so a deploy that is still running the previous release keeps working.
+    #
+    # Last time the device polled us (GET /iclock/getrequest, about every 10 s while it is online). This is the
+    # real "is it connected right now" signal: a push only happens when somebody punches.
+    last_heartbeat_at = models.DateTimeField(null=True, blank=True, db_column="last_heartbeat_at")
+    # Last time attendance data (an ATTLOG push) arrived, and the newest punch in it (the device's wall clock).
+    last_data_at = models.DateTimeField(null=True, blank=True, db_column="last_data_at")
+    last_punch_date = models.DateField(null=True, blank=True, db_column="last_punch_date")
+    last_punch_time = models.TimeField(null=True, blank=True, db_column="last_punch_time")
+    # The public address the push came from (the factory's internet IP as the server sees it).
+    last_remote_ip = models.TextField(blank=True, default="", db_default="", db_column="last_remote_ip")
+    # The last thing that went wrong while receiving from it (for example attendance lines that could not be read).
+    last_error = models.TextField(blank=True, default="", db_default="", db_column="last_error")
+    last_error_at = models.DateTimeField(null=True, blank=True, db_column="last_error_at")
+    # What the device said about itself in its own ADMS "options" upload (IP, firmware, time zone...).
+    reported_config = models.JSONField(null=True, blank=True, db_column="reported_config")
+    reported_config_at = models.DateTimeField(null=True, blank=True, db_column="reported_config_at")
+    # The pull direction (us connecting to the device): why the last attempt failed, and when we last got through.
+    last_sync_error = models.TextField(blank=True, default="", db_default="", db_column="last_sync_error")
+    last_sync_error_at = models.DateTimeField(null=True, blank=True, db_column="last_sync_error_at")
+    last_reachable_at = models.DateTimeField(null=True, blank=True, db_column="last_reachable_at")
+
     class Meta:
         db_table = "biometric_devices"
         ordering = ["-is_default", "name"]
+
+
+class BiometricProbe(models.Model):
+    """One connection check of one device, run from the server (ping, TCP port, device handshake, settings read).
+    Kept as a short history so the status page can show whether a device is slow or flapping, not only its last
+    state. The status page prunes each device to its latest PROBE_HISTORY_KEEP rows."""
+
+    device = models.ForeignKey(
+        BiometricDevice, on_delete=models.CASCADE, db_column="device_id", related_name="probes"
+    )
+    checked_at = models.DateTimeField(db_column="checked_at")
+    # reachable | timeout | refused | unreachable | dns | auth | error
+    status = models.TextField()
+    latency_ms = models.FloatField(null=True, blank=True, db_column="latency_ms")
+    icmp_ms = models.FloatField(null=True, blank=True, db_column="icmp_ms")
+    error = models.TextField(blank=True, default="")
+    # What the device reported about itself (serial, IP, gateway, DNS, server address...), when it answered.
+    detail = models.JSONField(null=True, blank=True)
+    # The steps tried and how each went: [{"key", "label", "ok", "ms", "note"}]
+    steps = models.JSONField(null=True, blank=True)
+    checked_from = models.TextField(blank=True, default="", db_column="checked_from")
+
+    class Meta:
+        db_table = "biometric_device_probes"
+        ordering = ["-checked_at"]
+        indexes = [models.Index(fields=["device", "-checked_at"])]
+
+
+class BiometricUnknownPusher(models.Model):
+    """A device that contacts the ADMS listener under a serial number no configured device carries. Either it is
+    a new machine nobody has added in Settings, or a configured one whose serial was typed wrongly: either way it
+    is worth showing, because its attendance is arriving from a device the portal does not know."""
+
+    serial_number = models.TextField(unique=True, db_column="serial_number")
+    first_seen_at = models.DateTimeField(db_column="first_seen_at")
+    last_seen_at = models.DateTimeField(db_column="last_seen_at")
+    last_remote_ip = models.TextField(blank=True, default="", db_column="last_remote_ip")
+    contact_count = models.IntegerField(default=0, db_column="contact_count")
+    punch_count = models.IntegerField(default=0, db_column="punch_count")
+
+    class Meta:
+        db_table = "biometric_unknown_pushers"
+        ordering = ["-last_seen_at"]
 
 
 class UnmatchedPunch(models.Model):

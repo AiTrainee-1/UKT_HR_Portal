@@ -922,6 +922,22 @@ def _date_from_for_mode(mode: str):
     return None  # "all"
 
 
+def _remember_sync_failure(target: dict, exc: Exception) -> None:
+    """Keep why a pull from a device failed, so the Biometric Device Status page can show it after the toast is
+    gone. Best effort: never lets bookkeeping hide the real error."""
+    device = target.get("device")
+    if device is None:
+        return
+    try:
+        from django.utils import timezone
+
+        device.last_sync_error = str(exc)[:1000]
+        device.last_sync_error_at = timezone.now()
+        device.save(update_fields=["last_sync_error", "last_sync_error_at"])
+    except Exception:  # noqa: BLE001
+        logger.exception("Could not record the sync failure of device %s", target.get("label"))
+
+
 def run_biometric_sync(mode: str = "day", device_id=None) -> dict:
     """
     Run the biometric sync and return a merged summary dict.
@@ -967,14 +983,18 @@ def run_biometric_sync(mode: str = "day", device_id=None) -> dict:
             succeeded += 1
             if t["device"] is not None:
                 t["device"].last_synced_at = timezone.now()
-                t["device"].save(update_fields=["last_synced_at"])
+                t["device"].last_reachable_at = t["device"].last_synced_at
+                t["device"].last_sync_error = ""
+                t["device"].save(update_fields=["last_synced_at", "last_reachable_at", "last_sync_error"])
             sync_progress.mark(t["label"], "completed")
         except BiometricSyncError as exc:
             device_errors.append(f"{t['label']}: {exc}")
+            _remember_sync_failure(t, exc)
             sync_progress.mark(t["label"], "failed")
         except Exception as exc:
             logger.exception("Biometric sync failed for device %s", t["label"])
             device_errors.append(f"{t['label']}: {exc}")
+            _remember_sync_failure(t, exc)
             sync_progress.mark(t["label"], "failed")
 
     sync_progress.finish()

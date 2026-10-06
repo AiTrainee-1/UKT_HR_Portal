@@ -29,10 +29,22 @@ def _device_dict(d: BiometricDevice) -> dict:
         "connectionConfig": d.connection_config or {},
         "isActive": d.is_active,
         "isDefault": d.is_default,
+        "serialNumber": d.serial_number or "",
         "lastSyncedAt": d.last_synced_at.isoformat() if d.last_synced_at else None,
         "notes": d.notes,
         "createdAt": d.created_at.isoformat() if d.created_at else None,
     }
+
+
+def _serial_conflict(serial: str, exclude_pk: int | None = None) -> str | None:
+    """A device's serial number identifies it when it pushes, so two devices cannot share one."""
+    if not serial:
+        return None
+    clash = BiometricDevice.objects.filter(serial_number=serial)
+    if exclude_pk is not None:
+        clash = clash.exclude(pk=exclude_pk)
+    other = clash.first()
+    return f"The serial number {serial} already belongs to the device '{other.name}'." if other else None
 
 
 def _env_device_dict() -> dict | None:
@@ -74,6 +86,11 @@ def biometric_devices(request: Request) -> Response:
     if not name:
         return Response({"error": "Device name is required"}, status=400)
 
+    serial = str(data.get("serialNumber") or "").strip()
+    conflict = _serial_conflict(serial)
+    if conflict:
+        return Response({"error": conflict}, status=400)
+
     device = BiometricDevice.objects.create(
         name=name,
         device_type=data.get("deviceType", "aiface_mars"),
@@ -83,6 +100,7 @@ def biometric_devices(request: Request) -> Response:
         connection_config=data.get("connectionConfig") or {},
         is_active=bool(data.get("isActive", True)),
         notes=data.get("notes"),
+        serial_number=serial,
     )
     if data.get("isDefault"):
         BiometricDevice.objects.exclude(pk=device.pk).update(is_default=False)
@@ -113,6 +131,12 @@ def biometric_device_detail(request: Request, pk: int) -> Response:
     for json_key, attr in field_map.items():
         if json_key in data:
             setattr(device, attr, data[json_key])
+    if "serialNumber" in data:
+        serial = str(data["serialNumber"] or "").strip()
+        conflict = _serial_conflict(serial, exclude_pk=device.pk)
+        if conflict:
+            return Response({"error": conflict}, status=400)
+        device.serial_number = serial
     if "apiKey" in data and data["apiKey"]:
         device.api_key = data["apiKey"]
     if "connectionConfig" in data and isinstance(data["connectionConfig"], dict):
