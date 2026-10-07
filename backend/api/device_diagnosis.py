@@ -21,10 +21,12 @@ Each layer ends in a state: ok (checked and fine), problem (this is wrong), warn
 
 Evidence keys (all optional): state, host, port, configuredSerial, lastContactAgeSeconds, remoteIp, lastError,
 syncError, probe {status, latencyMs, icmp, error, detail, ageSeconds}, reported {...}, serverOnCloud, serverHost,
-lanAnyReachable, pushDelaySeconds.
+serverScheme, privateAddress, lanAnyReachable, pushDelaySeconds.
 """
 
 from __future__ import annotations
+
+from .device_probe import is_private_host
 
 SLOW_CONNECT_MS = 250
 SLOW_PUSH_SECONDS = 120
@@ -108,6 +110,29 @@ def _is_ip(value: str | None) -> bool:
     return len(parts) == 4 and all(p.isdigit() and int(p) < 256 for p in parts)
 
 
+def _cloud_cannot_see(ev: dict) -> bool:
+    """A server in the cloud checking a private (192.168.x.x) address has no route there, so a check that gets no
+    answer says nothing about the device. (Once any device has answered, the server clearly can see the factory.)"""
+    if not ev.get("serverOnCloud") or ev.get("lanAnyReachable"):
+        return False
+    private = ev.get("privateAddress")
+    if private is None:
+        private = is_private_host(ev.get("host") or "")
+    return bool(private)
+
+
+def _device_checklist(server_host: str) -> str:
+    """What to look at on a device that has never reached the server, and the firewall it goes through."""
+    address = server_host.split(":")[0] or "the server's address"
+    return (
+        f"On the device, Menu → COMM. → Cloud Server Setting: Server Address {address}, Server Port 443, HTTPS on. "
+        "Menu → COMM. → Ethernet: DNS 8.8.8.8 and Gateway = the router. "
+        "Then make sure the company firewall lets the device out on HTTPS (port 443) and DNS. "
+        "This server is in the cloud and cannot read the device's settings: run the check from the local app on a "
+        "factory computer to see them."
+    )
+
+
 def diagnose(ev: dict) -> dict:
     """The verdict for one device: {"headline", "headlineLayer", "action", "layers": [...], "problems": [keys]}."""
     state = ev.get("state") or "never"
@@ -171,6 +196,10 @@ def diagnose(ev: dict) -> dict:
         headline = f"This device sends its attendance to {url}, not to this local server, so this server cannot see whether it arrives."
         action = f"Open this page on {url} (the deployed site) to see whether the device is connected there."
         headline_key = "railway"
+    elif state == "never" and cloud:
+        headline = "Nothing has ever been received from this device, so it has not reached this server."
+        action = _device_checklist(server_host)
+        headline_key = None
     elif state == "never":
         headline = "Nothing has been received from this device yet, and no connection check has been run."
         action = "Run a connection check from a computer on the factory network, and confirm the device's Cloud Server (ADMS) settings."
@@ -297,12 +326,27 @@ def _port_layer(ev, cfg, probe_status, connected) -> dict:
     if connected:
         return _layer("port", OK, "The device is pushing on a port the server accepts.")
     port = cfg.get("serverPort")
+    https = ev.get("serverScheme") == "https"
     if port is not None and port not in SERVER_PORTS:
+        if https:
+            return _layer(
+                "port",
+                PROBLEM,
+                f"The device is set to send to port {port}, but this server answers on port 443 (HTTPS) only; nothing answers on {port}.",
+                "On the device: Menu → COMM. → Cloud Server Setting → set the server port to 443 and turn HTTPS on, the same as a device that works.",
+            )
         return _layer(
             "port",
             PROBLEM,
             f"The device is set to send to port {port}, but the server only accepts connections on 443 (HTTPS) or 80.",
             "On the device: Menu → COMM. → Cloud Server Setting → set the server port to 443 with HTTPS on (or 80 with HTTPS off), the same as a device that works.",
+        )
+    if https and port == 80:
+        return _layer(
+            "port",
+            WARN,
+            "The device sends plain HTTP on port 80, but this server is served over HTTPS and normally redirects port 80 to HTTPS, which a device cannot follow.",
+            "On the device: Menu → COMM. → Cloud Server Setting → set the server port to 443 and turn HTTPS on, the same as a device that works.",
         )
     if probe_status == "refused":
         return _layer(
@@ -333,7 +377,13 @@ def _api_layer(ev, connected, heard) -> dict:
             "Check the device's firmware and its Cloud Server settings; if it keeps happening, the format of its attendance lines needs a look.",
         )
     if ev.get("state") == "disconnected":
-        return _layer("api", WARN, f"The server accepted this device's requests until {_ago(heard)}.", "")
+        return _layer(
+            "api",
+            WARN,
+            f"The server accepted this device's requests until {_ago(heard)}.",
+            "Check the device is powered on and shows a network connection, that its Cloud Server settings have not "
+            "changed, and that the firewall still lets it out on HTTPS (port 443) and DNS.",
+        )
     return _layer("api", UNKNOWN, "No request from this device has reached the server yet.", "")
 
 
@@ -421,6 +471,13 @@ def _ip_layer(ev, cfg, connected, host) -> dict:
 
 
 def _timeout_layer(probe, probe_status, ev) -> dict:
+    if probe_status in ("timeout", "unreachable") and _cloud_cannot_see(ev):
+        return _layer(
+            "timeout",
+            NA,
+            "This server runs in the cloud and cannot reach a 192.168.x.x address, so a check with no answer says nothing about this device.",
+            "Timing shows here once the device connects: the page measures how long its punches take to arrive.",
+        )
     if probe_status == "timeout":
         return _layer(
             "timeout",

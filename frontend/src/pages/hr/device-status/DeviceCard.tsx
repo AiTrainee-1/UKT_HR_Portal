@@ -28,7 +28,8 @@ export default function DeviceCard({
   const [open, setOpen] = useState(defaultOpen);
   const tone = STATUS_TONE[device.status];
   const probe = device.pull.probe;
-  const ping = pingSummary(probe);
+  // From the cloud a private address cannot be pinged at all, so no answer is expected, not a fault.
+  const ping = pingSummary(probe, server.deployment === "railway" && device.privateAddress && !server.canReachLan);
   const delay = describeDelay(device.push.delay);
   const more = device.diagnosis.problems.filter((k) => k !== device.diagnosis.headlineLayer).length;
   const disabled = device.status === "disabled";

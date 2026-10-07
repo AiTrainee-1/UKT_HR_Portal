@@ -617,6 +617,15 @@ class BiometricDevice(models.Model):
     last_sync_error_at = models.DateTimeField(null=True, blank=True, db_column="last_sync_error_at")
     last_reachable_at = models.DateTimeField(null=True, blank=True, db_column="last_reachable_at")
 
+    # ── What Device Control last read from the device itself ───────────────────────────────────────────────────────
+    # When its user table was last read into biometric_device_users, and why the last attempt failed (empty when it
+    # did not). Additive and nullable / defaulted, so a release still running the previous code keeps working.
+    users_read_at = models.DateTimeField(null=True, blank=True, db_column="users_read_at")
+    users_read_error = models.TextField(blank=True, default="", db_default="", db_column="users_read_error")
+    # Capacity and identity as the device reported them: {users, usersCap, records, recordsCap, faces, facesCap, cards,
+    # pinWidth, platform, firmware, serial}. Null until the first successful read.
+    capacity = models.JSONField(null=True, blank=True, db_column="capacity")
+
     class Meta:
         db_table = "biometric_devices"
         ordering = ["-is_default", "name"]
@@ -663,6 +672,65 @@ class BiometricUnknownPusher(models.Model):
     class Meta:
         db_table = "biometric_unknown_pushers"
         ordering = ["-last_seen_at"]
+
+
+class BiometricDeviceUser(models.Model):
+    """One user as a biometric device holds it, as last read from that device (Device Control → Data Push).
+
+    A snapshot, not the source of truth: the device is. It exists so the page can filter, search and compare every
+    device's users at once without opening a connection per click, and says when it was read. Rewritten by every
+    read of the device and updated by every add / edit / delete made through the portal.
+
+    user_id is the PIN printed on the device and, by this company's rule, the Employee Code (see
+    biometric_sync._active_employee_lookup); uid is the device's own record number. The device password is never
+    stored here, only whether there is one."""
+
+    device = models.ForeignKey(
+        BiometricDevice, on_delete=models.CASCADE, db_column="device_id", related_name="device_users"
+    )
+    uid = models.IntegerField(db_column="uid")
+    user_id = models.TextField(db_column="user_id", db_index=True)
+    name = models.TextField(blank=True, default="")
+    privilege = models.IntegerField(default=0)
+    card = models.BigIntegerField(default=0)
+    has_password = models.BooleanField(default=False, db_column="has_password")
+    group = models.TextField(blank=True, default="")
+    read_at = models.DateTimeField(db_column="read_at")
+
+    class Meta:
+        db_table = "biometric_device_users"
+        ordering = ["device_id", "uid"]
+        unique_together = [("device", "uid")]
+        indexes = [models.Index(fields=["device", "user_id"])]
+
+
+class BiometricFetchRun(models.Model):
+    """One manual fetch of punches from biometric devices (Device Control → Data Fetch), kept as a history.
+
+    A run is either a preview (reads the devices and reports what an update would do, changes nothing) or an update
+    (writes the new punches through the same path the Sync Biometric button uses). It runs on a background thread, so
+    the row is what the page polls: status, and one entry per device in `results` that fills in as each finishes."""
+
+    MODE_PREVIEW = "preview"
+    MODE_UPDATE = "update"
+
+    mode = models.TextField(default=MODE_UPDATE)
+    status = models.TextField(default="running")  # running | done | failed
+    started_by = models.TextField(blank=True, default="", db_column="started_by")
+    range_label = models.TextField(blank=True, default="", db_column="range_label")
+    date_from = models.DateField(null=True, blank=True, db_column="date_from")
+    date_to = models.DateField(null=True, blank=True, db_column="date_to")
+    device_ids = models.JSONField(default=list, db_column="device_ids")
+    results = models.JSONField(default=list)
+    summary = models.JSONField(null=True, blank=True)
+    error = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+    finished_at = models.DateTimeField(null=True, blank=True, db_column="finished_at")
+
+    class Meta:
+        db_table = "biometric_fetch_runs"
+        ordering = ["-created_at"]
 
 
 class UnmatchedPunch(models.Model):

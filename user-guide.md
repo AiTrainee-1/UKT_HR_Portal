@@ -299,6 +299,28 @@ This is a background process that automatically fetches raw punch records from t
 
 > From the cloud server, devices on the factory network (192.168.x.x) show **Unreachable**. That is expected, not a fault: what matters there is whether the device is **Connected**, meaning it is calling the server. To read a device's own settings, open the local app on a computer inside the factory and run the check there.
 
+#### Device Control
+
+**Attendance -> Device Control** is for the biometric machines themselves. It has three tabs.
+
+**Overview** shows how many devices are configured, how many are **Connected** (this server can reach them right now) and how many are **Disconnected**, with the exact reason and what to do for each one. Every device card shows how full its memory is (users and attendance log, amber from 80%), its clock against the server's, when its users were last read, and shortcuts to Data Fetch and Data Push for that device.
+
+**Data Fetch** pulls punches off the devices by hand and updates the HRMS. The HRMS already receives punches automatically; use this to be sure, or after a device was offline.
+1. Tick the devices and choose the dates.
+2. Press **Preview** to see how many punches the HRMS does not have yet (nothing is changed), then **Fetch and update HRMS** to add them. Punches the HRMS already has are never changed or deleted.
+3. The result lists each device, the IDs on the devices that have no active employee (their punches are not recorded), and any day with six or more punches for one person. Earlier fetches stay in the history below.
+
+**Data Push** shows everyone on every device and who they are in the HRMS.
+- Click a device to see only the people on it, or use **Which device** to find who is on all of several devices, or who is *not* on a device. The cards above the list filter to *In the HRMS*, *Not in the HRMS* (on a device, no employee), *Not on a device* (in the HRMS, on none), *Inactive, still on one* and *On several devices*. You can also filter by role, staff or production, department, and "details differ between devices". The address always reflects the filters, so a view can be sent to someone.
+- **Read all devices** refreshes the list from the machines; each device shows when it was last read. The search box waits for a pause in typing before it asks.
+- The small coloured chips on each row are the devices. Click the chip of a device the person is on to change them as that device holds them (only that device is ticked to start with); click one they are not on to add them there.
+- **Add user** puts a person on the devices you choose: pick an employee (or enter someone who is not in the HRMS), then the details the machine asks for: ID, name, role, card number, password, and a photo taken with the camera or uploaded (kept on the employee's HRMS profile). Tick the devices and press **Add**. The photo needs permission to edit employees, because it is saved on the employee's profile.
+- **Edit** (pencil) changes what the devices hold; only the fields you change are sent. The ID is the Employee Code and cannot be changed here.
+- **Add to more devices** (arrow) copies a person to other devices with the details the devices already hold; tick several rows to do it for many.
+- **Delete** (bin) removes the person from the devices you tick. By default it also makes the employee **Inactive** in the HRMS; they are never deleted, so their record is there if they join again. The dialog says exactly what will happen first.
+
+> These machines enrol faces on the device itself: a user added here has no face until the person enrols at the machine, and a photo taken here cannot be put on the machine. Device Control talks to the machines directly, so it needs the HRMS to be running where it can reach them (a computer in the factory); on the cloud server it says so instead of failing.
+
 #### Daily Attendance View
 Select a **Month** and **Year** to see the attendance calendar for all employees. Each cell shows:
 - ✅ Present

@@ -11,6 +11,10 @@ const API_PORT = 8180;
 const WEB_PORT = 5180;
 const FAKE_PORT = 8190;
 const FAKE_GEMINI_PORT = 8191;
+// Fake biometric terminals (backend/fake_zk_device.py): three devices on consecutive TCP ports that speak the ZK protocol,
+// and an HTTP control port the Device Control spec uses to reset them and to read back what the portal wrote to them.
+const FAKE_DEVICE_BASE_PORT = 14371;
+const FAKE_DEVICE_CONTROL_PORT = 14380;
 const backendEnv = {
   DB_NAME: process.env.E2E_DB_NAME ?? "uktex_e2e",
   // backend/.env may point DATABASE_URL at a real (even production) database, and a set DATABASE_URL wins over
@@ -81,6 +85,13 @@ export default defineConfig({
       reuseExistingServer: reuse,
       timeout: 30_000,
       env: { FAKE_GEMINI_PORT: String(FAKE_GEMINI_PORT) },
+    },
+    {
+      command: `python fake_zk_device.py --base-port ${FAKE_DEVICE_BASE_PORT} --count 3 --control-port ${FAKE_DEVICE_CONTROL_PORT}`,
+      cwd: "../backend",
+      url: `http://127.0.0.1:${FAKE_DEVICE_CONTROL_PORT}/health`,
+      reuseExistingServer: reuse,
+      timeout: 30_000,
     },
     {
       command: `python e2e_setup.py && python manage.py runserver 127.0.0.1:${API_PORT} --noreload`,

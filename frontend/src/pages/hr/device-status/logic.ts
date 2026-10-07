@@ -117,10 +117,16 @@ export function describeDelay(delay: PushDelay | null): { label: string; tone: T
   return { label: `Batched: ~${formatDelay(delay.medianSeconds)} late`, tone: "bad" };
 }
 
-/** What the "Ping" tile shows for a device: the ping reply, or the port-connect time when the server cannot ping. */
-export function pingSummary(probe: ProbeView | null): { value: string; sub: string; tone: Tone } {
+/** What the "Ping" tile shows for a device: the ping reply, or the port-connect time when the server cannot ping.
+ *  `cloudBlind`: the server is in the cloud and the device has a private (192.168.x.x) address, so a check that got no
+ *  answer is expected and says nothing about the device: it is shown as "not testable", not as a failure. */
+export function pingSummary(probe: ProbeView | null, cloudBlind = false): { value: string; sub: string; tone: Tone } {
   if (!probe) return { value: "–", sub: "Not checked yet", tone: "muted" };
   const ping = probe.ping;
+  const answered = (ping?.available && ping.ok) || probe.latencyMs != null;
+  if (cloudBlind && !answered) {
+    return { value: "Not testable", sub: "the cloud server cannot see 192.168.x.x addresses", tone: "muted" };
+  }
   if (ping?.available && ping.ok) {
     return {
       value: formatLatency(ping.ms ?? probe.latencyMs),

@@ -1390,7 +1390,10 @@ class Routes(MdApiTestCase):
             self.assertEqual(self.get(BASE + "briefing", limit="many").status_code, 400)
 
     def test_the_briefing_answer_is_enough_for_one_lookup(self):
-        with mock.patch.object(D, "_analytics", side_effect=world()):
+        with (
+            at(),
+            mock.patch.object(D, "_analytics", side_effect=world()),
+        ):  # at noon: the briefing leaves out the units before 11:00
             body = self.get(BASE + "briefing").json()
         self.assertEqual(len(body["briefing"]["sentences"]), 6)
         self.assertEqual(len(body["kpis"]), 8)
@@ -1409,7 +1412,7 @@ class Tools(MdApiTestCase):
         registry.clear_cache()
 
     def run_tool(self, name, **args):
-        with mock.patch.object(D, "_analytics", side_effect=world()), read_only_db():
+        with at(), mock.patch.object(D, "_analytics", side_effect=world()), read_only_db():
             return registry.all_tools()[name].run(args)
 
     def test_the_three_tools_are_registered_on_the_dashboard_page(self):
@@ -1450,11 +1453,24 @@ class Tools(MdApiTestCase):
     def test_a_tool_result_is_a_private_copy(self):
         """The assistant's privacy layer rewrites names inside a result in place: that must never reach the page's data
         (the composed answer is kept for a few seconds and shared by the page and the assistant)."""
+
+        def stable(result):
+            # tookMs (how long the sources really took) and generatedAt (to the second) differ between two honest runs
+            # and say nothing about privacy
+            def strip(value):
+                if isinstance(value, dict):
+                    return {k: strip(v) for k, v in value.items() if k not in ("tookMs", "generatedAt")}
+                if isinstance(value, list):
+                    return [strip(v) for v in value]
+                return value
+
+            return json.dumps(strip(result), sort_keys=True)
+
         with override_settings(MD_ANALYTICS_CACHE_SECONDS=60):
             for name in ("company_briefing", "company_overview", "needs_attention"):
                 D._MEMO.clear()
                 first = self.run_tool(name)
-                json_before = json.dumps(self.run_tool(name), sort_keys=True)
+                json_before = stable(self.run_tool(name))
                 text = json.dumps(first)
                 self.assertIn("Stitching", text)
                 for row in first.get("needsAttention", first.get("items", [])):
@@ -1463,5 +1479,5 @@ class Tools(MdApiTestCase):
                     line["text"] = "@emp-1 was here"
                 for card in first.get("kpis", []):
                     card["label"] = "@emp-3"
-                self.assertEqual(json.dumps(self.run_tool(name), sort_keys=True), json_before, name)
+                self.assertEqual(stable(self.run_tool(name)), json_before, name)
                 D._MEMO.clear()

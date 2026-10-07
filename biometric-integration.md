@@ -289,9 +289,29 @@ Read over the LAN from the five factory devices (HO - 1 to HO - 5 PROD) on 2026-
 |---|---|---|
 | ADMS / Cloud Server | ON | ON |
 | Server address | `api.uktextiles.in` | `api.uktextiles.in` |
-| Server port | the standard web port, as on HO (no port override) | 81 on four of them, 8000 on 192.168.0.20 |
+| Server port and HTTPS | **443 with HTTPS ON** (HO has no port override) | 81 on four of them, 8000 on 192.168.0.20 |
 | DNS server (Ethernet) | a working resolver, for example `8.8.8.8` or the router | `0.0.0.0`, so the device cannot turn the name into an address |
 | Gateway (Ethernet) | the router, for example `192.168.0.254` | `0.0.0.0` on 192.168.0.20 |
+
+### The path from a device to the server (checked from the factory LAN, 2026-10-06)
+
+`api.uktextiles.in` is behind **Cloudflare** (it resolved to 104.21.x.x and 172.67.x.x; Cloudflare's addresses change, so never allow it by fixed IP). From a computer on the factory network:
+
+| Request | Result |
+|---|---|
+| `https://api.uktextiles.in/iclock/getrequest` (port 443) | `200 OK`: this is the path a device must use |
+| `http://api.uktextiles.in/iclock/getrequest` (port 80) | `301` redirect to HTTPS. A device does not follow redirects, so plain HTTP does not work |
+| port 81, port 8000 | no connection at all (Cloudflare does not serve them), so a device set to 81 or 8000 can never connect |
+| TLS | the Cloudflare edge accepted TLS 1.0 to 1.3 when tested, so older device firmware can still negotiate |
+
+**Firewall (outbound only).** Push needs no inbound rule and no port forward: the device dials out. The DNAT section above is for Pull only.
+
+- Allow the device addresses (one IP host group, for example `192.168.0.20, .47, .59, .61, .107, .119`) outbound to the internet on **TCP 443** and on **DNS** (UDP and TCP 53 to `8.8.8.8`, or to the firewall's own DNS if the devices use the router as DNS).
+- Allow the destination by host name (`api.uktextiles.in`) or "any WAN" on 443, not by IP address.
+- Exempt the devices from HTTPS scanning / SSL-TLS inspection and from web filtering. A device cannot trust the certificate a firewall re-signs, so inspection makes the handshake fail even though 443 is open.
+- If a device still does not connect, read the firewall log for its IP: allowed or denied, and which rule matched.
+
+**Cloudflare / Railway need no change.** If a Cloudflare security rule is ever added (Bot Fight Mode, a WAF challenge, Browser Integrity Check), exempt `/iclock/*`: a device cannot answer a challenge.
 
 The device's own port 4370 is for Pull only and stays as it is. A proxy should be off unless the company really routes through one. The firewall must allow the device's outbound web traffic to the server (see the outbound rule at the top of the firewall section above).
 
@@ -322,3 +342,47 @@ Route `/hr/attendance/device-status`. Backend: `device_status.py` (the payload),
 **Connection check.** `POST /api/attendance/biometric-status/check` pings, opens the TCP port, performs the ZK handshake and reads a handful of options (serial, device name, MAC, IP, mask, gateway, DNS, DHCP, server URL, web port, ADMS function, proxy), then disconnects. It never disables the terminal and never changes a setting. One check runs at a time (a second request gets 409) and the whole check is held to 24 seconds. Each result is saved to `biometric_device_probes` (the latest 30 per device are kept).
 
 **Permissions.** The endpoints sit under `/api/attendance/`, so the existing Attendance module rule applies: viewing needs View, the connection check needs Edit. The check is written to the audit log.
+
+---
+
+## Device Control (Attendance -> Device Control)
+
+One section for the biometric machines themselves, with three tabs: **Overview** (how many devices, how many this server can reach right now, each one's health), **Data Fetch** (pull punches by hand) and **Data Push** (see and manage the people on every device). Routes `/hr/attendance/DeviceControl`, `/fetch` and `/push`. Backend: `device_client.py` (the session with a terminal), `device_directory.py` (users, mapping, changes), `device_fetch.py` (manual fetch), `device_control_views.py` (the endpoints). It does not change how attendance is recorded or calculated.
+
+### How it talks to a device
+
+The same way Sync Biometric does: a direct ZK-protocol connection on TCP 4370 (pyzk). So it works wherever **this server can reach the device**: the HRMS running on a computer in the factory, or a cloud server only through a forwarded port (the firewall section above). A cloud server with a device at `192.168.x.x` does not even try; it says why and what to do. Punches still reach a cloud server by themselves through ADMS push; this section does not use that path.
+
+One session per device at a time (a terminal serves one). Sessions in this process take a per-device lock, and a write holds the terminal disabled for its duration and always enables it again. The Attendance page's Sync Biometric button is not covered by that lock, so Device Control refuses to write users or start a fetch while a Sync Biometric run is in progress (HTTP 409, "wait for it to finish").
+
+Every session has a deadline: two minutes for reading users, writing and the overview check, ten when reading a whole punch log. pyzk itself waits for ever on a terminal that stops answering half way through a download (one that reboots mid-transfer); the deadline drops the connection, so such a device cannot hold the terminal or the request, and the page is told it "did not finish within N seconds".
+
+The legacy `.env` device (`BIOMETRIC_DEVICE_IP`) is not part of Device Control: only devices added in Settings -> Devices.
+
+### What these terminals are (read from the five factory devices and HO, 2026-10-06)
+
+Face terminals (platform `ZAM180_TFT` / `ZAM170_TFT`, firmware 6.60), not fingerprint ones: 0 fingerprints, one face per user. 3,000 users and 150,000 punches of memory each. HO-2 PROD held 140,796 of 150,000 punches (94%); the overview warns from 80%. A user record is 72 bytes: ID (the Employee Code) up to 9 characters, name up to 24 bytes, role, card, password (up to 8 digits), group.
+
+**What the network connection can do:** read, add, change and delete user records. **What it cannot:** create or copy a face template, or put a photo on a terminal. These models report photo support, but the ZK commands pyzk has do not reach it (it goes through the device's own cloud channel). So a user added from the portal has no face until the person enrols at the device, and a photo taken in the portal is kept on the employee's HRMS profile (the same `photo_url` the Employees page edits), not on the terminal.
+
+### Rules
+
+- **Who is who:** a device user is linked to the employee whose Employee Code equals their device ID, exactly (no leading-zero tricks), the same rule as `biometric_sync._active_employee_lookup`. People are: *In HRMS*, *Not in HRMS* (on a device, no employee), *Not on a device* (active employee, on none), *Inactive but still on a device*, and *Another branch* (hidden detail for a branch-limited caller, who also cannot change them).
+- **Edits never rebuild a record.** A user is read as the device's raw 72 bytes and only the fields being changed are overlaid before it is sent back, so every other byte is returned exactly as it was. pyzk's `set_user` is not used: it writes a zero in the byte after the card (the group), which every real terminal keeps at 1. A new user starts from a record shaped the way a terminal writes one. Every write is read back before it is reported as done.
+- **Delete** removes the user from the chosen devices and, if asked, makes their employee **Inactive** (`Employee.status`, the same thing a bulk upload or an approved resignation sets). The employee is never deleted: record, history and code stay. They become Inactive only when at least one device really removed them (verified by reading the device back) or the stored list had them on a chosen device and the device now says they are not there (someone who was never on a chosen device is not made Inactive by deleting them from it), and only with Edit access to Employees, in the caller's branch; otherwise the devices are changed and the employee left as they are, and the result says so. If the connection is lost part way, the result keeps what the device acknowledged ("went through, but could not be confirmed"), the rest is "not attempted", and no employee is changed on that device's account.
+- A write is refused for a device that reports no capacity (users cap 0) or no users while its own counters say it has some: a half-answering terminal is not written to. Every field asked for (name, role, card, password, group) is checked on the read-back, so a firmware that acknowledges a change and keeps the old value is reported as "did not keep the change".
+- A request names the employee only together with their own user ID (`employeeId` must be the employee whose Employee Code is that ID, inside the caller's branch), so a crafted request cannot be used to read another branch's names. Boolean options (`markInactive`, `apply`) are read strictly: the text "false" is false.
+- Device passwords are never stored (the snapshot keeps only "has a password") and never copied between devices.
+- A new user takes the lowest free slot on the device, as a terminal itself does. On an older terminal (28-byte records, whose punch log names a person by slot number only) the next number after the highest in use is taken instead, so a freed slot never turns the old occupant's past punches into the new person's. A device with no users yet cannot show its record format, so it is assumed to use the 72-byte records every current terminal has.
+- A branch-limited caller sees an employee of another branch only as "Another branch" (no name, not even the device's name for them, and not searchable by it) and cannot change or delete them.
+- Data Fetch results are masked the same way: a branch-limited caller sees the counts and codes of a run, not the names of the people in it (sample punches, suspicious days, unmatched IDs).
+- Limits per request: 200 users, 12 devices. Names are cut to 24 bytes without splitting a character.
+- The list the page filters is a **snapshot** of each device's users (`biometric_device_users`), read on demand and after every change; each device shows when it was read.
+
+### Data Fetch
+
+Choose devices and a range (today, yesterday, last 7 days, this month, last month, custom, everything), then **Preview** (reads the devices and says what an update would add; changes nothing) or **Fetch and update HRMS**. A new punch is written by `biometric_sync._ingest_punches`, the path Sync Biometric uses, and matched the same way (Employee Code, active employees only; status 0/4 = In, 1/5 = Out, anything else In). Two deliberate differences: punches the HRMS already has are recognised first (by who and when, ignoring the In/Out byte, because a pull and a push describe the same punch differently) and not offered to the write again, and IDs with no employee are reported in the run, not added to the "Skipped" list (reading a range twice must not count its punches twice there). A run is a row (`biometric_fetch_runs`) filled in by a background thread, so it works whichever web worker answers the page's polling, and it stays as the history. One run at a time (the check and the insert happen under a database advisory lock, so two clicks or two web workers cannot both start one); it also waits for a running Sync Biometric. A running run beats a heartbeat every 30 seconds; one that has been quiet for five minutes (the server was restarted) is marked failed, so it never blocks the next. Measured on the six real devices: 6 to 41 seconds each (up to three in parallel), because a terminal can only send its whole log. A preview and the update that followed it agreed exactly (423 and 423 punches for 7 days).
+
+### Testing without a terminal
+
+`backend/fake_zk_device.py` is an independent implementation of the other end of the ZK protocol, written from pyzk's client and from records captured off the real terminals. The unit tests start it in-process; the Playwright suite starts it as a process (three devices on 14371-14373, an HTTP control port 14380 to reset it and read back what the portal wrote), so the whole stack is exercised: connect, read users and punches, write and delete users, refusals, a device that is down. It must stay free of `api/device_client.py` so the two check each other.

@@ -68,6 +68,7 @@ const navGroups: NavGroupData[] = [
           { path: '/hr/geo-attendance', label: 'Geo Attendance' },
           { path: '/hr/attendance/search', label: 'Attendance Search' },
           { path: '/hr/attendance/device-status', label: 'Biometric Device Status' },
+          { path: '/hr/attendance/DeviceControl', label: 'Device Control' },
           { path: '/hr/attendance/report-log', label: 'Report Log' },
           { path: '/hr/missing-punch', label: 'Missing Punch' },
         ],
@@ -79,7 +80,7 @@ const navGroups: NavGroupData[] = [
         children: [
           { path: '/hr/outpass-visitors/outpass', label: 'Outpass' },
           { path: '/hr/outpass-visitors/visitors', label: 'Visitors' },
-          // { path: '/hr/outpass-visitors/tea-break', label: 'Tea Break' },
+          { path: '/hr/outpass-visitors/tea-break', label: 'Tea Break' },
         ],
       },
     ],

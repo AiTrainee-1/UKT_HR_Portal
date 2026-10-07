@@ -564,15 +564,53 @@ class DiagnosisTests(TestCase):
 
     def test_a_device_nobody_has_checked_says_what_to_do(self):
         v = verdict()
-        self.assertIn("Nothing has been received", v["headline"])
+        self.assertIn("Nothing has ever been received", v["headline"])
         self.assertEqual(states(v)["device"], "unknown")
+
+    def test_a_never_connected_device_on_the_cloud_gets_the_device_and_firewall_checklist(self):
+        v = verdict()
+        for expected in ("api.uktextiles.in", "Server Port 443", "HTTPS on", "DNS 8.8.8.8", "Gateway", "firewall"):
+            self.assertIn(expected, v["action"])
+
+    def test_a_never_connected_device_on_a_local_server_still_asks_for_a_check(self):
+        v = verdict(serverOnCloud=False, serverHost="localhost:8000")
+        self.assertIn("Nothing has been received", v["headline"])
+        self.assertIn("connection check", v["action"])
 
     def test_from_the_cloud_the_factory_network_cannot_be_judged_and_that_is_said(self):
         v = verdict(probe={"status": "timeout", "error": "No answer within 3 seconds", "ageSeconds": 5})
         self.assertEqual(states(v)["lan"], "na")
         self.assertEqual(states(v)["device"], "unknown")
-        self.assertEqual(states(v)["timeout"], "problem")
+        self.assertEqual(states(v)["timeout"], "na")
         self.assertIn("cloud", [l for l in v["layers"] if l["key"] == "lan"][0]["finding"])
+        # a check nobody could have passed is not the reason shown for the device
+        self.assertEqual(v["problems"], [])
+        self.assertNotIn("timed out", v["headline"])
+        self.assertIn("Nothing has ever been received", v["headline"])
+
+    def test_a_timeout_from_the_cloud_to_a_public_address_is_still_a_real_timeout(self):
+        v = verdict(host="93.184.216.34", probe={"status": "timeout", "error": "No answer", "ageSeconds": 5})
+        self.assertEqual(states(v)["timeout"], "problem")
+        # ...and so is one when other devices on the same network did answer
+        seen = verdict(lanAnyReachable=True, probe={"status": "timeout", "error": "No answer", "ageSeconds": 5})
+        self.assertEqual(states(seen)["timeout"], "problem")
+
+    def test_a_device_gone_quiet_on_the_cloud_is_pointed_at_the_device_and_the_firewall(self):
+        v = verdict(state="disconnected", lastContactAgeSeconds=7200)
+        self.assertIn("2 hours ago", v["headline"])
+        for expected in ("powered on", "Cloud Server settings", "firewall", "443"):
+            self.assertIn(expected, v["action"])
+
+    def test_on_an_https_server_a_wrong_port_is_told_to_use_443_with_https(self):
+        v = verdict(serverScheme="https", probe=reached({"serverPort": 8000}))
+        self.assertEqual(states(v)["port"], "problem")
+        self.assertIn("443 (HTTPS) only", v["headline"])
+        self.assertIn("HTTPS on", v["action"])
+
+    def test_plain_http_on_port_80_is_a_warning_on_an_https_server_only(self):
+        self.assertEqual(states(verdict(serverScheme="https", probe=reached({"serverPort": 80})))["port"], "warn")
+        self.assertEqual(states(verdict(serverScheme="http", probe=reached({"serverPort": 80})))["port"], "ok")
+        self.assertEqual(states(verdict(serverScheme="https", probe=reached({"serverPort": 443})))["port"], "ok")
 
     def test_one_device_silent_while_others_answer_points_at_that_device_and_its_cable(self):
         v = verdict(
@@ -909,6 +947,18 @@ class BuildStatusTests(TestCase):
         self.assertEqual((p["devices"][0]["status"], p["devices"][0]["reach"]), ("disconnected", "unreachable"))
         self.assertEqual((p["summary"]["unreachable"], p["summary"]["error"]), (1, 0))
         self.assertIs(p["server"]["canReachLan"], False)
+
+    def test_on_railway_a_timed_out_check_of_a_lan_device_is_not_the_reason_shown(self):
+        d = make_device("Never", "192.168.0.59", "")
+        BiometricProbe.objects.create(
+            device=d, checked_at=self.now, status="timeout", error="No answer within 3 seconds"
+        )
+        row = self.build(RAILWAY_ENVIRONMENT="production")["devices"][0]
+        layers = {layer["key"]: layer["state"] for layer in row["diagnosis"]["layers"]}
+        self.assertEqual((row["reach"], layers["timeout"], row["diagnosis"]["problems"]), ("unreachable", "na", []))
+        self.assertIn("Nothing has ever been received", row["headline"])
+        self.assertIn("Server Port 443", row["action"])
+        self.assertIn("api.uktextiles.in", row["action"])
 
     def test_an_empty_system_is_an_empty_payload(self):
         p = self.build()

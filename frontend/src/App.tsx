@@ -60,6 +60,7 @@ const BulkUploadEmployees = lazy(() => import("@/pages/hr/BulkUploadEmployees"))
 const ManualPunchImport = lazy(() => import("@/pages/hr/ManualPunchImport"));
 const PunchView = lazy(() => import("@/pages/hr/PunchView"));
 const BiometricDeviceStatus = lazy(() => import("@/pages/hr/BiometricDeviceStatus"));
+const DeviceControl = lazy(() => import("@/pages/hr/DeviceControl"));
 const EmployeeDetail = lazy(() => import("@/pages/hr/EmployeeDetail"));
 const EditEmployee = lazy(() => import("@/pages/hr/EditEmployee"));
 const Leave = lazy(() => import("@/pages/hr/Leave"));
@@ -323,6 +324,15 @@ function Router() {
       </Route>
       <Route path="/hr/attendance/device-status">
         {() => <ProtectedRoute component={BiometricDeviceStatus} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/attendance/DeviceControl">
+        {() => <ProtectedRoute component={DeviceControl} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/attendance/DeviceControl/fetch">
+        {() => <ProtectedRoute component={DeviceControl} allowedRoles={["hr"]} />}
+      </Route>
+      <Route path="/hr/attendance/DeviceControl/push">
+        {() => <ProtectedRoute component={DeviceControl} allowedRoles={["hr"]} />}
       </Route>
       <Route path="/hr/attendance/staff">
         {() => <ProtectedRoute component={Attendance} allowedRoles={["hr"]} />}

@@ -158,6 +158,21 @@ describe("the ping tile", () => {
   it("marks a slow answer", () => {
     expect(pingSummary(probe({ ping: null, latencyMs: 900 })).tone).toBe("bad");
   });
+
+  it("says a cloud server cannot test a private address, instead of showing a failure", () => {
+    const silent = probe({
+      status: "timeout",
+      latencyMs: null,
+      ping: { available: false, ok: false, ms: null },
+      error: "No answer within 3 seconds",
+    });
+    expect(pingSummary(silent, true)).toMatchObject({ value: "Not testable", tone: "muted" });
+    expect(pingSummary(silent, false)).toMatchObject({ value: "No reply", tone: "bad" });
+  });
+
+  it("still shows a real answer even when the server is in the cloud", () => {
+    expect(pingSummary(probe({}), true)).toMatchObject({ value: "2 ms", tone: "good" });
+  });
 });
 
 describe("filtering and ordering the devices", () => {

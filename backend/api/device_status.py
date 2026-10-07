@@ -290,6 +290,8 @@ def build_status(request=None, now=None) -> dict:
                 "reported": d.reported_config,
                 "serverOnCloud": info["deployment"] == "railway",
                 "serverHost": info["host"],
+                "serverScheme": info["scheme"],
+                "privateAddress": is_private_host(d.host),
                 "lanAnyReachable": lan_any,
                 "pushDelaySeconds": delay["medianSeconds"] if delay else None,
             }

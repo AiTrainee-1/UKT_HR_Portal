@@ -154,6 +154,22 @@ Back the Attendance -> Biometric Device Status page. All three sit under `/api/a
 - **POST /api/attendance/biometric-status/check** — `@require_hr`. Body `{"deviceIds": [..]}` (omit for every device). Runs the connection check (ping, TCP port, ZK handshake, a read of a few device settings, then disconnect; the terminal is never disabled and nothing is changed on it), saves one `BiometricProbe` per device, writes an audit-log entry and returns `{ranDeviceIds, status}` where `status` is the same payload as the GET. 400 for a malformed `deviceIds`, 404 for an unknown id, 409 while another check is running.
 - **GET /api/attendance/biometric-status/\<pk\>/history** — `@require_hr`. The latest 30 connection checks of one device, newest first (404 for an unknown device).
 
+## Device Control (device_control_views.py)
+
+Back Attendance -> Device Control. All sit under `/api/attendance/device-control/`, so the Attendance module permission applies (GET needs View, POST needs Edit); making an employee Inactive also needs Edit on Employees. They open a direct session with each device, so they work only where this server can reach it. Reading the people list never contacts a device.
+
+- **GET .../overview** — `@require_hr`. `summary` (configured, enabled, connected, disconnected, disabled, sendingToServer, peopleOnDevices, linked, deviceOnly, hrmsOnly, inactiveOnDevice), `server.deployment`, and `devices[]`: per device its `connection` (state connected/disconnected/disabled, code, the exact reason, latency), `push` (what the device sends the server by itself), `capacity` (users, faces, punches and their limits, serial, model, firmware, pin width), clock skew and when its users were last read. Opens a short session with every enabled device (parallel, 3 s limit; the answer is reused for 15 s; `?fresh=1` asks again).
+- **POST .../users/refresh** — `{"deviceIds": [..]}` (omit for every enabled device). Reads each device's user table into the snapshot. One entry per device (`ok`, `count`, or `code` and `error`).
+- **GET .../people** — the people on the devices plus every active employee, with `facets` (counts for the filter cards) and paging. Query: `search`, `devices` (ids), `deviceMode` any/all/none, `link` linked/device_only/hrms_only/inactive_on_device/restricted, `count` single/multiple, `role` admin/user, `employmentType`, `departmentId`, `branchId`, `differs`, `sort` name/code/devices/department, `dir`, `page`, `pageSize` (max 200). Each row: the user ID, the HRMS employee (or null), where the person is (`presence[]`: device, uid, name, role, card, has-password), what differs between devices.
+- **POST .../users/push** — `{"deviceIds": [..], "users": [{userId, name?, privilege?, password?, card?, group?, employeeId?}]}`. Adds users the device does not have (users it has are left alone). Returns `rejected[]` (bad input, per user), `results[]` (per device: added, skipped, failed, or why the device could not be used) and `summary`. At most 200 users and 12 devices.
+- **POST .../users/update** — same body; changes users the device has and leaves the rest. A field left out is left alone on every device.
+- **POST .../users/delete** — `{"userIds": [..], "deviceIds": [..]?, "markInactive": bool}`. Deletes from the named devices (or every device the snapshot says they are on), reads each device back, and when `markInactive` makes the employee Inactive (never deletes them): only if a device really removed them, only with Edit on Employees, and only within the caller's branch. Returns `results[]`, `inactive[]` (what happened to each employee, with the reason when nothing did) and `summary`.
+- **POST .../employees/\<id\>/photo** — `{"photo": "data:image/jpeg;base64,..."}`. Keeps a captured photo as the employee's `photo_url` (JPEG/PNG/WebP, 700 KB). Needs Edit on Employees.
+- **POST .../fetch/start** — `{"deviceIds": [..], "range": {"preset": today|yesterday|last7|this_month|last_month|all|custom, "from"?, "to"?}, "apply": bool}`. Starts a run on a background thread and returns it (202). `apply` false is a preview (changes nothing). 409 while another run, or the Attendance page's sync, is running.
+- **GET .../fetch/runs** and **GET .../fetch/runs/\<id\>** — the history (newest first) and one run: `status` running/done/failed, `results[]` per device (status, counts, unmatched IDs, samples, error) and a `summary`. The page polls the run while it is running.
+
+Every change is audited (`create`, `update`, `delete` on `attendance`; `update` on `employees` for an Inactive or a photo).
+
 ## System Settings — Biometric Devices & ID Card Template (system_settings_views.py)
 
 - **GET, POST /api/biometric-devices** — `@require_hr`. GET lists configured `BiometricDevice` rows plus a synthetic read-only entry for the legacy `.env`-configured device (if its host isn't already duplicated by a DB row); POST creates a new device, optionally flipping it to the sole default. Each row carries `serialNumber` (optional; rejected with 400 if another device already has it).
@@ -896,6 +912,7 @@ Configuration for a physical biometric attendance terminal (AiFace-Mars, ZKTeco,
 - `last_error`, `last_error_at` — what last went wrong receiving from it (e.g. unreadable attendance lines)
 - `reported_config`, `reported_config_at` — JSONField (nullable); the device's own options upload (IP, firmware, time zone...)
 - `last_sync_error`, `last_sync_error_at`, `last_reachable_at` — the pull direction: why the last attempt failed and when it last got through
+- `users_read_at`, `users_read_error`, `capacity` (JSONField, nullable) — Device Control: when its user table was last read, why the last read failed, and what the device reported (users, faces, punches and their limits, serial, model, firmware, pin width)
 - ordering `["-is_default", "name"]`
 
 All columns added by migration `0113_biometric_device_status` are nullable or carry a database default, so a release still running the previous code keeps working.
@@ -923,6 +940,29 @@ A device that contacts the ADMS listener under a serial number no configured dev
 - `first_seen_at`, `last_seen_at` — DateTimeField; `last_remote_ip` — TextField
 - `contact_count`, `punch_count` — IntegerField
 - ordering `["-last_seen_at"]`
+
+### BiometricDeviceUser
+**Table name:** `biometric_device_users`
+
+One user as a device holds it, as last read (Device Control -> Data Push). A snapshot so the page can filter every device at once; the device is the source of truth. The device password is never stored, only whether there is one.
+
+**Key fields:**
+- `device` — ForeignKey to `BiometricDevice` (CASCADE), `related_name="device_users"`
+- `uid` — IntegerField, the device's own record number; `unique_together` (`device`, `uid`)
+- `user_id` — TextField, indexed; the PIN on the device, which is the Employee Code
+- `name`, `group` — TextField; `privilege` — IntegerField (0 user, 2 enroller, 6 administrator, 14 super admin); `card` — BigIntegerField; `has_password` — BooleanField
+- `read_at` — DateTimeField, when this row was last confirmed on the device
+
+### BiometricFetchRun
+**Table name:** `biometric_fetch_runs`
+
+One manual fetch of punches (Device Control -> Data Fetch), kept as a history. A background thread fills it in device by device; the page polls it.
+
+**Key fields:**
+- `mode` — `preview` or `update`; `status` — `running`, `done` or `failed`
+- `started_by`, `range_label`, `date_from`, `date_to`, `device_ids` (JSON)
+- `results` — JSONField, one entry per device; `summary` — JSONField, nullable; `error`
+- `created_at`, `updated_at`, `finished_at`; a run with no update for 20 minutes is marked failed so it cannot block the next one
 
 ### UnmatchedPunch
 **Table name:** `unmatched_punches`

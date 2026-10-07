@@ -6,6 +6,7 @@ export * from "./approval";
 export * from "./attendance";
 export * from "./biometric";
 export * from "./device-status";
+export * from "./device-control";
 export * from "./chat";
 export * from "./compensation";
 export * from "./documents";

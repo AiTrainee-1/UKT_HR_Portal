@@ -35,7 +35,7 @@ python manage.py sync_biometric --days 3
 python manage.py sync_biometric --all
 ```
 
-Full detail, including Push and the ADMS path (devices calling `/iclock/...`), the device settings each terminal needs, and the **Attendance -> Biometric Device Status** page (`device_status.py`, `device_status_views.py`, `device_probe.py`, `device_diagnosis.py`, `device_health.py`): **`biometric-integration.md`**.
+Full detail, including Push and the ADMS path (devices calling `/iclock/...`), the device settings each terminal needs, the **Attendance -> Biometric Device Status** page (`device_status.py`, `device_status_views.py`, `device_probe.py`, `device_diagnosis.py`, `device_health.py`) and the **Attendance -> Device Control** section (`device_client.py`, `device_directory.py`, `device_fetch.py`, `device_control_views.py`; tests use `fake_zk_device.py`): **`biometric-integration.md`**.
 
 ---
 

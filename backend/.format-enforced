@@ -8,7 +8,11 @@ api/auto_sync_views.py
 api/branch_scope.py
 api/clock.py
 api/ctc.py
+api/device_client.py
+api/device_control_views.py
 api/device_diagnosis.py
+api/device_directory.py
+api/device_fetch.py
 api/device_health.py
 api/device_probe.py
 api/device_status.py
@@ -175,6 +179,8 @@ api/tests_approval_workflow.py
 api/tests_arrival_rules.py
 api/tests_attendance_day_kinds.py
 api/tests_compensation_page.py
+api/tests_device_control.py
+api/tests_device_fetch.py
 api/tests_device_status.py
 api/tests_email_control.py
 api/tests_employee_bulk.py
@@ -249,3 +255,4 @@ api/whatsapp_views.py
 config/__init__.py
 config/wsgi.py
 e2e_setup.py
+fake_zk_device.py

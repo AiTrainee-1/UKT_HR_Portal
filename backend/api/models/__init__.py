@@ -51,6 +51,8 @@ from .attendance import (
     MissingPunchRequest,
     LiveLocationPing,
     BiometricDevice,
+    BiometricDeviceUser,
+    BiometricFetchRun,
     BiometricProbe,
     BiometricUnknownPusher,
     UnmatchedPunch,
