@@ -241,6 +241,14 @@ function ProtectedRoute({
   return <Component />;
 }
 
+// A page that has moved: sends the old address to the new one (same sub-page, same ?query and #anchor), replacing the old
+// entry in the browser history so Back does not bounce through it. `from` and `to` are the two prefixes.
+function MovedTo({ from, to }: { from: string; to: string }) {
+  const [location] = useLocation();
+  const rest = location.slice(from.length);
+  return <Redirect to={`${to}${rest}${window.location.search}${window.location.hash}`} replace />;
+}
+
 // Every page except the entry/login screens is its own chunk, so the first
 // paint no longer downloads all ~70 pages (Settings alone is ~4k lines).
 function PageLoader() {
@@ -322,20 +330,31 @@ function Router() {
         <Route path="/hr/attendance/punch-view">
           {() => <ProtectedRoute component={PunchView} allowedRoles={["hr"]} />}
         </Route>
-        <Route path="/hr/attendance/device-status">
+        {/* ── Biometric Connectors section (these two pages used to live under /hr/attendance) ── */}
+        <Route path="/hr/Biometric-Connectors">
+          {() => <Redirect to="/hr/Biometric-Connectors/device-status" replace />}
+        </Route>
+        <Route path="/hr/Biometric-Connectors/device-status">
           {() => <ProtectedRoute component={BiometricDeviceStatus} allowedRoles={["hr"]} />}
         </Route>
-        <Route path="/hr/attendance/DeviceControl">
+        <Route path="/hr/Biometric-Connectors/DeviceControl">
           {() => <ProtectedRoute component={DeviceControl} allowedRoles={["hr"]} />}
         </Route>
-        <Route path="/hr/attendance/DeviceControl/fetch">
+        <Route path="/hr/Biometric-Connectors/DeviceControl/fetch">
           {() => <ProtectedRoute component={DeviceControl} allowedRoles={["hr"]} />}
         </Route>
-        <Route path="/hr/attendance/DeviceControl/push">
+        <Route path="/hr/Biometric-Connectors/DeviceControl/push">
           {() => <ProtectedRoute component={DeviceControl} allowedRoles={["hr"]} />}
         </Route>
-        <Route path="/hr/attendance/DeviceControl/connectors">
+        <Route path="/hr/Biometric-Connectors/DeviceControl/connectors">
           {() => <ProtectedRoute component={DeviceControl} allowedRoles={["hr"]} />}
+        </Route>
+        {/* The old addresses (bookmarks, links) still work: they go to the same page in its new place, query kept. */}
+        <Route path="/hr/attendance/device-status">
+          {() => <MovedTo from="/hr/attendance/device-status" to="/hr/Biometric-Connectors/device-status" />}
+        </Route>
+        <Route path="/hr/attendance/DeviceControl/:tab?">
+          {() => <MovedTo from="/hr/attendance/DeviceControl" to="/hr/Biometric-Connectors/DeviceControl" />}
         </Route>
         <Route path="/hr/attendance/staff">
           {() => <ProtectedRoute component={Attendance} allowedRoles={["hr"]} />}

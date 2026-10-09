@@ -129,7 +129,7 @@ export function SyncStatusIndicator() {
 
           <button
             type="button"
-            onClick={() => { setShowDetail(false); navigate("/hr/attendance/device-status"); }}
+            onClick={() => { setShowDetail(false); navigate("/hr/Biometric-Connectors/device-status"); }}
             className="self-start text-xs font-semibold text-[#006496] underline underline-offset-2"
             data-testid="open-full-device-status"
           >

@@ -5,12 +5,16 @@ import { useBiometricSync } from "@/contexts/BiometricSyncContext";
 // Floating indicator that keeps the biometric sync visible while the user
 // browses other pages. Hidden on the attendance pages themselves, since
 // those already render the full inline BiometricSyncPipeline for the same
-// shared state -this avoids showing the same progress twice.
+// shared state -this avoids showing the same progress twice. (Biometric Device
+// Status and Device Control used to be attendance pages, and keep not showing it
+// now they have their own Biometric Connectors section.)
 export default function GlobalSyncBanner() {
   const [pathname] = useLocation();
   const { showPipeline, isSyncing, progress, dismiss } = useBiometricSync();
 
-  if (!showPipeline || pathname.startsWith("/hr/attendance")) return null;
+  if (!showPipeline || pathname.startsWith("/hr/attendance") || pathname.toLowerCase().startsWith("/hr/biometric-connectors")) {
+    return null;
+  }
 
   const devices = progress?.devices ?? [];
   const completedCount = devices.filter(d => d.status === "completed" || d.status === "failed").length;

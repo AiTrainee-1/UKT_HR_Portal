@@ -148,7 +148,7 @@ These four routes are registered in `config/urls.py` at the bare root (`/iclock/
 
 ## Biometric Device Status (device_status_views.py)
 
-Back the Attendance -> Biometric Device Status page. All three sit under `/api/attendance/`, so the Attendance module permission applies (GET needs View, POST needs Edit). Reading never contacts a device.
+Back the Biometric Connectors -> Biometric Device Status page. All three sit under `/api/attendance/`, so the Attendance module permission applies (GET needs View, POST needs Edit). Reading never contacts a device.
 
 - **GET /api/attendance/biometric-status** — `@require_hr`. The whole picture in one payload: `server` (deployment `railway`/`local`, the address devices must be set to, the firewall/port checklist), `summary` (configured, enabled, connected, disconnected, error, unreachable, neverConnected, punchesToday), `thresholds` (heartbeat freshness, slow latency), `devices[]` (per device: name, IP, port, serial, `status` connected/disconnected/error/disabled, `reach` reachable/unreachable/refused/auth/error/unchecked, last heartbeat / data / successful sync, remote IP, errors, latest check with its steps, push delay, a nine-layer `diagnosis` with a headline, the device's reported settings and read-out) and `unknownPushers[]`.
 - **POST /api/attendance/biometric-status/check** — `@require_hr`. Body `{"deviceIds": [..]}` (omit for every device). Runs the connection check (ping, TCP port, ZK handshake, a read of a few device settings, then disconnect; the terminal is never disabled and nothing is changed on it), saves one `BiometricProbe` per device, writes an audit-log entry and returns `{ranDeviceIds, status}` where `status` is the same payload as the GET. 400 for a malformed `deviceIds`, 404 for an unknown id, 409 while another check is running.
@@ -156,7 +156,7 @@ Back the Attendance -> Biometric Device Status page. All three sit under `/api/a
 
 ## Device Control (device_control_views.py)
 
-Back Attendance -> Device Control. All sit under `/api/attendance/device-control/`, so the Attendance module permission applies (GET needs View, POST needs Edit); making an employee Inactive also needs Edit on Employees. They open a direct session with each device, so they work only where this server can reach it. Reading the people list never contacts a device.
+Back Biometric Connectors -> Device Control. All sit under `/api/attendance/device-control/`, so the Attendance module permission applies (GET needs View, POST needs Edit); making an employee Inactive also needs Edit on Employees. They open a direct session with each device, so they work only where this server can reach it. Reading the people list never contacts a device.
 
 - **GET .../overview** — `@require_hr`. `summary` (configured, enabled, connected, disconnected, disabled, sendingToServer, peopleOnDevices, linked, deviceOnly, hrmsOnly, inactiveOnDevice), `server.deployment`, and `devices[]`: per device its `connection` (state connected/disconnected/disabled, code, the exact reason, latency), `push` (what the device sends the server by itself), `capacity` (users, faces, punches and their limits, serial, model, firmware, pin width), clock skew and when its users were last read. Opens a short session with every enabled device (parallel, 3 s limit; the answer is reused for 15 s; `?fresh=1` asks again).
 - **POST .../users/refresh** — `{"deviceIds": [..]}` (omit for every enabled device). Reads each device's user table into the snapshot. One entry per device (`ok`, `count`, or `code` and `error`).

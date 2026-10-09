@@ -11,7 +11,7 @@ import { HR_PASSWORD, HR_USERNAME } from "./helpers";
 // Everything created here is prefixed "cn_" and removed afterwards. Each role signs in once: the server throttles sign-ins.
 
 const BASE = "/api/attendance/device-control";
-const PAGE = "/hr/attendance/DeviceControl";
+const PAGE = "/hr/Biometric-Connectors/DeviceControl";
 // a fresh password every run (this server's .env has pointed at a real database before: nothing fixed is created)
 const VIEWER_PASSWORD = `Pw-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}!`;
 

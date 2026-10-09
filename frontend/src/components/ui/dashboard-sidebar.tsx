@@ -15,7 +15,7 @@ import {
   ChevronRight, Search, X, Command, UserCheck, UserMinus,
   CalendarCheck, Bell, Award, TrendingUp, Gift, CreditCard,
   CalendarHeart, MessageCircle, UserCog, FolderOpen, MonitorSmartphone,
-  Smartphone, Landmark, DoorOpen, Mail, Crown,
+  Smartphone, Landmark, DoorOpen, Mail, Crown, Fingerprint,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -67,8 +67,6 @@ const navGroups: NavGroupData[] = [
           { path: '/hr/attendance/production', label: 'Production Attendance' },
           { path: '/hr/geo-attendance', label: 'Geo Attendance' },
           { path: '/hr/attendance/search', label: 'Attendance Search' },
-          { path: '/hr/attendance/device-status', label: 'Biometric Device Status' },
-          { path: '/hr/attendance/DeviceControl', label: 'Device Control' },
           { path: '/hr/attendance/report-log', label: 'Report Log' },
           { path: '/hr/missing-punch', label: 'Missing Punch' },
         ],
@@ -143,6 +141,15 @@ const navGroups: NavGroupData[] = [
       { path: '/hr/mobile-app-login', label: 'Mobile App Login', icon: Smartphone },
       { path: '/hr/whatsapp-control', label: 'WhatsApp Control', icon: MessageCircle },
       { path: '/hr/gmail-control', label: 'Gmail Control', icon: Mail },
+      {
+        path: '/hr/Biometric-Connectors',
+        label: 'Biometric Connectors',
+        icon: Fingerprint,
+        children: [
+          { path: '/hr/Biometric-Connectors/device-status', label: 'Biometric Device Status' },
+          { path: '/hr/Biometric-Connectors/DeviceControl', label: 'Device Control' },
+        ],
+      },
       { path: '/hr/settings', label: 'Settings', icon: Settings },
     ],
   },

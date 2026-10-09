@@ -287,7 +287,7 @@ This is a background process that automatically fetches raw punch records from t
 
 #### Biometric Device Status
 
-**Attendance -> Biometric Device Status** (also the **Device Status** button on the Attendance page) is the one place to check whether every punching machine is connected to the server, and why one is not.
+**Biometric Connectors -> Biometric Device Status** (also the **Device Status** button on the Attendance page) is the one place to check whether every punching machine is connected to the server, and why one is not.
 
 - **Summary cards:** devices configured, Connected, Disconnected, Errors, Unreachable, and punches received today. Click a card to list only those devices.
 - **Each device** shows its name, IP address and serial number; a status (Connected, Disconnected, Error or Disabled); whether the server can reach it; when the server last heard from it; the last successful sync; and the connection delay in milliseconds, with slow connections marked.
@@ -301,7 +301,7 @@ This is a background process that automatically fetches raw punch records from t
 
 #### Device Control
 
-**Attendance -> Device Control** is for the biometric machines themselves. It has three tabs.
+**Biometric Connectors -> Device Control** is for the biometric machines themselves. It has three tabs.
 
 **Overview** shows how many devices are configured, how many are **Connected** (this server can reach them right now) and how many are **Disconnected**, with the exact reason and what to do for each one. Every device card shows how full its memory is (users and attendance log, amber from 80%), its clock against the server's, when its users were last read, and shortcuts to Data Fetch and Data Push for that device.
 
@@ -325,7 +325,7 @@ This is a background process that automatically fetches raw punch records from t
 
 Some factories sit behind a network the cloud HRMS cannot reach, so Device Control shows their devices as Disconnected. A **site connector** fixes that: a small program installed once on a computer at the factory (on the same network as the devices). It reaches the devices from inside and reports to the HRMS over the internet, so **nothing has to be opened in the factory's firewall**. Everything on this page then works for those devices as for any other.
 
-**Attendance -> Device Control -> Site connectors**
+**Biometric Connectors -> Device Control -> Site connectors**
 1. **Add a connector** and name it after the site. A **pairing code** (like `K7QM-4XWD`) is shown once; it works once and expires after a day.
 2. Install the connector on a computer at the factory (the installer folder has the steps) and enter the HRMS address and the code. The connector's card turns **Online**.
 3. In **Settings -> Devices**, choose the connector under **Connect via** for each device at that factory. Use the device's address on the factory network (192.168.x.x).
@@ -832,7 +832,7 @@ List of all fingerprint machines connected to the system:
 - **Delete:** Remove a device that is no longer used.
 - The attendance sync pipeline fetches data from all enabled devices.
 
-> A device is synced by the server (it must then be on the same network as the server) or it pushes its own attendance to the cloud server. Attendance -> Biometric Device Status shows which devices are connected and why one is not. See `biometric-integration.md` for the technical detail.
+> A device is synced by the server (it must then be on the same network as the server) or it pushes its own attendance to the cloud server. Biometric Connectors -> Biometric Device Status shows which devices are connected and why one is not. See `biometric-integration.md` for the technical detail.
 
 ---
 

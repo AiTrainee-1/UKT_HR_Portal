@@ -527,7 +527,7 @@ export default function AttendancePage() {
             </Button>
             <Button
               variant="outline"
-              onClick={() => navigate("/hr/attendance/device-status")}
+              onClick={() => navigate("/hr/Biometric-Connectors/device-status")}
               className="clay-btn gap-1.5 h-9 px-3 rounded-xl border-0 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-700 shrink-0"
               data-testid="open-device-status"
             >

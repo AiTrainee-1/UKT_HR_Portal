@@ -124,6 +124,17 @@ describe("moduleForPath", () => {
     expect(moduleForPath("/hr/salary-slip")).toBe("salary_slip");
   });
 
+  it("gates the Biometric Connectors pages like Attendance, whatever the case of the address", () => {
+    // Biometric Device Status and Device Control moved there from Attendance: same module, same permission
+    expect(moduleForPath("/hr/Biometric-Connectors")).toBe("attendance");
+    expect(moduleForPath("/hr/Biometric-Connectors/device-status")).toBe("attendance");
+    expect(moduleForPath("/hr/Biometric-Connectors/DeviceControl/fetch")).toBe("attendance");
+    // the router matches routes without regard to case, so the permission lookup must too
+    expect(moduleForPath("/hr/biometric-connectors/devicecontrol")).toBe("attendance");
+    expect(moduleForPath("/hr/Payroll")).toBe("payroll");
+    expect(moduleForPath("/hr/Biometric-Connectorsx")).toBeNull();
+  });
+
   it("returns null outside the HR portal", () => {
     expect(moduleForPath("/login")).toBeNull();
     expect(moduleForPath("/")).toBeNull();

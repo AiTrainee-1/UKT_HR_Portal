@@ -1,6 +1,6 @@
 # Biometric Integration -UKTextiles HRMS
 
-Three ways exist for attendance to reach the server, and they can be used at once for different devices: **Pull** (Django connects to the device), **Push** (a script or device POSTs JSON to `/api/biometric/punch`) and **ADMS push** (the terminal's own Cloud Server mode, calling `/iclock/...`). **Attendance → Biometric Device Status** shows which devices are actually connected and, when one is not, why (see the last section). Read the "Which path is actually running today" box first if you just need to know what's live right now.
+Three ways exist for attendance to reach the server, and they can be used at once for different devices: **Pull** (Django connects to the device), **Push** (a script or device POSTs JSON to `/api/biometric/punch`) and **ADMS push** (the terminal's own Cloud Server mode, calling `/iclock/...`). **Biometric Connectors → Biometric Device Status** shows which devices are actually connected and, when one is not, why (see the last section). Read the "Which path is actually running today" box first if you just need to know what's live right now.
 
 ---
 
@@ -317,9 +317,11 @@ The device's own port 4370 is for Pull only and stays as it is. A proxy should b
 
 ---
 
-## Biometric Device Status page (Attendance -> Biometric Device Status)
+## Biometric Device Status page (Biometric Connectors -> Biometric Device Status)
 
-Route `/hr/attendance/device-status`. Backend: `device_status.py` (the payload), `device_status_views.py` (3 endpoints), `device_probe.py` (the connection check), `device_diagnosis.py` (the nine-layer reasoning), `device_health.py` (the one rule for "connected"). It answers one question: is every punching machine connected to the server, and if not, why?
+*Both this page and Device Control (below) live in the **Biometric Connectors** section of the sidebar (below Gmail Control), moved there from the Attendance menu. They are still Attendance-module pages for permissions, and their APIs are unchanged (`/api/attendance/...`). The old addresses `/hr/attendance/device-status` and `/hr/attendance/DeviceControl[/fetch|/push|/connectors]` redirect to `/hr/Biometric-Connectors/...`, keeping the query string.*
+
+Route `/hr/Biometric-Connectors/device-status`. Backend: `device_status.py` (the payload), `device_status_views.py` (3 endpoints), `device_probe.py` (the connection check), `device_diagnosis.py` (the nine-layer reasoning), `device_health.py` (the one rule for "connected"). It answers one question: is every punching machine connected to the server, and if not, why?
 
 **Two kinds of evidence, kept apart**
 
@@ -345,9 +347,9 @@ Route `/hr/attendance/device-status`. Backend: `device_status.py` (the payload),
 
 ---
 
-## Device Control (Attendance -> Device Control)
+## Device Control (Biometric Connectors -> Device Control)
 
-One section for the biometric machines themselves, with three tabs: **Overview** (how many devices, how many this server can reach right now, each one's health), **Data Fetch** (pull punches by hand) and **Data Push** (see and manage the people on every device). Routes `/hr/attendance/DeviceControl`, `/fetch` and `/push`. Backend: `device_client.py` (the session with a terminal), `device_directory.py` (users, mapping, changes), `device_fetch.py` (manual fetch), `device_control_views.py` (the endpoints). It does not change how attendance is recorded or calculated.
+One section for the biometric machines themselves, with three tabs: **Overview** (how many devices, how many this server can reach right now, each one's health), **Data Fetch** (pull punches by hand) and **Data Push** (see and manage the people on every device). Routes `/hr/Biometric-Connectors/DeviceControl`, `/fetch`, `/push` and `/connectors`. Backend: `device_client.py` (the session with a terminal), `device_directory.py` (users, mapping, changes), `device_fetch.py` (manual fetch), `device_control_views.py` (the endpoints). It does not change how attendance is recorded or calculated.
 
 ### How it talks to a device
 
@@ -393,7 +395,7 @@ For a factory whose devices the cloud server cannot reach (192.168.x.x, a differ
 
 ### Setting a site up
 
-1. Attendance -> Device Control -> **Site connectors** -> Add a connector (needs Edit on Settings). A one-time **pairing code** is shown once (valid 24 hours; only a keyed hash of it is kept: an HMAC with the server's `SECRET_KEY`, because the code is only 40 bits and a plain hash of it would fall to a short search).
+1. Biometric Connectors -> Device Control -> **Site connectors** -> Add a connector (needs Edit on Settings). A one-time **pairing code** is shown once (valid 24 hours; only a keyed hash of it is kept: an HMAC with the server's `SECRET_KEY`, because the code is only 40 bits and a plain hash of it would fall to a short search).
 2. At the factory the connector is installed and paired with that code (the HRMS address it asks for is the API's address, `https://api.uktextiles.in`). It receives a long random token; only the SHA-256 is kept here. Switching the connector off or removing it locks it out at its next call.
 3. Settings -> Devices -> **Connect via**: choose the connector for each device at that site, with the device's address **on the factory network** (192.168.x.x, as the connector's computer sees it) and its Comm Key. A device with no connector is connected to by the server itself, exactly as before.
 

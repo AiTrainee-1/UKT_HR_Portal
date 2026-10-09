@@ -577,7 +577,7 @@ export function localDate(at: Date = new Date()): string {
 
 // ── where things are ────────────────────────────────────────────────────────────────────────────────────────────────
 
-export const DEVICE_CONTROL_PATH = "/hr/attendance/DeviceControl";
+export const DEVICE_CONTROL_PATH = "/hr/Biometric-Connectors/DeviceControl";
 
 /** The address of Data Push on a view (the overview's cards and device buttons open it this way). */
 export const pushLink = (patch: Partial<PushFilters>): string =>

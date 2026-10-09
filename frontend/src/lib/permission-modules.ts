@@ -147,6 +147,9 @@ export const ROUTE_MODULE_MAP: Record<string, string> = {
   "/hr/designations": "employees.designations",
   "/hr/branches": "employees.branches",
   "/hr/attendance": "attendance",
+  // Biometric Device Status and Device Control moved here from Attendance; they are still the Attendance module's pages
+  // (their API is under /api/attendance/), so the same permission governs them.
+  "/hr/Biometric-Connectors": "attendance",
   "/hr/shifts": "shifts",
   "/hr/leave": "leave",
   "/hr/casual-leave": "casual_leave",
@@ -201,8 +204,12 @@ export const ROUTE_OR_MODULES: Record<string, string[]> = {
 export function moduleForPath(path: string): string | null {
   let best: string | null = null;
   let bestLen = -1;
+  // Compared without regard to case: the router matches routes that way, so a page opened as /hr/biometric-connectors
+  // must be gated like /hr/Biometric-Connectors, not slip through as "no module".
+  const where = path.toLowerCase();
   for (const [prefix, moduleKey] of Object.entries(ROUTE_MODULE_MAP)) {
-    if ((path === prefix || path.startsWith(prefix + "/")) && prefix.length > bestLen) {
+    const at = prefix.toLowerCase();
+    if ((where === at || where.startsWith(at + "/")) && prefix.length > bestLen) {
       best = moduleKey;
       bestLen = prefix.length;
     }

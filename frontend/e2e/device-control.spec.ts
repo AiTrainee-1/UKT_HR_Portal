@@ -11,7 +11,7 @@ import { HR_PASSWORD, HR_USERNAME } from "./helpers";
 const FAKE = "http://127.0.0.1:14380";
 const BASE_PORT = 14371;
 const VIEWER_PASSWORD = "Passw0rd!dcview";
-const PAGE = "/hr/attendance/DeviceControl";
+const PAGE = "/hr/Biometric-Connectors/DeviceControl";
 
 let adminToken = "";
 let viewerToken = "";
@@ -602,7 +602,7 @@ test("a role that may only view attendance can look but not change anything", as
   expect(await userOn(request, 0, "DC1003")).toBeTruthy();
 });
 
-test("the section is in the Attendance menu", async ({ page }) => {
+test("the section is in the Biometric Connectors menu", async ({ page }) => {
   await open(page, adminToken);
   await expect(page.getByRole("link", { name: "Device Control" }).first()).toBeVisible();
 });

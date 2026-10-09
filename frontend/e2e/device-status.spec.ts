@@ -10,7 +10,7 @@ import { HR_PASSWORD, HR_USERNAME } from "./helpers";
 
 const API = "http://127.0.0.1:8180";
 const VIEWER_PASSWORD = "Passw0rd!view";
-const PAGE = "/hr/attendance/device-status";
+const PAGE = "/hr/Biometric-Connectors/device-status";
 
 let adminToken = "";
 let viewerToken = "";
@@ -264,7 +264,7 @@ test("the Attendance page links to it, and so does the sync indicator", async ({
   await page.addInitScript((t) => localStorage.setItem("uk_textile_token", t), adminToken);
   await page.goto("/hr/attendance");
   await page.getByTestId("open-device-status").click();
-  await expect(page).toHaveURL(/\/hr\/attendance\/device-status/);
+  await expect(page).toHaveURL(/\/hr\/Biometric-Connectors\/device-status/);
   await expect(page.getByTestId("device-status-page")).toBeVisible();
 
   await page.goBack();
@@ -273,7 +273,7 @@ test("the Attendance page links to it, and so does the sync indicator", async ({
     .first()
     .click();
   await page.getByTestId("open-full-device-status").click();
-  await expect(page).toHaveURL(/\/hr\/attendance\/device-status/);
+  await expect(page).toHaveURL(/\/hr\/Biometric-Connectors\/device-status/);
 });
 
 test("a role that may only view attendance sees everything but cannot run a check", async ({ page, request }) => {

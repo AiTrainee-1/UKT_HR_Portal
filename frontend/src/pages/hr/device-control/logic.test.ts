@@ -959,9 +959,9 @@ describe("site connectors", () => {
   });
 
   it("finds the connectors tab from the address", () => {
-    expect(tabFromPath("/hr/attendance/DeviceControl/connectors")).toBe("connectors");
-    expect(tabFromPath("/hr/attendance/DeviceControl/push")).toBe("push");
-    expect(tabFromPath("/hr/attendance/DeviceControl")).toBe("overview");
+    expect(tabFromPath("/hr/Biometric-Connectors/DeviceControl/connectors")).toBe("connectors");
+    expect(tabFromPath("/hr/Biometric-Connectors/DeviceControl/push")).toBe("push");
+    expect(tabFromPath("/hr/Biometric-Connectors/DeviceControl")).toBe("overview");
   });
 
   it("labels every state of a connector", () => {
