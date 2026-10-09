@@ -26,17 +26,19 @@ import threading
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 
 from django.db import connection, transaction
 from django.utils import timezone
 
+from . import device_remote
 from .audit_utils import log_action
 from .biometric_sync import _STATUS_MAP, _active_employee_lookup, _ingest_punches
 from .clock import ist_today
-from .device_client import LOG_READ_DEADLINE_SECONDS, DeviceUnavailable, open_session
+from .device_client import LOG_READ_DEADLINE_SECONDS, DeviceUnavailable, Punch, open_session
 from .device_directory import employee_name, password_of
-from .models import AttendanceLog, BiometricDevice, BiometricDeviceUser, BiometricFetchRun
+from .models import Attendance, AttendanceLog, BiometricDevice, BiometricDeviceUser, BiometricFetchRun, Employee
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +109,11 @@ def start_run(request, device_ids, preset: str, date_from=None, date_to=None, ap
     from . import sync_progress
 
     start, end, label = resolve_range(preset, date_from, date_to)
-    devices = list(BiometricDevice.objects.filter(pk__in=device_ids or [], is_active=True).order_by("name"))
+    devices = list(
+        BiometricDevice.objects.select_related("connector")
+        .filter(pk__in=device_ids or [], is_active=True)
+        .order_by("name")
+    )
     if not devices:
         raise ValueError("Choose at least one device that is switched on.")
     _expire_stale()
@@ -199,12 +205,18 @@ def _read_punches(host: str, port: int | None, password: int, since, until) -> d
         return {"ok": False, "code": "error", "error": f"Something unexpected went wrong with this device: {exc}"}
 
 
+def _idle(seconds: float) -> None:
+    """How the run waits between looks at the connector jobs (a test replaces it with a simulated connector)."""
+    time.sleep(seconds)
+
+
 def _save_results(run_id: int, results: list[dict]) -> None:
     BiometricFetchRun.objects.filter(pk=run_id).update(results=results, updated_at=timezone.now())
 
 
-def _process_device(run: BiometricFetchRun, device: BiometricDevice, data: dict, by_code: dict) -> dict:
-    """What one device's punches mean for the HRMS, and (for an update) write the new ones."""
+def _process_device(run: BiometricFetchRun, device: BiometricDevice, data: dict, by_code: dict, writer=None) -> dict:
+    """What one device's punches mean for the HRMS, and (for an update) write the new ones with `writer` (by default the path
+    Sync Biometric uses)."""
     punches = data["punches"]
     source_tag = f"biometric:{device.name}"
     in_range = len(punches)
@@ -272,7 +284,7 @@ def _process_device(run: BiometricFetchRun, device: BiometricDevice, data: dict,
         "suspiciousDays": [],
     }
     if run.mode == BiometricFetchRun.MODE_UPDATE and new:
-        written = _ingest_punches(new, None, source_tag)
+        written = (writer or _ingest_punches)(new, None, source_tag)
         result["created"] = written["created"]
         names = {e.pk: employee_name(e) for e, *_ in new_meta}
         result["suspiciousDays"] = [
@@ -284,7 +296,7 @@ def _process_device(run: BiometricFetchRun, device: BiometricDevice, data: dict,
 def execute_run(run_id: int) -> None:
     """Run one fetch to the end. Called on the background thread (and directly by the tests)."""
     run = BiometricFetchRun.objects.get(pk=run_id)
-    devices = {d.pk: d for d in BiometricDevice.objects.filter(pk__in=run.device_ids)}
+    devices = {d.pk: d for d in BiometricDevice.objects.select_related("connector").filter(pk__in=run.device_ids)}
     order = [d for d in run.device_ids if d in devices]
     results = {r["deviceId"]: r for r in run.results}
     by_code = _active_employee_lookup()
@@ -294,6 +306,7 @@ def execute_run(run_id: int) -> None:
         _save_results(run.pk, [results[i] for i in order if i in results])
 
     readable = []
+    waiting: list[tuple[BiometricDevice, object]] = []  # devices behind a site connector, and their jobs
     for device_id in order:
         device = devices[device_id]
         pw = password_of(device)
@@ -303,42 +316,67 @@ def execute_run(run_id: int) -> None:
                 code="config",
                 error="The Comm password in Settings → Devices is not a number (it is the device's Comm Key, usually 0).",
             )
+        elif device_remote.is_remote(device):
+            reason = device_remote.offline_reason(device.connector)
+            if reason:
+                results[device_id].update(status="failed", code="connector_offline", error=reason)
+            else:
+                job = device_remote.submit_job(
+                    device,
+                    "read_punches",
+                    {
+                        "since": run.date_from.isoformat() if run.date_from else None,
+                        "until": run.date_to.isoformat() if run.date_to else None,
+                    },
+                )
+                waiting.append((device, job))
+                results[device_id].update(phase=f"Waiting for the site connector “{device.connector.name}”")
         else:
             readable.append((device, pw))
     publish()
 
-    with ThreadPoolExecutor(max_workers=max(1, min(READ_PARALLELISM, len(readable)))) as pool:
-        futures = {pool.submit(_read_punches, d.host, d.port, pw, run.date_from, run.date_to): d for d, pw in readable}
-        for future in as_completed(futures):
-            device = futures[future]
-            data = future.result()
-            entry = results[device.pk]
-            if not data["ok"]:
-                entry.update(status="failed", code=data["code"], error=data["error"])
-                if updating:
-                    BiometricDevice.objects.filter(pk=device.pk).update(
-                        last_sync_error=data["error"][:1000], last_sync_error_at=timezone.now()
-                    )
-                publish()
-                continue
-            entry.update(
-                status="processing",
-                phase=f"Checking {len(data['punches']):,} punches"
-                if not updating
-                else f"Writing punches to the HRMS ({len(data['punches']):,} in range)",
-            )
+    def handle(device: BiometricDevice, data: dict) -> None:
+        """What one device's punches mean for the HRMS (and, for an update, write them)."""
+        entry = results[device.pk]
+        if not data["ok"]:
+            entry.update(status="failed", code=data["code"], error=data["error"])
+            if updating:
+                BiometricDevice.objects.filter(pk=device.pk).update(
+                    last_sync_error=data["error"][:1000], last_sync_error_at=timezone.now()
+                )
             publish()
-            try:
-                entry.update(_process_device(run, device, data, by_code), status="done", phase="")
-                if updating:
-                    now = timezone.now()
-                    BiometricDevice.objects.filter(pk=device.pk).update(
-                        last_synced_at=now, last_reachable_at=now, last_sync_error=""
-                    )
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("Manual fetch %s: device %s failed while processing", run.pk, device.name)
-                entry.update(status="failed", code="error", error=f"Could not process this device's punches: {exc}")
-            publish()
+            return
+        entry.update(
+            status="processing",
+            phase=f"Checking {len(data['punches']):,} punches"
+            if not updating
+            else f"Writing punches to the HRMS ({len(data['punches']):,} in range)",
+        )
+        publish()
+        try:
+            entry.update(_process_device(run, device, data, by_code), status="done", phase="")
+            if updating:
+                now = timezone.now()
+                BiometricDevice.objects.filter(pk=device.pk).update(
+                    last_synced_at=now, last_reachable_at=now, last_sync_error=""
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Manual fetch %s: device %s failed while processing", run.pk, device.name)
+            entry.update(status="failed", code="error", error=f"Could not process this device's punches: {exc}")
+        publish()
+
+    if readable:
+        with ThreadPoolExecutor(max_workers=max(1, min(READ_PARALLELISM, len(readable)))) as pool:
+            futures = {
+                pool.submit(_read_punches, d.host, d.port, pw, run.date_from, run.date_to): d for d, pw in readable
+            }
+            for future in as_completed(futures):
+                handle(futures[future], future.result())
+
+    # the connector devices read meanwhile: take each as it reports
+    by_job = {job.pk: device for device, job in waiting}
+    for job in device_remote.wait_for_jobs([job for _device, job in waiting], sleep=_idle):
+        handle(by_job[job.pk], device_remote.collect_punches(job))
 
     done = [r for r in results.values() if r["status"] == "done"]
     summary = {
@@ -361,6 +399,101 @@ def execute_run(run_id: int) -> None:
         finished_at=timezone.now(),
         updated_at=timezone.now(),
     )
+
+
+def _light_lookup() -> dict:
+    """Active employees by Employee Code, with only the columns a punch needs (a full row can carry a photo)."""
+    return {
+        str(e.employee_code).strip(): e
+        for e in Employee.objects.filter(status="active").only("id", "employee_code", "first_name", "last_name")
+    }
+
+
+def _bulk_writer(by_code: dict):
+    """The write path for punches that arrive in a web request: the same rows as Sync Biometric writes (an AttendanceLog per
+    punch, the day marked present), but in a handful of queries instead of ten per punch, so a catch-up of hundreds of
+    punches fits inside the server's 30 second limit. The punches given are already known not to be held (_process_device
+    checks), so a conflict is only a race and is ignored."""
+
+    def write(punches, _date_from, source_tag):
+        rows = []
+        for uid, day, at_time, kind in punches:
+            emp = by_code.get(uid)
+            if emp is not None:
+                rows.append(
+                    AttendanceLog(employee_id=emp.pk, date=day, punch_time=at_time, punch_type=kind, source=source_tag)
+                )
+        if not rows:
+            return {"created": 0, "skipped": len(punches), "notFound": set(), "suspiciousDays": []}
+        employees = {r.employee_id for r in rows}
+        days = {r.date for r in rows}
+        with transaction.atomic():
+            span = {"employee_id__in": employees, "date__range": (min(days), max(days))}
+            before = AttendanceLog.objects.filter(**span).count()
+            AttendanceLog.objects.bulk_create(rows, batch_size=500, ignore_conflicts=True)
+            created = AttendanceLog.objects.filter(**span).count() - before
+            marks = {(r.employee_id, str(r.date)) for r in rows}
+            held = set(
+                Attendance.objects.filter(employee_id__in=employees, date__in={d for _e, d in marks}).values_list(
+                    "employee_id", "date"
+                )
+            )
+            Attendance.objects.bulk_create(
+                [Attendance(employee_id=e, date=d, present=True) for e, d in marks - held],
+                batch_size=500,
+                ignore_conflicts=True,
+            )
+            by_employee: dict[int, set[str]] = {}
+            for e, d in marks & held:
+                by_employee.setdefault(e, set()).add(d)
+            for e, dates in by_employee.items():
+                Attendance.objects.filter(employee_id=e, date__in=dates, present=False).update(present=True)
+        counts = Counter((r.employee_id, r.date) for r in rows)
+        suspicious = [{"employeeId": e, "date": str(d), "punches": n} for (e, d), n in counts.items() if n >= 6]
+        return {
+            "created": max(0, created),
+            "skipped": len(punches) - len(rows),
+            "notFound": set(),
+            "suspiciousDays": suspicious,
+        }
+
+    return write
+
+
+def ingest_from_connector(
+    device: BiometricDevice, rows: list[tuple[str, object, int]], invalid: int = 0, total=None
+) -> dict:
+    """Punches a Site Connector read off one of its devices on its own schedule, written as a manual update writes them
+    (matched to active employees by Employee Code; a punch the HRMS already has, by employee, date and time, is recognised
+    and left alone), so a window read again and again, or a punch the device also pushed live, is never counted twice.
+
+    A punch with an impossible time (a device whose clock is flat: 1970, or next year) is counted as invalid, not written. An ID
+    with no employee is noted once for the Skipped view (its count there is approximate for connector reads: the same window
+    is read more than once)."""
+    from .device_health import record_unmatched_punch
+
+    kept = [(u, at, s) for u, at, s in rows if device_remote.sane_punch_time(at)]
+    invalid += len(rows) - len(kept)
+    punches = [Punch(user_id, at, status) for user_id, at, status in kept]
+    data = {"punches": punches, "invalid": invalid, "total": total if total is not None else len(punches), "ms": 0}
+    by_code = _light_lookup()
+    result = _process_device(
+        SimpleNamespace(mode=BiometricFetchRun.MODE_UPDATE), device, data, by_code, writer=_bulk_writer(by_code)
+    )
+    for row in result["unmatched"]:
+        try:
+            when = (
+                datetime.combine(date.fromisoformat(row["lastDate"]), datetime.min.time())
+                if row["lastDate"]
+                else datetime.now()
+            )
+        except ValueError:
+            when = datetime.now()
+        record_unmatched_punch(row["userId"], device.serial_number or "", when)
+    now = timezone.now()
+    BiometricDevice.objects.filter(pk=device.pk).update(last_synced_at=now, last_reachable_at=now, last_sync_error="")
+    keep = ("inRange", "matched", "alreadyInHrms", "new", "created", "unmatchedPunches", "unmatchedIds")
+    return {k: result[k] for k in keep}
 
 
 def _merge_unmatched(done: list[dict]) -> list[dict]:

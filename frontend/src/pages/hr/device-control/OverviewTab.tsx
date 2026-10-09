@@ -2,6 +2,7 @@ import { useLocation } from "wouter";
 import {
   AlertTriangle,
   ArrowRight,
+  Cable,
   Clock,
   CloudDownload,
   Cpu,
@@ -40,7 +41,7 @@ function DeviceCard({
   const cap = d.capacity;
   const users = cap?.users;
   const faces = cap?.faces;
-  const down = d.isActive && d.connection.state === "disconnected";
+  const down = d.isActive && d.connection.state === "disconnected" && d.connection.code !== "pending";
   const connected = d.connection.state === "connected";
   const clock = describeClock(d.clockSkewSeconds ?? undefined);
 
@@ -110,6 +111,13 @@ function DeviceCard({
         <Fact icon={<Users size={12} />}>
           Users read {d.usersRead.error ? <span className="text-red-600">failed</span> : relativeTime(d.usersRead.at)}
         </Fact>
+        {d.via && (
+          <Fact icon={<Cable size={12} />}>
+            <span data-testid={`dc-device-${d.id}-via`}>
+              Reached through the site connector “{d.via.name}” ({d.via.online ? "online" : "offline"})
+            </span>
+          </Fact>
+        )}
         {connected && <Fact icon={<Zap size={12} />}>Answered in {formatLatency(d.connection.latencyMs)}</Fact>}
         {clock && <Fact icon={<Clock size={12} />}>Device clock {clock}</Fact>}
         <Fact icon={<Network size={12} />}>Last heard by the server {relativeTime(d.push.lastContactAt)}</Fact>

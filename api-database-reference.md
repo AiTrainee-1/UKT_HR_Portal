@@ -170,6 +170,28 @@ Back Attendance -> Device Control. All sit under `/api/attendance/device-control
 
 Every change is audited (`create`, `update`, `delete` on `attendance`; `update` on `employees` for an Inactive or a photo).
 
+## Site Connectors (connector_views.py, connector_admin_views.py)
+
+A Site Connector is a program at a factory that reaches devices the server cannot (see biometric-integration.md -> Site Connectors; the wire contract is the connector project's `docs/PROTOCOL.md`).
+
+**What the connector calls** (`/api/connector/...`, no trailing slash; `Authorization: Bearer <connector token>`, an opaque token checked against `biometric_site_connectors.token_hash` on every call, not an HR JWT; the HR permission middleware lets it through to the view's own auth):
+
+- **POST /api/connector/pair** — no token. `{code, hostname, version, os}` -> `{connectorId, name, token, pollSeconds, protocol}`. The code is one-time, valid 24 hours, compared by SHA-256; every wrong, used or expired code gets the same `400 invalid_code`; 10 attempts per address (60 in all) per 10 minutes, then 429.
+- **POST /api/connector/poll** — heartbeat and request for work: `{cfgHash, want, status}` -> `{serverTime, pollSeconds, protocol, config|null, jobs[]}`. Records `last_seen_at`, merges `status` (version, hostname, uptime, outbox, `devices{id: probe}`, `sync{id: last read}`, cut to known fields and the connector's own devices), expires overdue jobs, claims up to `want` (max 4) queued jobs (`select_for_update(skip_locked)`), and sends `config` (its devices with host, port, Comm Key, serial; punch reading interval and window) only when `cfgHash` differs. 401 `invalid_token`; 403 `revoked`.
+- **POST /api/connector/jobs/\<id\>/result** — `{ok, code, message, data}` for one of its own running jobs. Closes the job, clears its payload and, if it belonged to an operation, finishes the operation once every job is closed. A result for a job already closed is acknowledged (`accepted: false`) and changes nothing.
+- **POST /api/connector/jobs/\<id\>/punches** — a numbered chunk (<= 5000) `{seq, punches[{userId, at, status}]}` of a `read_punches` job's punches; a repeated `seq` is stored once; 409 unless the job is running and is a read.
+- **POST /api/connector/punches** — `{deviceId, punches[], invalid, total}` read on the connector's own schedule; written like a manual update (`ingest_from_connector`). Only for a device assigned to the connector (404 otherwise).
+
+**What HR uses** (under `/api/attendance/device-control/`, Attendance permission: GET View, others Edit; adding, changing, re-pairing or removing a connector also needs Edit on Settings):
+
+- **GET .../connectors** — every connector: `state` (online/offline/unpaired/off), `lastSeenAt`, version, hostname, `punchSyncMinutes/Days`, `outbox`, `openJobs`, and its `devices[]` (connected, reason, last punch read). Never a token or a code.
+- **POST .../connectors** — `{name, notes?}` -> 201 `{connector, pairingCode, pairingExpiresAt}` (the code is shown once).
+- **PATCH .../connectors/\<id\>** — `name`, `notes`, `isActive` (switching off ends its open jobs), `punchSyncMinutes` 0-1440, `punchSyncDays` 1-31. **DELETE** removes it (its devices fall back to direct connection; open jobs are ended first).
+- **POST .../connectors/\<id\>/pairing** — a new pairing code (the old token keeps working until the new pairing is done).
+- **GET .../operations/\<id\>** — `{id, kind, status running|done|failed, pending[{deviceId, deviceName, connector, state waiting|working}], final, error}`. `final` is the same body the request would have returned. A branch-limited caller sees only their own.
+
+**Changed:** POST .../users/refresh, push, update and delete answer **202 `{"operation": {...}}`** when the request includes a device behind a connector (and 200 with the finished body otherwise). The overview's devices gain `via` (`{id, name, online}` or null) and new connection codes `connector_offline`, `connector_off`, `pending`. **GET, POST /api/biometric-devices** and **PUT .../\<pk\>** carry `connectorId` (null = connected directly). The Attendance page's Sync Biometric and Auto Sync skip devices behind a connector.
+
 ## System Settings — Biometric Devices & ID Card Template (system_settings_views.py)
 
 - **GET, POST /api/biometric-devices** — `@require_hr`. GET lists configured `BiometricDevice` rows plus a synthetic read-only entry for the legacy `.env`-configured device (if its host isn't already duplicated by a DB row); POST creates a new device, optionally flipping it to the sole default. Each row carries `serialNumber` (optional; rejected with 400 if another device already has it).
@@ -913,6 +935,7 @@ Configuration for a physical biometric attendance terminal (AiFace-Mars, ZKTeco,
 - `reported_config`, `reported_config_at` — JSONField (nullable); the device's own options upload (IP, firmware, time zone...)
 - `last_sync_error`, `last_sync_error_at`, `last_reachable_at` — the pull direction: why the last attempt failed and when it last got through
 - `users_read_at`, `users_read_error`, `capacity` (JSONField, nullable) — Device Control: when its user table was last read, why the last read failed, and what the device reported (users, faces, punches and their limits, serial, model, firmware, pin width)
+- `connector` — ForeignKey to `BiometricSiteConnector` (SET_NULL), nullable, `related_name="devices"` (migration `0115`): the Site Connector that reaches this device, when the server cannot; null = the server connects itself
 - ordering `["-is_default", "name"]`
 
 All columns added by migration `0113_biometric_device_status` are nullable or carry a database default, so a release still running the previous code keeps working.
@@ -963,6 +986,46 @@ One manual fetch of punches (Device Control -> Data Fetch), kept as a history. A
 - `started_by`, `range_label`, `date_from`, `date_to`, `device_ids` (JSON)
 - `results` — JSONField, one entry per device; `summary` — JSONField, nullable; `error`
 - `created_at`, `updated_at`, `finished_at`; a run with no update for 20 minutes is marked failed so it cannot block the next one
+
+### BiometricSiteConnector
+**Table name:** `biometric_site_connectors`
+
+A Site Connector: the program at a factory. Created in the HRMS (which makes a pairing code), then paired.
+
+**Key fields:**
+- `name` — TextField, unique; `notes`; `is_active` — BooleanField (off = locked out at its next call)
+- `token_hash` — CharField(64), indexed; SHA-256 of the token, empty until paired. `pairing_hash`, `pairing_expires_at` — the one-time code (SHA-256) and its expiry; `paired_at`
+- `punch_sync_minutes` (default 15, 0 = never), `punch_sync_days` (default 2) — how it reads punches on its own
+- `last_seen_at`, `last_remote_ip`, `version`, `hostname`, `os_info`; `status` — JSONField (`reportedAt`, `uptimeSeconds`, `outbox`, `devices{id: probe}`, `sync{id: last read}`); `created_by`, `created_at`
+- online = heard from in the last 45 seconds
+
+### BiometricDeviceOperation
+**Table name:** `biometric_device_operations`
+
+A read or change of devices that includes a device behind a connector, which cannot be answered inside the request.
+
+**Key fields:**
+- `kind` — refresh / apply / delete; `status` — running / done / failed
+- `params` — JSONField (what was asked, without any device password); `actor` — JSONField (`jwtUser`, `branchScope`, `remoteAddr`: who asked, for the branch rules and the audit entry when it is finished later)
+- `results` — JSONField (`{device id: result}`), `final` — JSONField (the answer the request would have returned), `error`
+- `created_at`, `updated_at`, `finished_at`; finished operations older than 7 days can be pruned (`device_remote.prune_operations`)
+
+### BiometricConnectorJob
+**Table name:** `biometric_connector_jobs`
+
+One thing a connector is asked to do on one device. The connector asks for work; nothing is pushed to it.
+
+**Key fields:**
+- `connector` — ForeignKey (CASCADE), `related_name="jobs"`; `device` — ForeignKey to `BiometricDevice` (CASCADE); `operation` — ForeignKey, nullable (CASCADE)
+- `kind` — probe / read_users / apply_users / delete_users / read_punches; `payload` — JSONField (includes `target` = host, port, Comm Key; emptied when the job ends)
+- `status` — queued / running / succeeded / failed / expired / cancelled; `result` — JSONField; `error_code`, `error_message`
+- `attempts`; `last_seq` (the last punch chunk stored); `created_at`, `claimed_at`, `finished_at`, `expires_at` (probe 90 s, read users 4 min, writes 7 min, punches 30 min; a running job is given up on 3 minutes after it)
+- indexes (`connector`, `status`) and (`operation`)
+
+### BiometricConnectorPunch
+**Table name:** `biometric_connector_punches`
+
+Punches a connector read for a `read_punches` job, held until the manual fetch has processed them, then deleted. `job` — ForeignKey (CASCADE), `user_id`, `punch_date`, `punch_time`, `status`.
 
 ### UnmatchedPunch
 **Table name:** `unmatched_punches`

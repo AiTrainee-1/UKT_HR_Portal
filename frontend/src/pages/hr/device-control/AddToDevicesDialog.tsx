@@ -44,6 +44,7 @@ export default function AddToDevicesDialog({
     return new Set(deviceId != null && ready.includes(deviceId) ? [deviceId] : ready);
   });
   const [busy, setBusy] = useState(false);
+  const waiting = busy ? push.waiting : "";
   const total = devices.filter((d) => chosen.has(d.id)).reduce((n, d) => n + missing(d), 0);
 
   const go = async () => {
@@ -120,6 +121,11 @@ export default function AddToDevicesDialog({
         </div>
 
         <DialogFooter className="gap-2 sm:gap-2">
+          {waiting && (
+            <p className="mr-auto text-xs text-slate-500" role="status" data-testid="op-waiting">
+              {waiting}
+            </p>
+          )}
           <Button type="button" variant="ghost" onClick={onClose} disabled={busy}>
             Cancel
           </Button>

@@ -195,6 +195,13 @@ from .device_control_views import (
     device_control_fetch_runs, device_control_fetch_start, device_control_overview, device_control_people,
     device_control_push_users, device_control_refresh_users, device_control_update_users,
 )
+from .connector_admin_views import (
+    device_control_connector_detail, device_control_connector_pairing, device_control_connectors,
+    device_control_operation,
+)
+from .connector_views import (
+    connector_job_punches, connector_job_result, connector_pair, connector_poll, connector_punches,
+)
 from .chat_views import (
     chat_channels, chat_messages, chat_message_reactions,
 )
@@ -388,6 +395,17 @@ urlpatterns = [
     path("attendance/device-control/fetch/start", device_control_fetch_start),
     path("attendance/device-control/fetch/runs", device_control_fetch_runs),
     path("attendance/device-control/fetch/runs/<int:pk>", device_control_fetch_run),
+    path("attendance/device-control/connectors", device_control_connectors),
+    path("attendance/device-control/connectors/<int:pk>", device_control_connector_detail),
+    path("attendance/device-control/connectors/<int:pk>/pairing", device_control_connector_pairing),
+    path("attendance/device-control/operations/<int:pk>", device_control_operation),
+
+    # ── Site Connectors: what the Windows service at a factory calls (its own token, not an HR login) ──
+    path("connector/pair", connector_pair),
+    path("connector/poll", connector_poll),
+    path("connector/jobs/<int:pk>/result", connector_job_result),
+    path("connector/jobs/<int:pk>/punches", connector_job_punches),
+    path("connector/punches", connector_punches),
     path("attendance/report-log", attendance_report_log),
     path("attendance/report-log/sheet", attendance_report_log_sheet),
     path("attendance/day-informed", set_day_informed),

@@ -90,6 +90,8 @@ export default function UserDialog({ mode, open, onClose, devices, person, devic
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [submitting, setSubmitting] = useState(false);
+  // a device behind a Site Connector is answered by the connector: say what is being waited for
+  const waiting = submitting ? push.waiting || update.waiting : "";
 
   const subject = editing ? person : picked;
   const employee = subject?.employee ?? null;
@@ -554,6 +556,11 @@ export default function UserDialog({ mode, open, onClose, devices, person, devic
         </div>
 
         <DialogFooter className="gap-2 sm:gap-2">
+          {waiting && (
+            <p className="mr-auto text-xs text-slate-500" role="status" data-testid="op-waiting">
+              {waiting}
+            </p>
+          )}
           <Button type="button" variant="ghost" onClick={onClose} disabled={submitting}>
             Cancel
           </Button>

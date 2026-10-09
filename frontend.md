@@ -55,8 +55,8 @@ frontend/src/
 │   │   │                               #   AssignDialog (SelectionBuilder include/exclude chips + PlanPreview), AssignmentsTab,
 │   │   │                               #   UnassignedTab, ManageAssignmentDialogs, shift-logic.ts (pure, tested)
 │   │   ├── MissingPunch.tsx / ManualPunchImport.tsx / AttendancePunchSearch.tsx
-│   │   ├── DeviceControl.tsx + device-control/   # Attendance -> Device Control (/hr/attendance/DeviceControl, /fetch, /push): shell with
-│   │   │                               #   Overview / Data Fetch / Data Push tabs; OverviewTab, FetchTab + FetchResults, PushTab +
+│   │   ├── DeviceControl.tsx + device-control/   # Attendance -> Device Control (/hr/attendance/DeviceControl, /fetch, /push, /connectors): shell with
+│   │   │                               #   Overview / Data Fetch / Data Push / Site connectors tabs (ConnectorsTab: add, pairing code, settings, remove); OverviewTab, FetchTab + FetchResults, PushTab +
 │   │   │                               #   PeopleFilters + PeopleTable, UserDialog (add/edit), DeleteDialog, AddToDevicesDialog,
 │   │   │                               #   ResultDialog, CameraCapture, logic.ts (pure, tested); data via custom-hooks/device-control.ts
 │   │   ├── BiometricDeviceStatus.tsx + device-status/   # Attendance -> Biometric Device Status (/hr/attendance/device-status):

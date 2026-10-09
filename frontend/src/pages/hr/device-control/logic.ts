@@ -7,13 +7,15 @@ import type {
   FetchPreset,
   FetchRange,
   FetchRun,
+  ConnectorState,
+  ConnectorSync,
   PeopleParams,
   PersonLink,
   PersonRow,
   PushResult,
   UserInput,
 } from "@/lib/api-client/custom-hooks";
-import { type Tone } from "../device-status/logic";
+import { relativeTime, type Tone } from "../device-status/logic";
 
 // ── devices ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -81,10 +83,18 @@ export function deviceAlerts(d: DeviceControlDevice): DeviceAlert[] {
 export function connectionAdvice(d: DeviceControlDevice): string {
   switch (d.connection.code) {
     case "cloud":
-      return "Open the HRMS on a computer inside the factory (the local app) to manage this device, or have the firewall forward its port to this server.";
+      return "This server cannot reach a factory network. Install a Site Connector on a computer at the factory and choose it for this device (Settings → Devices → Connect via), or have the firewall forward the device's port to this server.";
+    case "connector_offline":
+      return "Check that the computer running the Site Connector is on and has internet. Its card under Site connectors says when it was last heard from.";
+    case "connector_off":
+      return "Switch the Site Connector on again under Site connectors.";
+    case "pending":
+      return "The Site Connector has not checked this device yet. It looks every minute; press Check connections to ask now.";
     case "timeout":
     case "unreachable":
-      return "Check that the device is on, its network cable, and that its IP address in Settings → Devices is right.";
+      return d.via
+        ? "Check that the device is on, its network cable, and that its address in Settings → Devices is its address on the factory network, as the connector's computer sees it."
+        : "Check that the device is on, its network cable, and that its IP address in Settings → Devices is right.";
     case "refused":
       return "The device is there, but not accepting this port. Check the TCP COMM. Port on the device against Settings → Devices.";
     case "auth":
@@ -577,13 +587,64 @@ export const pushLink = (patch: Partial<PushFilters>): string =>
 export const fetchLink = (deviceId?: number): string =>
   `${DEVICE_CONTROL_PATH}/fetch${deviceId ? `?device=${deviceId}` : ""}`;
 
-export type DeviceControlTab = "overview" | "fetch" | "push";
+export type DeviceControlTab = "overview" | "fetch" | "push" | "connectors";
 
 export function tabFromPath(path: string): DeviceControlTab {
   if (path.endsWith("/fetch")) return "fetch";
   if (path.endsWith("/push")) return "push";
+  if (path.endsWith("/connectors")) return "connectors";
   return "overview";
 }
 
 export const pathForTab = (tab: DeviceControlTab): string =>
   tab === "overview" ? DEVICE_CONTROL_PATH : `${DEVICE_CONTROL_PATH}/${tab}`;
+
+// ── Site Connectors ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+export const CONNECTOR_STATE_LABEL: Record<ConnectorState, string> = {
+  online: "Online",
+  offline: "Offline",
+  unpaired: "Waiting to be paired",
+  off: "Switched off",
+};
+
+export const CONNECTOR_STATE_TONE: Record<ConnectorState, Tone> = {
+  online: "good",
+  offline: "bad",
+  unpaired: "warn",
+  off: "muted",
+};
+
+/** One line on what a connector last did when it read a device's punches on its own. */
+export function describeConnectorSync(sync: ConnectorSync | null | undefined): string {
+  if (!sync || !sync.at) return "Punches not read by the connector yet.";
+  if (sync.ok === false) return `Could not read punches: ${sync.error || "the device did not answer"}`;
+  const when = relativeTime(sync.at);
+  if (sync.skipped) return `Punches: nothing new on the device (${when}).`;
+  const read = sync.read ?? 0;
+  const created = sync.created ?? 0;
+  return `Punches: ${read.toLocaleString("en-IN")} read, ${created.toLocaleString("en-IN")} new in the HRMS (${when}).`;
+}
+
+/** "2 h 5 min", "3 days": how long the connector has been running. */
+export function formatUptime(seconds: number): string {
+  if (seconds < 90) return `${Math.max(0, Math.round(seconds))} s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 120) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours} h ${minutes % 60} min`;
+  return `${Math.floor(hours / 24)} days`;
+}
+
+/** What is wrong with the connector's settings form, or "" when it can be saved. */
+export function validateConnectorSettings(form: { name: string; minutes: string; days: string }): string {
+  if (!form.name.trim()) return "Give the connector a name.";
+  if (form.name.trim().length > 80) return "The name is at most 80 characters.";
+  if (!/^\d{1,4}$/.test(form.minutes.trim()) || Number(form.minutes) > 1440) {
+    return "Reading punches every 0 (never) to 1440 minutes.";
+  }
+  if (!/^\d{1,2}$/.test(form.days.trim()) || Number(form.days) < 1 || Number(form.days) > 31) {
+    return "Each reading looks back 1 to 31 days.";
+  }
+  return "";
+}

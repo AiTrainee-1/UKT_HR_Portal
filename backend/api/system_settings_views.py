@@ -13,7 +13,9 @@ from rest_framework.response import Response
 from datetime import time as time_type
 
 from .auth import require_hr, require_auth
-from .models import BiometricDevice, IdCardSettings, ProductionShiftConfig, ProductionShiftSegment
+from .models import (
+    BiometricDevice, BiometricSiteConnector, IdCardSettings, ProductionShiftConfig, ProductionShiftSegment,
+)
 
 
 # ── Biometric Devices ───────────────────────────────────────────────────────
@@ -30,10 +32,28 @@ def _device_dict(d: BiometricDevice) -> dict:
         "isActive": d.is_active,
         "isDefault": d.is_default,
         "serialNumber": d.serial_number or "",
+        "connectorId": d.connector_id,
         "lastSyncedAt": d.last_synced_at.isoformat() if d.last_synced_at else None,
         "notes": d.notes,
         "createdAt": d.created_at.isoformat() if d.created_at else None,
     }
+
+
+def _connector_choice(data) -> tuple[bool, int | None, str | None]:
+    """(given, connector id, problem) from a device form: connectorId is a Site Connector's id, or empty/null for a
+    device the server connects to itself."""
+    if "connectorId" not in data:
+        return False, None, None
+    raw = data.get("connectorId")
+    if raw in (None, "", 0, "0"):
+        return True, None, None
+    try:
+        pk = int(raw)
+    except (TypeError, ValueError):
+        return True, None, "That Site Connector is not valid."
+    if not BiometricSiteConnector.objects.filter(pk=pk).exists():
+        return True, None, "That Site Connector does not exist."
+    return True, pk, None
 
 
 def _serial_conflict(serial: str, exclude_pk: int | None = None) -> str | None:
@@ -90,8 +110,12 @@ def biometric_devices(request: Request) -> Response:
     conflict = _serial_conflict(serial)
     if conflict:
         return Response({"error": conflict}, status=400)
+    _given, connector_id, problem = _connector_choice(data)
+    if problem:
+        return Response({"error": problem}, status=400)
 
     device = BiometricDevice.objects.create(
+        connector_id=connector_id,
         name=name,
         device_type=data.get("deviceType", "aiface_mars"),
         host=data.get("host", ""),
@@ -137,6 +161,11 @@ def biometric_device_detail(request: Request, pk: int) -> Response:
         if conflict:
             return Response({"error": conflict}, status=400)
         device.serial_number = serial
+    given, connector_id, problem = _connector_choice(data)
+    if problem:
+        return Response({"error": problem}, status=400)
+    if given:
+        device.connector_id = connector_id
     if "apiKey" in data and data["apiKey"]:
         device.api_key = data["apiKey"]
     if "connectionConfig" in data and isinstance(data["connectionConfig"], dict):

@@ -78,6 +78,11 @@ def get_sync_targets(device_id=None) -> list[dict]:
     """
     from .models import BiometricDevice
 
+    def via_connector(devices) -> str:
+        """A device behind a Site Connector is read by that connector (it sends the punches on its own schedule,
+        and Device Control → Data Fetch reads it on demand); this server has no route to it."""
+        return f"{', '.join(d.name for d in devices)} is read by a Site Connector, so it is not synced from here"
+
     def db_target(d: BiometricDevice) -> dict:
         raw_password = (d.connection_config or {}).get("password", 0) or 0
         try:
@@ -126,6 +131,9 @@ def get_sync_targets(device_id=None) -> list[dict]:
         missing = [i for i in ids if i not in devices]
         if missing:
             raise BiometricSyncError(f"Device(s) not found or disabled: {', '.join(map(str, missing))}")
+        behind = [d for d in devices.values() if d.connector_id]
+        if behind and len(behind) == len(devices) and not wants_env:
+            raise BiometricSyncError(via_connector(behind))
 
         # Preserve the order the caller selected them in.
         targets = []
@@ -134,7 +142,7 @@ def get_sync_targets(device_id=None) -> list[dict]:
                 env = get_env_device()
                 if env:
                     targets.append(env)
-            else:
+            elif not devices[int(x)].connector_id:
                 targets.append(db_target(devices[int(x)]))
         return targets
 
@@ -143,13 +151,22 @@ def get_sync_targets(device_id=None) -> list[dict]:
             d = BiometricDevice.objects.get(pk=int(device_id), is_active=True)
         except (BiometricDevice.DoesNotExist, ValueError, TypeError):
             raise BiometricSyncError("Device not found or disabled")
+        if d.connector_id:
+            raise BiometricSyncError(via_connector([d]))
         return [db_target(d)]
 
     # "all" (and the no-selection default): .env device + every enabled Settings device
-    targets = [db_target(d) for d in BiometricDevice.objects.filter(is_active=True).order_by("id")]
+    targets = [
+        db_target(d) for d in BiometricDevice.objects.filter(is_active=True, connector__isnull=True).order_by("id")
+    ]
     env = get_env_device()
     if env and not any(t["host"] == env["host"] for t in targets):
         targets.insert(0, env)
+    if not targets and BiometricDevice.objects.filter(is_active=True, connector__isnull=False).exists():
+        raise BiometricSyncError(
+            "Every enabled device is read by a Site Connector, which sends its punches on its own schedule: "
+            "there is nothing to sync from here (Device Control → Data Fetch reads them on demand)."
+        )
     if not targets:
         raise BiometricSyncError(
             "No biometric device configured -set BIOMETRIC_DEVICE_IP in backend/.env "

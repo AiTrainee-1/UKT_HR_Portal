@@ -1,7 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { DeleteResult, DeviceControlDevice, FetchRun, PersonRow, PushResult } from "@/lib/api-client/custom-hooks";
-import { peopleQuery } from "@/lib/api-client/custom-hooks";
 import {
+  FOLLOW_TIMEOUT_MS,
+  LOST_CONTACT_MESSAGE,
+  describeOperationWait,
+  followOperation,
+  isStarted,
+  peopleQuery,
+  type DeviceOperation,
+} from "@/lib/api-client/custom-hooks";
+import {
+  CONNECTOR_STATE_LABEL,
+  CONNECTOR_STATE_TONE,
   EMPTY_FORM,
   NO_FILTERS,
   activeFilterCount,
@@ -11,6 +21,7 @@ import {
   connectionAdvice,
   copyInput,
   deleteImpact,
+  describeConnectorSync,
   describeDeviceFilter,
   describeDiffers,
   describeRun,
@@ -21,6 +32,7 @@ import {
   filtersFromSearch,
   filtersToSearch,
   formFromPerson,
+  formatUptime,
   formatCount,
   formatDuration,
   initials,
@@ -34,8 +46,10 @@ import {
   shortDeviceName,
   summarizeDelete,
   summarizePush,
+  tabFromPath,
   toParams,
   trimToBytes,
+  validateConnectorSettings,
   validateForm,
 } from "./logic";
 
@@ -48,6 +62,7 @@ const device = (over: Partial<DeviceControlDevice> = {}): DeviceControlDevice =>
   deviceType: "aiface_mars",
   isActive: true,
   privateAddress: true,
+  via: null,
   connection: { state: "connected", code: "ok", reason: "", latencyMs: 12 },
   push: { state: "live", lastContactAt: null },
   capacity: { users: 345, usersCap: 3000, records: 1000, recordsCap: 150000, faces: 345 },
@@ -162,7 +177,7 @@ describe("what to do about a device that cannot be reached", () => {
     device({ connection: { state: "disconnected", code, reason: "x", latencyMs: null } });
 
   it("gives advice for each kind of failure", () => {
-    expect(connectionAdvice(down("cloud"))).toContain("local app");
+    expect(connectionAdvice(down("cloud"))).toContain("Site Connector");
     expect(connectionAdvice(down("timeout"))).toContain("cable");
     expect(connectionAdvice(down("refused"))).toContain("COMM. Port");
     expect(connectionAdvice(down("auth"))).toContain("Comm Key");
@@ -783,5 +798,217 @@ describe("review fixes", () => {
     expect(deleteImpact([active], null, [1]).employees).toHaveLength(1);
     expect(deleteImpact([active], [2], [1]).employees).toHaveLength(0);
     expect(deleteImpact([active], [2], null).employees).toHaveLength(1);
+  });
+});
+
+describe("site connectors", () => {
+  const operation = (over: Partial<DeviceOperation> = {}): DeviceOperation => ({
+    id: 7,
+    kind: "apply",
+    status: "running",
+    pending: [],
+    final: null,
+    error: "",
+    createdAt: "2026-10-09T10:00:00Z",
+    finishedAt: null,
+    ...over,
+  });
+  const quick = { sleep: async () => undefined, intervalMs: 1 };
+
+  it("recognises an answer that is an operation to follow, and nothing else", () => {
+    expect(isStarted({ operation: operation() })).toBe(true);
+    expect(isStarted({ results: [] })).toBe(false);
+    expect(isStarted(null)).toBe(false);
+    expect(isStarted("text")).toBe(false);
+  });
+
+  it("returns an ordinary answer as it is, without asking anything", async () => {
+    const load = vi.fn();
+    const body = { results: [{ deviceId: 1 }], summary: {} };
+    expect(await followOperation(body, { ...quick, load })).toBe(body);
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it("follows an operation until the connector has reported, then returns its final answer", async () => {
+    const answers = [
+      operation(),
+      operation({ pending: [{ deviceId: 1, deviceName: "A", connector: "S", state: "working" }] }),
+      operation({ status: "done", final: { summary: { added: 2 } } }),
+    ];
+    const load = vi.fn(async () => answers.shift()!);
+    const seen: string[] = [];
+    const result = await followOperation(
+      { operation: operation() },
+      { ...quick, load, onUpdate: (o) => seen.push(o.status) },
+    );
+    expect(result).toEqual({ summary: { added: 2 } });
+    expect(load).toHaveBeenCalledTimes(3);
+    expect(load).toHaveBeenCalledWith(7);
+    expect(seen).toEqual(["running", "running", "running", "done"]); // the one it started with, then each look
+  });
+
+  it("an operation that failed is an error with the server's words", async () => {
+    const load = async () => operation({ status: "failed", error: "The operation could not be finished: boom" });
+    await expect(followOperation({ operation: operation() }, { ...quick, load })).rejects.toThrow(
+      "could not be finished: boom",
+    );
+  });
+
+  it("an operation that is done but has no answer is an error, not a silent nothing", async () => {
+    const load = async () => operation({ status: "done", final: null });
+    await expect(followOperation({ operation: operation() }, { ...quick, load })).rejects.toThrow("did not finish");
+  });
+
+  it("a look that fails now and then (a dropped connection, a deploy) is tried again and the operation is still followed", async () => {
+    let calls = 0;
+    const flaky = async () => {
+      calls += 1;
+      if (calls <= 5) throw new Error("network");
+      return operation({ status: "done", final: { ok: true } });
+    };
+    expect(await followOperation({ operation: operation() }, { ...quick, load: flaky })).toEqual({ ok: true });
+    expect(calls).toBe(6);
+  });
+
+  it("after losing contact for too long it says the change may still go through, not that it failed", async () => {
+    const down = vi.fn(async () => {
+      throw new Error("offline");
+    });
+    await expect(
+      followOperation({ operation: operation() }, { ...quick, load: down, networkGiveUpMs: 0 }),
+    ).rejects.toThrow(LOST_CONTACT_MESSAGE);
+    expect(LOST_CONTACT_MESSAGE).toMatch(/may still go through/);
+    expect(down).toHaveBeenCalledTimes(1);
+  });
+
+  it("a look the server refuses (signed out, the operation gone) is not retried", async () => {
+    for (const status of [401, 403, 404]) {
+      const refused = vi.fn(async () => {
+        throw Object.assign(new Error("refused"), { status });
+      });
+      await expect(followOperation({ operation: operation() }, { ...quick, load: refused })).rejects.toThrow("refused");
+      expect(refused).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("a run of failures that ends resets the count", async () => {
+    const answers: Array<"fail" | DeviceOperation> = [
+      "fail",
+      "fail",
+      operation(),
+      "fail",
+      "fail",
+      operation({ status: "done", final: { ok: 1 } }),
+    ];
+    const load = vi.fn(async () => {
+      const next = answers.shift()!;
+      if (next === "fail") throw new Error("blip");
+      return next;
+    });
+    expect(await followOperation({ operation: operation() }, { ...quick, load, networkGiveUpMs: 60_000 })).toEqual({
+      ok: 1,
+    });
+  });
+
+  it("waits longer than the server's own longest job, so the server's specific answer is what a person gets", () => {
+    // writes: 7 minutes to be taken + 3 minutes grace once taken = 10 minutes at the most
+    expect(FOLLOW_TIMEOUT_MS).toBeGreaterThan(10 * 60_000);
+  });
+
+  it("says what is being waited for", () => {
+    expect(describeOperationWait(operation({ status: "done" }))).toBe("");
+    expect(describeOperationWait(operation({ pending: [] }))).toBe("Finishing…");
+    expect(
+      describeOperationWait(
+        operation({ pending: [{ deviceId: 1, deviceName: "HO-1", connector: "Unit 2", state: "waiting" }] }),
+      ),
+    ).toBe("Waiting for the site connector “Unit 2” to pick this up (HO-1)…");
+    expect(
+      describeOperationWait(
+        operation({
+          pending: [
+            { deviceId: 1, deviceName: "HO-1", connector: "Unit 2", state: "working" },
+            { deviceId: 2, deviceName: "HO-2", connector: "Unit 2", state: "waiting" },
+          ],
+        }),
+      ),
+    ).toBe("The site connector “Unit 2” is working on HO-1, HO-2…");
+  });
+
+  it("stops waiting after the time allowed and says to read the devices again", async () => {
+    const load = async () => operation();
+    await expect(
+      followOperation(
+        { operation: operation() },
+        { ...quick, load, timeoutMs: 5, sleep: () => new Promise((r) => setTimeout(r, 4)) },
+      ),
+    ).rejects.toThrow("Read the devices again");
+  });
+
+  it("tells a person what to do about each reason a connector's device cannot be used", () => {
+    const behind = (
+      code: DeviceControlDevice["connection"]["code"],
+      via: DeviceControlDevice["via"] = { id: 1, name: "Unit 2", online: true },
+    ) => device({ via, connection: { state: "disconnected", code, reason: "", latencyMs: null } });
+    expect(connectionAdvice(behind("connector_offline"))).toMatch(/computer running the Site Connector is on/);
+    expect(connectionAdvice(behind("connector_off"))).toMatch(/Switch the Site Connector on/);
+    expect(connectionAdvice(behind("pending"))).toMatch(/Check connections/);
+    expect(connectionAdvice(behind("timeout"))).toMatch(/as the connector's computer sees it/);
+    expect(connectionAdvice(behind("timeout", null))).not.toMatch(/connector/);
+    expect(connectionAdvice(behind("cloud", null))).toMatch(/Install a Site Connector/);
+  });
+
+  it("finds the connectors tab from the address", () => {
+    expect(tabFromPath("/hr/attendance/DeviceControl/connectors")).toBe("connectors");
+    expect(tabFromPath("/hr/attendance/DeviceControl/push")).toBe("push");
+    expect(tabFromPath("/hr/attendance/DeviceControl")).toBe("overview");
+  });
+
+  it("labels every state of a connector", () => {
+    expect(CONNECTOR_STATE_LABEL).toEqual({
+      online: "Online",
+      offline: "Offline",
+      unpaired: "Waiting to be paired",
+      off: "Switched off",
+    });
+    expect(CONNECTOR_STATE_TONE.online).toBe("good");
+    expect(CONNECTOR_STATE_TONE.offline).toBe("bad");
+  });
+
+  it("describes the last time a connector read a device's punches, and when", () => {
+    const now = new Date().toISOString();
+    expect(describeConnectorSync(null)).toMatch(/not read by the connector yet/);
+    expect(describeConnectorSync({})).toMatch(/not read by the connector yet/);
+    expect(describeConnectorSync({ at: now, ok: false, error: "The device stopped answering." })).toBe(
+      "Could not read punches: The device stopped answering.",
+    );
+    expect(describeConnectorSync({ at: now, ok: true, skipped: true })).toMatch(
+      /nothing new on the device \(just now\)/,
+    );
+    expect(describeConnectorSync({ at: now, ok: true, read: 1500, created: 12 })).toBe(
+      "Punches: 1,500 read, 12 new in the HRMS (just now).",
+    );
+    const old = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+    expect(describeConnectorSync({ at: old, ok: true, read: 5, created: 0 })).toMatch(/\(3 h ago\)|\(3 hours ago\)/);
+  });
+
+  it("writes how long a connector has been running", () => {
+    expect(formatUptime(30)).toBe("30 s");
+    expect(formatUptime(600)).toBe("10 min");
+    expect(formatUptime(3 * 3600 + 125)).toBe("3 h 2 min");
+    expect(formatUptime(5 * 86400)).toBe("5 days");
+  });
+
+  it("checks the connector settings form", () => {
+    const ok = { name: "Unit 2", minutes: "15", days: "2" };
+    expect(validateConnectorSettings(ok)).toBe("");
+    expect(validateConnectorSettings({ ...ok, minutes: "0" })).toBe("");
+    expect(validateConnectorSettings({ ...ok, name: "  " })).toMatch(/name/);
+    expect(validateConnectorSettings({ ...ok, name: "x".repeat(81) })).toMatch(/at most 80/);
+    expect(validateConnectorSettings({ ...ok, minutes: "-1" })).toMatch(/every 0/);
+    expect(validateConnectorSettings({ ...ok, minutes: "1441" })).toMatch(/every 0/);
+    expect(validateConnectorSettings({ ...ok, minutes: "ab" })).toMatch(/every 0/);
+    expect(validateConnectorSettings({ ...ok, days: "0" })).toMatch(/1 to 31/);
+    expect(validateConnectorSettings({ ...ok, days: "32" })).toMatch(/1 to 31/);
   });
 });

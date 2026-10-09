@@ -321,6 +321,19 @@ This is a background process that automatically fetches raw punch records from t
 
 > These machines enrol faces on the device itself: a user added here has no face until the person enrols at the machine, and a photo taken here cannot be put on the machine. Device Control talks to the machines directly, so it needs the HRMS to be running where it can reach them (a computer in the factory); on the cloud server it says so instead of failing.
 
+#### Site connectors
+
+Some factories sit behind a network the cloud HRMS cannot reach, so Device Control shows their devices as Disconnected. A **site connector** fixes that: a small program installed once on a computer at the factory (on the same network as the devices). It reaches the devices from inside and reports to the HRMS over the internet, so **nothing has to be opened in the factory's firewall**. Everything on this page then works for those devices as for any other.
+
+**Attendance -> Device Control -> Site connectors**
+1. **Add a connector** and name it after the site. A **pairing code** (like `K7QM-4XWD`) is shown once; it works once and expires after a day.
+2. Install the connector on a computer at the factory (the installer folder has the steps) and enter the HRMS address and the code. The connector's card turns **Online**.
+3. In **Settings -> Devices**, choose the connector under **Connect via** for each device at that factory. Use the device's address on the factory network (192.168.x.x).
+
+Each connector's card shows whether it is Online, Offline, switched off or waiting to be paired, when it was last heard from, which computer it is, each device it reaches (and why one does not answer), the last time it read the device's punches, and how many punches are waiting to be sent. **Settings** sets how often it reads punches (default every 15 minutes, last 2 days; the devices' own push of punches to the server carries on as before, this is the safety net behind it). **New pairing code** is for installing it again on another computer. **Disable connector** locks it out until you **Enable connector** again (you are asked to confirm: a change it is in the middle of is given up, and the page says the device may or may not have been changed); **Remove** sends its devices back to being connected directly. Someone whose role is limited to one branch can see that the connectors are there and how they are, but not the computers' names or addresses, and cannot add, change, re-pair or remove one (a connector serves every branch).
+
+When you read users, add, change or delete users, or fetch punches for such a device, the request goes to the connector and the page waits for its answer (a few seconds). If the connector's computer is off or has no internet, the page says so at once and nothing is changed.
+
 #### Daily Attendance View
 Select a **Month** and **Year** to see the attendance calendar for all employees. Each cell shows:
 - ✅ Present

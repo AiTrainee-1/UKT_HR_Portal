@@ -43,6 +43,7 @@ from .device_probe import (
     is_private_host,
     run_checks,
 )
+from . import device_remote
 from .models import AttendanceLog, BiometricDevice, BiometricProbe, BiometricUnknownPusher, UnmatchedPunch
 
 PROBE_HISTORY_KEEP = 30
@@ -288,10 +289,10 @@ def build_status(request=None, now=None) -> dict:
                 "lastError": errors[0]["message"] if errors and errors[0]["source"] == "push" else "",
                 "probe": probe_view if fresh_probe else None,
                 "reported": d.reported_config,
-                "serverOnCloud": info["deployment"] == "railway",
+                "serverOnCloud": info["deployment"] == "railway" and not d.connector_id,
                 "serverHost": info["host"],
                 "serverScheme": info["scheme"],
-                "privateAddress": is_private_host(d.host),
+                "privateAddress": is_private_host(d.host) and not d.connector_id,
                 "lanAnyReachable": lan_any,
                 "pushDelaySeconds": delay["medianSeconds"] if delay else None,
             }
@@ -417,12 +418,17 @@ def _password_of(device: BiometricDevice) -> int | None:
 def run_check(device_ids: list[int] | None = None) -> dict[int, dict]:
     """Check the given devices (every enabled one when none are named) from this server, and keep the results.
     Returns {device id: probe result}. Raises device_probe.CheckBusy when a check is already running."""
-    qs = BiometricDevice.objects.all()
+    qs = BiometricDevice.objects.select_related("connector")
     qs = qs.filter(pk__in=device_ids) if device_ids else qs.filter(is_active=True)
     devices = list(qs)
     targets = []
     results: dict[int, dict] = {}
     for d in devices:
+        if d.connector_id:
+            # the server cannot probe a device behind a Site Connector, and must not call it unreachable for that reason:
+            # what its connector reports is what is recorded
+            results[d.id] = device_remote.remote_check_result(d)
+            continue
         password = _password_of(d)
         if password is None:
             results[d.id] = {

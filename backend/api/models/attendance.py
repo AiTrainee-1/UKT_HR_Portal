@@ -626,6 +626,18 @@ class BiometricDevice(models.Model):
     # pinWidth, platform, firmware, serial}. Null until the first successful read.
     capacity = models.JSONField(null=True, blank=True, db_column="capacity")
 
+    # ── Which Site Connector reaches this device, if the server cannot ────────────────────────────────────────────
+    # Null = the server opens the connection itself (the HRMS running where it can reach the device). Set = a Site
+    # Connector on the device's own network does it, and the server never connects to this device at all.
+    connector = models.ForeignKey(
+        "BiometricSiteConnector",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        db_column="connector_id",
+        related_name="devices",
+    )
+
     class Meta:
         db_table = "biometric_devices"
         ordering = ["-is_default", "name"]
@@ -731,6 +743,142 @@ class BiometricFetchRun(models.Model):
     class Meta:
         db_table = "biometric_fetch_runs"
         ordering = ["-created_at"]
+
+
+class BiometricSiteConnector(models.Model):
+    """A Site Connector: the small Windows service that runs on a computer inside a factory, talks to that site's biometric
+    devices over the local network and reports to this server over outbound HTTPS (so no firewall rule is needed at the
+    site). One row per installed connector.
+
+    It is created here first, which makes a one-time pairing code; the connector exchanges the code for its own long
+    random token and from then on identifies itself with that. Only the SHA-256 of the code and of the token are kept,
+    so neither can be read back from the database. Deactivating the row (or deleting it) locks the connector out at its
+    very next request."""
+
+    name = models.TextField(unique=True)
+    notes = models.TextField(blank=True, default="")
+    is_active = models.BooleanField(default=True, db_column="is_active")
+    # sha256 hex of the token; empty until the connector has paired
+    token_hash = models.CharField(max_length=64, blank=True, default="", db_index=True, db_column="token_hash")
+    pairing_hash = models.CharField(max_length=64, blank=True, default="", db_column="pairing_hash")
+    pairing_expires_at = models.DateTimeField(null=True, blank=True, db_column="pairing_expires_at")
+    paired_at = models.DateTimeField(null=True, blank=True, db_column="paired_at")
+    # How often (minutes) the connector reads each device's log on its own and sends what is new to the HRMS, and how
+    # many days back each such read looks. 0 minutes = it does not. Live punches arrive by the device's own push; this is
+    # the safety net for a punch that push missed, and the only path for a device that cannot push.
+    punch_sync_minutes = models.IntegerField(default=15, db_column="punch_sync_minutes")
+    punch_sync_days = models.IntegerField(default=2, db_column="punch_sync_days")
+    # What the connector last said about itself
+    last_seen_at = models.DateTimeField(null=True, blank=True, db_column="last_seen_at")
+    last_remote_ip = models.TextField(blank=True, default="", db_column="last_remote_ip")
+    version = models.TextField(blank=True, default="")
+    hostname = models.TextField(blank=True, default="")
+    os_info = models.TextField(blank=True, default="", db_column="os_info")
+    # {"reportedAt", "uptimeSeconds", "outbox", "devices": {id: probe}, "sync": {id: last scheduled read}}
+    status = models.JSONField(default=dict, blank=True)
+    created_by = models.TextField(blank=True, default="", db_column="created_by")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "biometric_site_connectors"
+        ordering = ["name"]
+
+
+class BiometricDeviceOperation(models.Model):
+    """One change or read of devices that includes a device behind a Site Connector.
+
+    A device behind a connector cannot be answered inside the web request (the server has one worker and a 30 second
+    limit, and the connector reports back through that same server), so the request records what was asked here, starts
+    a job per connector device, and returns at once. When the last job reports, the operation is finished: the same code
+    that finishes a direct change stores the snapshots, makes employees Inactive, writes the audit entry and builds the
+    answer, which is kept in `final` for the page to pick up."""
+
+    kind = models.TextField()  # refresh | apply | delete
+    status = models.TextField(default="running")  # running | done | failed
+    # what was asked, without any device password: enough to finish the operation later
+    params = models.JSONField(default=dict, blank=True)
+    # who asked: {"jwtUser", "branchScope", "remoteAddr"}, so the audit entry and the branch rules apply as they would have
+    actor = models.JSONField(default=dict, blank=True)
+    # {str(device id): the device's result}, filled as each device finishes
+    results = models.JSONField(default=dict, blank=True)
+    final = models.JSONField(null=True, blank=True)
+    error = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+    finished_at = models.DateTimeField(null=True, blank=True, db_column="finished_at")
+
+    class Meta:
+        db_table = "biometric_device_operations"
+        ordering = ["-created_at"]
+
+
+class BiometricConnectorJob(models.Model):
+    """One thing a Site Connector has been asked to do on one of its devices. The connector asks for work, runs it on the
+    local network and reports the result. Nothing is ever pushed to the connector."""
+
+    STATUS_QUEUED = "queued"
+    STATUS_RUNNING = "running"
+    STATUS_SUCCEEDED = "succeeded"
+    STATUS_FAILED = "failed"
+    STATUS_EXPIRED = "expired"
+    STATUS_CANCELLED = "cancelled"
+    OPEN_STATUSES = (STATUS_QUEUED, STATUS_RUNNING)
+
+    connector = models.ForeignKey(
+        BiometricSiteConnector, on_delete=models.CASCADE, db_column="connector_id", related_name="jobs"
+    )
+    device = models.ForeignKey(
+        BiometricDevice, on_delete=models.CASCADE, db_column="device_id", related_name="connector_jobs"
+    )
+    operation = models.ForeignKey(
+        BiometricDeviceOperation,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        db_column="operation_id",
+        related_name="jobs",
+    )
+    kind = models.TextField()  # probe | read_users | apply_users | delete_users | read_punches
+    # What to do, including the device's address and Comm Key. Emptied as soon as the job finishes: it can hold the
+    # passwords of the users being added.
+    payload = models.JSONField(default=dict, blank=True)
+    status = models.TextField(default=STATUS_QUEUED)
+    result = models.JSONField(null=True, blank=True)
+    error_code = models.TextField(blank=True, default="", db_column="error_code")
+    error_message = models.TextField(blank=True, default="", db_column="error_message")
+    attempts = models.IntegerField(default=0)
+    # the last numbered chunk of punches received for a read_punches job, so a resent chunk is not stored twice
+    last_seq = models.IntegerField(default=0, db_column="last_seq")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    claimed_at = models.DateTimeField(null=True, blank=True, db_column="claimed_at")
+    finished_at = models.DateTimeField(null=True, blank=True, db_column="finished_at")
+    expires_at = models.DateTimeField(db_column="expires_at")
+
+    class Meta:
+        db_table = "biometric_connector_jobs"
+        ordering = ["created_at"]
+        indexes = [
+            models.Index(fields=["connector", "status"]),
+            models.Index(fields=["operation"]),
+            models.Index(fields=["status", "expires_at"]),
+        ]
+
+
+class BiometricConnectorPunch(models.Model):
+    """A punch a connector has read off a device for a read_punches job, held here until the manual fetch that asked for it
+    has processed it (then deleted). The device can only send its whole log, which can be 150,000 punches, so they arrive
+    in chunks and are assembled here rather than in one request."""
+
+    job = models.ForeignKey(
+        BiometricConnectorJob, on_delete=models.CASCADE, db_column="job_id", related_name="punches"
+    )
+    user_id = models.TextField(db_column="user_id")
+    punch_date = models.DateField(db_column="punch_date")
+    punch_time = models.TimeField(db_column="punch_time")
+    status = models.SmallIntegerField(default=0)
+
+    class Meta:
+        db_table = "biometric_connector_punches"
 
 
 class UnmatchedPunch(models.Model):

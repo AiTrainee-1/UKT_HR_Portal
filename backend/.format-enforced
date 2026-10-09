@@ -7,6 +7,9 @@ api/attendance_records_views.py
 api/auto_sync_views.py
 api/branch_scope.py
 api/clock.py
+api/connector_admin_views.py
+api/connector_auth.py
+api/connector_views.py
 api/ctc.py
 api/device_client.py
 api/device_control_views.py
@@ -15,6 +18,7 @@ api/device_directory.py
 api/device_fetch.py
 api/device_health.py
 api/device_probe.py
+api/device_remote.py
 api/device_status.py
 api/device_status_views.py
 api/email_catalog.py
@@ -179,6 +183,7 @@ api/tests_approval_workflow.py
 api/tests_arrival_rules.py
 api/tests_attendance_day_kinds.py
 api/tests_compensation_page.py
+api/tests_device_connector.py
 api/tests_device_control.py
 api/tests_device_fetch.py
 api/tests_device_status.py

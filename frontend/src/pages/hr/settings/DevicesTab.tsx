@@ -10,13 +10,57 @@ import {
   useCreateBiometricDevice,
   useUpdateBiometricDevice,
   useDeleteBiometricDevice,
+  useConnectors,
 } from "@/lib/api-client/custom-hooks";
+
+/** "Connect via": which Site Connector reaches a device the server cannot ("" = the server connects itself). */
+function ConnectViaSelect({
+  value,
+  onChange,
+  connectors,
+  testId,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  connectors: { id: number; name: string }[];
+  testId: string;
+}) {
+  if (connectors.length === 0) return null;
+  return (
+    <div className="space-y-1.5 sm:col-span-2">
+      <Label className="text-xs" htmlFor={testId}>
+        Connect via
+      </Label>
+      <select
+        id={testId}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full h-9 rounded-md border px-3 text-sm bg-background"
+        data-testid={testId}
+      >
+        <option value="">Directly from the server</option>
+        {connectors.map((c) => (
+          <option key={c.id} value={String(c.id)}>
+            Site connector: {c.name}
+          </option>
+        ))}
+      </select>
+      <p className="text-[11px] text-gray-400">
+        Choose a Site Connector when the server cannot reach this device (it is on a factory network). The address above
+        is then the device's address on that network (192.168.x.x), as the connector's computer sees it.
+      </p>
+    </div>
+  );
+}
 
 export default function DevicesTab() {
   const { toast } = useToast();
 
   // ── Biometric devices ────────────────────────────────────────────────────
   const { data: devices, isLoading: devicesLoading } = useListBiometricDevices();
+  // a role without Attendance access cannot list connectors: then the choice is simply not offered
+  const connectorList = useConnectors().data?.connectors ?? [];
+  const connectorName = (id?: number | null) => connectorList.find((c) => c.id === id)?.name;
 
   const createDevice = useCreateBiometricDevice();
 
@@ -35,17 +79,19 @@ export default function DevicesTab() {
     password: "",
     serialNumber: "",
     notes: "",
+    connectorId: "",
   });
 
   const [editingDeviceId, setEditingDeviceId] = useState<number | null>(null);
 
-  const [editDevice, setEditDevice] = useState({ host: "", port: "", password: "", serialNumber: "" });
+  const [editDevice, setEditDevice] = useState({ host: "", port: "", password: "", serialNumber: "", connectorId: "" });
 
   const startEditDevice = (d: {
     id: number;
     host: string;
     port: number | null;
     serialNumber?: string;
+    connectorId?: number | null;
     connectionConfig?: Record<string, unknown>;
   }) => {
     setEditingDeviceId(d.id);
@@ -54,6 +100,7 @@ export default function DevicesTab() {
       port: d.port ? String(d.port) : "",
       password: String((d.connectionConfig as any)?.password ?? ""),
       serialNumber: d.serialNumber ?? "",
+      connectorId: d.connectorId ? String(d.connectorId) : "",
     });
   };
 
@@ -65,6 +112,7 @@ export default function DevicesTab() {
           host: editDevice.host,
           port: editDevice.port ? Number(editDevice.port) : null,
           serialNumber: editDevice.serialNumber.trim(),
+          connectorId: editDevice.connectorId ? Number(editDevice.connectorId) : null,
           connectionConfig: { password: editDevice.password },
         } as any,
       });
@@ -89,6 +137,7 @@ export default function DevicesTab() {
         apiKey: newDevice.apiKey || undefined,
         notes: newDevice.notes || undefined,
         serialNumber: newDevice.serialNumber.trim() || undefined,
+        connectorId: newDevice.connectorId ? Number(newDevice.connectorId) : undefined,
         connectionConfig: newDevice.password ? { password: newDevice.password } : undefined,
       } as any);
       toast({ title: "Device added" });
@@ -101,6 +150,7 @@ export default function DevicesTab() {
         password: "",
         serialNumber: "",
         notes: "",
+        connectorId: "",
       });
       setShowAddDevice(false);
     } catch (e: any) {
@@ -197,6 +247,12 @@ export default function DevicesTab() {
                     onChange={(e) => setNewDevice((d) => ({ ...d, apiKey: e.target.value }))}
                   />
                 </div>
+                <ConnectViaSelect
+                  value={newDevice.connectorId}
+                  onChange={(v) => setNewDevice((d) => ({ ...d, connectorId: v }))}
+                  connectors={connectorList}
+                  testId="new-device-connector"
+                />
                 <div className="space-y-1.5 sm:col-span-2">
                   <Label className="text-xs">Notes</Label>
                   <Input
@@ -247,6 +303,9 @@ export default function DevicesTab() {
                       <p className="text-[11px] text-gray-400">
                         {d.deviceType} {d.host ? `· ${d.host}${d.port ? `:${d.port}` : ""}` : ""}
                         {d.serialNumber ? ` · ${d.serialNumber}` : ""}
+                        {d.connectorId
+                          ? ` · via site connector ${connectorName(d.connectorId) ?? "#" + d.connectorId}`
+                          : ""}
                         {d.isEnv ? " · configured in backend/.env" : ""}
                       </p>
                     </div>
@@ -313,6 +372,14 @@ export default function DevicesTab() {
                           onChange={(e) => setEditDevice((v) => ({ ...v, serialNumber: e.target.value }))}
                           placeholder="CQIK222560204"
                           data-testid="edit-device-serial"
+                        />
+                      </div>
+                      <div className="sm:col-span-4">
+                        <ConnectViaSelect
+                          value={editDevice.connectorId}
+                          onChange={(v) => setEditDevice((e) => ({ ...e, connectorId: v }))}
+                          connectors={connectorList}
+                          testId={`edit-device-connector-${d.id}`}
                         />
                       </div>
                       <div className="sm:col-span-4 flex gap-2">

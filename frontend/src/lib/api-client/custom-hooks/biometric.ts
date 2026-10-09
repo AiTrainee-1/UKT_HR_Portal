@@ -2,6 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { customFetch } from "../custom-fetch";
 import { SyncBiometricMode } from "./attendance";
+import { CONNECTORS_KEY, DEVICE_CONTROL_OVERVIEW_KEY } from "./device-control";
 import { SyncResult } from "./shared";
 
 // ── Biometric Sync Pipeline Progress ──────────────────────────────────────────
@@ -43,6 +44,8 @@ export type BiometricDeviceItem = {
   isDefault: boolean;
   /** The serial number the device pushes attendance under (shown on its Cloud Server screen); blank until known. */
   serialNumber?: string;
+  /** The Site Connector that reaches this device when the server cannot; null = the server connects itself. */
+  connectorId?: number | null;
   /** true for the read-only device configured via backend/.env */
   isEnv?: boolean;
   lastSyncedAt: string | null;
@@ -71,13 +74,19 @@ export const useCreateBiometricDevice = () => {
       isDefault?: boolean;
       notes?: string;
       serialNumber?: string;
+      connectorId?: number | null;
       connectionConfig?: Record<string, unknown>;
     }) =>
       customFetch<BiometricDeviceItem>("/api/biometric-devices", {
         method: "POST",
         body: JSON.stringify(data),
       }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: getBiometricDevicesQueryKey() }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getBiometricDevicesQueryKey() });
+      // which devices a Site Connector reaches, and what Device Control shows, follow a device being added, moved or removed
+      queryClient.invalidateQueries({ queryKey: CONNECTORS_KEY });
+      queryClient.invalidateQueries({ queryKey: DEVICE_CONTROL_OVERVIEW_KEY });
+    },
   });
 };
 
@@ -99,6 +108,7 @@ export const useUpdateBiometricDevice = () => {
         isDefault: boolean;
         notes: string;
         serialNumber: string;
+        connectorId: number | null;
         connectionConfig: Record<string, unknown>;
       }>;
     }) =>
@@ -106,7 +116,12 @@ export const useUpdateBiometricDevice = () => {
         method: "PUT",
         body: JSON.stringify(data),
       }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: getBiometricDevicesQueryKey() }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getBiometricDevicesQueryKey() });
+      // which devices a Site Connector reaches, and what Device Control shows, follow a device being added, moved or removed
+      queryClient.invalidateQueries({ queryKey: CONNECTORS_KEY });
+      queryClient.invalidateQueries({ queryKey: DEVICE_CONTROL_OVERVIEW_KEY });
+    },
   });
 };
 
@@ -114,7 +129,12 @@ export const useDeleteBiometricDevice = () => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => customFetch<void>(`/api/biometric-devices/${id}`, { method: "DELETE" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: getBiometricDevicesQueryKey() }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getBiometricDevicesQueryKey() });
+      // which devices a Site Connector reaches, and what Device Control shows, follow a device being added, moved or removed
+      queryClient.invalidateQueries({ queryKey: CONNECTORS_KEY });
+      queryClient.invalidateQueries({ queryKey: DEVICE_CONTROL_OVERVIEW_KEY });
+    },
   });
 };
 

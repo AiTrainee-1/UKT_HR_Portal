@@ -12,6 +12,11 @@ Device Control endpoints (Attendance → Device Control): the overview, Data Fet
   GET  /api/attendance/device-control/fetch/runs               the history, newest first
   GET  /api/attendance/device-control/fetch/runs/<id>          one run (the page polls this while it runs)
 
+Devices behind a Site Connector (connector_admin_views.py) cannot be answered inside the request, so a read, add,
+change or delete that includes one returns 202 {"operation": {...}} and the page polls
+GET /api/attendance/device-control/operations/<id> until its `final` answer is there. Changes that touch only
+devices the server connects to itself are answered at once (200), as they always were.
+
 They sit under /api/attendance/, so the Attendance module permission decides who may use them, as for the rest of the
 Attendance page: a GET needs View, everything else needs Edit. Making an employee Inactive additionally needs Edit on
 Employees (see device_directory.delete_users). Reading never changes a device; only the POSTs that say so do.
@@ -35,8 +40,8 @@ from .device_directory import (
     list_people,
     load_people,
     probe_devices,
-    refresh_users,
     save_employee_photo,
+    start_refresh,
 )
 from .branch_scope import get_branch_scope
 from .device_directory import SyncRunning
@@ -72,6 +77,11 @@ def _mask(request: Request) -> bool:
     return get_branch_scope(request) is not None
 
 
+def _answer(body: dict) -> Response:
+    """200 with the finished answer, or 202 when a connector is still working on it."""
+    return Response(body, status=202 if "operation" in body else 200)
+
+
 def _int_or_none(raw):
     try:
         return int(raw)
@@ -82,7 +92,7 @@ def _int_or_none(raw):
 @api_view(["GET"])
 @require_hr
 def device_control_overview(request: Request) -> Response:
-    devices = list(BiometricDevice.objects.all().order_by("name"))
+    devices = list(BiometricDevice.objects.select_related("connector").order_by("name"))
     fresh = request.query_params.get("fresh") in ("1", "true")
     probes = probe_devices(devices, fresh)
     now = timezone.now()
@@ -131,7 +141,7 @@ def device_control_refresh_users(request: Request) -> Response:
     ids = _int_list(request.data.get("deviceIds"))
     if ids is None:
         return _bad("deviceIds must be a list of device ids")
-    return Response({"results": refresh_users(ids or None)})
+    return _answer(start_refresh(request, ids or None))
 
 
 @api_view(["GET"])
@@ -173,7 +183,7 @@ def _change(request: Request, mode: str) -> Response:
     if ids is None or not isinstance(users, list):
         return _bad("deviceIds and users must be lists")
     try:
-        return Response(apply_users(request, ids, users, mode))
+        return _answer(apply_users(request, ids, users, mode))
     except SyncRunning as exc:
         return _bad(str(exc), 409)
     except ValueError as exc:
@@ -200,7 +210,7 @@ def device_control_delete_users(request: Request) -> Response:
     if not isinstance(user_ids, list) or ids is None:
         return _bad("userIds and deviceIds must be lists")
     try:
-        return Response(delete_users(request, user_ids, ids or None, _flag(request.data.get("markInactive"))))
+        return _answer(delete_users(request, user_ids, ids or None, _flag(request.data.get("markInactive"))))
     except SyncRunning as exc:
         return _bad(str(exc), 409)
     except ValueError as exc:

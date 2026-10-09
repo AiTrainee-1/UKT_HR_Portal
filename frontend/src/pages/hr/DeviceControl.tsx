@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
-import { CloudDownload, Cpu, Loader2, RefreshCw, UsersRound } from "lucide-react";
+import { Cable, CloudDownload, Cpu, Loader2, RefreshCw, UsersRound } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { useDeviceControlOverview, useRecheckDevices, useRefreshDeviceUsers } from "@/lib/api-client/custom-hooks";
 import { relativeTime } from "./device-status/logic";
+import ConnectorsTab from "./device-control/ConnectorsTab";
 import FetchTab from "./device-control/FetchTab";
 import OverviewTab from "./device-control/OverviewTab";
 import PushTab from "./device-control/PushTab";
@@ -94,6 +95,12 @@ export default function DeviceControl() {
               className="gap-1.5"
               onClick={() =>
                 recheck.mutate(undefined, {
+                  onSuccess: (fresh) => {
+                    // a device behind a Site Connector is looked at by the connector: its answer is a few seconds away
+                    // (it picks the job up within 5 seconds and then checks each device), so look again as it answers
+                    if (fresh.devices.some((d) => d.via))
+                      for (const ms of [3000, 7000, 12000, 20000]) setTimeout(() => overview.refetch(), ms);
+                  },
                   onError: (e) =>
                     toast({ title: "Could not check the devices", description: e.message, variant: "destructive" }),
                 })
@@ -107,15 +114,18 @@ export default function DeviceControl() {
           </div>
         </div>
 
-        <PillTabs
-          items={[
-            { value: "overview", label: "Overview", icon: <Cpu size={14} /> },
-            { value: "fetch", label: "Data Fetch", icon: <CloudDownload size={14} /> },
-            { value: "push", label: "Data Push", icon: <UsersRound size={14} /> },
-          ]}
-          value={tab}
-          onChange={(v) => navigate(pathForTab(v as DeviceControlTab))}
-        />
+        <div className="max-w-full overflow-x-auto">
+          <PillTabs
+            items={[
+              { value: "overview", label: "Overview", icon: <Cpu size={14} /> },
+              { value: "fetch", label: "Data Fetch", icon: <CloudDownload size={14} /> },
+              { value: "push", label: "Data Push", icon: <UsersRound size={14} /> },
+              { value: "connectors", label: "Site connectors", icon: <Cable size={14} /> },
+            ]}
+            value={tab}
+            onChange={(v) => navigate(pathForTab(v as DeviceControlTab))}
+          />
+        </div>
 
         {tab === "overview" && (
           <OverviewTab
@@ -126,7 +136,9 @@ export default function DeviceControl() {
             onRead={readOne}
           />
         )}
-        {tab !== "overview" && overview.isError && !data ? (
+        {tab === "connectors" ? (
+          <ConnectorsTab />
+        ) : tab !== "overview" && overview.isError && !data ? (
           <Card className="rounded-2xl ring-1 ring-red-200">
             <CardContent
               className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-red-700"

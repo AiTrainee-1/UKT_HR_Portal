@@ -403,6 +403,12 @@ export default function PushTab({
         </Button>
       </div>
 
+      {refresh.isPending && refresh.waiting && (
+        <p className="text-xs text-slate-500" role="status" data-testid="push-waiting">
+          {refresh.waiting}
+        </p>
+      )}
+
       <PeopleFilters
         filters={filters}
         onChange={change}

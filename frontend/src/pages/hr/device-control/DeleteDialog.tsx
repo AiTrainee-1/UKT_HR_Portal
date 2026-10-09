@@ -56,6 +56,7 @@ export default function DeleteDialog({
     () => canEditEmployees && people.some((p) => p.employee?.status === "active"),
   );
   const [busy, setBusy] = useState(false);
+  const waiting = busy ? remove.waiting : "";
 
   const unreachable = holding.filter((h) => chosen.has(h.device.id) && isUnreachable(h.device));
   const makesInactive = markInactive && canEditEmployees ? impact.employees : [];
@@ -216,6 +217,11 @@ export default function DeleteDialog({
         </div>
 
         <DialogFooter className="gap-2 sm:gap-2">
+          {waiting && (
+            <p className="mr-auto text-xs text-slate-500" role="status" data-testid="op-waiting">
+              {waiting}
+            </p>
+          )}
           <Button type="button" variant="ghost" onClick={onClose} disabled={busy}>
             Cancel
           </Button>

@@ -13,6 +13,10 @@ linked to the employee whose code equals their ID, and one with no such employee
 Device input/output runs on worker threads and returns plain data; every database read and write stays on the calling
 thread. That keeps the ORM off threads (and makes the logic testable inside a normal test transaction).
 
+A device behind a Site Connector (BiometricDevice.connector) is never connected to from here: the same work is queued as
+a job for the connector and the page polls an operation (device_remote.py). Direct and connector devices can be mixed in
+one change; the direct ones are done at once and the answer is finished when the last connector job reports.
+
 The HRMS is changed in exactly one way here: deleting a user from a device can also make their employee Inactive
 (the same Employee.status the bulk upload and an approved resignation set; the record is kept, so a rehire finds the
 history). Nothing about attendance, shifts or payroll is touched.
@@ -42,6 +46,7 @@ from .device_client import (
     open_session,
     timed_probe,
 )
+from . import device_remote
 from .device_health import connection_state, last_contact
 from .device_probe import is_private_host
 from .models import BiometricDevice, BiometricDeviceUser, Employee
@@ -153,8 +158,11 @@ def _read_device(host: str, port: int | None, password: int) -> dict:
         return {"ok": False, "code": exc.code, "error": exc.message}
 
 
+COMM_KEY_ERROR = "The Comm password in Settings → Devices is not a number (it is the device's Comm Key, usually 0)."
+
+
 def _devices_by_ids(device_ids) -> list[BiometricDevice]:
-    qs = BiometricDevice.objects.all().order_by("name")
+    qs = BiometricDevice.objects.select_related("connector").order_by("name")
     if device_ids:
         qs = qs.filter(pk__in=device_ids)
     else:
@@ -162,28 +170,26 @@ def _devices_by_ids(device_ids) -> list[BiometricDevice]:
     return list(qs)
 
 
-def refresh_users(device_ids=None) -> list[dict]:
-    """Read the user table of each device (every enabled one when none are named) into the snapshot.
-    One entry per device, in the order of the device names."""
-    devices = _devices_by_ids(device_ids)
-    jobs = []
+def _read_direct(devices: list[BiometricDevice]) -> dict[int, dict]:
+    """Read the user table of each device the server connects to itself, in parallel. {device pk: result}."""
+    results: dict[int, dict] = {}
+    runnable = []
     for d in devices:
         pw = password_of(d)
-        jobs.append((d, pw))
-    results: dict[int, dict] = {}
-    runnable = [(d, pw) for d, pw in jobs if pw is not None]
-    for d, pw in jobs:
         if pw is None:
-            results[d.pk] = {
-                "ok": False,
-                "code": "config",
-                "error": "The Comm password in Settings → Devices is not a number (it is the device's Comm Key, usually 0).",
-            }
+            results[d.pk] = {"ok": False, "code": "config", "error": COMM_KEY_ERROR}
+        else:
+            runnable.append((d, pw))
     if runnable:
         with ThreadPoolExecutor(max_workers=min(6, len(runnable))) as pool:
             futures = [(d, pool.submit(_guarded, _read_device, d.host, d.port, pw)) for d, pw in runnable]
             for d, future in futures:
                 results[d.pk] = future.result()
+    return results
+
+
+def finish_refresh(devices: list[BiometricDevice], results: dict[int, dict]) -> dict:
+    """Store what each device returned. One entry per device, in the order of the device names."""
     out = []
     for d in devices:
         r = results[d.pk]
@@ -193,7 +199,122 @@ def refresh_users(device_ids=None) -> list[dict]:
         else:
             BiometricDevice.objects.filter(pk=d.pk).update(users_read_error=r["error"][:1000])
             out.append({"deviceId": d.pk, "deviceName": d.name, "ok": False, "code": r["code"], "error": r["error"]})
-    return out
+    return {"results": out}
+
+
+def refresh_users(device_ids=None) -> list[dict]:
+    """Read the user table of each device the server connects to itself (every enabled one when none are named) into the
+    snapshot. Devices behind a Site Connector are read through start_refresh."""
+    devices = [d for d in _devices_by_ids(device_ids) if not device_remote.is_remote(d)]
+    return finish_refresh(devices, _read_direct(devices))["results"]
+
+
+def start_refresh(request, device_ids=None) -> dict:
+    """refresh_users for every device, including those behind a connector. {"results": [...]} when everything was done
+    here and now, {"operation": {...}} when a connector is still working (the page polls it)."""
+    devices = _devices_by_ids(device_ids)
+    return _dispatch(
+        request,
+        "refresh",
+        devices,
+        direct_fn=lambda d, pw: _read_device(d.host, d.port, pw),
+        job_kind="read_users",
+        payload=lambda d: {},
+        params={},
+        check_active=False,
+    )
+
+
+# ── running something on devices: directly, or as a job for the connector ──────────────────────────────────────────
+
+
+def _plan_devices(devices: list[BiometricDevice], check_active: bool):
+    """Sort devices into those that fail before anything is tried, those the server connects to, and those a connector
+    does. Returns (results so far, [(device, comm key)], [device])."""
+    results: dict[int, dict] = {}
+    direct: list[tuple[BiometricDevice, int]] = []
+    remote: list[BiometricDevice] = []
+    for d in devices:
+        pw = password_of(d)
+        if pw is None:
+            results[d.pk] = {"ok": False, "code": "config", "error": COMM_KEY_ERROR}
+        elif check_active and not d.is_active:
+            results[d.pk] = {
+                "ok": False,
+                "code": "disabled",
+                "error": "The device is switched off in Settings → Devices.",
+            }
+        elif device_remote.is_remote(d):
+            remote.append(d)
+        else:
+            direct.append((d, pw))
+    return results, direct, remote
+
+
+def _dispatch(request, kind, devices, direct_fn, job_kind, payload, params, check_active=True) -> dict:
+    """Do `kind` on `devices` and return the finished answer, or (if a connector is involved and has not yet reported) the
+    operation to poll. `direct_fn(device, comm key)` does it on a device the server connects to; `payload(device)` is what
+    a connector is told for the same device."""
+    results, direct, remote = _plan_devices(devices, check_active)
+    if direct:
+        with ThreadPoolExecutor(max_workers=min(6, len(direct))) as pool:
+            futures = [(d, pool.submit(_guarded, direct_fn, d, pw)) for d, pw in direct]
+            for d, future in futures:
+                results[d.pk] = future.result()
+    if not remote:
+        return _finish(kind, request, {**params, "deviceIds": [d.pk for d in devices]}, devices, results)
+    op = device_remote.start_operation(
+        request,
+        kind,
+        {**params, "deviceIds": [d.pk for d in devices]},
+        results,
+        [(d, job_kind, payload(d)) for d in remote],
+    )
+    if op.status == "done" and op.final is not None:
+        return op.final
+    return {"operation": device_remote.serialize_operation(op)}
+
+
+def _only_planned(results: dict[int, dict], plan: dict[int, list[str]] | None, keys: tuple[str, ...]) -> None:
+    """What a result says about users nobody asked about is not believed. It would be acted on (an employee made Inactive, a
+    snapshot changed) for someone nobody chose, perhaps of another branch, and the branch check was made on the ids that
+    were asked for. A user said to be deleted who is still in the list the device returned is not deleted either."""
+    if plan is None:
+        return
+    for pk, r in results.items():
+        allowed = set(plan.get(pk, ()))
+        for key in keys:
+            if isinstance(r.get(key), list):
+                r[key] = [u for u in r[key] if u in allowed]
+        users = r.get("users")
+        if "deleted" in keys and users is not None and isinstance(r.get("deleted"), list):
+            still = {u.user_id for u in users}
+            r["deleted"] = [u for u in r["deleted"] if u not in still]
+
+
+def _finish(kind: str, request, params: dict, devices: list[BiometricDevice], results: dict[int, dict]) -> dict:
+    if kind == "refresh":
+        return finish_refresh(devices, results)
+    if kind == "apply":
+        if "userIds" in params:
+            _only_planned(results, {d.pk: params["userIds"] for d in devices}, ("added", "updated"))
+        return finish_apply(request, params["mode"], devices, results, params.get("rejected", []))
+    if kind == "delete":
+        if "plan" in params:
+            _only_planned(results, {int(k): v for k, v in params["plan"].items()}, ("deleted", "absent"))
+        return finish_delete(request, params, devices, results)
+    raise ValueError(f"unknown operation kind {kind}")
+
+
+def finish_operation(op, results: dict[int, dict]) -> dict:
+    """Finish an operation that waited for connector jobs: the same code that finishes a direct change, with the request
+    rebuilt from who asked. `results` are the decoded results of every device."""
+    params = op.params or {}
+    ids = params.get("deviceIds") or []
+    devices = list(BiometricDevice.objects.select_related("connector").filter(pk__in=ids).order_by("name"))
+    for d in devices:
+        results.setdefault(d.pk, {"ok": False, "code": "lost", "error": device_remote.LOST_CONNECTOR})
+    return _finish(op.kind, device_remote.request_for(op.actor or {}), params, devices, results)
 
 
 # ── the overview: which devices can this server open a session with, right now ─────────────────────────────────────
@@ -208,7 +329,7 @@ def probe_devices(devices: list[BiometricDevice], fresh: bool = False) -> dict[i
     results: dict[int, dict] = {}
     todo = []
     for d in devices:
-        if not d.is_active:
+        if not d.is_active or device_remote.is_remote(d):
             continue
         cached = _probe_cache.get(d.pk)
         if cached and not fresh and now - cached[0] < PROBE_CACHE_SECONDS:
@@ -230,6 +351,8 @@ def probe_devices(devices: list[BiometricDevice], fresh: bool = False) -> dict[i
             for d, future in futures:
                 results[d.pk] = future.result()
                 _probe_cache[d.pk] = (time.monotonic(), results[d.pk])
+    # the devices behind a connector: what the connector last reported (a fresh check also asks it to look again)
+    results.update(device_remote.probe_remote(devices, fresh))
     return results
 
 
@@ -279,6 +402,15 @@ def device_summary(d: BiometricDevice, probe: dict | None, now: datetime) -> dic
         "deviceType": d.device_type,
         "isActive": d.is_active,
         "privateAddress": is_private_host(d.host),
+        "via": (
+            {
+                "id": d.connector_id,
+                "name": d.connector.name,
+                "online": device_remote.connector_online(d.connector, now),
+            }
+            if d.connector_id
+            else None
+        ),
         "connection": connection,
         "push": {
             "state": {"connected": "live", "disconnected": "silent", "never": "never", "disabled": "disabled"}[
@@ -773,27 +905,12 @@ def _apply_on_device(host, port, password, specs: list[UserSpec], mode: str) -> 
 
 
 def _run_on_devices(devices: list[BiometricDevice], fn_args) -> dict[int, dict]:
-    results: dict[int, dict] = {}
-    runnable = []
-    for d in devices:
-        pw = password_of(d)
-        if pw is None:
-            results[d.pk] = {
-                "ok": False,
-                "code": "config",
-                "error": "The Comm password in Settings → Devices is not a number (it is the device's Comm Key, usually 0).",
-            }
-        elif not d.is_active:
-            results[d.pk] = {
-                "ok": False,
-                "code": "disabled",
-                "error": "The device is switched off in Settings → Devices.",
-            }
-        else:
-            runnable.append((d, pw))
-    if runnable:
-        with ThreadPoolExecutor(max_workers=min(6, len(runnable))) as pool:
-            futures = [(d, pool.submit(_guarded, fn_args, d, pw)) for d, pw in runnable]
+    """Run fn_args(device, comm key) on each device the server connects to, in parallel. (Direct devices only: the
+    callers that can include connector devices go through _dispatch.)"""
+    results, direct, _remote = _plan_devices([d for d in devices if not device_remote.is_remote(d)], True)
+    if direct:
+        with ThreadPoolExecutor(max_workers=min(6, len(direct))) as pool:
+            futures = [(d, pool.submit(_guarded, fn_args, d, pw)) for d, pw in direct]
             for d, future in futures:
                 results[d.pk] = future.result()
     return results
@@ -827,7 +944,7 @@ def apply_users(request, device_ids, raw_users: list[dict], mode: str) -> dict:
         raise ValueError("Choose at least one user.")
     if len(raw_users) > MAX_USERS_PER_CHANGE:
         raise ValueError(f"Change at most {MAX_USERS_PER_CHANGE} users at a time.")
-    devices = list(BiometricDevice.objects.filter(pk__in=device_ids or []).order_by("name"))
+    devices = list(BiometricDevice.objects.select_related("connector").filter(pk__in=device_ids or []).order_by("name"))
     if not devices:
         raise ValueError("Choose at least one device.")
     if len(devices) > MAX_DEVICES_PER_CHANGE:
@@ -869,16 +986,47 @@ def apply_users(request, device_ids, raw_users: list[dict], mode: str) -> dict:
         rejected += [{"userId": u, "error": "This person belongs to another branch."} for u in sorted(blocked)]
         specs = [s for s in specs if s.user_id not in blocked]
 
-    results: dict[int, dict] = {}
-    if specs:
-        results = _run_on_devices(devices, lambda d, pw: _apply_on_device(d.host, d.port, pw, specs, mode))
-        for d in devices:
-            r = results[d.pk]
-            if r["ok"] and r.get("users") is not None:
-                store_snapshot(d, r["users"], r["capacity"])
-            elif not r["ok"]:
-                BiometricDevice.objects.filter(pk=d.pk).update(users_read_error=r["error"][:1000])
-    entries = [_device_entry(d, results[d.pk]) for d in devices] if specs else []
+    if not specs:
+        return {
+            "mode": mode,
+            "rejected": rejected,
+            "results": [],
+            "summary": {"added": 0, "updated": 0, "failed": len(rejected)},
+        }
+    return _dispatch(
+        request,
+        "apply",
+        devices,
+        direct_fn=lambda d, pw: _apply_on_device(d.host, d.port, pw, specs, mode),
+        job_kind="apply_users",
+        payload=lambda d: {"mode": mode, "specs": [_spec_payload(s) for s in specs]},
+        params={"mode": mode, "rejected": rejected, "userIds": [s.user_id for s in specs]},
+    )
+
+
+def _spec_payload(spec: UserSpec) -> dict:
+    """What a connector is told for one user: the fields to set (the ones the person left alone are null)."""
+    return {
+        "userId": spec.user_id,
+        "name": spec.name,
+        "privilege": spec.privilege,
+        "password": spec.password,
+        "card": spec.card,
+        "group": spec.group,
+    }
+
+
+def finish_apply(
+    request, mode: str, devices: list[BiometricDevice], results: dict[int, dict], rejected: list[dict]
+) -> dict:
+    """The answer to an add or change, and what it leaves behind: the snapshots, the audit entries."""
+    for d in devices:
+        r = results[d.pk]
+        if r["ok"] and r.get("users") is not None:
+            store_snapshot(d, r["users"], r["capacity"])
+        elif not r["ok"]:
+            BiometricDevice.objects.filter(pk=d.pk).update(users_read_error=r["error"][:1000])
+    entries = [_device_entry(d, results[d.pk]) for d in devices]
 
     added = sum(len(e["added"]) for e in entries)
     updated = sum(len(e["updated"]) for e in entries)
@@ -1020,14 +1168,14 @@ def delete_users(request, user_ids: list[str], device_ids=None, mark_inactive: b
         }
 
     if device_ids:
-        devices = list(BiometricDevice.objects.filter(pk__in=device_ids).order_by("name"))
+        devices = list(BiometricDevice.objects.select_related("connector").filter(pk__in=device_ids).order_by("name"))
         plan = {d.pk: list(user_ids) for d in devices}
     else:
         rows = BiometricDeviceUser.objects.filter(user_id__in=user_ids).values_list("device_id", "user_id")
         plan: dict[int, list[str]] = {}
         for device_id, user_id in rows:
             plan.setdefault(device_id, []).append(user_id)
-        devices = list(BiometricDevice.objects.filter(pk__in=plan).order_by("name"))
+        devices = list(BiometricDevice.objects.select_related("connector").filter(pk__in=plan).order_by("name"))
     if len(devices) > MAX_DEVICES_PER_CHANGE:
         raise ValueError("Too many devices in one change.")
 
@@ -1037,7 +1185,28 @@ def delete_users(request, user_ids: list[str], device_ids=None, mark_inactive: b
             "device_id", "user_id"
         )
     }
-    results = _run_on_devices(devices, lambda d, pw: _delete_on_device(d.host, d.port, pw, plan[d.pk]))
+    return _dispatch(
+        request,
+        "delete",
+        devices,
+        direct_fn=lambda d, pw: _delete_on_device(d.host, d.port, pw, plan[d.pk]),
+        job_kind="delete_users",
+        payload=lambda d: {"userIds": plan[d.pk]},
+        params={
+            "userIds": user_ids,
+            "markInactive": bool(mark_inactive),
+            "rejected": rejected,
+            "onSnapshot": sorted([device_id, user_id] for device_id, user_id in on_snapshot),
+            "plan": {str(pk): ids for pk, ids in plan.items()},
+        },
+    )
+
+
+def finish_delete(request, params: dict, devices: list[BiometricDevice], results: dict[int, dict]) -> dict:
+    """The answer to a delete, and its effects: the snapshots, the Inactive employees, the audit entry."""
+    on_snapshot = {(device_id, user_id) for device_id, user_id in params.get("onSnapshot", [])}
+    rejected = params.get("rejected", [])
+    mark_inactive = bool(params.get("markInactive"))
     entries = []
     for d in devices:
         r = results[d.pk]

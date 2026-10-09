@@ -288,9 +288,10 @@ export function CloudNotice({ devices }: { devices: DeviceControlDevice[] }) {
         <p className="font-bold">This server runs in the cloud, so it cannot reach the devices</p>
         <p className="text-xs leading-relaxed text-sky-900/80">
           Fetching punches and managing users opens a direct connection to each device, and the devices sit on the
-          factory network (192.168.x.x). Open the HRMS on a computer inside the factory (the local app) to use this
-          section, or have the firewall forward each device&apos;s port to this server. Punches themselves still reach
-          this server on their own: see Biometric Device Status.
+          factory network (192.168.x.x). Install a Site Connector on a computer at the factory (see the Site connectors
+          tab) and choose it for each device under Settings → Devices → Connect via, or have the firewall forward each
+          device&apos;s port to this server. Punches themselves still reach this server on their own: see Biometric
+          Device Status.
         </p>
       </div>
     </div>

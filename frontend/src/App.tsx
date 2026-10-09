@@ -116,11 +116,26 @@ const EmployeeNotifications = lazy(() => import("@/pages/employee/Notifications"
 
 // ERP pages
 import {
-  ErpDashboard, ProductionPlanning, Merchandising, PurchaseManagement,
-  InventoryManagement, FabricManagement, AccessoriesManagement,
-  OrderManagement, Sampling, QualityControl, Cutting, Sewing,
-  Finishing, Packing, ShipmentManagement, VendorManagement,
-  CustomerManagement, Finance, ErpReports, ErpSettings,
+  ErpDashboard,
+  ProductionPlanning,
+  Merchandising,
+  PurchaseManagement,
+  InventoryManagement,
+  FabricManagement,
+  AccessoriesManagement,
+  OrderManagement,
+  Sampling,
+  QualityControl,
+  Cutting,
+  Sewing,
+  Finishing,
+  Packing,
+  ShipmentManagement,
+  VendorManagement,
+  CustomerManagement,
+  Finance,
+  ErpReports,
+  ErpSettings,
 } from "@/pages/erp/ErpPlaceholder";
 
 const queryClient = new QueryClient({
@@ -166,10 +181,7 @@ function ProtectedRoute({
             is being restored. Same loader as the rest of the portal, with
             the mark, so a hard refresh looks like the app starting rather
             than like a different product. */}
-        <CircleLoader
-          logo
-          texts={["UK Textiles", "HR Portal", "Loading"]}
-        />
+        <CircleLoader logo texts={["UK Textiles", "HR Portal", "Loading"]} />
       </div>
     );
   }
@@ -245,266 +257,221 @@ function PageLoader() {
 function Router() {
   return (
     <Suspense fallback={<PageLoader />}>
-    <Switch>
-      {/* ── Public ────────────────────────────────────────────── */}
-      <Route path="/" component={Landing} />
-      <Route path="/login" component={LoginSelect} />
-      <Route path="/hr-login" component={HrLogin} />
-      <Route path="/employee-login" component={EmployeeLogin} />
-      <Route path="/erp-login" component={ErpLogin} />
-      <Route path="/set-password" component={SetPassword} />
-      <Route path="/apply/job/:id" component={JobApply} />
-      <Route path="/verify/:code" component={VerifyEmployee} />
-      <Route path="/db-offline" component={DatabaseOffline} />
-      <Route path="/server-error">{() => <ServerError />}</Route>
-      <Route path="/gate/outpass/:token" component={OutpassGate} />
-      <Route path="/gate/visitor/:token" component={VisitorGate} />
-      {/* Gate Scanner kiosk -literal /console route must be registered
+      <Switch>
+        {/* ── Public ────────────────────────────────────────────── */}
+        <Route path="/" component={Landing} />
+        <Route path="/login" component={LoginSelect} />
+        <Route path="/hr-login" component={HrLogin} />
+        <Route path="/employee-login" component={EmployeeLogin} />
+        <Route path="/erp-login" component={ErpLogin} />
+        <Route path="/set-password" component={SetPassword} />
+        <Route path="/apply/job/:id" component={JobApply} />
+        <Route path="/verify/:code" component={VerifyEmployee} />
+        <Route path="/db-offline" component={DatabaseOffline} />
+        <Route path="/server-error">{() => <ServerError />}</Route>
+        <Route path="/gate/outpass/:token" component={OutpassGate} />
+        <Route path="/gate/visitor/:token" component={VisitorGate} />
+        {/* Gate Scanner kiosk -literal /console route must be registered
           before the :loginToken param route, or "console" would itself be
           matched as a login token. */}
-      <Route path="/gate-scanner/console" component={GateScannerConsole} />
-      <Route path="/gate-scanner/:loginToken" component={GateScannerLogin} />
-      {/* Reception desk -same literal-before-param ordering as Gate Scanner above. */}
-      <Route path="/reception/console" component={ReceptionConsole} />
-      <Route path="/reception-login/:loginToken" component={ReceptionLogin} />
+        <Route path="/gate-scanner/console" component={GateScannerConsole} />
+        <Route path="/gate-scanner/:loginToken" component={GateScannerLogin} />
+        {/* Reception desk -same literal-before-param ordering as Gate Scanner above. */}
+        <Route path="/reception/console" component={ReceptionConsole} />
+        <Route path="/reception-login/:loginToken" component={ReceptionLogin} />
 
-      {/* ── HR Routes ─────────────────────────────────────────── */}
-      <Route path="/hr/dashboard">
-        {() => <ProtectedRoute component={HrDashboard} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/employees/new">
-        {() => <ProtectedRoute component={NewEmployee} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/employees/bulk-upload">
-        {() => <ProtectedRoute component={BulkUploadEmployees} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/employees/:id/edit">
-        {() => <ProtectedRoute component={EditEmployee} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/employees/:id">
-        {() => <ProtectedRoute component={EmployeeDetail} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/employees">
-        {() => <ProtectedRoute component={Employees} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/departments">
-        {() => <ProtectedRoute component={Departments} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/designations">
-        {() => <ProtectedRoute component={Designations} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/branches">
-        {() => <ProtectedRoute component={Branches} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/attendance/report-log">
-        {() => <ProtectedRoute component={AttendanceReportLog} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/outpass-visitors/outpass">
-        {() => <ProtectedRoute component={OutpassVisitors} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/outpass-visitors/visitors">
-        {() => <ProtectedRoute component={OutpassVisitors} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/outpass-visitors/tea-break">
-        {() => <ProtectedRoute component={OutpassVisitors} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/outpass-visitors">
-        {() => <ProtectedRoute component={OutpassVisitors} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/attendance/search">
-        {() => <ProtectedRoute component={AttendancePunchSearch} allowedRoles={["hr"]} />}
-      </Route>
-      {/* Route kept so the old page is reachable if inbound device access is
+        {/* ── HR Routes ─────────────────────────────────────────── */}
+        <Route path="/hr/dashboard">{() => <ProtectedRoute component={HrDashboard} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/employees/new">{() => <ProtectedRoute component={NewEmployee} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/employees/bulk-upload">
+          {() => <ProtectedRoute component={BulkUploadEmployees} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/employees/:id/edit">
+          {() => <ProtectedRoute component={EditEmployee} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/employees/:id">
+          {() => <ProtectedRoute component={EmployeeDetail} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/employees">{() => <ProtectedRoute component={Employees} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/departments">{() => <ProtectedRoute component={Departments} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/designations">{() => <ProtectedRoute component={Designations} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/branches">{() => <ProtectedRoute component={Branches} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/attendance/report-log">
+          {() => <ProtectedRoute component={AttendanceReportLog} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/outpass-visitors/outpass">
+          {() => <ProtectedRoute component={OutpassVisitors} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/outpass-visitors/visitors">
+          {() => <ProtectedRoute component={OutpassVisitors} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/outpass-visitors/tea-break">
+          {() => <ProtectedRoute component={OutpassVisitors} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/outpass-visitors">
+          {() => <ProtectedRoute component={OutpassVisitors} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/attendance/search">
+          {() => <ProtectedRoute component={AttendancePunchSearch} allowedRoles={["hr"]} />}
+        </Route>
+        {/* Route kept so the old page is reachable if inbound device access is
           ever set up -its header button is hidden, not removed. */}
-      <Route path="/hr/attendance/manual-import">
-        {() => <ProtectedRoute component={ManualPunchImport} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/attendance/punch-view">
-        {() => <ProtectedRoute component={PunchView} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/attendance/device-status">
-        {() => <ProtectedRoute component={BiometricDeviceStatus} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/attendance/DeviceControl">
-        {() => <ProtectedRoute component={DeviceControl} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/attendance/DeviceControl/fetch">
-        {() => <ProtectedRoute component={DeviceControl} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/attendance/DeviceControl/push">
-        {() => <ProtectedRoute component={DeviceControl} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/attendance/staff">
-        {() => <ProtectedRoute component={Attendance} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/attendance/production">
-        {() => <ProtectedRoute component={Attendance} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/attendance">
-        {() => <ProtectedRoute component={Attendance} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/promotion">
-        {() => <ProtectedRoute component={Promotion} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/increment">
-        {() => <ProtectedRoute component={Increment} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/bonus">
-        {() => <ProtectedRoute component={Bonus} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/id-cards">
-        {() => <ProtectedRoute component={IdCards} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/casual-leave">
-        {() => <ProtectedRoute component={CasualLeave} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/missing-punch">
-        {() => <ProtectedRoute component={MissingPunch} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/geo-attendance">
-        {() => <ProtectedRoute component={GeoAttendance} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/chat">
-        {() => <ProtectedRoute component={HrChat} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/shifts">
-        {() => <ProtectedRoute component={ManageShift} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/leave">
-        {() => <ProtectedRoute component={LeaveHoliday} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/requests">
-        {() => <ProtectedRoute component={ApprovedRequests} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/payroll">
-        {() => <ProtectedRoute component={StaffPayroll} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/production-payroll">
-        {() => <ProtectedRoute component={ProductionPayroll} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/salary">
-        {() => <Redirect to="/hr/payroll" />}
-      </Route>
-      <Route path="/hr/compensation">
-        {() => <ProtectedRoute component={Compensation} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/settlement">
-        {() => <ProtectedRoute component={Settlement} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/reports">
-        {() => <ProtectedRoute component={Reports} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/user-management">
-        {() => <ProtectedRoute component={UserManagement} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/user-management/:id">
-        {() => <ProtectedRoute component={ManagerDetail} allowedRoles={["hr"]} />}
-      </Route>
-      {/* ── Managing Director portal ─────────────────────────── */}
-      <Route path="/md">{() => <Redirect to="/md/dashboard" />}</Route>
-      <Route path="/md/dashboard">{() => <ProtectedRoute component={MdDashboard} allowedRoles={["hr"]} />}</Route>
-      <Route path="/md/attendance">{() => <ProtectedRoute component={MdAttendance} allowedRoles={["hr"]} />}</Route>
-      <Route path="/md/employees">{() => <ProtectedRoute component={MdEmployees} allowedRoles={["hr"]} />}</Route>
-      <Route path="/md/visitors">{() => <ProtectedRoute component={MdVisitors} allowedRoles={["hr"]} />}</Route>
-      <Route path="/md/tea-break">{() => <ProtectedRoute component={MdTeaBreak} allowedRoles={["hr"]} />}</Route>
-      <Route path="/md/payroll">{() => <ProtectedRoute component={MdPayroll} allowedRoles={["hr"]} />}</Route>
-      <Route path="/md/reports">{() => <ProtectedRoute component={MdReports} allowedRoles={["hr"]} />}</Route>
-      <Route path="/md/recruitment">{() => <ProtectedRoute component={MdRecruitment} allowedRoles={["hr"]} />}</Route>
-      <Route path="/md/activity">{() => <ProtectedRoute component={MdActivity} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/attendance/manual-import">
+          {() => <ProtectedRoute component={ManualPunchImport} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/attendance/punch-view">
+          {() => <ProtectedRoute component={PunchView} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/attendance/device-status">
+          {() => <ProtectedRoute component={BiometricDeviceStatus} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/attendance/DeviceControl">
+          {() => <ProtectedRoute component={DeviceControl} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/attendance/DeviceControl/fetch">
+          {() => <ProtectedRoute component={DeviceControl} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/attendance/DeviceControl/push">
+          {() => <ProtectedRoute component={DeviceControl} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/attendance/DeviceControl/connectors">
+          {() => <ProtectedRoute component={DeviceControl} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/attendance/staff">
+          {() => <ProtectedRoute component={Attendance} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/attendance/production">
+          {() => <ProtectedRoute component={Attendance} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/attendance">{() => <ProtectedRoute component={Attendance} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/promotion">{() => <ProtectedRoute component={Promotion} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/increment">{() => <ProtectedRoute component={Increment} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/bonus">{() => <ProtectedRoute component={Bonus} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/id-cards">{() => <ProtectedRoute component={IdCards} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/casual-leave">{() => <ProtectedRoute component={CasualLeave} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/missing-punch">
+          {() => <ProtectedRoute component={MissingPunch} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/geo-attendance">
+          {() => <ProtectedRoute component={GeoAttendance} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/chat">{() => <ProtectedRoute component={HrChat} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/shifts">{() => <ProtectedRoute component={ManageShift} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/leave">{() => <ProtectedRoute component={LeaveHoliday} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/requests">{() => <ProtectedRoute component={ApprovedRequests} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/payroll">{() => <ProtectedRoute component={StaffPayroll} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/production-payroll">
+          {() => <ProtectedRoute component={ProductionPayroll} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/salary">{() => <Redirect to="/hr/payroll" />}</Route>
+        <Route path="/hr/compensation">{() => <ProtectedRoute component={Compensation} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/settlement">{() => <ProtectedRoute component={Settlement} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/reports">{() => <ProtectedRoute component={Reports} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/user-management">
+          {() => <ProtectedRoute component={UserManagement} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/user-management/:id">
+          {() => <ProtectedRoute component={ManagerDetail} allowedRoles={["hr"]} />}
+        </Route>
+        {/* ── Managing Director portal ─────────────────────────── */}
+        <Route path="/md">{() => <Redirect to="/md/dashboard" />}</Route>
+        <Route path="/md/dashboard">{() => <ProtectedRoute component={MdDashboard} allowedRoles={["hr"]} />}</Route>
+        <Route path="/md/attendance">{() => <ProtectedRoute component={MdAttendance} allowedRoles={["hr"]} />}</Route>
+        <Route path="/md/employees">{() => <ProtectedRoute component={MdEmployees} allowedRoles={["hr"]} />}</Route>
+        <Route path="/md/visitors">{() => <ProtectedRoute component={MdVisitors} allowedRoles={["hr"]} />}</Route>
+        <Route path="/md/tea-break">{() => <ProtectedRoute component={MdTeaBreak} allowedRoles={["hr"]} />}</Route>
+        <Route path="/md/payroll">{() => <ProtectedRoute component={MdPayroll} allowedRoles={["hr"]} />}</Route>
+        <Route path="/md/reports">{() => <ProtectedRoute component={MdReports} allowedRoles={["hr"]} />}</Route>
+        <Route path="/md/recruitment">{() => <ProtectedRoute component={MdRecruitment} allowedRoles={["hr"]} />}</Route>
+        <Route path="/md/activity">{() => <ProtectedRoute component={MdActivity} allowedRoles={["hr"]} />}</Route>
 
-      <Route path="/hr/account-management/master">
-        {() => <ProtectedRoute component={AccountManagementMaster} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/account-management">
-        {() => <ProtectedRoute component={AccountManagement} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/activity-logs">
-        {() => <ProtectedRoute component={ActivityLogs} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/login-devices">
-        {() => <ProtectedRoute component={LoginDevices} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/mobile-app-login">
-        {() => <ProtectedRoute component={MobileAppLogin} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/whatsapp-control">
-        {() => <ProtectedRoute component={WhatsAppControl} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/gmail-control">
-        {() => <ProtectedRoute component={GmailControl} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/settings">
-        {() => <ProtectedRoute component={Settings} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/salary-slip">
-        {() => <Redirect to="/hr/payroll" />}
-      </Route>
-      <Route path="/hr/notifications">
-        {() => <ProtectedRoute component={HrNotifications} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/interviews">
-        {() => <ProtectedRoute component={Interviews} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/recruitment/dashboard">
-        {() => <ProtectedRoute component={RecruitmentDashboard} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/recruitment/new-joinees">
-        {() => <ProtectedRoute component={NewJoinees} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/recruitment/resignations">
-        {() => <ProtectedRoute component={Resignations} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/recruitment/required-roles">
-        {() => <ProtectedRoute component={RequiredRoles} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/recruitment/resume-screening">
-        {() => <ProtectedRoute component={ResumeScreening} allowedRoles={["hr"]} />}
-      </Route>
-      <Route path="/hr/recruitment/documents">
-        {() => <ProtectedRoute component={Documents} allowedRoles={["hr"]} />}
-      </Route>
+        <Route path="/hr/account-management/master">
+          {() => <ProtectedRoute component={AccountManagementMaster} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/account-management">
+          {() => <ProtectedRoute component={AccountManagement} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/activity-logs">
+          {() => <ProtectedRoute component={ActivityLogs} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/login-devices">
+          {() => <ProtectedRoute component={LoginDevices} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/mobile-app-login">
+          {() => <ProtectedRoute component={MobileAppLogin} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/whatsapp-control">
+          {() => <ProtectedRoute component={WhatsAppControl} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/gmail-control">
+          {() => <ProtectedRoute component={GmailControl} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/settings">{() => <ProtectedRoute component={Settings} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/salary-slip">{() => <Redirect to="/hr/payroll" />}</Route>
+        <Route path="/hr/notifications">
+          {() => <ProtectedRoute component={HrNotifications} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/interviews">{() => <ProtectedRoute component={Interviews} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/recruitment/dashboard">
+          {() => <ProtectedRoute component={RecruitmentDashboard} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/recruitment/new-joinees">
+          {() => <ProtectedRoute component={NewJoinees} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/recruitment/resignations">
+          {() => <ProtectedRoute component={Resignations} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/recruitment/required-roles">
+          {() => <ProtectedRoute component={RequiredRoles} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/recruitment/resume-screening">
+          {() => <ProtectedRoute component={ResumeScreening} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/recruitment/documents">
+          {() => <ProtectedRoute component={Documents} allowedRoles={["hr"]} />}
+        </Route>
 
-      {/* ── Employee Routes ───────────────────────────────────── */}
-      <Route path="/employee/dashboard">
-        {() => <ProtectedRoute component={EmployeeDashboard} allowedRoles={["employee"]} />}
-      </Route>
-      <Route path="/employee/profile">
-        {() => <ProtectedRoute component={EmployeeProfile} allowedRoles={["employee"]} />}
-      </Route>
-      <Route path="/employee/salary">
-        {() => <ProtectedRoute component={EmployeeSalary} allowedRoles={["employee"]} />}
-      </Route>
-      <Route path="/employee/leave">
-        {() => <ProtectedRoute component={EmployeeLeave} allowedRoles={["employee"]} />}
-      </Route>
-      <Route path="/employee/notifications">
-        {() => <ProtectedRoute component={EmployeeNotifications} allowedRoles={["employee"]} />}
-      </Route>
+        {/* ── Employee Routes ───────────────────────────────────── */}
+        <Route path="/employee/dashboard">
+          {() => <ProtectedRoute component={EmployeeDashboard} allowedRoles={["employee"]} />}
+        </Route>
+        <Route path="/employee/profile">
+          {() => <ProtectedRoute component={EmployeeProfile} allowedRoles={["employee"]} />}
+        </Route>
+        <Route path="/employee/salary">
+          {() => <ProtectedRoute component={EmployeeSalary} allowedRoles={["employee"]} />}
+        </Route>
+        <Route path="/employee/leave">
+          {() => <ProtectedRoute component={EmployeeLeave} allowedRoles={["employee"]} />}
+        </Route>
+        <Route path="/employee/notifications">
+          {() => <ProtectedRoute component={EmployeeNotifications} allowedRoles={["employee"]} />}
+        </Route>
 
-      {/* ── ERP Routes ────────────────────────────────────────── */}
-      <Route path="/erp/dashboard" component={ErpDashboard} />
-      <Route path="/erp/production" component={ProductionPlanning} />
-      <Route path="/erp/merchandising" component={Merchandising} />
-      <Route path="/erp/purchase" component={PurchaseManagement} />
-      <Route path="/erp/inventory" component={InventoryManagement} />
-      <Route path="/erp/fabric" component={FabricManagement} />
-      <Route path="/erp/accessories" component={AccessoriesManagement} />
-      <Route path="/erp/orders" component={OrderManagement} />
-      <Route path="/erp/sampling" component={Sampling} />
-      <Route path="/erp/quality" component={QualityControl} />
-      <Route path="/erp/cutting" component={Cutting} />
-      <Route path="/erp/sewing" component={Sewing} />
-      <Route path="/erp/finishing" component={Finishing} />
-      <Route path="/erp/packing" component={Packing} />
-      <Route path="/erp/shipment" component={ShipmentManagement} />
-      <Route path="/erp/vendors" component={VendorManagement} />
-      <Route path="/erp/customers" component={CustomerManagement} />
-      <Route path="/erp/finance" component={Finance} />
-      <Route path="/erp/reports" component={ErpReports} />
-      <Route path="/erp/settings" component={ErpSettings} />
+        {/* ── ERP Routes ────────────────────────────────────────── */}
+        <Route path="/erp/dashboard" component={ErpDashboard} />
+        <Route path="/erp/production" component={ProductionPlanning} />
+        <Route path="/erp/merchandising" component={Merchandising} />
+        <Route path="/erp/purchase" component={PurchaseManagement} />
+        <Route path="/erp/inventory" component={InventoryManagement} />
+        <Route path="/erp/fabric" component={FabricManagement} />
+        <Route path="/erp/accessories" component={AccessoriesManagement} />
+        <Route path="/erp/orders" component={OrderManagement} />
+        <Route path="/erp/sampling" component={Sampling} />
+        <Route path="/erp/quality" component={QualityControl} />
+        <Route path="/erp/cutting" component={Cutting} />
+        <Route path="/erp/sewing" component={Sewing} />
+        <Route path="/erp/finishing" component={Finishing} />
+        <Route path="/erp/packing" component={Packing} />
+        <Route path="/erp/shipment" component={ShipmentManagement} />
+        <Route path="/erp/vendors" component={VendorManagement} />
+        <Route path="/erp/customers" component={CustomerManagement} />
+        <Route path="/erp/finance" component={Finance} />
+        <Route path="/erp/reports" component={ErpReports} />
+        <Route path="/erp/settings" component={ErpSettings} />
 
-      <Route component={NotFound} />
-    </Switch>
+        <Route component={NotFound} />
+      </Switch>
     </Suspense>
   );
 }
@@ -517,29 +484,29 @@ function App() {
           {/* Inside AuthProvider so its /api/theme-settings fetch is
               authenticated; the cached theme still paints immediately. */}
           <ThemeProvider>
-          <BiometricSyncProvider>
-            <PayrollGenerationProvider>
-              <SalarySlipBulkProvider>
-                <WhatsAppBulkProvider>
-                  <ResumeScreeningProvider>
-                    <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-                      <ErrorBoundary>
-                        <Router />
-                      </ErrorBoundary>
-                      {/* The MD's AI assistant lives here, not in a page: every page mounts its own layout, so a panel
+            <BiometricSyncProvider>
+              <PayrollGenerationProvider>
+                <SalarySlipBulkProvider>
+                  <WhatsAppBulkProvider>
+                    <ResumeScreeningProvider>
+                      <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+                        <ErrorBoundary>
+                          <Router />
+                        </ErrorBoundary>
+                        {/* The MD's AI assistant lives here, not in a page: every page mounts its own layout, so a panel
                           inside it would reset on each navigation. It renders only for the MD, on /md/* pages. */}
-                      <AssistantHost />
-                    </WouterRouter>
-                    <GlobalSyncBanner />
-                    <GlobalPayrollBanner />
-                    <GlobalSalarySlipBulkBanner />
-                    <GlobalWhatsAppBulkBanner />
-                    <GlobalResumeScreeningBanner />
-                  </ResumeScreeningProvider>
-                </WhatsAppBulkProvider>
-              </SalarySlipBulkProvider>
-            </PayrollGenerationProvider>
-          </BiometricSyncProvider>
+                        <AssistantHost />
+                      </WouterRouter>
+                      <GlobalSyncBanner />
+                      <GlobalPayrollBanner />
+                      <GlobalSalarySlipBulkBanner />
+                      <GlobalWhatsAppBulkBanner />
+                      <GlobalResumeScreeningBanner />
+                    </ResumeScreeningProvider>
+                  </WhatsAppBulkProvider>
+                </SalarySlipBulkProvider>
+              </PayrollGenerationProvider>
+            </BiometricSyncProvider>
           </ThemeProvider>
         </AuthProvider>
         <Toaster />
