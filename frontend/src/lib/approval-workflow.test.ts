@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   addStep,
   availableChoices,
@@ -16,6 +16,7 @@ import {
   removeStep,
   setStepChoice,
   setStepMandatory,
+  setViewOnlyWorkflows,
   stepFromChoice,
   stepsEqual,
   trailLine,
@@ -176,6 +177,51 @@ describe("rejecting is told apart from approving", () => {
     expect(hodCanReject(block({ hod: true, hr: false }), false)).toBe(true);
     expect(hrCanReject(undefined, true)).toBe(true);
     expect(hodCanReject(null, false)).toBe(false);
+  });
+});
+
+describe("workflows a screen only shows (the Managing Director's view-only requests)", () => {
+  const request = (workflow: string): ApprovalProgress => ({
+    workflow,
+    label: workflow,
+    enabled: true,
+    steps: [],
+    currentStep: 0,
+    waitingFor: ["hr"],
+    canAct: { hod: false, hr: true },
+    canReject: { hod: false, hr: true },
+  });
+
+  afterEach(() => setViewOnlyWorkflows(null));
+
+  it("changes nothing until it is switched on", () => {
+    expect(hrCanAct(request("leave"), false)).toBe(true);
+    expect(hrCanReject(request("leave"), false)).toBe(true);
+    expect(hrCanAct(null, true)).toBe(true);
+  });
+
+  it("takes the HR buttons away for the listed workflows only", () => {
+    setViewOnlyWorkflows(["leave", "permission", "outpass"]);
+    for (const w of ["leave", "permission", "outpass"]) {
+      expect(hrCanAct(request(w), true), w).toBe(false);
+      expect(hrCanReject(request(w), true), w).toBe(false);
+    }
+    // another workflow keeps its buttons (the on-duty approvals on the Geo page)
+    expect(hrCanAct(request("on_duty"), false)).toBe(true);
+    expect(hrCanReject(request("on_duty"), false)).toBe(true);
+  });
+
+  it("treats a request with no progress as view-only while it is on (an outpass raised at the gate)", () => {
+    setViewOnlyWorkflows(["outpass"]);
+    expect(hrCanAct(null, true)).toBe(false);
+    expect(hrCanReject(undefined, true)).toBe(false);
+  });
+
+  it("does not touch the HOD's view, and switching it off puts everything back", () => {
+    setViewOnlyWorkflows(["leave"]);
+    expect(hodCanAct({ ...request("leave"), canAct: { hod: true, hr: true } }, false)).toBe(true);
+    setViewOnlyWorkflows([]);
+    expect(hrCanAct(request("leave"), false)).toBe(true);
   });
 });
 

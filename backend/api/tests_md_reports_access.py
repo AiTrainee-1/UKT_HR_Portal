@@ -124,7 +124,7 @@ class MdAndReports(TestCase):
         self.assertEqual(r.status_code, 200, r.content[:200])
 
     def test_being_the_md_does_not_open_the_rest_of_the_hr_portal(self):
-        for path in ("/api/employees", "/api/payroll", "/api/hr-users", "/api/audit-logs"):
+        for path in ("/api/salary-slips", "/api/payroll", "/api/hr-users", "/api/audit-logs"):
             self.assertIn(self.get(path, self.md).status_code, (401, 403, 404), path)
 
     def test_a_branch_limited_md_is_still_company_wide_in_reports(self):

@@ -1,44 +1,45 @@
 import type { ComponentType, ReactNode } from "react";
 import { clockText } from "@/lib/md/format";
+import { LiveChip, UpdatedRefresh } from "./MdHeaderParts";
 
 /**
- * The title row every MD page starts with: an icon tile, the title and what the page answers, and (on the right)
- * actions. `updatedAt` is the server's "numbers made at" stamp ("2026-10-05T10:42:10").
+ * The title row every MD page starts with, the same on all of them (see MdHeaderParts): the title with its Live chip and,
+ * under it, what the page answers or the date; the page's own buttons (`actions`) and, at the far right, when the data
+ * arrived and a Refresh button. A page that switches between views puts the switch in `tabs`, beside the title.
+ * `updatedAt` is the server's "numbers made at" stamp ("2026-10-05T10:42:10"); it replaces the client's "Updated" time.
+ *
+ * `icon` is accepted for the older call sites and is no longer drawn: the title row carries no icon tile.
  */
 export default function MdPageHeader({
-  icon: Icon,
   title,
   subtitle,
   actions,
+  tabs,
   updatedAt,
+  live = true,
 }: {
-  icon: ComponentType<{ size?: number }>;
+  icon?: ComponentType<{ size?: number }>;
   title: string;
-  subtitle: ReactNode;
+  subtitle?: ReactNode;
   actions?: ReactNode;
+  tabs?: ReactNode;
   updatedAt?: string | null;
+  live?: boolean;
 }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3" data-testid="md-page-header">
-      <div className="flex min-w-0 items-center gap-3">
-        <div className="rounded-2xl bg-gradient-to-br from-[#006496] to-[#0096c7] p-2.5 text-white shadow-sm">
-          <Icon size={22} />
-        </div>
-        <div className="min-w-0">
-          <h2 className="text-2xl font-black text-gray-900" data-testid="md-page-title">
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-3" data-testid="md-page-header">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <h2 className="text-[22px] font-black leading-7 tracking-tight text-[#1a3a4a]" data-testid="md-page-title">
             {title}
           </h2>
-          <p className="mt-0.5 text-sm text-muted-foreground">{subtitle}</p>
+          {live && <LiveChip />}
         </div>
+        {subtitle && <p className="mt-0.5 max-w-[34rem] text-xs font-medium text-[#003c64]/65">{subtitle}</p>}
       </div>
-      <div className="flex items-center gap-2">
-        {updatedAt && (
-          <span className="hidden text-[11px] text-[#006496]/55 sm:inline" data-testid="md-updated">
-            Numbers as of {clockText(updatedAt)}
-          </span>
-        )}
-        {actions}
-      </div>
+      {tabs}
+      <div className="ml-auto flex flex-wrap items-center gap-2">{actions}</div>
+      <UpdatedRefresh stamp={updatedAt ? `Numbers as of ${clockText(updatedAt)}` : undefined} />
     </div>
   );
 }

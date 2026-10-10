@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isMutatingControl, lockMutatingControls } from "./view-only-lock";
+import { isMutatingControl, lockIconOnlyDeletes, lockMutatingControls } from "./view-only-lock";
 
 function button(label: string, attrs: Record<string, string> = {}): HTMLButtonElement {
   const el = document.createElement("button");
@@ -56,6 +56,40 @@ describe("data-view-safe opt-out", () => {
     other.appendChild(b);
     lockMutatingControls(other);
     expect(b.disabled).toBe(true);
+  });
+});
+
+describe("lockIconOnlyDeletes", () => {
+  const bin = (extra = "") => `<button ${extra}><svg class="lucide lucide-trash-2"></svg></button>`;
+
+  it("hides and disables a bin with no words, which the name check cannot see", () => {
+    const root = document.createElement("div");
+    root.innerHTML = bin('id="x"');
+    expect(isMutatingControl(root.querySelector("#x") as HTMLButtonElement)).toBe(false);
+    lockIconOnlyDeletes(root);
+    const b = root.querySelector("#x") as HTMLButtonElement;
+    expect(b.disabled).toBe(true);
+    expect(b.style.display).toBe("none");
+  });
+
+  it("leaves other icon-only buttons, and buttons with words, alone", () => {
+    const root = document.createElement("div");
+    root.innerHTML =
+      '<button id="eye"><svg class="lucide lucide-eye"></svg></button>' +
+      '<button id="words"><svg class="lucide lucide-trash-2"></svg> Clear filters</button>' +
+      '<button id="named" aria-label="Clear"><svg class="lucide lucide-trash"></svg></button>';
+    lockIconOnlyDeletes(root);
+    for (const id of ["eye", "words", "named"]) {
+      expect((root.querySelector(`#${id}`) as HTMLButtonElement).disabled, id).toBe(false);
+    }
+  });
+
+  it("respects a view-safe container", () => {
+    const root = document.createElement("div");
+    root.setAttribute("data-view-safe", "");
+    root.innerHTML = bin('id="x"');
+    lockIconOnlyDeletes(root);
+    expect((root.querySelector("#x") as HTMLButtonElement).disabled).toBe(false);
   });
 });
 

@@ -10,6 +10,7 @@ analytics/tea_break.py and returns its envelope.
   GET offenders   repeat overrunners (?limit=&min=)
   GET rule        what counts as an overrun, in plain words (no period or scope)
   GET attention   "needs your attention" for the selected period and scope
+  GET story       the Insights tab's summary: a few plain sentences written from the figures above (no AI)
 """
 
 from django.urls import path
@@ -79,6 +80,12 @@ def attention(request):
     return tea.tea_attention(resolve_scope(params), resolve_period(params, default=DEFAULT_PERIOD))
 
 
+@md_get
+def story(request):
+    params = request_params(request)
+    return tea.tea_story(resolve_scope(params), resolve_period(params, default=DEFAULT_PERIOD))
+
+
 urlpatterns = [
     path("summary", summary),
     path("trend", trend),
@@ -88,4 +95,5 @@ urlpatterns = [
     path("offenders", offenders),
     path("rule", rule),
     path("attention", attention),
+    path("story", story),
 ]

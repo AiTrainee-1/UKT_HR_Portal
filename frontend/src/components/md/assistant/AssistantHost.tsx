@@ -17,10 +17,8 @@ const STYLES = `
   .assistant-orb-ring { animation: assistant-ring 3.2s ease-in-out infinite; }
   @keyframes assistant-orb { 0%,100% { transform: scale(.92); opacity: .75; } 50% { transform: scale(1.12); opacity: 1; } }
   @keyframes assistant-ring { 0%,100% { transform: scale(.96); opacity: .5; } 50% { transform: scale(1.06); opacity: 1; } }
-  .assistant-launcher-ring { box-shadow: 0 0 0 0 rgba(224,168,58,.55); animation: assistant-launcher 2.6s ease-out infinite; }
-  @keyframes assistant-launcher { 0% { box-shadow: 0 0 0 0 rgba(224,168,58,.5); } 70% { box-shadow: 0 0 0 14px rgba(224,168,58,0); } 100% { box-shadow: 0 0 0 0 rgba(224,168,58,0); } }
   @media (prefers-reduced-motion: reduce) {
-    .assistant-shimmer, .assistant-orb-glow, .assistant-orb-ring, .assistant-launcher-ring { animation: none; }
+    .assistant-shimmer, .assistant-orb-glow, .assistant-orb-ring { animation: none; }
     .assistant-shimmer { color: #7a5410; background: none; }
   }
 `;

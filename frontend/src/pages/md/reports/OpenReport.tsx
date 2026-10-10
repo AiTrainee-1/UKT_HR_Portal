@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PanelLeft } from "lucide-react";
 import AskAiButton from "@/components/md/kit/AskAiButton";
-import { RefreshButton } from "@/components/PageRefreshBar";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { usePublishAssistantContext } from "@/lib/md/assistant-store";
@@ -82,7 +81,6 @@ export function OpenReport({
                 </SheetContent>
               </Sheet>
               {spec && <AskAiButton size="md" label="Ask AI about this report" question={askAboutReport(spec, data)} />}
-              <RefreshButton />
             </>
           }
         />

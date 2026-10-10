@@ -69,3 +69,18 @@ export function lockMutatingControls(root: HTMLElement): void {
     if (isMutatingControl(btn) && !btn.disabled) btn.disabled = true;
   });
 }
+
+/**
+ * A row's bin: a <button> with only a trash icon and no words, which the name check above cannot see. A page that is
+ * view-only for someone (the Managing Director's Leave & Holiday and Requests) should not offer it, so it is hidden as
+ * well as disabled (a greyed-out bin says nothing). Only for icon-only buttons: a button with words is the name check's.
+ */
+export function lockIconOnlyDeletes(root: HTMLElement): void {
+  root.querySelectorAll<HTMLButtonElement>("button").forEach((btn) => {
+    if (btn.closest(`[${VIEW_SAFE_ATTR}]`)) return;
+    if ((btn.textContent ?? "").trim() !== "" || btn.getAttribute("aria-label") || btn.getAttribute("title")) return;
+    if (!btn.querySelector('svg[class*="lucide-trash"]')) return;
+    btn.disabled = true;
+    btn.style.display = "none";
+  });
+}

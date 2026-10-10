@@ -2,7 +2,7 @@ from django.http import JsonResponse
 
 from .auth import get_bearer_token
 from .jwt_utils import verify_token
-from .permission_registry import resolve_module, resolve_permission
+from .permission_registry import effective_permissions, resolve_module, resolve_permission
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 # auth/* must always be reachable to log in or check identity; healthz for
@@ -133,14 +133,16 @@ class HrPermissionMiddleware:
 
         # Cascading: a submodule (e.g. "employees.departments") with no
         # explicit entry inherits its parent's ("employees") level.
-        level = resolve_permission(hr_user.role.permissions if hr_user.role else {}, module_key)
+        # (effective_permissions adds the Managing Director's working access to the pages the MD portal reproduces)
+        level = resolve_permission(effective_permissions(hr_user), module_key)
 
         if level == "edit":
             return None
         if level == "view" and request.method in SAFE_METHODS:
             return None
 
-        return JsonResponse(
-            {"error": "permission_denied", "message": "You do not have access to this section."},
-            status=403,
-        )
+        message = "You do not have access to this section."
+        if hr_user.is_md and level == "view":
+            # a section the Managing Director may look at but not change (permission_registry.MD_VIEW_ONLY)
+            message = "The Managing Director can view this section but cannot change it."
+        return JsonResponse({"error": "permission_denied", "message": message}, status=403)

@@ -187,7 +187,9 @@ test.describe("the Managing Director identity", () => {
     ]) {
       await expect(mdPage.getByTestId(`md-nav-${id}`)).toBeVisible();
     }
-    await expect(mdPage.getByText("Account Management")).toHaveCount(0);
+    // no way into Account Management (the dashboard lists it among the Admin-only tools, locked: a button, not a link)
+    await expect(mdPage.locator('a[href*="account-management" i]')).toHaveCount(0);
+    await expect(mdPage.getByRole("link", { name: "Account Management" })).toHaveCount(0);
 
     // taking the identity away closes the door on the very next request
     const token = (await mdPage.evaluate(() => localStorage.getItem("uk_textile_token")))!;

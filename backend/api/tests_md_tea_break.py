@@ -74,7 +74,7 @@ from .tests_md_support import MdApiTestCase, make_md, md_headers
 NOW = datetime(2026, 9, 15, 10, 0, tzinfo=dt_timezone.utc)  # 15:30 IST on Tuesday 15 Sep 2026
 TODAY = date(2026, 9, 15)
 P = {"from": "2026-09-01", "to": "2026-09-14"}  # the period under test; the previous one is 2026-08-18..2026-08-31
-ROUTES = ["summary", "trend", "departments", "shifts", "heatmap", "offenders", "rule", "attention"]
+ROUTES = ["summary", "trend", "departments", "shifts", "heatmap", "offenders", "rule", "attention", "story"]
 
 
 def ist(month, day, hh=0, mm=0, ss=0, year=2026):
@@ -905,6 +905,16 @@ class EmptyDatabaseTests(MdApiTestCase):
         self.assertIsNone(o["shareOfMinutesLostPct"])
         self.assertEqual(self.api("attention")["items"], [])
 
+    def test_the_summary_says_so_when_nothing_was_scanned(self):
+        story = self.api("story")
+        self.assertEqual(
+            [s["text"] for s in story["sentences"]],
+            ["01 Sep – 14 Sep 2026: no tea-break scans were recorded for this selection."],
+        )
+        self.assertEqual(story["text"], story["sentences"][0]["text"])
+        self.assertEqual(tea.daily_minutes_lost(Scope(), resolve_period(P)), {})
+        self.assertEqual(tea.department_minutes_lost(Scope(), resolve_period(P)), {})
+
     def test_the_dashboard_pieces(self):
         self.assertEqual(tea.insights(today=TODAY), [])
         h = tea.headline(today=TODAY)
@@ -970,6 +980,102 @@ class ParameterTests(MdApiTestCase):
         s = self.get("/api/md/tea-break/summary").json()
         self.assertEqual(s["period"]["preset"], "last_30_days")
         self.assertEqual(s["period"]["days"], 30)
+
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+# the page's summary in plain English, and the daily / department minutes lost other pages compare with
+# ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+
+class StoryTests(GoldenBase):
+    def test_the_summary_is_made_of_the_pages_own_figures(self):
+        body = self.api("story")
+        self.assertEqual([s["id"] for s in body["sentences"]], ["volume", "lost", "attention"])
+        self.assertEqual(
+            [s["text"] for s in body["sentences"]],
+            [
+                # 28 breaks, 24 measured, 14 over the 15 minutes: 58.3 % (50.0 % before); c7, c8, o2, o3 are unmeasured
+                "01 Sep – 14 Sep 2026: 28 tea breaks were taken; 14 of the 24 that could be measured ran past the "
+                "15-minute allowance (58.3%, up 8.3 points on the previous 14 days). 4 more could not be measured "
+                "and are left out.",
+                "That cost 200 minutes (3.3 hours) beyond the allowance, up 140 minutes on the previous 14 days.",
+                "The most important item: 58% of tea breaks ran over the 15-minute allowance. "
+                "1 other item also needs a look.",
+            ],
+        )
+        self.assertEqual([s["tone"] for s in body["sentences"]], ["watch", "watch", "watch"])
+        self.assertEqual(body["text"], " ".join(s["text"] for s in body["sentences"]))
+        self.assertTrue(body["ask"].startswith("Explain tea-break discipline (01 Sep – 14 Sep 2026)"))
+
+    def test_the_figures_in_it_are_the_ones_the_summary_gives(self):
+        summary = self.api("summary")["metrics"]
+        text = self.api("story")["text"]
+        for figure in (summary["breaks"]["value"], summary["measured"]["value"], summary["overruns"]["value"]):
+            self.assertIn(str(figure), text)
+        self.assertIn(f"{summary['overrunPct']['value']}%", text)
+        self.assertIn(f"{summary['minutesLost']['value']} minutes", text)
+
+    def test_it_names_the_department_that_loses_the_most_time_once_the_sample_is_big_enough(self):
+        self.assertNotIn("where", [s["id"] for s in self.api("story")["sentences"]])  # 12 measured breaks: too few
+        with mock.patch.object(tea, "MIN_SAMPLE_BREAKS", 3):
+            sentences = {s["id"]: s["text"] for s in self.api("story")["sentences"]}
+        self.assertEqual(
+            sentences["where"],
+            "Stitching loses the most time: 150 minutes (75% of the total), with 66.7% of its breaks running over.",
+        )
+
+    def test_a_company_with_a_good_record_is_told_so(self):
+        TeaBreakLog.objects.all().delete()
+        for day in range(2, 12):  # twenty breaks, none over the allowance
+            for emp in (self.A, self.B):
+                TeaBreakLog.objects.create(employee=emp, out_at=ist(9, day, 10, 0), in_at=ist(9, day, 10, 12))
+        sentences = {s["id"]: s for s in self.api("story")["sentences"]}
+        self.assertEqual(sentences["lost"]["text"], "Nobody ran over, so no time was lost beyond the allowance.")
+        self.assertEqual(sentences["lost"]["tone"], "good")
+        self.assertEqual(sentences["volume"]["tone"], "neutral")
+
+    def test_breaks_that_cannot_be_measured_are_not_turned_into_a_rate(self):
+        TeaBreakLog.objects.all().delete()
+        TeaBreakLog.objects.create(employee=self.A, out_at=ist(9, 2, 10, 0))  # never came back
+        sentences = self.api("story")["sentences"]
+        self.assertEqual([s["id"] for s in sentences], ["volume", "attention"])
+        self.assertIn("none could be measured", sentences[0]["text"])
+        self.assertEqual(sentences[0]["tone"], "watch")
+
+    def test_the_selection_is_in_the_question_for_the_assistant(self):
+        body = self.api("story", department="Cutting")
+        self.assertIn("Cutting", body["ask"])
+        self.assertTrue(body["ask"].endswith("what should I look at first?"))
+
+    def test_it_carries_its_own_explanation(self):
+        ids = {p["id"] for p in self.api("story")["provenance"]}
+        self.assertTrue({"tea-story", "tea-overrun", "tea-minutes-lost"} <= ids)
+
+
+class MinutesLostHelperTests(GoldenBase):
+    """What the Outpass page sets beside its own hours: the days and departments behind the 200 minutes."""
+
+    def period(self):
+        return resolve_period(P)
+
+    def test_daily_minutes_add_up_to_the_summary(self):
+        per_day = tea.daily_minutes_lost(Scope(), self.period())
+        self.assertEqual(sum(v for v in per_day.values() if v is not None), 200)
+        self.assertEqual(per_day[date(2026, 9, 14)], 5)  # d4: 23:50 -> 00:10, 20 minutes, belongs to the 14th
+        self.assertEqual(per_day[date(2026, 9, 1)], 0)  # e1 on time: measured, nothing lost (not "no data")
+        self.assertIsNone(per_day[date(2026, 9, 12)])  # only o2, never closed: nothing measured
+        self.assertNotIn(date(2026, 9, 11), per_day)  # nobody scanned
+
+    def test_department_minutes_merge_a_name_shared_by_two_units(self):
+        by_department = tea.department_minutes_lost(Scope(), self.period())
+        # Stitching: C 120 + D 20 (Unit 2) + F 10; Cutting: A 21 + B 29; Admin was on time; G never scans
+        self.assertEqual(by_department, {"Stitching": 150, "Cutting": 50, "Admin": 0})
+        self.assertEqual(sum(by_department.values()), 200)
+
+    def test_the_selection_narrows_both(self):
+        scope = Scope(branch_ids=(self.u2.id,), labels={"branch": "Unit 2"})
+        self.assertEqual(tea.department_minutes_lost(scope, self.period()), {"Stitching": 20})  # only D
+        self.assertEqual(sum(v for v in tea.daily_minutes_lost(scope, self.period()).values() if v), 20)
 
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -1979,6 +2085,7 @@ class QueryCountTests(TestCase):
         ("heatmap", {}),
         ("offenders", {"min": 1}),
         ("attention", {}),
+        ("story", {}),
     ]
 
     def test_no_query_per_row(self):

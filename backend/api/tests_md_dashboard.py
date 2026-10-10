@@ -824,7 +824,7 @@ class Composition(MdApiTestCase):
             data = self.overview()
         self.assertEqual((data["kpis"], data["insights"], data["insightsTotal"]), ([], [], 0))
         self.assertTrue(all(not s["ok"] and "ran out of time" in s["error"] for s in data["sources"].values()))
-        self.assertEqual(data["units"], {"error": "Attendance Analytics was skipped: the Dashboard ran out of time."})
+        self.assertEqual(data["units"], {"error": "Staff Attendance was skipped: the Dashboard ran out of time."})
         self.assertEqual([s["id"] for s in data["briefing"]["sentences"]], ["exception"])
         self.assertEqual(data["briefing"]["sentences"][0]["text"], "The exception checks could not run just now.")
         self.assertEqual(len(data["notes"]), len(D.SOURCES))
@@ -848,7 +848,7 @@ class Composition(MdApiTestCase):
         attendance = world()("attendance")
         attendance.live_today = no_live
         data, _ = self.overview_failing(world(attendance=attendance))
-        self.assertEqual(data["units"], {"error": "Attendance Analytics could not be loaded just now."})
+        self.assertEqual(data["units"], {"error": "Staff Attendance could not be loaded just now."})
         self.assertEqual(len(data["kpis"]), 8)
 
     def test_a_unit_scope_narrows_only_the_unit_count_and_says_so(self):

@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef } from "react";
-import { RefreshButton } from "@/components/PageRefreshBar";
 import { usePublishAssistantContext } from "@/lib/md/assistant-store";
 import type { ReportCatalog } from "@/lib/report-center";
 import { ExecutiveShelf } from "./ExecutiveShelf";
@@ -24,7 +23,7 @@ export function ReportsHome({ catalog, scrollToTop }: { catalog: ReportCatalog; 
 
   return (
     <div className="space-y-6" ref={top} data-testid="md-reports-home">
-      <ReportsHeader actions={<RefreshButton />} />
+      <ReportsHeader />
       <ExecutiveShelf groups={library.executive} />
       <YourReports library={library} />
       <ReportLibrary library={library} />

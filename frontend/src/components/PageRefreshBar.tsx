@@ -15,11 +15,11 @@ function useLastUpdated(): number {
   );
 }
 
-const clock = (ms: number) =>
+export const clock = (ms: number) =>
   new Date(ms).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", second: "2-digit" });
 
-/** Reloads everything on the page in place; `busy` is true while it does. */
-function useRefreshAction() {
+/** Reloads everything on the page in place; `busy` is true while it does. (The MD portal's page header uses it too.) */
+export function useRefreshAction() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);

@@ -1,5 +1,7 @@
 from functools import wraps
 
+from django.db.models import Q
+
 from rest_framework.request import Request
 from rest_framework.response import Response
 
@@ -193,6 +195,27 @@ def require_super_admin(view_func):
             and HRUser.objects.filter(id=hr_user_id, is_active=True, is_super_admin=True).exists()
         )
         if not is_admin:
+            return Response({"error": "Administrator access required"}, status=403)
+        return view_func(request, *args, **kwargs)
+
+    return wrapper
+
+
+def require_super_admin_or_md(view_func):
+    """Like require_super_admin, and the Managing Director too: for the few read-only figures that a page the MD portal
+    copies from the HR portal shows (the Dashboard's activity counts). Nothing that changes anything uses this."""
+
+    @wraps(view_func)
+    @require_hr
+    def wrapper(request: Request, *args, **kwargs):
+        from .models import HRUser
+
+        hr_user_id = request.jwt_user.get("hrUserId")
+        allowed = (
+            hr_user_id is not None
+            and HRUser.objects.filter(id=hr_user_id, is_active=True).filter(Q(is_super_admin=True) | Q(is_md=True)).exists()
+        )
+        if not allowed:
             return Response({"error": "Administrator access required"}, status=403)
         return view_func(request, *args, **kwargs)
 

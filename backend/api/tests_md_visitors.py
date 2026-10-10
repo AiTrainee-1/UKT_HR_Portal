@@ -39,6 +39,7 @@ from django.test.utils import CaptureQueriesContext
 
 from .clock import FACTORY_TZ
 from .md_portal import common
+from .md_portal.analytics import tea_break as tea
 from .md_portal.analytics import visitors as A
 from .md_portal.assistant import registry
 from .md_portal.common import MdParamError, Period, Scope, read_only_db
@@ -54,15 +55,20 @@ from .models import (
     OutpassRecord,
     OutpassRequest,
     Role,
+    TeaBreakLog,
+    TeaBreakRule,
     Visitor,
     VisitorVisit,
 )
+from .reporting.definitions import gate_visitor_tea_common as TC
 from .tests_md_support import MdApiTestCase, md_headers
 
 NOW = datetime(2026, 10, 5, 12, 0, tzinfo=FACTORY_TZ)
 TODAY = date(2026, 10, 5)
 PERIOD = {"from": "2026-09-21", "to": "2026-10-04"}
 BASE = "/api/md/visitors/"
+#: The findings about the people who come IN; every other finding is about outpasses (the MD's two pages).
+VISITOR_FINDINGS = {"visitors.after-hours": "visitors", "visitors.frequent-visitors": "visitors"}
 
 
 def ist(month: int, day: int, hour: int = 0, minute: int = 0, year: int = 2026) -> datetime:
@@ -842,6 +848,8 @@ class PageContractTests(GateData):
         "trend": {"trend", "hours-out"},
         "activity": {"activity"},
         "units": {"units"},
+        "story": {"story", "passes", "hours-out", "return-rate", "waiting"},
+        "time-lost": {"time-lost", "hours-out", "tea-minutes-lost"},
     }
 
     def test_every_explanation_the_page_asks_for_exists(self):
@@ -980,7 +988,7 @@ class ExceptionsTests(GateData):
             titles["visitors.after-hours"], "2 visits outside 8:00 am to 6:00 pm between 21 Sep – 04 Oct 2026"
         )
         for item in items:
-            self.assertEqual(item["page"], "visitors")
+            self.assertEqual(item["page"], VISITOR_FINDINGS.get(item["id"], "outpass"), item["id"])
             self.assertTrue(item["ask"].endswith("?"))
             self.assertTrue(item["metric"])
 
@@ -1328,6 +1336,32 @@ class EmptyDatabaseTests(MdApiTestCase):
         a = self.get(BASE + "activity", **PERIOD).json()
         self.assertEqual((a["total"], a["items"], a["hasMore"]), (0, [], False))
 
+    def test_the_summaries_say_so_when_there_is_nothing_to_summarise(self):
+        outpass = self.get(BASE + "story", focus="outpass", **PERIOD).json()
+        self.assertEqual(
+            [s["text"] for s in outpass["sentences"]],
+            [
+                "No employee asked for an outpass between 21 Sep – 04 Oct 2026.",
+                "Nothing about outpasses needs your attention in this period.",
+            ],
+        )
+        visitors = self.get(BASE + "story", focus="visitors", **PERIOD).json()
+        self.assertEqual(
+            [s["text"] for s in visitors["sentences"]],
+            [
+                "Nobody checked in at the gate between 21 Sep – 04 Oct 2026.",
+                "Nothing about visitors needs your attention in this period.",
+            ],
+        )
+
+    def test_time_lost_has_nulls_not_zeros_when_nothing_was_measured(self):
+        body = self.get(BASE + "time-lost", **PERIOD).json()
+        for key in ("outpassMinutes", "teaMinutes", "togetherMinutes"):
+            self.assertEqual((body["totals"][key]["value"], body["totals"][key]["change"]), (None, None), key)
+        self.assertEqual(len(body["points"]), 14)
+        self.assertEqual(sum(p["outpassMinutes"] + p["teaMinutes"] for p in body["points"]), 0)
+        self.assertEqual((body["byDepartment"], body["departmentsTotal"], body["outpassByReason"]), ([], 0, []))
+
     def test_the_dashboard_hooks_work_on_nothing(self):
         self.assertEqual(A.insights(today=TODAY), [])
         h = A.headline(today=TODAY)
@@ -1380,7 +1414,7 @@ class DashboardHookTests(GateData):
         )  # last Monday: Asha's 30 minutes
         for k in h["kpis"]:
             self.assertEqual(len(k["spark"]), 14)
-            self.assertEqual(k["page"], "visitors")
+        self.assertEqual([k["page"] for k in h["kpis"]], ["visitors", "outpass", "outpass"])  # each opens its own page
         self.assertEqual(visitors["spark"][-1], 2)  # today
         self.assertEqual(hours["spark"][:4], [30, 10, 60, 150])  # 22, 23, 24, 25 Sep
         self.assertTrue(h["provenance"])
@@ -1414,6 +1448,7 @@ class ToolTests(GateData):
                 "gate_trend",
                 "gate_activity_on_date",
                 "search_gate_activity",
+                "time_lost_comparison",
             },
         )
         self.assertTrue(names <= set(registry.collect_tools()))
@@ -1513,11 +1548,253 @@ class ToolTests(GateData):
         self.assertEqual(tool["outpass"]["hoursOut"], page["outpass"]["hoursOut"])
 
 
+# ─── each page's summary in plain English ─────────────────────────────────────────────────────────────────────────
+
+
+class StoryTests(GateData):
+    def story(self, focus, **params):
+        return self.json("story", focus=focus, **params)
+
+    def test_the_outpass_summary_is_made_of_the_pages_own_figures(self):
+        body = self.story("outpass")
+        self.assertEqual(body["focus"], "outpass")
+        self.assertEqual([s["id"] for s in body["sentences"]], ["volume", "time", "control", "attention"])
+        self.assertEqual(
+            [s["text"] for s in body["sentences"]],
+            [
+                # 12 requests (5 before): 10 approved, 1 rejected, P10 undecided
+                "12 outpass requests were made between 21 Sep – 04 Oct 2026 (up 7 on the previous 14 days): "
+                "10 approved, 1 rejected, 1 not yet decided.",
+                # 325 minutes over 7 returned passes (46 each); 300 before
+                "Employees spent 5h 25m outside the gate on the passes that were scanned back in "
+                "(46m each on average; up 25 minutes on the previous 14 days).",
+                # 7 returned of 7 + P7 never returned; P14 is outside right now
+                "7 of the 8 passes that left were scanned back in (87.5%); 1 never came back, and 1 employee is "
+                "outside right now.",
+                "The most important item: 2 outpass requests waiting more than 24 hours for a decision. "
+                "3 other items also need a look.",
+            ],
+        )
+        self.assertEqual(body["text"], " ".join(s["text"] for s in body["sentences"]))
+        self.assertEqual([s["tone"] for s in body["sentences"]], ["neutral", "watch", "watch", "watch"])
+        self.assertTrue(body["ask"].startswith("Explain the outpass picture between 21 Sep – 04 Oct 2026"))
+
+    def test_the_visitors_summary_is_made_of_the_pages_own_figures(self):
+        body = self.story("visitors")
+        self.assertEqual(body["focus"], "visitors")
+        self.assertEqual([s["id"] for s in body["sentences"]], ["volume", "peak", "mix", "attention"])
+        self.assertEqual(
+            [s["text"] for s in body["sentences"]],
+            [
+                "11 visits by 6 different visitors between 21 Sep – 04 Oct 2026 (up 7 on the previous 14 days), "
+                "about 0.8 a day.",
+                "The busiest hour is 11:00–11:59 and the busiest day Tue 22 Sep (2 visits).",
+                "2 visits were outside 8:00 am to 6:00 pm; 3 visitors came more than once.",
+                "Nothing urgent. For your information: 2 visits outside 8:00 am to 6:00 pm between 21 Sep – 04 Oct 2026.",
+            ],
+        )
+        self.assertTrue(body["ask"].startswith("Explain visitor traffic between 21 Sep – 04 Oct 2026"))
+        story = next(p for p in body["provenance"] if p["id"] == "story")
+        self.assertTrue(any("no check-out" in c for c in story["caveats"]))  # said, not faked
+
+    def test_each_summary_quotes_its_own_half_only(self):
+        outpass = " ".join(s["text"] for s in self.story("outpass")["sentences"])
+        visitors = " ".join(s["text"] for s in self.story("visitors")["sentences"])
+        self.assertNotIn("visits", outpass)
+        self.assertNotIn("outpass request", visitors)
+
+    def test_every_figure_in_it_is_the_figure_the_summary_gives(self):
+        for scope in ({}, {"department": "Cutting"}, {"branch": self.u2.id}, {"type": "staff"}):
+            page = self.json("summary", **scope)
+            text = " ".join(s["text"] for s in self.story("outpass", **scope)["sentences"])
+            requests = page["outpass"]["requests"]["value"]
+            if requests:
+                self.assertIn(f"{requests} outpass request", text, scope)
+            minutes = page["outpass"]["minutesOut"]["value"]
+            if minutes:
+                self.assertIn(A._hm(minutes), text, scope)
+            visits = page["visitors"]["visits"]["value"]
+            vtext = " ".join(s["text"] for s in self.story("visitors", **scope)["sentences"])
+            if visits:
+                self.assertIn(f"{visits} visit", vtext, scope)
+
+    def test_the_summary_follows_the_period_and_the_selection(self):
+        body = self.story("outpass", department="Accounts")  # Dev: one rejected and one pending request
+        self.assertEqual(
+            body["sentences"][0]["text"],
+            "2 outpass requests were made between 21 Sep – 04 Oct 2026 (up 1 on the previous 14 days): "
+            "1 rejected, 1 not yet decided.",
+        )
+        self.assertTrue(body["ask"].endswith("what should I look at first?"))
+        self.assertIn("Accounts", body["ask"])
+
+    def test_an_unknown_page_is_a_readable_400(self):
+        r = self.get(BASE + "story", focus="tea", **PERIOD)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("'focus' must be one of: outpass, visitors", r.json()["error"])
+
+    def test_the_default_page_is_outpass(self):
+        self.assertEqual(self.json("story")["focus"], "outpass")
+
+
+class StoryRuleTests(SimpleTestCase):
+    def test_the_attention_sentence_says_what_matters_most_and_how_much_else_there_is(self):
+        def item(severity, title):
+            return {"severity": severity, "title": title}
+
+        said = lambda items: tea.attention_line(items, "outpasses")  # noqa: E731
+        self.assertEqual(
+            said([]),
+            {"id": "attention", "text": "Nothing about outpasses needs your attention in this period.", "tone": "good"},
+        )
+        one = said([item("critical", "3 requests are stuck"), item("info", "x")])
+        self.assertEqual((one["text"], one["tone"]), ("The most important item: 3 requests are stuck.", "watch"))
+        many = said([item("warning", "A"), item("warning", "B"), item("critical", "C")])["text"]
+        self.assertEqual(many, "The most important item: A. 2 other items also need a look.")
+        two = said([item("warning", "A"), item("warning", "B")])["text"]
+        self.assertEqual(two, "The most important item: A. 1 other item also needs a look.")
+        good = said([item("good", "Time out fell 20%"), item("info", "x")])
+        self.assertEqual(
+            (good["text"], good["tone"]), ("Nothing urgent, and some good news: Time out fell 20%.", "good")
+        )
+        info = said([item("info", "2 visits after hours")])
+        self.assertEqual(
+            (info["text"], info["tone"]), ("Nothing urgent. For your information: 2 visits after hours.", "neutral")
+        )
+
+    def test_numbers_are_written_the_way_the_company_reads_them(self):
+        self.assertEqual(A._n(1234567), "12,34,567")
+        self.assertEqual(A._n(0.8, 1), "0.8")
+        self.assertEqual(A._n(46.0, 1), "46")  # no trailing ".0"
+        self.assertEqual(A._n(1500.5, 1), "1,500.5")
+        self.assertEqual(A._n(None), "—")
+
+    def test_the_comparison_wording(self):
+        period = Period(date(2026, 9, 21), date(2026, 10, 4), "custom", "x")
+        self.assertEqual(A._before(period), "the previous 14 days")
+        self.assertEqual(A._before(Period(date(2026, 9, 21), date(2026, 9, 21), "custom", "x")), "the day before")
+        up = {"change": {"abs": 7.0, "pct": 175.0}}
+        self.assertEqual(A._moved(up, "", period), "up 7 on the previous 14 days")
+        self.assertEqual(
+            A._moved({"change": {"abs": -12.5, "pct": -12.5}}, " points", period, 1),
+            "down 12.5 points on the previous 14 days",
+        )
+        self.assertEqual(A._moved({"change": {"abs": 0.0, "pct": 0.0}}, "", period), "")  # nothing moved
+        self.assertEqual(A._moved({"change": None}, "", period), "")  # nothing to compare with
+
+
+# ─── time lost: outpasses beside tea breaks ───────────────────────────────────────────────────────────────────────
+
+
+class TimeLostTests(GateData):
+    """The tea breaks, on top of the gate fixture (allowance 15 minutes; out -> in, minutes beyond the allowance):
+    E1 22 Sep 10:00-10:30 (30, lost 15) and 15:00-15:10 (10);  E2 23 Sep 10:00-10:25 (25, lost 10);  E3 29 Sep
+    10:00-10:20 (20, lost 5);  E4 24 Sep 11:00-11:15 (15);  E5 30 Sep 10:00-11:00 (60, lost 45);  and before the period
+    E1 10 Sep 10:00-10:20 (20, lost 5).  Lost in the period 75, before it 5."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        TeaBreakRule.objects.create(pk=1, allowed_minutes=15)
+
+        def brk(emp, month, day, start, end):
+            TeaBreakLog.objects.create(employee=emp, out_at=ist(month, day, *start), in_at=ist(month, day, *end))
+
+        brk(cls.e1, 9, 22, (10, 0), (10, 30))
+        brk(cls.e1, 9, 22, (15, 0), (15, 10))
+        brk(cls.e2, 9, 23, (10, 0), (10, 25))
+        brk(cls.e3, 9, 29, (10, 0), (10, 20))
+        brk(cls.e4, 9, 24, (11, 0), (11, 15))
+        brk(cls.e5, 9, 30, (10, 0), (11, 0))
+        brk(cls.e1, 9, 10, (10, 0), (10, 20))
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(TC, "now_utc", return_value=NOW)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_totals_against_the_previous_period(self):
+        totals = self.json("time-lost")["totals"]
+        self.assertEqual(totals["outpassMinutes"], {"value": 325, "previous": 300, "change": {"abs": 25.0, "pct": 8.3}})
+        self.assertEqual(totals["teaMinutes"], {"value": 75, "previous": 5, "change": {"abs": 70.0, "pct": 1400.0}})
+        self.assertEqual(
+            totals["togetherMinutes"], {"value": 400, "previous": 305, "change": {"abs": 95.0, "pct": 31.1}}
+        )
+
+    def test_the_tea_side_is_the_tea_break_pages_own_figure(self):
+        mine = self.json("time-lost")["totals"]["teaMinutes"]
+        page = self.get("/api/md/tea-break/summary", **PERIOD).json()["metrics"]["minutesLost"]
+        self.assertEqual(mine, {k: page[k] for k in ("value", "previous", "change")})
+
+    def test_a_point_for_every_day_adding_up_to_the_totals(self):
+        body = self.json("time-lost")
+        self.assertEqual((body["granularity"], len(body["points"]), body["allowedMinutes"]), ("day", 14, 15))
+        by_key = {p["key"]: p for p in body["points"]}
+        self.assertEqual((by_key["2026-09-22"]["outpassMinutes"], by_key["2026-09-22"]["teaMinutes"]), (30, 15))
+        self.assertEqual((by_key["2026-09-25"]["outpassMinutes"], by_key["2026-09-25"]["teaMinutes"]), (150, 0))
+        self.assertEqual((by_key["2026-09-29"]["outpassMinutes"], by_key["2026-09-29"]["teaMinutes"]), (0, 5))
+        self.assertEqual(
+            (by_key["2026-09-24"]["outpassMinutes"], by_key["2026-09-24"]["teaMinutes"]), (60, 0)
+        )  # E4 on time
+        self.assertEqual(sum(p["outpassMinutes"] for p in body["points"]), 325)
+        self.assertEqual(sum(p["teaMinutes"] for p in body["points"]), 75)
+
+    def test_a_long_period_is_rolled_up_to_weeks_without_losing_a_minute(self):
+        body = self.json("time-lost", **{"from": "2026-07-01", "to": "2026-10-04"})
+        self.assertEqual(body["granularity"], "week")
+        self.assertEqual(sum(p["days"] for p in body["points"]), 96)
+        totals = body["totals"]
+        self.assertEqual(sum(p["outpassMinutes"] for p in body["points"]), totals["outpassMinutes"]["value"])
+        self.assertEqual(sum(p["teaMinutes"] for p in body["points"]), totals["teaMinutes"]["value"])
+        self.assertEqual(body["points"][0]["key"], "2026-06-29")  # the Monday of the first week
+
+    def test_by_department_merges_both_kinds_and_drops_departments_with_nothing(self):
+        body = self.json("time-lost")
+        self.assertEqual(
+            body["byDepartment"],
+            [
+                {"department": "Stitching", "outpassMinutes": 310, "teaMinutes": 70, "totalMinutes": 380},
+                {"department": "Cutting", "outpassMinutes": 15, "teaMinutes": 5, "totalMinutes": 20},
+            ],
+        )  # Accounts: a rejected and a pending pass and one tea break on time
+        self.assertEqual(body["departmentsTotal"], 2)
+        short = self.json("time-lost", limit=1)
+        self.assertEqual((len(short["byDepartment"]), short["departmentsTotal"]), (1, 2))
+        self.assertEqual(sum(d["totalMinutes"] for d in body["byDepartment"]), 400)
+
+    def test_the_kinds_of_outpass_are_listed_so_official_time_is_visible(self):
+        reasons = {r["key"]: r["minutesOut"] for r in self.json("time-lost")["outpassByReason"]}
+        # P3 150 + P8 15 official; P1, P2, P4, P5 personal; P11 states no type; the early dismissal never came back
+        self.assertEqual(reasons, {"official": 165, "personal": 130, "unspecified": 30, "early_dismissal": None})
+
+    def test_the_selection_narrows_both_sides(self):
+        body = self.json("time-lost", department="Cutting")
+        self.assertEqual((body["totals"]["outpassMinutes"]["value"], body["totals"]["teaMinutes"]["value"]), (15, 5))
+        staff = self.json("time-lost", type="staff")  # Dev (rejected, pending, tea on time) and Farid (still out)
+        self.assertEqual(
+            (staff["totals"]["outpassMinutes"]["value"], staff["totals"]["teaMinutes"]["value"]), (None, 0)
+        )
+
+    def test_it_explains_the_two_different_measures(self):
+        body = self.json("time-lost")
+        entry = next(p for p in body["provenance"] if p["id"] == "time-lost")
+        self.assertTrue(any("not the same kind of figure" in c for c in entry["caveats"]))
+        self.assertIn("tea-minutes-lost", {p["id"] for p in body["provenance"]})
+
+    def test_the_assistants_tool_gives_the_same_picture(self):
+        with read_only_db():
+            result = registry.collect_tools()["time_lost_comparison"].run(PERIOD)
+        self.assertEqual(result["totals"]["togetherMinutes"]["value"], 400)
+        self.assertLessEqual(len(result["byDepartment"]), 8)
+        json.dumps(result)  # plain JSON
+
+
 # ─── who may call it ──────────────────────────────────────────────────────────────────────────────────────────────
 
 
 class AccessTests(MdApiTestCase):
-    ROUTES = ("summary", "trend", "units", "visitors", "outpass", "exceptions", "activity", "day")
+    ROUTES = ("summary", "trend", "units", "visitors", "outpass", "exceptions", "activity", "day", "story", "time-lost")
 
     def setUp(self):
         super().setUp()
@@ -1553,8 +1830,17 @@ class AccessTests(MdApiTestCase):
         scope = Scope()
         period = Period(date(2026, 9, 21), date(2026, 10, 4), "custom", "x")
         with mock.patch("api.md_portal.analytics.visitors._now", return_value=NOW), read_only_db():
-            for fn in (A.summary, A.trend, A.visitors_breakdown, A.outpass_breakdown, A.exceptions):
+            for fn in (
+                A.summary,
+                A.trend,
+                A.visitors_breakdown,
+                A.outpass_breakdown,
+                A.exceptions,
+                A.story,
+                A.time_lost,
+            ):
                 self.assertIsInstance(fn(scope, period), dict, fn.__name__)
+            self.assertIsInstance(A.story(scope, period, focus="visitors"), dict)
             self.assertIsInstance(A.activity(scope, period), dict)
             self.assertIsInstance(A.day_snapshot(scope, date(2026, 9, 22)), dict)
             self.assertIsInstance(A.insights(today=TODAY), list)
@@ -1568,7 +1854,7 @@ class ScaleTests(MdApiTestCase):
     """The heavy endpoints run a fixed number of queries however many rows there are, and stay fast on a factory-sized
     year (250 employees, 120 days)."""
 
-    ENDPOINTS = ("summary", "trend", "units", "visitors", "outpass", "exceptions", "activity")
+    ENDPOINTS = ("summary", "trend", "units", "visitors", "outpass", "exceptions", "activity", "story", "time-lost")
 
     def setUp(self):
         super().setUp()

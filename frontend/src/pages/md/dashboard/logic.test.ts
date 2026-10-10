@@ -237,10 +237,19 @@ describe("explore", () => {
   it("offers every page but the dashboard, in sidebar order, with the page's own summary", () => {
     const tiles = exploreTiles(ME.pages);
     expect(tiles.map((t) => t.id)).toEqual([
-      "attendance",
       "employees",
+      "branches",
+      "attendance",
+      "attendance-production",
+      "geo-attendance",
+      "attendance-search",
+      "report-log",
+      "outpass",
       "visitors",
       "tea-break",
+      "shifts",
+      "leave",
+      "requests",
       "payroll",
       "reports",
       "recruitment",
@@ -255,7 +264,7 @@ describe("explore", () => {
 
   it("works before the page list has loaded", () => {
     const tiles = exploreTiles(undefined);
-    expect(tiles).toHaveLength(8);
+    expect(tiles).toHaveLength(17);
     expect(tiles.every((t) => t.summary === "")).toBe(true);
   });
 });

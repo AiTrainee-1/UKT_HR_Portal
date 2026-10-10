@@ -1,6 +1,6 @@
-"""MD portal: Outpass & Visitors routes (mounted at /api/md/visitors/). Every view is an @md_get function that parses
-?period=&branch=&department=&type= with common.resolve_period / resolve_scope, calls a function in
-analytics/visitors.py and returns its envelope. Nothing here computes a figure.
+"""MD portal: Outpass & Visitors routes (mounted at /api/md/visitors/), behind the MD's Outpass and Visitors pages. Every
+view is an @md_get function that parses ?period=&branch=&department=&type= with common.resolve_period / resolve_scope,
+calls a function in analytics/visitors.py and returns its envelope. Nothing here computes a figure.
 
     GET summary      headline figures with the previous period beside each
     GET trend        visits and outpasses per day (per week for long periods)
@@ -10,6 +10,8 @@ analytics/visitors.py and returns its envelope. Nothing here computes a figure.
     GET exceptions   what needs attention, with the people and records behind it
     GET activity     the newest visits / outpasses / gate-form exits, paged (?page=&pageSize=&q=&kind=)
     GET day          one day's snapshot (?date=YYYY-MM-DD): "who visited yesterday?"
+    GET story        a page's summary in plain sentences (?focus=outpass|visitors), written from the figures above
+    GET time-lost    outpass time out beside tea-break minutes lost: by day, in total, by department (?limit=)
 """
 
 from django.urls import path
@@ -90,6 +92,26 @@ def day_view(request):
     return A.day_snapshot(resolve_scope(params), parse_day(raw, "date"), limit=A.int_param(params, "limit", 15, 1, 50))
 
 
+@md_get
+def story_view(request):
+    params = request_params(request)
+    return A.story(
+        resolve_scope(params),
+        resolve_period(params, default=DEFAULT_PERIOD),
+        focus=str(params.get("focus") or A.PAGE_OUTPASS).strip().lower(),
+    )
+
+
+@md_get
+def time_lost_view(request):
+    params = request_params(request)
+    return A.time_lost(
+        resolve_scope(params),
+        resolve_period(params, default=DEFAULT_PERIOD),
+        limit=A.int_param(params, "limit", 10, 1, A.MAX_LIST),
+    )
+
+
 urlpatterns = [
     path("summary", summary_view),
     path("trend", trend_view),
@@ -99,4 +121,6 @@ urlpatterns = [
     path("exceptions", exceptions_view),
     path("activity", activity_view),
     path("day", day_view),
+    path("story", story_view),
+    path("time-lost", time_lost_view),
 ]

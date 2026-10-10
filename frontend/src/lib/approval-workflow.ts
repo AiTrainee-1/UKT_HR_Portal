@@ -156,9 +156,27 @@ export type ApprovalProgress = {
   canReject?: Record<ApprovalRole, boolean>;
 };
 
+// Requests a screen shows but does not let its user decide. The Managing Director's copies of the Leave, Requests and
+// Outpass pages (components/md/embedded) switch this on: the MD only views those requests (the server refuses the MD's
+// decision calls: permission_registry.MD_VIEW_ONLY), so the pages must not offer Approve / Reject. Every HR page asks
+// hrCanAct / hrCanReject before it draws those buttons, which is why one switch here is enough and no HR page changes.
+// Off (null) everywhere else, including the whole HR portal.
+let viewOnlyWorkflows: ReadonlySet<string> | null = null;
+
+/** Hide the decision buttons for these workflows ("leave", "permission", "outpass"...); null or [] shows them again. */
+export function setViewOnlyWorkflows(workflows: readonly string[] | null): void {
+  viewOnlyWorkflows = workflows && workflows.length > 0 ? new Set(workflows) : null;
+}
+
+/** A request with no approval progress is one an older backend sent, or an outpass raised at the gate: while the switch is
+ *  on it counts as view-only too, because there is no telling which workflow it belongs to. */
+const viewOnly = (approval: ApprovalProgress | null | undefined): boolean =>
+  viewOnlyWorkflows !== null && (!approval || viewOnlyWorkflows.has(approval.workflow));
+
 /** Can HR act on this request? Uses the pipeline when the server sent it, and the older status rule when it did not
  *  (an older backend), so a screen never loses its buttons because of a rolling deploy. */
 export function hrCanAct(approval: ApprovalProgress | null | undefined, fallback: boolean): boolean {
+  if (viewOnly(approval)) return false;
   return approval ? approval.canAct.hr : fallback;
 }
 
@@ -167,6 +185,7 @@ export function hodCanAct(approval: ApprovalProgress | null | undefined, fallbac
 }
 
 export function hrCanReject(approval: ApprovalProgress | null | undefined, fallback: boolean): boolean {
+  if (viewOnly(approval)) return false;
   return approval ? (approval.canReject?.hr ?? approval.canAct.hr) : fallback;
 }
 

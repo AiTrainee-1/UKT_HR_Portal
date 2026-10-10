@@ -75,8 +75,8 @@ class TheAnswerFlow(EngineCase):
             [
                 {
                     "id": "attendance",
-                    "title": "Attendance Analytics",
-                    "path": "/md/attendance",
+                    "title": "Staff Attendance",
+                    "path": "/md/attendance/staff",
                     "reason": "Detailed breakdown",
                 }
             ],
@@ -163,7 +163,7 @@ class TheAnswerFlow(EngineCase):
         self.assertIn("Payroll Analysis", system)
         self.assertIn("Month: Sep 2026", system)
         self.assertIn("Gross: ₹4.2 Cr", system)
-        self.assertIn("attendance: Attendance Analytics", system)  # the pages it may suggest
+        self.assertIn("attendance: Staff Attendance", system)  # the pages it may suggest
 
     def test_free_text_instead_of_the_answer_tool_is_accepted_with_low_confidence(self):
         msg, _, _ = self.run_question([text_reply("Attendance was good.")])

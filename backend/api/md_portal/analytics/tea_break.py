@@ -729,6 +729,12 @@ def _group_prov_entries(allowed: int, scope: Scope, period: Period, total: dict)
     )
 
 
+def _grouped(scope: Scope, start: date, end: date, log_field: str, allowed: int, now: datetime) -> dict:
+    """{group value: raw aggregates} for the breaks that started in [start, end], one query."""
+    qs = _breaks(scope, start, end).values(grp=F(log_field)).annotate(**_measures(allowed, now)).order_by()
+    return {r["grp"]: r for r in qs}
+
+
 @cached()
 def tea_departments(scope: Scope, period: Period, by: str = "department", limit: int = LIST_DEFAULT) -> dict:
     """Where the overruns are: ranked by minutes lost, by department (same name in several units = one department),
@@ -740,11 +746,8 @@ def tea_departments(scope: Scope, period: Period, by: str = "department", limit:
     log_field, emp_field, none_label = _GROUPS[by]
     previous = period.previous()
 
-    def grouped(start: date, end: date) -> dict:
-        qs = _breaks(scope, start, end).values(grp=F(log_field)).annotate(**_measures(allowed, now)).order_by()
-        return {r["grp"]: r for r in qs}
-
-    cur, prev = grouped(period.start, period.end), grouped(previous.start, previous.end)
+    cur = _grouped(scope, period.start, period.end, log_field, allowed, now)
+    prev = _grouped(scope, previous.start, previous.end, log_field, allowed, now)
     heads = dict(scope.employees().values_list(emp_field).annotate(n=Count("id")).order_by())
 
     total_raw = _zero()
@@ -795,6 +798,28 @@ def tea_departments(scope: Scope, period: Period, by: str = "department", limit:
         extra_prov=[grouping],
         notes=notes,
     )
+
+
+def daily_minutes_lost(scope: Scope, period: Period) -> dict[date, int | None]:
+    """Minutes lost to overruns on each day of the period that had breaks (None on a day with no measured break): the
+    daily figures behind the trend and the summary, for the page that sets them beside other kinds of lost time."""
+    allowed, _, now = _context()
+    rows = _daily(scope, period.start, period.end, allowed, now)
+    return {d: _figures(raw, allowed)["minutesLost"] for d, raw in rows.items()}
+
+
+def department_minutes_lost(scope: Scope, period: Period) -> dict[str, int]:
+    """Minutes lost to overruns by department name (the same name in several units is one department), for every
+    department that had a measured break. Not capped, unlike the ranking, so a comparison never misses a department."""
+    allowed, _, now = _context()
+    log_field, _, none_label = _GROUPS["department"]
+    out: dict[str, int] = {}
+    for grp, raw in _grouped(scope, period.start, period.end, log_field, allowed, now).items():
+        lost = _figures(raw, allowed)["minutesLost"]
+        if lost is not None:
+            label = none_label if grp is None or grp == "" else str(grp)
+            out[label] = out.get(label, 0) + lost
+    return out
 
 
 class _Roster:
@@ -1446,6 +1471,149 @@ def tea_attention(scope: Scope, period: Period) -> dict:
         caveats=["These are rules of thumb: no tea-break target is configured in the system."],
     )
     return envelope({"items": items}, period=period, scope=scope, provenance=[thresholds])
+
+
+# ─── the page's summary, in plain English ───────────────────────────────────────────────────────────────────────
+
+
+def _story_line(id_: str, text: str, tone: str = "neutral") -> dict:
+    return {"id": id_, "text": text, "tone": tone}
+
+
+def _taken(n: int) -> str:
+    return f"{_num(n)} tea {'break was' if n == 1 else 'breaks were'} taken"
+
+
+def _moved(change_: dict | None, unit: str, before: str, places: int = 0) -> str:
+    """ ", up 8.3 points on the previous 14 days" (empty when nothing moved or there is nothing to compare)."""
+    if not change_ or not change_["abs"]:
+        return ""
+    return f", {'up' if change_['abs'] > 0 else 'down'} {_num(abs(change_['abs']), places)} {unit} on {before}"
+
+
+def attention_line(items: list[dict], subject: str, momentum: dict | None = None) -> dict:
+    """The last sentence of a page's summary: what most needs attention among its findings (most severe first), else the
+    good news, else (when given) how the trend is going, else what is merely worth knowing, else that nothing does."""
+    urgent = [i for i in items if i["severity"] in ("critical", "warning")]
+    if urgent:
+        others = len(urgent) - 1
+        text = f"The most important item: {urgent[0]['title']}."
+        if others:
+            text += f" {others} other {_plural(others, 'item')} also {'needs' if others == 1 else 'need'} a look."
+        return _story_line("attention", text, "watch")
+    good = [i for i in items if i["severity"] == "good"]
+    if good:
+        return _story_line("attention", f"Nothing urgent, and some good news: {good[0]['title']}.", "good")
+    if momentum and momentum["verdict"] != "unclear":
+        return _story_line(
+            "attention", momentum["text"], {"better": "good", "worse": "watch"}.get(momentum["verdict"], "neutral")
+        )
+    if items:
+        return _story_line("attention", f"Nothing urgent. For your information: {items[0]['title']}.")
+    return _story_line("attention", f"Nothing about {subject} needs your attention in this period.", "good")
+
+
+@cached()
+def tea_story(scope: Scope, period: Period) -> dict:
+    """The Insights tab's summary: three or four plain sentences written by fixed rules (no AI, no model call on page
+    load) from the very figures the cards show: breaks and overruns, the time lost, where it is lost, and the one thing
+    that most needs attention. A sentence whose figure does not exist for this selection is left out, never invented."""
+    summary = tea_summary(scope, period)
+    allowed = summary["allowedMinutes"]
+    m = summary["metrics"]
+    cov = summary["coverage"]
+    breaks = m["breaks"]["value"]
+    measured = m["measured"]["value"] or 0
+    overruns = m["overruns"]["value"] or 0
+    rate = m["overrunPct"]["value"]
+    lost = m["minutesLost"]["value"]
+    before = _previous_phrase(period)
+    lines: list[dict] = []
+
+    if not breaks:
+        lines.append(_story_line("volume", f"{period.label}: no tea-break scans were recorded for this selection."))
+    elif not measured:
+        lines.append(
+            _story_line(
+                "volume",
+                f"{period.label}: {_taken(breaks)}, but none could be measured (no return scan, or longer than "
+                f"{SUSPECT_MINUTES} minutes), so there is no overrun figure.",
+                "watch",
+            )
+        )
+    else:
+        delta = m["overrunPct"]["change"]
+        text = (
+            f"{period.label}: {_taken(breaks)}; {_num(overruns)} of the {_num(measured)} that could be measured ran "
+            f"past the {allowed}-minute allowance ({_p(rate, 1)}{_moved(delta, 'points', before, 1)})."
+        )
+        if cov["unmeasured"]:
+            text += f" {_num(cov['unmeasured'])} more could not be measured and are left out."
+        tone = "watch" if rate is not None and rate >= OVERALL_WARN_PCT else "neutral"
+        if delta and delta["abs"] <= -TREND_FLAG_POINTS:
+            tone = "good"
+        lines.append(_story_line("volume", text, tone))
+
+    if measured and lost is not None:
+        change_ = m["minutesLost"]["change"]
+        if not overruns:
+            lines.append(_story_line("lost", "Nobody ran over, so no time was lost beyond the allowance.", "good"))
+        else:
+            text = (
+                f"That cost {_num(lost)} minutes ({_num(summary['hoursLost'], 1)} hours) beyond the allowance"
+                f"{_moved(change_, 'minutes', before)}."
+            )
+            tone = "neutral" if not change_ or not change_["abs"] else ("watch" if change_["abs"] > 0 else "good")
+            lines.append(_story_line("lost", text, tone))
+
+    if measured >= MIN_SAMPLE_BREAKS:
+        rows = tea_departments(scope, period, by="department", limit=LIST_MAX)["rows"]
+        compared = [r for r in rows if r["measured"]]
+        top = next((r for r in compared if not r["lowSample"] and r["key"] != NONE_KEY and r["minutesLost"]), None)
+        if top and len(compared) >= 2:
+            lines.append(
+                _story_line(
+                    "where",
+                    f"{top['label']} loses the most time: {_num(top['minutesLost'])} minutes "
+                    f"({_p(top['shareOfLostPct'])} of the total), with {_p(top['overrunPct'], 1)} of its breaks running "
+                    "over.",
+                )
+            )
+
+    if breaks:
+        items = _exceptions(scope, period, limit=6)
+        urgent = any(i["severity"] in ("critical", "warning") for i in items)
+        momentum = None if urgent else tea_trend(scope, period)["momentum"]
+        lines.append(attention_line(items, "tea breaks", momentum))
+
+    who = "" if scope.is_everyone() else f", {scope.describe()}"
+    entry = prov(
+        "tea-story",
+        "The plain-English summary",
+        dataset="Gate tea-break scans, tea-break rule, shift assignments, employee list",
+        definition=(
+            "A few sentences written by fixed rules from the figures on this page (no AI): every number in them is the "
+            "same figure the cards below show, for the same period and selection."
+        ),
+        formula=None,
+        filters=[period.label, scope.describe()],
+        caveats=[
+            "It is not written by the AI. 'Explain with AI' asks the assistant, which looks the figures up itself and "
+            "shows how it got its answer."
+        ],
+    )
+    return envelope(
+        {
+            "sentences": lines,
+            "text": " ".join(line["text"] for line in lines),
+            "ask": f"Explain tea-break discipline ({period.label}{who}): what changed against {before}, why, and what "
+            "should I look at first?",
+        },
+        period=period,
+        scope=scope,
+        provenance=[entry, *_pick({e["id"]: e for e in summary["provenance"]}, "tea-overrun", "tea-minutes-lost")],
+        notes=summary["notes"],
+    )
 
 
 def _recent_windows(today: date | None) -> tuple[Period, Period]:

@@ -277,6 +277,22 @@ question ─► privacy (names → @emp-123 tokens) ─► Gemini ─► tool ca
 * **History.** Conversations and messages are stored (`md_conversations`, `md_messages`) so a conversation survives page changes
   and the explanation can be shown again; the MD can delete any or all. Nobody else can read them (every query is by the MD).
 
+### The character (the radio, 2026-10-10)
+
+The assistant's face is the radio character from the `page-mascot` package (`npm i page-mascot`; MIT, no dependencies). Its
+two sheets, `public/mascots/radio-directions.webp` and `radio-reactions.webp` (3x3 grids of nine head directions and nine
+expressions, transparent), are the character; any other of the package's characters can replace them by changing
+`RADIO_SHEETS` in `components/md/assistant/mascot.tsx`.
+
+* **`RadioMascot`** (the package's `Mascot`): the head follows the pointer and a poke gives a blink, a heart or sparkles
+  (dizzy when poked repeatedly). It is the floating launcher (`Launcher.tsx`, bottom-right, with an "Ask AI" bubble; the poke
+  opens the panel 280 ms later so the reaction is seen, at once with reduced motion, and Ctrl+J never waits) and the
+  panel's welcome. The package names its button "Boop the ..."; the launcher renames it "Open the AI assistant".
+* **`MascotFace`**: the same sheets as a still face for the small avatars (the panel header and each reply), because the
+  package has no way to set an expression and many pointer-tracking copies would be wasteful. The expression follows what
+  the assistant is doing: sparkles while an answer is made (`working`), dizzy when it failed, asleep when the MD stopped it,
+  the plain face otherwise. The cell order is the package's (`DIRECTIONS`, `REACTIONS` in `dist/mascot.js`).
+
 ### Voice
 
 * **Listening** (`components/md/assistant/voice/useVoiceInput.ts`): the browser's recogniser (Web Speech API) with live words in
@@ -357,3 +373,170 @@ Shared files are **frozen for module owners** (change requests go to the integra
   now wraps formatters); and every unit has its own "Stitching", so name the unit wherever departments are listed.
 * **End to end.** `e2e/md-assistant.spec.ts` (identity, assistant, privacy, read-only, quota, voice) and `e2e/md-pages.spec.ts`
   (all nine pages, laptop / phone / assistant open: no 5xx, no console error, nothing wider than the screen).
+
+---
+
+## 10. The MD's copies of the HR pages (added 2026-10-10)
+
+The MD portal is no longer only analytics. Fourteen HR pages exist in it **in full** (same components, same features, same
+buttons, same API as the Super Admin has) with the MD's **Insights & AI** on top. Decisions taken with the product owner:
+
+* **The MD can act**, like a super administrator, on exactly these pages' modules (add/edit employees, edit shifts,
+  branches ...). This reverses section 1's "portal is read-only" **for these pages only**. `/api/md/*` (analytics) is still
+  read-only (`read_only_db()`), and **the assistant still has no write tool**.
+* **Exception (2026-10-10, the product owner: "the MD only needs to view those requests"): Leave & Holiday and Requests
+  are look-only.** The MD sees every leave, permission and outpass request (and holidays, leave types) but cannot approve,
+  reject, edit or delete them: HR and the department heads decide. Three layers, all driven by `MD_VIEW_ONLY`
+  (`permission_registry.py`, a cap: a role on the MD account cannot raise it): (1) the permission middleware refuses the
+  MD's writes on those modules with 403 "The Managing Director can view this section but cannot change it"
+  (`tests_md_hr_access.py`); (2) `/auth/me` reports `leave` and `requests` as `view`, so the pages show the "View only"
+  banner and the existing lock disables their other mutating buttons (and hides icon-only bins:
+  `view-only-lock.ts lockIconOnlyDeletes`); (3) `MdHrApp` calls `setViewOnlyWorkflows(viewOnlyWorkflowsFor(user))`
+  (`lib/md/view-only-requests.ts`) so `hrCanAct` / `hrCanReject` (`lib/approval-workflow.ts`), which every HR page asks
+  before drawing Approve / Reject, answer no for the leave, permission and outpass workflows: that also covers the Outpass
+  page's Requests tab. It is set in the `Page` guard because a page builds its buttons in its own render, before the frame
+  around it renders. The dashboard's "Requests waiting" card (`pages/md/home/RequestsWaiting.tsx`) lists the pending
+  requests, oldest first, with who each waits for, and no buttons. Geo Attendance's on-duty approvals, and the rest of
+  the pages, are unchanged. To give the decisions back: remove the key from `MD_VIEW_ONLY`, set it to `edit` in
+  `MD_HR_GRANTS`, and drop it from `REQUEST_WORKFLOW_MODULES`.
+* The old analytics pages for Attendance, Employees, Outpass & Visitors and Tea Break **merged into** the pages they
+  analyse (their content is now each page's Insights). `/md/visitors` and `/md/tea-break` redirect. Payroll, Reports,
+  Recruitment and Activity Logs stay analytics pages.
+
+### 10.1 The fourteen pages
+
+| MD page (sidebar) | Address | page id | HR component | Insights domain (`analytics/<domain>.py`) |
+|---|---|---|---|---|
+| Dashboard | `/md/dashboard` | `dashboard` | `pages/hr/Dashboard` | `dashboard` (exists) |
+| Employees | `/md/employees` | `employees` | `Employees` (+ `/new`, `/bulk-upload`, `/:id`, `/:id/edit`) | `employees` (exists) |
+| Branches | `/md/branches` | `branches` | `Branches` | **`units`** (new) |
+| Staff Attendance | `/md/attendance/staff` | `attendance` | `Attendance` | `attendance` (exists; scope `type=staff`) |
+| Production Attendance | `/md/attendance/production` | `attendance-production` | `Attendance` | `attendance` (scope `type=production`) |
+| Geo Attendance | `/md/geo-attendance` | `geo-attendance` | `GeoAttendance` | **`geo`** (new) |
+| Attendance Search | `/md/attendance/search` | `attendance-search` | `AttendancePunchSearch` | **`punches`** (new) |
+| Report Log | `/md/attendance/report-log` | `report-log` | `AttendanceReportLog` | **`reportlog`** (new) |
+| Outpass | `/md/outpass-visitors/outpass` | `outpass` | `OutpassVisitors` | `visitors` (exists; outpass focus) |
+| Visitors | `/md/outpass-visitors/visitors` | `visitors` | `OutpassVisitors` | `visitors` (visitor focus) |
+| Tea Break | `/md/outpass-visitors/tea-break` | `tea-break` | `OutpassVisitors` | `tea_break` (exists) |
+| Manage Shift | `/md/shifts` | `shifts` | `ManageShift` | **`shifts`** (new) |
+| Leave & Holiday | `/md/leave` | `leave` | `LeaveHoliday` | **`leave`** (new) |
+| Requests | `/md/requests` | `requests` | `ApprovedRequests` | **`requests`** (new) |
+
+`backend/api/md_portal/pages.py` and `frontend/src/components/md/md-nav.ts` list the pages (ids, titles, paths, domains);
+`md-nav.test.ts` fails if they drift.
+
+### 10.2 How a copy runs (so you know what you can and cannot touch)
+
+```
+browser  /md/employees/5   ->  App.tsx catch-all  /md/*?   ->  components/md/MdHrApp.tsx
+                                   nested wouter Router whose hook (lib/md/embed.ts useMdHrLocation) shows the page
+                                   /hr/employees/5, and turns every /hr/... address a page navigates to into /md/...
+HR page component   <HrLayout>  ->  (inside MdEmbedProvider)  HrLayout renders <MdLayout> instead of the HR shell
+MdLayout            ->  <MdEmbeddedFrame>  =  the shared title row (10.2a) + [Strip] + page  (or the Insights tab)
+```
+
+* **The HR page components are untouched and must stay untouched** (the product owner's hard rule: "do not modify the
+  existing pages"). Everything MD is added around them. If you believe an HR component must change, STOP and report.
+* `Operations` is the HR page (stays mounted when the Insights tab is open, so filters and typing are kept).
+  `Insights & AI` is the page's analytics, mounted only while open (so it can publish its own assistant context).
+* **Your files**: `frontend/src/pages/md/embedded/<page id>/index.tsx` (folder name = the page id from the table):
+
+```tsx
+export default function Insights() { ... }   // the Insights & AI tab. No layout of its own (the frame is the layout).
+export function Strip() { ... }              // optional: the strip above the page. Default: <BriefStrip page="<id>"/>
+```
+  They are found by `import.meta.glob` (`components/md/embedded/registry.tsx`): no registration edit is needed. Without
+  them a page gets the generic brief (`components/md/embedded/brief.tsx`: the domain's `headline()` + `insights()` served
+  by `GET /api/md/brief/<page id>`), so every page already shows something.
+* Inside an embedded page `useLocation()` returns **`/hr/...` addresses** (the router hides the `/md` prefix), but your
+  Insights modules and the kit use `/md/...` links (`MD_NAV_BY_ID[id].path`), which pass through unchanged. Links to a
+  page that the portal does not copy go to the nearest MD page (`HR_TO_MD_PAGES` in `lib/md/embed.ts`).
+* **The MD's access** to the modules behind the pages is `permission_registry.MD_HR_GRANTS` (edit on the pages' modules
+  except `leave` and `requests`, which are `view` and capped by `MD_VIEW_ONLY`; `view` on `recruitment`), merged into
+  `/auth/me` `permissions` (the role alone is `rolePermissions`), so the HR pages' own permission checks work unchanged.
+  `tests_md_hr_access.py` pins it. One line makes the MD's copy of any module read-only.
+
+### 10.2a The title row (the same on every MD page; changed 2026-10-10)
+
+```
+Title  (Live)  [ Operations | Insights & AI ]  ..............  [the page's own buttons]  |  Updated 10:31:22 am
+date / what the page is for                                                              |  Refresh
+```
+
+* The pieces are in `components/md/kit/MdHeaderParts.tsx` (`LiveChip`, `ModeTabs`, `UpdatedRefresh`). The pages the MD
+  portal owns (Dashboard, Payroll, Reports, Recruitment, Activity Logs) get the row from `kit/MdPageHeader` (`title`,
+  `subtitle`, `actions`, `updatedAt`; `icon` is accepted and ignored). **Use it for any new MD-owned page.** Do not draw a
+  title row of your own, and do not add a Refresh button: the stack has one (it reloads every query on screen).
+* The HR pages' copies keep the HR page's own title row, and the frame slots the pieces into it
+  (`embedded/headerRow.ts`, DOM side, unit-tested; `useHeaderAdoption.ts`, React side): the Live chip goes inside the
+  heading, the switch right after the title block, the stack is pinned to the row's top-right corner (room is kept for it)
+  and the strip goes under the row. The page's own Refresh buttons are hidden (the stack replaces them), its buttons are
+  pushed right, titles are set to one size/colour, subtitles to a 34rem maximum, and a page's own padded `max-width`
+  container (Report Log) loses its padding so every title starts at the same left edge. Below 720px of content width the
+  stack goes back into the row's flow. **No HR file is touched.**
+* The row is found by: the page's first `h1/h2`, then the nearest flex container above it that spreads its items out
+  (else the nearest flex container). A page whose heading has no flex row (or none yet) gets the frame's own row above it
+  (`MdPageHeader` with the tab switch): same look, nothing breaks. The Insights tab always draws the frame's own row, with
+  the page's title and subtitle read from the page, so switching tabs does not move anything.
+* A crowded row wraps (the switch or the buttons drop to a second line) instead of squeezing the buttons.
+* Checked by `headerRow.test.ts`, `MdPageHeader` use in the page tests, and e2e `md-hr-pages.spec.ts` ("every MD page opens
+  with the same title row": the same left edge and the same right edge on all 18 pages, Live on the title's line, the stack
+  at the top of the row, one Refresh).
+
+### 10.3 What every Insights tab must contain
+
+The MD reads in two-minute bursts (section 2). Each Insights tab is a small analytics page for **that page's subject**:
+
+1. A filter bar (`PeriodBar` / `ScopeBar` from `kit/FilterBar`): period (default `last_30_days` unless the subject is
+   "now") and scope (unit / department / type) where the data has them.
+2. **A plain-English summary** composed by the SERVER from the numbers (like `dashboard.briefing`): 2-4 sentences, every
+   figure in it taken from the same envelope, with an "Explain with AI" button. (No LLM call on page load: it would cost
+   quota and send data to Google on every visit. The AI explains on demand, through the assistant.)
+3. **KPI cards** (`KpiCard`): value, change against the previous period (`good` direction set), sparkline.
+4. **Visual comparisons, at least three**: a trend over time (`TrendChart`), a comparison across groups (`BarList`,
+   `DonutChart`, `Heatmap`, or a table with in-cell bars), and a before/after or this-vs-previous comparison. Say what the
+   chart means in its subtitle.
+5. **Needs your attention**: the exceptions (`InsightList`) with severity, the number, where to look and an *Explain* button
+   (`ask:` question for the assistant). Computed in the domain's `insights()`.
+6. **Ask AI** on every card (`AskAiButton`), `ProvenanceButton` ("how is this calculated?") on every figure.
+7. `usePublishAssistantContext(...)` with the page id, title, filters and headline numbers, so the assistant knows what
+   the MD is looking at.
+8. Empty / error / loading states (`kit/states`), small screens (container queries: `@3xl:` / `@5xl:`, never `lg:`), the
+   assistant panel open beside it (444 px).
+
+### 10.4 Backend contract for a new domain (`units`, `geo`, `punches`, `reportlog`, `shifts`, `leave`, `requests`)
+
+Follow section 3 exactly (it is the same kind of module): `analytics/<domain>.py` (pure read-only functions taking
+`Scope`/`Period`, every figure with `provenance`, aggregated in the database, scope always applied, no query per row),
+`routes/<domain>.py` (thin `@md_get` views; the stub already exists and is already mounted at `/api/md/<domain>/`),
+`TOOLS` (4-8 tools for the assistant; the domain is already in `assistant/registry.TOOL_MODULES`), `insights()` (at most 5
+company-wide exceptions) and `headline()` (1-3 KPIs), `tests_md_<domain>.py` (exact numbers, empty database, scope and
+period edges, query budget, the tools). **No file outside your domain may be edited** except where §10.6 says.
+Run tests with `DB_TEST_NAME=test_uktex_<domain> python manage.py test api.tests_md_<domain> --noinput` after verifying
+`DB_HOST=localhost` in `backend/.env` (read only that line; never print credentials).
+
+### 10.5 Gates (ratchets: only tighten)
+
+* Backend: `ruff format` + `ruff check` clean on every file you add; your tests pass; `tests_md_tools_contract` and
+  `tests_md_identity` still pass (they walk every route and tool).
+* Frontend: `npx tsc -p tsconfig.json --noEmit` clean; **ESLint adds zero warnings** (`npm run lint` is at its 83 ceiling);
+  `npx prettier --write` on your files (`src/pages/md`, `src/components/md`, `src/lib/md` are format-enforced); vitest
+  tests for your components (fixtures in your folder; assert what the MD sees, not implementation) and your pure logic.
+* **Do not run Playwright, the QA stack, `e2e_setup.py`, `seed_md_demo` against the shared databases, or start servers**:
+  they share ports and the `uktex_e2e` database, so parallel runs corrupt each other. The integrator runs the browser
+  checks and screenshots and sends findings back.
+* Never leave a QA MD account in a database; the user's dev servers (:8000/:5173) are theirs: do not touch them.
+
+### 10.6 Files with one owner
+
+`pages.py`, `md-nav.ts`, `urls.py`, `assistant/registry.py`, `assistant/suggestions.ts`, `analytics/dashboard.py` (its
+`SOURCES`), `analytics/brief.py`, `common.py`, `permission_registry.py`, `lib/md/embed.ts`, `components/md/embedded/*`,
+`components/md/MdLayout.tsx`, `kit/*` (existing components), `backend/.format-enforced`, `seed_md_demo.py`: the integrator.
+Ask (in your final report) for a change there; do not make it. New generic kit components are allowed under
+`components/md/kit/` only with a name that cannot clash (prefix with your domain) and a test.
+
+### 10.7 Where things are checked
+
+`e2e/md-hr-pages.spec.ts` opens every copy and fails on any refused API call (a 403 means `MD_HR_GRANTS` lacks a module the
+page reads); `e2e/md-insights.spec.ts` checks the Insights tabs; `tests_md_hr_access.py` pins the access;
+`lib/md/embed.test.ts` the address mapping; `md-nav.test.ts` the page list.

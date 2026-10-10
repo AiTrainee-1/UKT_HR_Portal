@@ -1,7 +1,13 @@
-"""MD portal: Outpass & Visitors (page ``visitors``, ``/api/md/visitors/*``).
+"""MD portal: Outpass & Visitors (pages ``outpass`` and ``visitors``, ``/api/md/visitors/*``).
 
 The question this answers for the Managing Director: *who is coming into the premises, who is leaving during shift
 hours, and is it under control?* It is about gate discipline and lost time, not a visitor register.
+
+The HR "Outpass / Visitors / Tea Break" screen has one MD address for each subject, and this module serves the first two:
+the **outpass** page (employees leaving during the shift) and the **visitors** page (people coming in). Both read the
+same tables and the same endpoints; each finding and each card names the page it is about (``PAGE_OUTPASS`` /
+``PAGE_VISITORS``) so the page shows its own half and links to the other. ``story`` writes each page's plain-English
+summary and ``time_lost`` sets the time employees spend out on passes beside the tea-break minutes lost (tea_break.py).
 
 Where the numbers come from, and the decisions that keep them honest
 --------------------------------------------------------------------
@@ -47,8 +53,14 @@ from ...clock import FACTORY_TZ
 from ...models import Branch, OutpassGateScan, OutpassRecord, OutpassRequest, VisitorVisit
 from ...reporting.definitions import gate_outpass_common as GO
 from ...reporting.definitions import gate_visitor_tea_common as GV
+from ...reporting.formatting import indian_number
 from ..assistant.tools_base import integer_param, string_param, tool
 from ..common import MdParamError, Period, Scope, cached, change, envelope, parse_day, pct, period_for_preset, prov
+from . import tea_break as tea
+
+#: The MD pages this module's findings and cards belong to (md_portal/pages.py): a finding opens the page it is about.
+PAGE_OUTPASS = "outpass"
+PAGE_VISITORS = "visitors"
 
 # ─── thresholds: named so the response and the provenance can show them ───────────────────────────────────────────
 
@@ -1698,7 +1710,7 @@ def _attention(data: dict, period: Period) -> list[dict]:
                 "detail": f"The most is {top['passes']} passes ({_hm(top['minutesOut'])} out). Repeated short absences "
                 "add up to lost production time.",
                 "metric": f"{repeat['total']} {_plural(repeat['total'], 'person', 'people')}",
-                "page": "visitors",
+                "page": PAGE_OUTPASS,
                 "ask": f"Which employees took {threshold} or more outpasses {when}, and how many hours were they out?",
             }
         )
@@ -1716,7 +1728,7 @@ def _attention(data: dict, period: Period) -> list[dict]:
                 "detail": "The employee left on an earlier day and no return was recorded: they may have gone home, "
                 "or the return scan was missed.",
                 "metric": f"{n} {_plural(n, 'pass', 'passes')}",
-                "page": "visitors",
+                "page": PAGE_OUTPASS,
                 "ask": f"Which outpasses were never returned {when}, and who took them?",
             }
         )
@@ -1733,7 +1745,7 @@ def _attention(data: dict, period: Period) -> list[dict]:
                 "detail": f"The oldest has waited {_wait_text(oldest)}. A pass is only valid for an hour after "
                 "approval, so a late decision is no use to the employee.",
                 "metric": f"{n} waiting",
-                "page": "visitors",
+                "page": PAGE_OUTPASS,
                 "ask": "Which outpass requests have been waiting more than 24 hours, and with whom?",
             }
         )
@@ -1750,7 +1762,7 @@ def _attention(data: dict, period: Period) -> list[dict]:
                 if long_["medianMinutes"] is not None
                 else "These are far longer than a typical outpass.",
                 "metric": f"{n} {_plural(n, 'pass', 'passes')}",
-                "page": "visitors",
+                "page": PAGE_OUTPASS,
                 "ask": f"Which outpasses were much longer than usual {when}?",
             }
         )
@@ -1765,7 +1777,7 @@ def _attention(data: dict, period: Period) -> list[dict]:
                 f"{_clock_label(VISIT_DAY_END_HOUR)} {when}",
                 "detail": "Check-ins before opening time or after closing time.",
                 "metric": f"{n} {_plural(n, 'visit')}",
-                "page": "visitors",
+                "page": PAGE_VISITORS,
                 "ask": f"Who visited the factory after hours {when}, and whom did they come to see?",
             }
         )
@@ -1779,7 +1791,7 @@ def _attention(data: dict, period: Period) -> list[dict]:
                 "title": f"{n} {_plural(n, 'visitor')} came {frequent['minimum']} or more times {when}",
                 "detail": "Regular suppliers are normal; check that each has a reason to come this often.",
                 "metric": f"{n} {_plural(n, 'visitor')}",
-                "page": "visitors",
+                "page": PAGE_VISITORS,
                 "ask": f"Which visitors came most often {when}, and why?",
             }
         )
@@ -1793,7 +1805,7 @@ def _attention(data: dict, period: Period) -> list[dict]:
                 f"far above a typical day ({spike['typical']})",
                 "detail": "An unusually busy day at the gate.",
                 "metric": f"{spike['visits']} visits",
-                "page": "visitors",
+                "page": PAGE_VISITORS,
                 "ask": f"Why were there so many visitors on {spike['date']}? Who came?",
             }
         )
@@ -1806,7 +1818,7 @@ def _attention(data: dict, period: Period) -> list[dict]:
                 "title": good["title"],
                 "detail": good["detail"],
                 "metric": good["metric"],
-                "page": "visitors",
+                "page": PAGE_OUTPASS,
                 "ask": good["ask"],
             }
         )
@@ -2282,6 +2294,279 @@ def day_snapshot(scope: Scope, day: date, *, limit: int = 15) -> dict:
     )
 
 
+# ─── each page's summary, in plain English ────────────────────────────────────────────────────────────────────────
+
+FOCUS_CHOICES = (PAGE_OUTPASS, PAGE_VISITORS)
+
+
+def _n(value: float | int | None, places: int = 0) -> str:
+    """12,34,567 (Indian grouping), trailing zeros dropped: text written here is read by the MD as it is."""
+    if value is None:
+        return "—"
+    text = indian_number(round(float(value), places), places)
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _before(period: Period) -> str:
+    return "the day before" if period.days == 1 else f"the previous {period.days} days"
+
+
+def _moved(metric: dict, unit: str, period: Period, places: int = 0) -> str:
+    """ "up 7 on the previous 14 days" (empty when nothing moved or there is nothing to compare)."""
+    change_ = metric["change"]
+    if not change_ or not change_["abs"]:
+        return ""
+    return f"{'up' if change_['abs'] > 0 else 'down'} {_n(abs(change_['abs']), places)}{unit} on {_before(period)}"
+
+
+def _line(id_: str, text: str, tone: str = "neutral") -> dict:
+    return {"id": id_, "text": text, "tone": tone}
+
+
+def _outpass_lines(s: dict, findings: list[dict], period: Period) -> list[dict]:
+    o = s["outpass"]
+    when = _when(period)
+    lines: list[dict] = []
+    requests = o["requests"]["value"]
+    if not requests:
+        lines.append(_line("volume", f"No employee asked for an outpass {when}."))
+    else:
+        moved = _moved(o["requests"], "", period)
+        parts = [
+            f"{_n(o[key]['value'])} {label}"
+            for key, label in (("approved", "approved"), ("rejected", "rejected"), ("pending", "not yet decided"))
+            if o[key]["value"]
+        ]
+        text = f"{_n(requests)} outpass {'request was' if requests == 1 else 'requests were'} made {when}"
+        text += f" ({moved})" if moved else ""
+        text += f": {', '.join(parts)}." if parts else "."
+        lines.append(_line("volume", text))
+        minutes = o["minutesOut"]["value"]
+        if minutes is None:
+            lines.append(
+                _line("time", "No pass has been scanned back in yet, so there is no time-out figure.", "watch")
+            )
+        else:
+            moved = _moved(o["minutesOut"], " minutes", period)
+            text = (
+                f"Employees spent {_hm(minutes)} outside the gate on the passes that were scanned back in "
+                f"({_hm(o['avgMinutesOut']['value'])} each on average"
+            )
+            text += f"; {moved})." if moved else ")."
+            change_ = o["minutesOut"]["change"]
+            tone = "neutral" if not change_ or not change_["abs"] else ("watch" if change_["abs"] > 0 else "good")
+            lines.append(_line("time", text, tone))
+    returned, never, rate, outside = (
+        o["returned"]["value"],
+        o["notReturned"]["value"],
+        o["returnRatePct"]["value"],
+        o["outsideNow"],
+    )
+    clauses = []
+    if rate is not None:
+        text = f"{_n(returned)} of the {_n(returned + never)} passes that left were scanned back in ({_n(rate, 1)}%)"
+        clauses.append(text + (f"; {_n(never)} never came back" if never else ""))
+    if outside:
+        clauses.append(f"{_n(outside)} {_plural(outside, 'employee is', 'employees are')} outside right now")
+    if clauses:
+        lines.append(_line("control", ", and ".join(clauses) + ".", "watch" if never else "neutral"))
+    lines.append(tea.attention_line(findings, "outpasses"))
+    return lines
+
+
+def _visitor_lines(s: dict, findings: list[dict], period: Period) -> list[dict]:
+    v = s["visitors"]
+    when = _when(period)
+    visits = v["visits"]["value"]
+    if not visits:
+        return [_line("volume", f"Nobody checked in at the gate {when}."), tea.attention_line(findings, "visitors")]
+    unique = v["uniqueVisitors"]["value"]
+    moved = _moved(v["visits"], "", period)
+    text = (
+        f"{_n(visits)} {_plural(visits, 'visit')} by {_n(unique)} different {_plural(unique, 'visitor')} {when}"
+        + (f" ({moved})" if moved else "")
+        + f", about {_n(v['avgPerDay']['value'], 1)} a day."
+    )
+    lines = [_line("volume", text)]
+    peak_hour, peak_day = v["peakHour"], v["peakDay"]
+    if peak_hour and peak_day:
+        day = date.fromisoformat(peak_day["date"])
+        lines.append(
+            _line(
+                "peak",
+                f"The busiest hour is {peak_hour['label']} and the busiest day {peak_day['weekday']} "
+                f"{day.day:02d} {day.strftime('%b')} ({_n(peak_day['visits'])} {_plural(peak_day['visits'], 'visit')}).",
+            )
+        )
+    after, repeat = v["afterHours"]["value"], v["repeatVisitors"]["value"]
+    clauses = []
+    if after:
+        clauses.append(
+            f"{_n(after)} {_plural(after, 'visit was', 'visits were')} outside {_clock_label(VISIT_DAY_START_HOUR)} to "
+            f"{_clock_label(VISIT_DAY_END_HOUR)}"
+        )
+    if repeat:
+        clauses.append(f"{_n(repeat)} {_plural(repeat, 'visitor')} came more than once")
+    text = (
+        "; ".join(clauses) + "." if clauses else "Every visit was inside opening hours and nobody came more than once."
+    )
+    lines.append(_line("mix", text, "watch" if after else "neutral"))
+    lines.append(tea.attention_line(findings, "visitors"))
+    return lines
+
+
+@cached()
+def story(scope: Scope, period: Period, focus: str = PAGE_OUTPASS) -> dict:
+    """An Insights tab's summary: two to four plain sentences written by fixed rules (no AI, no model call on page load)
+    from the very figures the cards show. ``focus`` is the page: ``outpass`` (employees leaving during the shift) or
+    ``visitors`` (people coming in). A sentence whose figure does not exist for the selection is left out, never invented."""
+    if focus not in FOCUS_CHOICES:
+        raise MdParamError(f"'focus' must be one of: {', '.join(FOCUS_CHOICES)}.")
+    s = summary(scope, period)
+    findings = [i for i in exceptions(scope, period, limit=MAX_LIST)["attention"] if i["page"] == focus]
+    outpass = focus == PAGE_OUTPASS
+    lines = (_outpass_lines if outpass else _visitor_lines)(s, findings, period)
+    wanted = (
+        ("passes", "hours-out", "return-rate", "waiting")
+        if outpass
+        else ("visits", "peak", "after-hours", "repeat-visitors")
+    )
+    who = "" if scope.is_everyone() else f" ({scope.describe()})"
+    subject = "the outpass picture" if outpass else "visitor traffic"
+    entry = prov(
+        "story",
+        "The plain-English summary",
+        dataset="Outpass requests, visitor check-ins, gate scans",
+        definition=(
+            "A few sentences written by fixed rules from the figures on this page (no AI): every number in them is the "
+            "same figure the cards below show, for the same period and selection."
+        ),
+        formula=None,
+        filters=[period.label, scope.describe()],
+        caveats=[
+            "It is not written by the AI. 'Explain with AI' asks the assistant, which looks the figures up itself and "
+            "shows how it got its answer.",
+            *([] if outpass else [NOTE_NO_CHECKOUT]),
+        ],
+    )
+    return envelope(
+        {
+            "focus": focus,
+            "sentences": lines,
+            "text": " ".join(line["text"] for line in lines),
+            "ask": f"Explain {subject} {_when(period)}{who}: what changed against {_before(period)}, why, and what "
+            "should I look at first?",
+        },
+        period=period,
+        scope=scope,
+        provenance=[entry, *[p_ for p_ in s["provenance"] if p_["id"] in wanted]],
+        notes=s["notes"],
+    )
+
+
+# ─── time lost: outpasses beside tea breaks ───────────────────────────────────────────────────────────────────────
+
+
+def _p_time_lost(rows: int | None) -> dict:
+    return prov(
+        "time-lost",
+        "Time lost: outpasses and tea breaks",
+        dataset="Outpass requests (gate exit and return scans), tea-break scans, tea-break rule",
+        definition=(
+            "Two kinds of time that employees spend away from their work, set side by side. Outpass time is door to "
+            "door, exit scan to return scan, for the passes scanned back in (official and personal). Tea-break time is "
+            "only the minutes beyond the allowance, added up over every overrun. Together = the two added up."
+        ),
+        formula="outpass minutes out + tea-break minutes beyond the allowance",
+        rows=rows,
+        caveats=[
+            "They are not the same kind of figure: a pass counts all the time spent outside, a tea break only the part "
+            "beyond the allowance.",
+            "Neither says the line stood still, or that the work was not made up later.",
+            "A pass counts on the day it was requested and a tea break on the day it started.",
+        ],
+    )
+
+
+@cached()
+def time_lost(scope: Scope, period: Period, *, limit: int = 10) -> dict:
+    """Time away from work in one picture: the minutes employees spent outside on outpasses and the minutes lost to tea
+    breaks that ran over, day by day (week by week once the period is long), in total against the previous period, and
+    by department. The tea-break side is the Tea Break page's own figure (tea_break.py)."""
+    limit = max(1, min(MAX_LIST, limit))
+    now, today = _clock()
+    previous = period.previous()
+    weekly = period.days > WEEKLY_AFTER_DAYS
+    cur_facts, _ = _facts(_pass_rows(scope, period), now, today)
+    prev_facts, _ = _facts(_pass_rows(scope, previous), now, today)
+    c, p = _pass_metrics(cur_facts), _pass_metrics(prev_facts)
+    tea_summary = tea.tea_summary(scope, period)
+    tea_total = tea_summary["metrics"]["minutesLost"]
+
+    def together(a: int | None, b: int | None) -> int | None:
+        return None if a is None and b is None else (a or 0) + (b or 0)
+
+    outpass_by_day: dict[date, int] = defaultdict(int)
+    for f in cur_facts:
+        outpass_by_day[GO.ist_date(f.row["created_at"])] += f.minutes or 0
+    tea_by_day = tea.daily_minutes_lost(scope, period)
+    buckets: dict[date, dict] = {}
+    for offset in range(period.days):
+        d = period.start + timedelta(days=offset)
+        key = d - timedelta(days=d.weekday()) if weekly else d
+        b = buckets.setdefault(
+            key,
+            {"key": key.isoformat(), "start": d.isoformat(), "end": d.isoformat(), "days": 0}
+            | {"outpassMinutes": 0, "teaMinutes": 0},
+        )
+        b["end"] = d.isoformat()
+        b["days"] += 1
+        b["outpassMinutes"] += outpass_by_day.get(d, 0)
+        b["teaMinutes"] += tea_by_day.get(d) or 0
+
+    out_by_dept = {r["department"]: r["minutesOut"] for r in _by_department(cur_facts, {}) if r["minutesOut"]}
+    tea_by_dept = tea.department_minutes_lost(scope, period)
+    departments = [
+        {
+            "department": name,
+            "outpassMinutes": out_by_dept.get(name),
+            "teaMinutes": tea_by_dept.get(name),
+            "totalMinutes": (out_by_dept.get(name) or 0) + (tea_by_dept.get(name) or 0),
+        }
+        for name in set(out_by_dept) | set(tea_by_dept)
+    ]
+    departments.sort(key=lambda r: (-r["totalMinutes"], r["department"]))
+    departments = [r for r in departments if r["totalMinutes"]]
+    outpass_now, tea_now = c["minutesOut"], tea_total["value"]
+    return envelope(
+        {
+            "granularity": "week" if weekly else "day",
+            "allowedMinutes": tea_summary["allowedMinutes"],
+            "points": list(buckets.values()),
+            "totals": {
+                "outpassMinutes": _metric(outpass_now, p["minutesOut"]),
+                "teaMinutes": {k: tea_total[k] for k in ("value", "previous", "change")},
+                "togetherMinutes": _metric(
+                    together(outpass_now, tea_now), together(p["minutesOut"], tea_total["previous"])
+                ),
+            },
+            "outpassByReason": [
+                {"key": r["key"], "label": r["label"], "minutesOut": r["minutesOut"]} for r in _by_reason(cur_facts)
+            ],
+            "byDepartment": departments[:limit],
+            "departmentsTotal": len(departments),
+        },
+        period=period,
+        scope=scope,
+        provenance=[
+            _p_time_lost(c["measured"] + (tea_summary["metrics"]["overruns"]["value"] or 0)),
+            _p_hours_out(c["measured"]),
+            *[e for e in tea_summary["provenance"] if e["id"] == "tea-minutes-lost"],
+        ],
+        notes=tea_summary["notes"],
+    )
+
+
 # ─── the Dashboard's two hooks ────────────────────────────────────────────────────────────────────────────────────
 
 
@@ -2334,7 +2619,7 @@ def headline(*, today: date | None = None) -> dict:
             "sub": f"{visits_by_day.get(yesterday, 0)} yesterday",
             "delta": None,
             "spark": _spark(visits_by_day, days),
-            "page": "visitors",
+            "page": PAGE_VISITORS,
         },
         {
             "id": "outpasses-today",
@@ -2344,7 +2629,7 @@ def headline(*, today: date | None = None) -> dict:
             "sub": f"{waiting['waiting']} waiting for approval",
             "delta": None,
             "spark": _spark(passes_by_day, days),
-            "page": "visitors",
+            "page": PAGE_OUTPASS,
         },
         {
             "id": "hours-out-week",
@@ -2354,7 +2639,7 @@ def headline(*, today: date | None = None) -> dict:
             "sub": f"{week_passes} {_plural(week_passes, 'pass', 'passes')} since Monday",
             "delta": {**delta, "good": "down"} if delta else None,
             "spark": _spark(minutes_by_day, days),
-            "page": "visitors",
+            "page": PAGE_OUTPASS,
         },
     ]
     return {
@@ -2507,6 +2792,19 @@ TOOLS = [
         defaults={"limit": 10},
         person_fields=("hostName", "visitorName"),
         example={"date": "2026-10-04"},
+    ),
+    tool(
+        "time_lost_comparison",
+        "Time away from work in one picture for a period: the minutes employees spent outside on outpasses (door to "
+        "door, passes scanned back in, official and personal) next to the minutes lost to tea breaks that ran over the "
+        "allowance, day by day, in total against the previous period, and by department. Use for 'how much time do we "
+        "lose to outpasses and tea breaks', 'which department loses the most time away from the line'. The two are "
+        "different measures (all time outside vs only the part of a tea break beyond the allowance): say so.",
+        time_lost,
+        page="visitors",
+        period="last_30_days",
+        extra={"limit": LIMIT_PARAM},
+        defaults={"limit": 8},
     ),
     tool(
         "search_gate_activity",

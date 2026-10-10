@@ -8,6 +8,7 @@ from . import views
 urlpatterns = [
     path("me", views.md_me),
     path("org", views.md_org),
+    path("brief/", include("api.md_portal.routes.brief")),
     path("dashboard/", include("api.md_portal.routes.dashboard")),
     path("attendance/", include("api.md_portal.routes.attendance")),
     path("employees/", include("api.md_portal.routes.employees")),
@@ -16,5 +17,12 @@ urlpatterns = [
     path("payroll/", include("api.md_portal.routes.payroll")),
     path("recruitment/", include("api.md_portal.routes.recruitment")),
     path("activity/", include("api.md_portal.routes.activity")),
+    path("units/", include("api.md_portal.routes.units")),
+    path("geo/", include("api.md_portal.routes.geo")),
+    path("punches/", include("api.md_portal.routes.punches")),
+    path("reportlog/", include("api.md_portal.routes.reportlog")),
+    path("shifts/", include("api.md_portal.routes.shifts")),
+    path("leave/", include("api.md_portal.routes.leave")),
+    path("requests/", include("api.md_portal.routes.requests")),
     path("assistant/", include("api.md_portal.assistant.urls")),
 ]

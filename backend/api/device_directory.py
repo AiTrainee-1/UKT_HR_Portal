@@ -1133,7 +1133,7 @@ def restricted_codes(request, user_ids: list[str]) -> set[str]:
 def can_edit_module(request, module: str) -> bool:
     """Whether the caller's role may edit `module` (Super admins always may)."""
     from .models import HRUser
-    from .permission_registry import resolve_permission
+    from .permission_registry import effective_permissions, resolve_permission
 
     user_id = (getattr(request, "jwt_user", None) or {}).get("hrUserId")
     hr = HRUser.objects.select_related("role").filter(pk=user_id, is_active=True).first() if user_id else None
@@ -1141,7 +1141,7 @@ def can_edit_module(request, module: str) -> bool:
         return False
     if hr.is_super_admin:
         return True
-    return resolve_permission((hr.role.permissions if hr.role else {}) or {}, module) == "edit"
+    return resolve_permission(effective_permissions(hr), module) == "edit"
 
 
 def delete_users(request, user_ids: list[str], device_ids=None, mark_inactive: bool = False) -> dict:

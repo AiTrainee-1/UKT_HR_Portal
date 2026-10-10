@@ -7,8 +7,10 @@ import { usePayrollSettings } from "@/lib/api-client/custom-hooks";
 import { UKTLogo } from "@/components/ui/dashboard-sidebar";
 import { useAuth } from "@/contexts/AuthContext";
 import { toggleAssistant, useAssistantState } from "@/lib/md/assistant-store";
+import { useMdEmbedded } from "@/lib/md/embed";
 import { toggleSidebarCollapsed, useIsDesktop, useSidebarCollapsed } from "@/lib/sidebar-state";
 import { cn } from "@/lib/utils";
+import MdEmbeddedFrame from "./embedded/MdEmbeddedFrame";
 import MdSidebar, { MD_GOLD_GRADIENT } from "./MdSidebar";
 
 // Scroll positions per pathname, surviving page remounts (each MD page renders its own MdLayout, as the HR pages do).
@@ -44,6 +46,8 @@ const isTyping = (target: EventTarget | null) => {
 
 /** The shell of every MD page: sidebar, mobile bar, scrolling content that makes room for the assistant panel. */
 export default function MdLayout({ children }: { children: ReactNode }) {
+  // inside an MD copy of an HR page (lib/md/embed.ts) the page is framed with the MD's insights
+  const embedded = useMdEmbedded();
   const [mobileOpen, setMobileOpen] = useState(false);
   const { data: settings } = usePayrollSettings();
   const companyName = settings?.companyName || "UKTextiles";
@@ -206,7 +210,7 @@ export default function MdLayout({ children }: { children: ReactNode }) {
             assistantOpen && "xl:pr-[444px]",
           )}
         >
-          {children}
+          {embedded ? <MdEmbeddedFrame>{children}</MdEmbeddedFrame> : children}
         </main>
       </div>
     </div>

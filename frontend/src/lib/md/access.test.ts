@@ -18,4 +18,11 @@ describe("hasHrAccess", () => {
   it("is false when every module is hidden", () => {
     expect(hasHrAccess({ permissions: { employees: "hidden", payroll: "hidden" } })).toBe(false);
   });
+
+  it("goes by the role alone, not by the access the MD portal gives the MD to the pages it copies", () => {
+    // what the server sends a role-less MD: effective permissions (with the MD's grants) but no role permissions
+    const md = { permissions: { employees: "edit", attendance: "edit" }, rolePermissions: {} } as const;
+    expect(hasHrAccess(md)).toBe(false);
+    expect(hasHrAccess({ ...md, rolePermissions: { payroll: "view" } })).toBe(true);
+  });
 });

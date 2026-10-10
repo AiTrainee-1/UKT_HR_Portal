@@ -103,7 +103,7 @@ describe("MdDashboard", () => {
     expect(textOf(page, "md-dashboard-trend-movement-chips")).toContain("Headcount now 1,240");
 
     // explore: a tile for every other page, with its own summary
-    expect(page.container.querySelectorAll('[data-testid^="md-explore-"]').length).toBe(8);
+    expect(page.container.querySelectorAll('[data-testid^="md-explore-"]').length).toBe(17);
     expect(textOf(page, "md-explore-payroll")).toContain("Payroll cost and its trend");
     expect(byTestId(page, "md-explore-payroll")?.querySelector("a")?.getAttribute("href")).toBe("/md/payroll");
     expect(text).toContain("Ask about this");
@@ -132,8 +132,8 @@ describe("MdDashboard", () => {
     expect(full).toBeDefined();
     await act(async () => full!.click());
     expect(getAssistantState().prompt?.text).toBe(overview.briefing.ask);
-    expect(asks.filter((el) => el.textContent?.includes("Ask about this")).length).toBe(8);
-    expect(asks.length).toBeGreaterThanOrEqual(8 + 1 + 1 + 1 + 3); // tiles, briefing, attention, units, three charts
+    expect(asks.filter((el) => el.textContent?.includes("Ask about this")).length).toBe(17);
+    expect(asks.length).toBeGreaterThanOrEqual(17 + 1 + 1 + 1 + 3); // tiles, briefing, attention, units, three charts
     expect(page.container.querySelectorAll('[data-testid="provenance-button"]').length).toBeGreaterThanOrEqual(8);
   });
 
@@ -234,7 +234,7 @@ describe("MdDashboard", () => {
     expect(textOf(page, "kpi-employees.headcount-value")).toBe("—");
     expect(page.text()).toContain("Attendance, last 30 days");
     expect(textOf(page, "md-dashboard-trend-attendance-chips")).toContain("Average 93.4%");
-    expect(page.container.querySelectorAll('[data-testid^="md-explore-"]').length).toBe(8);
+    expect(page.container.querySelectorAll('[data-testid^="md-explore-"]').length).toBe(17);
     expect(textOf(page, "md-page-title")).toBe("Good afternoon, Murugan");
     expect(textOf(page, "md-updated")).toContain("Getting the numbers");
   });

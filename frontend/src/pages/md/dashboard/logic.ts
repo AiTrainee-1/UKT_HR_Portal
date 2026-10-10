@@ -222,7 +222,16 @@ export const movementSummary = (totals: MovementTrend["totals"]): string =>
 
 const EXPLORE_QUESTIONS: Record<string, string> = {
   attendance: "How is attendance this month, and which departments have the most absence?",
+  "attendance-production": "How is production attendance this month, and which shifts are short?",
+  "geo-attendance": "Who is on duty outside the premises, and are their punches being verified?",
+  "attendance-search": "Which punches were entered by hand lately, and are any devices silent?",
+  "report-log": "Were this month's absences followed up as Informed or Not informed?",
   employees: "How is the workforce changing, and where are people leaving from?",
+  branches: "How do the units compare on headcount and attendance today?",
+  outpass: "Who is out on an outpass right now, and for how long?",
+  shifts: "Which employees have no shift, and what changed in shifts recently?",
+  leave: "Who is on leave this week, and which leave requests are waiting?",
+  requests: "Which requests are waiting for a decision, and how long have they waited?",
   visitors: "How many visitors and outpasses were there recently, and is anything out of order?",
   "tea-break": "Are tea breaks costing us production time, and where is it worst?",
   payroll: "What did payroll cost last month and what changed from the month before?",

@@ -17,7 +17,10 @@ interface UserInfo {
   isMasterAdmin?: boolean;
   /** The Managing Director: opens the executive portal (/md/*). Decided by the server (/auth/me), never by the token. */
   isMd?: boolean;
+  /** What the account may do in each module: its role's permissions and, for the MD, the access the MD portal's pages need. */
   permissions?: Record<string, PermissionLevel>;
+  /** The role's own permissions, without the MD's added access: whether the account has an HR role at all. */
+  rolePermissions?: Record<string, PermissionLevel>;
   branchId?: number | null;
   branchName?: string | null;
 }
@@ -141,6 +144,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     isMasterAdmin: (me as { isMasterAdmin?: boolean }).isMasterAdmin,
     isMd: (me as { isMd?: boolean }).isMd,
     permissions: (me as { permissions?: Record<string, PermissionLevel> }).permissions,
+    rolePermissions: (me as { rolePermissions?: Record<string, PermissionLevel> }).rolePermissions,
     branchId: (me as { branchId?: number | null }).branchId ?? null,
     branchName: (me as { branchName?: string | null }).branchName ?? null,
   } : null;

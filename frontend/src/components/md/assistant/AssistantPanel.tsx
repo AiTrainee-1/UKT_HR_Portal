@@ -24,6 +24,7 @@ import { shouldAutoSend, type VoiceLanguageChoice } from "@/lib/md/voice";
 import { mdPageForPath } from "../md-nav";
 import { getStatus, type ChatMessage, type HeardPayload } from "./api";
 import Composer from "./Composer";
+import { RadioMascot } from "./mascot";
 import MessageBubble, { AssistantAvatar } from "./MessageBubble";
 import { suggestionsFor } from "./suggestions";
 import { useAssistantChat } from "./useAssistantChat";
@@ -66,12 +67,13 @@ const isBool = (v: unknown): v is boolean => typeof v === "boolean";
 const isLanguage = (v: unknown): v is VoiceLanguageChoice =>
   v === "en-IN" || v === "ta-IN" || v === "hi-IN" || v === "auto";
 
+/** The welcome: the radio character (it follows the pointer and can be poked) in a soft glow. */
 function GlowOrb() {
   return (
-    <div className="relative flex h-20 w-20 items-center justify-center" aria-hidden>
-      <span className="assistant-orb-glow absolute inset-0 rounded-full" />
-      <span className="assistant-orb-ring absolute inset-1 rounded-full border border-[#e0a83a]/40" />
-      <AssistantAvatar size={52} className="relative" />
+    <div className="relative flex h-32 w-32 items-center justify-center">
+      <span className="assistant-orb-glow absolute inset-0 rounded-full" aria-hidden />
+      <span className="assistant-orb-ring absolute inset-2 rounded-full border border-[#e0a83a]/40" aria-hidden />
+      <RadioMascot size={108} label="AI assistant" className="relative" />
     </div>
   );
 }
@@ -233,7 +235,7 @@ export default function AssistantPanel() {
       >
         {/* header */}
         <header className="relative flex items-center gap-2.5 border-b border-[#006496]/10 bg-white px-4 py-3">
-          <AssistantAvatar size={36} />
+          <AssistantAvatar size={40} mood={chat.busy ? "working" : "idle"} />
           <div className="min-w-0 flex-1">
             <h2 className="text-[15px] font-black leading-tight text-[#1a3a4a]">AI Assistant</h2>
             <p

@@ -17,6 +17,14 @@ TOOL_MODULES = (
     "payroll",
     "recruitment",
     "activity",
+    # the modules behind the MD copies of HR pages (md-portal.md section 10); a module not written yet offers no tools
+    "units",
+    "geo",
+    "punches",
+    "reportlog",
+    "shifts",
+    "leave",
+    "requests",
 )
 
 

@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { HR_PASSWORD, HR_USERNAME } from "./helpers";
 
-// Every page of the MD portal opens, on a laptop and on a phone, with the assistant closed and open: the page title is
+// Every analytics page of the MD portal opens, on a laptop and on a phone, with the assistant closed and open: the page title is
 // there, nothing on the page is wider than the screen, no request to the server fails (5xx) and the browser logs no
 // error. The database is the e2e fixture company (small, and some pages are empty), so this is about the pages holding
 // together, not about the numbers: those are the backend and component tests' job.
@@ -9,17 +9,9 @@ import { HR_PASSWORD, HR_USERNAME } from "./helpers";
 // The server throttles sign-ins (10 a minute), so the MD signs in ONCE and every test starts from that token.
 
 const MD_PASSWORD = "Passw0rd!md";
-const PAGES = [
-  "/md/dashboard",
-  "/md/attendance",
-  "/md/employees",
-  "/md/visitors",
-  "/md/tea-break",
-  "/md/payroll",
-  "/md/reports",
-  "/md/recruitment",
-  "/md/activity",
-];
+// The analytics pages. The pages that copy an HR page (Dashboard, Employees, Attendance, ...) are in md-hr-pages.spec.ts and
+// md-insights.spec.ts: there the HR page's own title is what shows, not md-page-title.
+const PAGES = ["/md/payroll", "/md/reports", "/md/recruitment", "/md/activity"];
 
 let adminToken = "";
 let mdToken = "";

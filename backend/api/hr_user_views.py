@@ -9,7 +9,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from .auth import is_master_admin, require_master_admin, require_super_admin
+from .auth import is_master_admin, require_master_admin, require_super_admin, require_super_admin_or_md
 from .branch_scope import scope_to_branch
 from .models import HRUser, Role, AuditLog
 from .audit_utils import log_action
@@ -410,7 +410,7 @@ def audit_logs(request: Request) -> Response:
 
 
 @api_view(["GET"])
-@require_super_admin
+@require_super_admin_or_md
 def audit_logs_stats(request: Request) -> Response:
     now = timezone.now()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)

@@ -214,7 +214,12 @@ def auth_me(request: Request) -> Response:
             .first()
         )
         is_super_admin = bool(hr_user and hr_user.is_super_admin)
-        permissions = (hr_user.role.permissions if hr_user and hr_user.role else {}) or {}
+        from .permission_registry import effective_permissions
+
+        # the role's permissions, plus (for the Managing Director only) the access the MD portal's pages need
+        permissions = effective_permissions(hr_user) if hr_user else {}
+        # the role alone: lets the MD portal tell "has an HR role" from "has the MD's own access to its pages"
+        payload["rolePermissions"] = (hr_user.role.permissions if hr_user and hr_user.role else {}) or {}
         payload["isSuperAdmin"] = is_super_admin
         # Narrower than isSuperAdmin -only the ADMIN_USERNAME account. Gates
         # Account Management → Master in the UI; the API guard is what

@@ -9,12 +9,21 @@ import { useAuth, isRouteViewOnly } from "@/contexts/AuthContext";
 import { moduleForPath } from "@/lib/permission-modules";
 import { lockMutatingControls } from "@/lib/view-only-lock";
 import { useSidebarCollapsed, useIsDesktop, toggleSidebarCollapsed } from "@/lib/sidebar-state";
+import { useMdEmbedded } from "@/lib/md/embed";
+import MdLayout from "@/components/md/MdLayout";
 
 // Scroll positions per pathname, surviving page remounts (each page renders its
 // own HrLayout, so navigating away and back would otherwise reset to the top).
 const scrollPositions = new Map<string, number>();
 
+/** Every HR page renders this around itself. In the Managing Director's portal the same pages run inside the MD's own
+ *  shell (see lib/md/embed.ts), so there it is the MD layout; everywhere else it is the HR layout, exactly as before. */
 export default function HrLayout({ children }: { children: React.ReactNode }) {
+  const embeddedInMdPortal = useMdEmbedded();
+  return embeddedInMdPortal ? <MdLayout>{children}</MdLayout> : <HrShell>{children}</HrShell>;
+}
+
+function HrShell({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const { data: settings } = usePayrollSettings();
   const companyName = settings?.companyName || "UKTextiles";

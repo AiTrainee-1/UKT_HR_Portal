@@ -220,7 +220,7 @@ class OnlyTheMdReachesTheMdApi(Base):
         self.assertEqual(r.status_code, 200, r.content)
         body = r.json()
         self.assertEqual((body["username"], body["name"]), ("md.sir", "R. Murugan"))
-        self.assertEqual([p["id"] for p in body["pages"]][:2], ["dashboard", "attendance"])
+        self.assertEqual([p["id"] for p in body["pages"]][:3], ["dashboard", "employees", "branches"])
         self.assertIn("serverTime", body)
 
     def test_everyone_else_is_refused(self):
@@ -260,11 +260,13 @@ class OnlyTheMdReachesTheMdApi(Base):
         )  # past the lock
 
     def test_the_md_does_not_gain_the_hr_portal_by_being_the_md(self):
-        """The flag opens /api/md/* only: the rest of the HR portal still answers to the role (this one has none)."""
+        """The flag opens /api/md/* and, for the pages the MD portal copies from the HR portal, those pages' modules
+        (permission_registry.MD_HR_GRANTS: tests_md_hr_access pins them). The rest of the HR portal still answers to the
+        role, and this one has none."""
         self.make_md()
-        r = self.client.get("/api/employees", **headers_for(self.person))
-        self.assertEqual(r.status_code, 403)
-        self.assertEqual(self.client.get("/api/hr-users", **headers_for(self.person)).status_code, 403)
+        self.assertNotEqual(self.client.get("/api/employees", **headers_for(self.person)).status_code, 403)
+        for path in ("/api/payroll", "/api/salary-slips", "/api/hr-users", "/api/roles", "/api/audit-logs"):
+            self.assertEqual(self.client.get(path, **headers_for(self.person)).status_code, 403, path)
 
 
 def _md_routes() -> list[str]:

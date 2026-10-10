@@ -99,6 +99,68 @@ def all_module_keys() -> list[str]:
     return keys
 
 
+# ── the Managing Director's working access ──────────────────────────────────────────────────────────────────────────────
+#
+# The MD portal (/md/*) reproduces these HR pages in full (Dashboard, Employees, Branches, Staff/Production Attendance,
+# Geo Attendance, Attendance Search, Report Log, Outpass / Visitors / Tea Break, Manage Shift, Leave & Holiday, Requests)
+# with the AI and visual extras on top, and the MD works in them like a super administrator does (except for the requests
+# the MD only views: MD_VIEW_ONLY). That needs the same API access, so the MD account is given this access on exactly these
+# modules, whatever its role says (a role can add more; it can never take these away). It is not a super administrator:
+# every module not listed keeps following the role.
+#
+# One place to change it: set a level to "view" to make the MD's copy of a module read-only, or remove a key to take the
+# module away. See md-portal.md section 10.
+MD_HR_GRANTS: dict[str, str] = {
+    # the fourteen pages
+    "dashboard": "edit",
+    "employees": "edit",
+    "employees.departments": "edit",
+    "employees.designations": "edit",
+    "employees.branches": "edit",
+    "attendance": "edit",
+    "geo_attendance": "edit",
+    "outpass_visitors": "edit",
+    "shifts": "edit",
+    # The MD only LOOKS at leave, permission and outpass requests, holidays and leave types: see MD_VIEW_ONLY below.
+    "leave": "view",
+    "requests": "view",
+    # what the pages above read or approve through other modules (the Requests page decides leave, permission, casual-leave,
+    # missing-punch, outpass and advance requests; the Dashboard counts them). See md-portal.md section 10 for the audit.
+    "casual_leave": "edit",
+    "missing_punch": "edit",
+    "settlement": "edit",
+    "notifications": "view",
+    "recruitment": "view",
+}
+
+# Modules the Managing Director may only VIEW (2026-10-10, the product owner: "the MD only needs to view those requests"):
+# the Leave & Holiday and Requests pages show leave, permission and outpass requests but the MD does not approve, reject,
+# edit or delete them; HR and the department heads decide. Unlike a grant this is a CAP: a role on the MD account that says
+# "edit" is lowered to "view" for these modules, so nothing but this list decides it. To give the decisions back, remove a
+# key here and set it to "edit" in MD_HR_GRANTS.
+MD_VIEW_ONLY: frozenset[str] = frozenset({"leave", "requests"})
+
+_LEVEL_RANK = {"hidden": 0, "view": 1, "edit": 2}
+
+
+def effective_permissions(hr_user) -> dict:
+    """What an HR account may do in each module: its role's permissions and, for the Managing Director, MD_HR_GRANTS.
+
+    A grant only ever raises a level, except that MD_VIEW_ONLY modules are held at "view". The result is a flat
+    {module key: level} dict like Role.permissions, so every consumer (the permission middleware, /auth/me, the per-view
+    checks) reads it the same way."""
+    permissions = dict((hr_user.role.permissions if hr_user is not None and hr_user.role else {}) or {})
+    if hr_user is None or not getattr(hr_user, "is_md", False) or not getattr(hr_user, "is_active", True):
+        return permissions
+    for key, level in MD_HR_GRANTS.items():
+        if _LEVEL_RANK[level] > _LEVEL_RANK.get(resolve_permission(permissions, key), 0):
+            permissions[key] = level
+    for key in MD_VIEW_ONLY:
+        if _LEVEL_RANK.get(resolve_permission(permissions, key), 0) > _LEVEL_RANK["view"]:
+            permissions[key] = "view"
+    return permissions
+
+
 def resolve_permission(permissions: dict, key: str) -> str:
     """
     Walks a dotted key ("employees.departments") from most specific to least

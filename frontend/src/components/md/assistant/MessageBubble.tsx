@@ -1,28 +1,33 @@
 import { useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
-import { AlertCircle, ArrowUpRight, Check, Copy, Mic, RotateCcw, Sparkles, Square, Volume2 } from "lucide-react";
+import { AlertCircle, ArrowUpRight, Check, Copy, Mic, RotateCcw, Square, Volume2 } from "lucide-react";
 import { clockText } from "@/lib/md/format";
 import { stripMarkdown } from "@/lib/md/markdown";
 import { describeHeard } from "@/lib/md/voice";
-import { cn } from "@/lib/utils";
 import type { ChatMessage } from "./api";
 import Explainer, { ConfidenceChip } from "./Explainer";
 import Markdown from "./Markdown";
+import { MascotFace, type MascotMood } from "./mascot";
 import ProgressList from "./ProgressList";
 
-export function AssistantAvatar({ size = 28, className }: { size?: number; className?: string }) {
-  return (
-    <span
-      className={cn(
-        "flex shrink-0 items-center justify-center rounded-full text-[#5b3d00] shadow-sm ring-2 ring-white",
-        className,
-      )}
-      style={{ width: size, height: size, background: "linear-gradient(135deg, #f6d27a 0%, #e0a83a 100%)" }}
-      aria-hidden
-    >
-      <Sparkles size={Math.round(size * 0.52)} strokeWidth={2.2} />
-    </span>
-  );
+/** The assistant's face (the radio character, see ./mascot.tsx); its expression follows what the assistant is doing. */
+export function AssistantAvatar({
+  size = 28,
+  mood = "idle",
+  className,
+}: {
+  size?: number;
+  mood?: MascotMood;
+  className?: string;
+}) {
+  return <MascotFace size={size} mood={mood} className={className} />;
+}
+
+/** Working on it while the answer is made, dizzy when it went wrong, asleep when the MD stopped it. */
+function moodOf(message: ChatMessage): MascotMood {
+  if (message.status === "pending" || message.status === "running") return "working";
+  if (message.status === "error") return message.payload.errorKind === "cancelled" ? "stopped" : "error";
+  return "idle";
 }
 
 export type MessageBubbleProps = {
@@ -124,7 +129,7 @@ export default function MessageBubble(props: MessageBubbleProps) {
 
   return (
     <motion.div {...enter} className="flex gap-2.5" data-testid="assistant-reply" data-status={message.status}>
-      <AssistantAvatar className="mt-0.5" />
+      <AssistantAvatar className="mt-0.5" size={32} mood={moodOf(message)} />
       <div className="min-w-0 flex-1 space-y-2">
         {running && (
           <div className="rounded-2xl rounded-tl-md border border-[#006496]/10 bg-white px-3.5 py-3 shadow-sm">

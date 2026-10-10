@@ -42,11 +42,8 @@ const ReceptionConsole = lazy(() => import("@/pages/gate/ReceptionConsole"));
 const GateScannerConsole = lazy(() => import("@/pages/gate/GateScannerConsole"));
 
 // Managing Director portal (executive analytics; only the account flagged MD gets in -see ProtectedRoute)
-const MdDashboard = lazy(() => import("@/pages/md/MdDashboard"));
-const MdAttendance = lazy(() => import("@/pages/md/MdAttendance"));
-const MdEmployees = lazy(() => import("@/pages/md/MdEmployees"));
-const MdVisitors = lazy(() => import("@/pages/md/MdVisitors"));
-const MdTeaBreak = lazy(() => import("@/pages/md/MdTeaBreak"));
+// The MD's copies of the HR pages (Dashboard, Employees, Attendance, ...) with their Insights: one app, see lib/md/embed.ts
+const MdHrApp = lazy(() => import("@/components/md/MdHrApp"));
 const MdPayroll = lazy(() => import("@/pages/md/MdPayroll"));
 const MdReports = lazy(() => import("@/pages/md/MdReports"));
 const MdRecruitment = lazy(() => import("@/pages/md/MdRecruitment"));
@@ -394,15 +391,15 @@ function Router() {
         </Route>
         {/* ── Managing Director portal ─────────────────────────── */}
         <Route path="/md">{() => <Redirect to="/md/dashboard" />}</Route>
-        <Route path="/md/dashboard">{() => <ProtectedRoute component={MdDashboard} allowedRoles={["hr"]} />}</Route>
-        <Route path="/md/attendance">{() => <ProtectedRoute component={MdAttendance} allowedRoles={["hr"]} />}</Route>
-        <Route path="/md/employees">{() => <ProtectedRoute component={MdEmployees} allowedRoles={["hr"]} />}</Route>
-        <Route path="/md/visitors">{() => <ProtectedRoute component={MdVisitors} allowedRoles={["hr"]} />}</Route>
-        <Route path="/md/tea-break">{() => <ProtectedRoute component={MdTeaBreak} allowedRoles={["hr"]} />}</Route>
         <Route path="/md/payroll">{() => <ProtectedRoute component={MdPayroll} allowedRoles={["hr"]} />}</Route>
         <Route path="/md/reports">{() => <ProtectedRoute component={MdReports} allowedRoles={["hr"]} />}</Route>
         <Route path="/md/recruitment">{() => <ProtectedRoute component={MdRecruitment} allowedRoles={["hr"]} />}</Route>
         <Route path="/md/activity">{() => <ProtectedRoute component={MdActivity} allowedRoles={["hr"]} />}</Route>
+        {/* The analytics pages that used to be separate now live inside the pages they analyse. */}
+        <Route path="/md/visitors">{() => <Redirect to="/md/outpass-visitors/visitors" replace />}</Route>
+        <Route path="/md/tea-break">{() => <Redirect to="/md/outpass-visitors/tea-break" replace />}</Route>
+        {/* Everything else under /md is an MD copy of an HR page (Dashboard, Employees, Attendance, ...). */}
+        <Route path="/md/*?">{() => <ProtectedRoute component={MdHrApp} allowedRoles={["hr"]} />}</Route>
 
         <Route path="/hr/account-management/master">
           {() => <ProtectedRoute component={AccountManagementMaster} allowedRoles={["hr"]} />}

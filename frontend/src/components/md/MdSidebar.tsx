@@ -7,6 +7,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { usePayrollSettings } from "@/lib/api-client/custom-hooks";
 import { toggleAssistant, useAssistantState } from "@/lib/md/assistant-store";
 import { hasHrAccess } from "@/lib/md/access";
+import { hrToMd } from "@/lib/md/embed";
 import { cn } from "@/lib/utils";
 import { MD_NAV_GROUPS, type MdNavItem } from "./md-nav";
 
@@ -14,7 +15,11 @@ import { MD_NAV_GROUPS, type MdNavItem } from "./md-nav";
 export const MD_GOLD = "#e0a83a";
 export const MD_GOLD_GRADIENT = "linear-gradient(135deg, #f6d27a 0%, #e0a83a 100%)";
 
-const isActivePath = (current: string, path: string) => current === path || current.startsWith(`${path}/`);
+const isActivePath = (current: string, path: string) => {
+  const now = current.toLowerCase();
+  const own = path.toLowerCase();
+  return now === own || now.startsWith(`${own}/`);
+};
 
 function ExpandedItem({ item, current, onClose }: { item: MdNavItem; current: string; onClose: () => void }) {
   const active = isActivePath(current, item.path);
@@ -81,7 +86,8 @@ export default function MdSidebar({
   collapsed?: boolean;
   onToggleCollapse?: () => void;
 }) {
-  const [location] = useLocation();
+  // Inside an MD copy of an HR page the router shows /hr/... addresses (lib/md/embed.ts): the sidebar compares /md/... ones
+  const location = hrToMd(useLocation()[0]);
   const { user, logout } = useAuth();
   const { open: assistantOpen } = useAssistantState();
   const { data: settings } = usePayrollSettings();
@@ -245,11 +251,11 @@ export default function MdSidebar({
             {hrAccess && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Link href="/hr/dashboard" aria-label="HR portal" data-testid="md-to-hr">
+                  <a href="/hr/dashboard" aria-label="HR portal" data-testid="md-to-hr">
                     <span className={cn(railBtn, "text-[#006496]/70 hover:bg-[#006496]/[0.08] hover:text-[#006496]")}>
                       <ArrowLeftRight className="h-[18px] w-[18px]" strokeWidth={1.8} />
                     </span>
-                  </Link>
+                  </a>
                 </TooltipTrigger>
                 <TooltipContent side="right" sideOffset={10}>
                   HR portal
@@ -303,12 +309,12 @@ export default function MdSidebar({
               </div>
             </div>
             {hrAccess && (
-              <Link href="/hr/dashboard" data-testid="md-to-hr">
+              <a href="/hr/dashboard" data-testid="md-to-hr">
                 <div className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] font-medium text-[#1e4d6b] transition-all duration-200 hover:translate-x-1 hover:bg-[#006496]/[0.05] hover:text-[#006496]">
                   <ArrowLeftRight className="h-4 w-4 shrink-0 text-[#006496]/80" strokeWidth={1.8} />
                   <span>HR portal</span>
                 </div>
-              </Link>
+              </a>
             )}
             <button
               onClick={logout}
