@@ -37,7 +37,7 @@ export default function KpiStrip({ overview, failed }: { overview: DashboardOver
   return (
     <div className="@container" data-testid="md-dashboard-kpis">
       {overview && overview.kpis.length === 0 ? (
-        <div className="rounded-2xl clay-card">
+        <div className="md-card">
           <EmptyBlock title="No figures could be read just now">
             The pages that make these cards did not answer. The reason and a Retry are at the top of the page.
           </EmptyBlock>

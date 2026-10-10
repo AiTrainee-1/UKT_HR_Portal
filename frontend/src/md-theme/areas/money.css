@@ -1,0 +1,745 @@
+/* MD portal skin, area: money (Payroll Analysis and Reports). Owned by the designer of that area (md-portal.md section 11.4).
+   Every selector here starts with an .md-money-* class of its own (or html[data-md-theme]); md-theme.test.ts checks. Use the
+   palette tokens (var(--md-wine-700) ...), never a hex colour (white and rgba() numbers are fine).
+
+   Rules of this file:
+   - It paints glass, tints, gradients and states. Spacing, type sizes and layout are Tailwind utilities in the components.
+   - This CSS is un-layered, so it beats Tailwind utilities: never set a property here that a component also sets with a
+     utility on the same element (padding, radius, display) unless this file is the one place that owns it.
+   - Blur only on the few top-level cards (md-card). The many small cards (the report library) are translucent without blur.
+   - Colours: wine = accent, indigo = text and dark surfaces, sand / vanilla / alabaster = backgrounds, sage / ochre / crimson
+     = good / watch / bad and nothing else. */
+
+/* ── tones ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   One tone per element: --tone (the strong colour), --tone-hi (its lighter end, for gradients), --tone-ink (text that sits
+   on a tint of the tone, always at least 4.5:1). The tile, the status banner, the dots and the pills read these. */
+
+.md-money-t-wine {
+  --tone: var(--md-wine-700);
+  --tone-hi: var(--md-wine-500);
+  --tone-ink: var(--md-wine-800);
+}
+.md-money-t-ink {
+  --tone: var(--md-ink-800);
+  --tone-hi: var(--md-ink-600);
+  --tone-ink: var(--md-ink-900);
+}
+.md-money-t-rose {
+  --tone: var(--md-rose-700);
+  --tone-hi: var(--md-rose-500);
+  --tone-ink: var(--md-rose-800);
+}
+.md-money-t-info {
+  --tone: var(--md-info-700);
+  --tone-hi: var(--md-info-500);
+  --tone-ink: var(--md-info-800);
+}
+.md-money-t-mauve {
+  --tone: var(--md-mauve-700);
+  --tone-hi: var(--md-mauve-500);
+  --tone-ink: var(--md-mauve-800);
+}
+.md-money-t-clay {
+  --tone: var(--md-clay-600);
+  --tone-hi: var(--md-clay-400);
+  --tone-ink: var(--md-clay-700);
+}
+.md-money-t-sky {
+  --tone: var(--md-sky-700);
+  --tone-hi: var(--md-sky-500);
+  --tone-ink: var(--md-sky-800);
+}
+.md-money-t-neutral {
+  --tone: var(--md-n-600);
+  --tone-hi: var(--md-n-400);
+  --tone-ink: var(--md-n-700);
+}
+/* the three that carry meaning */
+.md-money-t-success {
+  --tone: var(--md-success-600);
+  --tone-hi: var(--md-success-400);
+  --tone-ink: var(--md-success-700);
+}
+.md-money-t-warning {
+  --tone: var(--md-warning-600);
+  --tone-hi: var(--md-warning-400);
+  --tone-ink: var(--md-warning-800);
+}
+.md-money-t-danger {
+  --tone: var(--md-danger-600);
+  --tone-hi: var(--md-danger-400);
+  --tone-ink: var(--md-danger-700);
+}
+
+/* ── icon tiles: a rounded glass square holding an icon, tinted by the tone (wine when no tone is set) ──────────────── */
+
+.md-money-tile {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.9rem;
+  color: var(--tone, var(--md-wine-700));
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--tone, var(--md-wine-700)) 18%, white),
+    color-mix(in srgb, var(--tone, var(--md-wine-700)) 6%, white)
+  );
+  border: 1px solid color-mix(in srgb, var(--tone, var(--md-wine-700)) 24%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    0 8px 16px -10px color-mix(in srgb, var(--tone, var(--md-wine-700)) 65%, transparent);
+}
+.md-money-tile-solid {
+  color: white;
+  background: linear-gradient(135deg, var(--tone, var(--md-wine-700)), var(--tone-hi, var(--md-wine-500)));
+  border-color: rgba(255, 255, 255, 0.38);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.45),
+    0 12px 22px -10px color-mix(in srgb, var(--tone, var(--md-wine-700)) 75%, transparent);
+}
+.md-money-tile-md {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.8rem;
+}
+.md-money-tile-lg {
+  width: 3rem;
+  height: 3rem;
+  border-radius: 1rem;
+}
+.md-money-tile-sm {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.75rem;
+}
+/* on the dark hero: sand glass */
+.md-money-tile-sand {
+  color: var(--md-sand);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--md-sand) 24%, transparent),
+    color-mix(in srgb, var(--md-sand) 8%, transparent)
+  );
+  border-color: color-mix(in srgb, var(--md-sand) 30%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 30%, transparent);
+}
+
+/* ── pills and counts ──────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* information (periwinkle) and quiet neutral pills, to sit beside md-chip-success / -warning / -danger in glass.css */
+.md-money-pill-info {
+  color: var(--md-info-800);
+  background: color-mix(in srgb, var(--md-info-500) 12%, white);
+  border-color: color-mix(in srgb, var(--md-info-500) 30%, transparent);
+}
+.md-money-pill-quiet {
+  color: var(--md-ink-600);
+  background: color-mix(in srgb, var(--md-ink-800) 5%, white);
+  border-color: color-mix(in srgb, var(--md-ink-800) 12%, transparent);
+}
+.md-money-delta {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* the chosen item of a segmented switch. glass.css paints it through :where(), which has no weight, so its own :hover rule
+   would win and wash the chosen item out while the pointer is over it; this keeps it wine. */
+.md-money-seg-on,
+.md-money-seg-on:hover {
+  color: white;
+  background: linear-gradient(135deg, var(--md-wine-700), var(--md-wine-500));
+  border-color: rgba(255, 255, 255, 0.3);
+  box-shadow:
+    0 8px 18px -6px color-mix(in srgb, var(--md-wine) 55%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+/* the little number inside a segmented switch item */
+.md-money-count {
+  display: inline-flex;
+  min-width: 1.35rem;
+  justify-content: center;
+  padding: 0 0.4rem;
+  border-radius: 9999px;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  color: var(--md-ink-700);
+  background: color-mix(in srgb, var(--md-ink-800) 9%, transparent);
+}
+.md-money-count-on {
+  color: white;
+  background: rgba(255, 255, 255, 0.24);
+}
+
+/* ── filters ───────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* the calendar icon beside the month picker */
+.md-money-filter-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 9999px;
+  color: var(--md-wine-700);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--md-wine) 14%, white),
+    color-mix(in srgb, var(--md-wine) 5%, white)
+  );
+  border: 1px solid color-mix(in srgb, var(--md-wine) 20%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+/* ── KPI strip ─────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+.md-money-kpi {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  min-width: 0;
+  padding: 1.05rem 1.15rem 1.1rem;
+  /* eight of these sit on the page at once, over a smooth background: translucent glass without the blur keeps scrolling light */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* the gross-pay statement: md-hero (dark indigo glass, wine glow) at the size of its neighbours, with a pair of faint sand rings */
+.md-money-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  min-width: 0;
+  padding: 1.05rem 1.15rem 1.1rem;
+  border-radius: 1.25rem;
+}
+.md-money-hero::after {
+  content: "";
+  position: absolute;
+  right: -3.5rem;
+  bottom: -5.5rem;
+  z-index: 0;
+  width: 13rem;
+  height: 13rem;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--md-sand) 16%, transparent);
+  box-shadow:
+    0 0 0 1.5rem color-mix(in srgb, var(--md-sand) 4%, transparent),
+    0 0 0 3rem color-mix(in srgb, var(--md-sand) 2.5%, transparent);
+  pointer-events: none;
+}
+.md-money-hero > *:not(.ukt-kpi-run) {
+  position: relative;
+  z-index: 1;
+}
+
+/* the share of slips that are paid, under "Awaiting payment" */
+.md-money-meter {
+  position: relative;
+  height: 0.5rem;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--md-ink-800) 10%, transparent);
+  box-shadow: inset 0 1px 2px rgba(40, 43, 74, 0.12);
+}
+.md-money-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--tone, var(--md-success-600)), var(--tone-hi, var(--md-success-400)));
+  transition: width 0.5s ease;
+}
+
+/* ── status banner (the strip under the filters) ───────────────────────────────────────────────────────────────────── */
+
+.md-money-status {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.85rem 1.25rem;
+  overflow: hidden;
+  padding: 1rem 1.25rem 1rem 1.6rem;
+}
+.md-money-status::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0.35rem;
+  background: linear-gradient(180deg, var(--tone-hi, var(--md-info-500)), var(--tone, var(--md-info-700)));
+}
+.md-money-status::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    36rem 9rem at 0% 0%,
+    color-mix(in srgb, var(--tone, var(--md-info-700)) 11%, transparent),
+    transparent 72%
+  );
+}
+.md-money-status > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* ── small figures inside a card ───────────────────────────────────────────────────────────────────────────────────── */
+
+.md-money-metric {
+  min-width: 0;
+  padding: 0.8rem 1rem 0.85rem;
+  border-radius: 1rem;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.66), rgba(255, 255, 255, 0.4));
+  border: 1px solid var(--md-line);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+.md-money-metric-wine {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--md-wine) 9%, white),
+    color-mix(in srgb, var(--md-wine) 3%, white)
+  );
+  border-color: color-mix(in srgb, var(--md-wine) 18%, transparent);
+}
+
+/* ── tables (the components table, the exceptions list) ────────────────────────────────────────────────────────────── */
+
+.md-money-table {
+  border-collapse: collapse;
+}
+.md-money-table thead th {
+  height: auto;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--md-ink-600);
+  border-bottom: 1px solid var(--md-line-strong);
+}
+.md-money-table tbody tr {
+  border-bottom: 1px solid color-mix(in srgb, var(--md-ink-800) 8%, transparent);
+  transition: background-color 0.15s ease;
+}
+.md-money-table tbody tr:last-child {
+  border-bottom: 0;
+}
+.md-money-table tbody tr:hover {
+  background: color-mix(in srgb, var(--md-wine) 3.5%, transparent);
+}
+.md-money-table tbody td {
+  padding: 0.6rem 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+/* the total row: heavier, tinted, a rule above */
+.md-money-table tbody tr.md-money-total {
+  border-top: 1px solid var(--md-line-strong);
+  background: color-mix(in srgb, var(--md-wine) 5%, transparent);
+  font-weight: 800;
+}
+.md-money-table tbody tr.md-money-total:hover {
+  background: color-mix(in srgb, var(--md-wine) 7%, transparent);
+}
+
+/* ── the cost bridge ───────────────────────────────────────────────────────────────────────────────────────────────── */
+
+.md-money-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: hidden;
+}
+.md-money-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  padding: 0.7rem 0.9rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--md-ink-800) 8%, transparent);
+  transition: background-color 0.15s ease;
+}
+.md-money-step:last-child {
+  border-bottom: 0;
+}
+.md-money-step:hover {
+  background: color-mix(in srgb, var(--md-wine) 3.5%, transparent);
+}
+.md-money-step-total {
+  align-items: baseline;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--md-wine) 9%, transparent),
+    color-mix(in srgb, var(--md-wine) 3%, transparent)
+  );
+  border-top: 1px solid color-mix(in srgb, var(--md-wine) 16%, transparent);
+}
+/* the arrow badge before a step: a small round chip in the step's meaning (crimson raises cost, sage lowers it) */
+.md-money-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.65rem;
+  height: 1.65rem;
+  margin-top: 0.05rem;
+  border-radius: 9999px;
+  color: var(--tone-ink, var(--md-ink-700));
+  background: color-mix(in srgb, var(--tone, var(--md-n-600)) 13%, white);
+  border: 1px solid color-mix(in srgb, var(--tone, var(--md-n-600)) 26%, transparent);
+}
+.md-money-swatch {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 0.25rem;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+/* ── the twelve month tiles ────────────────────────────────────────────────────────────────────────────────────────── */
+
+.md-money-month {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  min-width: 6.4rem;
+  min-height: 3.5rem;
+  padding: 0.6rem 0.85rem;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 1rem;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.52));
+  border: 1px solid var(--md-line);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 6px 16px -10px rgba(40, 43, 74, 0.4);
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease,
+    background 0.2s ease;
+}
+.md-money-month:hover:not(:disabled) {
+  transform: translateY(-2px);
+}
+.md-money-month:hover:not(:disabled):not([aria-current="date"]) {
+  border-color: color-mix(in srgb, var(--md-wine) 34%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 14px 24px -12px rgba(40, 43, 74, 0.45);
+}
+.md-money-month:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+}
+.md-money-month:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 2px;
+}
+.md-money-month:disabled {
+  cursor: default;
+  opacity: 0.55;
+  box-shadow: none;
+}
+.md-money-month[aria-current="date"] {
+  border-color: var(--md-wine-600);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--md-wine) 10%, white),
+    color-mix(in srgb, var(--md-wine) 3%, white)
+  );
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--md-wine) 14%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 12px 22px -12px color-mix(in srgb, var(--md-wine) 55%, transparent);
+}
+.md-money-dot {
+  flex: none;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 9999px;
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.9),
+    0 0 0 3px rgba(40, 43, 74, 0.12);
+}
+
+/* ── reports: the shelf of the MD's own reports ────────────────────────────────────────────────────────────────────── */
+
+.md-money-exec {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  padding: 1.35rem 1.4rem 1.25rem;
+  text-decoration: none;
+}
+.md-money-exec::before {
+  content: "";
+  position: absolute;
+  top: -3.5rem;
+  right: -3.5rem;
+  width: 12rem;
+  height: 12rem;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--md-wine) 17%, transparent), transparent);
+  transition: transform 0.5s ease;
+  pointer-events: none;
+}
+.md-money-exec:hover::before {
+  transform: scale(1.18);
+}
+.md-money-exec > * {
+  position: relative;
+}
+.md-money-exec:focus-visible,
+.md-money-card:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 3px;
+}
+
+/* "Open report": a soft wine pill that fills in when the card is hovered */
+.md-money-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.38rem 0.85rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 800;
+  color: var(--md-wine-800);
+  background: color-mix(in srgb, var(--md-wine) 8%, white);
+  border: 1px solid color-mix(in srgb, var(--md-wine) 20%, transparent);
+  transition:
+    background 0.2s ease,
+    color 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+.md-money-cta svg {
+  transition: transform 0.2s ease;
+}
+.md-money-exec:hover .md-money-cta {
+  color: white;
+  background: linear-gradient(135deg, var(--md-wine-700), var(--md-wine-500));
+  border-color: rgba(255, 255, 255, 0.3);
+  box-shadow: 0 10px 20px -8px color-mix(in srgb, var(--md-wine) 60%, transparent);
+}
+.md-money-exec:hover .md-money-cta svg {
+  transform: translateX(3px);
+}
+
+/* ── reports: the library's cards (many of them, so translucent without blur) ──────────────────────────────────────── */
+
+.md-money-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  padding: 1rem 1.05rem 0.95rem;
+  text-decoration: none;
+  border-radius: 1.25rem;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.54));
+  border: 1px solid rgba(255, 255, 255, 0.88);
+  box-shadow:
+    0 10px 26px -14px rgba(40, 43, 74, 0.3),
+    0 1px 3px rgba(40, 43, 74, 0.05),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.25s ease,
+    border-color 0.2s ease;
+}
+.md-money-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--md-wine) 26%, white);
+  box-shadow:
+    0 18px 34px -14px rgba(40, 43, 74, 0.36),
+    0 2px 6px rgba(40, 43, 74, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+.md-money-card-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.75rem;
+  height: auto;
+  padding: 0.65rem 0.9rem;
+  border-radius: 1rem;
+}
+
+/* ── reports: category filter chips (pills; the chosen one is wine glass) ──────────────────────────────────────────── */
+
+.md-money-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.25rem;
+  padding: 0.3rem 0.9rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  color: var(--md-ink-700);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(255, 255, 255, 0.52));
+  border: 1px solid var(--md-line);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 6px 14px -10px rgba(40, 43, 74, 0.42);
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease,
+    background 0.2s ease,
+    color 0.2s ease;
+}
+.md-money-chip:hover {
+  transform: translateY(-1px);
+  color: var(--md-wine-800);
+  border-color: color-mix(in srgb, var(--md-wine) 34%, transparent);
+}
+.md-money-chip:active {
+  transform: translateY(0) scale(0.98);
+}
+.md-money-chip:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 2px;
+}
+.md-money-chip[aria-pressed="true"] {
+  color: white;
+  background: linear-gradient(135deg, var(--md-wine-700), var(--md-wine-500));
+  border-color: rgba(255, 255, 255, 0.34);
+  box-shadow:
+    0 10px 20px -8px color-mix(in srgb, var(--md-wine) 60%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.42);
+}
+.md-money-chip-count {
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--md-ink-600);
+}
+.md-money-chip[aria-pressed="true"] .md-money-chip-count {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+/* the search box: a frosted pill */
+.md-money-search {
+  color: var(--md-ink-800);
+  border-radius: 9999px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.6));
+  border: 1px solid rgba(40, 43, 74, 0.14);
+  box-shadow:
+    inset 0 1px 2px rgba(40, 43, 74, 0.06),
+    0 8px 20px -14px rgba(40, 43, 74, 0.4);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    background 0.18s ease;
+}
+.md-money-search::placeholder {
+  color: var(--md-ink-500);
+}
+.md-money-search:hover {
+  border-color: color-mix(in srgb, var(--md-wine) 32%, transparent);
+}
+.md-money-search:focus,
+.md-money-search:focus-visible {
+  outline: none;
+  border-color: var(--md-wine-600);
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--md-wine) 15%, transparent),
+    inset 0 1px 2px rgba(40, 43, 74, 0.05);
+}
+
+/* ── reports: an open report (the rail beside the Report Center's own workspace) ───────────────────────────────────── */
+
+.md-money-rail nav > a:first-child {
+  padding: 0.5rem 0.7rem;
+  border-radius: 0.8rem;
+  font-weight: 800;
+  color: var(--md-wine-800);
+  background: color-mix(in srgb, var(--md-wine) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--md-wine) 14%, transparent);
+  transition: background-color 0.18s ease;
+}
+.md-money-rail nav > a:first-child:hover {
+  background: color-mix(in srgb, var(--md-wine) 12%, transparent);
+}
+.md-money-rail nav p.uppercase {
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--md-ink-600);
+}
+.md-money-rail nav ul a {
+  position: relative;
+  padding: 0.42rem 0.7rem;
+  border-radius: 0.75rem;
+  font-weight: 600;
+  color: var(--md-ink-700);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+.md-money-rail nav ul a:hover {
+  color: var(--md-ink-900);
+  background: color-mix(in srgb, var(--md-ink-800) 6%, transparent);
+}
+.md-money-rail nav ul a[aria-current="page"] {
+  font-weight: 800;
+  color: var(--md-wine-800);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--md-wine) 11%, white),
+    color-mix(in srgb, var(--md-wine) 5%, white)
+  );
+  box-shadow:
+    inset 3px 0 0 var(--md-wine-600),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+.md-money-rail nav a:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 1px;
+}
+.md-money-rail nav input {
+  border-radius: 9999px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(255, 255, 255, 0.6));
+  border: 1px solid rgba(40, 43, 74, 0.14);
+}
+.md-money-rail nav input:focus,
+.md-money-rail nav input:focus-visible {
+  outline: none;
+  border-color: var(--md-wine-600);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-wine) 15%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .md-money-month,
+  .md-money-chip,
+  .md-money-card,
+  .md-money-cta,
+  .md-money-cta svg,
+  .md-money-exec::before,
+  .md-money-meter > span {
+    transition: none;
+  }
+  .md-money-month:hover:not(:disabled),
+  .md-money-chip:hover,
+  .md-money-card:hover,
+  .md-money-exec:hover::before,
+  .md-money-exec:hover .md-money-cta svg {
+    transform: none;
+  }
+}

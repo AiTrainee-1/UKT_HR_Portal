@@ -23,8 +23,8 @@ import type {
 function Who({ row }: { row: PersonRow }) {
   return (
     <div className="min-w-[9rem]">
-      <p className="truncate font-semibold text-[#1a3a4a]">{row.name}</p>
-      <p className="truncate text-[11px] text-[#006496]/55">
+      <p className="truncate font-semibold text-md-ink">{row.name}</p>
+      <p className="truncate text-[11px] text-md-ink-soft">
         {row.code} · {row.department} · {row.unit}
       </p>
     </div>
@@ -41,7 +41,7 @@ const who = <T extends PersonRow>(): Column<T> => ({
 const dates = <T extends { dates: string[] }>(header = "Latest dates"): Column<T> => ({
   key: "dates",
   header,
-  cell: (r) => <span className="text-xs text-[#1a3a4a]/80">{datesText(r.dates)}</span>,
+  cell: (r) => <span className="text-xs text-md-ink-soft">{datesText(r.dates)}</span>,
 });
 
 const COLUMNS = {
@@ -92,12 +92,7 @@ const COLUMNS = {
       header: "Status",
       sortValue: (r) => (r.ongoing ? 1 : 0),
       cell: (r) => (
-        <span
-          className={cn(
-            "rounded-full px-2 py-0.5 text-[11px] font-bold",
-            r.ongoing ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-600",
-          )}
-        >
+        <span className={cn("md-chip", r.ongoing ? "md-chip-danger" : "md-analytics-tone-neutral")}>
           {r.ongoing ? "Still absent" : "Back at work"}
         </span>
       ),
@@ -199,7 +194,7 @@ function Table({ tab, data }: { tab: ExceptionKey; data: AttendanceExceptions })
     <>
       {table}
       {total > shown && (
-        <p className="mt-2 text-xs text-muted-foreground">
+        <p className="md-analytics-note">
           Showing the first {shown} of {total}: narrow the unit or department to see the rest.
         </p>
       )}

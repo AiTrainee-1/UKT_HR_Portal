@@ -1,14 +1,15 @@
 import { useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { AlertTriangle, ChevronDown, Database, FileSearch, ListChecks, ShieldCheck, Sparkles } from "lucide-react";
+import { AlertTriangle, ChevronDown, ShieldAlert, ShieldCheck, ShieldX, Sparkles } from "lucide-react";
 import { num } from "@/lib/md/format";
 import { cn } from "@/lib/utils";
 import type { AnswerPayload, Confidence } from "./api";
 
-const CONFIDENCE: Record<Confidence, { label: string; chip: string }> = {
-  high: { label: "High confidence", chip: "bg-green-100 text-green-800" },
-  medium: { label: "Medium confidence", chip: "bg-amber-100 text-amber-800" },
-  low: { label: "Low confidence", chip: "bg-red-100 text-red-800" },
+/** Good / watch / bad, in the portal's meaning of those colours (sage, ochre, crimson). The words carry it as well. */
+const CONFIDENCE: Record<Confidence, { label: string; chip: string; icon: typeof ShieldCheck }> = {
+  high: { label: "High confidence", chip: "md-chip-success", icon: ShieldCheck },
+  medium: { label: "Medium confidence", chip: "md-chip-warning", icon: ShieldAlert },
+  low: { label: "Low confidence", chip: "md-chip-danger", icon: ShieldX },
 };
 
 type Tab = "did" | "data" | "assume";
@@ -17,18 +18,16 @@ export function ConfidenceChip({ payload }: { payload: AnswerPayload }) {
   if (!payload.confidence) return null;
   const c = CONFIDENCE[payload.confidence];
   return (
-    <span
-      className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[10.5px] font-bold", c.chip)}
-      title={payload.confidenceReason}
-      data-testid="assistant-confidence"
-    >
+    <span className={cn("md-chip", c.chip)} title={payload.confidenceReason} data-testid="assistant-confidence">
+      <c.icon size={11} aria-hidden />
       {c.label}
     </span>
   );
 }
 
 /** "How I got this": the explainable part of an answer. Everything here is built by the server from the lookups that
- *  really happened (steps, data used, caveats): the assistant's own words are shown separately and labelled as such. */
+ *  really happened (steps, data used, caveats): the assistant's own words are shown separately (wine tint) and labelled
+ *  as such. A sand panel under the answer's glass card, with white inner panels for each fact. */
 export default function Explainer({ payload }: { payload: AnswerPayload }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("did");
@@ -38,29 +37,31 @@ export default function Explainer({ payload }: { payload: AnswerPayload }) {
   const assumptions = payload.assumptions ?? [];
   if (steps.length === 0 && data.length === 0 && assumptions.length === 0 && !payload.reasoning?.length) return null;
 
-  const tabs: { id: Tab; label: string; icon: typeof Database; count: number }[] = [
-    { id: "did", label: "What I did", icon: ListChecks, count: steps.length },
-    { id: "data", label: "Data used", icon: Database, count: data.length },
-    { id: "assume", label: "Assumptions", icon: FileSearch, count: assumptions.length },
+  const tabs: { id: Tab; label: string; count: number }[] = [
+    { id: "did", label: "What I did", count: steps.length },
+    { id: "data", label: "Data used", count: data.length },
+    { id: "assume", label: "Assumptions", count: assumptions.length },
   ];
 
   return (
-    <div className="rounded-xl border border-[#006496]/12 bg-[#f6fafe]" data-testid="assistant-explainer">
+    <div className="md-panel-sand overflow-hidden" data-testid="assistant-explainer">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+        className="md-assistant-explain-toggle flex w-full items-center gap-2.5 px-3 py-2.5 text-left"
         data-testid="assistant-explain-toggle"
       >
-        <Sparkles size={13} className="shrink-0 text-[#c18a1f]" />
-        <span className="flex-1 text-[12px] font-bold text-[#006496]">How I got this</span>
-        <span className="text-[11px] text-[#006496]/55">
+        <span className="md-icon-tile md-assistant-tile-sm h-7 w-7 shrink-0">
+          <Sparkles size={13} />
+        </span>
+        <span className="flex-1 text-[12.5px] font-extrabold text-md-wine-700">How I got this</span>
+        <span className="text-[11.5px] tabular-nums text-md-ink-soft">
           {steps.length} lookup{steps.length === 1 ? "" : "s"}
         </span>
         <ChevronDown
-          size={14}
-          className={cn("shrink-0 text-[#006496]/50 transition-transform", open && "rotate-180")}
+          size={15}
+          className={cn("shrink-0 text-md-ink-soft transition-transform duration-200", open && "rotate-180")}
         />
       </button>
       <AnimatePresence initial={false}>
@@ -72,76 +73,72 @@ export default function Explainer({ payload }: { payload: AnswerPayload }) {
             transition={{ duration: 0.22 }}
             className="overflow-hidden"
           >
-            <div className="border-t border-[#006496]/10 px-3 pb-3 pt-2">
-              <div className="mb-2.5 flex gap-1 overflow-x-auto pb-0.5" role="tablist">
-                {tabs.map((t) => (
-                  <button
-                    key={t.id}
-                    role="tab"
-                    type="button"
-                    aria-selected={tab === t.id}
-                    onClick={() => setTab(t.id)}
-                    data-testid={`explain-tab-${t.id}`}
-                    className={cn(
-                      "flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-bold transition-colors",
-                      tab === t.id ? "bg-[#006496] text-white" : "bg-white text-[#006496]/70 hover:bg-[#006496]/[0.07]",
-                    )}
-                  >
-                    <t.icon size={11} />
-                    {t.label}
-                    <span className={cn("tabular-nums", tab === t.id ? "text-white/70" : "text-[#006496]/45")}>
-                      {t.count}
-                    </span>
-                  </button>
-                ))}
+            <div className="border-t border-md-warning-400/20 px-3 pb-3 pt-3">
+              <div className="md-assistant-tabs-scroll">
+                <div className="md-seg md-assistant-tabs" role="tablist">
+                  {tabs.map((t) => (
+                    <button
+                      key={t.id}
+                      role="tab"
+                      type="button"
+                      aria-selected={tab === t.id}
+                      onClick={() => setTab(t.id)}
+                      data-testid={`explain-tab-${t.id}`}
+                      className="md-seg-item"
+                    >
+                      {t.label}
+                      <span className="tabular-nums opacity-75">{t.count}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
 
               {tab === "did" && (
                 <div className="space-y-3">
-                  <ol className="space-y-2" data-testid="explain-steps">
+                  <ol className="space-y-3" data-testid="explain-steps">
                     {steps.map((step, i) => (
                       <li key={i} className="flex gap-2.5">
-                        <span
-                          className={cn(
-                            "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-extrabold",
-                            step.ok ? "bg-[#006496]/10 text-[#006496]" : "bg-amber-100 text-amber-800",
-                          )}
-                        >
-                          {i + 1}
-                        </span>
+                        <span className={cn("md-assistant-step-no", !step.ok && "is-warn")}>{i + 1}</span>
                         <div className="min-w-0 flex-1">
-                          <p className="text-[12.5px] font-semibold text-[#1a3a4a]">{step.title}</p>
-                          {step.detail && <p className="text-[11.5px] italic text-[#1a3a4a]/70">{step.detail}</p>}
-                          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10.5px] text-[#006496]/70">
-                            {step.period && <span className="rounded-full bg-white px-1.5 py-0.5">{step.period}</span>}
+                          <p className="text-[13px] font-bold leading-snug text-md-ink">{step.title}</p>
+                          {step.detail && (
+                            <p className="mt-0.5 text-[12px] italic leading-snug text-md-ink-soft">{step.detail}</p>
+                          )}
+                          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11.5px] text-md-ink-soft">
+                            {step.period && <span className="md-chip">{step.period}</span>}
                             {step.scope && step.scope !== "All units · all departments · staff and production" && (
-                              <span className="rounded-full bg-white px-1.5 py-0.5">{step.scope}</span>
+                              <span className="md-chip">{step.scope}</span>
                             )}
-                            {step.rows != null && <span>{num(step.rows)} records</span>}
-                            {step.ms > 0 && <span>{step.ms} ms</span>}
+                            {step.rows != null && <span className="tabular-nums">{num(step.rows)} records</span>}
+                            {step.ms > 0 && <span className="tabular-nums">{step.ms} ms</span>}
                           </div>
                           {!step.ok && (
-                            <p className="mt-0.5 flex items-center gap-1 text-[11px] text-amber-800">
-                              <AlertTriangle size={11} /> This lookup could not be completed
-                              {step.error ? `: ${step.error}` : "."}
+                            <p className="mt-1 flex items-start gap-1.5 text-[12px] font-semibold text-md-warning-800">
+                              <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                              <span>
+                                This lookup could not be completed
+                                {step.error ? `: ${step.error}` : "."}
+                              </span>
                             </p>
                           )}
                         </div>
                       </li>
                     ))}
                     {steps.length === 0 && (
-                      <li className="text-[12px] text-[#1a3a4a]/60">No data lookups were needed for this reply.</li>
+                      <li className="text-[12.5px] text-md-ink-soft">No data lookups were needed for this reply.</li>
                     )}
                   </ol>
                   {!!payload.reasoning?.length && (
-                    <div className="rounded-lg bg-white p-2.5">
-                      <p className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-[#006496]/55">
+                    <div className="md-panel-wine p-3">
+                      <p className="md-assistant-overline md-assistant-overline-wine mb-1.5">
                         In the assistant&apos;s words
                       </p>
-                      <ul className="space-y-1 text-[12px] text-[#1a3a4a]/85">
+                      <ul className="space-y-1.5 text-[12.5px] leading-snug text-md-ink">
                         {payload.reasoning.map((line, i) => (
                           <li key={i} className="flex gap-1.5">
-                            <span className="text-[#c18a1f]">›</span>
+                            <span className="font-bold text-md-wine-500" aria-hidden>
+                              ›
+                            </span>
                             <span>{line}</span>
                           </li>
                         ))}
@@ -152,64 +149,63 @@ export default function Explainer({ payload }: { payload: AnswerPayload }) {
               )}
 
               {tab === "data" && (
-                <ul className="space-y-2" data-testid="explain-data">
+                <ul className="space-y-2.5" data-testid="explain-data">
                   {data.map((d, i) => (
-                    <li key={i} className="rounded-lg bg-white p-2.5">
-                      <p className="text-[12.5px] font-bold text-[#1a3a4a]">{d.title}</p>
-                      <p className="text-[11px] text-[#006496]/70">
+                    <li key={i} className="md-panel p-3">
+                      <p className="text-[13px] font-bold leading-snug text-md-ink">{d.title}</p>
+                      <p className="mt-0.5 text-[11.5px] text-md-ink-soft">
                         {d.dataset}
                         {d.rows != null ? ` · ${num(d.rows)} records` : ""}
                         {d.period ? ` · ${d.period}` : ""}
                       </p>
-                      {d.definition && <p className="mt-1 text-[12px] text-[#1a3a4a]/85">{d.definition}</p>}
-                      {d.formula && (
-                        <p className="mt-1 rounded bg-[#006496]/[0.06] px-1.5 py-1 font-mono text-[11px] text-[#1a3a4a]">
-                          {d.formula}
-                        </p>
-                      )}
+                      {d.definition && <p className="mt-1.5 text-[12.5px] leading-snug text-md-ink">{d.definition}</p>}
+                      {d.formula && <p className="md-assistant-formula mt-1.5 px-2 py-1 text-[11.5px]">{d.formula}</p>}
                       {d.filters.length > 0 && (
-                        <p className="mt-1 text-[11px] text-[#1a3a4a]/65">Filters: {d.filters.join("; ")}</p>
+                        <p className="mt-1.5 text-[11.5px] text-md-ink-soft">Filters: {d.filters.join("; ")}</p>
                       )}
                       {d.caveats.map((c, n) => (
-                        <p key={n} className="mt-1 flex items-start gap-1 text-[11px] text-amber-800">
-                          <AlertTriangle size={11} className="mt-0.5 shrink-0" /> {c}
+                        <p
+                          key={n}
+                          className="mt-1.5 flex items-start gap-1.5 text-[11.5px] font-semibold text-md-warning-800"
+                        >
+                          <AlertTriangle size={12} className="mt-0.5 shrink-0" /> {c}
                         </p>
                       ))}
                     </li>
                   ))}
                   {data.length === 0 && (
-                    <li className="text-[12px] text-[#1a3a4a]/60">No company data was used in this reply.</li>
+                    <li className="text-[12.5px] text-md-ink-soft">No company data was used in this reply.</li>
                   )}
                 </ul>
               )}
 
               {tab === "assume" && (
-                <div className="space-y-2" data-testid="explain-assumptions">
-                  <ul className="space-y-1 text-[12px] text-[#1a3a4a]/85">
+                <div className="space-y-2.5" data-testid="explain-assumptions">
+                  <ul className="space-y-1.5 text-[12.5px] leading-snug text-md-ink">
                     {assumptions.map((a, i) => (
                       <li key={i} className="flex gap-1.5">
-                        <span className="text-[#c18a1f]">›</span>
+                        <span className="font-bold text-md-wine-500" aria-hidden>
+                          ›
+                        </span>
                         <span>{a}</span>
                       </li>
                     ))}
                     {assumptions.length === 0 && (
-                      <li className="text-[#1a3a4a]/60">Nothing was assumed beyond your question.</li>
+                      <li className="text-md-ink-soft">Nothing was assumed beyond your question.</li>
                     )}
                   </ul>
                   {payload.confidenceReason && (
-                    <p className="rounded-lg bg-white p-2 text-[11.5px] text-[#1a3a4a]/80">
-                      {payload.confidenceReason}
-                    </p>
+                    <p className="md-panel p-2.5 text-[12px] leading-snug text-md-ink">{payload.confidenceReason}</p>
                   )}
                   {payload.privacy?.enabled && (
-                    <p className="flex items-start gap-1.5 text-[11px] text-[#006496]/75">
-                      <ShieldCheck size={12} className="mt-0.5 shrink-0 text-green-600" />
+                    <p className="flex items-start gap-1.5 text-[11.5px] leading-snug text-md-ink-soft">
+                      <ShieldCheck size={13} className="mt-0.5 shrink-0 text-md-success" />
                       Employee names were replaced with codes before anything was sent to Google Gemini, and put back
                       here for you.
                     </p>
                   )}
                   {payload.usage && (
-                    <p className="text-[10.5px] text-[#006496]/50">
+                    <p className="text-[11px] tabular-nums text-md-ink-soft">
                       {payload.model} · {payload.usage.requests} request{payload.usage.requests === 1 ? "" : "s"} ·{" "}
                       {num(payload.usage.promptTokens + payload.usage.outputTokens)} tokens
                     </p>

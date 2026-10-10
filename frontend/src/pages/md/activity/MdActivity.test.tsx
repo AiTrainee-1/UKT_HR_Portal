@@ -141,6 +141,7 @@ describe("Activity Logs: charts and tables", () => {
     expect(table).toContain("Sat 03 Oct, 8:59 pm");
     expect(table).toContain("+5 (+250%)");
     expect(table).toContain("+3 (new)");
+    expect(byId(page, "row-Anita Rao")?.querySelector("[data-initials]")?.getAttribute("data-initials")).toBe("AR");
   });
 
   it("charts the weekday by hour grid and who works outside normal hours", async () => {

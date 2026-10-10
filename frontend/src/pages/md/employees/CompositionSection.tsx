@@ -21,13 +21,13 @@ import {
 import { Unavailable } from "./parts";
 import type { EmployeesComposition } from "./types";
 
-const heading = "mb-2 text-[11px] font-bold uppercase tracking-wider text-[#006496]/60";
+const heading = "md-analytics-subhead";
 
 function Total({ n }: { n: number }) {
   return (
     <>
-      <p className="text-2xl font-black text-[#1a3a4a]">{num(n)}</p>
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-[#006496]/55">people</p>
+      <p className="text-2xl font-black tabular-nums text-md-ink">{num(n)}</p>
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-md-ink-soft">people</p>
     </>
   );
 }
@@ -108,7 +108,7 @@ export default function CompositionSection({
           testId="md-employees-mix-donut"
         />
         {c.byGender.length > 0 && (
-          <div className="mt-4 border-t pt-3" data-testid="md-employees-gender">
+          <div className="mt-4 border-t border-md-line pt-4" data-testid="md-employees-gender">
             <p className={heading}>Gender</p>
             <DonutChart data={genderSlices(c.byGender)} height={120} />
           </div>
@@ -141,7 +141,7 @@ export default function CompositionSection({
           <button
             type="button"
             onClick={onShowAll}
-            className="mt-3 w-full rounded-lg border border-dashed border-[#006496]/25 py-1.5 text-xs font-semibold text-[#006496] hover:bg-[#006496]/[0.05]"
+            className="md-btn md-btn-soft md-btn-sm mt-4 w-full"
             data-testid="md-employees-departments-more"
           >
             Show all {num(c.departmentsTotal)} departments

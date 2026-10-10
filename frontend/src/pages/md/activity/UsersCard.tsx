@@ -22,8 +22,8 @@ const COLUMNS: Column<UserRow>[] = [
     align: "right",
     cell: (u) => (
       <div className="tabular-nums">
-        <p className="font-bold text-[#1a3a4a]">{num(u.actions)}</p>
-        <p className="text-[11px] text-[#006496]/55">{changeText(u.change)}</p>
+        <p className="font-bold text-md-ink">{num(u.actions)}</p>
+        <p className="text-[11px] text-md-ink-soft">{changeText(u.change)}</p>
       </div>
     ),
     sortValue: (u) => u.actions,
@@ -32,7 +32,18 @@ const COLUMNS: Column<UserRow>[] = [
     key: "share",
     header: "Share",
     align: "right",
-    cell: (u) => <span className="tabular-nums">{pct(u.sharePct)}</span>,
+    cell: (u) => (
+      <div className="flex items-center justify-end gap-2.5 tabular-nums">
+        {/* a hair of a bar beside the figure on wide screens: the share of all actions */}
+        <span className="md-people-meter hidden w-14 @6xl:block" aria-hidden="true">
+          <span
+            className="md-people-meter-fill block bg-md-wine"
+            style={{ width: `${Math.max(3, Math.min(100, u.sharePct ?? 0))}%` }}
+          />
+        </span>
+        <span className="text-md-ink">{pct(u.sharePct)}</span>
+      </div>
+    ),
     sortValue: (u) => u.sharePct,
   },
   {
@@ -40,11 +51,7 @@ const COLUMNS: Column<UserRow>[] = [
     header: "Sensitive",
     align: "right",
     cell: (u) =>
-      u.sensitive > 0 ? (
-        <Chip className="border-amber-200 bg-amber-100 text-amber-800">{num(u.sensitive)}</Chip>
-      ) : (
-        <span className="text-muted-foreground">—</span>
-      ),
+      u.sensitive > 0 ? <Chip tone="warning">{num(u.sensitive)}</Chip> : <span className="text-md-ink-soft">—</span>,
     sortValue: (u) => u.sensitive,
   },
   {
@@ -52,17 +59,13 @@ const COLUMNS: Column<UserRow>[] = [
     header: "After hours",
     align: "right",
     cell: (u) =>
-      u.afterHours > 0 ? (
-        <Chip className="border-indigo-200 bg-indigo-50 text-indigo-800">{num(u.afterHours)}</Chip>
-      ) : (
-        <span className="text-muted-foreground">—</span>
-      ),
+      u.afterHours > 0 ? <Chip tone="info">{num(u.afterHours)}</Chip> : <span className="text-md-ink-soft">—</span>,
     sortValue: (u) => u.afterHours,
   },
   {
     key: "last",
     header: "Last active",
-    cell: (u) => <span className="whitespace-nowrap text-xs text-[#1a3a4a]">{whenText(u.lastActive)}</span>,
+    cell: (u) => <span className="whitespace-nowrap text-xs text-md-ink">{whenText(u.lastActive)}</span>,
     sortValue: (u) => u.lastActive,
   },
 ];
@@ -110,7 +113,7 @@ export default function UsersCard({
             dense
           />
           {u.others && (
-            <p className="mt-2 text-xs text-[#006496]/60">
+            <p className="mt-2 text-xs text-md-ink-soft">
               And {num(u.others.people)} more {plural(u.others.people, "person", "people")} with {num(u.others.actions)}{" "}
               {plural(u.others.actions, "action")}.
             </p>

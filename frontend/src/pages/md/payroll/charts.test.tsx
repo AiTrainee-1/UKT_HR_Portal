@@ -5,6 +5,7 @@
 import { act, cloneElement, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { CHART } from "@/components/md/kit/chartTheme";
 import { buildWaterfall } from "./logic";
 import { distributionFixture } from "./fixtures";
 import type { BridgeStep } from "./types";
@@ -70,9 +71,9 @@ describe("the waterfall", () => {
 
   it("draws a bar per step, red where cost rises, green where it falls, blue for the totals", () => {
     const c = render(<WaterfallChart bars={bars} />);
-    expect(c.querySelectorAll('path[fill="#ef4444"]')).toHaveLength(3); // joined, pay rate, overtime
-    expect(c.querySelectorAll('path[fill="#22c55e"]')).toHaveLength(3); // left, attendance, other
-    expect(c.querySelectorAll('path[fill="#006496"]')).toHaveLength(2); // the two totals
+    expect(c.querySelectorAll('path[fill="' + CHART.bad + '"]')).toHaveLength(3); // joined, pay rate, overtime
+    expect(c.querySelectorAll('path[fill="' + CHART.good + '"]')).toHaveLength(3); // left, attendance, other
+    expect(c.querySelectorAll('path[fill="' + CHART.brand + '"]')).toHaveLength(2); // the two totals
   });
 
   it("writes each bar's amount above it, with the sign on a step", () => {
@@ -110,6 +111,6 @@ describe("the pay histogram", () => {
     for (const tick of ["Nil", "<10k", "10k–15k", "15k–20k", "20k–25k", "25k–30k"]) expect(text, tick).toContain(tick);
     expect(text).toContain("3"); // three people in ₹15k–20k
     // four of the six bands have people in them; an empty band draws no bar
-    expect(c.querySelectorAll('path[fill="#006496"]')).toHaveLength(4);
+    expect(c.querySelectorAll('path[fill="' + CHART.brand + '"]')).toHaveLength(4);
   });
 });

@@ -30,12 +30,14 @@ export default function MdPageHeader({
     <div className="flex flex-wrap items-center gap-x-4 gap-y-3" data-testid="md-page-header">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2.5">
-          <h2 className="text-[22px] font-black leading-7 tracking-tight text-[#1a3a4a]" data-testid="md-page-title">
+          <h2 className="text-[22px] font-black leading-7 tracking-tight text-md-ink" data-testid="md-page-title">
             {title}
           </h2>
           {live && <LiveChip />}
         </div>
-        {subtitle && <p className="mt-0.5 max-w-[34rem] text-xs font-medium text-[#003c64]/65">{subtitle}</p>}
+        {subtitle && (
+          <p className="mt-0.5 max-w-[34rem] text-xs font-medium leading-snug text-md-ink-soft">{subtitle}</p>
+        )}
       </div>
       {tabs}
       <div className="ml-auto flex flex-wrap items-center gap-2">{actions}</div>

@@ -139,6 +139,7 @@ export function PillTabs({
   return (
     <div
       role="tablist"
+      data-slot="pill-tabs"
       className={`inline-flex items-stretch gap-[3px] p-[3px] rounded-full w-fit ${className}`}
       style={{ background: pillBg }}
     >
@@ -147,6 +148,7 @@ export function PillTabs({
           key={item.value}
           type="button"
           role="tab"
+          data-slot="pill-tab"
           aria-selected={i === activeIndex}
           onClick={() => onChange(item.value)}
           onMouseEnter={() => handleEnter(i)}
@@ -155,6 +157,7 @@ export function PillTabs({
           style={{ color: idleTextColor }}
         >
           <span
+            data-slot="pill-tab-fill"
             className="ptab-hover-circle absolute left-1/2 bottom-0 rounded-full pointer-events-none"
             style={{ background: item.color ?? baseColor, zIndex: 1, willChange: "transform" }}
             aria-hidden="true"

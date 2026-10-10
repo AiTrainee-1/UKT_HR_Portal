@@ -28,11 +28,11 @@ export default function KpiStrip({ params }: { params: MdQueryParams }) {
   const before = s?.previousPeriod.label ?? "Previous period";
 
   return (
-    <div className="grid grid-cols-2 gap-3 @3xl:grid-cols-3 @6xl:grid-cols-6" data-testid="md-activity-kpis">
+    <div className="grid grid-cols-2 gap-3 @3xl:grid-cols-3 @3xl:gap-4 @6xl:grid-cols-6" data-testid="md-activity-kpis">
       <StatCard
         label="Actions"
         icon={Activity}
-        tone="blue"
+        tone="indigo"
         loading={loading}
         value={s ? num(s.actions.value) : dash}
         sub={s ? previousText(before, s.actions.previous) : undefined}
@@ -45,7 +45,7 @@ export default function KpiStrip({ params }: { params: MdQueryParams }) {
       <StatCard
         label="Active people"
         icon={Users}
-        tone="teal"
+        tone="blue"
         loading={loading}
         value={s ? num(s.activeUsers.value) : dash}
         sub={s ? peopleSub(s.activeUsers.enabledAccounts) : undefined}
@@ -72,7 +72,7 @@ export default function KpiStrip({ params }: { params: MdQueryParams }) {
       <StatCard
         label="After-hours actions"
         icon={Moon}
-        tone="indigo"
+        tone="purple"
         loading={loading}
         value={s ? num(s.afterHours.value) : dash}
         sub={s ? afterHoursSub(s.afterHours) : undefined}
@@ -86,7 +86,7 @@ export default function KpiStrip({ params }: { params: MdQueryParams }) {
       <StatCard
         label="Sign-ins"
         icon={LogIn}
-        tone="purple"
+        tone="indigo"
         loading={loading}
         value={s ? num(s.signIns.value) : dash}
         sub={s ? signInsSub(s.signIns.people) : undefined}

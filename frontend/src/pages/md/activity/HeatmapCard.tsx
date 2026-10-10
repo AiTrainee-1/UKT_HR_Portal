@@ -37,63 +37,62 @@ export default function HeatmapCard({ params, label }: { params: MdQueryParams; 
         </EmptyBlock>
       ) : h ? (
         <div className="space-y-4">
-          <Heatmap {...heatmapShape(h)} rowHeaderWidth={44} cellHeight={26} testId="md-activity-heatmap-grid" />
-          <p className="text-xs text-[#006496]/70" data-testid="md-activity-heatmap-summary">
-            {peak && (
-              <>
-                <b className="text-[#1a3a4a]">Busiest: {peak}.</b>{" "}
-              </>
-            )}
-            {afterHoursText(
-              h.afterHours.events,
-              h.total,
-              h.afterHours.sharePct,
-              h.afterHours.weekend,
-              h.afterHours.night,
-            )}
+          <div className="md-panel p-3 sm:p-4">
+            <Heatmap {...heatmapShape(h)} rowHeaderWidth={44} cellHeight={26} testId="md-activity-heatmap-grid" />
+          </div>
+          <p
+            className="md-panel-wine md-people-callout text-xs leading-relaxed text-md-ink"
+            data-testid="md-activity-heatmap-summary"
+          >
+            <Clock size={15} className="mt-0.5 shrink-0 text-md-wine" aria-hidden="true" />
+            <span>
+              {peak && (
+                <>
+                  <b>Busiest: {peak}.</b>{" "}
+                </>
+              )}
+              {afterHoursText(
+                h.afterHours.events,
+                h.total,
+                h.afterHours.sharePct,
+                h.afterHours.weekend,
+                h.afterHours.night,
+              )}
+            </span>
           </p>
           {after.isError ? (
             <ErrorBanner message={describeMdError(after.error)} onRetry={() => after.refetch()} />
           ) : a && a.events > 0 ? (
-            <div
-              className="grid grid-cols-1 gap-5 border-t pt-4 @3xl:grid-cols-2"
-              data-testid="md-activity-after-hours"
-            >
-              <div>
+            <div className="grid grid-cols-1 gap-4 @3xl:grid-cols-2" data-testid="md-activity-after-hours">
+              <div className="md-panel p-4">
                 <ListHeading>Who works outside normal hours</ListHeading>
-                <ul className="space-y-2.5">
+                <ul>
                   {a.byUser.map((p) => (
-                    <li key={p.userName} className="flex items-center justify-between gap-3">
+                    <li key={p.userName} className="md-people-row">
                       <PersonCell name={p.userName} role={p.role} />
                       <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
-                        <Chip className="border-indigo-200 bg-indigo-50 text-indigo-800">
+                        <Chip tone="info">
                           {num(p.afterHours)} {plural(p.afterHours, "action")}
                         </Chip>
-                        {p.weekend > 0 && (
-                          <Chip className="border-slate-200 bg-slate-50 text-slate-700">{num(p.weekend)} Sunday</Chip>
-                        )}
-                        {p.sensitive > 0 && (
-                          <Chip className="border-amber-200 bg-amber-100 text-amber-800">
-                            {num(p.sensitive)} sensitive
-                          </Chip>
-                        )}
+                        {p.weekend > 0 && <Chip>{num(p.weekend)} Sunday</Chip>}
+                        {p.sensitive > 0 && <Chip tone="warning">{num(p.sensitive)} sensitive</Chip>}
                       </div>
                     </li>
                   ))}
                 </ul>
               </div>
-              <div>
+              <div className="md-panel p-4">
                 <ListHeading>Latest cases</ListHeading>
-                <ul className="space-y-2.5">
+                <ul className="space-y-3">
                   {a.recent.map((c, i) => (
-                    <li key={`${c.at}-${i}`} className="text-xs text-[#1a3a4a]">
+                    <li key={`${c.at}-${i}`} className="text-xs text-md-ink">
                       <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
                         <b className="text-[13px]">{c.userName}</b>
-                        <span className="text-[#006496]/65">{whenText(c.at)}</span>
-                        <Chip className="border-indigo-200 bg-indigo-50 text-indigo-800">{afterKindText(c.kind)}</Chip>
+                        <span className="text-md-ink-soft">{whenText(c.at)}</span>
+                        <Chip tone="info">{afterKindText(c.kind)}</Chip>
                         {c.severity && <SeverityChip severity={c.severity} />}
                       </p>
-                      <p className="text-[#006496]/65">
+                      <p className="mt-0.5 leading-snug text-md-ink-soft">
                         {c.what ?? "Routine change"} · {c.area}
                         {c.count > 1 ? ` · ${num(c.count)} actions` : ""}
                       </p>

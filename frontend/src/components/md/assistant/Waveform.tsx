@@ -2,7 +2,7 @@ import { cn } from "@/lib/utils";
 
 const BARS = 28;
 
-/** A row of bars that dance with the voice. `level` is 0..1 (the live loudness); each bar has its own phase so it looks
+/** A row of wine bars that dance with the voice. `level` is 0..1 (the live loudness); each bar has its own phase so it looks
  *  like a voice and not a block. With no level it rests as a calm line. */
 export default function Waveform({ level, active, className }: { level: number; active: boolean; className?: string }) {
   return (
@@ -20,7 +20,7 @@ export default function Waveform({ level, active, className }: { level: number; 
             key={i}
             className={cn(
               "w-[3px] rounded-full transition-[height] duration-100",
-              active ? "bg-gradient-to-t from-[#c18a1f] to-[#f6d27a]" : "bg-[#006496]/20",
+              active ? "bg-gradient-to-t from-md-wine-700 to-md-wine-300" : "bg-md-wine/25",
             )}
             style={{ height }}
           />

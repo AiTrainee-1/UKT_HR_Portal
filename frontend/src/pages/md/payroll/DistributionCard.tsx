@@ -5,10 +5,9 @@ import BarList from "@/components/md/kit/BarList";
 import { CHART, axisStyle, gridProps, tooltipStyle } from "@/components/md/kit/chartTheme";
 import SectionCard from "@/components/md/kit/SectionCard";
 import { EmptyBlock } from "@/components/md/kit/states";
-import { PillTabs } from "@/components/ui/pill-tabs";
 import { inr, inrCompact, num } from "@/lib/md/format";
 import { bandRows, type BandKind } from "./logic";
-import { CardError, Metric, emptyReason, failed } from "./parts";
+import { CardError, Metric, OVERLINE, SegTabs, emptyReason, failed } from "./parts";
 import type { PayrollQueries } from "./queries";
 
 const KINDS: { value: BandKind; label: string }[] = [
@@ -41,7 +40,7 @@ export default function DistributionCard({ query, label }: { query: PayrollQueri
         </EmptyBlock>
       ) : (
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-2 @xl:grid-cols-4" data-testid="md-payroll-distribution-stats">
+          <div className="grid grid-cols-2 gap-3 @xl:grid-cols-4" data-testid="md-payroll-distribution-stats">
             <Metric label="Median take-home" value={inrCompact(stats.median)} />
             <Metric label="Average take-home" value={inrCompact(stats.average)} />
             <Metric
@@ -56,7 +55,7 @@ export default function DistributionCard({ query, label }: { query: PayrollQueri
             />
             <Metric label="Under ₹10,000" value={num(stats.belowTenThousand)} sub={`of ${num(stats.people)} people`} />
           </div>
-          <PillTabs size="sm" items={KINDS} value={kind} onChange={(v) => setKind(v as BandKind)} />
+          <SegTabs label="People in the histogram" items={KINDS} value={kind} onChange={setKind} />
           <div className="overflow-x-auto">
             <div style={{ height: 220, minWidth: 440 }} data-testid="md-payroll-distribution-chart">
               <ResponsiveContainer width="100%" height="100%">
@@ -66,21 +65,19 @@ export default function DistributionCard({ query, label }: { query: PayrollQueri
                   <YAxis allowDecimals={false} tick={axisStyle} axisLine={false} tickLine={false} width={40} />
                   <Tooltip
                     contentStyle={tooltipStyle}
-                    cursor={{ fill: "rgba(0,100,150,.05)" }}
+                    cursor={{ fill: "var(--md-wine)", fillOpacity: 0.05 }}
                     formatter={(value) => [`${num(Number(value))} people`, "Net pay band"]}
                     labelFormatter={(_, items) => items?.[0]?.payload?.label ?? ""}
                   />
-                  <Bar dataKey="count" fill={CHART.brand} radius={[4, 4, 0, 0]} isAnimationActive={false}>
-                    <LabelList dataKey="count" position="top" fontSize={10} fill="#1a3a4a" />
+                  <Bar dataKey="count" fill={CHART.brand} radius={[6, 6, 0, 0]} isAnimationActive={false}>
+                    <LabelList dataKey="count" position="top" fontSize={11} fontWeight={700} fill="var(--md-ink-800)" />
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
           </div>
           <div>
-            <h4 className="mb-2 text-[11px] font-bold uppercase tracking-wider text-[#006496]/60">
-              Gross pay by designation
-            </h4>
+            <h4 className={`mb-3 ${OVERLINE}`}>Gross pay by designation</h4>
             <BarList
               testId="md-payroll-designation-bars"
               color={CHART.sky}
@@ -95,7 +92,7 @@ export default function DistributionCard({ query, label }: { query: PayrollQueri
               }))}
             />
             {data.designationsTotal > 6 && (
-              <p className="mt-1 text-[11px] text-[#006496]/60">Top 6 of {data.designationsTotal} designations.</p>
+              <p className="mt-2 text-[11.5px] text-md-ink-soft">Top 6 of {data.designationsTotal} designations.</p>
             )}
           </div>
         </div>

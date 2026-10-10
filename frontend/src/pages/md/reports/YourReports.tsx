@@ -20,10 +20,10 @@ function Strip({
   if (items.length === 0) return null;
   return (
     <section aria-label={title} data-testid={testId}>
-      <h3 className="mb-2 flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-[0.15em] text-[#006496]/60">
+      <h3 className="mb-2.5 flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.14em] text-md-ink-soft">
         {icon} {title}
       </h3>
-      <div className="grid grid-cols-1 gap-2.5 @xl:grid-cols-2 @4xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2 @4xl:grid-cols-3">
         {items.map(({ report }) => (
           <CompactLink
             key={report.id}
@@ -47,15 +47,21 @@ export function YourReports({ library }: { library: Library }) {
   const recent = pickReports(recents, library.all, MAX_RECENT);
   if (starred.length === 0 && recent.length === 0) return null;
   return (
-    <div className="space-y-4" data-testid="md-your-reports">
+    <div className="space-y-5" data-testid="md-your-reports">
       <Strip
         title="Starred"
-        icon={<Star size={12} className="fill-amber-400 text-amber-500" />}
+        icon={<Star size={13} className="fill-md-warning-400 text-md-warning-500" aria-hidden />}
         testId="md-starred"
         items={starred}
         library={library}
       />
-      <Strip title="Recently opened" icon={<Clock size={12} />} testId="md-recent" items={recent} library={library} />
+      <Strip
+        title="Recently opened"
+        icon={<Clock size={13} aria-hidden />}
+        testId="md-recent"
+        items={recent}
+        library={library}
+      />
     </div>
   );
 }

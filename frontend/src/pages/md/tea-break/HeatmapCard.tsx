@@ -4,8 +4,8 @@ import AskAiButton from "@/components/md/kit/AskAiButton";
 import Heatmap from "@/components/md/kit/Heatmap";
 import SectionCard from "@/components/md/kit/SectionCard";
 import { EmptyBlock } from "@/components/md/kit/states";
-import { PillTabs } from "@/components/ui/pill-tabs";
 import { num, pct } from "@/lib/md/format";
+import SegTabs from "../embedded/shared/SegTabs";
 import { heatmapCaption, heatmapMatrix, visibleSlots, type HeatMetric } from "./logic";
 import { QueryError, refreshingClass } from "./parts";
 import type { TeaHeatmap } from "./types";
@@ -35,7 +35,7 @@ export default function HeatmapCard({ query, ask }: { query: UseQueryResult<TeaH
       provenance={data?.provenance}
       actions={
         <>
-          <PillTabs size="sm" items={METRICS} value={metric} onChange={(v) => setMetric(v as HeatMetric)} />
+          <SegTabs label="What to show" items={METRICS} value={metric} onChange={(v) => setMetric(v as HeatMetric)} />
           <AskAiButton question={ask} />
         </>
       }
@@ -59,7 +59,7 @@ export default function HeatmapCard({ query, ask }: { query: UseQueryResult<TeaH
               rowHeaderWidth={44}
               testId="md-tea-break-heatmap-grid"
             />
-            <ul className="mt-3 space-y-0.5 text-xs text-[#006496]/70" data-testid="md-tea-break-heatmap-notes">
+            <ul className="md-analytics-note space-y-0.5" data-testid="md-tea-break-heatmap-notes">
               {caption.map((line) => (
                 <li key={line}>{line}</li>
               ))}

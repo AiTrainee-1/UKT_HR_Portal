@@ -7,9 +7,13 @@ import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import {
   AlertTriangle,
+  ArrowUp,
   History,
   KeyRound,
+  Languages,
+  ListChecks,
   MessageSquarePlus,
+  Mic,
   ShieldCheck,
   ShieldOff,
   Sparkles,
@@ -67,17 +71,25 @@ const isBool = (v: unknown): v is boolean => typeof v === "boolean";
 const isLanguage = (v: unknown): v is VoiceLanguageChoice =>
   v === "en-IN" || v === "ta-IN" || v === "hi-IN" || v === "auto";
 
-/** The welcome: the radio character (it follows the pointer and can be poked) in a soft glow. */
+/** The welcome: the radio character (it follows the pointer and can be poked) on a frosted disc in a soft wine glow. */
 function GlowOrb() {
   return (
-    <div className="relative flex h-32 w-32 items-center justify-center">
-      <span className="assistant-orb-glow absolute inset-0 rounded-full" aria-hidden />
-      <span className="assistant-orb-ring absolute inset-2 rounded-full border border-[#e0a83a]/40" aria-hidden />
+    <div className="relative flex h-36 w-36 items-center justify-center">
+      <span className="md-assistant-orb-glow absolute -inset-5 rounded-full" aria-hidden />
+      <span className="md-assistant-orb-disc absolute inset-3 rounded-full" aria-hidden />
+      <span className="md-assistant-orb-ring absolute inset-1 rounded-full" aria-hidden />
       <RadioMascot size={108} label="AI assistant" className="relative" />
     </div>
   );
 }
 
+const SETUP_TITLE = {
+  not_configured: "Setup needed",
+  disabled: "Switched off",
+  limit: "Daily allowance used",
+} as const;
+
+/** A notice about the assistant itself (no key, switched off, out of allowance): a sand panel with an ochre tile. */
 function SetupNotice({ kind, resetsAt }: { kind: "not_configured" | "disabled" | "limit"; resetsAt?: string }) {
   const text =
     kind === "not_configured"
@@ -88,15 +100,26 @@ function SetupNotice({ kind, resetsAt }: { kind: "not_configured" | "disabled" |
   const Icon = kind === "not_configured" ? KeyRound : AlertTriangle;
   return (
     <div
-      className="mx-4 mt-4 flex gap-2.5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-[12.5px] text-amber-900"
+      className="md-panel-sand mx-4 mt-4 flex gap-3 p-3.5 text-[12.5px] leading-relaxed text-md-warning-800"
       data-testid="assistant-setup"
       role="status"
     >
-      <Icon size={16} className="mt-0.5 shrink-0" />
-      <p>{text}</p>
+      <span className="md-icon-tile md-assistant-notice-icon h-8 w-8 shrink-0">
+        <Icon size={15} />
+      </span>
+      <div className="min-w-0">
+        <p className="font-extrabold text-md-warning-900">{SETUP_TITLE[kind]}</p>
+        <p className="mt-0.5">{text}</p>
+      </div>
     </div>
   );
 }
+
+const CAPABILITIES = [
+  { icon: Mic, text: "Type or speak" },
+  { icon: Languages, text: "English · தமிழ் · हिन्दी" },
+  { icon: ListChecks, text: "Explains its answers" },
+];
 
 export default function AssistantPanel() {
   const { open, prompt } = useAssistantState();
@@ -213,7 +236,7 @@ export default function AssistantPanel() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[54] bg-[#003c64]/25 backdrop-blur-[2px] xl:hidden print:hidden"
+            className="fixed inset-0 z-[54] bg-md-ink/30 backdrop-blur-[3px] xl:hidden print:hidden"
             onClick={closeAssistant}
             aria-hidden
           />
@@ -231,26 +254,28 @@ export default function AssistantPanel() {
         transition={reduce ? { duration: 0 } : { type: "spring", stiffness: 300, damping: 32 }}
         style={{ visibility: open ? "visible" : undefined }}
         onKeyDown={(e) => e.key === "Escape" && closeAssistant()}
-        className="fixed inset-y-0 right-0 z-[55] flex w-full flex-col overflow-hidden bg-[#f6fafe] shadow-[-24px_0_60px_rgba(0,60,100,0.18)] sm:w-[428px] print:hidden"
+        className="md-assistant-panel fixed inset-y-0 right-0 z-[55] flex w-full flex-col overflow-hidden sm:w-[428px] print:hidden"
       >
-        {/* header */}
-        <header className="relative flex items-center gap-2.5 border-b border-[#006496]/10 bg-white px-4 py-3">
-          <AssistantAvatar size={40} mood={chat.busy ? "working" : "idle"} />
+        {/* header: the face, the title, and three round ghost buttons */}
+        <header className="md-assistant-header relative flex items-center gap-2.5 px-4 py-3">
+          <AssistantAvatar size={42} mood={chat.busy ? "working" : "idle"} />
           <div className="min-w-0 flex-1">
-            <h2 className="text-[15px] font-black leading-tight text-[#1a3a4a]">AI Assistant</h2>
+            <h2 className="text-[15.5px] font-black leading-tight tracking-tight text-md-ink">AI Assistant</h2>
             <p
-              className="flex items-center gap-1 truncate text-[11px] text-[#006496]/65"
+              className="mt-1 flex min-w-0"
               data-testid="assistant-subtitle"
               title="Read-only, names protected, and every answer explains how it was reached"
             >
               {status.data?.privacyMode === false ? (
-                <>
-                  <ShieldOff size={11} className="text-amber-600" /> Names are not hidden from Gemini
-                </>
+                <span className="md-chip md-chip-warning min-w-0 max-w-full">
+                  <ShieldOff size={11} className="shrink-0" />
+                  <span className="truncate">Names are not hidden from Gemini</span>
+                </span>
               ) : (
-                <>
-                  <ShieldCheck size={11} className="shrink-0 text-green-600" /> Read-only · names protected
-                </>
+                <span className="md-chip md-chip-success min-w-0 max-w-full">
+                  <ShieldCheck size={11} className="shrink-0" />
+                  <span className="truncate">Read-only · names protected</span>
+                </span>
               )}
             </p>
           </div>
@@ -263,7 +288,7 @@ export default function AssistantPanel() {
             aria-label="Conversation history"
             aria-expanded={historyOpen}
             data-testid="assistant-history"
-            className="rounded-full p-2 text-[#006496]/70 transition-colors hover:bg-[#006496]/[0.07] hover:text-[#006496]"
+            className="md-btn md-btn-ghost md-btn-icon md-assistant-iconbtn"
           >
             <History size={17} />
           </button>
@@ -277,7 +302,7 @@ export default function AssistantPanel() {
             aria-label="New conversation"
             title="New conversation"
             data-testid="assistant-new"
-            className="rounded-full p-2 text-[#006496]/70 transition-colors hover:bg-[#006496]/[0.07] hover:text-[#006496]"
+            className="md-btn md-btn-ghost md-btn-icon md-assistant-iconbtn"
           >
             <MessageSquarePlus size={17} />
           </button>
@@ -286,7 +311,7 @@ export default function AssistantPanel() {
             onClick={closeAssistant}
             aria-label="Close assistant"
             data-testid="assistant-close"
-            className="rounded-full p-2 text-[#006496]/70 transition-colors hover:bg-[#006496]/[0.07] hover:text-[#006496]"
+            className="md-btn md-btn-ghost md-btn-icon md-assistant-iconbtn"
           >
             <X size={18} />
           </button>
@@ -298,26 +323,26 @@ export default function AssistantPanel() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -6 }}
                 transition={{ duration: 0.16 }}
-                className="absolute inset-x-3 top-full z-10 mt-1 max-h-[55vh] overflow-y-auto rounded-2xl border border-[#006496]/12 bg-white p-1.5 shadow-xl"
+                className="md-assistant-menu absolute inset-x-3 top-full z-10 mt-2 max-h-[55vh] overflow-y-auto p-1.5"
                 data-testid="assistant-history-list"
               >
                 {chat.history.length === 0 && (
-                  <p className="px-3 py-4 text-center text-[12.5px] text-[#006496]/55">
+                  <p className="px-3 py-5 text-center text-[13px] text-md-ink-soft">
                     {chat.historyLoading ? "Loading…" : "No earlier conversations."}
                   </p>
                 )}
                 {chat.history.map((c) => (
-                  <div key={c.id} className="group flex items-center gap-1 rounded-xl hover:bg-[#006496]/[0.05]">
+                  <div key={c.id} className="md-assistant-menu-row group flex items-center gap-1">
                     <button
                       type="button"
                       onClick={() => {
                         void chat.openConversation(c.id);
                         setHistoryOpen(false);
                       }}
-                      className="min-w-0 flex-1 px-3 py-2 text-left"
+                      className="min-w-0 flex-1 rounded-xl px-3 py-2 text-left"
                     >
-                      <span className="block truncate text-[13px] font-semibold text-[#1a3a4a]">{c.title}</span>
-                      <span className="block text-[10.5px] text-[#006496]/50">
+                      <span className="block truncate text-[13px] font-semibold text-md-ink">{c.title}</span>
+                      <span className="block text-[11px] tabular-nums text-md-ink-soft">
                         {c.updatedAt?.replace("T", " ").slice(0, 16)}
                       </span>
                     </button>
@@ -325,9 +350,9 @@ export default function AssistantPanel() {
                       type="button"
                       onClick={() => void chat.removeConversation(c.id)}
                       aria-label={`Delete conversation: ${c.title}`}
-                      className="mr-1 rounded-full p-1.5 text-[#006496]/40 opacity-0 transition hover:bg-red-50 hover:text-red-600 focus:opacity-100 group-hover:opacity-100"
+                      className="md-btn md-btn-ghost md-btn-icon md-assistant-iconbtn md-assistant-iconbtn-danger mr-1 opacity-0 focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
                     >
-                      <Trash2 size={14} />
+                      <Trash2 size={15} />
                     </button>
                   </div>
                 ))}
@@ -335,7 +360,7 @@ export default function AssistantPanel() {
                   <button
                     type="button"
                     onClick={() => void chat.clearAll()}
-                    className="mt-1 w-full rounded-xl px-3 py-2 text-left text-[12px] font-semibold text-red-700 hover:bg-red-50"
+                    className="md-btn md-btn-danger md-btn-sm mt-1.5 w-full"
                   >
                     Delete all conversations
                   </button>
@@ -346,33 +371,40 @@ export default function AssistantPanel() {
         </header>
 
         {/* conversation */}
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain" data-testid="assistant-scroll">
+        <div
+          className="md-assistant-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain"
+          data-testid="assistant-scroll"
+        >
           {status.data && !status.data.enabled && <SetupNotice kind="disabled" />}
           {status.data && status.data.enabled && !status.data.configured && <SetupNotice kind="not_configured" />}
           {limitHit && <SetupNotice kind="limit" resetsAt={status.data?.usage.resetsAt} />}
 
           {chat.messages.length === 0 ? (
-            <div className="flex flex-col items-center px-5 pb-4 pt-8 text-center" data-testid="assistant-empty">
+            <div className="flex flex-col items-center px-5 pb-6 pt-7 text-center" data-testid="assistant-empty">
               <GlowOrb />
-              <h3 className="mt-4 text-[19px] font-black text-[#1a3a4a]">
+              <h3 className="mt-3 text-[22px] font-black leading-tight tracking-tight text-md-ink">
                 {greeting(me.data?.serverTime)}
                 {firstName ? `, ${firstName}` : ""}
               </h3>
-              <p className="mt-1.5 max-w-[320px] text-[13px] leading-relaxed text-[#1a3a4a]/70">
+              <p className="mt-2 max-w-[330px] text-[13.5px] leading-relaxed text-md-ink-soft">
                 Ask me about your workforce, attendance, payroll, hiring or the gate. I read your live data, show how I
                 worked it out, and never change anything.
               </p>
-              <div className="mt-3 flex flex-wrap justify-center gap-1.5 text-[10.5px] font-bold text-[#7a5410]">
-                {["Type or speak", "English · தமிழ் · हिन्दी", "Explains its answers"].map((t) => (
-                  <span key={t} className="rounded-full bg-[#fff1cc] px-2.5 py-1">
-                    {t}
+              <div className="mt-4 flex flex-wrap justify-center gap-2">
+                {CAPABILITIES.map(({ icon: Icon, text }) => (
+                  <span key={text} className="md-chip md-chip-sand">
+                    <Icon size={12} aria-hidden />
+                    {text}
                   </span>
                 ))}
               </div>
-              <p className="mb-2 mt-6 flex items-center gap-1.5 self-start text-[10.5px] font-extrabold uppercase tracking-widest text-[#006496]/50">
-                <Sparkles size={11} className="text-[#c18a1f]" /> Try asking
-              </p>
-              <ul className="w-full space-y-2">
+              <div className="mb-3 mt-7 flex items-center gap-2.5 self-stretch">
+                <p className="md-assistant-overline">
+                  <Sparkles size={12} className="text-md-wine" aria-hidden /> Try asking
+                </p>
+                <span className="h-px flex-1 bg-md-line" aria-hidden />
+              </div>
+              <ul className="w-full space-y-2.5">
                 {suggestions.map((text, i) => (
                   <motion.li
                     key={text}
@@ -385,16 +417,20 @@ export default function AssistantPanel() {
                       disabled={!ready || chat.busy}
                       onClick={() => submit(text)}
                       data-testid="assistant-suggestion"
-                      className="w-full rounded-xl border border-[#006496]/12 bg-white px-3.5 py-2.5 text-left text-[13px] font-medium text-[#1a3a4a] shadow-sm transition-all enabled:hover:-translate-y-px enabled:hover:border-[#e0a83a]/60 enabled:hover:shadow-md disabled:opacity-50"
+                      className="md-assistant-suggest"
                     >
-                      {text}
+                      <span className="md-icon-tile md-assistant-tile-sm h-8 w-8 shrink-0">
+                        <Sparkles size={14} aria-hidden />
+                      </span>
+                      <span className="min-w-0 flex-1">{text}</span>
+                      <ArrowUp size={16} className="md-assistant-suggest-go" aria-hidden />
                     </button>
                   </motion.li>
                 ))}
               </ul>
             </div>
           ) : (
-            <div className="space-y-4 px-4 py-4" data-testid="assistant-messages">
+            <div className="space-y-5 px-4 py-5" data-testid="assistant-messages">
               {chat.messages.map((message) => (
                 <MessageBubble
                   key={message.id}
@@ -414,7 +450,7 @@ export default function AssistantPanel() {
               ))}
               {speech.notice && (
                 <p
-                  className="rounded-lg bg-amber-50 px-3 py-2 text-[11.5px] text-amber-900"
+                  className="md-panel-sand px-3 py-2 text-[12px] leading-snug text-md-warning-800"
                   role="status"
                   data-testid="assistant-speech-notice"
                 >

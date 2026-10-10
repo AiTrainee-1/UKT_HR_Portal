@@ -1,21 +1,19 @@
 import { Link } from "wouter";
 import { ArrowRight, ArrowUpRight, Star } from "lucide-react";
-import { MD_GOLD_GRADIENT } from "@/components/md/MdSidebar";
 import type { ReportGroup } from "@/lib/report-catalog";
 import type { ReportMeta } from "@/lib/report-center";
 import { toggleFavorite } from "@/lib/report-prefs";
 import { cn } from "@/lib/utils";
 import { reportHref } from "@/pages/hr/report-center/ReportCatalogView";
-import { categoryStyle, iconFor } from "@/pages/hr/report-center/report-icons";
+import { iconFor } from "@/pages/hr/report-center/report-icons";
+import { categoryTone } from "./category-tone";
 import { MD_REPORTS_PATH, starredIdOf } from "./report-library";
 
 const hrefFor = (id: string) => reportHref(id, MD_REPORTS_PATH);
 
-const FOCUS = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#006496]/40";
-
-/** One of the MD's own reports: the shelf at the top of the page. A large card with the portal's gold, a plain-English
- *  description and where it leads. */
-export function ExecutiveCard({ group }: { group: ReportGroup }) {
+/** One of the MD's own reports: the shelf at the top of the page. A large glass card with a wine gradient icon tile, a
+ *  plain-English description and where it leads; the card lifts on hover and its "Open report" pill fills in. */
+export function ExecutiveCard({ group, order = 0 }: { group: ReportGroup; order?: number }) {
   const report = group.primary;
   const Icon = iconFor(report.icon);
   const views = group.variants.length;
@@ -23,47 +21,40 @@ export function ExecutiveCard({ group }: { group: ReportGroup }) {
     <Link
       href={hrefFor(report.id)}
       data-testid={`executive-card-${report.id}`}
-      className={cn("clay-card group relative flex h-full flex-col overflow-hidden rounded-2xl p-5 pt-6", FOCUS)}
+      className="md-card md-money-exec md-money-t-wine motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-2 motion-safe:duration-300 motion-safe:fill-mode-backwards"
+      style={order ? { animationDelay: `${order * 40}ms` } : undefined}
     >
-      <span aria-hidden className="absolute inset-x-0 top-0 h-1" style={{ background: MD_GOLD_GRADIENT }} />
-      <span
-        className="mb-3 inline-flex h-11 w-11 items-center justify-center rounded-xl text-[#5b3d00] shadow-sm"
-        style={{ background: MD_GOLD_GRADIENT }}
-      >
-        <Icon size={22} />
+      <span className="md-money-tile md-money-tile-solid md-money-tile-lg">
+        <Icon size={22} aria-hidden />
       </span>
-      <span className="text-[15px] font-black leading-snug text-[#1a3a4a]">{report.title}</span>
-      <span className="mt-1 line-clamp-3 text-[13px] leading-relaxed text-muted-foreground">{report.description}</span>
-      <span className="mt-auto flex items-center gap-2 pt-4">
-        {views > 1 && (
-          <span className="rounded-full bg-[#fbf3dc] px-2 py-0.5 text-[11px] font-semibold text-[#8a5d00]">
-            {views} views
-          </span>
-        )}
-        <span className="ml-auto inline-flex items-center gap-1 text-xs font-bold text-[#006496]">
-          Open report <ArrowRight size={14} className="transition-transform group-hover:translate-x-0.5" />
+      <span className="mt-4 text-[17px] font-black leading-snug tracking-tight text-md-ink">{report.title}</span>
+      <span className="mt-1.5 line-clamp-3 text-[13px] leading-relaxed text-md-ink-soft">{report.description}</span>
+      <span className="mt-auto flex items-center gap-2 pt-5">
+        {views > 1 && <span className="md-chip md-chip-sand">{views} views</span>}
+        <span className="md-money-cta ml-auto">
+          Open report <ArrowRight size={14} aria-hidden />
         </span>
       </span>
     </Link>
   );
 }
 
-/** A report's star: starred reports are kept under "Starred" at the top of the page. */
+/** A report's star: starred reports are kept under "Starred" at the top of the page. A round glass icon button; a starred
+ *  report's star is filled in ochre, the warm highlight. */
 function StarButton({ group, favorites }: { group: ReportGroup; favorites: string[] }) {
   const starred = starredIdOf(group, favorites);
   return (
-    <button
-      type="button"
-      aria-label={starred ? "Unstar this report" : "Star this report"}
-      aria-pressed={!!starred}
-      onClick={() => toggleFavorite(starred ?? group.primary.id)}
-      className={cn(
-        "absolute right-2.5 top-2.5 rounded-md p-1 transition-colors",
-        starred ? "text-amber-500" : "text-gray-300 hover:bg-gray-100 hover:text-gray-500",
-      )}
-    >
-      <Star size={15} className={starred ? "fill-amber-400" : ""} />
-    </button>
+    <div className="absolute right-2.5 top-2.5">
+      <button
+        type="button"
+        aria-label={starred ? "Unstar this report" : "Star this report"}
+        aria-pressed={!!starred}
+        onClick={() => toggleFavorite(starred ?? group.primary.id)}
+        className="md-btn md-btn-ghost md-btn-icon"
+      >
+        <Star size={16} className={starred ? "fill-md-warning-400 text-md-warning-500" : "text-md-ink-soft"} />
+      </button>
+    </div>
   );
 }
 
@@ -79,42 +70,39 @@ export function LibraryCard({
 }) {
   const report = group.primary;
   const Icon = iconFor(report.icon);
-  const style = categoryStyle(report.category);
+  const tone = categoryTone(report.category);
   const views = group.variants.length;
   return (
     <div className="group relative" data-testid={`report-card-${report.id}`}>
-      <Link
-        href={hrefFor(report.id)}
-        className={cn(
-          "flex h-full flex-col rounded-2xl border border-[#006496]/10 bg-white p-4 pr-10 shadow-sm transition-all hover:-translate-y-0.5 hover:border-[#006496]/30 hover:shadow-md",
-          FOCUS,
-        )}
-      >
-        <span
-          className={cn(
-            "mb-3 inline-flex h-9 w-9 items-center justify-center rounded-xl ring-1",
-            style.chip,
-            style.ring,
-          )}
-        >
-          <Icon size={18} />
+      <Link href={hrefFor(report.id)} className={cn("md-money-card", tone.tone)}>
+        <span className="md-money-tile">
+          <Icon size={18} aria-hidden />
         </span>
-        <span className="text-sm font-bold text-[#1a3a4a]">{report.title}</span>
-        <span className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">{report.description}</span>
-        <span className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] font-semibold">
+        <span className="mt-3.5 text-[14.5px] font-extrabold leading-snug tracking-tight text-md-ink">
+          {report.title}
+        </span>
+        <span className="mt-1 line-clamp-2 text-[12.5px] leading-relaxed text-md-ink-soft">{report.description}</span>
+        <span className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1.5 pt-3.5 text-[11.5px] font-semibold">
           {category && (
-            <span className="inline-flex items-center gap-1 text-gray-500">
-              <span className={cn("h-1.5 w-1.5 rounded-full", style.dot)} />
+            <span className="inline-flex items-center gap-1.5 text-md-ink-soft">
+              <span className={cn("h-1.5 w-1.5 rounded-full", tone.dot)} />
               {category}
             </span>
           )}
           {views > 1 && (
-            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-600">
-              {views} views: {group.variants.map((v) => v.variant).join(" · ")}
+            <span className="md-chip md-chip-sand max-w-full">
+              <span className="truncate">
+                {views} views: {group.variants.map((v) => v.variant).join(" · ")}
+              </span>
             </span>
           )}
-          <span className="ml-auto inline-flex items-center gap-0.5 text-[#006496]/80 group-hover:text-[#006496]">
-            Open <ArrowUpRight size={12} />
+          <span className="ml-auto inline-flex items-center gap-0.5 font-extrabold text-md-wine">
+            Open{" "}
+            <ArrowUpRight
+              size={13}
+              className="transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5"
+              aria-hidden
+            />
           </span>
         </span>
       </Link>
@@ -126,28 +114,22 @@ export function LibraryCard({
 /** A small row for "Starred" and "Recently opened": the exact report that was opened, and its category. */
 export function CompactLink({ report, category }: { report: ReportMeta; category: string }) {
   const Icon = iconFor(report.icon);
-  const style = categoryStyle(report.category);
+  const tone = categoryTone(report.category);
   return (
     <Link
       href={hrefFor(report.id)}
       data-testid={`report-link-${report.id}`}
-      className={cn(
-        "flex items-center gap-3 rounded-xl border border-[#006496]/10 bg-white px-3 py-2.5 shadow-sm transition-all hover:border-[#006496]/30 hover:shadow-md",
-        FOCUS,
-      )}
+      className={cn("md-money-card md-money-card-row", tone.tone)}
     >
-      <span
-        className={cn(
-          "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ring-1",
-          style.chip,
-          style.ring,
-        )}
-      >
-        <Icon size={16} />
+      <span className="md-money-tile md-money-tile-sm">
+        <Icon size={16} aria-hidden />
       </span>
       <span className="min-w-0">
-        <span className="block truncate text-[13px] font-bold text-[#1a3a4a]">{report.title}</span>
-        <span className="block truncate text-[11px] text-muted-foreground">{category}</span>
+        <span className="block truncate text-[13.5px] font-extrabold text-md-ink">{report.title}</span>
+        <span className="mt-0.5 flex items-center gap-1.5 truncate text-[11.5px] font-medium text-md-ink-soft">
+          <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", tone.dot)} />
+          <span className="truncate">{category}</span>
+        </span>
       </span>
     </Link>
   );

@@ -46,15 +46,15 @@ export default function TrendCard({ query }: { query: PayrollQueries["trend"] })
                 color: CHART.light,
                 stackId: "gross",
               },
-              { key: "headcount", label: "People paid", kind: "line", color: CHART.teal, rightAxis: true },
+              { key: "headcount", label: "People paid", kind: "line", color: CHART.deep, rightAxis: true },
             ]}
           />
           {anyProvisional && (
-            <p className="mt-1 text-[11px] text-[#006496]/60">
+            <p className="mt-2 text-[11.5px] leading-snug text-md-ink-soft">
               Lighter bars are months still running or with staff slips generated before month end: they understate pay.
             </p>
           )}
-          <div className="mt-3 grid grid-cols-1 gap-2 @xl:grid-cols-3">
+          <div className="mt-4 grid grid-cols-1 gap-3 @xl:grid-cols-3">
             <Metric label="Average month" value={data?.average != null ? inrCompact(data.average) : "—"} />
             <Metric
               label="Highest month"

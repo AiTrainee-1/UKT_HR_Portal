@@ -2,7 +2,6 @@ import { Suspense, useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useLocation } from "wouter";
 import { Eye } from "lucide-react";
-import { CircleLoader } from "@/components/ui/CircleLoader";
 import { useAuth, isRouteViewOnly } from "@/contexts/AuthContext";
 import { hrToMd } from "@/lib/md/embed";
 import { usePublishAssistantContext } from "@/lib/md/assistant-store";
@@ -10,8 +9,10 @@ import { moduleForPath } from "@/lib/permission-modules";
 import { lockIconOnlyDeletes, lockMutatingControls } from "@/lib/view-only-lock";
 import { LiveChip, ModeTabs, UpdatedRefresh, type FrameTab } from "../kit/MdHeaderParts";
 import MdPageHeader from "../kit/MdPageHeader";
+import { SkeletonBlock } from "../kit/states";
 import { mdPageForPath } from "../md-nav";
 import { insightsFor } from "./registry";
+import { useTitleMark } from "./titleMark";
 import { useHeaderAdoption } from "./useHeaderAdoption";
 
 export type { FrameTab };
@@ -77,6 +78,9 @@ export default function MdEmbeddedFrame({ children }: { children: ReactNode }) {
 
   const [ops, setOps] = useState<HTMLDivElement | null>(null);
   const adopted = useHeaderAdoption(ops);
+  // a page with no title row of its own (a form, a record): its first heading is still its title
+  const [plain, setPlain] = useState<HTMLDivElement | null>(null);
+  useTitleMark(plain);
 
   // what the assistant is told the MD is looking at: the HR page here; the Insights tab publishes its own, richer, context
   usePublishAssistantContext(page && tab === "operations" ? { page: page.id, title: page.title } : null);
@@ -96,15 +100,20 @@ export default function MdEmbeddedFrame({ children }: { children: ReactNode }) {
     return () => observer.disconnect();
   }, [isViewOnly, location]);
 
+  // a sand panel with an eye: the MD can look at everything here but not change it
   const viewOnlyBanner = isViewOnly && (
     <div
-      className="mb-4 flex items-center gap-2 rounded-xl bg-amber-50 px-3.5 py-2.5 text-sm font-semibold text-amber-700"
+      className="md-panel-sand mb-4 flex items-center gap-3 px-4 py-2.5 text-[13px] font-semibold leading-snug text-md-warning-800"
       data-testid="md-view-only"
     >
-      <Eye size={15} strokeWidth={2} />{" "}
-      {page?.id === "leave" || page?.id === "requests"
-        ? "View only: look at every request and holiday here; HR and the Department Heads decide requests."
-        : "View only: browse and inspect freely, changes can't be saved."}
+      <span className="md-shell-banner-tile">
+        <Eye size={15} strokeWidth={2.2} />
+      </span>
+      <span className="min-w-0">
+        {page?.id === "leave" || page?.id === "requests"
+          ? "View only: look at every request and holiday here; HR and the Department Heads decide requests."
+          : "View only: browse and inspect freely, changes can't be saved."}
+      </span>
     </div>
   );
 
@@ -112,7 +121,7 @@ export default function MdEmbeddedFrame({ children }: { children: ReactNode }) {
     return (
       <>
         {viewOnlyBanner}
-        {children}
+        <div ref={setPlain}>{children}</div>
       </>
     );
   }
@@ -135,7 +144,7 @@ export default function MdEmbeddedFrame({ children }: { children: ReactNode }) {
       data-testid="md-frame"
       data-page={page.id}
       // the HR pages' titles differ in size and colour from page to page, and their subtitles in length: one look for all
-      className="[&_[data-md-subtitle]]:max-w-[34rem] [&_[data-md-subtitle]]:text-xs [&_[data-md-title]]:text-[22px] [&_[data-md-title]]:leading-7 [&_[data-md-title]]:text-[#1a3a4a]"
+      className="[&_[data-md-subtitle]]:max-w-[34rem] [&_[data-md-subtitle]]:text-xs [&_[data-md-subtitle]]:font-medium [&_[data-md-subtitle]]:text-md-ink-soft [&_[data-md-title]]:text-[22px] [&_[data-md-title]]:font-black [&_[data-md-title]]:leading-7 [&_[data-md-title]]:tracking-tight [&_[data-md-title]]:text-md-ink"
     >
       {viewOnlyBanner}
 
@@ -161,8 +170,8 @@ export default function MdEmbeddedFrame({ children }: { children: ReactNode }) {
         <div data-testid="md-frame-insights">
           <Suspense
             fallback={
-              <div className="flex min-h-[200px] items-center justify-center">
-                <CircleLoader texts={["UK Textiles", "MD Portal", "Loading"]} />
+              <div className="md-card p-6">
+                <SkeletonBlock rows={4} className="min-h-[200px]" />
               </div>
             }
           >

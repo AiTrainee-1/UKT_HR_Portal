@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CHART } from "@/components/md/kit/chartTheme";
 import {
+  GAP_KEY,
   PERIOD_PRESETS,
   ageBar,
   assistantSummary,
@@ -14,6 +15,7 @@ import {
   gapBarItems,
   gapColor,
   hasVacancyLine,
+  initialsOf,
   mixSegments,
   mixTitle,
   outlookLine,
@@ -43,6 +45,18 @@ describe("words", () => {
     expect(daysLeftText(15)).toBe("15 days left");
     expect(plural(1, "document")).toBe("1 document");
     expect(plural(3, "person", "people")).toBe("3 people");
+  });
+});
+
+describe("avatars", () => {
+  it("takes the first letter of the first two words of a name", () => {
+    expect(initialsOf("S. Ramanathan")).toBe("SR");
+    expect(initialsOf("Anil Test")).toBe("AT");
+    expect(initialsOf("anil")).toBe("A");
+    expect(initialsOf("Mary Jane Watson")).toBe("MJ");
+    expect(initialsOf("Chandra (Managing Director)")).toBe("C");
+    expect(initialsOf("")).toBe("");
+    expect(initialsOf(null)).toBe("");
   });
 });
 
@@ -197,6 +211,10 @@ describe("the staffing gap", () => {
     expect(items[1].sub).toBe("2 of 3 filled (67%) · 1 open posting");
   });
 
+  it("keeps the key under the bars in step with the colours", () => {
+    expect(GAP_KEY.map((k) => k.color)).toEqual([gapColor(40), gapColor(80), gapColor(95)]);
+  });
+
   it("colours by how much of the plan is filled", () => {
     expect([null, 40, 69.9, 70, 89.9, 90, 107].map(gapColor)).toEqual([
       CHART.slate,
@@ -222,7 +240,8 @@ describe("resignations", () => {
       ["Not stated", 1],
       ["Something new", 1],
     ]);
-    expect(slices[0].color).toBe("#006496");
+    expect(slices[0].color).toBe(CHART.series[0]); // pay is wine, the portal's first colour
+    expect(slices[1].color).toBe("var(--md-n-300)"); // not stated is a warm grey
     expect(slices[2].color).toBe(CHART.slate); // a group the page has not met falls back, it does not crash
   });
 

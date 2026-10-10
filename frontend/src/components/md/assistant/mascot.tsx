@@ -76,7 +76,8 @@ export function RadioMascot({
 const ZOOM = 1.45;
 const HEAD_CENTRE_Y = 0.4;
 
-/** The still avatar: the radio's face in a round frame, its expression following `mood`. */
+/** The still avatar: the radio's face in a round glass frame (white ring, wine glow: .md-assistant-face), its expression
+ *  following `mood`. The face itself is the character and is not restyled. */
 export function MascotFace({
   size = 36,
   mood = "idle",
@@ -98,7 +99,7 @@ export function MascotFace({
       aria-hidden
       data-testid="assistant-face"
       data-mood={mood}
-      className={cn("block shrink-0 overflow-hidden rounded-full bg-[#fff1cc] shadow-sm ring-2 ring-white", className)}
+      className={cn("md-assistant-face block shrink-0 overflow-hidden rounded-full", className)}
       style={{
         width: size,
         height: size,

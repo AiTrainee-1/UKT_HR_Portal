@@ -8,7 +8,7 @@ import { EmptyBlock } from "@/components/md/kit/states";
 import TrendChart, { type TrendSeries } from "@/components/md/kit/TrendChart";
 import { dayShort, monthText, num } from "@/lib/md/format";
 import { daysText, docsChip, earlyHeadline, hasVacancyLine, plural, trendRows, trendVerdict } from "./logic";
-import { Chip, Expandable, QueryError } from "./parts";
+import { Avatar, Chip, Expandable, QueryError } from "./parts";
 import type { EarlyLeaverRow, JoinerRow, QueryLike, RecruitmentJoiners, RecruitmentTrend } from "./types";
 
 const JOINER_COLUMNS: Column<JoinerRow>[] = [
@@ -16,13 +16,16 @@ const JOINER_COLUMNS: Column<JoinerRow>[] = [
     key: "name",
     header: "Employee",
     cell: (r) => (
-      <div className="min-w-[8rem]">
-        <p className="font-semibold text-[#1a3a4a]">{r.employeeName}</p>
-        <p className="text-xs text-[#006496]/60">
-          {[r.department, r.designation ?? (r.type ? r.type[0].toUpperCase() + r.type.slice(1) : null)]
-            .filter(Boolean)
-            .join(" · ")}
-        </p>
+      <div className="flex min-w-[9rem] items-center gap-2.5">
+        <Avatar name={r.employeeName} className="md-people-avatar-sm" />
+        <div className="min-w-0">
+          <p className="font-semibold text-md-ink">{r.employeeName}</p>
+          <p className="text-xs text-md-ink-soft">
+            {[r.department, r.designation ?? (r.type ? r.type[0].toUpperCase() + r.type.slice(1) : null)]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+        </div>
       </div>
     ),
     sortValue: (r) => r.employeeName,
@@ -49,9 +52,12 @@ const EARLY_COLUMNS: Column<EarlyLeaverRow>[] = [
     key: "name",
     header: "Employee",
     cell: (r) => (
-      <div className="min-w-[8rem]">
-        <p className="font-semibold text-[#1a3a4a]">{r.employeeName}</p>
-        <p className="text-xs text-[#006496]/60">{r.department}</p>
+      <div className="flex min-w-[9rem] items-center gap-2.5">
+        <Avatar name={r.employeeName} className="md-people-avatar-sm md-people-avatar-ink" />
+        <div className="min-w-0">
+          <p className="font-semibold text-md-ink">{r.employeeName}</p>
+          <p className="text-xs text-md-ink-soft">{r.department}</p>
+        </div>
       </div>
     ),
     sortValue: (r) => r.employeeName,
@@ -61,7 +67,7 @@ const EARLY_COLUMNS: Column<EarlyLeaverRow>[] = [
     header: "Stayed",
     cell: (r) => (
       <span
-        className="whitespace-nowrap font-bold tabular-nums text-[#1a3a4a]"
+        className="whitespace-nowrap font-bold tabular-nums text-md-ink"
         title={r.approximate ? "Exit date is approximate" : undefined}
       >
         {r.approximate ? "about " : ""}
@@ -74,7 +80,7 @@ const EARLY_COLUMNS: Column<EarlyLeaverRow>[] = [
     key: "dates",
     header: "Joined → left",
     cell: (r) => (
-      <span className="whitespace-nowrap text-xs text-[#006496]/70">
+      <span className="whitespace-nowrap text-xs text-md-ink-soft">
         {dayShort(r.joinDate)} → {dayShort(r.exitDate)}
       </span>
     ),
@@ -82,11 +88,22 @@ const EARLY_COLUMNS: Column<EarlyLeaverRow>[] = [
   },
 ];
 
+// Joined is the series that matters (wine), Left the comparison (indigo), the staffing gap an ochre dashed line on its own
+// scale. Colour is not the only cue: the legend names each, and the bars sit side by side.
 const TREND_SERIES = (withVacancies: boolean): TrendSeries[] => [
-  { key: "joiners", label: "Joined", kind: "bar", color: CHART.good },
-  { key: "leavers", label: "Left", kind: "bar", color: CHART.bad },
+  { key: "joiners", label: "Joined", kind: "bar", color: CHART.brand },
+  { key: "leavers", label: "Left", kind: "bar", color: CHART.deep },
   ...(withVacancies
-    ? [{ key: "vacancies", label: "Vacancies against plan", kind: "line" as const, color: CHART.gold, rightAxis: true }]
+    ? [
+        {
+          key: "vacancies",
+          label: "Vacancies against plan",
+          kind: "line" as const,
+          color: CHART.gold,
+          dashed: true,
+          rightAxis: true,
+        },
+      ]
     : []),
 ];
 
@@ -134,7 +151,7 @@ export default function JoinersSection({
               />
             ))}
           {t && withVacancies && (
-            <p className="mt-2 text-[11px] text-[#006496]/60">
+            <p className="mt-2 text-[11px] leading-snug text-md-ink-soft">
               The line is vacancies against today's staffing plan at each month end (right-hand scale); the plan has no
               history. The latest month is the month so far.
             </p>
@@ -169,7 +186,7 @@ export default function JoinersSection({
                 >
                   {(shown) => <BarList testId="md-recruitment-joiners-departments" items={shown} />}
                 </Expandable>
-                <div className="mt-4 border-t pt-3">
+                <div className="mt-5 border-t border-md-line pt-3">
                   <DataTable
                     testId="md-recruitment-joiners-table"
                     columns={JOINER_COLUMNS}
@@ -179,7 +196,7 @@ export default function JoinersSection({
                     dense
                   />
                   {j.listShown < j.summary.joiners && (
-                    <p className="mt-2 text-[11px] text-[#006496]/60">
+                    <p className="mt-2 text-[11px] leading-snug text-md-ink-soft">
                       The {j.listShown} most recent of {num(j.summary.joiners)} joiners are listed.
                     </p>
                   )}
@@ -206,13 +223,14 @@ export default function JoinersSection({
               </EmptyBlock>
             ) : (
               <>
-                <p className="mb-3 text-sm font-semibold text-[#1a3a4a]" data-testid="md-recruitment-early-headline">
+                <p
+                  className="md-panel-wine mb-4 px-4 py-3 text-sm font-semibold leading-snug text-md-ink"
+                  data-testid="md-recruitment-early-headline"
+                >
                   {earlyHeadline(j.earlyAttrition)}
                 </p>
                 {j.earlyAttrition.list.length === 0 ? (
-                  <p className="py-4 text-center text-sm text-muted-foreground">
-                    No one left within 90 days of joining.
-                  </p>
+                  <p className="py-4 text-center text-sm text-md-ink-soft">No one left within 90 days of joining.</p>
                 ) : (
                   <DataTable
                     testId="md-recruitment-early-table"
@@ -224,7 +242,7 @@ export default function JoinersSection({
                   />
                 )}
                 {j.earlyAttrition.byDepartment.length > 0 && (
-                  <p className="mt-3 text-[11px] text-[#006496]/60">
+                  <p className="mt-3 text-[11px] leading-snug text-md-ink-soft">
                     Most early exits:{" "}
                     {j.earlyAttrition.byDepartment.map((d) => `${d.department} (${d.leavers})`).join(", ")}.
                   </p>

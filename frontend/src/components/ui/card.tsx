@@ -12,6 +12,7 @@ const Card = React.forwardRef<
       "rounded-2xl bg-card text-card-foreground clay-card border-0",
       className
     )}
+    data-slot="card"
     {...props}
   />
 ))
@@ -24,6 +25,7 @@ const CardHeader = React.forwardRef<
   <div
     ref={ref}
     className={cn("flex flex-col space-y-1.5 p-6", className)}
+    data-slot="card-header"
     {...props}
   />
 ))
@@ -36,6 +38,7 @@ const CardTitle = React.forwardRef<
   <div
     ref={ref}
     className={cn("font-semibold leading-none tracking-tight", className)}
+    data-slot="card-title"
     {...props}
   />
 ))
@@ -48,6 +51,7 @@ const CardDescription = React.forwardRef<
   <div
     ref={ref}
     className={cn("text-sm text-muted-foreground", className)}
+    data-slot="card-description"
     {...props}
   />
 ))

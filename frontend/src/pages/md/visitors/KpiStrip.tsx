@@ -21,7 +21,7 @@ export default function KpiStrip({ summary, loading }: { summary?: SummaryRespon
   const specs = summary ? buildKpis(summary) : [];
   const provenance: Provenance[] | undefined = summary?.provenance;
   return (
-    <div className="grid grid-cols-2 gap-3 @3xl:grid-cols-4" data-testid="md-visitors-kpis">
+    <div className="grid grid-cols-1 gap-3 @sm:grid-cols-2 @3xl:grid-cols-4" data-testid="md-visitors-kpis">
       {KPI_KEYS.map((key) => {
         const spec = specs.find((s) => s.key === key);
         return (

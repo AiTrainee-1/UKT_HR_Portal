@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
-import { AlertCircle, ArrowUpRight, Check, Copy, Mic, RotateCcw, Square, Volume2 } from "lucide-react";
+import { AlertCircle, ArrowUpRight, Check, Compass, Copy, Mic, RotateCcw, Square, Volume2 } from "lucide-react";
 import { clockText } from "@/lib/md/format";
 import { stripMarkdown } from "@/lib/md/markdown";
 import { describeHeard } from "@/lib/md/voice";
@@ -43,6 +43,7 @@ export type MessageBubbleProps = {
   onRetry: () => void;
 };
 
+/** Listen and copy (ghost glass buttons), the confidence chip and the time, under an answer. */
 function Actions({
   message,
   speaking,
@@ -66,15 +67,15 @@ function Actions({
       // clipboard blocked: nothing to do
     }
   };
-  const btn =
-    "flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold text-[#006496]/70 transition-colors hover:bg-[#006496]/[0.07] hover:text-[#006496]";
+  const btn = "md-btn md-btn-ghost md-btn-sm md-assistant-act";
   return (
-    <div className="flex flex-wrap items-center gap-1">
+    <div className="flex flex-wrap items-center gap-1.5">
       {speechSupported && (
         <button
           type="button"
           onClick={speaking ? onStop : onSpeak}
           className={btn}
+          data-active={speaking}
           data-testid="assistant-listen"
           aria-label={speaking ? "Stop reading" : "Read aloud"}
         >
@@ -83,12 +84,12 @@ function Actions({
         </button>
       )}
       <button type="button" onClick={copy} className={btn} aria-label="Copy answer">
-        {copied ? <Check size={13} className="text-green-600" /> : <Copy size={13} />}
+        {copied ? <Check size={13} className="text-md-success" /> : <Copy size={13} />}
         {copied ? "Copied" : "Copy"}
       </button>
       <ConfidenceChip payload={message.payload} />
       {message.finishedAt && (
-        <span className="ml-auto text-[10.5px] text-[#006496]/45">{clockText(message.finishedAt)}</span>
+        <span className="ml-auto text-[11px] tabular-nums text-md-ink-soft">{clockText(message.finishedAt)}</span>
       )}
     </div>
   );
@@ -105,18 +106,16 @@ export default function MessageBubble(props: MessageBubbleProps) {
   if (message.role === "user") {
     const heard = message.inputMode === "voice" ? describeHeard(message.payload.voice) : null;
     return (
-      <motion.div {...enter} className="flex flex-col items-end gap-1" data-testid="assistant-user-message">
-        <div
-          className="max-w-[88%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md px-3.5 py-2.5 text-[13.5px] leading-relaxed text-white shadow-sm"
-          style={{ background: "linear-gradient(135deg, #006496 0%, #0888b8 100%)" }}
-        >
+      <motion.div {...enter} className="flex flex-col items-end gap-1.5" data-testid="assistant-user-message">
+        {/* the MD's own words: a wine glass bubble, white text */}
+        <div className="md-assistant-user max-w-[88%] whitespace-pre-wrap break-words px-4 py-2.5 text-[13.5px] leading-relaxed">
           {message.inputMode === "voice" && (
-            <Mic size={11} className="mr-1.5 inline -translate-y-px opacity-80" aria-label="Asked by voice" />
+            <Mic size={12} className="mr-1.5 inline -translate-y-px opacity-85" aria-label="Asked by voice" />
           )}
           {message.content}
         </div>
         {heard && (
-          <p className="max-w-[88%] text-right text-[10.5px] text-[#006496]/55" data-testid="assistant-heard">
+          <p className="max-w-[88%] text-right text-[11px] text-md-ink-soft" data-testid="assistant-heard">
             {heard}
           </p>
         )}
@@ -130,18 +129,22 @@ export default function MessageBubble(props: MessageBubbleProps) {
   return (
     <motion.div {...enter} className="flex gap-2.5" data-testid="assistant-reply" data-status={message.status}>
       <AssistantAvatar className="mt-0.5" size={32} mood={moodOf(message)} />
-      <div className="min-w-0 flex-1 space-y-2">
+      <div className="min-w-0 flex-1 space-y-2.5">
         {running && (
-          <div className="rounded-2xl rounded-tl-md border border-[#006496]/10 bg-white px-3.5 py-3 shadow-sm">
+          <div className="md-card md-card-strong md-assistant-answer md-assistant-working px-4 py-3.5">
             <ProgressList lines={payload.progress ?? []} />
           </div>
         )}
 
         {message.status === "error" && payload.errorKind === "cancelled" && (
-          <div className="flex items-center gap-2 px-1 text-[12px] text-[#006496]/65" data-testid="assistant-stopped">
+          <div className="flex items-center gap-2 px-1 text-[12.5px] text-md-ink-soft" data-testid="assistant-stopped">
             <Square size={11} className="fill-current" /> You stopped this answer.
             {isLast && (
-              <button type="button" onClick={onRetry} className="font-bold text-[#006496] hover:underline">
+              <button
+                type="button"
+                onClick={onRetry}
+                className="md-btn md-btn-ghost md-btn-sm md-assistant-act md-assistant-act-wine"
+              >
                 Ask again
               </button>
             )}
@@ -149,20 +152,16 @@ export default function MessageBubble(props: MessageBubbleProps) {
         )}
 
         {message.status === "error" && payload.errorKind !== "cancelled" && (
-          <div
-            className="rounded-2xl rounded-tl-md border border-red-200 bg-red-50 px-3.5 py-3 text-red-900"
-            role="alert"
-            data-testid="assistant-error"
-          >
-            <p className="flex items-start gap-2 text-[13px]">
-              <AlertCircle size={15} className="mt-0.5 shrink-0" />
+          <div className="md-assistant-error px-4 py-3.5" role="alert" data-testid="assistant-error">
+            <p className="flex items-start gap-2 text-[13px] font-semibold leading-snug">
+              <AlertCircle size={16} className="mt-0.5 shrink-0" />
               <span>{message.error || "The assistant could not answer."}</span>
             </p>
             {isLast && payload.errorKind !== "disabled" && payload.errorKind !== "not_configured" && (
               <button
                 type="button"
                 onClick={onRetry}
-                className="mt-2 flex items-center gap-1 rounded-full bg-white px-2.5 py-1 text-[11.5px] font-bold text-red-800 shadow-sm hover:bg-red-100"
+                className="md-btn md-btn-danger md-btn-sm md-assistant-act mt-2.5"
               >
                 <RotateCcw size={12} /> Try again
               </button>
@@ -172,7 +171,7 @@ export default function MessageBubble(props: MessageBubbleProps) {
 
         {message.status === "done" && (
           <>
-            <div className="rounded-2xl rounded-tl-md border border-[#006496]/10 bg-white px-3.5 py-3 shadow-sm">
+            <div className="md-card md-card-strong md-assistant-answer px-4 py-3.5">
               <Markdown text={message.content} />
             </div>
             <Actions
@@ -183,22 +182,26 @@ export default function MessageBubble(props: MessageBubbleProps) {
               onStop={onStopSpeaking}
             />
             {!!payload.suggestedPages?.length && (
-              <div className="space-y-1.5" data-testid="assistant-pages">
+              <div className="space-y-2" data-testid="assistant-pages">
+                <p className="md-assistant-overline px-0.5">Related pages</p>
                 {payload.suggestedPages.map((page) => (
                   <button
                     key={page.id}
                     type="button"
                     onClick={() => onOpenPage(page.path)}
-                    className="group flex w-full items-center gap-2.5 rounded-xl border border-[#e0a83a]/35 bg-gradient-to-r from-[#fff8e6] to-white px-3 py-2 text-left transition-all hover:border-[#e0a83a]/70 hover:shadow-sm"
+                    className="md-assistant-page group"
                     data-testid={`assistant-page-${page.id}`}
                   >
+                    <span className="md-icon-tile md-assistant-tile-sm h-8 w-8 shrink-0">
+                      <Compass size={15} />
+                    </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[12.5px] font-bold text-[#7a5410]">{page.title}</span>
-                      <span className="block truncate text-[11.5px] text-[#7a5410]/75">{page.reason}</span>
+                      <span className="block text-[13px] font-bold leading-snug text-md-ink">{page.title}</span>
+                      <span className="block truncate text-[12px] text-md-ink-soft">{page.reason}</span>
                     </span>
                     <ArrowUpRight
-                      size={15}
-                      className="shrink-0 text-[#c18a1f] transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5"
+                      size={16}
+                      className="shrink-0 text-md-wine-600 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5"
                     />
                   </button>
                 ))}
@@ -206,13 +209,13 @@ export default function MessageBubble(props: MessageBubbleProps) {
             )}
             <Explainer payload={payload} />
             {isLast && !!payload.followUps?.length && (
-              <div className="flex flex-wrap gap-1.5" data-testid="assistant-followups">
+              <div className="flex flex-wrap gap-2" data-testid="assistant-followups">
                 {payload.followUps.map((text) => (
                   <button
                     key={text}
                     type="button"
                     onClick={() => onFollowUp(text)}
-                    className="rounded-full border border-[#006496]/20 bg-white px-2.5 py-1 text-left text-[11.5px] font-semibold text-[#006496] transition-colors hover:border-[#006496]/45 hover:bg-[#006496]/[0.05]"
+                    className="md-chip md-assistant-chipbtn"
                   >
                     {text}
                   </button>

@@ -1,0 +1,957 @@
+/* MD portal skin, area: shell. Owned by the designer of that area (md-portal.md section 11.4). Every selector here must start
+   with an .md-* class of your own (name them md-shell-*) or with html[data-md-theme]; md-theme.test.ts checks. Use the palette
+   tokens (var(--md-wine-700) ...), never a hex colour (write `white`, not the three-digit hex). No @keyframes here: the test reads
+   every { } block as a rule, so use Tailwind's animate-* utilities and .clay-skeleton for motion.
+
+   What lives here: the frame every MD page sits in (page background, glass rail, mobile top bar, scrim, identity card, tooltips)
+   and the look of the shared building blocks in components/md/kit (stat cards, insight rows, tables, bars, Ask AI chip,
+   the "how is this calculated" popover, the MD insights strip, banners). The TSX uses Tailwind for layout and these classes for
+   everything that needs a gradient, a blur or a tint taken from the palette. */
+
+/* ── the frame ────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* the page: tinted background (md-app-bg) plus three soft orbs behind the content, so the glass has something to blur */
+.md-shell-root {
+  position: relative;
+  isolation: isolate;
+}
+.md-shell-root::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(520px 420px at 4% 6%, color-mix(in srgb, var(--md-wine) 9%, transparent), transparent 70%),
+    radial-gradient(640px 460px at 98% 34%, color-mix(in srgb, var(--md-indigo) 8%, transparent), transparent 72%),
+    radial-gradient(720px 480px at 52% 106%, color-mix(in srgb, var(--md-sand) 95%, transparent), transparent 70%);
+}
+@media print {
+  .md-shell-root::before {
+    display: none;
+  }
+}
+
+/* the rail: sand to vanilla glass, a hairline on its edge, a long soft shadow onto the page */
+.md-shell-rail {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--md-sand) 74%, transparent) 0%,
+    color-mix(in srgb, var(--md-vanilla) 66%, transparent) 48%,
+    color-mix(in srgb, var(--md-alabaster) 76%, transparent) 100%
+  );
+  border-right: 1px solid color-mix(in srgb, var(--md-indigo) 9%, transparent);
+  box-shadow:
+    inset -1px 0 0 rgba(255, 255, 255, 0.75),
+    16px 0 48px -24px color-mix(in srgb, var(--md-indigo) 42%, transparent);
+  -webkit-backdrop-filter: blur(26px) saturate(1.5);
+  backdrop-filter: blur(26px) saturate(1.5);
+}
+/* the drawer on a small screen sits over the page, so it is more opaque and casts a bigger shadow */
+@media (max-width: 1023.98px) {
+  .md-shell-rail {
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--md-sand) 94%, transparent) 0%,
+      color-mix(in srgb, var(--md-vanilla) 92%, transparent) 55%,
+      color-mix(in srgb, var(--md-alabaster) 95%, transparent) 100%
+    );
+    box-shadow:
+      inset -1px 0 0 rgba(255, 255, 255, 0.8),
+      24px 0 60px -20px color-mix(in srgb, var(--md-indigo) 55%, transparent);
+  }
+}
+
+/* a glass control inside the rail or the top bar needs no blur of its own: the bar behind it is already blurred */
+.md-shell-rail .md-btn,
+.md-shell-topbar .md-btn {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.md-shell-scrim {
+  background: color-mix(in srgb, var(--md-indigo) 34%, transparent);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+/* the bar on a small screen: frosted vanilla, hairline under it */
+.md-shell-topbar {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--md-vanilla) 88%, transparent),
+    color-mix(in srgb, var(--md-alabaster) 78%, transparent)
+  );
+  border-bottom: 1px solid color-mix(in srgb, var(--md-indigo) 9%, transparent);
+  box-shadow:
+    inset 0 -1px 0 rgba(255, 255, 255, 0.7),
+    0 10px 28px -20px color-mix(in srgb, var(--md-indigo) 50%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
+  backdrop-filter: blur(20px) saturate(1.5);
+}
+
+/* the logo sits on a small white glass tile so the company mark reads as a badge, whatever its own colours */
+.md-shell-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  height: 2.5rem;
+  padding: 0 0.4rem;
+  min-width: 2.5rem;
+  border-radius: 0.95rem;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.58));
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  box-shadow:
+    0 10px 20px -12px color-mix(in srgb, var(--md-indigo) 55%, transparent),
+    inset 0 1px 0 white;
+}
+
+.md-shell-logo-sm {
+  height: 2.25rem;
+  min-width: 2.25rem;
+  border-radius: 0.85rem;
+}
+
+/* a small overline: the group headings of the rail, the labels over a strip or a popover (set its colour with a text-md-* utility) */
+.md-shell-overline {
+  font-size: 0.625rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+/* ── rail items ──────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+.md-shell-nav {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  min-height: 2.25rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: 0.95rem;
+  border: 1px solid transparent;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--md-ink-700);
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    color 0.18s ease,
+    transform 0.18s ease;
+}
+.md-shell-nav svg {
+  flex: none;
+  color: var(--md-ink-600);
+  transition:
+    color 0.18s ease,
+    transform 0.18s ease;
+}
+.md-shell-nav:hover {
+  color: var(--md-ink-900);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.46));
+  border-color: rgba(255, 255, 255, 0.9);
+  box-shadow:
+    0 8px 18px -12px color-mix(in srgb, var(--md-indigo) 55%, transparent),
+    inset 0 1px 0 white;
+}
+.md-shell-nav:hover svg {
+  color: var(--md-wine-700);
+}
+.md-shell-nav:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 1px;
+}
+/* the page you are on: wine glass, a sand icon, a soft wine glow */
+.md-shell-nav[aria-current="page"] {
+  color: white;
+  font-weight: 700;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--md-wine-700) 97%, transparent) 0%,
+    color-mix(in srgb, var(--md-wine-500) 90%, transparent) 100%
+  );
+  border-color: rgba(255, 255, 255, 0.3);
+  box-shadow:
+    0 14px 26px -12px color-mix(in srgb, var(--md-wine) 75%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--md-wine) 18%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+.md-shell-nav[aria-current="page"] svg {
+  color: var(--md-sand);
+}
+/* the collapsed rail, as the HR portal's: a 48 x 44 square holding only the icon; the page you are on also gets a small bar
+   on the rail's edge (the rail's side padding is 10 px) */
+.md-shell-nav-rail {
+  justify-content: center;
+  width: 3rem;
+  height: 2.75rem;
+  padding: 0;
+  border-radius: 0.9rem;
+}
+.md-shell-nav-rail[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 0.6rem;
+  bottom: 0.6rem;
+  width: 3px;
+  border-radius: 0 9999px 9999px 0;
+  background: var(--md-wine-700);
+}
+/* sign out warms to crimson, as the HR portal's does */
+.md-shell-nav-danger:hover {
+  color: var(--md-danger-600);
+  background: color-mix(in srgb, var(--md-danger-600) 9%, transparent);
+  border-color: color-mix(in srgb, var(--md-danger-600) 18%, transparent);
+  box-shadow: none;
+}
+.md-shell-nav-danger:hover svg {
+  color: var(--md-danger-600);
+}
+/* the round toggle at the top of the collapsed rail */
+.md-shell-rail-toggle {
+  width: 2.75rem;
+  height: 2.75rem;
+  color: var(--md-wine-700);
+}
+
+/* "Ask the AI assistant": midnight indigo glass with a sand icon; wine ring while the assistant is open */
+.md-shell-ask-ai {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 0.5rem;
+  padding: 0.45rem 0.6rem 0.45rem 0.45rem;
+  border-radius: 1rem;
+  text-align: left;
+  font-size: 0.78rem;
+}
+.md-shell-ask-ai .md-shell-spark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1.65rem;
+  height: 1.65rem;
+  border-radius: 0.6rem;
+  color: var(--md-sand);
+  background: rgba(255, 255, 255, 0.13);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+.md-shell-ask-ai .md-shell-spark svg {
+  transition: transform 0.25s ease;
+}
+.md-shell-ask-ai:hover .md-shell-spark svg {
+  transform: rotate(14deg) scale(1.08);
+}
+.md-shell-ask-ai[aria-pressed="true"],
+.md-shell-ask-ai[aria-pressed="true"]:hover {
+  box-shadow:
+    0 0 0 2px var(--md-wine-500),
+    0 16px 30px -12px color-mix(in srgb, var(--md-wine) 70%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+/* the AI entry on the collapsed rail sits where the HR portal's search square does: a light frosted square, wine icon */
+.md-shell-ask-rail {
+  width: 3rem;
+  height: 2.75rem;
+  padding: 0;
+  border-radius: 0.9rem;
+}
+.md-shell-ask-rail[aria-pressed="true"] {
+  box-shadow:
+    0 0 0 2px var(--md-wine-500),
+    0 12px 24px -12px color-mix(in srgb, var(--md-wine) 65%, transparent),
+    inset 0 1px 0 white;
+}
+.md-shell-kbd {
+  flex: none;
+  padding: 0.14rem 0.42rem;
+  border-radius: 0.45rem;
+  font-size: 0.625rem;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+  color: var(--md-sand);
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* the identity card at the bottom of the rail, and the quiet rows under it */
+.md-shell-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.6rem 0.7rem;
+  border-radius: 1.1rem;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.44));
+  border: 1px solid rgba(255, 255, 255, 0.92);
+  box-shadow:
+    0 14px 28px -18px color-mix(in srgb, var(--md-indigo) 58%, transparent),
+    inset 0 1px 0 white;
+}
+.md-shell-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 2.375rem;
+  height: 2.375rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  color: var(--md-sand);
+  background: linear-gradient(135deg, var(--md-wine-700), var(--md-wine-500));
+  box-shadow:
+    0 0 0 2px white,
+    0 10px 18px -8px color-mix(in srgb, var(--md-wine) 65%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+.md-shell-quiet {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  min-height: 2.25rem;
+  padding: 0.45rem 0.75rem;
+  border-radius: 0.9rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--md-ink-600);
+  cursor: pointer;
+  transition:
+    background 0.18s ease,
+    color 0.18s ease;
+}
+.md-shell-quiet:hover {
+  color: var(--md-wine-700);
+  background: color-mix(in srgb, var(--md-wine) 7%, transparent);
+}
+.md-shell-quiet:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 1px;
+}
+
+/* tooltips beside the collapsed rail: small midnight indigo glass with sand text */
+.md-shell-tip {
+  padding: 0.4rem 0.7rem;
+  border-radius: 0.7rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--md-sand);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--md-ink-900) 95%, transparent),
+    color-mix(in srgb, var(--md-ink-700) 92%, transparent)
+  );
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow:
+    0 14px 30px -12px color-mix(in srgb, var(--md-ink-900) 70%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+/* ── the title row ───────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* the green "Live" dot has a soft ring, so it reads as a signal, not a bullet */
+.md-shell-live-dot {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 9999px;
+  background: var(--md-success-500);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-success-500) 24%, transparent);
+}
+
+/* Updated / Refresh at the far right: a hairline, the time, and a small frosted Refresh pill (kept under 44 px tall:
+   the HR copies pin this stack to a 44 px corner, see embedded/headerRow.ts) */
+.md-shell-refresh {
+  gap: 0.35rem;
+  padding: 0.22rem 0.7rem;
+  font-size: 0.75rem;
+  line-height: 1.2;
+}
+
+/* the segmented switches (Operations | Insights, the period presets): 40 px tall like the HR pages' own buttons beside them; the
+   small one is for filter bars; the focus ring is drawn inside because the period switch scrolls sideways on a narrow screen
+   and would clip an outer ring */
+.md-shell-seg .md-seg-item {
+  padding-block: 0.35rem;
+  line-height: 1.25;
+}
+.md-shell-seg-sm .md-seg-item {
+  padding: 0.3rem 0.8rem;
+  font-size: 0.75rem;
+}
+.md-shell-seg .md-seg-item:focus-visible {
+  outline-offset: -2px;
+}
+/* tall enough to tap on a touch screen */
+@media (pointer: coarse) {
+  .md-shell-seg .md-seg-item,
+  .md-shell-sort {
+    min-height: 2.25rem;
+  }
+}
+
+/* ── cards and stat tiles ────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* the figure's colour, set once per tone: the icon tile, the corner glow and the sparkline take it from here */
+.md-shell-tone-ink {
+  --tone: var(--md-ink-700);
+}
+.md-shell-tone-sage {
+  --tone: var(--md-success-600);
+}
+.md-shell-tone-ochre {
+  --tone: var(--md-warning-600);
+}
+.md-shell-tone-wine {
+  --tone: var(--md-wine-700);
+}
+.md-shell-tone-periwinkle {
+  --tone: var(--md-info-600);
+}
+.md-shell-tone-crimson {
+  --tone: var(--md-danger-600);
+}
+.md-shell-tone-mauve {
+  --tone: var(--md-mauve-600);
+}
+.md-shell-tone-rose {
+  --tone: var(--md-rose-600);
+}
+
+.md-shell-stat {
+  isolation: isolate;
+}
+.md-shell-stat::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(
+    150px 100px at 100% 0%,
+    color-mix(in srgb, var(--tone) 13%, transparent),
+    transparent 72%
+  );
+}
+.md-shell-stat[role="button"]:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 2px;
+}
+
+.md-shell-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.85rem;
+  color: var(--tone, var(--md-wine-700));
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--tone, var(--md-wine-700)) 17%, white),
+    color-mix(in srgb, var(--tone, var(--md-wine-700)) 6%, white)
+  );
+  border: 1px solid color-mix(in srgb, var(--tone, var(--md-wine-700)) 20%, transparent);
+  box-shadow:
+    0 8px 16px -10px color-mix(in srgb, var(--tone, var(--md-wine-700)) 60%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+/* change chips: small pills with an arrow, so the direction is never carried by colour alone */
+.md-shell-delta {
+  gap: 0.15rem;
+  padding: 0.08rem 0.5rem 0.08rem 0.4rem;
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── small controls ──────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* "Ask AI": a frosted pill with wine text and a wine sparkle; its tap area is larger than the pill (36 px) */
+.md-shell-ask {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.28rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 1.3;
+  white-space: nowrap;
+  color: var(--md-wine-700);
+  cursor: pointer;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.56));
+  border: 1px solid color-mix(in srgb, var(--md-wine) 22%, transparent);
+  box-shadow:
+    0 6px 12px -8px color-mix(in srgb, var(--md-wine) 55%, transparent),
+    inset 0 1px 0 white;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease,
+    background 0.2s ease;
+}
+.md-shell-ask::after {
+  content: "";
+  position: absolute;
+  inset: -0.4rem -0.25rem;
+}
+.md-shell-ask svg {
+  flex: none;
+  transition: transform 0.25s ease;
+}
+.md-shell-ask:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--md-wine) 44%, transparent);
+  background: linear-gradient(180deg, white, color-mix(in srgb, var(--md-wine-50) 85%, white));
+  box-shadow:
+    0 12px 20px -10px color-mix(in srgb, var(--md-wine) 55%, transparent),
+    inset 0 1px 0 white;
+}
+.md-shell-ask:hover svg {
+  transform: rotate(14deg) scale(1.1);
+}
+.md-shell-ask:active {
+  transform: translateY(0) scale(0.97);
+}
+.md-shell-ask:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 2px;
+}
+.md-shell-ask-lg {
+  padding: 0.4rem 0.95rem;
+  font-size: 0.75rem;
+}
+
+/* a link drawn as a wine chip ("Employees ↗"): the same size as the Ask AI pill beside it */
+.md-shell-link {
+  position: relative;
+  padding: 0.28rem 0.75rem;
+  line-height: 1.3;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.2s ease,
+    background 0.2s ease,
+    border-color 0.2s ease;
+}
+.md-shell-link::after {
+  content: "";
+  position: absolute;
+  inset: -0.4rem -0.25rem;
+}
+.md-shell-link:hover {
+  transform: translateY(-1px);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--md-wine) 15%, white),
+    color-mix(in srgb, var(--md-wine) 8%, white)
+  );
+  border-color: color-mix(in srgb, var(--md-wine) 38%, transparent);
+  box-shadow: 0 10px 18px -10px color-mix(in srgb, var(--md-wine) 50%, transparent);
+}
+.md-shell-link:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 2px;
+}
+
+/* the (i) beside a figure: round, quiet, wine on hover; 28 px drawn, 36 px to tap */
+.md-shell-info {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 9999px;
+  color: var(--md-ink-500);
+  cursor: pointer;
+  transition:
+    background 0.18s ease,
+    color 0.18s ease;
+}
+.md-shell-info::after {
+  content: "";
+  position: absolute;
+  inset: -0.25rem;
+}
+.md-shell-info:hover,
+.md-shell-info[data-state="open"] {
+  color: var(--md-wine-700);
+  background: color-mix(in srgb, var(--md-wine) 9%, transparent);
+}
+.md-shell-info:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 1px;
+}
+
+/* the "how is this calculated?" popover: strong glass, a light edge, a soft indigo shadow */
+.md-shell-popover {
+  padding: 0;
+  border-radius: 1.25rem;
+  background: var(--md-glass-bg-strong);
+  border: 1px solid var(--md-glass-edge);
+  box-shadow:
+    0 24px 56px -16px color-mix(in srgb, var(--md-indigo) 45%, transparent),
+    0 4px 12px color-mix(in srgb, var(--md-indigo) 8%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  -webkit-backdrop-filter: blur(22px) saturate(1.6);
+  backdrop-filter: blur(22px) saturate(1.6);
+}
+
+/* ── insights: the rows of "needs your attention" and the strip above a page ────────────────────────────────────── */
+
+.md-shell-sev-critical {
+  --sev: var(--md-danger-600);
+}
+.md-shell-sev-warning {
+  --sev: var(--md-warning-600);
+}
+.md-shell-sev-info {
+  --sev: var(--md-info-600);
+}
+.md-shell-sev-good {
+  --sev: var(--md-success-600);
+}
+
+.md-shell-insight {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.8rem;
+  padding: 0.8rem 0.9rem;
+  border-radius: 1rem;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--sev) 8%, rgba(255, 255, 255, 0.62)),
+    color-mix(in srgb, var(--sev) 3%, rgba(255, 255, 255, 0.4))
+  );
+  border: 1px solid color-mix(in srgb, var(--sev) 20%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
+  transition:
+    box-shadow 0.2s ease,
+    border-color 0.2s ease;
+}
+.md-shell-insight:hover {
+  border-color: color-mix(in srgb, var(--sev) 34%, transparent);
+  box-shadow:
+    0 12px 24px -18px color-mix(in srgb, var(--sev) 70%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+.md-shell-insight-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.75rem;
+  color: var(--sev);
+  background: color-mix(in srgb, var(--sev) 12%, white);
+  border: 1px solid color-mix(in srgb, var(--sev) 22%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+/* "MD insights": a sand glass strip with a warm edge and a faint wine glow in its corner */
+.md-shell-strip {
+  position: relative;
+  isolation: isolate;
+  border-radius: 1.25rem;
+  background:
+    radial-gradient(360px 160px at 0% 0%, color-mix(in srgb, var(--md-wine) 7%, transparent), transparent 70%),
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--md-sand) 90%, transparent) 0%,
+      color-mix(in srgb, var(--md-vanilla) 70%, rgba(255, 255, 255, 0.5)) 100%
+    );
+  border: 1px solid color-mix(in srgb, var(--md-warning-500) 24%, rgba(255, 255, 255, 0.6));
+  box-shadow:
+    var(--md-glass-shadow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  -webkit-backdrop-filter: blur(var(--md-glass-blur)) saturate(1.5);
+  backdrop-filter: blur(var(--md-glass-blur)) saturate(1.5);
+}
+.md-shell-strip-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 0.55rem;
+  color: var(--md-sand);
+  background: linear-gradient(135deg, var(--md-wine-700), var(--md-wine-500));
+  box-shadow:
+    0 6px 12px -6px color-mix(in srgb, var(--md-wine) 70%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+/* one figure in the strip: a small white panel (no blur of its own: the strip is the glass) with the label over the value */
+.md-shell-strip-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: 0.95rem;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow:
+    0 8px 16px -14px color-mix(in srgb, var(--md-indigo) 60%, transparent),
+    inset 0 1px 0 white;
+}
+.md-shell-strip-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 0.85rem;
+  transition: background 0.15s ease;
+}
+.md-shell-strip-row:hover {
+  background: rgba(255, 255, 255, 0.58);
+}
+
+/* the filter bar at the top of an analysis page: the card's glass without its blur (the period switch and the selects inside
+   are glass themselves, and blur is not nested) */
+.md-shell-filterbar {
+  background: var(--md-glass-bg-strong);
+  border: 1px solid var(--md-glass-edge);
+  border-radius: 1.25rem;
+  box-shadow:
+    0 10px 28px -14px color-mix(in srgb, var(--md-indigo) 30%, transparent),
+    0 2px 6px color-mix(in srgb, var(--md-indigo) 5%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+/* ── tables, bars, heatmaps ──────────────────────────────────────────────────────────────────────────────────────── */
+
+/* a table in a card: a sand header band with rounded ends, hairlines between rows, a wine tint under the pointer */
+.md-shell-table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.md-shell-table thead th {
+  background: color-mix(in srgb, var(--md-sand) 72%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--md-warning-600) 14%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--md-warning-600) 14%, transparent);
+  color: var(--md-ink-600);
+}
+.md-shell-table thead th:first-child {
+  border-left: 1px solid color-mix(in srgb, var(--md-warning-600) 14%, transparent);
+  border-top-left-radius: 0.85rem;
+  border-bottom-left-radius: 0.85rem;
+}
+.md-shell-table thead th:last-child {
+  border-right: 1px solid color-mix(in srgb, var(--md-warning-600) 14%, transparent);
+  border-top-right-radius: 0.85rem;
+  border-bottom-right-radius: 0.85rem;
+}
+.md-shell-table tbody td {
+  border-bottom: 1px solid var(--md-line);
+  transition: background 0.15s ease;
+}
+.md-shell-table tbody tr:last-child td {
+  border-bottom-color: transparent;
+}
+.md-shell-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--md-wine) 4.5%, transparent);
+}
+.md-shell-table tbody tr:hover td:first-child {
+  border-top-left-radius: 0.7rem;
+  border-bottom-left-radius: 0.7rem;
+}
+.md-shell-table tbody tr:hover td:last-child {
+  border-top-right-radius: 0.7rem;
+  border-bottom-right-radius: 0.7rem;
+}
+.md-shell-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin: -0.15rem -0.35rem;
+  padding: 0.15rem 0.35rem;
+  border-radius: 0.5rem;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.md-shell-sort:hover {
+  color: var(--md-wine-700);
+  background: rgba(255, 255, 255, 0.6);
+}
+.md-shell-sort:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 1px;
+}
+
+/* ranked bars: a recessed track, a coloured fill with a glassy top edge */
+.md-shell-bar-track {
+  height: 0.5rem;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--md-ink) 8%, transparent);
+  box-shadow: inset 0 1px 2px color-mix(in srgb, var(--md-ink) 12%, transparent);
+}
+.md-shell-bar-fill {
+  position: relative;
+  height: 100%;
+  border-radius: 9999px;
+  transition: width 0.5s ease-out;
+}
+.md-shell-bar-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.38), transparent 62%);
+}
+.md-shell-bar-row {
+  display: block;
+  width: calc(100% + 1rem);
+  padding: 0.35rem 0.5rem;
+  margin: -0.35rem -0.5rem;
+  border-radius: 0.8rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.md-shell-bar-row:hover {
+  background: color-mix(in srgb, var(--md-wine) 5%, transparent);
+}
+.md-shell-bar-row:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 1px;
+}
+
+.md-shell-ramp {
+  box-shadow: inset 0 1px 2px color-mix(in srgb, var(--md-ink) 18%, transparent);
+}
+.md-shell-dot {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85);
+}
+
+.md-shell-heat-cell {
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.md-shell-heat-cell:hover {
+  transform: scale(1.08);
+  box-shadow:
+    0 8px 14px -8px color-mix(in srgb, var(--md-indigo) 60%, transparent),
+    0 0 0 2px rgba(255, 255, 255, 0.85);
+  position: relative;
+  z-index: 1;
+}
+
+/* ── banners ─────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* a failed load: crimson glass (crimson is "bad"; wine is the brand and is never used for it) */
+.md-shell-error {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--md-danger-50) 94%, transparent),
+    color-mix(in srgb, var(--md-danger-100) 60%, transparent)
+  );
+  border: 1px solid color-mix(in srgb, var(--md-danger-500) 26%, transparent);
+  box-shadow:
+    0 14px 28px -20px color-mix(in srgb, var(--md-danger-600) 60%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.75);
+}
+.md-shell-banner-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.75rem;
+  color: var(--banner, var(--md-warning-700));
+  background: color-mix(in srgb, var(--banner, var(--md-warning-600)) 14%, white);
+  border: 1px solid color-mix(in srgb, var(--banner, var(--md-warning-600)) 24%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+.md-shell-banner-danger {
+  --banner: var(--md-danger-600);
+}
+
+/* the empty state's tile: larger, with a soft wine halo */
+.md-shell-empty-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3.25rem;
+  height: 3.25rem;
+  border-radius: 1.15rem;
+  color: var(--md-wine-700);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--md-wine) 13%, white),
+    color-mix(in srgb, var(--md-sand) 80%, white)
+  );
+  border: 1px solid color-mix(in srgb, var(--md-wine) 16%, transparent);
+  box-shadow:
+    0 14px 26px -14px color-mix(in srgb, var(--md-wine) 55%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+/* ── motion: nothing moves for someone who asked for less ────────────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .md-shell-nav,
+  .md-shell-nav svg,
+  .md-shell-ask,
+  .md-shell-ask svg,
+  .md-shell-link,
+  .md-shell-ask-ai .md-shell-spark svg,
+  .md-shell-info,
+  .md-shell-bar-fill,
+  .md-shell-heat-cell,
+  .md-shell-insight,
+  .md-shell-quiet {
+    transition: none;
+  }
+  .md-shell-ask:hover,
+  .md-shell-link:hover,
+  .md-shell-heat-cell:hover {
+    transform: none;
+  }
+  .md-shell-ask:hover svg,
+  .md-shell-ask-ai:hover .md-shell-spark svg {
+    transform: none;
+  }
+}
+
+/* browsers without backdrop-filter: more opaque glass so text stays readable */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .md-shell-rail,
+  .md-shell-topbar {
+    background: color-mix(in srgb, var(--md-vanilla) 96%, transparent);
+  }
+  .md-shell-popover {
+    background: color-mix(in srgb, var(--md-alabaster) 98%, transparent);
+  }
+  .md-shell-tip {
+    background: var(--md-ink-800);
+  }
+}

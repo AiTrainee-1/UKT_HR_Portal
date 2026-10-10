@@ -132,7 +132,14 @@ test("every MD page opens with the same title row: Live beside the title, the sw
   page,
 }) => {
   test.setTimeout(240_000);
-  const paths = [...PAGES.map((p) => p.path), "/md/payroll", "/md/reports", "/md/recruitment", "/md/activity"];
+  // (the dashboard is left out on purpose: it has no title strip, its welcome card is the top of the page)
+  const paths = [
+    ...PAGES.map((p) => p.path).filter((p) => p !== "/md/dashboard"),
+    "/md/payroll",
+    "/md/reports",
+    "/md/recruitment",
+    "/md/activity",
+  ];
   const rowLeft: number[] = [];
   const stackRight: number[] = [];
 
@@ -314,4 +321,33 @@ test("the MD can make a change on a copied page's data, and nobody else can open
   await page.addInitScript((t) => localStorage.setItem("uk_textile_token", t), adminToken);
   await goto(page, "/md/employees");
   await expect(page).toHaveURL(/\/hr\/dashboard$/);
+});
+
+test("the MD skin stays inside the MD portal: wine for the MD, nothing of it in the HR portal", async ({ page }) => {
+  const skin = () =>
+    page.evaluate(() => {
+      const root = document.documentElement;
+      const button = document.querySelector('[data-slot="button"][data-variant="default"]');
+      return {
+        on: root.hasAttribute("data-md-theme"),
+        primary: getComputedStyle(root).getPropertyValue("--primary").trim(),
+        buttonBackground: button ? getComputedStyle(button).backgroundImage : "",
+      };
+    });
+
+  // the MD portal: the skin is on, the primary colour is wine, a primary button is wine glass
+  await open(page, "/md/branches");
+  const md = await skin();
+  expect(md.on).toBe(true);
+  expect(md.primary).toBe("346 98% 25%");
+  expect(md.buttonBackground).toContain("rgba(127, 1, 31");
+
+  // the HR portal, signed in as the Super Admin: no attribute, the original blue, the original gradient
+  await page.addInitScript((t) => localStorage.setItem("uk_textile_token", t), adminToken);
+  await goto(page, "/hr/branches");
+  await expect(page.getByRole("heading", { name: /Manage Branch/ })).toBeVisible({ timeout: 30_000 });
+  const hr = await skin();
+  expect(hr.on).toBe(false);
+  expect(hr.primary).toBe("201 100% 29%");
+  expect(hr.buttonBackground).toContain("rgb(0, 100, 150)");
 });

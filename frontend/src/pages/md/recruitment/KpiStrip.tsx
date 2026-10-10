@@ -17,7 +17,7 @@ export default function KpiStrip({ query }: { query: QueryLike<RecruitmentSummar
   const waitingTone = c?.oldestPendingDays == null ? "slate" : waitTone(c.oldestPendingDays, warnAfter);
 
   return (
-    <div className="grid grid-cols-2 gap-3 @3xl:grid-cols-4" data-testid="md-recruitment-kpis">
+    <div className="grid grid-cols-2 gap-3 @3xl:grid-cols-4 @3xl:gap-4" data-testid="md-recruitment-kpis">
       <StatCard
         testId="md-recruitment-kpi-open"
         label="Open positions"
@@ -72,7 +72,7 @@ export default function KpiStrip({ query }: { query: QueryLike<RecruitmentSummar
             : undefined
         }
         icon={CalendarClock}
-        tone="teal"
+        tone="purple"
         loading={loading}
         provenance={provenance}
         provenanceIds={["interviews"]}
@@ -97,7 +97,7 @@ export default function KpiStrip({ query }: { query: QueryLike<RecruitmentSummar
         value={c ? num(c.leavers) : "—"}
         sub={c ? `${num(c.leaversResigned)} resigned · ${num(c.leaversDeactivated)} other exits` : undefined}
         icon={UserMinus}
-        tone="red"
+        tone="indigo"
         delta={deltaOf(changes?.leavers, "number", "down")}
         loading={loading}
         provenance={provenance}

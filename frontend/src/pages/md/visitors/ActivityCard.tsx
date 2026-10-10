@@ -6,10 +6,10 @@ import SectionCard from "@/components/md/kit/SectionCard";
 import { ErrorBanner } from "@/components/md/kit/states";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { PillTabs } from "@/components/ui/pill-tabs";
 import { describeMdError, useMdQuery } from "@/lib/api-client/custom-hooks/md";
 import { minutesText } from "@/lib/md/format";
 import { cn } from "@/lib/utils";
+import SegTabs from "../embedded/shared/SegTabs";
 import { periodPhrase, rangeText, stampText } from "./logic";
 import { Chip, PersonCell, type ChipTone } from "./parts";
 import type { ActivityItem, ActivityKind, ActivityResponse } from "./types";
@@ -84,12 +84,12 @@ const columns: Column<ActivityItem>[] = [
             To meet {i.hostName ?? "—"}
             {i.hostLinked && i.hostDepartment ? ` (${i.hostDepartment})` : ""}
           </p>
-          <p className="truncate text-[11px] text-[#006496]/60">{i.purpose ?? "—"}</p>
+          <p className="truncate text-[11px] text-md-ink-soft">{i.purpose ?? "—"}</p>
         </div>
       ) : i.kind === "outpass" ? (
         <div className="max-w-[18rem]">
           <p className="truncate">{i.destination ?? "—"}</p>
-          <p className="truncate text-[11px] text-[#006496]/60">{i.passTypeLabel}</p>
+          <p className="truncate text-[11px] text-md-ink-soft">{i.passTypeLabel}</p>
         </div>
       ) : (
         <p className="max-w-[18rem] truncate">{i.destination ?? "—"}</p>
@@ -102,7 +102,7 @@ const columns: Column<ActivityItem>[] = [
       i.kind === "outpass" ? (
         <div className="space-y-0.5">
           <Chip tone={OUTCOME_TONE[i.outcome] ?? "slate"}>{i.outcomeLabel}</Chip>
-          {i.minutesOut != null && <p className="text-[11px] text-[#006496]/60">{minutesText(i.minutesOut)} out</p>}
+          {i.minutesOut != null && <p className="text-[11px] text-md-ink-soft">{minutesText(i.minutesOut)} out</p>}
         </div>
       ) : i.kind === "gate_form" ? (
         <Chip tone={i.matched ? "green" : "amber"}>{i.matched ? "Matched" : "No match"}</Chip>
@@ -151,19 +151,19 @@ export default function ActivityCard({ params }: { params: Record<string, string
             <div className="relative w-full @3xl:max-w-sm">
               <Search
                 size={14}
-                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#006496]/50"
+                className="pointer-events-none absolute left-3.5 top-1/2 z-10 -translate-y-1/2 text-md-ink-soft"
               />
               <Input
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 placeholder="Search a name, department, place or purpose"
                 aria-label="Search recent activity"
-                className="h-9 pl-8 text-sm"
+                className="md-field h-10 pl-10 text-sm"
                 data-testid="md-activity-search"
               />
             </div>
-            <div className="max-w-full overflow-x-auto pb-1" data-testid="md-activity-kinds">
-              <PillTabs size="sm" items={KINDS} value={kind} onChange={(v) => setKind(v as ActivityKind)} />
+            <div className="max-w-full" data-testid="md-activity-kinds">
+              <SegTabs label="What to list" items={KINDS} value={kind} onChange={(v) => setKind(v as ActivityKind)} />
             </div>
           </div>
 
@@ -179,7 +179,7 @@ export default function ActivityCard({ params }: { params: Record<string, string
           </div>
 
           {d && d.total > 0 && (
-            <div className="flex items-center justify-between gap-2 border-t pt-2 text-xs text-muted-foreground">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-md-line pt-3 text-xs text-md-ink-soft">
               <span data-testid="md-activity-range">{rangeText(d.page, d.pageSize, d.total, d.items.length)}</span>
               <div className="flex items-center gap-1">
                 <Button

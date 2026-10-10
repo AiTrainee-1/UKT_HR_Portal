@@ -5,8 +5,8 @@ import DataTable, { type Column } from "@/components/md/kit/DataTable";
 import SectionCard from "@/components/md/kit/SectionCard";
 import { EmptyBlock } from "@/components/md/kit/states";
 import { dayShort, num } from "@/lib/md/format";
-import { daysText, gapBarItems, plural } from "./logic";
-import { AgeBarView, Chip, Expandable, MixBar, QueryError } from "./parts";
+import { GAP_KEY, daysText, gapBarItems, plural } from "./logic";
+import { AgeBarView, Chip, Expandable, MixBar, MixKey, QueryError } from "./parts";
 import type { OpenPosition, QueryLike, RecruitmentPositions } from "./types";
 
 function columnsFor(staleAfter: number, maxDays: number): Column<OpenPosition>[] {
@@ -16,8 +16,8 @@ function columnsFor(staleAfter: number, maxDays: number): Column<OpenPosition>[]
       header: "Position",
       cell: (p) => (
         <div className="min-w-[9rem]">
-          <p className="font-semibold text-[#1a3a4a]">{p.title}</p>
-          <p className="text-xs text-[#006496]/60">
+          <p className="font-semibold text-md-ink">{p.title}</p>
+          <p className="text-xs text-md-ink-soft">
             {[p.department, p.unit].filter(Boolean).join(" · ") || "No department"}
           </p>
         </div>
@@ -30,11 +30,11 @@ function columnsFor(staleAfter: number, maxDays: number): Column<OpenPosition>[]
       cell: (p) => (
         <div className="min-w-[9rem]" data-testid={`position-age-${p.id}`}>
           <div className="flex items-baseline justify-between gap-2">
-            <span className="font-bold tabular-nums text-[#1a3a4a]">{daysText(p.daysOpen)}</span>
+            <span className="font-bold tabular-nums text-md-ink">{daysText(p.daysOpen)}</span>
             {p.stale && <Chip tone="red">Stale</Chip>}
           </div>
           <AgeBarView days={p.daysOpen} staleAfter={staleAfter} maxDays={maxDays} />
-          <p className="mt-0.5 text-[11px] text-[#006496]/55">Posted {dayShort(p.postedOn)}</p>
+          <p className="mt-1 text-[11px] text-md-ink-soft">Posted {dayShort(p.postedOn)}</p>
         </div>
       ),
       sortValue: (p) => p.daysOpen,
@@ -44,7 +44,7 @@ function columnsFor(staleAfter: number, maxDays: number): Column<OpenPosition>[]
       header: "Applicants",
       cell: (p) => (
         <div className="min-w-[6rem]">
-          <p className="mb-1 font-bold tabular-nums text-[#1a3a4a]">{num(p.applicants)}</p>
+          <p className="mb-1.5 font-bold tabular-nums text-md-ink">{num(p.applicants)}</p>
           <MixBar mix={p.stageMix} />
         </div>
       ),
@@ -96,14 +96,20 @@ export default function PositionsSection({ query }: { query: QueryLike<Recruitme
                   pageSize={6}
                 />
                 {data.positionsShown < data.summary.open && (
-                  <p className="mt-2 text-[11px] text-[#006496]/60">
+                  <p className="mt-2 text-[11px] text-md-ink-soft">
                     The {data.positionsShown} oldest of {data.summary.open} positions are listed.
                   </p>
                 )}
-                <p className="mt-3 text-[11px] text-[#006496]/60" data-testid="md-recruitment-time-to-fill-note">
-                  The system does not record when a position is filled, so the age of positions still open is shown
-                  instead of time to fill.
-                </p>
+                <div className="mt-4 space-y-2 border-t border-md-line pt-3">
+                  <MixKey />
+                  <p
+                    className="text-[11px] leading-snug text-md-ink-soft"
+                    data-testid="md-recruitment-time-to-fill-note"
+                  >
+                    The system does not record when a position is filled, so the age of positions still open is shown
+                    instead of time to fill.
+                  </p>
+                </div>
               </>
             ))}
         </SectionCard>
@@ -141,7 +147,15 @@ export default function PositionsSection({ query }: { query: QueryLike<Recruitme
                 <Expandable items={gapItems}>
                   {(shown) => <BarList testId="md-recruitment-gap-list" items={shown} />}
                 </Expandable>
-                <p className="mt-4 text-[11px] text-[#006496]/60">
+                <ul className="md-people-key mt-4" aria-label="Bar colours">
+                  {GAP_KEY.map((k) => (
+                    <li key={k.label}>
+                      <i style={{ background: k.color }} aria-hidden="true" />
+                      {k.label}
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-[11px] leading-snug text-md-ink-soft">
                   {gap.departmentsTotal - (gap.departmentsWithGap ?? 0)} of {gap.departmentsTotal} planned departments
                   are at or above their plan. Shortfalls are not offset by another department's surplus.
                 </p>

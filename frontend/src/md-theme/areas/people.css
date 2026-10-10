@@ -1,0 +1,448 @@
+/* MD portal skin, area: people. Owned by the designer of that area (md-portal.md section 11.4). Every selector here must start
+   with an .md-* class of your own (name them md-people-*) or with html[data-md-theme]; md-theme.test.ts checks. Use the palette
+   tokens (var(--md-wine-700) ...), never a hex colour. */
+
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   People: Recruitment and Activity Logs.
+
+   What is here is what the shared glass classes (glass.css) do not already give a card's INSIDE: the overline, the initials
+   avatar, the funnel, the meters (open-for-N-days, applicants), the outlook tiles, the filter pills, the severity tiles
+   and the feed rows. The surfaces themselves (md-card, md-panel*), buttons (md-btn*), chips (md-chip*) and segmented
+   switches (md-seg*) come from glass.css. Blur stays on the cards: everything here is a tint, a hairline or a shadow.
+   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* ── type ─────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* the small caps label above a list inside a card ("Serving notice", "Failed attempts") */
+.md-people-overline {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--md-ink-600);
+}
+
+/* a figure: tabular so a column of them lines up */
+.md-people-figure {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* ── the initials avatar (the letters are drawn by CSS from data-initials, so a screen reader and a text search see only the name) ── */
+
+.md-people-avatar {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 9999px;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  color: var(--md-wine-700);
+  background: linear-gradient(135deg, var(--md-wine-100) 0%, var(--md-sand) 100%);
+  border: 1px solid rgba(127, 1, 31, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+.md-people-avatar::before {
+  content: attr(data-initials);
+}
+.md-people-avatar-ink {
+  color: var(--md-ink-800);
+  background: linear-gradient(135deg, var(--md-ink-100) 0%, var(--md-vanilla) 100%);
+  border-color: rgba(40, 43, 74, 0.16);
+}
+.md-people-avatar-sm {
+  width: 1.75rem;
+  height: 1.75rem;
+  font-size: 0.625rem;
+}
+
+/* ── the funnel ───────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* a step: its number, its label and count on the left, its bar on the right */
+.md-people-funnel {
+  counter-reset: md-people-step;
+}
+.md-people-step-no {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.375rem;
+  height: 1.375rem;
+  border-radius: 9999px;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  color: var(--md-wine-700);
+  background: rgba(127, 1, 31, 0.08);
+  border: 1px solid rgba(127, 1, 31, 0.16);
+}
+.md-people-step-no[data-kind="pipeline"]::before {
+  counter-increment: md-people-step;
+  content: counter(md-people-step);
+}
+.md-people-step-no[data-kind="records"] {
+  color: var(--md-ink-700);
+  background: rgba(40, 43, 74, 0.07);
+  border-color: rgba(40, 43, 74, 0.18);
+}
+
+/* the track the bar sits in: a sand groove, so a short bar still reads against what it could have been */
+.md-people-funnel-track {
+  height: 2.5rem;
+  padding: 3px;
+  border-radius: 0.95rem;
+  background: linear-gradient(180deg, rgba(245, 235, 208, 0.72), rgba(238, 235, 218, 0.55));
+  border: 1px solid rgba(184, 130, 32, 0.16);
+  box-shadow: inset 0 1px 2px rgba(40, 43, 74, 0.08);
+}
+/* the bar: the colour is set inline from the wine ramp (light at the top of the funnel, dark at the bottom); the sheen and
+   the edge make it glass */
+.md-people-funnel-bar {
+  position: relative;
+  height: 100%;
+  margin-inline: auto;
+  overflow: hidden;
+  border-radius: 0.7rem;
+  border: 1px solid rgba(127, 1, 31, 0.22);
+  box-shadow:
+    0 8px 16px -8px rgba(127, 1, 31, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  transition: width 0.5s ease-out;
+}
+.md-people-funnel-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.4) 0%, rgba(255, 255, 255, 0) 58%);
+  pointer-events: none;
+}
+/* "joined" is counted from the employee records, not from the candidate pipeline: indigo and dashed, so it is not
+   mistaken for the next step of the funnel */
+.md-people-funnel-bar[data-standalone="true"] {
+  background: rgba(40, 43, 74, 0.1);
+  border: 2px dashed var(--md-ink-500);
+  box-shadow: none;
+}
+.md-people-funnel-bar[data-standalone="true"]::after {
+  display: none;
+}
+.md-people-funnel-empty {
+  display: flex;
+  height: 2.5rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.95rem;
+  border: 1px dashed rgba(40, 43, 74, 0.28);
+  background: rgba(255, 255, 255, 0.35);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--md-ink-600);
+}
+
+/* ── meters: a thin track and a fill (open for N days, the applicants of a position) ──────────────────────────────── */
+
+.md-people-meter {
+  position: relative;
+  height: 0.5rem;
+  border-radius: 9999px;
+  background: rgba(40, 43, 74, 0.09);
+  box-shadow: inset 0 1px 1px rgba(40, 43, 74, 0.08);
+}
+.md-people-meter-fill {
+  height: 100%;
+  border-radius: inherit;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  transition: width 0.5s ease-out;
+}
+/* the tick where "stale" begins */
+.md-people-meter-tick {
+  position: absolute;
+  top: -3px;
+  width: 2px;
+  height: 14px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--md-ink-500);
+  opacity: 0.6;
+}
+/* the applicants bar: its segments are separated by a hair of the track */
+.md-people-meter-mix {
+  display: flex;
+  gap: 1px;
+  overflow: hidden;
+}
+.md-people-meter-mix > i {
+  display: block;
+  height: 100%;
+  min-width: 3px;
+}
+
+/* the colour key under a table or chart: a dot and a word, in a row */
+.md-people-key {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 1rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--md-ink-600);
+}
+.md-people-key > li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.md-people-key > li > i {
+  display: block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+}
+
+/* ── a chip for "information" (periwinkle): the glass chips have wine, ink, sand and the three statuses ────────────── */
+
+.md-people-chip-info {
+  color: var(--md-info-700);
+  background: rgba(228, 229, 245, 0.85);
+  border-color: rgba(85, 89, 171, 0.26);
+}
+
+/* ── the outlook tiles ("next 30 days", "next 60 days") ───────────────────────────────────────────────────────────── */
+
+.md-people-outlook {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 1rem 1.1rem;
+}
+.md-people-outlook-figure {
+  font-size: 2.125rem;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--md-wine-700);
+}
+.md-people-outlook[data-tone="ink"] .md-people-outlook-figure {
+  color: var(--md-ink-800);
+}
+
+/* ── a list row (people who are serving notice, a security signal) ────────────────────────────────────────────────── */
+
+.md-people-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.5rem;
+  margin-inline: -0.5rem;
+  border-radius: 0.85rem;
+  transition: background 0.18s ease;
+}
+.md-people-row:hover {
+  background: rgba(255, 255, 255, 0.6);
+}
+/* the hairline between two rows is drawn inside the row's own width, so it does not curl with the hover background */
+.md-people-row + .md-people-row::after,
+.md-people-feed-row + .md-people-feed-row::after {
+  content: "";
+  position: absolute;
+  left: 0.5rem;
+  right: 0.5rem;
+  top: 0;
+  height: 1px;
+  background: var(--md-line);
+}
+
+/* ── pills: a filter that is on or off (the categories of the feed, the "only this person" filter) ─────────────────── */
+
+.md-people-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2rem;
+  padding: 0.3rem 0.9rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--md-ink-700);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.84) 0%, rgba(255, 255, 255, 0.5) 100%);
+  border: 1px solid rgba(40, 43, 74, 0.14);
+  box-shadow:
+    0 6px 14px -8px rgba(40, 43, 74, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.2s ease,
+    background 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease;
+}
+.md-people-pill:hover {
+  transform: translateY(-1px);
+  color: var(--md-wine-700);
+  border-color: rgba(127, 1, 31, 0.36);
+}
+.md-people-pill:active {
+  transform: translateY(0) scale(0.98);
+}
+.md-people-pill:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 2px;
+}
+/* on: wine glass, like the chosen item of a segmented switch */
+.md-people-pill:where([aria-pressed="true"], .is-on) {
+  color: white;
+  background: linear-gradient(135deg, rgba(127, 1, 31, 0.97) 0%, rgba(176, 41, 74, 0.9) 100%);
+  border-color: rgba(255, 255, 255, 0.3);
+  box-shadow:
+    0 10px 22px -8px rgba(127, 1, 31, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+.md-people-pill:where([aria-pressed="true"], .is-on):hover {
+  color: white;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+.md-people-pill-count {
+  padding: 0.05rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--md-wine-700);
+  background: rgba(127, 1, 31, 0.1);
+}
+.md-people-pill:where([aria-pressed="true"], .is-on) .md-people-pill-count {
+  color: white;
+  background: rgba(255, 255, 255, 0.26);
+}
+
+/* ── severity tiles and the feed ──────────────────────────────────────────────────────────────────────────────────── */
+
+/* the square icon tile of a feed row, tinted by how serious the action is (the severity is also written in the chip) */
+.md-people-tile {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.85rem;
+  color: var(--md-ink-700);
+  background: linear-gradient(135deg, rgba(40, 43, 74, 0.1), rgba(40, 43, 74, 0.04));
+  border: 1px solid rgba(40, 43, 74, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+.md-people-tile[data-tone="critical"] {
+  color: var(--md-danger-700);
+  background: linear-gradient(135deg, var(--md-danger-100), var(--md-danger-50));
+  border-color: rgba(183, 45, 51, 0.24);
+}
+.md-people-tile[data-tone="high"] {
+  color: var(--md-warning-700);
+  background: linear-gradient(135deg, var(--md-warning-100), var(--md-warning-50));
+  border-color: rgba(185, 130, 32, 0.3);
+}
+.md-people-tile[data-tone="medium"] {
+  color: var(--md-info-700);
+  background: linear-gradient(135deg, var(--md-info-100), var(--md-info-50));
+  border-color: rgba(85, 89, 171, 0.24);
+}
+
+/* a line of the activity feed: quiet until it is hovered, with a thin bar on the left when it matters */
+.md-people-feed-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.8rem;
+  padding: 0.8rem 0.5rem;
+  margin-inline: -0.5rem;
+  border-radius: 1rem;
+  transition: background 0.18s ease;
+}
+.md-people-feed-row:hover {
+  background: rgba(255, 255, 255, 0.62);
+}
+.md-people-feed-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.9rem;
+  bottom: 0.9rem;
+  width: 3px;
+  border-radius: 3px;
+  background: transparent;
+}
+.md-people-feed-row[data-severity="critical"]::before {
+  background: var(--md-danger-500);
+}
+.md-people-feed-row[data-severity="high"]::before {
+  background: var(--md-warning-400);
+}
+.md-people-feed-row[data-severity="medium"]::before {
+  background: var(--md-info-300);
+}
+
+/* ── one figure with a caption inside a card (the sign-ins strip) ─────────────────────────────────────────────────── */
+
+.md-people-mini {
+  padding: 0.8rem 1rem;
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(40, 43, 74, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+.md-people-mini[data-tone="bad"] {
+  background: linear-gradient(135deg, rgba(250, 221, 219, 0.6), rgba(253, 241, 240, 0.6));
+  border-color: rgba(183, 45, 51, 0.24);
+}
+.md-people-mini[data-tone="good"] {
+  background: linear-gradient(135deg, rgba(220, 238, 225, 0.6), rgba(240, 247, 242, 0.6));
+  border-color: rgba(51, 112, 73, 0.22);
+}
+
+/* a one-line finding under a chart: an icon and a sentence on a quiet tinted panel (use it with md-panel-wine or md-panel-sand) */
+.md-people-callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.75rem 1rem;
+}
+
+/* ── small screens: tap targets of 36px, nothing wider than the card ─────────────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  .md-people-pill {
+    min-height: 2.25rem;
+  }
+  .md-people-row {
+    flex-wrap: wrap;
+  }
+  .md-people-outlook-figure {
+    font-size: 1.75rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .md-people-pill,
+  .md-people-row,
+  .md-people-feed-row,
+  .md-people-funnel-bar,
+  .md-people-meter-fill {
+    transition: none;
+  }
+  .md-people-pill:hover {
+    transform: none;
+  }
+}

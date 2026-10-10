@@ -150,7 +150,7 @@ export function kpiTiles(summary: EmployeesSummary, movement?: EmployeesMovement
       sub: tenure.unknown > 0 ? `${num(tenure.unknown)} without a usable join date` : "Length of service",
       note: versus,
       delta: changeDelta(tenure.change, "years", true),
-      tone: "teal",
+      tone: "blue",
       icon: "tenure",
       provenanceIds: ["tenure"],
     },
@@ -240,23 +240,24 @@ export function headcountDomain(rows: { headcount: number }[]): [number, number]
   return [Math.max(0, low - pad), high + pad];
 }
 
-const KIND_COLOR: Record<string, string> = { staff: CHART.brand, production: CHART.warn, other: CHART.slate };
+const KIND_COLOR: Record<string, string> = { staff: CHART.brand, production: CHART.deep, other: CHART.slate };
 
 export function typeSlices(rows: KeyedShareRow[]): DonutSlice[] {
   return rows.map((r) => ({ name: r.label, value: r.count, color: KIND_COLOR[r.key] }));
 }
 
 const GENDER_COLOR: Record<string, string> = {
-  male: CHART.brand,
-  female: CHART.leave,
-  other: CHART.teal,
+  male: CHART.deep,
+  female: CHART.brand,
+  other: CHART.series[5],
   unspecified: CHART.slate,
 };
 
 export const genderSlices = (rows: KeyedShareRow[]): DonutSlice[] =>
   rows.map((r) => ({ name: r.label, value: r.count, color: GENDER_COLOR[r.key] }));
 
-const REASON_COLOR: Record<string, string> = { other: CHART.slate, none: "#cbd5e1" };
+/** The vague reasons are grey: "other" the palette's grey, "no reason given" a lighter one (a CSS variable: a chart fill accepts it). */
+const REASON_COLOR: Record<string, string> = { other: CHART.slate, none: "var(--md-ink-200)" };
 
 export function reasonSlices(rows: KeyedShareRow[]): DonutSlice[] {
   return rows.map((r, i) => ({

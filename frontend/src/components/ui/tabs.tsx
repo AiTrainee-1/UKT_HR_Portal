@@ -12,6 +12,7 @@ const TabsList = React.forwardRef<
   <TabsPrimitive.List
     ref={ref}
     className={cn("clay-tabs-list", className)}
+    data-slot="tabs-list"
     {...props}
   />
 ))
@@ -24,6 +25,7 @@ const TabsTrigger = React.forwardRef<
   <TabsPrimitive.Trigger
     ref={ref}
     className={cn("clay-tabs-trigger", className)}
+    data-slot="tabs-trigger"
     {...props}
   />
 ))
@@ -39,6 +41,7 @@ const TabsContent = React.forwardRef<
       "mt-2 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
       className
     )}
+    data-slot="tabs-content"
     {...props}
   />
 ))

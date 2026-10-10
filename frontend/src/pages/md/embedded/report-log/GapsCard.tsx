@@ -36,25 +36,19 @@ export default function GapsCard({ query, ask }: { query: UseQueryResult<RlGaps>
             rowHeaderWidth={110}
             testId="md-reportlog-gaps-grid"
           />
-          <p className="mt-3 text-xs text-[#006496]/70" data-testid="md-reportlog-gaps-text">
+          <p className="md-analytics-note" data-testid="md-reportlog-gaps-text">
             {gapText(gaps)}
           </p>
           {gaps.gapDays.length > 0 && (
-            <ul className="mt-2 flex flex-wrap gap-1.5" data-testid="md-reportlog-gap-days">
+            <ul className="mt-3 flex flex-wrap gap-2" data-testid="md-reportlog-gap-days">
               {gaps.gapDays.slice(-12).map((d) => (
-                <li
-                  key={d.date}
-                  className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-900"
-                  data-testid={`md-reportlog-gap-${d.date}`}
-                >
+                <li key={d.date} className="md-chip md-chip-warning" data-testid={`md-reportlog-gap-${d.date}`}>
                   {d.weekday} {dayLong(d.date)}: {num(d.absences)} absences, none marked
                 </li>
               ))}
             </ul>
           )}
-          {gaps.truncated && (
-            <p className="mt-1 text-[11px] text-[#006496]/55">Showing the latest days of the period only.</p>
-          )}
+          {gaps.truncated && <p className="md-analytics-note">Showing the latest days of the period only.</p>}
         </>
       ) : gaps ? (
         <EmptyBlock title="No absences to follow up" testId="md-reportlog-gaps-empty">

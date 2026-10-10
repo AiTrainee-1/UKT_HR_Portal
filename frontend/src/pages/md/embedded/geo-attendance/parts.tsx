@@ -14,11 +14,11 @@ export function refreshingClass(...queries: UseQueryResult<unknown>[]): string {
   return refreshing ? "opacity-60 transition-opacity" : "transition-opacity";
 }
 
-/** The small grey tag next to a group whose figures rest on too few sessions to rank. */
+/** The small neutral tag next to a group whose figures rest on too few sessions to rank. */
 export function SmallSample() {
   return (
     <span
-      className="ml-1.5 rounded-full bg-slate-100 px-1.5 py-0.5 align-middle text-[9.5px] font-semibold text-slate-500"
+      className="md-chip md-analytics-tone-neutral md-analytics-chip-sm ml-1.5 align-middle"
       title="Fewer sessions than it takes to rank this group: read the figures with care."
     >
       small sample

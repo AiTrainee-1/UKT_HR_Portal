@@ -31,6 +31,7 @@ export function ActionTooltip({
     >
       {children}
       <span
+        data-slot="action-tooltip-label"
         className="pointer-events-none absolute bottom-full left-1/2 whitespace-nowrap rounded-md px-2.5 py-1 text-[11px] font-bold text-white shadow-lg"
         style={{
           marginBottom: 8,

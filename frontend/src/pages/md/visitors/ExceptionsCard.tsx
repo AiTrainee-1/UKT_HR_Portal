@@ -4,7 +4,6 @@ import AskAiButton from "@/components/md/kit/AskAiButton";
 import DataTable, { type Column } from "@/components/md/kit/DataTable";
 import SectionCard from "@/components/md/kit/SectionCard";
 import { ErrorBanner } from "@/components/md/kit/states";
-import { PillTabs } from "@/components/ui/pill-tabs";
 import { describeMdError } from "@/lib/api-client/custom-hooks/md";
 import { minutesText, num } from "@/lib/md/format";
 import {
@@ -17,6 +16,7 @@ import {
   waitText,
   type ExceptionTab,
 } from "./logic";
+import SegTabs from "../embedded/shared/SegTabs";
 import { Chip, PersonCell } from "./parts";
 import type {
   AfterHoursVisit,
@@ -69,9 +69,9 @@ const notReturnedColumns: Column<NotReturnedRow>[] = [
       <div>
         <p>{stampText(r.exitedAt)}</p>
         {r.state === "outside_now" && r.minutesOutsideSoFar != null && (
-          <p className="text-[11px] text-[#006496]/60">out for {minutesText(r.minutesOutsideSoFar)} so far</p>
+          <p className="text-[11px] text-md-ink-soft">out for {minutesText(r.minutesOutsideSoFar)} so far</p>
         )}
-        {r.state === "not_returned" && <p className="text-[11px] text-[#006496]/60">{daysAgoText(r.daysAgo)}</p>}
+        {r.state === "not_returned" && <p className="text-[11px] text-md-ink-soft">{daysAgoText(r.daysAgo)}</p>}
       </div>
     ),
     sortValue: (r) => r.exitedAt,
@@ -86,7 +86,7 @@ const longColumns: Column<LongOutpassRow>[] = [
     key: "minutes",
     header: "Time out",
     align: "right",
-    cell: (r) => <span className="font-semibold text-red-700">{minutesText(r.minutes)}</span>,
+    cell: (r) => <span className="font-semibold text-md-danger">{minutesText(r.minutes)}</span>,
     sortValue: (r) => r.minutes,
   },
   { key: "type", header: "Kind of pass", cell: (r) => r.passTypeLabel },
@@ -99,7 +99,7 @@ const waitingColumns: Column<WaitingRow>[] = [
   {
     key: "wait",
     header: "Waiting",
-    cell: (r) => <span className="font-semibold text-red-700">{waitText(r.waitingMinutes)}</span>,
+    cell: (r) => <span className="font-semibold text-md-danger">{waitText(r.waitingMinutes)}</span>,
     sortValue: (r) => r.waitingMinutes,
   },
   { key: "asked", header: "Asked at", cell: (r) => stampText(r.requestedAt) },
@@ -208,10 +208,10 @@ export default function ExceptionsCard({ query }: { query: UseQueryResult<Except
         <ErrorBanner message={describeMdError(query.error)} onRetry={() => query.refetch()} />
       ) : (
         <div className="space-y-3">
-          <div className="max-w-full overflow-x-auto pb-1" data-testid="md-visitors-exception-tabs">
-            <PillTabs size="sm" items={tabs} value={tab} onChange={(v) => setTab(v as ExceptionTab)} />
+          <div className="max-w-full" data-testid="md-visitors-exception-tabs">
+            <SegTabs label="Kind of exception" items={tabs} value={tab} onChange={(v) => setTab(v as ExceptionTab)} />
           </div>
-          {note && <p className="text-xs text-[#006496]/60">{note}</p>}
+          {note && <p className="text-xs text-md-ink-soft">{note}</p>}
           {d && <TabTable tab={tab} data={d} />}
         </div>
       )}

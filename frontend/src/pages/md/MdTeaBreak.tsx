@@ -5,7 +5,6 @@ import AskAiButton from "@/components/md/kit/AskAiButton";
 import { FilterBar, PeriodBar, ScopeBar } from "@/components/md/kit/FilterBar";
 import MdPageHeader from "@/components/md/kit/MdPageHeader";
 import { ErrorBanner } from "@/components/md/kit/states";
-import { PillTabs } from "@/components/ui/pill-tabs";
 import { describeMdError, useMdOrg } from "@/lib/api-client/custom-hooks/md";
 import { usePublishAssistantContext } from "@/lib/md/assistant-store";
 import {
@@ -16,6 +15,7 @@ import {
   type PeriodChoice,
   type ScopeChoice,
 } from "@/lib/md/period";
+import SegTabs from "./embedded/shared/SegTabs";
 import AttentionCard from "./tea-break/AttentionCard";
 import BreakdownCard from "./tea-break/BreakdownCard";
 import CoverageNote from "./tea-break/CoverageNote";
@@ -90,8 +90,8 @@ export default function MdTeaBreak() {
             nameHeader={GROUP_TABS.find((t) => t.value === by)?.header ?? "Group"}
             tabs={
               <div data-testid="md-tea-break-group-tabs">
-                <PillTabs
-                  size="sm"
+                <SegTabs
+                  label="Group by"
                   items={GROUP_TABS.map((t) => ({ value: t.value, label: t.label }))}
                   value={by}
                   onChange={(v) => setBy(v as GroupBy)}

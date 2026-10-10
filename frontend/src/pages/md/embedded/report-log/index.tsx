@@ -1,11 +1,8 @@
 import { useState } from "react";
-import { Sparkles } from "lucide-react";
 import { useBrief, pageQuestion } from "@/components/md/embedded/brief";
-import AskAiButton from "@/components/md/kit/AskAiButton";
 import { FilterBar, PeriodBar, ScopeBar } from "@/components/md/kit/FilterBar";
 import { ErrorBanner, NoteBanner } from "@/components/md/kit/states";
 import { kpiDelta, kpiValueText, sortInsights } from "@/components/md/kit/dto";
-import { PillTabs } from "@/components/ui/pill-tabs";
 import { describeMdError, useMdOrg } from "@/lib/api-client/custom-hooks/md";
 import { usePublishAssistantContext } from "@/lib/md/assistant-store";
 import {
@@ -16,7 +13,8 @@ import {
   type PeriodChoice,
   type ScopeChoice,
 } from "@/lib/md/period";
-import { cn } from "@/lib/utils";
+import { StripFigure, StripInsights, StripNote, StripShell } from "../shared/InsightStrip";
+import SegTabs from "../shared/SegTabs";
 import AttentionCard from "./AttentionCard";
 import BriefingCard from "./BriefingCard";
 import CompareCard from "./CompareCard";
@@ -88,8 +86,8 @@ export default function ReportLogInsights() {
         ask={ask.groups}
         nameHeader={GROUP_TABS.find((t) => t.value === by)?.header ?? "Group"}
         tabs={
-          <PillTabs
-            size="sm"
+          <SegTabs
+            label="Group by"
             items={GROUP_TABS.map((t) => ({ value: t.value, label: t.label }))}
             value={by}
             onChange={(v) => setBy(v as GroupBy)}
@@ -120,8 +118,6 @@ export default function ReportLogInsights() {
   );
 }
 
-const TONE: Record<string, string> = { good: "text-green-700", bad: "text-red-700", neutral: "text-[#006496]/70" };
-
 /**
  * The strip above the Report Log page, always visible: how much of the last week's absences were followed up, how many were
  * not informed, the attendance report exports on record, the top exceptions with Explain, and the one thing to remember
@@ -134,58 +130,28 @@ export function Strip() {
 
   if (brief.isError || (!brief.isLoading && kpis.length === 0 && insights.length === 0)) return null;
   return (
-    <div
-      className="mb-4 rounded-2xl border border-[#e0a83a]/30 bg-gradient-to-r from-[#fffaf0] to-white p-3.5 shadow-sm"
-      data-testid="md-reportlog-strip"
+    <StripShell
+      testId="md-reportlog-strip"
+      question={pageQuestion("Report Log")}
+      loading={brief.isLoading}
+      below={
+        <>
+          <StripInsights items={insights} testId="md-reportlog-strip-insights" />
+          <p className="md-analytics-strip-caveat" data-testid="md-reportlog-strip-caveat">
+            Exports made from this page (Excel, PDF, image) are produced in the browser and are not recorded, so the
+            export figures cover Report Center and Attendance Search exports only.
+          </p>
+        </>
+      }
     >
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <span className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-widest text-[#b8801c]">
-          <Sparkles size={13} /> MD insights
-        </span>
-        {brief.isLoading && <span className="text-xs text-muted-foreground">Working out the figures…</span>}
-        {kpis.map((kpi) => {
-          const delta = kpiDelta(kpi);
-          return (
-            <span key={kpi.id} className="flex items-baseline gap-1.5 text-sm" data-testid={`strip-kpi-${kpi.id}`}>
-              <span className="text-xs text-muted-foreground">{kpi.label}</span>
-              <b className="font-black text-gray-900">{kpiValueText(kpi)}</b>
-              {delta && (
-                <span className={cn("text-[11px] font-semibold", TONE[delta.tone] ?? TONE.neutral)}>{delta.text}</span>
-              )}
-            </span>
-          );
-        })}
-        <span className="ml-auto">
-          <AskAiButton question={pageQuestion("Report Log")} label="Ask AI about this page" />
-        </span>
-      </div>
-      {insights.length > 0 && (
-        <ul className="mt-2.5 space-y-1" data-testid="md-reportlog-strip-insights">
-          {insights.map((item) => (
-            <li key={item.id} className="flex items-start gap-2 text-[13px] text-gray-800">
-              <span
-                className={cn(
-                  "mt-1.5 h-2 w-2 shrink-0 rounded-full",
-                  item.severity === "critical"
-                    ? "bg-red-500"
-                    : item.severity === "warning"
-                      ? "bg-amber-500"
-                      : "bg-blue-500",
-                )}
-              />
-              <span className="min-w-0 flex-1">
-                <b className="font-semibold">{item.title}</b>
-                {item.detail && <span className="text-muted-foreground"> — {item.detail}</span>}
-              </span>
-              {item.ask && <AskAiButton question={item.ask} label="Explain" />}
-            </li>
-          ))}
-        </ul>
-      )}
-      <p className="mt-2 text-[11px] text-[#006496]/60" data-testid="md-reportlog-strip-caveat">
-        Exports made from this page (Excel, PDF, image) are produced in the browser and are not recorded, so the export
-        figures cover Report Center and Attendance Search exports only.
-      </p>
-    </div>
+      {kpis.map((kpi) => {
+        const delta = kpiDelta(kpi);
+        return (
+          <StripFigure key={kpi.id} testId={`strip-kpi-${kpi.id}`} label={kpi.label} value={kpiValueText(kpi)}>
+            {delta && <StripNote tone={delta.tone}>{delta.text}</StripNote>}
+          </StripFigure>
+        );
+      })}
+    </StripShell>
   );
 }

@@ -1,11 +1,9 @@
 import { useState } from "react";
-import { Radio, Sparkles } from "lucide-react";
+import { Radio } from "lucide-react";
 import { useBrief, pageQuestion } from "@/components/md/embedded/brief";
-import AskAiButton from "@/components/md/kit/AskAiButton";
 import { FilterBar, PeriodBar, ScopeBar } from "@/components/md/kit/FilterBar";
 import { ErrorBanner, NoteBanner } from "@/components/md/kit/states";
 import { kpiValueText, sortInsights } from "@/components/md/kit/dto";
-import { PillTabs } from "@/components/ui/pill-tabs";
 import { describeMdError, useMdOrg, useMdQuery } from "@/lib/api-client/custom-hooks/md";
 import { usePublishAssistantContext } from "@/lib/md/assistant-store";
 import {
@@ -17,6 +15,8 @@ import {
   type ScopeChoice,
 } from "@/lib/md/period";
 import { cn } from "@/lib/utils";
+import { StripFigure, StripInsights, StripNote, StripShell } from "../shared/InsightStrip";
+import SegTabs from "../shared/SegTabs";
 import AttentionCard from "./AttentionCard";
 import BriefingCard from "./BriefingCard";
 import CompareCard from "./CompareCard";
@@ -94,8 +94,8 @@ export default function GeoInsights() {
         ask={ask.groups}
         nameHeader={GROUP_TABS.find((t) => t.value === by)?.header ?? "Group"}
         tabs={
-          <PillTabs
-            size="sm"
+          <SegTabs
+            label="Group by"
             items={GROUP_TABS.map((t) => ({ value: t.value, label: t.label }))}
             value={by}
             onChange={(v) => setBy(v as GroupBy)}
@@ -147,63 +147,28 @@ export function Strip() {
     return null;
   }
   return (
-    <div
-      className="mb-4 rounded-2xl border border-[#e0a83a]/30 bg-gradient-to-r from-[#fffaf0] to-white p-3.5 shadow-sm"
-      data-testid="md-geo-strip"
+    <StripShell
+      testId="md-geo-strip"
+      question={pageQuestion("Geo Attendance")}
+      loading={brief.isLoading || live.isLoading}
+      below={<StripInsights items={insights} testId="md-geo-strip-insights" />}
     >
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <span className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-widest text-[#b8801c]">
-          <Sparkles size={13} /> MD insights
-        </span>
-        {(brief.isLoading || live.isLoading) && (
-          <span className="text-xs text-muted-foreground">Working out the figures…</span>
-        )}
-        {now && (
-          <span className="flex items-baseline gap-1.5 text-sm" data-testid="md-geo-strip-now">
-            <Radio size={13} className={cn("self-center", now.onDutyNow > 0 ? "text-green-600" : "text-slate-400")} />
-            <span className="text-xs text-muted-foreground">On duty now</span>
-            <b className="font-black text-gray-900">{now.onDutyNow}</b>
-            {now.awaitingApproval > 0 && (
-              <span className="text-[11px] font-semibold text-amber-700">{now.awaitingApproval} awaiting approval</span>
-            )}
-            {now.leftOpen > 0 && (
-              <span className="text-[11px] font-semibold text-red-700">{now.leftOpen} left open</span>
-            )}
-          </span>
-        )}
-        {kpis.map((kpi) => (
-          <span key={kpi.id} className="flex items-baseline gap-1.5 text-sm" data-testid={`strip-kpi-${kpi.id}`}>
-            <span className="text-xs text-muted-foreground">{kpi.label}</span>
-            <b className="font-black text-gray-900">{kpiValueText(kpi)}</b>
-          </span>
-        ))}
-        <span className="ml-auto">
-          <AskAiButton question={pageQuestion("Geo Attendance")} label="Ask AI about this page" />
-        </span>
-      </div>
-      {insights.length > 0 && (
-        <ul className="mt-2.5 space-y-1" data-testid="md-geo-strip-insights">
-          {insights.map((item) => (
-            <li key={item.id} className="flex items-start gap-2 text-[13px] text-gray-800">
-              <span
-                className={cn(
-                  "mt-1.5 h-2 w-2 shrink-0 rounded-full",
-                  item.severity === "critical"
-                    ? "bg-red-500"
-                    : item.severity === "warning"
-                      ? "bg-amber-500"
-                      : "bg-blue-500",
-                )}
-              />
-              <span className="min-w-0 flex-1">
-                <b className="font-semibold">{item.title}</b>
-                {item.detail && <span className="text-muted-foreground"> — {item.detail}</span>}
-              </span>
-              {item.ask && <AskAiButton question={item.ask} label="Explain" />}
-            </li>
-          ))}
-        </ul>
+      {now && (
+        <StripFigure
+          testId="md-geo-strip-now"
+          label="On duty now"
+          value={now.onDutyNow}
+          icon={
+            <Radio size={14} className={cn("self-center", now.onDutyNow > 0 ? "text-md-success" : "text-md-ink-400")} />
+          }
+        >
+          {now.awaitingApproval > 0 && <StripNote tone="watch">{now.awaitingApproval} awaiting approval</StripNote>}
+          {now.leftOpen > 0 && <StripNote tone="bad">{now.leftOpen} left open</StripNote>}
+        </StripFigure>
       )}
-    </div>
+      {kpis.map((kpi) => (
+        <StripFigure key={kpi.id} testId={`strip-kpi-${kpi.id}`} label={kpi.label} value={kpiValueText(kpi)} />
+      ))}
+    </StripShell>
   );
 }

@@ -126,7 +126,7 @@ export function kpiTiles(summary: GeoSummary, trend?: GeoTrend, verification?: G
       value: summary.participationPct == null ? "—" : pct(summary.participationPct, 0),
       sub: `${num(summary.headcount)} active ${plural(summary.headcount, "employee", "employees")} in the selection`,
       icon: "people",
-      tone: "indigo",
+      tone: "purple",
       delta: deltaChip(m.people.change, "pct", "none"),
       source: "summary",
       provenanceIds: ["geo-sessions"],
@@ -137,7 +137,7 @@ export function kpiTiles(summary: GeoSummary, trend?: GeoTrend, verification?: G
       value: num(punches),
       sub: sessions > 0 ? `${num(punches / sessions, 1)} per session` : "No sessions",
       icon: "punches",
-      tone: "teal",
+      tone: "indigo",
       delta: deltaChip(m.punches.change, "pct", "none"),
       spark: spark("punches"),
       source: "summary",
@@ -190,7 +190,7 @@ export function kpiTiles(summary: GeoSummary, trend?: GeoTrend, verification?: G
           ? `${pct(timing.within24hPct, 0)} decided within a day`
           : "Nothing decided",
       icon: "speed",
-      tone: "purple",
+      tone: "blue",
       delta: deltaChip(m.medianVerifyHours.change, "hours", "down"),
       source: "summary",
       provenanceIds: ["geo-turnaround"],
@@ -312,11 +312,13 @@ export function hasActivity(trend: GeoTrend): boolean {
   return trend.points.some((p) => p.sessions > 0 || p.punches > 0 || p.officePunches > 0);
 }
 
+/** The verdict banner's tone (md-theme/areas/analytics.css): more on-duty work is something to watch, less is information,
+ *  steady and unclear are neither. */
 export const VERDICT_STYLE: Record<Verdict, { label: string; box: string }> = {
-  rising: { label: "Rising", box: "border-amber-200 bg-amber-50 text-amber-900" },
-  falling: { label: "Falling", box: "border-blue-200 bg-blue-50 text-blue-900" },
-  steady: { label: "Steady", box: "border-slate-200 bg-slate-50 text-slate-800" },
-  unclear: { label: "Too early to say", box: "border-slate-200 bg-slate-50 text-slate-700" },
+  rising: { label: "Rising", box: "md-analytics-tone-watch" },
+  falling: { label: "Falling", box: "md-analytics-tone-info" },
+  steady: { label: "Steady", box: "md-analytics-tone-neutral" },
+  unclear: { label: "Too early to say", box: "md-analytics-tone-neutral" },
 };
 
 // ─── verification ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -331,7 +333,7 @@ export function statusSlices(v: Pick<GeoVerification, "punches">): DonutSlice[] 
   ];
 }
 
-const AGE_COLORS = [CHART.good, CHART.warn, "#f97316", CHART.bad];
+const AGE_COLORS = [CHART.good, CHART.gold, CHART.warn, CHART.bad];
 
 /** What is waiting for HR now, by how long it has waited (punches and requests together). */
 export function ageBars(backlog: Pick<Backlog, "ageBuckets">): BarItem[] {
@@ -455,19 +457,21 @@ export function liveChips(live: Pick<GeoLive, "onDutyNow" | "leftOpen" | "awaiti
 
 // ─── unusual sessions ───────────────────────────────────────────────────────────────────────────────────────────
 
+/** The tone of each reason chip: a simulated location is bad, far and long are to watch, the rest are labels. */
 export const REASON_STYLE: Record<ReasonCode, string> = {
-  mocked: "bg-red-100 text-red-800",
-  far: "bg-amber-100 text-amber-800",
-  odd: "bg-slate-100 text-slate-700",
-  long: "bg-amber-100 text-amber-800",
-  stale: "bg-orange-100 text-orange-800",
-  rejected: "bg-purple-100 text-purple-800",
+  mocked: "md-analytics-tone-bad",
+  far: "md-analytics-tone-watch",
+  odd: "md-analytics-tone-neutral",
+  long: "md-analytics-tone-watch",
+  stale: "md-analytics-tone-clay",
+  rejected: "md-analytics-tone-mauve",
 };
 
+/** The tone of the accent bar on an unusual session's row. */
 export const SEVERITY_BAR: Record<"critical" | "warning" | "info", string> = {
-  critical: "border-l-red-500",
-  warning: "border-l-amber-500",
-  info: "border-l-blue-400",
+  critical: "md-analytics-tone-bad",
+  warning: "md-analytics-tone-watch",
+  info: "md-analytics-tone-info",
 };
 
 // ─── the assistant ──────────────────────────────────────────────────────────────────────────────────────────────

@@ -38,7 +38,7 @@ export function AttendanceTrendCard({ query }: { query: TrendsQuery }) {
       actions={
         <AskAiButton question="Is attendance improving or slipping over the last 30 days, and when did it dip?" />
       }
-      className="min-w-0"
+      className="md-dashboard-card min-w-0"
       testId="md-dashboard-trend-attendance"
     >
       {trendError(query, section) ??
@@ -64,11 +64,11 @@ export function AttendanceTrendCard({ query }: { query: TrendsQuery }) {
               }
             />
             <div className="flex flex-wrap gap-2" data-testid="md-dashboard-trend-attendance-chips">
-              <Chip>Average {pct(average?.attendancePct)}</Chip>
+              <Chip className="md-chip-sand">Average {pct(average?.attendancePct)}</Chip>
               <Chip>Absent {pct(average?.absentPct)}</Chip>
               <Chip>Late {pct(average?.latePct)}</Chip>
             </div>
-            {trend?.notes[0] && <p className="text-[11px] text-[#006496]/60">{trend.notes[0]}</p>}
+            {trend?.notes[0] && <p className="text-[11px] leading-snug text-md-ink-soft">{trend.notes[0]}</p>}
           </div>
         ))}
     </SectionCard>
@@ -88,7 +88,7 @@ export function PayrollTrendCard({ query }: { query: TrendsQuery }) {
       provenance={trend?.provenance}
       loading={query.isPending}
       actions={<AskAiButton question="How has payroll cost moved over the last 12 months, and is overtime rising?" />}
-      className="min-w-0"
+      className="md-dashboard-card min-w-0"
       testId="md-dashboard-trend-payroll"
     >
       {trendError(query, section) ??
@@ -114,19 +114,19 @@ export function PayrollTrendCard({ query }: { query: TrendsQuery }) {
                   color: CHART.light,
                   stackId: "gross",
                 },
-                { key: "headcount", label: "People paid", kind: "line", color: CHART.teal, rightAxis: true },
+                { key: "headcount", label: "People paid", kind: "line", color: CHART.deep, rightAxis: true },
               ]}
             />
             <div className="flex flex-wrap gap-2" data-testid="md-dashboard-trend-payroll-chips">
               {latest && (
-                <Chip>
+                <Chip className="md-chip-wine">
                   {latest.label}: {inrCompact(latest.grossPay)}
                 </Chip>
               )}
               {trend?.average != null && <Chip>Average month {inrCompact(trend.average)}</Chip>}
             </div>
             {rows.some((r) => r.grossProvisional != null) && (
-              <p className="text-[11px] text-[#006496]/60">
+              <p className="text-[11px] leading-snug text-md-ink-soft">
                 Lighter bars are months still running, or with slips made before month end: they understate pay.
               </p>
             )}
@@ -145,11 +145,11 @@ export function MovementTrendCard({ query }: { query: TrendsQuery }) {
   return (
     <SectionCard
       title="Joiners and leavers, last 12 months"
-      subtitle="People who joined (green) and left (red) each month"
+      subtitle="People who joined and people who left, month by month"
       provenance={trend?.provenance}
       loading={query.isPending}
       actions={<AskAiButton question="Are we gaining or losing people, and which months were the worst for leavers?" />}
-      className="min-w-0"
+      className="md-dashboard-card min-w-0"
       testId="md-dashboard-trend-movement"
     >
       {trendError(query, section) ??
@@ -172,9 +172,11 @@ export function MovementTrendCard({ query }: { query: TrendsQuery }) {
             />
             <div className="flex flex-wrap gap-2" data-testid="md-dashboard-trend-movement-chips">
               <Chip>{movementSummary(trend.totals)}</Chip>
-              {trend.totals.closing != null && <Chip>Headcount now {num(trend.totals.closing)}</Chip>}
+              {trend.totals.closing != null && (
+                <Chip className="md-chip-ink">Headcount now {num(trend.totals.closing)}</Chip>
+              )}
             </div>
-            <p className="text-[11px] text-[#006496]/60">
+            <p className="text-[11px] leading-snug text-md-ink-soft">
               Past headcount is rebuilt from join and exit dates: the system keeps no headcount history.
             </p>
           </div>

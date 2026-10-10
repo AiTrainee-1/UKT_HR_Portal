@@ -161,7 +161,6 @@ export function PrintButton({ onPrint, disabled }: { onPrint: () => void; disabl
       onClick={onPrint}
       disabled={disabled}
       title="Print this report: every row, with the filters it ran with"
-      className="border-sky-200 bg-sky-50 text-sky-800 hover:bg-sky-100"
       data-testid="report-print"
     >
       <Printer /> Print

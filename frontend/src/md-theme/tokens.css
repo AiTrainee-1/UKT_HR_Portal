@@ -1,0 +1,361 @@
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   The Managing Director portal's palette (2026-10-10). Only the MD portal uses it: every rule that CHANGES how something
+   looks is scoped to  html[data-md-theme]  (set by MdLayout while an MD page is mounted, see lib/md/theme.ts), so the HR
+   portal and everything else keep their own colours. These custom properties are harmless on their own: they are only
+   read by MD code (the md-* utilities and classes) and by the scoped overrides in the sibling files.
+
+   The five colours the product owner chose:
+     WINE RED  #7F011F   brand: primary buttons, active states, links, key figures
+     MIDNIGHT INDIGO #282B4A   ink: text, icons, dark surfaces, secondary buttons
+     LIGHT SAND #F5EBD0 | VANILLA #EEEBDA | ALABASTER #F3EFE7   the backgrounds
+   (ALABASTER was given as "#F3FE7", five digits; #F3EFE7 is the reading used. Change --md-alabaster to change it.)
+
+   Everything else is derived from these: tints and shades of wine and indigo for hover, border and chart colours, and a
+   small set of muted semantic colours (sage for good, ochre for watch, crimson for bad) tuned to sit with them.
+   Text on the light backgrounds: --md-ink-800 (11.9:1), --md-ink-600 for secondary text (6.4:1); never --md-ink-400 for
+   text. White on --md-wine-700 is 10.9:1.
+   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* the five */
+  --md-wine: #7f011f;
+  --md-sand: #f5ebd0;
+  --md-indigo: #282b4a;
+  --md-alabaster: #f3efe7;
+  --md-vanilla: #eeebda;
+
+  /* WINE RED ramp (700 is the brand colour) */
+  --md-wine-50: #fcf1f3;
+  --md-wine-100: #f8e1e6;
+  --md-wine-200: #f0c4cd;
+  --md-wine-300: #e39aa9;
+  --md-wine-400: #d2677c;
+  --md-wine-500: #bc3550;
+  --md-wine-600: #9e1530;
+  --md-wine-700: #7f011f;
+  --md-wine-800: #650119;
+  --md-wine-900: #4f0113;
+  --md-wine-950: #30000b;
+
+  /* MIDNIGHT INDIGO ramp, the "ink" (800 is the brand colour) */
+  --md-ink-50: #f3f3f8;
+  --md-ink-100: #e7e8f0;
+  --md-ink-200: #d0d2e1;
+  --md-ink-300: #b1b4ca;
+  --md-ink-400: #8c8fad;
+  --md-ink-500: #6a6e91;
+  --md-ink-600: #4f5379;
+  --md-ink-700: #3c4064;
+  --md-ink-800: #282b4a;
+  --md-ink-900: #1b1d36;
+  --md-ink-950: #101123;
+
+  /* warm neutrals: the grey scale (borders, muted surfaces, secondary text) with a little sand and indigo in it */
+  --md-n-50: #f9f7f2;
+  --md-n-100: #f2efe6;
+  --md-n-200: #e4e1d8;
+  --md-n-300: #cdcbcb;
+  --md-n-400: #a0a1b3;
+  --md-n-500: #72748f;
+  --md-n-600: #55587a;
+  --md-n-700: #3f4366;
+  --md-n-800: #2a2d4d;
+  --md-n-900: #1d1f3b;
+  --md-n-950: #121329;
+
+  /* periwinkle: the "information" colour (what was blue) */
+  --md-info-50: #f2f2fa;
+  --md-info-100: #e4e5f5;
+  --md-info-200: #caccea;
+  --md-info-300: #a3a7d9;
+  --md-info-400: #787dc3;
+  --md-info-500: #5559ab;
+  --md-info-600: #41448f;
+  --md-info-700: #343774;
+  --md-info-800: #282b4a;
+  --md-info-900: #1c1e36;
+  --md-info-950: #121325;
+
+  /* lighter periwinkle (what was sky) */
+  --md-sky-50: #f4f5fb;
+  --md-sky-100: #e7e9f6;
+  --md-sky-200: #d0d4ee;
+  --md-sky-300: #b1b7e3;
+  --md-sky-400: #8f97d3;
+  --md-sky-500: #6f78bf;
+  --md-sky-600: #5760a6;
+  --md-sky-700: #464e88;
+  --md-sky-800: #383e6b;
+  --md-sky-900: #2b3052;
+  --md-sky-950: #1b1e38;
+
+  /* dusty rose (what was cyan) */
+  --md-rose-50: #fbf3f4;
+  --md-rose-100: #f5e3e6;
+  --md-rose-200: #ebc8ce;
+  --md-rose-300: #dea3ae;
+  --md-rose-400: #cd7a8b;
+  --md-rose-500: #b85670;
+  --md-rose-600: #9e3f5a;
+  --md-rose-700: #823248;
+  --md-rose-800: #66283a;
+  --md-rose-900: #4d202d;
+  --md-rose-950: #2e121b;
+
+  /* sage (what was teal) */
+  --md-sage-50: #f2f6f2;
+  --md-sage-100: #e2ebe3;
+  --md-sage-200: #c6d8c9;
+  --md-sage-300: #a0bea6;
+  --md-sage-400: #77a082;
+  --md-sage-500: #568565;
+  --md-sage-600: #416b4f;
+  --md-sage-700: #355640;
+  --md-sage-800: #2b4534;
+  --md-sage-900: #20352a;
+  --md-sage-950: #122019;
+
+  /* good (what was green) */
+  --md-success-50: #f0f7f2;
+  --md-success-100: #dceee1;
+  --md-success-200: #badec4;
+  --md-success-300: #8fc4a0;
+  --md-success-400: #62a67a;
+  --md-success-500: #428a5d;
+  --md-success-600: #337049;
+  --md-success-700: #2b593c;
+  --md-success-800: #234833;
+  --md-success-900: #1b3828;
+  --md-success-950: #0f2217;
+
+  /* watch (what was amber and yellow): ochre */
+  --md-warning-50: #fbf6e8;
+  --md-warning-100: #f6eac9;
+  --md-warning-200: #edd596;
+  --md-warning-300: #e2ba5c;
+  --md-warning-400: #d49e32;
+  --md-warning-500: #b98220;
+  --md-warning-600: #966719;
+  --md-warning-700: #765017;
+  --md-warning-800: #5a3e16;
+  --md-warning-900: #432f13;
+  --md-warning-950: #281b0a;
+
+  /* bad (what was red): a crimson that cannot be mistaken for the brand wine */
+  --md-danger-50: #fdf1f0;
+  --md-danger-100: #fadddb;
+  --md-danger-200: #f4b9b4;
+  --md-danger-300: #eb8a84;
+  --md-danger-400: #de5e58;
+  --md-danger-500: #ce3d3d;
+  --md-danger-600: #b72d33;
+  --md-danger-700: #961f29;
+  --md-danger-800: #781a25;
+  --md-danger-900: #5c1520;
+  --md-danger-950: #350b12;
+
+  /* terracotta (what was orange) */
+  --md-clay-50: #fbf1ec;
+  --md-clay-100: #f6ddd0;
+  --md-clay-200: #edbba4;
+  --md-clay-300: #e08f6e;
+  --md-clay-400: #d06b44;
+  --md-clay-500: #b8512b;
+  --md-clay-600: #96401f;
+  --md-clay-700: #763319;
+  --md-clay-800: #5b2917;
+  --md-clay-900: #442015;
+  --md-clay-950: #29120b;
+
+  /* mauve (what was violet, purple and fuchsia) */
+  --md-mauve-50: #f8f2f6;
+  --md-mauve-100: #f0e2ea;
+  --md-mauve-200: #e1c5d5;
+  --md-mauve-300: #cc9fb8;
+  --md-mauve-400: #b4779a;
+  --md-mauve-500: #985880;
+  --md-mauve-600: #7d4568;
+  --md-mauve-700: #643756;
+  --md-mauve-800: #4c2b44;
+  --md-mauve-900: #3a2134;
+  --md-mauve-950: #22121e;
+
+  /* the roles, so MD code says what it means (text-md-ink, bg-md-wine/10, ...) */
+  --md-brand: var(--md-wine-700);
+  --md-brand-hover: var(--md-wine-600);
+  --md-ink: var(--md-ink-800);
+  --md-ink-soft: var(--md-ink-600); /* secondary text */
+  --md-line: rgba(40, 43, 74, 0.12); /* hairlines and borders */
+  --md-line-strong: rgba(40, 43, 74, 0.2);
+
+  /* glass: translucent white over the tinted background, blurred, with a light edge and a soft indigo shadow */
+  --md-glass-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.7) 0%, rgba(255, 255, 255, 0.42) 100%);
+  --md-glass-bg-strong: linear-gradient(135deg, rgba(255, 255, 255, 0.88) 0%, rgba(255, 255, 255, 0.64) 100%);
+  --md-glass-edge: rgba(255, 255, 255, 0.75);
+  --md-glass-shadow: 0 12px 36px -10px rgba(40, 43, 74, 0.2), 0 2px 6px rgba(40, 43, 74, 0.05);
+  --md-glass-blur: 18px;
+
+  /* the page: three light backgrounds with soft wine and indigo glows, so the glass has something to blur */
+  --md-page-bg:
+    radial-gradient(880px 560px at 6% -8%, rgba(127, 1, 31, 0.1), transparent 62%),
+    radial-gradient(760px 560px at 100% 2%, rgba(40, 43, 74, 0.11), transparent 58%),
+    radial-gradient(720px 520px at 72% 112%, rgba(245, 235, 208, 0.95), transparent 62%),
+    linear-gradient(135deg, #f3efe7 0%, #eeebda 56%, #f5ebd0 100%);
+}
+
+/* Tailwind utilities for MD code: text-md-wine, bg-md-ink/10, border-md-line, from-md-wine-500, text-md-ink-soft ...
+   (inline: the utility uses the variable directly, so a change of --md-* shows without a rebuild of the ramps) */
+@theme inline {
+  --color-md-wine: var(--md-wine);
+  --color-md-sand: var(--md-sand);
+  --color-md-indigo: var(--md-indigo);
+  --color-md-alabaster: var(--md-alabaster);
+  --color-md-vanilla: var(--md-vanilla);
+  --color-md-brand: var(--md-brand);
+  --color-md-brand-hover: var(--md-brand-hover);
+  --color-md-ink: var(--md-ink);
+  --color-md-ink-soft: var(--md-ink-soft);
+  --color-md-line: var(--md-line);
+  --color-md-line-strong: var(--md-line-strong);
+
+  --color-md-wine-50: var(--md-wine-50);
+  --color-md-wine-100: var(--md-wine-100);
+  --color-md-wine-200: var(--md-wine-200);
+  --color-md-wine-300: var(--md-wine-300);
+  --color-md-wine-400: var(--md-wine-400);
+  --color-md-wine-500: var(--md-wine-500);
+  --color-md-wine-600: var(--md-wine-600);
+  --color-md-wine-700: var(--md-wine-700);
+  --color-md-wine-800: var(--md-wine-800);
+  --color-md-wine-900: var(--md-wine-900);
+
+  --color-md-ink-50: var(--md-ink-50);
+  --color-md-ink-100: var(--md-ink-100);
+  --color-md-ink-200: var(--md-ink-200);
+  --color-md-ink-300: var(--md-ink-300);
+  --color-md-ink-400: var(--md-ink-400);
+  --color-md-ink-500: var(--md-ink-500);
+  --color-md-ink-600: var(--md-ink-600);
+  --color-md-ink-700: var(--md-ink-700);
+  --color-md-ink-800: var(--md-ink-800);
+  --color-md-ink-900: var(--md-ink-900);
+
+  --color-md-success: var(--md-success-600);
+  --color-md-success-soft: var(--md-success-100);
+  --color-md-warning: var(--md-warning-700);
+  --color-md-warning-soft: var(--md-warning-100);
+  --color-md-danger: var(--md-danger-600);
+  --color-md-danger-soft: var(--md-danger-100);
+  --color-md-info: var(--md-info-600);
+  --color-md-info-soft: var(--md-info-100);
+  /* the remaining ramps as utilities: text-md-warning-800, bg-md-sage-100, border-md-n-200, ... (wine and ink above) */
+  --color-md-n-50: var(--md-n-50);
+  --color-md-n-100: var(--md-n-100);
+  --color-md-n-200: var(--md-n-200);
+  --color-md-n-300: var(--md-n-300);
+  --color-md-n-400: var(--md-n-400);
+  --color-md-n-500: var(--md-n-500);
+  --color-md-n-600: var(--md-n-600);
+  --color-md-n-700: var(--md-n-700);
+  --color-md-n-800: var(--md-n-800);
+  --color-md-n-900: var(--md-n-900);
+
+  --color-md-info-50: var(--md-info-50);
+  --color-md-info-100: var(--md-info-100);
+  --color-md-info-200: var(--md-info-200);
+  --color-md-info-300: var(--md-info-300);
+  --color-md-info-400: var(--md-info-400);
+  --color-md-info-500: var(--md-info-500);
+  --color-md-info-600: var(--md-info-600);
+  --color-md-info-700: var(--md-info-700);
+  --color-md-info-800: var(--md-info-800);
+  --color-md-info-900: var(--md-info-900);
+
+  --color-md-sky-50: var(--md-sky-50);
+  --color-md-sky-100: var(--md-sky-100);
+  --color-md-sky-200: var(--md-sky-200);
+  --color-md-sky-300: var(--md-sky-300);
+  --color-md-sky-400: var(--md-sky-400);
+  --color-md-sky-500: var(--md-sky-500);
+  --color-md-sky-600: var(--md-sky-600);
+  --color-md-sky-700: var(--md-sky-700);
+  --color-md-sky-800: var(--md-sky-800);
+  --color-md-sky-900: var(--md-sky-900);
+
+  --color-md-rose-50: var(--md-rose-50);
+  --color-md-rose-100: var(--md-rose-100);
+  --color-md-rose-200: var(--md-rose-200);
+  --color-md-rose-300: var(--md-rose-300);
+  --color-md-rose-400: var(--md-rose-400);
+  --color-md-rose-500: var(--md-rose-500);
+  --color-md-rose-600: var(--md-rose-600);
+  --color-md-rose-700: var(--md-rose-700);
+  --color-md-rose-800: var(--md-rose-800);
+  --color-md-rose-900: var(--md-rose-900);
+
+  --color-md-sage-50: var(--md-sage-50);
+  --color-md-sage-100: var(--md-sage-100);
+  --color-md-sage-200: var(--md-sage-200);
+  --color-md-sage-300: var(--md-sage-300);
+  --color-md-sage-400: var(--md-sage-400);
+  --color-md-sage-500: var(--md-sage-500);
+  --color-md-sage-600: var(--md-sage-600);
+  --color-md-sage-700: var(--md-sage-700);
+  --color-md-sage-800: var(--md-sage-800);
+  --color-md-sage-900: var(--md-sage-900);
+
+  --color-md-success-50: var(--md-success-50);
+  --color-md-success-100: var(--md-success-100);
+  --color-md-success-200: var(--md-success-200);
+  --color-md-success-300: var(--md-success-300);
+  --color-md-success-400: var(--md-success-400);
+  --color-md-success-500: var(--md-success-500);
+  --color-md-success-600: var(--md-success-600);
+  --color-md-success-700: var(--md-success-700);
+  --color-md-success-800: var(--md-success-800);
+  --color-md-success-900: var(--md-success-900);
+
+  --color-md-warning-50: var(--md-warning-50);
+  --color-md-warning-100: var(--md-warning-100);
+  --color-md-warning-200: var(--md-warning-200);
+  --color-md-warning-300: var(--md-warning-300);
+  --color-md-warning-400: var(--md-warning-400);
+  --color-md-warning-500: var(--md-warning-500);
+  --color-md-warning-600: var(--md-warning-600);
+  --color-md-warning-700: var(--md-warning-700);
+  --color-md-warning-800: var(--md-warning-800);
+  --color-md-warning-900: var(--md-warning-900);
+
+  --color-md-danger-50: var(--md-danger-50);
+  --color-md-danger-100: var(--md-danger-100);
+  --color-md-danger-200: var(--md-danger-200);
+  --color-md-danger-300: var(--md-danger-300);
+  --color-md-danger-400: var(--md-danger-400);
+  --color-md-danger-500: var(--md-danger-500);
+  --color-md-danger-600: var(--md-danger-600);
+  --color-md-danger-700: var(--md-danger-700);
+  --color-md-danger-800: var(--md-danger-800);
+  --color-md-danger-900: var(--md-danger-900);
+
+  --color-md-clay-50: var(--md-clay-50);
+  --color-md-clay-100: var(--md-clay-100);
+  --color-md-clay-200: var(--md-clay-200);
+  --color-md-clay-300: var(--md-clay-300);
+  --color-md-clay-400: var(--md-clay-400);
+  --color-md-clay-500: var(--md-clay-500);
+  --color-md-clay-600: var(--md-clay-600);
+  --color-md-clay-700: var(--md-clay-700);
+  --color-md-clay-800: var(--md-clay-800);
+  --color-md-clay-900: var(--md-clay-900);
+
+  --color-md-mauve-50: var(--md-mauve-50);
+  --color-md-mauve-100: var(--md-mauve-100);
+  --color-md-mauve-200: var(--md-mauve-200);
+  --color-md-mauve-300: var(--md-mauve-300);
+  --color-md-mauve-400: var(--md-mauve-400);
+  --color-md-mauve-500: var(--md-mauve-500);
+  --color-md-mauve-600: var(--md-mauve-600);
+  --color-md-mauve-700: var(--md-mauve-700);
+  --color-md-mauve-800: var(--md-mauve-800);
+  --color-md-mauve-900: var(--md-mauve-900);
+}

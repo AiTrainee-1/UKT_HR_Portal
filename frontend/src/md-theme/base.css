@@ -1,0 +1,105 @@
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Base look of the MD portal: the shared component tokens (shadcn: --background, --primary, --border ...), the page
+   background, text colour, scrollbars, selection and focus. Scoped to html[data-md-theme]. The values are HSL triplets
+   because the components read them as hsl(var(--x)).
+   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+html[data-md-theme] {
+  --background: 40 33% 93%; /* alabaster #F3EFE7 */
+  --foreground: 235 30% 22%; /* midnight indigo #282B4A */
+  --border: 44 16% 84%;
+
+  --card: 40 45% 99%;
+  --card-foreground: 235 30% 22%;
+  --card-border: 44 16% 88%;
+
+  --popover: 40 45% 99%;
+  --popover-foreground: 235 30% 22%;
+  --popover-border: 44 16% 86%;
+
+  --primary: 346 98% 25%; /* wine #7F011F */
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 51 37% 89%; /* vanilla #EEEBDA */
+  --secondary-foreground: 235 30% 22%;
+
+  --muted: 44 40% 91%;
+  --muted-foreground: 235 16% 41%; /* ink-600: 6:1 on the backgrounds */
+
+  --accent: 346 98% 25%;
+  --accent-foreground: 0 0% 100%;
+
+  --destructive: 358 60% 45%;
+  --destructive-foreground: 0 0% 100%;
+
+  --input: 44 18% 82%;
+  --ring: 346 98% 25%;
+
+  --chart-1: 346 98% 25%; /* wine */
+  --chart-2: 235 30% 22%; /* indigo */
+  --chart-3: 341 37% 53%; /* dusty rose */
+  --chart-4: 40 66% 51%; /* ochre */
+  --chart-5: 140 22% 44%; /* sage */
+
+  --sidebar: 44 40% 93%;
+  --sidebar-foreground: 235 30% 22%;
+  --sidebar-border: 44 16% 84%;
+  --sidebar-primary: 346 98% 25%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 44 40% 90%;
+  --sidebar-accent-foreground: 235 30% 22%;
+  --sidebar-ring: 346 98% 25%;
+
+  --button-outline: rgba(40, 43, 74, 0.1);
+  --elevate-1: rgba(40, 43, 74, 0.06);
+  --elevate-2: rgba(40, 43, 74, 0.12);
+}
+
+html[data-md-theme] body {
+  background: var(--md-alabaster);
+  color: var(--md-ink);
+}
+
+/* the page itself (MdLayout puts this class on its root): three light backgrounds with soft glows behind the glass */
+.md-app-bg {
+  background: var(--md-page-bg);
+  color: var(--md-ink);
+}
+
+html[data-md-theme] ::selection {
+  background: rgba(127, 1, 31, 0.18);
+  color: var(--md-ink-900);
+}
+
+html[data-md-theme] :focus-visible {
+  outline-color: var(--md-wine-500);
+}
+
+/* thin, quiet scrollbars (the page scrolls inside <main>, tables inside their cards) */
+html[data-md-theme] * {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(40, 43, 74, 0.28) transparent;
+}
+html[data-md-theme] *::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+html[data-md-theme] *::-webkit-scrollbar-thumb {
+  background: rgba(40, 43, 74, 0.26);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+html[data-md-theme] *::-webkit-scrollbar-thumb:hover {
+  background: rgba(127, 1, 31, 0.45);
+  background-clip: padding-box;
+}
+html[data-md-theme] .scrollbar-hide {
+  scrollbar-width: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-md-theme] * {
+    scroll-behavior: auto !important;
+  }
+}

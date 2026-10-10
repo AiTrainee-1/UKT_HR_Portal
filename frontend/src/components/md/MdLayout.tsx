@@ -8,10 +8,11 @@ import { UKTLogo } from "@/components/ui/dashboard-sidebar";
 import { useAuth } from "@/contexts/AuthContext";
 import { toggleAssistant, useAssistantState } from "@/lib/md/assistant-store";
 import { useMdEmbedded } from "@/lib/md/embed";
+import { useMdTheme } from "@/lib/md/theme";
 import { toggleSidebarCollapsed, useIsDesktop, useSidebarCollapsed } from "@/lib/sidebar-state";
 import { cn } from "@/lib/utils";
 import MdEmbeddedFrame from "./embedded/MdEmbeddedFrame";
-import MdSidebar, { MD_GOLD_GRADIENT } from "./MdSidebar";
+import MdSidebar from "./MdSidebar";
 
 // Scroll positions per pathname, surviving page remounts (each MD page renders its own MdLayout, as the HR pages do).
 const scrollPositions = new Map<string, number>();
@@ -56,6 +57,7 @@ export default function MdLayout({ children }: { children: ReactNode }) {
   const mainRef = useRef<HTMLElement>(null);
 
   useMdSessionGuard();
+  useMdTheme();
 
   const collapsedPref = useSidebarCollapsed();
   const isDesktop = useIsDesktop();
@@ -123,25 +125,18 @@ export default function MdLayout({ children }: { children: ReactNode }) {
 
   return (
     <div
-      className="flex h-screen print:block print:h-auto"
-      style={{
-        background: "linear-gradient(135deg, #f0f5fa 0%, #e8f2f8 50%, #eef4fc 100%)",
-        fontFamily: "'Hanken Grotesk', 'Inter', sans-serif",
-      }}
+      className="md-app-bg md-shell-root flex h-screen print:block print:h-auto"
+      style={{ fontFamily: "'Hanken Grotesk', 'Inter', sans-serif" }}
       data-testid="md-shell"
     >
+      {/* the glass rail (and, on a small screen, the drawer): see md-theme/areas/shell.css */}
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex w-64 shrink-0 transform flex-col overflow-hidden transition-[transform,width] duration-300 ease-out print:hidden",
+          "md-shell-rail fixed inset-y-0 left-0 z-50 flex w-64 shrink-0 transform flex-col overflow-hidden transition-[transform,width] duration-300 ease-out print:hidden",
           mobileOpen ? "translate-x-0" : "-translate-x-full",
           "lg:relative lg:translate-x-0",
           collapsed ? "lg:w-[68px]" : "lg:w-64",
         )}
-        style={{
-          background: "#f6fafe",
-          borderRight: "1px solid rgba(0,100,150,0.08)",
-          boxShadow: "10px 0 30px rgba(0,100,150,0.08), 2px 0 8px rgba(255,255,255,0.9)",
-        }}
       >
         <MdSidebar
           onClose={() => setMobileOpen(false)}
@@ -152,49 +147,42 @@ export default function MdLayout({ children }: { children: ReactNode }) {
 
       {mobileOpen && (
         <div
-          className="fixed inset-0 z-40 lg:hidden"
-          style={{ background: "rgba(0,60,100,0.2)", backdropFilter: "blur(4px)" }}
+          className="md-shell-scrim fixed inset-0 z-40 lg:hidden"
+          aria-hidden="true"
           onClick={() => setMobileOpen(false)}
         />
       )}
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden print:block print:h-auto print:overflow-visible">
-        <header
-          className="flex items-center gap-3 px-4 py-3 lg:hidden print:hidden"
-          style={{
-            background: "#f6fafe",
-            borderBottom: "1px solid rgba(0,100,150,0.07)",
-            boxShadow: "0 4px 16px rgba(0,100,150,0.06)",
-          }}
-        >
+        <header className="md-shell-topbar flex items-center gap-3 px-4 py-2.5 lg:hidden print:hidden">
           <button
+            type="button"
             onClick={() => setMobileOpen(true)}
             data-testid="button-menu"
             aria-label="Open menu"
-            className="rounded-xl p-2 transition-all"
-            style={{ color: "#006496" }}
+            className="md-btn md-btn-soft md-btn-icon shrink-0"
           >
-            <Menu size={20} strokeWidth={2} />
+            <Menu size={18} strokeWidth={2} aria-hidden="true" />
           </button>
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            {companyLogo ? (
-              <img src={companyLogo} alt={companyName} className="h-7 w-7 rounded-full bg-white object-contain" />
-            ) : (
-              <UKTLogo className="h-7 w-auto" />
-            )}
-            <span className="truncate text-base font-black tracking-tight" style={{ color: "#006496" }}>
-              {companyName}
+          <div className="flex min-w-0 flex-1 items-center gap-2.5">
+            <span className="md-shell-logo md-shell-logo-sm">
+              {companyLogo ? (
+                <img src={companyLogo} alt={companyName} className="h-6 w-6 rounded-full object-contain" />
+              ) : (
+                <UKTLogo className="h-6 w-auto" />
+              )}
             </span>
+            <span className="truncate text-base font-black tracking-tight text-md-wine">{companyName}</span>
           </div>
           <button
+            type="button"
             onClick={toggleAssistant}
             aria-label="AI assistant"
             aria-pressed={assistantOpen}
             data-testid="md-ask-ai-mobile"
-            className="rounded-xl p-2 text-[#5b3d00] shadow-sm"
-            style={{ background: MD_GOLD_GRADIENT }}
+            className="md-btn md-btn-ink md-btn-icon shrink-0"
           >
-            <Sparkles size={18} strokeWidth={2} />
+            <Sparkles size={17} strokeWidth={2.1} aria-hidden="true" />
           </button>
         </header>
 

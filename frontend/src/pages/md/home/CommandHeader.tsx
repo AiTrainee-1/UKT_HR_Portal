@@ -1,10 +1,9 @@
 import { useState, type FormEvent } from "react";
-import { Search } from "lucide-react";
+import { ArrowUp, Search, Sparkles } from "lucide-react";
 import { suggestionsFor } from "@/components/md/assistant/suggestions";
-import { MD_GOLD_GRADIENT } from "@/components/md/MdSidebar";
 import { openAssistant } from "@/lib/md/assistant-store";
 import { cn } from "@/lib/utils";
-import { greetingLine } from "../dashboard/logic";
+import { greetingLine, longDate } from "../dashboard/logic";
 
 /** How the header sums the day up: the requests waiting (for HR or a Department Head; the MD looks at them) and the things
  *  that want a look. */
@@ -17,8 +16,10 @@ export function pulseSentence(attention: number, waiting: number): { text: strin
 }
 
 /**
- * The hero under the dashboard's title row: the greeting (by the factory's clock), what wants attention today, and the Ask
- * bar. A question typed here, or one of the suggestions, opens the assistant with it. (The title row, with the date, "Brief
+ * The welcome card under the dashboard's title row: a frosted glass sheet floating over a slow aurora of wine, indigo and
+ * sand (the shared md-hero-* classes, md-theme/glass.css). On the sheet, in three layers with room between them: the date
+ * and the greeting (by the factory's clock) with what wants attention today; the Ask bar, the focal point; and a few
+ * suggested questions. A question typed here, or a suggestion, opens the assistant with it. (The title row, with "Brief
  * me" and Refresh, is the same one every MD page has: see index.tsx.)
  */
 export default function CommandHeader({
@@ -37,6 +38,7 @@ export default function CommandHeader({
   const [question, setQuestion] = useState("");
   const pulse = pulseSentence(attention, waiting);
   const suggestions = suggestionsFor("dashboard").slice(0, 4);
+  const date = longDate(serverTime);
 
   const ask = (event: FormEvent) => {
     event.preventDefault();
@@ -47,65 +49,68 @@ export default function CommandHeader({
   };
 
   return (
-    <section
-      className="relative overflow-hidden rounded-3xl px-5 py-6 text-white shadow-[0_18px_40px_rgba(4,50,74,0.28)] sm:px-8 sm:py-7"
-      style={{ background: "linear-gradient(130deg, #04324a 0%, #07577d 52%, #0f86b6 100%)" }}
-      data-testid="md-home-header"
-    >
-      <span
-        aria-hidden
-        className="pointer-events-none absolute -right-16 -top-24 h-72 w-72 rounded-full bg-[#e0a83a]/20 blur-2xl"
-      />
-      <span
-        aria-hidden
-        className="pointer-events-none absolute -bottom-28 left-1/3 h-56 w-56 rounded-full bg-white/10 blur-2xl"
-      />
-      <div className="relative space-y-5">
-        <div className="min-w-0">
-          <h3 className="text-2xl font-black leading-tight sm:text-4xl" data-testid="md-home-greeting">
-            {serverTime ? greetingLine(serverTime, name) : "Welcome back"}
-          </h3>
-          <p
-            className={cn(
-              "mt-2 inline-flex items-center gap-2 rounded-full px-3 py-1 text-[13px] font-semibold",
-              pulse.calm ? "bg-green-400/20 text-green-100" : "bg-[#e0a83a]/25 text-[#ffe9b0]",
-            )}
-            data-testid="md-home-pulse"
+    <section className="md-hero-glass" data-testid="md-home-header">
+      <span aria-hidden className="md-hero-orb md-hero-orb-wine" />
+      <span aria-hidden className="md-hero-orb md-hero-orb-indigo" />
+      <span aria-hidden className="md-hero-orb md-hero-orb-sand" />
+
+      <div className="md-hero-sheet md-dashboard-hero-sheet space-y-7 sm:space-y-8">
+        <div className="min-w-0 space-y-3.5">
+          {date && <p className="md-dashboard-overline">{date}</p>}
+          <h1
+            className="md-hero-title md-dashboard-greeting text-[2rem] sm:text-4xl lg:text-5xl"
+            data-testid="md-home-greeting"
           >
-            <span className={cn("h-2 w-2 rounded-full", pulse.calm ? "bg-green-300" : "bg-[#f6d27a]")} />
+            {serverTime ? greetingLine(serverTime, name) : "Welcome back"}
+          </h1>
+          <p className={cn("md-hero-chip", !pulse.calm && "md-hero-chip-wine")} data-testid="md-home-pulse">
+            <span aria-hidden className="relative flex h-2 w-2">
+              <span
+                className={cn(
+                  "absolute inline-flex h-full w-full rounded-full opacity-60 motion-safe:animate-ping",
+                  pulse.calm ? "bg-md-success-500" : "bg-md-wine",
+                )}
+              />
+              <span
+                className={cn(
+                  "relative inline-flex h-2 w-2 rounded-full",
+                  pulse.calm ? "bg-md-success-500" : "bg-md-wine",
+                )}
+              />
+            </span>
             {pulse.text}
           </p>
         </div>
 
-        <form onSubmit={ask} className="space-y-2.5" role="search" data-testid="md-home-ask">
-          <label className="flex items-center gap-3 rounded-2xl bg-white px-4 py-3 text-[#1a3a4a] shadow-lg ring-1 ring-white/40 focus-within:ring-2 focus-within:ring-[#e0a83a]">
-            <Search size={18} className="shrink-0 text-[#006496]/60" />
+        <form onSubmit={ask} className="space-y-4" role="search" data-testid="md-home-ask">
+          <label className="md-hero-ask">
+            <Search size={20} className="shrink-0 text-md-wine" aria-hidden />
             <input
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
               placeholder="Ask anything about the company… for example: why is absenteeism up this week?"
               aria-label="Ask the AI assistant"
               data-testid="md-home-ask-input"
-              className="min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-[#006496]/40"
+              className="md-dashboard-ask-input min-w-0 flex-1 truncate border-0 bg-transparent py-1.5 text-base text-md-ink outline-none"
             />
             <button
               type="submit"
               disabled={!question.trim()}
               data-testid="md-home-ask-send"
-              className="shrink-0 rounded-xl px-4 py-1.5 text-sm font-black text-[#5b3d00] transition disabled:opacity-40"
-              style={{ background: MD_GOLD_GRADIENT }}
+              className="md-btn md-btn-primary md-btn-lg shrink-0"
             >
-              Ask
+              Ask <ArrowUp size={15} aria-hidden />
             </button>
           </label>
-          <div className="flex flex-wrap gap-2" data-testid="md-home-suggestions">
+          <div className="flex flex-wrap gap-2.5" data-testid="md-home-suggestions">
             {suggestions.map((text) => (
               <button
                 key={text}
                 type="button"
                 onClick={() => openAssistant(text)}
-                className="rounded-full bg-white/12 px-3 py-1 text-[12px] font-medium text-white/90 ring-1 ring-white/20 transition hover:bg-white/20"
+                className="md-hero-suggestion inline-flex min-h-9 items-center gap-1.5 text-left"
               >
+                <Sparkles size={12} className="shrink-0 text-md-wine" aria-hidden />
                 {text}
               </button>
             ))}

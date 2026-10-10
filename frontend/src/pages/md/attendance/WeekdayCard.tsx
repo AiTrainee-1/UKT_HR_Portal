@@ -68,7 +68,7 @@ export default function WeekdayCard({
           return (
             <div className="space-y-3">
               <BarList items={weekdayBars(d.weekdays)} format={(n) => pct(n)} testId="md-attendance-weekday-bars" />
-              {note && <p className="text-xs text-[#006496]/70">{note}</p>}
+              {note && <p className="text-xs text-md-ink-soft">{note}</p>}
             </div>
           );
         }}

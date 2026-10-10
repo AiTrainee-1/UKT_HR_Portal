@@ -17,7 +17,8 @@ export type Column<T> = {
 type Sort = { key: string; dir: "asc" | "desc" };
 
 /**
- * A compact read-only table: sortable columns, "Show more" paging, an empty state and the portal's header style.
+ * A compact read-only table: sortable columns, "Show more" paging, an empty state and the portal's table look (a sand header
+ * band, hairlines between rows, a wine tint under the pointer: md-theme areas/shell.css, .md-shell-table).
  * Rows are plain objects; nothing in it edits anything.
  */
 export default function DataTable<T>({
@@ -59,16 +60,18 @@ export default function DataTable<T>({
     });
   }, [rows, columns, sort]);
 
-  if (rows.length === 0) return <p className="py-8 text-center text-sm text-muted-foreground">{empty}</p>;
+  if (rows.length === 0) {
+    return <p className="md-panel-sand py-8 text-center text-sm font-medium text-md-ink-soft">{empty}</p>;
+  }
 
   const alignClass = (a?: Column<T>["align"]) =>
     a === "right" ? "text-right" : a === "center" ? "text-center" : "text-left";
 
   return (
     <div data-testid={testId}>
-      <Table>
-        <TableHeader>
-          <TableRow>
+      <Table className="md-shell-table">
+        <TableHeader className="[&_tr]:border-0">
+          <TableRow className="border-0 hover:bg-transparent">
             {columns.map((c) => {
               const active = sort?.key === c.key;
               const Icon = !active ? ChevronsUpDown : sort.dir === "asc" ? ArrowUp : ArrowDown;
@@ -76,7 +79,7 @@ export default function DataTable<T>({
                 <TableHead
                   key={c.key}
                   className={cn(
-                    "text-[11px] font-bold uppercase tracking-wider text-[#006496]/60",
+                    "h-10 px-3 text-[11px] font-extrabold uppercase tracking-[0.08em] text-md-ink-soft",
                     alignClass(c.align),
                     c.className,
                   )}
@@ -92,13 +95,10 @@ export default function DataTable<T>({
                             : { key: c.key, dir: "desc" },
                         )
                       }
-                      className={cn(
-                        "inline-flex items-center gap-1 uppercase tracking-wider hover:text-[#006496]",
-                        active && "text-[#006496]",
-                      )}
+                      className={cn("md-shell-sort", active && "text-md-wine")}
                     >
                       {c.header}
-                      <Icon size={12} className={active ? "" : "opacity-40"} />
+                      <Icon size={12} strokeWidth={2.4} className={active ? "" : "opacity-50"} aria-hidden="true" />
                     </button>
                   ) : (
                     c.header
@@ -113,13 +113,18 @@ export default function DataTable<T>({
             <TableRow
               key={rowKey(row)}
               onClick={onRowClick ? () => onRowClick(row) : undefined}
-              className={cn(onRowClick && "cursor-pointer")}
+              className={cn("border-0 hover:bg-transparent", onRowClick && "cursor-pointer")}
               data-testid={`row-${rowKey(row)}`}
             >
               {columns.map((c) => (
                 <TableCell
                   key={c.key}
-                  className={cn(dense ? "py-1.5" : "py-2.5", "text-sm", alignClass(c.align), c.className)}
+                  className={cn(
+                    dense ? "py-2" : "py-3",
+                    "px-3 text-[13px] text-md-ink",
+                    alignClass(c.align),
+                    c.className,
+                  )}
                 >
                   {c.cell(row)}
                 </TableCell>
@@ -129,11 +134,11 @@ export default function DataTable<T>({
         </TableBody>
       </Table>
       {sorted.length > shown && (
-        <div className="flex items-center justify-between border-t px-2 pt-2 text-xs text-muted-foreground">
+        <div className="mt-1 flex items-center justify-between gap-3 border-t border-md-line px-2 pt-3 text-xs font-medium text-md-ink-soft">
           <span>
             Showing {shown} of {sorted.length}
           </span>
-          <Button variant="ghost" size="sm" onClick={() => setShown((n) => n + pageSize)} data-testid="show-more">
+          <Button variant="outline" size="sm" onClick={() => setShown((n) => n + pageSize)} data-testid="show-more">
             Show more
           </Button>
         </div>

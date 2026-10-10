@@ -4,50 +4,52 @@ import { KpiRunningBorder } from "@/components/ui/KpiLoader";
 import type { Tone } from "@/lib/md/format";
 import type { Provenance } from "@/lib/md/types";
 import { cn } from "@/lib/utils";
+import { CHART } from "./chartTheme";
 import ProvenanceButton from "./ProvenanceButton";
 import Sparkline from "./Sparkline";
 
 type IconType = ComponentType<{ size?: number; className?: string }>;
 
-/** Tints, written out in full because Tailwind can't build class names from variables. Same family as the HR pages. */
+/**
+ * The figure's colour, by the names pages already use. `box` is a tone class (md-theme areas/shell.css sets the colour the icon
+ * tile and the corner glow take from it), `accent` the sparkline's and the loader's colour. Wine and indigo are the brand and
+ * the neutral; sage, ochre and crimson keep their meaning (good, watch, bad) and are meant for figures that carry it.
+ */
 export const STAT_TONES = {
-  slate: { box: "bg-slate-100 text-slate-800", accent: "#475569" },
-  green: { box: "bg-green-50 text-green-800", accent: "#16a34a" },
-  amber: { box: "bg-amber-50 text-amber-800", accent: "#d97706" },
-  blue: { box: "bg-blue-50 text-blue-800", accent: "#006496" },
-  indigo: { box: "bg-indigo-50 text-indigo-800", accent: "#4f46e5" },
-  red: { box: "bg-red-50 text-red-800", accent: "#dc2626" },
-  purple: { box: "bg-purple-50 text-purple-800", accent: "#9333ea" },
-  teal: { box: "bg-teal-50 text-teal-800", accent: "#0d9488" },
+  slate: { box: "md-shell-tone-ink", accent: CHART.deep },
+  green: { box: "md-shell-tone-sage", accent: CHART.good },
+  amber: { box: "md-shell-tone-ochre", accent: CHART.warn },
+  blue: { box: "md-shell-tone-wine", accent: CHART.brand },
+  indigo: { box: "md-shell-tone-periwinkle", accent: CHART.info },
+  red: { box: "md-shell-tone-crimson", accent: CHART.bad },
+  purple: { box: "md-shell-tone-mauve", accent: CHART.leave },
+  teal: { box: "md-shell-tone-rose", accent: CHART.sky },
 } as const;
 
 export type StatTone = keyof typeof STAT_TONES;
 
 const DELTA_STYLE: Record<Tone, string> = {
-  good: "bg-green-100 text-green-800",
-  bad: "bg-red-100 text-red-800",
-  neutral: "bg-white/70 text-slate-600",
+  good: "md-chip-success",
+  bad: "md-chip-danger",
+  neutral: "",
 };
 
-/** "▲ 3.2 pts" next to a figure: the change against the previous period, coloured by whether it is good news. */
+/** "▲ 3.2 pts" next to a figure: the change against the previous period, coloured by whether it is good news (sage), bad news
+ *  (crimson) or neither (frosted). The arrow carries the direction, so the colour is never the only signal. */
 export function DeltaChip({ text, tone, direction }: { text: string; tone: Tone; direction?: "up" | "down" | "flat" }) {
   const Arrow = direction === "up" ? ArrowUpRight : direction === "down" ? ArrowDownRight : Minus;
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10.5px] font-bold",
-        DELTA_STYLE[tone],
-      )}
-    >
-      <Arrow size={11} />
+    <span className={cn("md-chip md-shell-delta", DELTA_STYLE[tone])}>
+      <Arrow size={11} strokeWidth={2.6} aria-hidden="true" />
       {text}
     </span>
   );
 }
 
 /**
- * One headline figure: label, value, an optional change chip and sparkline, and the "how is this calculated" button.
- * While `loading` it shows the portal's running-border loader instead of a value.
+ * One headline figure: label, value, an optional change chip and sparkline, and the "how is this calculated" button, on a
+ * glass card with a tinted icon tile and a faint glow of the tone in its corner. While `loading` it shows the portal's
+ * running-border loader instead of a value. With `onClick` the whole card is a button.
  */
 export default function StatCard({
   label,
@@ -83,9 +85,9 @@ export default function StatCard({
   return (
     <div
       className={cn(
-        "relative flex flex-col justify-between gap-2 rounded-2xl p-4 transition-transform",
+        "md-card md-shell-stat relative flex flex-col justify-between gap-3 p-4 @2xl:p-5",
         t.box,
-        clickable && "cursor-pointer hover:scale-[1.015]",
+        clickable && "cursor-pointer",
       )}
       onClick={onClick}
       role={clickable ? "button" : undefined}
@@ -93,33 +95,32 @@ export default function StatCard({
       onKeyDown={clickable ? (e) => (e.key === "Enter" || e.key === " ") && onClick?.() : undefined}
       data-testid={testId}
     >
-      {loading && <KpiRunningBorder accent={t.accent} radius={16} />}
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5 rounded-xl bg-white/60 p-2">
-          <Icon size={16} />
+      {loading && <KpiRunningBorder accent={t.accent} radius={20} />}
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 flex-1 items-start gap-0.5 pt-1">
+          <p className="min-w-0 text-xs font-semibold leading-snug text-md-ink-soft">{label}</p>
+          {provenance && provenance.length > 0 && (
+            <ProvenanceButton provenance={provenance} ids={provenanceIds} className="-my-1.5 -mr-0.5" />
+          )}
         </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-1">
-            <p className="text-xs font-medium opacity-70">{label}</p>
-            {provenance && provenance.length > 0 && (
-              <ProvenanceButton
-                provenance={provenance}
-                ids={provenanceIds}
-                className="-mr-1 -mt-1 h-5 w-5 text-current opacity-60"
-              />
-            )}
-          </div>
-          <p
-            className={cn("text-2xl font-black leading-tight", loading && "opacity-0")}
-            data-testid={testId ? `${testId}-value` : undefined}
-          >
-            {value}
-          </p>
-          {sub && <p className="mt-0.5 text-xs leading-snug opacity-60">{sub}</p>}
-        </div>
+        <span className="md-shell-tile">
+          <Icon size={17} />
+        </span>
+      </div>
+      <div className="min-w-0">
+        <p
+          className={cn(
+            "text-[1.65rem] font-black leading-none tracking-tight tabular-nums text-md-ink [overflow-wrap:anywhere]",
+            loading && "opacity-0",
+          )}
+          data-testid={testId ? `${testId}-value` : undefined}
+        >
+          {value}
+        </p>
+        {sub && <p className="mt-2 text-xs leading-snug text-md-ink-soft">{sub}</p>}
       </div>
       {(delta || (spark && spark.length > 1) || children) && (
-        <div className="flex flex-wrap items-end justify-between gap-x-2 gap-y-1">
+        <div className="flex flex-wrap items-end justify-between gap-x-2 gap-y-1.5">
           <div className="min-w-0">
             {delta ? <DeltaChip {...delta} /> : null}
             {children}

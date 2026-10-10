@@ -31,10 +31,10 @@ function columns(view: View, baseline: number | null | undefined): Column<GroupR
       sortValue: (r) => r.name,
       cell: (r) => (
         <div className="min-w-0">
-          <p className="truncate font-semibold text-[#1a3a4a]">{r.name}</p>
-          <p className="text-[11px] text-[#006496]/55">
+          <p className="truncate font-semibold text-md-ink">{r.name}</p>
+          <p className="text-[11px] text-md-ink-soft">
             {num(r.headcount)} {r.headcount === 1 ? "person" : "people"}
-            {r.belowBaseline && <span className="ml-1.5 font-bold text-red-600">· below the company</span>}
+            {r.belowBaseline && <span className="ml-1.5 font-bold text-md-danger">· below the company</span>}
           </p>
         </div>
       ),
@@ -156,7 +156,7 @@ export default function DepartmentCard({
                 testId="md-attendance-department-table"
               />
               {d.total > d.departments.length && view === "departments" && (
-                <p className="mt-2 text-xs text-muted-foreground">
+                <p className="md-analytics-note">
                   Showing the {d.departments.length} lowest of {d.total} departments.
                 </p>
               )}

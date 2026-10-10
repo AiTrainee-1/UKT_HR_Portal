@@ -1,7 +1,7 @@
 import DataTable, { type Column } from "@/components/md/kit/DataTable";
 import { num } from "@/lib/md/format";
 import { daysSinceText, whenText } from "./logic";
-import { Chip, PersonCell } from "./parts";
+import { Chip, PersonCell, type ChipTone } from "./parts";
 import type { SignInAccount } from "./types";
 
 const COLUMNS: Column<SignInAccount>[] = [
@@ -21,7 +21,7 @@ const COLUMNS: Column<SignInAccount>[] = [
     key: "signIns",
     header: "Sign-ins",
     align: "right",
-    cell: (a) => <b className="tabular-nums">{num(a.signIns)}</b>,
+    cell: (a) => <b className="tabular-nums text-md-ink">{num(a.signIns)}</b>,
     sortValue: (a) => a.signIns,
   },
   {
@@ -29,17 +29,13 @@ const COLUMNS: Column<SignInAccount>[] = [
     header: "Devices",
     cell: (a) =>
       a.devices.length === 0 ? (
-        <span className="text-muted-foreground">—</span>
+        <span className="text-md-ink-soft">—</span>
       ) : (
         <div className="flex flex-wrap gap-1">
           {a.devices.slice(0, 2).map((d) => (
-            <Chip key={d} className="border-slate-200 bg-slate-50 text-slate-700">
-              {d}
-            </Chip>
+            <Chip key={d}>{d}</Chip>
           ))}
-          {a.devices.length > 2 && (
-            <Chip className="border-slate-200 bg-slate-50 text-slate-700">+{a.devices.length - 2}</Chip>
-          )}
+          {a.devices.length > 2 && <Chip>+{a.devices.length - 2}</Chip>}
         </div>
       ),
   },
@@ -47,9 +43,9 @@ const COLUMNS: Column<SignInAccount>[] = [
     key: "last",
     header: "Last sign-in",
     cell: (a) => (
-      <div className="whitespace-nowrap text-xs text-[#1a3a4a]">
+      <div className="whitespace-nowrap text-xs text-md-ink">
         <p>{whenText(a.lastSignIn)}</p>
-        <p className="text-[11px] text-[#006496]/55">{daysSinceText(a.daysSince)}</p>
+        <p className="text-[11px] text-md-ink-soft">{daysSinceText(a.daysSince)}</p>
       </div>
     ),
     sortValue: (a) => a.lastSignIn,
@@ -59,16 +55,16 @@ const COLUMNS: Column<SignInAccount>[] = [
     header: "Flags",
     cell: (a) => {
       const flags = [
-        a.newDevices > 0 && { text: "New device", cls: "border-amber-200 bg-amber-100 text-amber-800" },
-        a.overlapping > 0 && { text: "Open twice", cls: "border-blue-200 bg-blue-50 text-blue-800" },
-        a.dormant && { text: "Dormant", cls: "border-slate-300 bg-slate-100 text-slate-700" },
-      ].filter((f): f is { text: string; cls: string } => Boolean(f));
+        a.newDevices > 0 && { text: "New device", tone: "warning" as ChipTone },
+        a.overlapping > 0 && { text: "Open twice", tone: "info" as ChipTone },
+        a.dormant && { text: "Dormant", tone: "neutral" as ChipTone },
+      ].filter((f): f is { text: string; tone: ChipTone } => Boolean(f));
       return flags.length === 0 ? (
-        <span className="text-muted-foreground">—</span>
+        <span className="text-md-ink-soft">—</span>
       ) : (
         <div className="flex flex-wrap gap-1">
           {flags.map((f) => (
-            <Chip key={f.text} className={f.cls}>
+            <Chip key={f.text} tone={f.tone}>
               {f.text}
             </Chip>
           ))}

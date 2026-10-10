@@ -10,7 +10,7 @@ export default function TrendsSection({ query }: { query: UseQueryResult<Dashboa
       <GroupHeading id="md-trends-heading" title="Trends">
         The last month and the last year, from the pages' own charts
       </GroupHeading>
-      <div className="grid grid-cols-1 gap-5 @4xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 @4xl:grid-cols-3">
         <AttendanceTrendCard query={query} />
         <PayrollTrendCard query={query} />
         <MovementTrendCard query={query} />

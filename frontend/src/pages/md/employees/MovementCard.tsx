@@ -55,7 +55,7 @@ export default function MovementCard({
             yFormat={(v) => num(v)}
             height={210}
           />
-          <p className="px-1 pt-1 text-[11px] font-bold uppercase tracking-wider text-[#006496]/60">Headcount</p>
+          <p className="md-analytics-subhead px-1 pt-2">Headcount</p>
           <TrendChart
             data={rows}
             xKey="label"
@@ -65,7 +65,7 @@ export default function MovementCard({
             legend={false}
             height={130}
           />
-          <p className="px-1 text-[11px] text-[#006496]/55" data-testid="md-employees-movement-caveat">
+          <p className="md-analytics-note px-1" data-testid="md-employees-movement-caveat">
             Headcount before today is rebuilt from join and exit dates: the system keeps no headcount history.
           </p>
         </div>

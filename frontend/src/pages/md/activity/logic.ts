@@ -30,6 +30,15 @@ export const PAGE_STEP = 10;
 
 export const plural = (n: number, one: string, many = `${one}s`) => (n === 1 ? one : many);
 
+/** The letters of an avatar: the first letter of the first two words of a name ("S. Ramanathan" is "SR", "admin" is "A"). */
+export function initialsOf(name: string | null | undefined): string {
+  const words = (name ?? "").replace(/\([^)]*\)/g, " ").match(/[\p{L}\p{N}]+/gu) ?? [];
+  return words
+    .slice(0, 2)
+    .map((w) => w[0].toUpperCase())
+    .join("");
+}
+
 // ─── changes against the previous period ──────────────────────────────────────────────────────────────────────
 
 /** The chip beside a headline figure. `good` is the direction that is good news ("down" for failed sign-ins), or null
@@ -79,7 +88,7 @@ export function failedSub(f: Pick<ActivitySummary["failedSignIns"], "lockouts" |
   return parts.filter(Boolean).join(" · ") || "No lock-outs";
 }
 
-/** Red for a critical change or a lock-out, amber for anything else sensitive, green when there is none. */
+/** Crimson for a critical change or a lock-out, ochre for anything else sensitive, sage when there is none. */
 export function alertTone(serious: number, any: number): StatTone {
   return serious > 0 ? "red" : any > 0 ? "amber" : "green";
 }

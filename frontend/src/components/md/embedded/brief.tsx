@@ -1,4 +1,4 @@
-import { Activity, Sparkles } from "lucide-react";
+import { Activity, AlertOctagon, AlertTriangle, CheckCircle2, Info, Sparkles } from "lucide-react";
 import { Link } from "wouter";
 import { useMdQuery } from "@/lib/api-client/custom-hooks/md";
 import { describeMdError } from "@/lib/api-client/custom-hooks/md";
@@ -9,6 +9,7 @@ import AskAiButton from "../kit/AskAiButton";
 import InsightList from "../kit/InsightList";
 import KpiCard from "../kit/KpiCard";
 import SectionCard from "../kit/SectionCard";
+import { DeltaChip } from "../kit/StatCard";
 import { EmptyBlock, ErrorBanner } from "../kit/states";
 import { MD_NAV_BY_ID } from "../md-nav";
 
@@ -26,17 +27,12 @@ export type Brief = {
 
 export const useBrief = (page: string) => useMdQuery<Brief>(`brief/${page}`, undefined, { staleTime: 60_000 });
 
-const TONE: Record<string, string> = {
-  good: "text-green-700",
-  bad: "text-red-700",
-  neutral: "text-[#006496]/70",
-};
-
-const SEVERITY_DOT: Record<MdInsightDto["severity"], string> = {
-  critical: "bg-red-500",
-  warning: "bg-amber-500",
-  info: "bg-blue-500",
-  good: "bg-green-500",
+/** One icon per severity (the shape says it, the colour backs it up): crimson bad, ochre watch, periwinkle information, sage good. */
+const SEVERITY: Record<MdInsightDto["severity"], { icon: typeof Info; tone: string; label: string }> = {
+  critical: { icon: AlertOctagon, tone: "text-md-danger-600", label: "Critical" },
+  warning: { icon: AlertTriangle, tone: "text-md-warning-600", label: "Needs attention" },
+  info: { icon: Info, tone: "text-md-info", label: "For your information" },
+  good: { icon: CheckCircle2, tone: "text-md-success", label: "Good news" },
 };
 
 /** The question "Ask AI" opens with for a page as a whole. */
@@ -60,24 +56,24 @@ export function BriefStrip({ page }: { page: string }) {
   }
 
   return (
-    <div
-      className="mb-4 rounded-2xl border border-[#e0a83a]/30 bg-gradient-to-r from-[#fffaf0] to-white p-3.5 shadow-sm"
-      data-testid="md-brief-strip"
-    >
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <span className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-widest text-[#b8801c]">
-          <Sparkles size={13} /> MD insights
+    <div className="md-shell-strip mb-4 p-4" data-testid="md-brief-strip">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-3">
+        <span className="mr-1 flex items-center gap-2">
+          <span className="md-shell-strip-mark">
+            <Sparkles size={13} strokeWidth={2.2} />
+          </span>
+          <span className="md-shell-overline text-md-wine">MD insights</span>
         </span>
-        {brief.isLoading && <span className="text-xs text-muted-foreground">Working out the figures…</span>}
+        {brief.isLoading && <span className="text-xs font-medium text-md-ink-soft">Working out the figures…</span>}
         {kpis.map((kpi) => {
           const delta = kpiDelta(kpi);
           return (
-            <span key={kpi.id} className="flex items-baseline gap-1.5 text-sm" data-testid={`strip-kpi-${kpi.id}`}>
-              <span className="text-xs text-muted-foreground">{kpi.label}</span>
-              <b className="font-black text-gray-900">{kpiValueText(kpi)}</b>
-              {delta && (
-                <span className={cn("text-[11px] font-semibold", TONE[delta.tone] ?? TONE.neutral)}>{delta.text}</span>
-              )}
+            <span key={kpi.id} className="md-shell-strip-kpi" data-testid={`strip-kpi-${kpi.id}`}>
+              <span className="text-[11px] font-semibold leading-tight text-md-ink-soft">{kpi.label}</span>
+              <span className="flex items-center gap-2">
+                <b className="text-base font-black leading-tight tabular-nums text-md-ink">{kpiValueText(kpi)}</b>
+                {delta && <DeltaChip {...delta} />}
+              </span>
             </span>
           );
         })}
@@ -85,21 +81,25 @@ export function BriefStrip({ page }: { page: string }) {
           <AskAiButton
             question={pageQuestion(meta?.title ?? data?.title ?? "this page")}
             label="Ask AI about this page"
+            size="md"
           />
         </span>
       </div>
       {insights.length > 0 && (
-        <ul className="mt-2.5 space-y-1" data-testid="strip-insights">
-          {insights.map((item) => (
-            <li key={item.id} className="flex items-start gap-2 text-[13px] text-gray-800">
-              <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", SEVERITY_DOT[item.severity])} />
-              <span className="min-w-0 flex-1">
-                <b className="font-semibold">{item.title}</b>
-                {item.detail && <span className="text-muted-foreground"> — {item.detail}</span>}
-              </span>
-              {item.ask && <AskAiButton question={item.ask} label="Explain" />}
-            </li>
-          ))}
+        <ul className="mt-3 space-y-0.5 border-t border-md-warning-600/15 pt-2.5" data-testid="strip-insights">
+          {insights.map((item) => {
+            const s = SEVERITY[item.severity];
+            return (
+              <li key={item.id} className="md-shell-strip-row">
+                <s.icon size={15} strokeWidth={2.2} className={cn("mt-0.5 shrink-0", s.tone)} aria-label={s.label} />
+                <span className="min-w-0 flex-1 text-[13px] leading-snug text-md-ink">
+                  <b className="font-bold">{item.title}</b>
+                  {item.detail && <span className="text-md-ink-soft"> — {item.detail}</span>}
+                </span>
+                {item.ask && <AskAiButton question={item.ask} label="Explain" />}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>
@@ -140,7 +140,7 @@ export function BriefBody({ page }: { page: string }) {
       {!brief.isLoading && kpis.length === 0 && insights.length === 0 && (
         <EmptyBlock title="Nothing to compare yet">
           There are no figures behind this page yet. Ask the assistant about it, or open{" "}
-          <Link href="/md/dashboard" className="font-semibold text-[#006496] underline">
+          <Link href="/md/dashboard" className="font-semibold text-md-wine underline">
             the dashboard
           </Link>
           .

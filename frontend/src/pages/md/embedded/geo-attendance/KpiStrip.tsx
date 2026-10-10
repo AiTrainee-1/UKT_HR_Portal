@@ -20,12 +20,12 @@ const ICONS: Record<TileIcon, ComponentType<{ size?: number }>> = {
 /** What the strip shows while the first answer is on its way: the same eight tiles, empty. */
 const SKELETON: { id: string; label: string; icon: TileIcon; tone: StatTone }[] = [
   { id: "sessions", label: "On-duty sessions", icon: "sessions", tone: "blue" },
-  { id: "people", label: "Employees who went out", icon: "people", tone: "indigo" },
-  { id: "punches", label: "On-duty punches", icon: "punches", tone: "teal" },
+  { id: "people", label: "Employees who went out", icon: "people", tone: "purple" },
+  { id: "punches", label: "On-duty punches", icon: "punches", tone: "indigo" },
   { id: "office", label: "Office geo punches", icon: "office", tone: "slate" },
   { id: "verified", label: "Verified by HR", icon: "verified", tone: "green" },
   { id: "waiting", label: "Waiting for HR now", icon: "waiting", tone: "amber" },
-  { id: "speed", label: "Median time to verify", icon: "speed", tone: "purple" },
+  { id: "speed", label: "Median time to verify", icon: "speed", tone: "blue" },
   { id: "mocked", label: "Simulated GPS punches", icon: "mocked", tone: "red" },
 ];
 
@@ -43,7 +43,10 @@ export default function KpiStrip({
   const data = summary.data;
   return (
     <div>
-      <div className={`grid grid-cols-2 gap-3 @3xl:grid-cols-4 ${refreshingClass(summary)}`} data-testid="md-geo-kpis">
+      <div
+        className={`grid grid-cols-1 gap-3 @sm:grid-cols-2 @3xl:grid-cols-4 ${refreshingClass(summary)}`}
+        data-testid="md-geo-kpis"
+      >
         {data
           ? kpiTiles(data, trend.data, verification.data).map((tile) => {
               const source = tile.source === "verification" ? verification.data : data;
@@ -77,7 +80,7 @@ export default function KpiStrip({
             ))}
       </div>
       {data && (
-        <p className="mt-2 px-1 text-[11px] text-[#006496]/55" data-testid="md-geo-compare">
+        <p className="md-analytics-note px-1" data-testid="md-geo-compare">
           Changes compare with {previousText(data)}, the same number of days just before.
         </p>
       )}

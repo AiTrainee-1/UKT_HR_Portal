@@ -13,7 +13,7 @@ export function MarbleSwitch({
   disabled?: boolean;
 }) {
   return (
-    <div className="ukt-switch-wrap" title={title}>
+    <div className="ukt-switch-wrap" title={title} data-slot="marble-switch">
       <input
         className="ukt-switch-input"
         type="checkbox"

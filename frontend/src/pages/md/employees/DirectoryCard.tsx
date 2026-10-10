@@ -6,7 +6,6 @@ import SectionCard from "@/components/md/kit/SectionCard";
 import { EmptyBlock, ErrorBanner } from "@/components/md/kit/states";
 import { DataPagination } from "@/components/ui/DataPagination";
 import { Input } from "@/components/ui/input";
-import { PillTabs } from "@/components/ui/pill-tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { describeMdError, useMdQuery, type MdQueryParams } from "@/lib/api-client/custom-hooks/md";
 import { dayLong, dayShort, num } from "@/lib/md/format";
@@ -18,6 +17,7 @@ import {
   directoryParams,
   type DirectoryFilters,
 } from "./logic";
+import SegTabs from "../embedded/shared/SegTabs";
 import { PersonCell, StatusChip } from "./parts";
 import type { DirectoryPerson, DirectoryStatus, EmployeesDirectory } from "./types";
 
@@ -52,7 +52,7 @@ function columns(onSelect: (id: number) => void): Column<DirectoryPerson>[] {
             e.stopPropagation();
             onSelect(p.id);
           }}
-          className="max-w-[16rem] text-left"
+          className="max-w-[16rem] rounded-lg text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-md-wine-500"
           aria-label={`Open ${p.name}`}
         >
           <PersonCell name={p.name} code={p.code} />
@@ -80,7 +80,7 @@ function columns(onSelect: (id: number) => void): Column<DirectoryPerson>[] {
       cell: (p) => (
         <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
           <StatusChip status={p.status} />
-          {p.leftOn && <span className="text-[10px] text-[#006496]/55">{dayShort(p.leftOn)}</span>}
+          {p.leftOn && <span className="text-[11px] text-md-ink-soft">{dayShort(p.leftOn)}</span>}
         </span>
       ),
       className: "hidden @xl:table-cell",
@@ -130,29 +130,38 @@ export default function DirectoryCard({
       <div className="space-y-3">
         <div className="flex flex-col gap-2 @3xl:flex-row @3xl:items-center">
           <div className="relative flex-1">
-            <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <Search
+              size={15}
+              className="pointer-events-none absolute left-3.5 top-1/2 z-10 -translate-y-1/2 text-md-ink-soft"
+            />
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search by name or employee code"
               aria-label="Search people"
-              className="h-10 pl-9 pr-9"
+              className="md-field h-10 pl-10 pr-10"
               data-testid="md-employees-search"
             />
             {search && (
-              <button
-                type="button"
-                onClick={() => setSearch("")}
-                aria-label="Clear search"
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-gray-400 hover:text-gray-700"
-              >
-                <X size={14} />
-              </button>
+              <span className="absolute right-0.5 top-1/2 z-10 -translate-y-1/2">
+                <button
+                  type="button"
+                  onClick={() => setSearch("")}
+                  aria-label="Clear search"
+                  className="md-btn md-btn-ghost md-btn-icon"
+                >
+                  <X size={14} />
+                </button>
+              </span>
             )}
           </div>
           <div className="grid grid-cols-2 gap-2 @3xl:flex">
             <Select value={filters.designation || ANY} onValueChange={(v) => set({ designation: v === ANY ? "" : v })}>
-              <SelectTrigger className="h-10 @3xl:w-48" aria-label="Designation" data-testid="md-employees-designation">
+              <SelectTrigger
+                className="md-field h-10 @3xl:w-48"
+                aria-label="Designation"
+                data-testid="md-employees-designation"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -171,7 +180,7 @@ export default function DirectoryCard({
                 if (chosen) set({ sort: chosen.sort, dir: chosen.dir });
               }}
             >
-              <SelectTrigger className="h-10 @3xl:w-48" aria-label="Sort by" data-testid="md-employees-sort">
+              <SelectTrigger className="md-field h-10 @3xl:w-48" aria-label="Sort by" data-testid="md-employees-sort">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -186,13 +195,13 @@ export default function DirectoryCard({
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <PillTabs
-            size="sm"
+          <SegTabs
+            label="Who to list"
             items={STATUS_TABS}
             value={filters.status}
             onChange={(v) => set({ status: v as DirectoryStatus })}
           />
-          <p className="text-xs text-gray-500" data-testid="md-employees-count">
+          <p className="text-xs text-md-ink-soft" data-testid="md-employees-count">
             {data
               ? data.total === 0
                 ? "No one found"
@@ -210,7 +219,7 @@ export default function DirectoryCard({
                     dir: filters.dir,
                   });
                 }}
-                className="ml-2 font-semibold text-blue-600 hover:underline"
+                className="md-analytics-link ml-2"
                 data-testid="md-employees-clear"
               >
                 Clear filters

@@ -1,5 +1,4 @@
 import { useState, type ReactNode } from "react";
-import { PillTabs } from "@/components/ui/pill-tabs";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -13,11 +12,11 @@ import {
 import type { MdOrg } from "@/lib/md/types";
 import { cn } from "@/lib/utils";
 
-/** The strip of filters at the top of an analysis page. */
+/** The strip of filters at the top of an analysis page: one glass bar holding a segmented period switch and the selects. */
 export function FilterBar({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <div
-      className={cn("flex flex-wrap items-center gap-x-4 gap-y-2.5 rounded-2xl border bg-white p-3", className)}
+      className={cn("md-shell-filterbar flex flex-wrap items-center gap-x-4 gap-y-3 px-4 py-3", className)}
       data-testid="md-filter-bar"
     >
       {children}
@@ -25,7 +24,8 @@ export function FilterBar({ children, className }: { children: ReactNode; classN
   );
 }
 
-/** Period presets as pills, plus "Custom" with two dates. Emits a choice only when it is usable. */
+/** Period presets as a segmented switch (the chosen one a wine glass pill), plus "Custom" with two dates. Emits a choice
+ *  only when it is usable. */
 export function PeriodBar({
   value,
   onChange,
@@ -45,38 +45,51 @@ export function PeriodBar({
     ...presets.map((p) => ({ value: p as string, label: PRESET_LABEL[p] })),
     ...(allowCustom ? [{ value: "custom", label: "Custom" }] : []),
   ];
+  const current = customOpen ? "custom" : value.preset;
 
   const apply = (nextFrom: string, nextTo: string) => {
     if (isValidCustom(nextFrom, nextTo)) onChange({ preset: "custom", from: nextFrom, to: nextTo });
   };
 
+  const choose = (v: string) => {
+    if (v === "custom") {
+      setCustomOpen(true);
+      apply(from, to);
+      return;
+    }
+    setCustomOpen(false);
+    onChange({ preset: v as PeriodPreset });
+  };
+
   return (
-    <div className="flex max-w-full flex-wrap items-center gap-2" data-testid="period-bar">
-      <div className="max-w-full overflow-x-auto">
-        <PillTabs
-          size="sm"
-          items={items}
-          value={customOpen ? "custom" : value.preset}
-          onChange={(v) => {
-            if (v === "custom") {
-              setCustomOpen(true);
-              apply(from, to);
-              return;
-            }
-            setCustomOpen(false);
-            onChange({ preset: v as PeriodPreset });
-          }}
-        />
+    <div className="flex max-w-full flex-wrap items-center gap-2.5" data-testid="period-bar">
+      <div
+        role="tablist"
+        aria-label="Period"
+        className="md-seg md-shell-seg md-shell-seg-sm max-w-full overflow-x-auto scrollbar-hide"
+      >
+        {items.map((item) => (
+          <button
+            key={item.value}
+            type="button"
+            role="tab"
+            aria-selected={item.value === current}
+            onClick={() => choose(item.value)}
+            className="md-seg-item whitespace-nowrap"
+          >
+            {item.label}
+          </button>
+        ))}
       </div>
       {customOpen && (
-        <div className="flex items-center gap-1.5 text-xs text-[#006496]/70">
+        <div className="flex flex-wrap items-center gap-1.5 text-xs font-medium text-md-ink-soft">
           <Input
             type="date"
             value={from}
             max={to || undefined}
             aria-label="From date"
             data-testid="period-from"
-            className="h-8 w-[9.5rem] text-xs"
+            className="md-field h-9 w-[9.5rem] text-xs"
             onChange={(e) => {
               setFrom(e.target.value);
               apply(e.target.value, to);
@@ -89,7 +102,7 @@ export function PeriodBar({
             min={from || undefined}
             aria-label="To date"
             data-testid="period-to"
-            className="h-8 w-[9.5rem] text-xs"
+            className="md-field h-9 w-[9.5rem] text-xs"
             onChange={(e) => {
               setTo(e.target.value);
               apply(from, e.target.value);
@@ -103,8 +116,8 @@ export function PeriodBar({
 
 const ALL = "__all__";
 
-/** Unit, department and staff/production selectors. Departments follow the chosen unit; the department is sent by NAME so
- *  a name that exists in several units covers all of them (the server groups them). */
+/** Unit, department and staff/production selectors, as frosted glass fields. Departments follow the chosen unit; the
+ *  department is sent by NAME so a name that exists in several units covers all of them (the server groups them). */
 export function ScopeBar({
   value,
   onChange,
@@ -125,6 +138,8 @@ export function ScopeBar({
     ),
   ).sort((a, b) => a.localeCompare(b));
 
+  const trigger = "md-field h-9 text-xs font-semibold";
+
   return (
     <div className="flex flex-wrap items-center gap-2" data-testid="scope-bar">
       <Select
@@ -138,7 +153,7 @@ export function ScopeBar({
           onChange({ ...value, branch, department: stillThere ? value.department : "" });
         }}
       >
-        <SelectTrigger className="h-8 w-[10.5rem] text-xs" aria-label="Unit" data-testid="scope-branch">
+        <SelectTrigger className={cn(trigger, "w-[10.5rem]")} aria-label="Unit" data-testid="scope-branch">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -156,7 +171,7 @@ export function ScopeBar({
           value={value.department || ALL}
           onValueChange={(v) => onChange({ ...value, department: v === ALL ? "" : v })}
         >
-          <SelectTrigger className="h-8 w-[11.5rem] text-xs" aria-label="Department" data-testid="scope-department">
+          <SelectTrigger className={cn(trigger, "w-[11.5rem]")} aria-label="Department" data-testid="scope-department">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -174,7 +189,11 @@ export function ScopeBar({
           value={value.type || ALL}
           onValueChange={(v) => onChange({ ...value, type: v === ALL ? "" : (v as ScopeChoice["type"]) })}
         >
-          <SelectTrigger className="h-8 w-[10.5rem] text-xs" aria-label="Staff or production" data-testid="scope-type">
+          <SelectTrigger
+            className={cn(trigger, "w-[10.5rem]")}
+            aria-label="Staff or production"
+            data-testid="scope-type"
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

@@ -22,11 +22,13 @@ export default function MonthPicker({
   const options = monthOptions(status, value);
   const latest = status?.defaultMonth ? ` (${monthText(status.defaultMonth)})` : "";
   return (
-    <div className="flex items-center gap-2" data-testid="md-payroll-month-picker">
-      <CalendarDays size={15} className="text-[#006496]/60" aria-hidden />
+    <div className="flex items-center gap-2.5" data-testid="md-payroll-month-picker">
+      <span className="md-money-filter-icon">
+        <CalendarDays size={15} aria-hidden />
+      </span>
       <Select value={value || LATEST} onValueChange={(v) => onChange(v === LATEST ? "" : v)}>
         <SelectTrigger
-          className="h-8 w-[15rem] max-w-full text-xs"
+          className="md-field h-9 w-[15rem] max-w-full text-[13px] font-semibold"
           aria-label="Payroll month"
           data-testid="md-payroll-month"
         >

@@ -1,22 +1,12 @@
 import { useState } from "react";
-import { Sparkles } from "lucide-react";
-import MdPageHeader from "@/components/md/kit/MdPageHeader";
-import { MD_GOLD_GRADIENT } from "@/components/md/MdSidebar";
 import MdLayout from "@/components/md/MdLayout";
 import { ErrorBanner, NoteBanner } from "@/components/md/kit/states";
 import { describeMdError, useMdMe, useMdQuery } from "@/lib/api-client/custom-hooks/md";
-import { openAssistant, usePublishAssistantContext } from "@/lib/md/assistant-store";
+import { usePublishAssistantContext } from "@/lib/md/assistant-store";
 import AttentionCard from "../dashboard/AttentionCard";
 import BriefingCard from "../dashboard/BriefingCard";
 import ExploreSection from "../dashboard/ExploreSection";
-import {
-  assistantContext,
-  BRIEFING_QUESTION,
-  failedSources,
-  failureMessage,
-  longDate,
-  pageNotes,
-} from "../dashboard/logic";
+import { assistantContext, failedSources, failureMessage, pageNotes } from "../dashboard/logic";
 import TrendsSection from "../dashboard/TrendsSection";
 import type { DashboardOverview, DashboardTrends } from "../dashboard/types";
 import CommandHeader from "./CommandHeader";
@@ -31,8 +21,9 @@ const REFRESH_MS = 60_000;
 /**
  * The Managing Director's dashboard: a command centre, not a copy of the HR dashboard.
  *
- *   title row    the same one every MD page has: the date, "Brief me" (the day's briefing), Updated / Refresh
- *   hero         the greeting, what wants the MD today, and the Ask bar that opens the AI assistant
+ *   hero         the date and the greeting (the page's heading: this page has no title strip of its own, by the owner's
+ *                choice), what wants the MD today, and the Ask bar that opens the AI assistant; "Give me a briefing"
+ *                is its first suggestion
  *   pulse        the company's headline figures, each with its change and a way into its page
  *   main column  the briefing, today at the factory (every unit), what needs attention, the trends
  *   right rail   the requests waiting (to look at: HR and the Department Heads decide them), quick actions, and what only
@@ -60,24 +51,7 @@ export default function MdDashboardHome() {
 
   return (
     <MdLayout>
-      <div className="mx-auto max-w-[1600px] space-y-5" data-testid="md-dashboard-page">
-        <MdPageHeader
-          title="Dashboard"
-          subtitle={longDate(data?.today ?? me.data?.serverTime)}
-          updatedAt={data?.generatedAt}
-          actions={
-            <button
-              type="button"
-              onClick={() => openAssistant(BRIEFING_QUESTION)}
-              data-testid="md-brief-me"
-              className="inline-flex items-center gap-1.5 rounded-full px-4 py-1.5 text-[12.5px] font-bold text-[#5b3d00] shadow-sm transition-transform hover:scale-[1.03]"
-              style={{ background: MD_GOLD_GRADIENT }}
-            >
-              <Sparkles size={13} /> Brief me
-            </button>
-          }
-        />
-
+      <div className="mx-auto max-w-[1600px] space-y-6" data-testid="md-dashboard-page">
         <CommandHeader
           name={me.data?.name}
           serverTime={me.data?.serverTime}
@@ -103,14 +77,14 @@ export default function MdDashboardHome() {
 
         <Pulse overview={data} failed={overview.isError} />
 
-        <div className="grid grid-cols-1 items-start gap-5 @5xl:grid-cols-[minmax(0,1fr)_380px]">
-          <div className="min-w-0 space-y-5">
+        <div className="grid grid-cols-1 items-start gap-6 @5xl:grid-cols-[minmax(0,1fr)_380px]">
+          <div className="min-w-0 space-y-6">
             <BriefingCard overview={data} failed={overview.isError} />
             <TodayUnits overview={data} failed={overview.isError} />
             <AttentionCard overview={data} failed={overview.isError} />
             <TrendsSection query={trends} />
           </div>
-          <aside className="min-w-0 space-y-5 @5xl:sticky @5xl:top-2" data-testid="md-home-rail">
+          <aside className="min-w-0 space-y-6 @5xl:sticky @5xl:top-2" data-testid="md-home-rail">
             <RequestsWaiting onTotal={setWaiting} />
             <Tools />
           </aside>

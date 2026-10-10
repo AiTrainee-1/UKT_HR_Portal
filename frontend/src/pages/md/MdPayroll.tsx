@@ -119,7 +119,13 @@ export default function MdPayroll() {
                 {emptyReason(summary.notes, "No salary slips exist for this month in this selection.")}
               </EmptyBlock>
               <div className="flex justify-center pb-4">
-                <Button variant="outline" size="sm" onClick={() => pickMonth("")} data-testid="md-payroll-go-latest">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="rounded-full"
+                  onClick={() => pickMonth("")}
+                  data-testid="md-payroll-go-latest"
+                >
                   Show the latest closed month
                 </Button>
               </div>

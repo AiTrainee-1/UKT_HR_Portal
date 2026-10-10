@@ -11,17 +11,11 @@ import { cn } from "@/lib/utils";
 // MdPageHeader (kit) lays them out for the pages the MD portal owns; MdEmbeddedFrame slots the same pieces into the title
 // row of an HR page's copy (embedded/headerRow.ts), so both kinds of page read alike.
 
-/** The green "Live" chip next to a page title. */
+/** The sage "Live" chip next to a page title: a pill with a softly ringed dot. */
 export function LiveChip({ className }: { className?: string }) {
   return (
-    <span
-      className={cn(
-        "inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700",
-        className,
-      )}
-      data-testid="md-live"
-    >
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+    <span className={cn("md-chip md-chip-success shrink-0", className)} data-testid="md-live">
+      <span className="md-shell-live-dot motion-safe:animate-pulse" aria-hidden="true" />
       Live
     </span>
   );
@@ -32,7 +26,7 @@ export type FrameTab = "operations" | "insights";
 const TAB_ICON = { operations: LayoutGrid, insights: BrainCircuit } as const;
 const TAB_LABEL = { operations: "Operations", insights: "Insights & AI" } as const;
 
-/** The switch between a page itself and its Insights: a pale track, the chosen side in amber. */
+/** The switch between a page itself and its Insights: a frosted track, the chosen side a wine glass pill. */
 export function ModeTabs({
   active,
   onSelect,
@@ -49,7 +43,7 @@ export function ModeTabs({
     <div
       role="tablist"
       aria-label={label}
-      className={cn("inline-flex shrink-0 items-center gap-1 rounded-xl bg-[#e8eff7] p-1", className)}
+      className={cn("md-seg md-shell-seg max-w-full shrink-0", className)}
       data-testid="md-tabs"
     >
       {(["operations", "insights"] as const).map((id) => {
@@ -63,12 +57,9 @@ export function ModeTabs({
             aria-selected={on}
             data-testid={`md-tab-${id}`}
             onClick={() => onSelect(id)}
-            className={cn(
-              "flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-[13px] font-bold transition-colors",
-              on ? "bg-[#f59e0b] text-white shadow-sm" : "text-[#1a3a4a]/75 hover:bg-white/70 hover:text-[#1a3a4a]",
-            )}
+            className="md-seg-item whitespace-nowrap"
           >
-            <Icon size={14} strokeWidth={2.2} /> {TAB_LABEL[id]}
+            <Icon size={14} strokeWidth={2.2} aria-hidden="true" /> {TAB_LABEL[id]}
           </button>
         );
       })}
@@ -79,21 +70,21 @@ export function ModeTabs({
 /**
  * The far right of the title row: when the data on screen arrived (or, on the analytics pages, the moment the server made
  * its numbers: `stamp`) over a Refresh button that reloads everything on the page. A hairline sets it apart from the
- * page's own buttons.
+ * page's own buttons. It stays under 44 px tall: the HR pages' copies pin it to a 44 px corner of their own title row.
  */
 export function UpdatedRefresh({ stamp, className }: { stamp?: ReactNode; className?: string }) {
   const { refresh, busy, lastUpdated } = useRefreshAction();
   return (
     <div className={cn("flex shrink-0 items-stretch gap-3 print:hidden", className)} data-testid="md-refresh-stack">
-      <span aria-hidden className="w-px self-stretch bg-[#006496]/15" />
-      <div className="flex flex-col items-end justify-center leading-tight">
+      <span aria-hidden className="w-px self-stretch bg-md-line" />
+      <div className="flex flex-col items-end justify-center gap-0.5 leading-tight">
         {stamp ? (
-          <span className="text-[11px] tabular-nums text-gray-500" data-testid="md-updated">
+          <span className="text-[11px] font-medium tabular-nums text-md-ink-soft" data-testid="md-updated">
             {stamp}
           </span>
         ) : (
           lastUpdated > 0 && (
-            <span className="text-[11px] tabular-nums text-gray-500" data-testid="md-updated">
+            <span className="text-[11px] font-medium tabular-nums text-md-ink-soft" data-testid="md-updated">
               Updated {clock(lastUpdated)}
             </span>
           )
@@ -104,9 +95,10 @@ export function UpdatedRefresh({ stamp, className }: { stamp?: ReactNode; classN
           disabled={busy}
           aria-label="Refresh this page"
           data-testid="md-refresh"
-          className="mt-0.5 inline-flex items-center gap-1.5 text-[13px] font-semibold text-[#0b78b0] transition-colors hover:text-[#006496] disabled:opacity-60"
+          className="md-btn md-btn-soft md-shell-refresh"
         >
-          <RefreshCw size={13} className={busy ? "animate-spin" : ""} /> Refresh
+          <RefreshCw size={12} strokeWidth={2.4} className={cn("text-md-wine", busy && "motion-safe:animate-spin")} />{" "}
+          Refresh
         </button>
       </div>
     </div>

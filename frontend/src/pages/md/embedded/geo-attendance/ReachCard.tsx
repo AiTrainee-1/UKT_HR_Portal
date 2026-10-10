@@ -27,14 +27,14 @@ export default function ReachCard({ query, ask }: { query: UseQueryResult<GeoRea
       ) : reach && reach.punches > 0 ? (
         <>
           <BarList items={bandBars(reach)} testId="md-geo-reach-bars" />
-          <p className="mt-3 text-xs text-[#006496]/70" data-testid="md-geo-reach-line">
+          <p className="md-analytics-note" data-testid="md-geo-reach-line">
             {reach.farthestKm != null ? `Farthest punch: ${num(reach.farthestKm, 1)} km from its unit. ` : ""}
             {num(reach.farPunches)} {reach.farPunches === 1 ? "punch was" : "punches were"} over {num(reach.farKm)} km
             away
             {reach.farPunches > 0 ? ` (${num(reach.farPeople)} ${reach.farPeople === 1 ? "person" : "people"})` : ""}.
           </p>
           {reach.unknownPunches > 0 && (
-            <p className="mt-1 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900">
+            <p className="md-analytics-callout md-analytics-tone-watch">
               {num(reach.unknownPunches)} of {num(reach.punches)} punches cannot be placed: their unit has no location
               set (Branches).
             </p>

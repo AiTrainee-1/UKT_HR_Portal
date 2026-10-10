@@ -9,17 +9,17 @@ import { closeAssistant, useAssistantState } from "@/lib/md/assistant-store";
 import AssistantPanel from "./AssistantPanel";
 import Launcher from "./Launcher";
 
+// Only the keyframes live here (md-theme.test.ts does not accept percentage selectors in an area file); the classes that use
+// them are in md-theme/areas/assistant.css, and every colour is a palette variable.
 const STYLES = `
-  .assistant-shimmer { background: linear-gradient(90deg, #7a5410 0%, #e0a83a 45%, #7a5410 90%); background-size: 200% 100%;
-    -webkit-background-clip: text; background-clip: text; color: transparent; animation: assistant-shimmer 1.6s linear infinite; }
-  @keyframes assistant-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
-  .assistant-orb-glow { background: radial-gradient(circle, rgba(246,210,122,.55) 0%, rgba(246,210,122,0) 68%); animation: assistant-orb 3.2s ease-in-out infinite; }
-  .assistant-orb-ring { animation: assistant-ring 3.2s ease-in-out infinite; }
-  @keyframes assistant-orb { 0%,100% { transform: scale(.92); opacity: .75; } 50% { transform: scale(1.12); opacity: 1; } }
-  @keyframes assistant-ring { 0%,100% { transform: scale(.96); opacity: .5; } 50% { transform: scale(1.06); opacity: 1; } }
-  @media (prefers-reduced-motion: reduce) {
-    .assistant-shimmer, .assistant-orb-glow, .assistant-orb-ring { animation: none; }
-    .assistant-shimmer { color: #7a5410; background: none; }
+  @keyframes md-assistant-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+  @keyframes md-assistant-orb { 0%,100% { transform: scale(.92); opacity: .75; } 50% { transform: scale(1.1); opacity: 1; } }
+  @keyframes md-assistant-ring { 0%,100% { transform: scale(.97); opacity: .45; } 50% { transform: scale(1.05); opacity: 1; } }
+  @keyframes md-assistant-slide { 0% { background-position: -60% 0; } 100% { background-position: 160% 0; } }
+  @keyframes md-assistant-bob { 0%,100% { translate: 0 0; } 50% { translate: 0 -3px; } }
+  @keyframes md-assistant-face-pulse {
+    0%,100% { box-shadow: 0 0 0 2px rgba(255,255,255,.96), 0 0 0 3px color-mix(in srgb, var(--md-wine) 16%, transparent), 0 8px 18px -6px color-mix(in srgb, var(--md-wine) 45%, transparent); }
+    50% { box-shadow: 0 0 0 2px rgba(255,255,255,.96), 0 0 0 6px color-mix(in srgb, var(--md-wine) 26%, transparent), 0 10px 22px -4px color-mix(in srgb, var(--md-wine) 55%, transparent); }
   }
 `;
 

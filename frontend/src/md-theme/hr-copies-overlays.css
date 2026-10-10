@@ -1,0 +1,211 @@
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   hr-copies: floating layers. Dialogs, alert dialogs, sheets, popovers, select and menu panels, tooltips, toasts.
+   They render in a portal under <body>, which is why the MD skin switch lives on <html> (lib/md/theme.ts); the hooks are
+   the data-slot markers on the shared components (components/ui). Every selector starts with html[data-md-theme].
+   One recipe: a frosted panel (translucent, blurred, a light edge, an indigo-tinted shadow) over an indigo veil.
+   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* ── the veil behind a dialog or a sheet ──────────────────────────────────────────────────────────────────────────── */
+
+html[data-md-theme] :is([data-slot="dialog-overlay"], [data-slot="alert-dialog-overlay"], [data-slot="sheet-overlay"]) {
+  background: radial-gradient(900px 520px at 50% 0%, rgba(127, 1, 31, 0.16), transparent 70%), rgba(27, 29, 54, 0.42);
+  -webkit-backdrop-filter: blur(8px) saturate(1.15);
+  backdrop-filter: blur(8px) saturate(1.15);
+}
+
+/* ── dialogs ──────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+html[data-md-theme] :is([data-slot="dialog-content"], [data-slot="alert-dialog-content"]) {
+  background:
+    radial-gradient(520px 260px at 100% 0%, rgba(127, 1, 31, 0.06), transparent 70%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.9) 0%, rgba(250, 245, 232, 0.84) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  border-radius: 1.5rem;
+  box-shadow:
+    0 32px 80px -20px rgba(27, 29, 54, 0.55),
+    0 4px 16px rgba(40, 43, 74, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    inset 0 0 0 1px rgba(40, 43, 74, 0.04);
+  -webkit-backdrop-filter: blur(28px) saturate(1.6);
+  backdrop-filter: blur(28px) saturate(1.6);
+  color: var(--md-ink-800);
+}
+html[data-md-theme] :is([data-slot="dialog-title"], [data-slot="sheet-title"]) {
+  color: var(--md-ink-800);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+html[data-md-theme] [data-slot="dialog-description"] {
+  color: var(--md-ink-600);
+}
+html[data-md-theme] [data-slot="dialog-close"],
+html[data-md-theme] [data-slot="sheet-close"] {
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 9999px;
+  background: rgba(40, 43, 74, 0.06);
+  color: var(--md-ink-600);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  opacity: 1;
+  transition:
+    background 0.18s ease,
+    color 0.18s ease,
+    transform 0.15s ease;
+}
+html[data-md-theme] [data-slot="dialog-close"]:hover,
+html[data-md-theme] [data-slot="sheet-close"]:hover {
+  background: rgba(127, 1, 31, 0.1);
+  color: var(--md-wine-700);
+}
+html[data-md-theme] [data-slot="dialog-close"]:active,
+html[data-md-theme] [data-slot="sheet-close"]:active {
+  transform: scale(0.94);
+}
+html[data-md-theme] [data-slot="sheet-close"] {
+  padding: 0.3rem;
+}
+@media (max-width: 640px) {
+  /* a dialog keeps a 16px gutter on a phone instead of touching both edges */
+  html[data-md-theme] :is([data-slot="dialog-content"], [data-slot="alert-dialog-content"]) {
+    width: calc(100vw - 2rem);
+    max-width: calc(100vw - 2rem);
+  }
+}
+
+/* ── sheets (side panels) ─────────────────────────────────────────────────────────────────────────────────────────── */
+
+html[data-md-theme] [data-slot="sheet-content"] {
+  background:
+    radial-gradient(420px 240px at 100% 0%, rgba(127, 1, 31, 0.05), transparent 70%),
+    linear-gradient(180deg, rgba(252, 249, 242, 0.94) 0%, rgba(247, 241, 226, 0.9) 100%);
+  border-color: rgba(255, 255, 255, 0.8);
+  box-shadow:
+    0 0 80px -12px rgba(27, 29, 54, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  -webkit-backdrop-filter: blur(26px) saturate(1.5);
+  backdrop-filter: blur(26px) saturate(1.5);
+  color: var(--md-ink-800);
+}
+html[data-md-theme] [data-slot="sheet-content"][class~="right-0"] {
+  border-radius: 1.5rem 0 0 1.5rem;
+}
+html[data-md-theme] [data-slot="sheet-content"][class~="left-0"] {
+  border-radius: 0 1.5rem 1.5rem 0;
+}
+
+/* ── panels that hang off a control: popovers, select lists, menus ────────────────────────────────────────────────── */
+
+html[data-md-theme] :is([data-slot="popover-panel"], [data-slot="select-content"], [data-slot="dropdown-content"]) {
+  background: var(--hrc-pop-bg);
+  border: 1px solid var(--hrc-pop-edge);
+  border-radius: 1rem;
+  box-shadow: var(--hrc-pop-shadow);
+  -webkit-backdrop-filter: blur(22px) saturate(1.6);
+  backdrop-filter: blur(22px) saturate(1.6);
+  color: var(--md-ink-800);
+}
+
+/* an item: a soft wine wash under the pointer or the keyboard (not the solid wine the accent token would paint) */
+html[data-md-theme] :is([data-slot="select-item"], [data-slot="dropdown-item"]) {
+  border-radius: 0.65rem;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+html[data-md-theme] :is([data-slot="select-item"], [data-slot="dropdown-item"])[data-highlighted] {
+  background: rgba(127, 1, 31, 0.09);
+  color: var(--md-wine-800);
+}
+html[data-md-theme] :is([data-slot="select-item"], [data-slot="dropdown-item"])[data-state="checked"] {
+  color: var(--md-wine-800);
+  font-weight: 700;
+}
+/* the tick of a chosen option, not the icons a menu item may carry */
+html[data-md-theme] [data-slot="select-item"] > span svg,
+html[data-md-theme] [data-slot="dropdown-item"][data-state="checked"] > span svg {
+  color: var(--md-wine-700);
+}
+/* a destructive menu item keeps its red under the pointer */
+html[data-md-theme]
+  [data-slot="dropdown-item"][data-highlighted]:is(
+    [class~="text-red-600"],
+    [class~="text-red-500"],
+    [class~="text-destructive"]
+  ) {
+  background: rgba(183, 45, 51, 0.09);
+  color: var(--md-danger-700);
+}
+html[data-md-theme] :is([data-slot="select-label"], [data-slot="dropdown-label"]) {
+  color: var(--md-ink-600);
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+html[data-md-theme] :is([data-slot="select-separator"], [data-slot="dropdown-separator"]) {
+  background: var(--md-line);
+}
+
+/* ── tooltips: midnight indigo glass with sand text ───────────────────────────────────────────────────────────────── */
+
+html[data-md-theme] [data-slot="tooltip-panel"] {
+  background: linear-gradient(135deg, rgba(40, 43, 74, 0.96) 0%, rgba(62, 66, 108, 0.92) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 0.65rem;
+  box-shadow:
+    0 12px 28px -10px rgba(27, 29, 54, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  -webkit-backdrop-filter: blur(10px) saturate(1.4);
+  backdrop-filter: blur(10px) saturate(1.4);
+  color: var(--md-sand);
+  font-weight: 600;
+}
+/* the small hover labels above icon actions keep their meaning (blue info, green good, amber watch, red bad) in palette
+   colours; their colour is an inline style */
+html[data-md-theme] [data-slot="action-tooltip-label"] {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow:
+    0 10px 22px -8px rgba(27, 29, 54, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+html[data-md-theme] [data-slot="action-tooltip-label"][style*="background-color: rgb(37, 99, 235)"] {
+  background: linear-gradient(135deg, rgba(40, 43, 74, 0.97), rgba(62, 66, 108, 0.92)) !important;
+}
+html[data-md-theme] [data-slot="action-tooltip-label"][style*="background-color: rgb(5, 150, 105)"] {
+  background: linear-gradient(135deg, rgba(43, 89, 60, 0.97), rgba(66, 138, 93, 0.92)) !important;
+}
+html[data-md-theme] [data-slot="action-tooltip-label"][style*="background-color: rgb(217, 119, 6)"] {
+  background: linear-gradient(135deg, rgba(118, 80, 23, 0.97), rgba(185, 130, 32, 0.92)) !important;
+}
+html[data-md-theme] [data-slot="action-tooltip-label"][style*="background-color: rgb(220, 38, 38)"] {
+  background: linear-gradient(135deg, rgba(150, 31, 41, 0.97), rgba(206, 61, 61, 0.92)) !important;
+}
+
+/* ── toasts ───────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+html[data-md-theme] [data-slot="toast"] {
+  background: var(--hrc-pop-bg);
+  border: 1px solid var(--hrc-pop-edge);
+  border-radius: 1rem;
+  box-shadow:
+    var(--hrc-pop-shadow),
+    inset 3px 0 0 var(--md-wine-600);
+  -webkit-backdrop-filter: blur(22px) saturate(1.6);
+  backdrop-filter: blur(22px) saturate(1.6);
+  color: var(--md-ink-800);
+}
+html[data-md-theme] [data-slot="toast"][data-variant="destructive"] {
+  background: linear-gradient(135deg, rgba(150, 31, 41, 0.97) 0%, rgba(183, 45, 51, 0.93) 100%);
+  border-color: rgba(255, 255, 255, 0.25);
+  box-shadow:
+    0 24px 50px -14px rgba(183, 45, 51, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  color: white;
+}
+html[data-md-theme] [data-slot="toast-action"] {
+  border-radius: 9999px;
+  border-color: var(--hrc-hair);
+  font-weight: 700;
+}
+html[data-md-theme] [data-slot="toast-close"] {
+  border-radius: 9999px;
+}

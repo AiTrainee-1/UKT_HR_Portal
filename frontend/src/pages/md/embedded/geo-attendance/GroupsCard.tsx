@@ -13,11 +13,11 @@ function LabelCell({ row }: { row: GeoGroupRow }) {
   const detail = participationText(row);
   return (
     <div className="min-w-[8rem]">
-      <p className="font-semibold text-[#1a3a4a]">
+      <p className="font-semibold text-md-ink">
         {row.label}
         {row.lowSample && row.sessions > 0 && <SmallSample />}
       </p>
-      {detail && <p className="text-[11px] text-[#006496]/60">{detail}</p>}
+      {detail && <p className="text-[11px] text-md-ink-soft">{detail}</p>}
     </div>
   );
 }
@@ -26,9 +26,9 @@ function SessionsCell({ row }: { row: GeoGroupRow }) {
   const chip = deltaChip(row.change.sessions, "pct", "none");
   return (
     <div className="flex flex-col items-end gap-0.5">
-      <span className="font-bold tabular-nums text-[#1a3a4a]">{num(row.sessions)}</span>
+      <span className="font-bold tabular-nums text-md-ink">{num(row.sessions)}</span>
       {row.shareOfSessionsPct != null && (
-        <span className="text-[11px] text-[#006496]/55">{pct(row.shareOfSessionsPct, 0)} of all</span>
+        <span className="text-[11px] text-md-ink-soft">{pct(row.shareOfSessionsPct, 0)} of all</span>
       )}
       {chip && <DeltaChip {...chip} />}
     </div>
@@ -90,7 +90,7 @@ export default function GroupsCard({
       bodyClassName={refreshingClass(query)}
       testId="md-geo-groups"
     >
-      <div className="mb-3 overflow-x-auto" data-testid="md-geo-group-tabs">
+      <div className="mb-4" data-testid="md-geo-group-tabs">
         {tabs}
       </div>
       {query.isError ? (
@@ -98,7 +98,7 @@ export default function GroupsCard({
       ) : data ? (
         <>
           {data.average.sessions > 0 && (
-            <p className="mb-2 text-xs text-[#006496]/70">
+            <p className="mb-3 text-xs text-md-ink-soft">
               Overall: {num(data.average.sessions)} sessions by {num(data.average.people)} people
               {data.average.participationPct != null ? ` (${pct(data.average.participationPct, 0)} of employees)` : ""}
               {data.average.sessionsPerPerson != null ? `, ${num(data.average.sessionsPerPerson, 1)} each` : ""}.
@@ -115,10 +115,10 @@ export default function GroupsCard({
             testId="md-geo-groups-table"
           />
           {onFocus && data.rows.length > 0 && (
-            <p className="mt-2 text-[11px] text-[#006496]/55">Click a row to focus the whole tab on it.</p>
+            <p className="md-analytics-note">Click a row to focus the whole tab on it.</p>
           )}
           {data.truncated && (
-            <p className="mt-1 text-[11px] text-[#006496]/55">
+            <p className="md-analytics-note">
               Showing the {num(data.rows.length)} biggest of {num(data.total)}.
             </p>
           )}

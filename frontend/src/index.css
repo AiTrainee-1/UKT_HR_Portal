@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "./md-theme/index.css";
 @plugin "@tailwindcss/typography";
 
 /* ── UKT Clay Tab System ────────────────────────────────────────── */

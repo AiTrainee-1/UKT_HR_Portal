@@ -36,7 +36,12 @@ export interface BadgeProps
 
 function Badge({ className, variant, ...props }: BadgeProps) {
   return (
-    <div className={cn(badgeVariants({ variant }), className)} {...props} />
+    <div
+      className={cn(badgeVariants({ variant }), className)}
+      data-slot="badge"
+      data-variant={variant ?? "default"}
+      {...props}
+    />
   )
 }
 

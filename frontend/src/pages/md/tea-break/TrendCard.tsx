@@ -32,7 +32,7 @@ const AVERAGE: TrendSeries = {
   key: "average",
   label: "7-day average",
   kind: "line",
-  color: CHART.brand,
+  color: CHART.deep,
   dashed: true,
   rightAxis: true,
 };
@@ -66,12 +66,14 @@ export default function TrendCard({ query, ask }: { query: UseQueryResult<TeaTre
       ) : trend && verdict && hasMeasuredBreaks(trend) ? (
         <>
           <div
-            className={cn("mb-3 flex items-start gap-2 rounded-xl border p-3 text-sm", VERDICT_STYLE[verdict].box)}
+            className={cn("md-analytics-verdict", VERDICT_STYLE[verdict].box)}
             data-testid="md-tea-break-verdict"
             data-verdict={verdict}
           >
-            <VerdictIcon size={16} className="mt-0.5 shrink-0" aria-label={VERDICT_STYLE[verdict].label} />
-            <p>{trend.momentum.text}</p>
+            <span className="md-analytics-verdict-icon">
+              <VerdictIcon size={16} aria-label={VERDICT_STYLE[verdict].label} />
+            </span>
+            <p className="min-w-0 self-center">{trend.momentum.text}</p>
           </div>
           <TrendChart
             data={rows}
@@ -83,15 +85,13 @@ export default function TrendCard({ query, ask }: { query: UseQueryResult<TeaTre
             rightFormat={(v) => pct(v, 0)}
           />
           {trend.worstDay && (
-            <p className="mt-2 text-xs text-[#006496]/70" data-testid="md-tea-break-worst-day">
+            <p className="md-analytics-note" data-testid="md-tea-break-worst-day">
               Worst day: {dayLong(trend.worstDay.date)}, {minutesText(trend.worstDay.minutesLost)} lost
               {trend.worstDay.overrunPct != null ? ` (${pct(trend.worstDay.overrunPct, 0)} of breaks ran over)` : ""}.
             </p>
           )}
           {weekly && (
-            <p className="mt-1 text-[11px] text-[#006496]/55">
-              Each point is a week (Monday to Sunday), labelled by its first day.
-            </p>
+            <p className="md-analytics-note">Each point is a week (Monday to Sunday), labelled by its first day.</p>
           )}
         </>
       ) : trend ? (

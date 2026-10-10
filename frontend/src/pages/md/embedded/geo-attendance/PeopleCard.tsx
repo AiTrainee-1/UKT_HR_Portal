@@ -13,15 +13,13 @@ const COLUMNS: Column<GeoPerson>[] = [
     sortValue: (r) => r.employeeName.toLowerCase(),
     cell: (r) => (
       <div className="min-w-[8rem]">
-        <p className="font-semibold text-[#1a3a4a]">
+        <p className="font-semibold text-md-ink">
           {r.employeeName}
           {r.frequent && (
-            <span className="ml-1.5 rounded-full bg-blue-100 px-1.5 py-0.5 align-middle text-[9.5px] font-semibold text-blue-800">
-              frequent
-            </span>
+            <span className="md-chip md-chip-wine md-analytics-chip-sm ml-1.5 align-middle">frequent</span>
           )}
         </p>
-        <p className="text-[11px] text-[#006496]/60">
+        <p className="text-[11px] text-md-ink-soft">
           {[r.employeeCode, r.department, r.unit].filter(Boolean).join(" · ")}
         </p>
       </div>
@@ -81,7 +79,7 @@ export default function PeopleCard({ query, ask }: { query: UseQueryResult<GeoPe
             testId="md-geo-people-table"
           />
           {data.truncated && (
-            <p className="mt-1 text-[11px] text-[#006496]/55">
+            <p className="md-analytics-note">
               Showing the {num(data.rows.length)} who went out most, of {num(data.total)}.
             </p>
           )}

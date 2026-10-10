@@ -69,7 +69,7 @@ export default function MdVisitors() {
         <FilterBar>
           <PeriodBar value={period} onChange={setPeriod} />
           <ScopeBar value={scope} onChange={setScope} org={org.data} />
-          <span className="hidden max-w-sm text-[11px] leading-snug text-[#006496]/55 xl:inline">
+          <span className="hidden max-w-sm text-[11px] leading-snug text-md-ink-soft xl:inline">
             Unit narrows everything. Department and staff or production apply to the employee who leaves and to the
             person visited.
           </span>

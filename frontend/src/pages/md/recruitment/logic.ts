@@ -50,6 +50,15 @@ export function plural(n: number, one: string, many = `${one}s`): string {
   return `${num(n)} ${n === 1 ? one : many}`;
 }
 
+/** The letters of an avatar: the first letter of the first two words of a name ("S. Ramanathan" is "SR", "Anil" is "A"). */
+export function initialsOf(name: string | null | undefined): string {
+  const words = (name ?? "").replace(/\([^)]*\)/g, " ").match(/[\p{L}\p{N}]+/gu) ?? [];
+  return words
+    .slice(0, 2)
+    .map((w) => w[0].toUpperCase())
+    .join("");
+}
+
 // ─── change chips ───
 
 /** The change chip for a KPI. `good` is the direction that is good news (more joiners, fewer leavers). */
@@ -103,7 +112,7 @@ export function funnelBars(stages: FunnelStage[]): FunnelBar[] {
   });
 }
 
-/** Bar colour for step `index` of `total`: the portal's blue ramp, light to dark down the funnel. */
+/** Bar colour for step `index` of `total`: the portal's wine ramp, light at the top of the funnel and dark at the bottom. */
 export function stepColor(index: number, total: number): string {
   const ramp = CHART.ramp;
   const position = total <= 1 ? 0 : index / (total - 1);
@@ -126,11 +135,11 @@ export function ageBar(days: number, staleAfter: number, maxDays: number): AgeBa
 }
 
 export const MIX_META: { key: keyof StageMix; label: string; color: string }[] = [
-  { key: "applied", label: "Applied", color: "#94a3b8" },
-  { key: "attended", label: "Attended interview", color: "#4FB8F0" },
+  { key: "applied", label: "Applied", color: "var(--md-n-400)" },
+  { key: "attended", label: "Attended interview", color: "var(--md-wine-300)" },
   { key: "selected", label: "Selected", color: CHART.good },
-  { key: "rejected", label: "Rejected", color: "#fca5a5" },
-  { key: "other", label: "Other", color: "#cbd5e1" },
+  { key: "rejected", label: "Rejected", color: "var(--md-danger-200)" },
+  { key: "other", label: "Other", color: "var(--md-n-300)" },
 ];
 
 export type MixSegment = { key: keyof StageMix; label: string; count: number; widthPct: number; color: string };
@@ -155,13 +164,20 @@ export function mixTitle(mix: StageMix): string {
 
 // ─── the staffing gap ───
 
-/** Red below 70% of the plan, amber below 90%, otherwise the portal blue. */
+/** Crimson below 70% of the plan, ochre below 90%, otherwise the portal's wine. */
 export function gapColor(fillPct: number | null): string {
   if (fillPct == null) return CHART.slate;
   if (fillPct < 70) return CHART.bad;
   if (fillPct < 90) return CHART.warn;
   return CHART.brand;
 }
+
+/** What the colours of the staffing-gap bars stand for (the same thresholds as gapColor), shown as a key under them. */
+export const GAP_KEY: { label: string; color: string }[] = [
+  { label: "Under 70% filled", color: CHART.bad },
+  { label: "70 to 89% filled", color: CHART.warn },
+  { label: "90% or more", color: CHART.brand },
+];
 
 /** The departments that are short of staff, biggest gap first, as ranked bars. Fully staffed ones are left out. */
 export function gapBarItems(rows: GapRow[]): BarItem[] {
@@ -182,16 +198,18 @@ export function gapBarItems(rows: GapRow[]): BarItem[] {
 
 // ─── resignations ───
 
+// One colour per reason, from the chart palette (wine and indigo first, then the hues furthest from them). Reasons are
+// categories, not good or bad, so no reason borrows a status colour's meaning: "health" is terracotta, not crimson.
 const REASON_COLOR: Record<string, string> = {
-  pay: "#006496",
-  family: "#8b5cf6",
-  health: "#ef4444",
-  relocation: "#0d9488",
-  business: "#f59e0b",
-  growth: "#0096c7",
-  work: "#4FB8F0",
-  other: "#64748b",
-  not_stated: "#cbd5e1",
+  pay: CHART.series[0], // wine
+  family: CHART.series[1], // indigo
+  health: CHART.series[7], // terracotta
+  relocation: CHART.series[4], // sage
+  business: CHART.series[3], // ochre
+  growth: CHART.series[5], // periwinkle
+  work: CHART.series[2], // dusty rose
+  other: "var(--md-n-400)", // a cool grey
+  not_stated: "var(--md-n-300)", // a warm, lighter grey
 };
 
 /** Reason groups as donut slices with a fixed colour per reason, so a colour means the same thing in every period. */

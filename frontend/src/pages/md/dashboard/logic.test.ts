@@ -48,6 +48,25 @@ describe("the hero", () => {
     expect(firstName(undefined)).toBe("");
   });
 
+  it("greets a job title by the whole title, not by its first word", () => {
+    expect(firstName("Managing Director")).toBe("Managing Director");
+    expect(firstName("managing   director")).toBe("managing director");
+    expect(firstName("Joint Managing Director")).toBe("Joint Managing Director");
+    expect(firstName("Director")).toBe("Director");
+    expect(firstName("MD")).toBe("MD");
+    expect(firstName("M.D.")).toBe("M.D.");
+    expect(firstName("Chairman")).toBe("Chairman");
+    expect(firstName("Sir")).toBe("Sir");
+    expect(firstName("Madam")).toBe("Madam");
+    // a person's name with a post in front, or an honorific, still gives the person
+    expect(firstName("Managing Director R. Murugan")).toBe("Murugan");
+    expect(firstName("Mr. Rajesh Kumar")).toBe("Rajesh");
+    expect(firstName("R. Murugan")).toBe("Murugan");
+    // a name that merely resembles a title word is a name
+    expect(firstName("md_test")).toBe("md_test");
+    expect(firstName("Directora Rao")).toBe("Directora");
+  });
+
   it("writes the date in full, without depending on the browser's locale", () => {
     expect(longDate("2026-10-05")).toBe("Monday, 5 October 2026");
     expect(longDate("2026-10-05T14:10:00")).toBe("Monday, 5 October 2026");
@@ -62,6 +81,8 @@ describe("the hero", () => {
     expect(greetingLine("2026-10-05T14:10:00", "R. Murugan")).toBe("Good afternoon, Murugan");
     expect(greetingLine("2026-10-05T19:30:00", "Sundar")).toBe("Good evening, Sundar");
     expect(greetingLine("2026-10-05T14:10:00", undefined)).toBe("Good afternoon");
+    expect(greetingLine("2026-10-10T14:10:00", "Managing Director")).toBe("Good afternoon, Managing Director");
+    expect(greetingLine("2026-10-10T09:00:00", "Chairman")).toBe("Good morning, Chairman");
   });
 
   it("asks the assistant the briefing question the server also uses", () => {

@@ -16,8 +16,8 @@ const COLUMNS: Column<TeaOffender>[] = [
     sortValue: (r) => r.employeeName.toLowerCase(),
     cell: (r) => (
       <div className="min-w-[9rem]">
-        <p className="font-semibold text-[#1a3a4a]">{r.employeeName}</p>
-        <p className="text-[11px] text-[#006496]/60">{offenderSub(r)}</p>
+        <p className="font-semibold text-md-ink">{r.employeeName}</p>
+        <p className="text-[11px] text-md-ink-soft">{offenderSub(r)}</p>
       </div>
     ),
   },
@@ -28,9 +28,9 @@ const COLUMNS: Column<TeaOffender>[] = [
     sortValue: (r) => r.overruns,
     cell: (r) => (
       <div className="flex flex-col items-end">
-        <span className="font-bold tabular-nums text-[#1a3a4a]">{num(r.overruns)}</span>
+        <span className="font-bold tabular-nums text-md-ink">{num(r.overruns)}</span>
         {r.overrunPct != null && (
-          <span className="text-[11px] text-[#006496]/55">
+          <span className="text-[11px] text-md-ink-soft">
             {pct(r.overrunPct, 0)} of {num(r.measured)} breaks
           </span>
         )}
@@ -52,7 +52,7 @@ const COLUMNS: Column<TeaOffender>[] = [
     cell: (r) => (
       <div className="flex flex-col items-end">
         <span className="tabular-nums">{worstCase(r)}</span>
-        {r.worstOverBy != null && <span className="text-[11px] text-[#006496]/55">{num(r.worstOverBy)} min over</span>}
+        {r.worstOverBy != null && <span className="text-[11px] text-md-ink-soft">{num(r.worstOverBy)} min over</span>}
       </div>
     ),
   },
@@ -85,7 +85,7 @@ export default function OffendersCard({ query, ask }: { query: UseQueryResult<Te
         ) : (
           <>
             {data.shareOfMinutesLostPct != null && (
-              <p className="mb-2 text-xs text-[#006496]/70" data-testid="md-tea-break-offenders-share">
+              <p className="mb-3 text-xs text-md-ink-soft" data-testid="md-tea-break-offenders-share">
                 {num(data.total)} {data.total === 1 ? "person accounts" : "people account"} for{" "}
                 {pct(data.shareOfMinutesLostPct, 0)} of the minutes lost to overruns.
               </p>
@@ -99,7 +99,7 @@ export default function OffendersCard({ query, ask }: { query: UseQueryResult<Te
               testId="md-tea-break-offenders-table"
             />
             {data.truncated && (
-              <p className="mt-1 text-[11px] text-[#006496]/55">
+              <p className="md-analytics-note">
                 Showing the {num(data.rows.length)} worst of {num(data.total)}.
               </p>
             )}

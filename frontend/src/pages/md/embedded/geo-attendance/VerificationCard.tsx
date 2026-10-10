@@ -31,7 +31,7 @@ export default function VerificationCard({ query, ask }: { query: UseQueryResult
       ) : v && !nothing ? (
         <div className="grid grid-cols-1 gap-6 @2xl:grid-cols-2">
           <div data-testid="md-geo-status">
-            <p className="mb-2 text-xs font-semibold text-[#006496]/70">Punches in this period</p>
+            <p className="md-analytics-subhead">Punches in this period</p>
             {v.punches.captured > 0 ? (
               <DonutChart
                 data={statusSlices(v)}
@@ -39,8 +39,8 @@ export default function VerificationCard({ query, ask }: { query: UseQueryResult
                 testId="md-geo-status-donut"
                 center={
                   <>
-                    <span className="text-2xl font-black text-[#1a3a4a]">{pct(v.verifiedPct, 0)}</span>
-                    <span className="text-[10px] font-semibold text-[#006496]/60">verified</span>
+                    <span className="text-2xl font-black tabular-nums text-md-ink">{pct(v.verifiedPct, 0)}</span>
+                    <span className="text-[11px] font-semibold text-md-ink-soft">verified</span>
                   </>
                 }
               />
@@ -48,11 +48,11 @@ export default function VerificationCard({ query, ask }: { query: UseQueryResult
               <p className="py-6 text-sm text-muted-foreground">No on-duty punches were taken in this period.</p>
             )}
             {line && (
-              <p className="mt-3 text-xs text-[#006496]/70" data-testid="md-geo-decision-line">
+              <p className="md-analytics-note" data-testid="md-geo-decision-line">
                 {line}
               </p>
             )}
-            <p className="mt-1 text-xs text-[#006496]/70" data-testid="md-geo-request-line">
+            <p className="md-analytics-note" data-testid="md-geo-request-line">
               Requests: {num(v.sessions.requested)} made · {num(v.sessions.approved)} approved
               {awaiting > 0 ? ` · ${num(awaiting)} awaiting approval` : ""}
               {v.sessions.rejected > 0 ? ` · ${num(v.sessions.rejected)} rejected` : ""}
@@ -63,7 +63,7 @@ export default function VerificationCard({ query, ask }: { query: UseQueryResult
             </p>
           </div>
           <div data-testid="md-geo-backlog">
-            <p className="mb-2 text-xs font-semibold text-[#006496]/70">
+            <p className="md-analytics-subhead">
               Waiting for HR now ({num(v.backlog.pendingPunches)} punches, {num(v.backlog.pendingSessions)} requests)
             </p>
             {v.backlog.pendingPunches + v.backlog.pendingSessions > 0 ? (
@@ -72,7 +72,7 @@ export default function VerificationCard({ query, ask }: { query: UseQueryResult
               <p className="py-6 text-sm text-muted-foreground">Nothing is waiting for HR.</p>
             )}
             {v.backlog.overduePunches + v.backlog.overdueSessions > 0 && (
-              <p className="mt-3 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900">
+              <p className="md-analytics-callout md-analytics-tone-watch">
                 {num(v.backlog.overduePunches)} punches and {num(v.backlog.overdueSessions)} requests have waited more
                 than {Math.round(v.backlog.overdueHours / 24)} days; the oldest punch{" "}
                 {hoursText(v.backlog.oldestPunchHours)}.

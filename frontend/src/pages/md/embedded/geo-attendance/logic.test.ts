@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CHART } from "@/components/md/kit/chartTheme";
 import { EVERYONE } from "@/lib/md/period";
 import type { MdOrg } from "@/lib/md/types";
 import * as fx from "./fixtures";
@@ -229,7 +230,7 @@ describe("how far from the unit", () => {
     const bars = bandBars(fx.reach);
     expect(bars).toHaveLength(7);
     expect(bars.find((b) => b.key === "upto_10")).toMatchObject({ value: 5, display: "5 · 36%", sub: "2 people" });
-    expect(bars.find((b) => b.key === "beyond")?.color).toBe("#ef4444");
+    expect(bars.find((b) => b.key === "beyond")?.color).toBe(CHART.bad);
     expect(bandBars(fx.emptyReach)).toEqual([]);
   });
 });

@@ -62,13 +62,13 @@ export function previousMonth(month: string): string {
 // ─── month state ────────────────────────────────────────────────────────────────────────────────────────────
 
 export const STATE_STYLE: Record<PayrollState, { label: string; chip: string; dot: string }> = {
-  paid: { label: "Paid", chip: "bg-green-100 text-green-800", dot: "bg-green-500" },
-  part_paid: { label: "Part paid", chip: "bg-amber-100 text-amber-800", dot: "bg-amber-500" },
-  generated: { label: "Generated", chip: "bg-blue-100 text-blue-800", dot: "bg-blue-500" },
-  in_progress: { label: "In progress", chip: "bg-slate-100 text-slate-700", dot: "bg-slate-400" },
-  not_generated: { label: "Not generated", chip: "bg-red-100 text-red-800", dot: "bg-red-500" },
-  not_started: { label: "Not started", chip: "bg-slate-50 text-slate-500", dot: "bg-slate-300" },
-  no_data: { label: "No payroll", chip: "bg-slate-50 text-slate-400", dot: "bg-slate-200" },
+  paid: { label: "Paid", chip: "md-chip-success", dot: "bg-md-success-500" },
+  part_paid: { label: "Part paid", chip: "md-chip-warning", dot: "bg-md-warning-500" },
+  generated: { label: "Generated", chip: "md-money-pill-info", dot: "bg-md-info-500" },
+  in_progress: { label: "In progress", chip: "md-money-pill-quiet", dot: "bg-md-n-400" },
+  not_generated: { label: "Not generated", chip: "md-chip-danger", dot: "bg-md-danger-500" },
+  not_started: { label: "Not started", chip: "md-money-pill-quiet", dot: "bg-md-n-300" },
+  no_data: { label: "No payroll", chip: "md-money-pill-quiet", dot: "bg-md-n-300" },
 };
 
 /** The server's wall-clock timestamp as "01 Oct 2026, 9:00 am". */

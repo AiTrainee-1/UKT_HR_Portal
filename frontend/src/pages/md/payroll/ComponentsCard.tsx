@@ -1,11 +1,10 @@
 import AskAiButton from "@/components/md/kit/AskAiButton";
 import SectionCard from "@/components/md/kit/SectionCard";
-import { DeltaChip } from "@/components/md/kit/StatCard";
 import { EmptyBlock, NoteBanner } from "@/components/md/kit/states";
 import { inr, inrCompact } from "@/lib/md/format";
 import { cn } from "@/lib/utils";
 import { deltaView } from "./logic";
-import { CardError, Metric, cardNotes, emptyReason, failed } from "./parts";
+import { CardError, Delta, Metric, cardNotes, emptyReason, failed } from "./parts";
 import type { PayrollQueries } from "./queries";
 import type { ComponentLine } from "./types";
 
@@ -26,25 +25,25 @@ function Lines({
   const row = (l: ComponentLine, strong = false) => {
     const view = deltaView(l.change, "money", "neutral");
     return (
-      <tr key={l.id} className={cn(strong && "border-t font-bold")} data-testid={`${testId}-${l.id}`}>
-        <td className="py-1.5 pr-2 text-[13px] text-[#1a3a4a]">{l.label}</td>
-        <td className="py-1.5 text-right text-[13px] tabular-nums text-[#1a3a4a]">{inr(l.amount)}</td>
-        <td className="hidden py-1.5 text-right text-[12px] tabular-nums text-[#006496]/60 sm:table-cell">
+      <tr key={l.id} className={cn(strong && "md-money-total")} data-testid={`${testId}-${l.id}`}>
+        <td className="text-[13px] text-md-ink">{l.label}</td>
+        <td className="text-right text-[13px] text-md-ink">{inr(l.amount)}</td>
+        <td className="hidden text-right text-[12.5px] text-md-ink-soft sm:table-cell">
           {l.previous != null ? inr(l.previous) : "—"}
         </td>
-        <td className="py-1.5 pl-2 text-right">{view ? <DeltaChip {...view} /> : null}</td>
+        <td className="text-right">{view ? <Delta {...view} /> : null}</td>
       </tr>
     );
   };
   return (
-    <div>
-      <table className="w-full" data-testid={testId}>
+    <div className="md-panel overflow-hidden">
+      <table className="md-money-table w-full" data-testid={testId}>
         <thead>
-          <tr className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/60">
-            <th className="pb-1 text-left">{title}</th>
-            <th className="pb-1 text-right">This month</th>
-            <th className="hidden pb-1 text-right sm:table-cell">{previousLabel ?? "Last month"}</th>
-            <th className="pb-1 text-right">Change</th>
+          <tr>
+            <th className="text-left">{title}</th>
+            <th className="text-right">This month</th>
+            <th className="hidden text-right sm:table-cell">{previousLabel ?? "Last month"}</th>
+            <th className="text-right">Change</th>
           </tr>
         </thead>
         <tbody>
@@ -99,14 +98,16 @@ export default function ComponentsCard({ query, label }: { query: PayrollQueries
           />
           {data.netPay && (
             <div
-              className="flex items-baseline justify-between rounded-xl bg-[#006496]/[0.06] px-3 py-2"
+              className="md-panel-wine flex items-baseline justify-between gap-3 px-4 py-3"
               data-testid="md-payroll-components-net"
             >
-              <span className="text-[13px] font-bold text-[#1a3a4a]">Net pay (take-home)</span>
-              <span className="text-[15px] font-black tabular-nums text-[#1a3a4a]">{inr(data.netPay.amount)}</span>
+              <span className="text-[13px] font-extrabold text-md-ink">Net pay (take-home)</span>
+              <span className="text-lg font-black tracking-tight tabular-nums text-md-wine">
+                {inr(data.netPay.amount)}
+              </span>
             </div>
           )}
-          <div className="grid grid-cols-1 gap-2 @xl:grid-cols-2" data-testid="md-payroll-components-extras">
+          <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2" data-testid="md-payroll-components-extras">
             <Metric
               label="Employer cost (estimate)"
               value={data.employerCost ? inrCompact(data.employerCost.amount) : "—"}
@@ -139,7 +140,7 @@ export default function ComponentsCard({ query, label }: { query: PayrollQueries
           {cardNotes(data.notes).map((n) => (
             <NoteBanner key={n}>{n}</NoteBanner>
           ))}
-          <p className="text-[11px] text-[#006496]/55">
+          <p className="text-[11.5px] leading-snug text-md-ink-soft">
             Income tax (TDS) and arrears are not recorded in this system, so they are not shown.
           </p>
         </div>

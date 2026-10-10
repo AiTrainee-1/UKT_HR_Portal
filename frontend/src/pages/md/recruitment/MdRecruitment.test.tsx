@@ -98,6 +98,8 @@ describe("the Recruitment page", { timeout: 30_000 }, () => {
   it("switches the funnel to one pipeline and says what that pipeline cannot answer", async () => {
     page = await render();
     await page.click('[data-testid="md-recruitment-funnel-view"] button:nth-child(2)'); // Job board
+    const tabs = all('[data-testid="md-recruitment-funnel-view"] [role="tab"]');
+    expect(tabs.map((t) => t.getAttribute("aria-selected"))).toEqual(["false", "true", "false"]); // the switch says which
     expect(text('[data-testid="funnel-count-applied"]')).toBe("6");
     expect(text('[data-testid="funnel-step-offered"]')).toContain("33.3% of interviewed");
     expect(text('[data-testid="funnel-step-joined"]')).toContain("Not recorded for this view");
@@ -123,6 +125,9 @@ describe("the Recruitment page", { timeout: 30_000 }, () => {
     expect(text('[data-testid="md-recruitment-time-to-fill-note"]')).toContain(
       "does not record when a position is filled",
     );
+    // the applicants bar is not read by colour alone: a key names every colour, and the bar says it in words
+    expect(text('[data-testid="md-recruitment-mix-key"]')).toContain("Attended interview");
+    expect(page.container.querySelector('[data-testid="md-recruitment-positions-table"] [role="img"]')).not.toBeNull();
   });
 
   it("shows only the first few positions and offers more", async () => {
@@ -191,6 +196,11 @@ describe("the Recruitment page", { timeout: 30_000 }, () => {
     const rows = all('[data-testid="md-recruitment-pending-table"] tbody tr').map((r) => r.textContent ?? "");
     expect(rows).toHaveLength(3);
     expect(rows[0]).toContain("Anil Test");
+    // the initials badge is drawn from an attribute, so it adds nothing to what a screen reader or a search reads
+    expect(all('[data-testid="md-recruitment-pending-table"] [data-initials]')[0].getAttribute("data-initials")).toBe(
+      "AT",
+    );
+    expect(rows[0]).not.toContain("AT Anil");
     expect(rows[0]).toContain("waiting 10 days");
     expect(rows[0]).toContain("Department head");
     expect(rows[1]).toContain("HR"); // Anita: the department head has approved

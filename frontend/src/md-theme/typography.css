@@ -1,0 +1,57 @@
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   The MD portal's type (2026-10-10, the product owner):
+     WHOLE CHOMP   the title of each page (Employees, Manage Branch, Staff Attendance, Payroll Analysis ...): the heading
+                   at the top of the page. On the DASHBOARD it also sets the greeting and the card headings, as the owner
+                   asked ("keep the dashboard's fonts").
+     everything else   the current fonts (Hanken Grotesk, then Inter), unchanged: card and section headings, dialogs, the
+                   sidebar, the assistant, figures. (Times New Roman was tried for reports and money figures and then
+                   withdrawn by the owner: it is not used anywhere.)
+   Only the MD portal: the rules are scoped to html[data-md-theme], so the HR portal, the login pages and the employee app
+   keep their fonts. The font file is only fetched once a scoped rule uses it (an MD page is showing).
+
+   Whole Chomp is a heavy, flared display face with ONE weight, and THIS FILE (the free 1001Fonts cut) DRAWS ONLY THE 52
+   LETTERS A-Z and a-z: its digits, punctuation, brackets, accented letters and the rupee sign are empty glyphs (they take
+   up room and draw nothing). So the face is limited to those letters with unicode-range, and everything else in a heading
+   (a number, a comma, a bracket, an accent, the rupee sign) is drawn by the next font in the stack, Hanken Grotesk, at the
+   heading's own weight. The face is declared for every weight (100 900) so the browser never fakes a bold on the heavy
+   letters, and the Hanken characters beside them keep the bold the heading asks for.
+
+   LICENCE: the file is "1001Fonts Free For Personal Use". The licence text sits next to it in public/fonts/. A company
+   system needs written permission or a commercial licence from the author (Decograph Studio) before it is used in
+   production: that is the product owner's to settle.
+   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+@font-face {
+  font-family: "Whole Chomp";
+  src: url("/fonts/WholeChomp-Regular.otf") format("opentype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0041-005A, U+0061-007A;
+}
+
+:root {
+  --md-font-heading: "Whole Chomp", "Hanken Grotesk", Inter, "Segoe UI", system-ui, sans-serif;
+}
+
+/* ── the page title, on every MD page ─────────────────────────────────────────────────────────────────────────────── */
+/* [data-md-title]: the heading of an embedded HR page (embedded/headerRow.ts and embedded/titleMark.ts mark it);
+   [data-testid="md-page-title"]: the title of a page the MD portal draws itself (kit/MdPageHeader). */
+html[data-md-theme] :is([data-md-title], [data-testid="md-page-title"]) {
+  font-family: var(--md-font-heading);
+  font-style: normal;
+  font-synthesis: none;
+  letter-spacing: 0.012em; /* the flared terminals need a little air */
+  text-transform: none;
+}
+
+/* ── the dashboard keeps all its headings in Whole Chomp ──────────────────────────────────────────────────────────── */
+html[data-md-theme]
+  [data-testid="md-dashboard-page"]
+  :is(h1, h2, h3, h4, h5, h6, [role="heading"], [data-slot$="-title"]) {
+  font-family: var(--md-font-heading);
+  font-style: normal;
+  font-synthesis: none;
+  letter-spacing: 0.012em;
+  text-transform: none;
+}

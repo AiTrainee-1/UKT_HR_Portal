@@ -1,27 +1,30 @@
-// Small presentational pieces shared by the Recruitment sections: a label chip, the "open for N days" bar, the
-// applicant-mix bar, and the error block for a section whose request failed. Cards themselves come from the MD kit.
+// Small presentational pieces shared by the Recruitment sections: a label chip, the "open for N days" and applicant-mix
+// meters, the segmented switch, an initials avatar, and the error block for a section whose request failed. Cards
+// themselves come from the MD kit; the glass classes (md-chip, md-btn, md-seg) from md-theme/glass.css and the rest from
+// md-theme/areas/people.css.
 
 import { useState, type ReactNode } from "react";
+import { ChevronDown } from "lucide-react";
 import { CHART } from "@/components/md/kit/chartTheme";
 import { ErrorBanner } from "@/components/md/kit/states";
-import { Button } from "@/components/ui/button";
 import { describeMdError } from "@/lib/api-client/custom-hooks/md";
 import { cn } from "@/lib/utils";
-import { ageBar, mixSegments, mixTitle } from "./logic";
+import { MIX_META, ageBar, initialsOf, mixSegments, mixTitle } from "./logic";
 import type { QueryLike, StageMix } from "./types";
 
-/** Tints written out in full (Tailwind cannot build class names from variables). */
+/** The glass chip each tone uses. The tone names are the ones the page's logic hands out (slate = neutral, amber = watch,
+ *  red = bad, green = good, blue = information); the colours are the portal's palette (md-theme/glass.css). */
 export const CHIP_TONES = {
-  slate: "border-slate-200 bg-slate-100 text-slate-700",
-  amber: "border-amber-200 bg-amber-50 text-amber-800",
-  red: "border-red-200 bg-red-50 text-red-700",
-  green: "border-green-200 bg-green-50 text-green-700",
-  blue: "border-blue-200 bg-blue-50 text-blue-700",
+  slate: "",
+  amber: "md-chip-warning",
+  red: "md-chip-danger",
+  green: "md-chip-success",
+  blue: "md-people-chip-info",
 } as const;
 
 export type ChipTone = keyof typeof CHIP_TONES;
 
-/** A small label pill (not a Badge: those lift on hover, and these are not clickable). */
+/** A small label pill (not a button: nothing in it is clickable). */
 export function Chip({
   tone = "slate",
   children,
@@ -34,23 +37,51 @@ export function Chip({
   testId?: string;
 }) {
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-semibold",
-        CHIP_TONES[tone],
-        className,
-      )}
-      data-testid={testId}
-    >
+    <span className={cn("md-chip whitespace-nowrap", CHIP_TONES[tone], className)} data-testid={testId}>
       {children}
     </span>
   );
+}
+
+/** A round badge with a person's initials (drawn by CSS, so only the name is read out and searched). */
+export function Avatar({ name, className }: { name: string; className?: string }) {
+  return <span className={cn("md-people-avatar", className)} data-initials={initialsOf(name)} aria-hidden="true" />;
 }
 
 /** The error block for a section whose request failed and has nothing older to show. */
 export function QueryError({ query }: { query: QueryLike<unknown> }) {
   if (!query.isError || query.data) return null;
   return <ErrorBanner message={describeMdError(query.error)} onRetry={() => void query.refetch()} />;
+}
+
+/** A segmented switch: a frosted track, the chosen option a wine glass pill. Tabs, like the period switch above it. */
+export function SegTabs({
+  items,
+  value,
+  onChange,
+  label,
+}: {
+  items: { value: string; label: ReactNode }[];
+  value: string;
+  onChange: (value: string) => void;
+  label: string;
+}) {
+  return (
+    <div className="md-seg max-w-full" role="tablist" aria-label={label}>
+      {items.map((item) => (
+        <button
+          key={item.value}
+          type="button"
+          role="tab"
+          aria-selected={item.value === value}
+          onClick={() => onChange(item.value)}
+          className="md-seg-item min-h-9 whitespace-nowrap"
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 /** A ranked list that shows its first few rows and expands on request ("Show all 12"), like the tables' "Show more". */
@@ -69,10 +100,20 @@ export function Expandable<T>({
     <>
       {children(shown)}
       {items.length > initial && (
-        <div className="mt-2 flex justify-end">
-          <Button variant="ghost" size="sm" onClick={() => setOpen((o) => !o)} data-testid="show-more-bars">
+        <div className="mt-3 flex justify-center">
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            aria-expanded={open}
+            data-testid="show-more-bars"
+            className="md-btn md-btn-soft md-btn-sm min-h-9"
+          >
             {open ? "Show fewer" : `Show all ${items.length}`}
-          </Button>
+            <ChevronDown
+              size={14}
+              className={cn("transition-transform motion-reduce:transition-none", open && "rotate-180")}
+            />
+          </button>
         </div>
       )}
     </>
@@ -85,13 +126,10 @@ const AGE_FILL = { ok: CHART.brand, warn: CHART.warn, stale: CHART.bad } as cons
 export function AgeBarView({ days, staleAfter, maxDays }: { days: number; staleAfter: number; maxDays: number }) {
   const bar = ageBar(days, staleAfter, maxDays);
   return (
-    <div className="relative mt-1.5 h-2 w-full min-w-[7rem] rounded-full bg-[#006496]/[0.07]" data-tone={bar.tone}>
-      <div
-        className="h-full rounded-full transition-[width] duration-500 ease-out"
-        style={{ width: `${bar.widthPct}%`, background: AGE_FILL[bar.tone] }}
-      />
+    <div className="md-people-meter mt-1.5 w-full min-w-[7rem]" data-tone={bar.tone}>
+      <div className="md-people-meter-fill" style={{ width: `${bar.widthPct}%`, background: AGE_FILL[bar.tone] }} />
       <span
-        className="absolute -top-[3px] h-[14px] w-px bg-slate-400"
+        className="md-people-meter-tick"
         style={{ left: `${bar.markerPct}%` }}
         title={`Stale after ${staleAfter} days`}
         aria-hidden="true"
@@ -100,18 +138,34 @@ export function AgeBarView({ days, staleAfter, maxDays }: { days: number; staleA
   );
 }
 
-/** The applicants of one position by status, as one proportional bar (hover for the words). */
+/** The applicants of one position by status, as one proportional bar (hover for the words, or see the key under the table). */
 export function MixBar({ mix }: { mix: StageMix }) {
   const segments = mixSegments(mix);
-  if (segments.length === 0) return <span className="text-xs text-[#006496]/50">None yet</span>;
+  if (segments.length === 0) return <span className="text-xs text-md-ink-soft">None yet</span>;
   return (
     <div
-      className="flex h-2 w-full min-w-[5rem] overflow-hidden rounded-full bg-[#006496]/[0.07]"
+      className="md-people-meter md-people-meter-mix w-full min-w-[5rem]"
       title={mixTitle(mix)}
+      role="img"
+      aria-label={mixTitle(mix)}
     >
       {segments.map((s) => (
-        <i key={s.key} className="h-full" style={{ width: `${s.widthPct}%`, background: s.color }} />
+        <i key={s.key} style={{ width: `${s.widthPct}%`, background: s.color }} />
       ))}
     </div>
+  );
+}
+
+/** What each colour of the applicants bar stands for, so the colours are not the only way to read it. */
+export function MixKey() {
+  return (
+    <ul className="md-people-key" aria-label="Applicant colours" data-testid="md-recruitment-mix-key">
+      {MIX_META.map((m) => (
+        <li key={m.key}>
+          <i style={{ background: m.color }} aria-hidden="true" />
+          {m.label}
+        </li>
+      ))}
+    </ul>
   );
 }

@@ -161,7 +161,7 @@ export function kpiTiles(summary: RlSummary, trend?: RlTrend): KpiTile[] {
       value: num(m.exporters.value),
       sub: `${num(m.exportsAll.value)} exports of any report`,
       icon: "people",
-      tone: "teal",
+      tone: "blue",
       delta: deltaChip(m.exporters.change, "pct", "none"),
       provenanceIds: ["reportlog-exports"],
     },
@@ -382,7 +382,7 @@ export function reportBars(reports: ExportReport[]): BarItem[] {
     label: r.report,
     value: r.exports,
     display: `${num(r.exports)}${r.sharePct != null ? ` · ${pct(r.sharePct, 0)}` : ""}`,
-    color: CHART.teal,
+    color: CHART.deep,
   }));
 }
 

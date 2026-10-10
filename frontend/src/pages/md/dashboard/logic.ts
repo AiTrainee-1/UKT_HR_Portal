@@ -17,11 +17,50 @@ export const BRIEFING_QUESTION = "Give me a briefing on how the company is doing
 
 const TITLES = /^(mr|mrs|ms|miss|dr|prof|sir|shri|sri|smt|thiru|thirumathi|tmt|er|ca|capt|col)\.?$/i;
 
+/** Words of a job title or a form of address. An account is often named after the post ("Managing Director"), not the
+ *  person; the first word of that ("Managing") is not a name, so a name made only of these is used whole. */
+const JOB_TITLE_WORDS = new Set([
+  "managing",
+  "joint",
+  "executive",
+  "whole-time",
+  "wholetime",
+  "director",
+  "md",
+  "cmd",
+  "ceo",
+  "coo",
+  "cfo",
+  "chairman",
+  "chairperson",
+  "chairwoman",
+  "chair",
+  "president",
+  "proprietor",
+  "partner",
+  "owner",
+  "founder",
+  "sir",
+  "madam",
+  "madame",
+  "boss",
+]);
+
+/** A word without its dots and commas, lower case: "M.D." -> "md", "Director," -> "director". */
+const bare = (token: string): string => token.toLowerCase().replace(/[.,]/g, "");
+
 /** What to call the MD in the greeting: the first real word of the name, skipping titles ("Dr.") and initials ("R.").
- *  "R. Murugan" -> "Murugan"; "Mr. Rajesh Kumar" -> "Rajesh"; an account name with no spaces is used as it is. */
+ *  "R. Murugan" -> "Murugan"; "Mr. Rajesh Kumar" -> "Rajesh"; an account name with no spaces is used as it is.
+ *  When the name is a job title and not a person ("Managing Director", "MD", "Chairman", "Madam"), the whole title is
+ *  returned, so the greeting reads "Good afternoon, Managing Director" and not "... Managing". */
 export function firstName(name: string | null | undefined): string {
   const tokens = (name ?? "").trim().split(/\s+/).filter(Boolean);
-  const words = tokens.filter((t) => !TITLES.test(t));
+  const isLabel = (t: string) => TITLES.test(t) || JOB_TITLE_WORDS.has(bare(t));
+  if (tokens.length > 0 && tokens.every(isLabel) && tokens.some((t) => JOB_TITLE_WORDS.has(bare(t)))) {
+    return tokens.join(" ");
+  }
+  // a person's name with a post in front ("Managing Director R. Murugan"): skip the post as well as the honorific
+  const words = tokens.filter((t) => !isLabel(t));
   const real = words.find((t) => t.replace(/\./g, "").length > 1);
   return real ?? words[0] ?? tokens[0] ?? "";
 }

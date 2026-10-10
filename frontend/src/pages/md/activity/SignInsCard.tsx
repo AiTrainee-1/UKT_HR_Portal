@@ -37,7 +37,7 @@ export default function SignInsCard({ params, label }: { params: MdQueryParams; 
       ) : s ? (
         <div className="space-y-5">
           <div
-            className="grid grid-cols-2 gap-2 @md:grid-cols-3 @4xl:grid-cols-6"
+            className="grid grid-cols-2 gap-3 @md:grid-cols-3 @4xl:grid-cols-6"
             data-testid="md-activity-signin-stats"
           >
             <MiniStat label="Sign-ins" value={num(s.signIns.value)} sub={`${changeText(s.signIns.change)} vs before`} />
@@ -75,7 +75,7 @@ export default function SignInsCard({ params, label }: { params: MdQueryParams; 
             />
           </div>
 
-          <div>
+          <div className="md-panel p-4">
             <ListHeading>
               Sign-ins and failed attempts {s.granularity === "week" ? "each week" : "each day"}
             </ListHeading>
@@ -92,12 +92,12 @@ export default function SignInsCard({ params, label }: { params: MdQueryParams; 
             />
           </div>
 
-          <div className="grid grid-cols-1 items-start gap-6 @4xl:grid-cols-12">
-            <div className="min-w-0 @4xl:col-span-7">
+          <div className="grid grid-cols-1 items-start gap-4 @4xl:grid-cols-12">
+            <div className="md-panel min-w-0 p-4 @4xl:col-span-7">
               <ListHeading>People</ListHeading>
               <SignInPeople accounts={s.accounts} />
               {s.totalAccounts > s.accounts.length && (
-                <p className="mt-2 text-xs text-[#006496]/60">
+                <p className="mt-2 text-xs text-md-ink-soft">
                   Showing {num(s.accounts.length)} of {num(s.totalAccounts)} accounts.
                 </p>
               )}

@@ -41,7 +41,7 @@ export default function ExportsCard({
         <QueryError query={query} />
       ) : data && t && t.attendance > 0 ? (
         <div className="space-y-5">
-          <p className="text-sm text-gray-800" data-testid="md-reportlog-exports-line">
+          <p className="text-sm leading-relaxed text-md-ink" data-testid="md-reportlog-exports-line">
             {num(t.attendance)} {t.attendance === 1 ? "export" : "exports"} by {num(t.exporters)}{" "}
             {t.exporters === 1 ? "person" : "people"} on {num(t.days)} of {num(t.daysInPeriod)} days
             {t.change
@@ -62,19 +62,19 @@ export default function ExportsCard({
           )}
           <div className="grid grid-cols-1 gap-6 @3xl:grid-cols-2">
             <div data-testid="md-reportlog-exports-users">
-              <p className="mb-2 text-xs font-semibold text-[#006496]/70">By person</p>
+              <p className="md-analytics-subhead">By person</p>
               <BarList items={userBars(data.byUser)} />
               {data.usersTotal > data.byUser.length && (
-                <p className="mt-1 text-[11px] text-[#006496]/55">
+                <p className="md-analytics-note">
                   Showing {num(data.byUser.length)} of {num(data.usersTotal)} people.
                 </p>
               )}
             </div>
             <div data-testid="md-reportlog-exports-reports">
-              <p className="mb-2 text-xs font-semibold text-[#006496]/70">By report</p>
+              <p className="md-analytics-subhead">By report</p>
               <BarList items={reportBars(data.byReport)} />
               {data.reportsTotal > data.byReport.length && (
-                <p className="mt-1 text-[11px] text-[#006496]/55">
+                <p className="md-analytics-note">
                   Showing {num(data.byReport.length)} of {num(data.reportsTotal)} reports.
                 </p>
               )}
@@ -82,13 +82,10 @@ export default function ExportsCard({
           </div>
           {data.latest.length > 0 && (
             <div data-testid="md-reportlog-exports-latest">
-              <p className="mb-1.5 text-xs font-semibold text-[#006496]/70">Latest exports</p>
-              <ul className="space-y-1 text-xs text-gray-700">
+              <p className="md-analytics-subhead">Latest exports</p>
+              <ul className="space-y-1.5 text-xs text-md-ink">
                 {data.latest.map((item) => (
-                  <li
-                    key={`${item.at}-${item.userName}-${item.report}`}
-                    className="rounded-lg bg-[#006496]/[0.04] px-2.5 py-1.5"
-                  >
+                  <li key={`${item.at}-${item.userName}-${item.report}`} className="md-panel px-3 py-2">
                     {latestLine(item)}
                   </li>
                 ))}

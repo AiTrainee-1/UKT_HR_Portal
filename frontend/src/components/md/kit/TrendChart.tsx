@@ -11,7 +11,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { CHART, axisStyle, gridProps, tooltipStyle } from "./chartTheme";
+import { CHART, axisStyle, gridProps, legendStyle, tooltipStyle } from "./chartTheme";
 
 export type TrendSeries = {
   key: string;
@@ -74,8 +74,8 @@ export default function TrendChart({
               const color = s.color ?? CHART.series[i % CHART.series.length];
               return (
                 <linearGradient key={s.key} id={`md-grad-${s.key}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={color} stopOpacity={0.28} />
-                  <stop offset="100%" stopColor={color} stopOpacity={0} />
+                  <stop offset="0%" stopColor={color} stopOpacity={0.26} />
+                  <stop offset="100%" stopColor={color} stopOpacity={0.01} />
                 </linearGradient>
               );
             })}
@@ -112,6 +112,7 @@ export default function TrendChart({
           )}
           <Tooltip
             contentStyle={tooltipStyle}
+            cursor={{ stroke: CHART.slate, strokeDasharray: "3 4", strokeOpacity: 0.7, fill: CHART.grid }}
             labelFormatter={(label) => fmtX(String(label))}
             formatter={(value, name, item) => {
               const s = series.find((x) => x.label === name);
@@ -121,7 +122,14 @@ export default function TrendChart({
               return [Number.isNaN(n) ? "—" : f(n), name];
             }}
           />
-          {legend && series.length > 1 && <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />}
+          {legend && series.length > 1 && (
+            <Legend
+              iconType="circle"
+              iconSize={8}
+              wrapperStyle={legendStyle}
+              formatter={(value: string) => <span style={{ color: "var(--md-ink-700)" }}>{value}</span>}
+            />
+          )}
           {references?.map((r) => (
             <ReferenceLine
               key={`${r.y}-${r.label}`}
@@ -148,7 +156,7 @@ export default function TrendChart({
                   name={s.label}
                   fill={color}
                   stackId={s.stackId}
-                  radius={s.stackId ? 0 : [4, 4, 0, 0]}
+                  radius={s.stackId ? 0 : [6, 6, 0, 0]}
                   maxBarSize={28}
                 />
               );
@@ -162,7 +170,7 @@ export default function TrendChart({
                   dataKey={s.key}
                   name={s.label}
                   stroke={color}
-                  strokeWidth={2}
+                  strokeWidth={2.2}
                   fill={`url(#md-grad-${s.key})`}
                   stackId={s.stackId}
                   connectNulls
@@ -178,10 +186,11 @@ export default function TrendChart({
                 dataKey={s.key}
                 name={s.label}
                 stroke={color}
-                strokeWidth={2}
+                strokeWidth={2.2}
+                strokeLinecap="round"
                 strokeDasharray={s.dashed ? "5 4" : undefined}
                 dot={false}
-                activeDot={{ r: 4 }}
+                activeDot={{ r: 5, stroke: "white", strokeWidth: 2 }}
                 connectNulls
               />
             );

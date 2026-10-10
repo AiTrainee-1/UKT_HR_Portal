@@ -34,7 +34,7 @@ const SKELETON: { id: string; label: string; icon: TileIcon; tone: StatTone }[] 
   { id: "unmarked", label: "Not yet marked", icon: "unmarked", tone: "amber" },
   { id: "gaps", label: "Days nobody made the call", icon: "gaps", tone: "purple" },
   { id: "exports", label: "Attendance report exports", icon: "exports", tone: "indigo" },
-  { id: "people", label: "People who export them", icon: "people", tone: "teal" },
+  { id: "people", label: "People who export them", icon: "people", tone: "blue" },
   { id: "latest", label: "Latest export", icon: "latest", tone: "slate" },
 ];
 
@@ -51,7 +51,7 @@ export default function KpiStrip({
   return (
     <div>
       <div
-        className={`grid grid-cols-2 gap-3 @3xl:grid-cols-4 ${refreshingClass(summary)}`}
+        className={`grid grid-cols-1 gap-3 @sm:grid-cols-2 @3xl:grid-cols-4 ${refreshingClass(summary)}`}
         data-testid="md-reportlog-kpis"
       >
         {data
@@ -83,7 +83,7 @@ export default function KpiStrip({
             ))}
       </div>
       {data && (
-        <p className="mt-2 px-1 text-[11px] text-[#006496]/55" data-testid="md-reportlog-compare">
+        <p className="md-analytics-note px-1" data-testid="md-reportlog-compare">
           Changes compare with {previousText(data)}, the same number of days just before.
         </p>
       )}

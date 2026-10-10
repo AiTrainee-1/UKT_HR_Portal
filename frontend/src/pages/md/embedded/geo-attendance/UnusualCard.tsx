@@ -36,24 +36,21 @@ export default function UnusualCard({ query, ask }: { query: UseQueryResult<GeoU
               {data.rows.map((row) => (
                 <li
                   key={row.sessionId}
-                  className={cn("rounded-xl border border-l-4 bg-white p-3", SEVERITY_BAR[row.severity])}
+                  className={cn("md-analytics-row md-analytics-row-accent", SEVERITY_BAR[row.severity])}
                   data-testid={`md-geo-unusual-${row.sessionId}`}
                   data-severity={row.severity}
                 >
                   <div className="flex flex-wrap items-baseline justify-between gap-x-2">
-                    <p className="text-[13px] font-bold text-gray-900">{row.employeeName}</p>
-                    <p className="text-[11px] text-[#006496]/60">
+                    <p className="text-sm font-bold text-md-ink">{row.employeeName}</p>
+                    <p className="text-xs text-md-ink-soft">
                       {[row.employeeCode, row.department, row.unit].filter(Boolean).join(" · ")}
                       {row.date ? ` · ${dayShort(row.date)}` : ""}
                     </p>
                   </div>
-                  {row.destination && <p className="mt-0.5 text-xs text-gray-700">To {row.destination}</p>}
-                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {row.destination && <p className="mt-1 text-[13px] text-md-ink">To {row.destination}</p>}
+                  <div className="mt-2 flex flex-wrap gap-1.5">
                     {row.reasons.map((r) => (
-                      <span
-                        key={r.code}
-                        className={cn("rounded-full px-2 py-0.5 text-[10.5px] font-semibold", REASON_STYLE[r.code])}
-                      >
+                      <span key={r.code} className={cn("md-chip md-analytics-chip-sm", REASON_STYLE[r.code])}>
                         {r.label}
                       </span>
                     ))}
@@ -63,28 +60,28 @@ export default function UnusualCard({ query, ask }: { query: UseQueryResult<GeoU
             </ul>
           )}
           {data.truncated && (
-            <p className="text-[11px] text-[#006496]/55">
+            <p className="md-analytics-note">
               Showing the {num(data.rows.length)} most serious of {num(data.counts.sessionsFlagged)}.
             </p>
           )}
           {data.repeatRejected.length > 0 && (
             <div data-testid="md-geo-repeat-rejected">
-              <p className="mb-1.5 text-xs font-bold text-[#1a3a4a]">
+              <p className="md-analytics-subhead">
                 Repeated rejections ({data.thresholds.repeatMinRejections}+ in the period)
               </p>
-              <ul className="space-y-1">
+              <ul className="space-y-2">
                 {data.repeatRejected.map((r) => (
                   <li
                     key={r.employeeCode}
-                    className="flex flex-wrap items-baseline justify-between gap-x-2 rounded-lg bg-purple-50 px-3 py-1.5 text-xs"
+                    className="md-analytics-row md-analytics-tone-mauve flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 md-analytics-row-compact text-xs"
                   >
-                    <span className="font-semibold text-gray-900">
+                    <span className="font-semibold text-md-ink">
                       {r.employeeName}{" "}
-                      <span className="font-normal text-[#006496]/60">
+                      <span className="font-normal text-md-ink-soft">
                         {[r.employeeCode, r.department].filter(Boolean).join(" · ")}
                       </span>
                     </span>
-                    <span className="text-purple-900">
+                    <span className="font-medium text-md-mauve-700">
                       {num(r.rejectedSessions)} {r.rejectedSessions === 1 ? "request" : "requests"} and{" "}
                       {num(r.rejectedPunches)} {r.rejectedPunches === 1 ? "punch" : "punches"} rejected
                     </span>

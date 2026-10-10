@@ -94,8 +94,8 @@ export default function VisitorsSection({ query }: { query: UseQueryResult<Visit
                   data={purposeSlices(d.purposes.categories)}
                   center={
                     <>
-                      <span className="text-2xl font-black text-[#1a3a4a]">{num(d.visits)}</span>
-                      <span className="text-[11px] text-[#006496]/60">{plural(d.visits, "visit")}</span>
+                      <span className="text-2xl font-black tabular-nums text-md-ink">{num(d.visits)}</span>
+                      <span className="text-[11px] font-semibold text-md-ink-soft">{plural(d.visits, "visit")}</span>
                     </>
                   }
                   testId="md-visitors-purpose-donut"

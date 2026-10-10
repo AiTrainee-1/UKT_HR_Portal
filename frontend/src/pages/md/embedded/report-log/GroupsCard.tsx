@@ -14,12 +14,12 @@ function MarksBar({ row }: { row: RlGroupRow }) {
   const s = markShares(row);
   return (
     <div className="min-w-[8rem]" data-testid={`md-reportlog-marks-${row.key}`}>
-      <div className="flex h-2 overflow-hidden rounded-full bg-[#006496]/[0.07]">
-        <i className="h-full bg-green-500" style={{ width: `${s.informed}%` }} />
-        <i className="h-full bg-red-500" style={{ width: `${s.notInformed}%` }} />
-        <i className="h-full bg-amber-400" style={{ width: `${s.unmarked}%` }} />
+      <div className="flex h-2 overflow-hidden rounded-full bg-md-wine/[0.07]">
+        <i className="h-full bg-md-success-500" style={{ width: `${s.informed}%` }} />
+        <i className="h-full bg-md-danger-500" style={{ width: `${s.notInformed}%` }} />
+        <i className="h-full bg-md-warning-400" style={{ width: `${s.unmarked}%` }} />
       </div>
-      <p className="mt-0.5 text-[10.5px] text-[#006496]/60">
+      <p className="mt-1 text-[11px] text-md-ink-soft">
         {num(row.informed)} informed · {num(row.notInformed)} not · {num(row.unmarked)} unmarked
       </p>
     </div>
@@ -29,12 +29,12 @@ function MarksBar({ row }: { row: RlGroupRow }) {
 function LabelCell({ row }: { row: RlGroupRow }) {
   return (
     <div className="min-w-[7rem]">
-      <p className="font-semibold text-[#1a3a4a]">
+      <p className="font-semibold text-md-ink">
         {row.label}
         {row.lowSample && <SmallSample />}
       </p>
       {row.headcount > 0 && (
-        <p className="text-[11px] text-[#006496]/60">
+        <p className="text-[11px] text-md-ink-soft">
           {num(row.headcount)} {row.headcount === 1 ? "employee" : "employees"}
         </p>
       )}
@@ -46,18 +46,18 @@ function AbsencesCell({ row }: { row: RlGroupRow }) {
   const chip = deltaChip(row.change.absences, "pct", "down");
   return (
     <div className="flex flex-col items-end gap-0.5">
-      <span className="font-bold tabular-nums text-[#1a3a4a]">{num(row.absences)}</span>
+      <span className="font-bold tabular-nums text-md-ink">{num(row.absences)}</span>
       {chip && <DeltaChip {...chip} />}
     </div>
   );
 }
 
 function FollowedCell({ row }: { row: RlGroupRow }) {
-  if (row.reviewedPct == null) return <span className="text-muted-foreground">—</span>;
+  if (row.reviewedPct == null) return <span className="text-md-ink-soft">—</span>;
   const chip = deltaChip(row.change.reviewedPct, "pts", "up");
   return (
     <div className="flex flex-col items-end gap-0.5">
-      <span className="font-bold tabular-nums text-[#1a3a4a]">{pct(row.reviewedPct, 1)}</span>
+      <span className="font-bold tabular-nums text-md-ink">{pct(row.reviewedPct, 1)}</span>
       {chip && <DeltaChip {...chip} />}
     </div>
   );
@@ -117,7 +117,7 @@ export default function GroupsCard({
       bodyClassName={refreshingClass(query)}
       testId="md-reportlog-groups"
     >
-      <div className="mb-3 overflow-x-auto" data-testid="md-reportlog-group-tabs">
+      <div className="mb-4" data-testid="md-reportlog-group-tabs">
         {tabs}
       </div>
       {query.isError ? (
@@ -125,7 +125,7 @@ export default function GroupsCard({
       ) : data ? (
         <>
           {data.average.absences > 0 && (
-            <p className="mb-2 text-xs text-[#006496]/70">
+            <p className="mb-3 text-xs text-md-ink-soft">
               Overall: {num(data.average.absences)} absences, {pct(data.average.reviewedPct, 1)} followed up,{" "}
               {num(data.average.unmarked)} not yet marked.
             </p>
@@ -141,10 +141,10 @@ export default function GroupsCard({
             testId="md-reportlog-groups-table"
           />
           {onFocus && data.rows.length > 0 && (
-            <p className="mt-2 text-[11px] text-[#006496]/55">Click a row to focus the whole tab on it.</p>
+            <p className="md-analytics-note">Click a row to focus the whole tab on it.</p>
           )}
           {data.truncated && (
-            <p className="mt-1 text-[11px] text-[#006496]/55">
+            <p className="md-analytics-note">
               Showing the {num(data.rows.length)} with the most unmarked absences, of {num(data.total)}.
             </p>
           )}

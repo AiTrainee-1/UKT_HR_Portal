@@ -82,8 +82,12 @@ const textOf = (p: RenderedPage, id: string) => byTestId(p, id)?.textContent ?? 
 describe("the MD's dashboard", () => {
   it("opens with the greeting, what wants the MD, an Ask bar, the pulse tiles and today by unit", async () => {
     page = await renderMdPage(MdDashboardHome, data(), { path: "/md/dashboard" });
-    expect(textOf(page, "md-page-title")).toBe("Dashboard");
     expect(textOf(page, "md-home-greeting")).toContain("Murugan");
+    // the greeting is the page's heading; the dashboard has no title strip, no Brief me button and no Refresh stack
+    expect(byTestId(page, "md-home-greeting")?.tagName).toBe("H1");
+    expect(byTestId(page, "md-page-header")).toBeNull();
+    expect(byTestId(page, "md-brief-me")).toBeNull();
+    expect(byTestId(page, "md-refresh-stack")).toBeNull();
     expect(textOf(page, "md-home-pulse")).toMatch(/4 requests waiting/);
     expect(textOf(page, "md-home-pulse")).toMatch(/thing/);
     expect(byTestId(page, "md-home-ask-input")).not.toBeNull();

@@ -1,0 +1,636 @@
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   hr-copies: data. Tables, skeletons and loaders, the Attendance charts, the Geo and Branch maps, and the colours the HR
+   code hard-codes (hex in a class, an inline style, an SVG attribute) that tailwind-remap.css cannot reach because they
+   are not Tailwind's own colour names. Every selector starts with html[data-md-theme]. See hr-copies.css.
+   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* ── tables (the shared Table: sand header, hairlines, a wine wash under the pointer) ─────────────────────────────── */
+
+html[data-md-theme] [data-slot="table-header"] {
+  background: linear-gradient(180deg, rgba(245, 235, 208, 0.72), rgba(245, 235, 208, 0.46));
+}
+html[data-md-theme] [data-slot="table-header"] [data-slot="table-row"] {
+  border-bottom-color: rgba(184, 130, 32, 0.24);
+}
+html[data-md-theme] [data-slot="table-head"] {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+html[data-md-theme] [data-slot="table-row"] {
+  border-bottom-color: rgba(40, 43, 74, 0.07);
+  transition: background-color 0.15s ease;
+}
+html[data-md-theme] [data-slot="table-body"] [data-slot="table-row"]:hover {
+  background-color: var(--hrc-wash);
+}
+html[data-md-theme] [data-slot="table-row"][data-state="selected"] {
+  background-color: rgba(127, 1, 31, 0.08);
+}
+html[data-md-theme] [data-slot="table-footer"] {
+  background: linear-gradient(180deg, rgba(245, 235, 208, 0.62), rgba(245, 235, 208, 0.4));
+  border-top-color: rgba(184, 130, 32, 0.26);
+}
+html[data-md-theme] [data-slot="table-cell"] {
+  font-variant-numeric: tabular-nums;
+}
+html[data-md-theme] [data-slot="table-caption"] {
+  color: var(--md-ink-600);
+}
+
+/* the plain <table>s some pages draw by hand inside a card or a dialog (not the shared Table, and not the MD pages' own
+   tables, which carry md- classes): the same sand header and wine wash. Rows that carry a tint of their own (a bg- class)
+   keep it. */
+html[data-md-theme]
+  :is(.clay-card, [data-slot="dialog-content"], [data-slot="sheet-content"])
+  table:not([data-slot="table"]):not([class*="md-"])
+  > thead
+  > tr {
+  background-color: rgba(245, 235, 208, 0.55);
+}
+html[data-md-theme]
+  :is(.clay-card, [data-slot="dialog-content"], [data-slot="sheet-content"])
+  table:not([data-slot="table"]):not([class*="md-"])
+  > thead[class~="sticky"][class~="bg-white"] {
+  background-color: var(--md-sand);
+}
+html[data-md-theme]
+  :is(.clay-card, [data-slot="dialog-content"], [data-slot="sheet-content"])
+  table:not([data-slot="table"]):not([class*="md-"])
+  > tbody
+  > tr:not([class^="bg-"]):not([class*=" bg-"]):hover {
+  background-color: var(--hrc-wash);
+}
+
+/* ── surfaces the HR pages draw by hand ───────────────────────────────────────────────────────────────────────────── */
+
+/* a box the page made from utilities (rounded, bordered, white) is a quiet panel: a translucent tint with a hairline, so the
+   card it sits in still shows through. Anything that floats (absolute, fixed, sticky, or a Radix tooltip or popper) is left opaque on purpose. */
+html[data-md-theme]
+  :is(div, details, section, li)[class~="border"][class~="bg-white"]:is(
+    [class~="rounded-lg"],
+    [class~="rounded-xl"],
+    [class~="rounded-2xl"]
+  ):where(:not([class~="absolute"], [class~="sticky"], [class~="fixed"], [data-radix-popper-content-wrapper] *)) {
+  background-color: rgba(255, 255, 255, 0.66);
+  border-color: var(--hrc-hair);
+  box-shadow:
+    0 1px 2px rgba(40, 43, 74, 0.05),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+/* a list that drops down from a field (the employee picker on the Attendance pages) is a floating glass panel */
+html[data-md-theme] :is(div, ul)[class~="absolute"][class~="bg-white"][class~="border"][class~="shadow-lg"] {
+  background: var(--hrc-pop-bg);
+  border-color: var(--hrc-pop-edge);
+  border-radius: 1rem;
+  box-shadow: var(--hrc-pop-shadow);
+  -webkit-backdrop-filter: blur(22px) saturate(1.6);
+  backdrop-filter: blur(22px) saturate(1.6);
+}
+
+/* an employee photo, and the placeholder shown until there is one (EmployeeAvatar): a white ring, and sand with a wine
+   figure instead of grey */
+html[data-md-theme] img[class~="rounded-full"][class~="object-cover"] {
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.9),
+    0 2px 6px rgba(40, 43, 74, 0.2);
+}
+html[data-md-theme] div[class~="rounded-full"][class~="bg-gray-100"]:has(> svg:only-child) {
+  background: linear-gradient(135deg, rgba(245, 235, 208, 0.98), rgba(238, 235, 218, 0.8));
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.9),
+    inset 0 0 0 1px rgba(184, 130, 32, 0.2);
+}
+html[data-md-theme] div[class~="rounded-full"][class~="bg-gray-100"] > svg:only-child {
+  color: var(--md-wine-600);
+}
+
+/* ── skeletons and loaders ────────────────────────────────────────────────────────────────────────────────────────── */
+
+html[data-md-theme] [data-slot="skeleton"] {
+  background: linear-gradient(
+    90deg,
+    rgba(232, 220, 186, 0.5) 25%,
+    rgba(245, 235, 208, 0.95) 50%,
+    rgba(232, 220, 186, 0.5) 75%
+  );
+  background-size: 200% 100%;
+  border-radius: 0.75rem;
+}
+
+/* the six discs of the Employees loader: sand instead of grey (their pulse keeps the original shadows) */
+html[data-md-theme] .ukt-circle {
+  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.98), rgba(236, 223, 188, 0.92));
+}
+html[data-md-theme] .ukt-circle-text {
+  color: var(--md-ink-600);
+}
+/* the shield and coin loader of the report pages */
+html[data-md-theme] .ukt-shield-track {
+  stroke: rgba(40, 43, 74, 0.18);
+}
+html[data-md-theme] .ukt-shield,
+html[data-md-theme] .ukt-scan {
+  stroke: var(--md-wine-600);
+}
+html[data-md-theme] .ukt-coin {
+  fill: var(--md-wine-600);
+}
+/* the attendance loader (its styles are a <style> tag of plain class names) */
+html[data-md-theme] .spinnerContainer .spinner {
+  border-right-color: var(--md-wine-600);
+}
+html[data-md-theme] .spinnerContainer .loader {
+  color: var(--md-ink-700);
+}
+html[data-md-theme] .spinnerContainer .word {
+  color: var(--md-wine-700);
+}
+/* the loading border that runs round a KPI card: wine, or the colour the card meant (green, red, purple, amber) */
+html[data-md-theme] .ukt-kpi-run {
+  --kpi-accent: var(--md-wine-600) !important;
+}
+html[data-md-theme] .ukt-kpi-run:is([style*="#16a34a" i], [style*="#22c55e" i], [style*="#059669" i]) {
+  --kpi-accent: var(--md-success-500) !important;
+}
+html[data-md-theme] .ukt-kpi-run:is([style*="#ef4444" i], [style*="#dc2626" i]) {
+  --kpi-accent: var(--md-danger-500) !important;
+}
+html[data-md-theme] .ukt-kpi-run:is([style*="#a855f7" i], [style*="#8b5cf6" i], [style*="#7c3aed" i]) {
+  --kpi-accent: var(--md-mauve-500) !important;
+}
+html[data-md-theme] .ukt-kpi-run:is([style*="#f59e0b" i], [style*="#d97706" i]) {
+  --kpi-accent: var(--md-warning-400) !important;
+}
+html[data-md-theme] .ukt-kpi-run:is([style*="#0ea5e9" i], [style*="#2563eb" i]) {
+  --kpi-accent: var(--md-info-500) !important;
+}
+html[data-md-theme] .ukt-kpi-run:is([style*="#374151" i]) {
+  --kpi-accent: var(--md-ink-600) !important;
+}
+
+/* a solid icon tile in one of the HR pages' Tailwind colours (a square holding a white icon, as on the KPI cards) gets the
+   glass finish: a light edge on top, a little shade underneath, a soft drop. The colour itself stays the page's. */
+html[data-md-theme]
+  :is(.rounded-md, .rounded-lg, .rounded-xl, .rounded-full):is(
+    [class*="bg-slate-"],
+    [class*="bg-gray-"],
+    [class*="bg-red-"],
+    [class*="bg-orange-"],
+    [class*="bg-amber-"],
+    [class*="bg-yellow-"],
+    [class*="bg-green-"],
+    [class*="bg-emerald-"],
+    [class*="bg-teal-"],
+    [class*="bg-sky-"],
+    [class*="bg-blue-"],
+    [class*="bg-indigo-"],
+    [class*="bg-violet-"],
+    [class*="bg-purple-"],
+    [class*="bg-pink-"],
+    [class*="bg-rose-"]
+  ):has(> svg.text-white:only-child) {
+  box-shadow:
+    0 6px 12px -6px rgba(40, 43, 74, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45),
+    inset 0 -6px 10px -6px rgba(27, 29, 54, 0.28);
+}
+
+/* ── charts (the Attendance bar charts; their colours are in the generated block below) ───────────────────────────── */
+
+html[data-md-theme] [data-chart] .recharts-cartesian-grid line {
+  stroke: rgba(40, 43, 74, 0.1);
+}
+html[data-md-theme] [data-chart] .recharts-cartesian-axis-tick text {
+  fill: var(--md-ink-600);
+}
+html[data-md-theme] [data-chart] :is(.recharts-cartesian-axis-line, .recharts-cartesian-axis-tick-line) {
+  stroke: rgba(40, 43, 74, 0.2);
+}
+html[data-md-theme] [data-chart] .recharts-default-tooltip {
+  background: var(--hrc-pop-bg) !important;
+  border: 1px solid var(--hrc-pop-edge) !important;
+  border-radius: 0.85rem;
+  box-shadow: var(--hrc-pop-shadow);
+  -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  backdrop-filter: blur(16px) saturate(1.5);
+}
+html[data-md-theme] [data-chart] .recharts-tooltip-label {
+  color: var(--md-ink-800);
+  font-weight: 700;
+}
+html[data-md-theme] [data-chart] .recharts-legend-item-text {
+  font-weight: 700;
+}
+
+/* ── maps (Geo Attendance, the branch location picker) ────────────────────────────────────────────────────────────── */
+
+html[data-md-theme] .leaflet-container {
+  background: var(--md-sand);
+  font-family: inherit;
+}
+/* the tiles are warmed and calmed so the map sits in the sand palette instead of shouting over it */
+html[data-md-theme] .leaflet-tile-pane {
+  filter: saturate(0.7) sepia(0.16) hue-rotate(-12deg) contrast(0.98);
+}
+html[data-md-theme] .leaflet-bar {
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  border-radius: 0.9rem;
+  box-shadow: 0 10px 24px -10px rgba(40, 43, 74, 0.45);
+}
+html[data-md-theme] .leaflet-bar a {
+  width: 36px;
+  height: 36px;
+  line-height: 36px;
+  background-color: rgba(255, 255, 255, 0.86);
+  border-bottom: 1px solid rgba(40, 43, 74, 0.1);
+  color: var(--md-ink-700);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+html[data-md-theme] .leaflet-bar a:last-child {
+  border-bottom: 0;
+}
+html[data-md-theme] .leaflet-bar a:hover,
+html[data-md-theme] .leaflet-bar a:focus-visible {
+  background-color: rgba(252, 241, 243, 0.98);
+  color: var(--md-wine-700);
+}
+html[data-md-theme] .leaflet-bar a.leaflet-disabled {
+  background-color: rgba(238, 235, 218, 0.85);
+  color: var(--md-ink-300);
+}
+html[data-md-theme] .leaflet-popup-content-wrapper {
+  background: var(--hrc-pop-bg);
+  border: 1px solid var(--hrc-pop-edge);
+  border-radius: 1rem;
+  box-shadow: var(--hrc-pop-shadow);
+  color: var(--md-ink-800);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  backdrop-filter: blur(16px) saturate(1.4);
+}
+html[data-md-theme] .leaflet-popup-tip {
+  background: rgba(251, 246, 234, 0.96);
+  box-shadow: 0 6px 14px -6px rgba(27, 29, 54, 0.35);
+}
+html[data-md-theme] .leaflet-container a.leaflet-popup-close-button {
+  color: var(--md-ink-500);
+  font-weight: 700;
+}
+html[data-md-theme] .leaflet-container a.leaflet-popup-close-button:hover {
+  color: var(--md-wine-700);
+}
+html[data-md-theme] .leaflet-container .leaflet-control-attribution {
+  background: rgba(255, 255, 255, 0.72);
+  border-radius: 0.6rem 0 0 0;
+  color: var(--md-ink-600);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+html[data-md-theme] .leaflet-container .leaflet-control-attribution a {
+  color: var(--md-wine-700);
+}
+/* the branch picker's pin and the route arrows are HTML written by the page, so their colour is an authored style */
+html[data-md-theme] .leaflet-marker-icon [style*="background:#006496" i] {
+  background: var(--md-wine-600) !important;
+  box-shadow: 0 2px 10px rgba(127, 1, 31, 0.5) !important;
+}
+html[data-md-theme] .leaflet-marker-icon [style*="border-bottom:12px solid #006496" i] {
+  border-bottom-color: var(--md-wine-600) !important;
+}
+
+/* ── colours the HR code hard-codes ───────────────────────────────────────────────────────────────────────────────── */
+
+/* arbitrary-hex utility classes */
+html[data-md-theme] .text-\[\#006496\],
+html[data-md-theme] .text-\[\#8a5d00\] {
+  color: var(--md-wine-700);
+}
+html[data-md-theme] .bg-\[\#fbf3dc\] {
+  background-color: var(--md-wine-50);
+}
+html[data-md-theme] .bg-\[\#e0a83a\] {
+  background-color: var(--md-wine-500);
+}
+html[data-md-theme] .ring-\[\#f1d890\] {
+  --tw-ring-color: var(--md-wine-200);
+}
+html[data-md-theme] .from-\[\#006496\] {
+  --tw-gradient-from: var(--md-wine-700);
+}
+html[data-md-theme] .to-\[\#0080bf\] {
+  --tw-gradient-to: var(--md-wine-500);
+}
+
+/* a branch's icon tile: a teal-to-cyan gradient written inline */
+html[data-md-theme] [style*="linear-gradient"][style*="rgb(15, 118, 110)"][style*="rgb(6, 182, 212)"] {
+  background: linear-gradient(135deg, var(--md-wine-700), var(--md-wine-500)) !important;
+  box-shadow:
+    0 8px 18px -8px rgba(127, 1, 31, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+/* the approval trail (Leave, Requests, Outpass): sage for done, ochre for waiting on someone, crimson for rejected */
+html[data-md-theme] [data-testid="approval-trail"] [style*="background: rgb(5, 150, 105)"] {
+  background: linear-gradient(135deg, var(--md-success-700), var(--md-success-500)) !important;
+  border-color: var(--md-success-600) !important;
+  box-shadow:
+    0 4px 10px -4px rgba(51, 112, 73, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+html[data-md-theme] [data-testid="approval-trail"] [style*="background: rgb(217, 119, 6)"] {
+  background: linear-gradient(135deg, var(--md-warning-700), var(--md-warning-400)) !important;
+  border-color: var(--md-warning-500) !important;
+  box-shadow:
+    0 4px 10px -4px rgba(185, 130, 32, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+html[data-md-theme] [data-testid="approval-trail"] [style*="background: rgb(220, 38, 38)"] {
+  background: linear-gradient(135deg, var(--md-danger-700), var(--md-danger-500)) !important;
+  border-color: var(--md-danger-600) !important;
+  box-shadow:
+    0 4px 10px -4px rgba(183, 45, 51, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+html[data-md-theme] [data-testid="approval-trail"] [style*="rgb(240, 244, 248)"],
+html[data-md-theme] [data-testid="approval-trail"] [style*="rgb(248, 250, 252)"] {
+  background: rgba(245, 235, 208, 0.6) !important;
+  border-color: var(--md-ink-200) !important;
+}
+html[data-md-theme] [data-testid="approval-trail"] [style*="background: rgb(226, 232, 240)"] {
+  background: var(--md-ink-100) !important;
+}
+
+/* SVG that carries its colour as an attribute (fill="#16a34a"): a CSS rule beats a presentation attribute */
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([fill="#006496" i], [fill="#0891b2" i]) {
+  fill: var(--md-wine-600);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([stroke="#006496" i], [stroke="#0891b2" i]) {
+  stroke: var(--md-wine-600);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([fill="#0080bf" i]) {
+  fill: var(--md-wine-500);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([stroke="#0080bf" i]) {
+  stroke: var(--md-wine-500);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([fill="#4fb8f0" i]) {
+  fill: var(--md-wine-300);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([stroke="#4fb8f0" i]) {
+  stroke: var(--md-wine-300);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([fill="#0f766e" i]) {
+  fill: var(--md-sage-600);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([stroke="#0f766e" i]) {
+  stroke: var(--md-sage-600);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([fill="#06b6d4" i], [fill="#db2777" i]) {
+  fill: var(--md-rose-500);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([stroke="#06b6d4" i], [stroke="#db2777" i]) {
+  stroke: var(--md-rose-500);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([fill="#d97706" i]) {
+  fill: var(--md-warning-500);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([stroke="#d97706" i]) {
+  stroke: var(--md-warning-500);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([fill="#f59e0b" i]) {
+  fill: var(--md-warning-400);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([stroke="#f59e0b" i]) {
+  stroke: var(--md-warning-400);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([fill="#b45309" i]) {
+  fill: var(--md-clay-500);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([stroke="#b45309" i]) {
+  stroke: var(--md-clay-500);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([fill="#dc2626" i]) {
+  fill: var(--md-danger-600);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([stroke="#dc2626" i]) {
+  stroke: var(--md-danger-600);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([fill="#ef4444" i]) {
+  fill: var(--md-danger-500);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([stroke="#ef4444" i]) {
+  stroke: var(--md-danger-500);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([fill="#16a34a" i]) {
+  fill: var(--md-success-600);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([stroke="#16a34a" i]) {
+  stroke: var(--md-success-600);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([fill="#22c55e" i], [fill="#059669" i]) {
+  fill: var(--md-success-500);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([stroke="#22c55e" i], [stroke="#059669" i]) {
+  stroke: var(--md-success-500);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([fill="#7c3aed" i]) {
+  fill: var(--md-info-500);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([stroke="#7c3aed" i]) {
+  stroke: var(--md-info-500);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([fill="#4338ca" i]) {
+  fill: var(--md-ink-600);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([stroke="#4338ca" i]) {
+  stroke: var(--md-ink-600);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([fill="#a855f7" i]) {
+  fill: var(--md-mauve-500);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([stroke="#a855f7" i]) {
+  stroke: var(--md-mauve-500);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([fill="#d1d5db" i]) {
+  fill: var(--md-ink-300);
+}
+html[data-md-theme] :is(.leaflet-container, [data-chart]) :is([stroke="#d1d5db" i]) {
+  stroke: var(--md-ink-300);
+}
+/* Inline styles React wrote (a colour reads back as rgb()): the legend and list dots on the Geo maps, the steps of a
+   progress pipeline. Fills, borders and text each get their own rule; text is anchored at the start of a declaration so
+   background-color: and border-color: are never read as text. */
+html[data-md-theme] [style*="background: rgb(0, 100, 150)"],
+html[data-md-theme] [style*="background: rgb(8, 145, 178)"] {
+  background: var(--md-wine-600) !important;
+}
+html[data-md-theme] [style*="background: rgb(0, 128, 191)"] {
+  background: var(--md-wine-500) !important;
+}
+html[data-md-theme] [style*="background: rgb(79, 184, 240)"] {
+  background: var(--md-wine-300) !important;
+}
+html[data-md-theme] [style*="background: rgb(15, 118, 110)"] {
+  background: var(--md-sage-600) !important;
+}
+html[data-md-theme] [style*="background: rgb(6, 182, 212)"],
+html[data-md-theme] [style*="background: rgb(219, 39, 119)"] {
+  background: var(--md-rose-500) !important;
+}
+html[data-md-theme] [style*="background: rgb(217, 119, 6)"] {
+  background: var(--md-warning-500) !important;
+}
+html[data-md-theme] [style*="background: rgb(245, 158, 11)"] {
+  background: var(--md-warning-400) !important;
+}
+html[data-md-theme] [style*="background: rgb(180, 83, 9)"] {
+  background: var(--md-clay-500) !important;
+}
+html[data-md-theme] [style*="background: rgb(220, 38, 38)"] {
+  background: var(--md-danger-600) !important;
+}
+html[data-md-theme] [style*="background: rgb(239, 68, 68)"] {
+  background: var(--md-danger-500) !important;
+}
+html[data-md-theme] [style*="background: rgb(22, 163, 74)"] {
+  background: var(--md-success-600) !important;
+}
+html[data-md-theme] [style*="background: rgb(34, 197, 94)"],
+html[data-md-theme] [style*="background: rgb(5, 150, 105)"] {
+  background: var(--md-success-500) !important;
+}
+html[data-md-theme] [style*="background: rgb(124, 58, 237)"] {
+  background: var(--md-info-500) !important;
+}
+html[data-md-theme] [style*="background: rgb(67, 56, 202)"] {
+  background: var(--md-ink-600) !important;
+}
+html[data-md-theme] [style*="background: rgb(168, 85, 247)"] {
+  background: var(--md-mauve-500) !important;
+}
+html[data-md-theme] [style*="background: rgb(209, 213, 219)"] {
+  background: var(--md-ink-300) !important;
+}
+html[data-md-theme] [style*="solid rgb(0, 100, 150)"],
+html[data-md-theme] [style*="solid rgb(8, 145, 178)"] {
+  border-color: var(--md-wine-600) !important;
+}
+html[data-md-theme] [style*="solid rgb(0, 128, 191)"] {
+  border-color: var(--md-wine-500) !important;
+}
+html[data-md-theme] [style*="solid rgb(79, 184, 240)"] {
+  border-color: var(--md-wine-300) !important;
+}
+html[data-md-theme] [style*="solid rgb(15, 118, 110)"] {
+  border-color: var(--md-sage-600) !important;
+}
+html[data-md-theme] [style*="solid rgb(6, 182, 212)"],
+html[data-md-theme] [style*="solid rgb(219, 39, 119)"] {
+  border-color: var(--md-rose-500) !important;
+}
+html[data-md-theme] [style*="solid rgb(217, 119, 6)"] {
+  border-color: var(--md-warning-500) !important;
+}
+html[data-md-theme] [style*="solid rgb(245, 158, 11)"] {
+  border-color: var(--md-warning-400) !important;
+}
+html[data-md-theme] [style*="solid rgb(180, 83, 9)"] {
+  border-color: var(--md-clay-500) !important;
+}
+html[data-md-theme] [style*="solid rgb(220, 38, 38)"] {
+  border-color: var(--md-danger-600) !important;
+}
+html[data-md-theme] [style*="solid rgb(239, 68, 68)"] {
+  border-color: var(--md-danger-500) !important;
+}
+html[data-md-theme] [style*="solid rgb(22, 163, 74)"] {
+  border-color: var(--md-success-600) !important;
+}
+html[data-md-theme] [style*="solid rgb(34, 197, 94)"],
+html[data-md-theme] [style*="solid rgb(5, 150, 105)"] {
+  border-color: var(--md-success-500) !important;
+}
+html[data-md-theme] [style*="solid rgb(124, 58, 237)"] {
+  border-color: var(--md-info-500) !important;
+}
+html[data-md-theme] [style*="solid rgb(67, 56, 202)"] {
+  border-color: var(--md-ink-600) !important;
+}
+html[data-md-theme] [style*="solid rgb(168, 85, 247)"] {
+  border-color: var(--md-mauve-500) !important;
+}
+html[data-md-theme] [style*="solid rgb(209, 213, 219)"] {
+  border-color: var(--md-ink-300) !important;
+}
+html[data-md-theme] [style^="color: rgb(0, 100, 150)"],
+html[data-md-theme] [style*="; color: rgb(0, 100, 150)"],
+html[data-md-theme] [style^="color: rgb(8, 145, 178)"],
+html[data-md-theme] [style*="; color: rgb(8, 145, 178)"],
+html[data-md-theme] [style^="color: rgb(0, 128, 191)"],
+html[data-md-theme] [style*="; color: rgb(0, 128, 191)"] {
+  color: var(--md-wine-700) !important;
+}
+html[data-md-theme] [style^="color: rgb(79, 184, 240)"],
+html[data-md-theme] [style*="; color: rgb(79, 184, 240)"] {
+  color: var(--md-wine-600) !important;
+}
+html[data-md-theme] [style^="color: rgb(15, 118, 110)"],
+html[data-md-theme] [style*="; color: rgb(15, 118, 110)"] {
+  color: var(--md-sage-700) !important;
+}
+html[data-md-theme] [style^="color: rgb(6, 182, 212)"],
+html[data-md-theme] [style*="; color: rgb(6, 182, 212)"],
+html[data-md-theme] [style^="color: rgb(219, 39, 119)"],
+html[data-md-theme] [style*="; color: rgb(219, 39, 119)"] {
+  color: var(--md-rose-700) !important;
+}
+html[data-md-theme] [style^="color: rgb(217, 119, 6)"],
+html[data-md-theme] [style*="; color: rgb(217, 119, 6)"],
+html[data-md-theme] [style^="color: rgb(245, 158, 11)"],
+html[data-md-theme] [style*="; color: rgb(245, 158, 11)"] {
+  color: var(--md-warning-700) !important;
+}
+html[data-md-theme] [style^="color: rgb(180, 83, 9)"],
+html[data-md-theme] [style*="; color: rgb(180, 83, 9)"] {
+  color: var(--md-clay-700) !important;
+}
+html[data-md-theme] [style^="color: rgb(220, 38, 38)"],
+html[data-md-theme] [style*="; color: rgb(220, 38, 38)"],
+html[data-md-theme] [style^="color: rgb(239, 68, 68)"],
+html[data-md-theme] [style*="; color: rgb(239, 68, 68)"] {
+  color: var(--md-danger-700) !important;
+}
+html[data-md-theme] [style^="color: rgb(22, 163, 74)"],
+html[data-md-theme] [style*="; color: rgb(22, 163, 74)"],
+html[data-md-theme] [style^="color: rgb(34, 197, 94)"],
+html[data-md-theme] [style*="; color: rgb(34, 197, 94)"],
+html[data-md-theme] [style^="color: rgb(5, 150, 105)"],
+html[data-md-theme] [style*="; color: rgb(5, 150, 105)"] {
+  color: var(--md-success-700) !important;
+}
+html[data-md-theme] [style^="color: rgb(124, 58, 237)"],
+html[data-md-theme] [style*="; color: rgb(124, 58, 237)"] {
+  color: var(--md-info-700) !important;
+}
+html[data-md-theme] [style^="color: rgb(67, 56, 202)"],
+html[data-md-theme] [style*="; color: rgb(67, 56, 202)"] {
+  color: var(--md-ink-700) !important;
+}
+html[data-md-theme] [style^="color: rgb(168, 85, 247)"],
+html[data-md-theme] [style*="; color: rgb(168, 85, 247)"] {
+  color: var(--md-mauve-700) !important;
+}
+html[data-md-theme] [style^="color: rgb(209, 213, 219)"],
+html[data-md-theme] [style*="; color: rgb(209, 213, 219)"] {
+  color: var(--md-ink-500) !important;
+}
+html[data-md-theme] [style^="color: rgb(148, 163, 184)"],
+html[data-md-theme] [style*="; color: rgb(148, 163, 184)"] {
+  color: var(--md-ink-500) !important;
+}

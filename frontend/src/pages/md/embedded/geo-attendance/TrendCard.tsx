@@ -20,12 +20,12 @@ const VERDICT_ICON: Record<Verdict, typeof TrendingUp> = {
 };
 
 const SESSIONS: TrendSeries = { key: "sessions", label: "Sessions", kind: "bar", color: CHART.brand };
-const PUNCHES: TrendSeries = { key: "punches", label: "On-duty punches", kind: "bar", color: CHART.teal };
+const PUNCHES: TrendSeries = { key: "punches", label: "On-duty punches", kind: "bar", color: CHART.deep };
 const AVERAGE: TrendSeries = {
   key: "average",
   label: "7-day average of sessions",
   kind: "line",
-  color: CHART.gold,
+  color: CHART.sky,
   dashed: true,
 };
 const OFFICE: TrendSeries = {
@@ -65,12 +65,14 @@ export default function TrendCard({ query, ask }: { query: UseQueryResult<GeoTre
       ) : trend && verdict && hasActivity(trend) ? (
         <>
           <div
-            className={cn("mb-3 flex items-start gap-2 rounded-xl border p-3 text-sm", VERDICT_STYLE[verdict].box)}
+            className={cn("md-analytics-verdict", VERDICT_STYLE[verdict].box)}
             data-testid="md-geo-verdict"
             data-verdict={verdict}
           >
-            <VerdictIcon size={16} className="mt-0.5 shrink-0" aria-label={VERDICT_STYLE[verdict].label} />
-            <p>{trend.momentum.text}</p>
+            <span className="md-analytics-verdict-icon">
+              <VerdictIcon size={16} aria-label={VERDICT_STYLE[verdict].label} />
+            </span>
+            <p className="min-w-0 self-center">{trend.momentum.text}</p>
           </div>
           <TrendChart
             data={rows}
@@ -82,16 +84,14 @@ export default function TrendCard({ query, ask }: { query: UseQueryResult<GeoTre
             rightFormat={(v) => num(v)}
           />
           {trend.busiestDay && (
-            <p className="mt-2 text-xs text-[#006496]/70" data-testid="md-geo-busiest-day">
+            <p className="md-analytics-note" data-testid="md-geo-busiest-day">
               Busiest day: {dayLong(trend.busiestDay.date)}, {num(trend.busiestDay.sessions)}{" "}
               {trend.busiestDay.sessions === 1 ? "session" : "sessions"} and {num(trend.busiestDay.punches)} on-duty{" "}
               {trend.busiestDay.punches === 1 ? "punch" : "punches"}.
             </p>
           )}
           {weekly && (
-            <p className="mt-1 text-[11px] text-[#006496]/55">
-              Each point is a week (Monday to Sunday), labelled by its first day.
-            </p>
+            <p className="md-analytics-note">Each point is a week (Monday to Sunday), labelled by its first day.</p>
           )}
         </>
       ) : trend ? (

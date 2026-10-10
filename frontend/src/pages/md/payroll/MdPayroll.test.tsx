@@ -76,8 +76,8 @@ describe("Payroll Analysis page", () => {
     expect(textOf("md-payroll-kpi-overtime")).toContain("0.9% of gross pay");
     expect(textOf("md-payroll-kpi-payable-value")).toBe("₹63,145");
     expect(textOf("md-payroll-kpi-payable")).toContain("6 of 8 slips not marked paid");
-    // cost falling is good news: green chip on the gross pay card
-    expect(by("md-payroll-kpi-gross")!.querySelector(".bg-green-100")).not.toBeNull();
+    // cost falling is good news: the change chip on the gross pay card says so (sage)
+    expect(by("md-payroll-kpi-gross")!.querySelector('[data-tone="good"]')).not.toBeNull();
   });
 
   it("puts what needs attention first, most serious first", async () => {

@@ -19,7 +19,7 @@ export default function CoverageNote({
   if (!coverage.partial) {
     return (
       <p
-        className="flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 p-3 text-xs text-green-900"
+        className="md-analytics-callout md-analytics-callout-block md-analytics-tone-good flex items-center gap-2"
         data-testid="md-attendance-coverage"
       >
         <CheckCircle2 size={14} className="shrink-0" /> {coverageText(coverage)} Every figure on this page covers the

@@ -3,12 +3,10 @@ import AskAiButton from "@/components/md/kit/AskAiButton";
 import BarList from "@/components/md/kit/BarList";
 import DataTable, { type Column } from "@/components/md/kit/DataTable";
 import SectionCard from "@/components/md/kit/SectionCard";
-import { DeltaChip } from "@/components/md/kit/StatCard";
 import { EmptyBlock } from "@/components/md/kit/states";
-import { PillTabs } from "@/components/ui/pill-tabs";
 import { inr, inrCompact, num, pct } from "@/lib/md/format";
 import { deltaView, groupRows, type GroupRow, type GroupView } from "./logic";
-import { CardError, emptyReason, failed } from "./parts";
+import { CardError, Delta, SegTabs, emptyReason, failed } from "./parts";
 import type { PayrollQueries } from "./queries";
 
 const VIEWS: { value: GroupView; label: string }[] = [
@@ -23,9 +21,9 @@ const COLUMNS: Column<GroupRow>[] = [
     header: "Name",
     sortValue: (r) => r.name,
     cell: (r) => (
-      <span className="font-semibold text-[#1a3a4a]">
+      <span className="font-semibold text-md-ink">
         {r.name}
-        {r.unit && <span className="ml-1.5 text-[11px] font-normal text-[#006496]/55">{r.unit}</span>}
+        {r.unit && <span className="ml-1.5 text-[11px] font-medium text-md-ink-soft">{r.unit}</span>}
       </span>
     ),
   },
@@ -65,7 +63,7 @@ const COLUMNS: Column<GroupRow>[] = [
     sortValue: (r) => r.change?.grossPay?.pct ?? null,
     cell: (r) => {
       const view = deltaView(r.change?.grossPay, "money", "down");
-      return view ? <DeltaChip {...view} /> : <span className="text-xs text-muted-foreground">new</span>;
+      return view ? <Delta {...view} /> : <span className="text-xs font-semibold text-md-ink-soft">new</span>;
     },
   },
 ];
@@ -98,7 +96,7 @@ export default function DepartmentsCard({ query, label }: { query: PayrollQuerie
         </EmptyBlock>
       ) : (
         <div className="space-y-4">
-          <PillTabs size="sm" items={VIEWS} value={view} onChange={(v) => setView(v as GroupView)} />
+          <SegTabs label="Group the cost by" items={VIEWS} value={view} onChange={setView} />
           <BarList
             testId="md-payroll-dept-bars"
             items={rows.slice(0, 8).map((r) => ({
@@ -123,7 +121,7 @@ export default function DepartmentsCard({ query, label }: { query: PayrollQuerie
             dense
           />
           {view === "department" && data.departmentsTotal > data.departments.length && (
-            <p className="text-[11px] text-[#006496]/60">
+            <p className="text-[11.5px] text-md-ink-soft">
               The {data.departments.length} highest-cost of {data.departmentsTotal} departments are shown.
             </p>
           )}

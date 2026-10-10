@@ -3,14 +3,15 @@ import ProvenanceButton from "@/components/md/kit/ProvenanceButton";
 import type { Provenance } from "@/lib/md/types";
 import { cn } from "@/lib/utils";
 import { STATE_STYLE, describeStatus, whenText, type StatusSummary } from "./logic";
-import { Pill } from "./parts";
+import { OVERLINE, Pill, toneClass, type MoneyTone } from "./parts";
 import type { MonthStatus } from "./types";
 
-const TONE: Record<StatusSummary["tone"], { box: string; icon: typeof Info; iconClass: string }> = {
-  good: { box: "border-green-200 bg-green-50/70", icon: CircleCheck, iconClass: "text-green-600" },
-  warn: { box: "border-amber-200 bg-amber-50/70", icon: Hourglass, iconClass: "text-amber-600" },
-  bad: { box: "border-red-200 bg-red-50/70", icon: CircleAlert, iconClass: "text-red-600" },
-  info: { box: "border-blue-200 bg-blue-50/60", icon: Info, iconClass: "text-blue-600" },
+// Sage = all well, ochre = watch, crimson = a problem, periwinkle = information. Never wine: that is the brand.
+const TONE: Record<StatusSummary["tone"], { tone: MoneyTone; icon: typeof Info }> = {
+  good: { tone: "success", icon: CircleCheck },
+  warn: { tone: "warning", icon: Hourglass },
+  bad: { tone: "danger", icon: CircleAlert },
+  info: { tone: "info", icon: Info },
 };
 
 /**
@@ -32,32 +33,34 @@ export default function StatusBanner({
   const Icon = tone.icon;
   return (
     <div
-      className={cn("flex flex-wrap items-start gap-3 rounded-2xl border p-3.5", tone.box)}
+      className={cn("md-card md-money-status", toneClass(tone.tone))}
       data-testid="md-payroll-status-banner"
       data-state={status.state}
     >
-      <Icon size={20} className={cn("mt-0.5 shrink-0", tone.iconClass)} aria-hidden />
-      <div className="min-w-0 flex-1">
-        <p className="flex flex-wrap items-center gap-2 text-sm font-bold text-gray-900">
+      <span className="md-money-tile md-money-tile-solid">
+        <Icon size={20} aria-hidden />
+      </span>
+      <div className="min-w-0 flex-[1_1_16rem]">
+        <p className="flex flex-wrap items-center gap-2 text-[17px] font-black leading-tight tracking-tight text-md-ink">
           <span data-testid="md-payroll-status-month">{status.label}</span>
           <Pill className={style.chip}>{view.headline}</Pill>
         </p>
-        <p className="mt-0.5 text-xs text-gray-600" data-testid="md-payroll-status-detail">
+        <p className="mt-1 text-[13px] leading-snug text-md-ink-soft" data-testid="md-payroll-status-detail">
           {view.detail}
         </p>
       </div>
       {(status.generatedAt || status.paidAt) && (
-        <dl className="flex gap-4 text-[11px] text-gray-500">
+        <dl className="flex gap-5 sm:border-l sm:border-md-line sm:pl-5">
           {status.generatedAt && (
             <div>
-              <dt className="font-semibold uppercase tracking-wide">Generated</dt>
-              <dd>{whenText(status.generatedAt)}</dd>
+              <dt className={OVERLINE}>Generated</dt>
+              <dd className="mt-0.5 text-[13px] font-bold tabular-nums text-md-ink">{whenText(status.generatedAt)}</dd>
             </div>
           )}
           {status.paidAt && (
             <div>
-              <dt className="font-semibold uppercase tracking-wide">Last marked paid</dt>
-              <dd>{whenText(status.paidAt)}</dd>
+              <dt className={OVERLINE}>Last marked paid</dt>
+              <dd className="mt-0.5 text-[13px] font-bold tabular-nums text-md-ink">{whenText(status.paidAt)}</dd>
             </div>
           )}
         </dl>

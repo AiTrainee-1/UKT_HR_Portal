@@ -22,7 +22,7 @@ export function ReportsHome({ catalog, scrollToTop }: { catalog: ReportCatalog; 
   }, [scrollToTop]);
 
   return (
-    <div className="space-y-6" ref={top} data-testid="md-reports-home">
+    <div className="space-y-7" ref={top} data-testid="md-reports-home">
       <ReportsHeader />
       <ExecutiveShelf groups={library.executive} />
       <YourReports library={library} />

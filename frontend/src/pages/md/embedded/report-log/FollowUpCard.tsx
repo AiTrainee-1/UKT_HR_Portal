@@ -72,14 +72,12 @@ export default function FollowUpCard({ query, ask }: { query: UseQueryResult<RlT
             rightFormat={(v) => pct(v, 0)}
           />
           {caption && (
-            <p className="mt-2 text-xs text-[#006496]/70" data-testid="md-reportlog-followup-caption">
+            <p className="md-analytics-note" data-testid="md-reportlog-followup-caption">
               {caption}
             </p>
           )}
           {weekly && (
-            <p className="mt-1 text-[11px] text-[#006496]/55">
-              Each point is a week (Monday to Sunday), labelled by its first day.
-            </p>
+            <p className="md-analytics-note">Each point is a week (Monday to Sunday), labelled by its first day.</p>
           )}
         </>
       ) : trend ? (

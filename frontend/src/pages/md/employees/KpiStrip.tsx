@@ -22,7 +22,7 @@ const SKELETON: { id: string; label: string; icon: TileIcon; tone: StatTone }[] 
   { id: "leavers", label: "Leavers", icon: "leavers", tone: "amber" },
   { id: "net", label: "Net change", icon: "net", tone: "indigo" },
   { id: "attrition", label: "Attrition", icon: "attrition", tone: "red" },
-  { id: "tenure", label: "Average tenure", icon: "tenure", tone: "teal" },
+  { id: "tenure", label: "Average tenure", icon: "tenure", tone: "blue" },
   { id: "early", label: "Left within 90 days", icon: "early", tone: "purple" },
   { id: "people", label: "Women · average age", icon: "people", tone: "slate" },
 ];
@@ -39,7 +39,7 @@ export default function KpiStrip({
   failed?: boolean;
 }) {
   return (
-    <div className="grid grid-cols-2 gap-3 @3xl:grid-cols-4" data-testid="md-employees-kpis">
+    <div className="grid grid-cols-1 gap-3 @sm:grid-cols-2 @3xl:grid-cols-4" data-testid="md-employees-kpis">
       {summary
         ? kpiTiles(summary, movement).map((tile) => {
             const Icon = ICONS[tile.icon];
@@ -57,7 +57,7 @@ export default function KpiStrip({
                 provenance={summary.provenance}
                 provenanceIds={tile.provenanceIds}
               >
-                {tile.note && <p className="mt-1 text-[10.5px] leading-tight opacity-60">{tile.note}</p>}
+                {tile.note && <p className="mt-1 text-[11px] leading-tight text-md-ink-soft">{tile.note}</p>}
               </StatCard>
             );
           })

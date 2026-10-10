@@ -8,7 +8,7 @@ function renderInline(nodes: Inline[], keyPrefix = ""): ReactNode[] {
     switch (node.t) {
       case "b":
         return (
-          <strong key={key} className="font-bold text-gray-950">
+          <strong key={key} className="font-extrabold tabular-nums text-md-wine-700">
             {renderInline(node.c, `${key}-`)}
           </strong>
         );
@@ -16,7 +16,10 @@ function renderInline(nodes: Inline[], keyPrefix = ""): ReactNode[] {
         return <em key={key}>{renderInline(node.c, `${key}-`)}</em>;
       case "code":
         return (
-          <code key={key} className="rounded bg-[#006496]/[0.08] px-1 py-0.5 font-mono text-[12px]">
+          <code
+            key={key}
+            className="rounded-md border border-md-warning-400/25 bg-md-sand px-1.5 py-0.5 font-mono text-[12px] text-md-wine-800"
+          >
             {node.v}
           </code>
         );
@@ -39,7 +42,12 @@ function BlockView({ block }: { block: Block }) {
   switch (block.t) {
     case "h":
       return (
-        <p className={cn("font-extrabold text-gray-950", block.level === 1 ? "text-[15px]" : "text-[13.5px]")}>
+        <p
+          className={cn(
+            "font-black leading-snug tracking-tight",
+            block.level === 1 ? "text-[15.5px] text-md-ink" : "text-[13.5px] text-md-wine-700",
+          )}
+        >
           {renderInline(block.c)}
         </p>
       );
@@ -48,7 +56,10 @@ function BlockView({ block }: { block: Block }) {
         <ul className="space-y-1.5">
           {block.items.map((item, i) => (
             <li key={i} className="flex gap-2">
-              <span className="mt-[0.55em] h-1.5 w-1.5 shrink-0 rounded-full bg-[#e0a83a]" aria-hidden />
+              <span
+                className="mt-[0.6em] h-1.5 w-1.5 shrink-0 rounded-full bg-md-wine-400 ring-2 ring-md-wine/10"
+                aria-hidden
+              />
               <span className="min-w-0">{renderInline(item)}</span>
             </li>
           ))}
@@ -59,7 +70,7 @@ function BlockView({ block }: { block: Block }) {
         <ol className="space-y-1.5">
           {block.items.map((item, i) => (
             <li key={i} className="flex gap-2">
-              <span className="w-4 shrink-0 text-right font-bold tabular-nums text-[#006496]/70">{i + 1}.</span>
+              <span className="md-assistant-ol-no">{i + 1}</span>
               <span className="min-w-0">{renderInline(item)}</span>
             </li>
           ))}
@@ -67,16 +78,12 @@ function BlockView({ block }: { block: Block }) {
       );
     case "table":
       return (
-        <div className="overflow-x-auto rounded-xl border border-[#006496]/10">
+        <div className="md-assistant-table overflow-x-auto">
           <table className="w-full min-w-max text-[12.5px]">
             <thead>
-              <tr className="bg-[#006496]/[0.05]">
+              <tr>
                 {block.head.map((cell, c) => (
-                  <th
-                    key={c}
-                    className="px-2.5 py-1.5 text-[10.5px] font-bold uppercase tracking-wider text-[#006496]/70"
-                    style={{ textAlign: block.align[c] }}
-                  >
+                  <th key={c} style={{ textAlign: block.align[c] }}>
                     {renderInline(cell)}
                   </th>
                 ))}
@@ -84,9 +91,9 @@ function BlockView({ block }: { block: Block }) {
             </thead>
             <tbody>
               {block.rows.map((row, r) => (
-                <tr key={r} className="border-t border-[#006496]/[0.07]">
+                <tr key={r}>
                   {row.map((cell, c) => (
-                    <td key={c} className="px-2.5 py-1.5 tabular-nums" style={{ textAlign: block.align[c] }}>
+                    <td key={c} className="tabular-nums" style={{ textAlign: block.align[c] }}>
                       {renderInline(cell)}
                     </td>
                   ))}
@@ -97,7 +104,7 @@ function BlockView({ block }: { block: Block }) {
         </div>
       );
     case "hr":
-      return <hr className="border-[#006496]/10" />;
+      return <hr className="border-md-line" />;
     default:
       return <p>{renderInline(block.c)}</p>;
   }
@@ -108,7 +115,7 @@ export default function Markdown({ text, className }: { text: string; className?
   const blocks = useMemo(() => parseMarkdown(text), [text]);
   return (
     <div
-      className={cn("space-y-2.5 text-[13.5px] leading-relaxed text-[#1a3a4a]", className)}
+      className={cn("md-assistant-md space-y-2.5 text-[13.5px] leading-relaxed text-md-ink", className)}
       data-testid="assistant-markdown"
     >
       {blocks.map((block, i) => (

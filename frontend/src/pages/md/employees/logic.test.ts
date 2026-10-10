@@ -177,7 +177,7 @@ describe("bands and groups", () => {
     const slices = typeSlices(composition.byType);
     expect(slices).toEqual([
       { name: "Staff", value: 310, color: CHART.brand },
-      { name: "Production", value: 930, color: CHART.warn },
+      { name: "Production", value: 930, color: CHART.deep },
     ]);
   });
 
@@ -197,7 +197,7 @@ describe("bands and groups", () => {
     ]);
     expect(slices[0].color).toBe(CHART.series[0]);
     expect(slices[1].color).toBe(CHART.slate);
-    expect(slices[2].color).toBe("#cbd5e1");
+    expect(slices[2].color).toBe("var(--md-ink-200)");
   });
 });
 

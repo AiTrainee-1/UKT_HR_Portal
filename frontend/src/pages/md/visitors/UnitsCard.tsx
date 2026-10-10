@@ -52,7 +52,7 @@ const columns: Column<UnitRow>[] = [
     header: "Never returned",
     align: "right",
     cell: (u) => (
-      <span className={u.notReturned > 0 ? "font-semibold text-red-700" : undefined}>{num(u.notReturned)}</span>
+      <span className={u.notReturned > 0 ? "font-semibold text-md-danger" : undefined}>{num(u.notReturned)}</span>
     ),
     sortValue: (u) => u.notReturned,
   },

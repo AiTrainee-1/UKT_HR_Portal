@@ -351,7 +351,7 @@ describe("outpasses", () => {
     expect(bands[2].sub).toBe("43% of returned passes");
 
     const aging = agingItems(OUTPASS.approvals.aging.buckets);
-    expect(aging.map((a) => a.color)).toEqual([CHART.good, CHART.teal, CHART.warn, CHART.bad]);
+    expect(aging.map((a) => a.color)).toEqual([CHART.good, CHART.gold, CHART.warn, CHART.bad]);
 
     const refusals = refusalItems(OUTPASS.gateScans);
     expect(refusals.map((r) => [r.label, r.value])).toEqual([

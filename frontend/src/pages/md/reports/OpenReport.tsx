@@ -62,7 +62,7 @@ export function OpenReport({
             <>
               <Sheet open={railOpen} onOpenChange={setRailOpen}>
                 <SheetTrigger asChild>
-                  <Button type="button" variant="outline" size="sm" className="@4xl:hidden">
+                  <Button type="button" variant="outline" size="sm" className="rounded-full @4xl:hidden">
                     <PanelLeft /> Browse reports
                   </Button>
                 </SheetTrigger>
@@ -70,7 +70,7 @@ export function OpenReport({
                   <SheetHeader>
                     <SheetTitle>Reports</SheetTitle>
                   </SheetHeader>
-                  <div className="mt-4">
+                  <div className="md-money-rail mt-4">
                     <ReportNavRail
                       catalog={railCatalog}
                       activeId={reportId}
@@ -87,7 +87,7 @@ export function OpenReport({
 
         <div className="grid grid-cols-1 gap-6 @4xl:grid-cols-[240px_minmax(0,1fr)]">
           <aside className="hidden @4xl:block">
-            <div className="clay-card sticky top-2 max-h-[calc(100vh-7rem)] overflow-y-auto rounded-2xl p-3">
+            <div className="md-card md-money-rail sticky top-2 max-h-[calc(100vh-7rem)] overflow-y-auto p-3.5">
               <ReportNavRail catalog={railCatalog} activeId={reportId} basePath={MD_REPORTS_PATH} />
             </div>
           </aside>

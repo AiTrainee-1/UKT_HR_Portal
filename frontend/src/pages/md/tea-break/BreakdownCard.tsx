@@ -13,33 +13,33 @@ function LabelCell({ row }: { row: TeaGroupRow }) {
   const detail = row.sub ?? participationText(row);
   return (
     <div className="min-w-[8rem]">
-      <p className="font-semibold text-[#1a3a4a]">
+      <p className="font-semibold text-md-ink">
         {row.label}
         {row.lowSample && row.breaks > 0 && <SmallSample />}
       </p>
-      {detail && <p className="text-[11px] text-[#006496]/60">{detail}</p>}
+      {detail && <p className="text-[11px] text-md-ink-soft">{detail}</p>}
     </div>
   );
 }
 
 function RateCell({ row }: { row: TeaGroupRow }) {
-  if (row.overrunPct == null) return <span className="text-muted-foreground">—</span>;
+  if (row.overrunPct == null) return <span className="text-md-ink-soft">—</span>;
   const chip = deltaChip(row.change.overrunPct, "pts", "down");
   return (
     <div className="flex flex-col items-end gap-0.5">
-      <span className="font-bold tabular-nums text-[#1a3a4a]">{pct(row.overrunPct, 1)}</span>
+      <span className="font-bold tabular-nums text-md-ink">{pct(row.overrunPct, 1)}</span>
       {chip && <DeltaChip {...chip} />}
     </div>
   );
 }
 
 function LostCell({ row }: { row: TeaGroupRow }) {
-  if (row.minutesLost == null) return <span className="text-muted-foreground">—</span>;
+  if (row.minutesLost == null) return <span className="text-md-ink-soft">—</span>;
   return (
     <div className="flex flex-col items-end">
-      <span className="font-bold tabular-nums text-[#1a3a4a]">{minutesText(row.minutesLost)}</span>
+      <span className="font-bold tabular-nums text-md-ink">{minutesText(row.minutesLost)}</span>
       {row.shareOfLostPct != null && (
-        <span className="text-[11px] text-[#006496]/55">{pct(row.shareOfLostPct, 0)} of the total</span>
+        <span className="text-[11px] text-md-ink-soft">{pct(row.shareOfLostPct, 0)} of the total</span>
       )}
     </div>
   );
@@ -108,13 +108,13 @@ export default function BreakdownCard({
       bodyClassName={refreshingClass(query)}
       testId={testId}
     >
-      {tabs && <div className="mb-3 overflow-x-auto">{tabs}</div>}
+      {tabs && <div className="mb-4">{tabs}</div>}
       {query.isError ? (
         <QueryError query={query} />
       ) : data ? (
         <>
           {data.average.overrunPct != null && (
-            <p className="mb-2 text-xs text-[#006496]/70">
+            <p className="mb-3 text-xs text-md-ink-soft">
               Overall: {pct(data.average.overrunPct, 1)} of breaks ran over, average {num(data.average.avgMinutes, 1)}{" "}
               min.
             </p>
@@ -130,10 +130,10 @@ export default function BreakdownCard({
             testId={`${testId}-table`}
           />
           {onFocus && data.rows.length > 0 && (
-            <p className="mt-2 text-[11px] text-[#006496]/55">Click a row to focus the whole page on it.</p>
+            <p className="md-analytics-note">Click a row to focus the whole page on it.</p>
           )}
           {data.truncated && (
-            <p className="mt-1 text-[11px] text-[#006496]/55">
+            <p className="md-analytics-note">
               Showing the {num(data.rows.length)} biggest of {num(data.total)}.
             </p>
           )}

@@ -31,14 +31,14 @@ const DROP_TONE: Record<string, ChipTone> = { bad: "red", warn: "amber", neutral
 
 type GateRow = OutpassResponse["gateScans"]["byGate"][number];
 const gateColumns: Column<GateRow>[] = [
-  { key: "gate", header: "Gate", cell: (g) => <span className="font-semibold text-[#1a3a4a]">{g.gate}</span> },
+  { key: "gate", header: "Gate", cell: (g) => <span className="font-semibold text-md-ink">{g.gate}</span> },
   { key: "exits", header: "Exits", align: "right", cell: (g) => num(g.exits) },
   { key: "returns", header: "Returns", align: "right", cell: (g) => num(g.returns) },
   {
     key: "refused",
     header: "Refused",
     align: "right",
-    cell: (g) => <span className={g.refused > 0 ? "font-semibold text-red-700" : undefined}>{num(g.refused)}</span>,
+    cell: (g) => <span className={g.refused > 0 ? "font-semibold text-md-danger" : undefined}>{num(g.refused)}</span>,
   },
 ];
 
@@ -121,7 +121,7 @@ export default function OutpassSection({ query }: { query: UseQueryResult<Outpas
           >
             <BarList
               items={departments}
-              color={CHART.warn}
+              color={CHART.brand}
               emptyText="No pass was scanned back in during this period."
               testId="md-outpass-department-bars"
             />

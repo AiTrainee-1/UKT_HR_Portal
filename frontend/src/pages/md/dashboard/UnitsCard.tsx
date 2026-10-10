@@ -12,7 +12,7 @@ const SEGMENT_COLOR: Record<SegmentKey, string> = {
   in: CHART.good,
   late: CHART.warn,
   leave: CHART.leave,
-  notIn: "#fca5a5",
+  notIn: "var(--md-danger-300)",
 };
 
 const SEGMENT_LABEL: Record<SegmentKey, string> = { in: "In", late: "Late", leave: "On leave", notIn: "Not in yet" };
@@ -20,7 +20,7 @@ const SEGMENT_LABEL: Record<SegmentKey, string> = { in: "In", late: "Late", leav
 function Legend({ keys }: { keys: SegmentKey[] }) {
   return (
     <ul
-      className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-[#006496]/70"
+      className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-medium text-md-ink-soft"
       data-testid="md-dashboard-units-legend"
     >
       {keys.map((key) => (
@@ -49,10 +49,10 @@ function Body({ units, settled }: { units: UnitsToday; settled: boolean }) {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-x-3">
-        <p className="text-3xl font-black leading-none text-[#1a3a4a]" data-testid="md-dashboard-units-total">
+        <p className="text-3xl font-black leading-none tabular-nums text-md-ink" data-testid="md-dashboard-units-total">
           {pct(units.total.attendancePct)}
         </p>
-        <p className="text-xs text-[#006496]/65">
+        <p className="text-xs text-md-ink-soft">
           {num(units.total.present)} of {num(units.total.expected)} scheduled people in so far
         </p>
       </div>
@@ -62,13 +62,13 @@ function Body({ units, settled }: { units: UnitsToday; settled: boolean }) {
           return (
             <li key={row.id ?? row.name} data-testid={`md-dashboard-unit-${row.id ?? "none"}`}>
               <div className="mb-1 flex items-baseline justify-between gap-2">
-                <span className="min-w-0 truncate text-[13px] font-semibold text-[#1a3a4a]">{row.name}</span>
-                <span className="shrink-0 text-[13px] font-bold tabular-nums text-[#1a3a4a]">
+                <span className="min-w-0 truncate text-[13px] font-semibold text-md-ink">{row.name}</span>
+                <span className="shrink-0 text-[13px] font-bold tabular-nums text-md-ink">
                   {pct(row.attendancePct)}
                 </span>
               </div>
               <div
-                className="flex h-2.5 w-full overflow-hidden rounded-full bg-[#006496]/[0.07]"
+                className="flex h-2.5 w-full overflow-hidden rounded-full bg-md-ink/[0.07]"
                 role="img"
                 aria-label={unitCaption(row)}
               >
@@ -80,20 +80,20 @@ function Body({ units, settled }: { units: UnitsToday; settled: boolean }) {
                   />
                 ))}
               </div>
-              <p className="mt-1 text-[11px] text-[#006496]/60">{unitCaption(row)}</p>
+              <p className="mt-1 text-[11px] text-md-ink-soft">{unitCaption(row)}</p>
             </li>
           );
         })}
       </ul>
       <Legend keys={order.filter((k) => seen.has(k))} />
       {weak && (
-        <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-900" data-testid="md-dashboard-units-weakest">
+        <p className="md-panel-sand px-3.5 py-2.5 text-xs text-md-warning-900" data-testid="md-dashboard-units-weakest">
           Weakest department so far: <b>{weak.name}</b>, {pct(weak.attendancePct)} ({num(weak.present)} of{" "}
           {num(weak.expected)} in).
         </p>
       )}
       {!units.lateKnown && (
-        <p className="text-[11px] text-[#006496]/55">
+        <p className="text-[11px] text-md-ink-soft">
           Late arrivals are shown once HR's attendance records for today are ready.
         </p>
       )}
@@ -126,6 +126,7 @@ export default function UnitsCard({
       provenanceIds={["dashboard-units"]}
       loading={!overview && !failed}
       actions={<AskAiButton question="Which units and departments are short of people today, and who is not in yet?" />}
+      className="md-dashboard-card"
       testId="md-dashboard-units"
     >
       {!units ? (

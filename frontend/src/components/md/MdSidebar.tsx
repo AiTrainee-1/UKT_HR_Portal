@@ -1,19 +1,22 @@
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
-import { ArrowLeftRight, LogOut, Sparkles, X } from "lucide-react";
+import { ArrowLeftRight, LogOut, Menu, PanelLeftClose, Sparkles, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { SidebarToggle } from "@/components/ui/sidebar-toggle";
 import { UKTLogo } from "@/components/ui/dashboard-sidebar";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePayrollSettings } from "@/lib/api-client/custom-hooks";
 import { toggleAssistant, useAssistantState } from "@/lib/md/assistant-store";
 import { hasHrAccess } from "@/lib/md/access";
 import { hrToMd } from "@/lib/md/embed";
+import { MD_PALETTE } from "@/lib/md/theme";
 import { cn } from "@/lib/utils";
 import { MD_NAV_GROUPS, type MdNavItem } from "./md-nav";
 
-/** The Managing Director's gold: the identity colour that sets this portal apart from the blue HR one. */
-export const MD_GOLD = "#e0a83a";
-export const MD_GOLD_GRADIENT = "linear-gradient(135deg, #f6d27a 0%, #e0a83a 100%)";
+/** @deprecated The MD portal no longer has a gold: its colours are wine, midnight indigo and sand (md-portal.md section 11).
+ *  Kept, with the wine, because other files still import it; use `text-md-wine` / `bg-md-wine` or `var(--md-wine)`. */
+export const MD_GOLD: string = MD_PALETTE.wine;
+/** @deprecated See MD_GOLD: a wine gradient now. Prefer `md-btn md-btn-primary` or `.md-icon-tile-solid` for a wine surface. */
+export const MD_GOLD_GRADIENT = "linear-gradient(135deg, var(--md-wine-700) 0%, var(--md-wine-500) 100%)";
 
 const isActivePath = (current: string, path: string) => {
   const now = current.toLowerCase();
@@ -21,30 +24,31 @@ const isActivePath = (current: string, path: string) => {
   return now === own || now.startsWith(`${own}/`);
 };
 
+/** A small midnight-indigo glass label beside a rail control (the rail is too narrow for words). */
+function Tip({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="right" sideOffset={12} className="md-shell-tip">
+        {label}
+        {hint && <span className="ml-2 opacity-70">{hint}</span>}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function ExpandedItem({ item, current, onClose }: { item: MdNavItem; current: string; onClose: () => void }) {
   const active = isActivePath(current, item.path);
   return (
-    <Link href={item.path} onClick={onClose} data-testid={`md-nav-${item.id}`}>
-      <div
-        className={cn(
-          "group flex cursor-pointer select-none items-center gap-2.5 rounded-xl py-[8px] pl-[10px] pr-3 transition-all duration-200",
-          active
-            ? "clay-nav-active"
-            : "text-[#1e4d6b] hover:translate-x-1 hover:bg-[#006496]/[0.05] hover:text-[#006496]",
-        )}
-        aria-current={active ? "page" : undefined}
-      >
-        <item.icon
-          className={cn(
-            "h-4 w-4 shrink-0 transition-colors",
-            active ? "text-white" : "text-[#006496]/80 group-hover:text-[#006496]",
-          )}
-          strokeWidth={1.8}
-        />
-        <span className={cn("truncate text-[13px] font-medium", active && "text-white")}>
-          {item.navLabel ?? item.title}
-        </span>
-      </div>
+    <Link
+      href={item.path}
+      onClick={onClose}
+      data-testid={`md-nav-${item.id}`}
+      aria-current={active ? "page" : undefined}
+      className="md-shell-nav"
+    >
+      <item.icon className="h-4 w-4" strokeWidth={1.9} aria-hidden="true" />
+      <span className="truncate">{item.navLabel ?? item.title}</span>
     </Link>
   );
 }
@@ -52,31 +56,24 @@ function ExpandedItem({ item, current, onClose }: { item: MdNavItem; current: st
 function RailItem({ item, current, onClose }: { item: MdNavItem; current: string; onClose: () => void }) {
   const active = isActivePath(current, item.path);
   return (
-    <Link href={item.path} onClick={onClose} aria-label={item.title} data-testid={`md-nav-${item.id}`}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <div
-            className={cn(
-              "relative flex h-11 w-12 cursor-pointer select-none items-center justify-center rounded-xl transition-all duration-200",
-              active ? "clay-nav-active" : "text-[#006496]/80 hover:bg-[#006496]/[0.08] hover:text-[#006496]",
-            )}
-          >
-            {active && (
-              <span className="absolute -left-[10px] bottom-2.5 top-2.5 w-[3px] rounded-r-full bg-[#006496]" />
-            )}
-            <item.icon className="h-[18px] w-[18px]" strokeWidth={1.8} />
-          </div>
-        </TooltipTrigger>
-        <TooltipContent side="right" sideOffset={10}>
-          {item.title}
-        </TooltipContent>
-      </Tooltip>
-    </Link>
+    <Tip label={item.title}>
+      <Link
+        href={item.path}
+        onClick={onClose}
+        aria-label={item.title}
+        aria-current={active ? "page" : undefined}
+        data-testid={`md-nav-${item.id}`}
+        className="md-shell-nav md-shell-nav-rail"
+      >
+        <item.icon className="h-[18px] w-[18px]" strokeWidth={1.9} aria-hidden="true" />
+      </Link>
+    </Tip>
   );
 }
 
-/** The MD portal's navigation: the same clay sidebar as the HR portal, with the MD's gold identity and the assistant's
- *  entry point. Collapses to an icon rail on desktop (Ctrl+B), is a drawer on small screens. */
+/** The MD portal's navigation: a glass rail on sand and vanilla with the company mark, the assistant's entry point, the pages
+ *  in groups (the page you are on is a wine glass pill), and the Managing Director's identity card with a quiet sign-out.
+ *  Collapses to an icon rail on desktop (Ctrl+B), is a drawer on small screens. */
 export default function MdSidebar({
   onClose,
   collapsed = false,
@@ -103,133 +100,149 @@ export default function MdSidebar({
     .slice(0, 2)
     .toUpperCase();
 
-  const railBtn = "flex h-11 w-12 shrink-0 items-center justify-center rounded-xl transition-all duration-200";
+  // The list is longer than a short screen, and every page remounts this rail: bring the page you are on into view
+  const navRef = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const nav = navRef.current;
+    const current = nav?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (!nav || !current) return;
+    const above = current.getBoundingClientRect().top - nav.getBoundingClientRect().top;
+    const room = nav.clientHeight - current.offsetHeight;
+    if (above < 0 || above > room) nav.scrollTop += above - room / 2;
+  }, [location, collapsed]);
+
+  // the company mark on a white glass tile; the collapsed rail (68 px) gets a smaller one
+  const logo = (
+    <span className="md-shell-logo">
+      {companyLogo ? (
+        <img
+          src={companyLogo}
+          alt={companyName}
+          className={cn("rounded-full object-contain", collapsed ? "h-6 w-6" : "h-7 w-7")}
+        />
+      ) : (
+        <UKTLogo className={cn("w-auto", collapsed ? "h-6" : "h-7")} />
+      )}
+    </span>
+  );
+
+  const toggle = onToggleCollapse && (
+    <div className="hidden lg:block">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-expanded={!collapsed}
+            data-testid="button-sidebar-toggle"
+            className={
+              collapsed ? "md-btn md-btn-soft md-btn-icon md-shell-rail-toggle" : "md-btn md-btn-ghost md-btn-icon"
+            }
+          >
+            {collapsed ? (
+              <Menu size={18} strokeWidth={2} aria-hidden="true" />
+            ) : (
+              <PanelLeftClose size={18} strokeWidth={1.9} aria-hidden="true" />
+            )}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side={collapsed ? "right" : "bottom"} sideOffset={12} className="md-shell-tip">
+          {collapsed ? "Expand sidebar" : "Collapse sidebar"} <span className="ml-1 opacity-70">Ctrl+B</span>
+        </TooltipContent>
+      </Tooltip>
+    </div>
+  );
 
   return (
     <TooltipProvider delayDuration={120}>
       <div className="relative flex h-full flex-col" style={{ fontFamily: "'Hanken Grotesk', 'Inter', sans-serif" }}>
-        {/* Header */}
-        <div
-          className={cn("flex items-center py-3", collapsed ? "px-[10px]" : "pl-4 pr-3")}
-          style={{ borderBottom: "1px solid rgba(0,100,150,0.08)" }}
-        >
-          {!collapsed && (
-            <>
-              <div className="flex min-w-0 flex-1 items-center gap-3">
-                {companyLogo ? (
-                  <img
-                    src={companyLogo}
-                    alt={companyName}
-                    className="h-9 w-9 shrink-0 rounded-full bg-white object-contain"
-                  />
-                ) : (
-                  <UKTLogo className="h-9 w-auto shrink-0" />
-                )}
-                <div className="min-w-0">
-                  <h1
-                    className="truncate text-[15px] font-black leading-none tracking-tight"
-                    style={{ color: "#006496" }}
-                  >
-                    {companyName}
-                  </h1>
-                  <p
-                    className="mt-0.5 flex items-center gap-1 text-[10px] font-extrabold uppercase leading-none tracking-widest"
-                    style={{ color: "#b8801c" }}
-                  >
-                    <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: MD_GOLD_GRADIENT }} />
-                    MD Portal
-                  </p>
-                </div>
-              </div>
+        {/* Brand */}
+        {collapsed ? (
+          // the collapsed rail follows the HR portal's: the round toggle alone at the top (the logo is for the open rail)
+          <div className="flex items-center justify-center border-b border-md-line px-[10px] py-3">{toggle}</div>
+        ) : (
+          <div className="flex items-center gap-3 px-4 pb-3 pt-4">
+            {logo}
+            <div className="min-w-0 flex-1">
+              <h1 className="truncate text-[15px] font-black leading-none tracking-tight text-md-wine">
+                {companyName}
+              </h1>
+              <p className="md-shell-overline mt-1.5 flex items-center gap-1.5 text-md-ink-soft">
+                <span className="h-1.5 w-1.5 rounded-full bg-md-wine" aria-hidden="true" />
+                MD Portal
+              </p>
+            </div>
+            <div className="lg:hidden">
               <button
                 onClick={onClose}
-                className="shrink-0 rounded-lg p-1.5 transition-colors lg:hidden"
-                style={{ color: "rgba(0,100,150,0.4)" }}
+                className="md-btn md-btn-ghost md-btn-icon"
                 aria-label="Close menu"
+                type="button"
               >
-                <X className="h-4 w-4" strokeWidth={1.5} />
+                <X size={18} strokeWidth={1.9} aria-hidden="true" />
               </button>
-            </>
-          )}
-          {onToggleCollapse && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <SidebarToggle
-                  collapsed={collapsed}
-                  onToggle={onToggleCollapse}
-                  compact={!collapsed}
-                  className="hidden lg:flex"
-                />
-              </TooltipTrigger>
-              <TooltipContent side={collapsed ? "right" : "bottom"} sideOffset={10}>
-                {collapsed ? "Expand sidebar" : "Collapse sidebar"} <span className="ml-1 opacity-60">Ctrl+B</span>
-              </TooltipContent>
-            </Tooltip>
-          )}
-        </div>
+            </div>
+            {toggle}
+          </div>
+        )}
 
         {/* Ask AI */}
-        <div
-          className={cn("py-3", collapsed ? "flex justify-center px-[10px]" : "px-3")}
-          style={{ borderBottom: "1px solid rgba(0,100,150,0.06)" }}
-        >
+        <div className={collapsed ? "flex justify-center border-b border-md-line px-[10px] py-2.5" : "px-3 pb-3"}>
           {collapsed ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={toggleAssistant}
-                  aria-label="AI assistant"
-                  aria-pressed={assistantOpen}
-                  data-testid="md-ask-ai"
-                  className={cn(railBtn, "text-[#5b3d00] shadow-sm hover:brightness-105")}
-                  style={{ background: MD_GOLD_GRADIENT }}
-                >
-                  <Sparkles className="h-[18px] w-[18px]" strokeWidth={2} />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="right" sideOffset={10}>
-                AI assistant <span className="ml-1 opacity-60">Ctrl+J</span>
-              </TooltipContent>
-            </Tooltip>
+            <Tip label="AI assistant" hint="Ctrl+J">
+              <button
+                type="button"
+                onClick={toggleAssistant}
+                aria-label="AI assistant"
+                aria-pressed={assistantOpen}
+                data-testid="md-ask-ai"
+                className="md-btn md-btn-soft md-shell-ask-rail"
+              >
+                <Sparkles className="h-[18px] w-[18px] text-md-wine" strokeWidth={2} aria-hidden="true" />
+              </button>
+            </Tip>
           ) : (
             <button
+              type="button"
               onClick={toggleAssistant}
               aria-pressed={assistantOpen}
               data-testid="md-ask-ai"
-              className="group flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[#5b3d00] shadow-sm transition-all hover:brightness-105 hover:shadow-md"
-              style={{ background: MD_GOLD_GRADIENT }}
+              className="md-btn md-btn-ink md-shell-ask-ai"
             >
-              <Sparkles className="h-4 w-4 shrink-0 transition-transform group-hover:rotate-12" strokeWidth={2} />
-              <span className="flex-1 text-[13px] font-extrabold">Ask the AI assistant</span>
-              <span className="rounded-md bg-white/40 px-1.5 py-0.5 text-[10px] font-bold">Ctrl J</span>
+              <span className="md-shell-spark">
+                <Sparkles size={15} strokeWidth={2.2} aria-hidden="true" />
+              </span>
+              <span className="min-w-0 flex-1 truncate font-extrabold">Ask the AI assistant</span>
+              <kbd className="md-shell-kbd">Ctrl J</kbd>
             </button>
           )}
         </div>
 
         {/* Navigation */}
         <nav
-          className={cn(
-            "flex flex-1 flex-col overflow-y-auto py-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-            collapsed ? "items-center gap-3 px-[10px]" : "gap-4 px-2.5",
-          )}
+          ref={navRef}
+          aria-label="MD portal"
+          className={
+            collapsed
+              ? "flex flex-1 flex-col items-center gap-3 overflow-y-auto px-[10px] py-3"
+              : "flex flex-1 flex-col gap-4 overflow-y-auto px-3 py-2"
+          }
         >
           {MD_NAV_GROUPS.map((group, index) => (
             <div
               key={group.heading}
               className={
                 collapsed
-                  ? cn("flex w-full flex-col items-center gap-1", index > 0 && "border-t pt-3")
+                  ? `flex w-full flex-col items-center gap-1 ${index > 0 ? "border-t border-md-line pt-3" : ""}`
                   : "flex flex-col gap-0.5"
               }
-              style={collapsed && index > 0 ? { borderColor: "rgba(0,100,150,0.1)" } : undefined}
             >
               {!collapsed && (
-                <span
-                  className="mb-1 px-3 text-[9.5px] font-extrabold uppercase tracking-[0.2em]"
-                  style={{ color: "rgba(0,60,100,0.45)" }}
-                >
-                  {group.heading}
-                </span>
+                <div className="flex items-center gap-2 px-3 pb-1 pt-0.5">
+                  <span className="md-shell-overline text-md-ink-soft">{group.heading}</span>
+                  <span className="h-px flex-1 bg-md-line" aria-hidden="true" />
+                </div>
               )}
               {group.items.map((item) =>
                 collapsed ? (
@@ -244,85 +257,52 @@ export default function MdSidebar({
 
         {/* Identity + sign out */}
         {collapsed ? (
-          <div
-            className="flex flex-col items-center gap-2 px-[10px] py-3"
-            style={{ borderTop: "1px solid rgba(0,100,150,0.08)" }}
-          >
+          <div className="flex flex-col items-center gap-1 border-t border-md-line px-[10px] py-3">
             {hrAccess && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <a href="/hr/dashboard" aria-label="HR portal" data-testid="md-to-hr">
-                    <span className={cn(railBtn, "text-[#006496]/70 hover:bg-[#006496]/[0.08] hover:text-[#006496]")}>
-                      <ArrowLeftRight className="h-[18px] w-[18px]" strokeWidth={1.8} />
-                    </span>
-                  </a>
-                </TooltipTrigger>
-                <TooltipContent side="right" sideOffset={10}>
-                  HR portal
-                </TooltipContent>
-              </Tooltip>
+              <Tip label="HR portal">
+                <a
+                  href="/hr/dashboard"
+                  aria-label="HR portal"
+                  data-testid="md-to-hr"
+                  className="md-shell-nav md-shell-nav-rail"
+                >
+                  <ArrowLeftRight className="h-[18px] w-[18px]" strokeWidth={1.9} aria-hidden="true" />
+                </a>
+              </Tip>
             )}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div
-                  className="flex h-9 w-9 items-center justify-center rounded-full text-[12px] font-black text-[#5b3d00] ring-2 ring-white"
-                  style={{ background: MD_GOLD_GRADIENT }}
-                  data-testid="md-identity"
-                >
-                  {initials}
-                </div>
-              </TooltipTrigger>
-              <TooltipContent side="right" sideOffset={10}>
-                {name} · Managing Director
-              </TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={logout}
-                  data-testid="button-logout"
-                  aria-label="Sign out"
-                  className={cn(railBtn, "text-[#006496]/55 hover:bg-[#c0392b]/[0.07] hover:text-[#c0392b]")}
-                >
-                  <LogOut className="h-[18px] w-[18px]" strokeWidth={1.8} />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="right" sideOffset={10}>
-                Sign out
-              </TooltipContent>
-            </Tooltip>
+            {/* no avatar on the rail (the HR portal's has none): the identity is still there for a screen reader */}
+            <span className="sr-only" data-testid="md-identity">
+              {name} · Managing Director
+            </span>
+            <Tip label="Sign out">
+              <button
+                type="button"
+                onClick={logout}
+                data-testid="button-logout"
+                aria-label="Sign out"
+                className="md-shell-nav md-shell-nav-rail md-shell-nav-danger"
+              >
+                <LogOut className="h-[18px] w-[18px]" strokeWidth={1.9} aria-hidden="true" />
+              </button>
+            </Tip>
           </div>
         ) : (
-          <div className="space-y-1 px-3 py-3" style={{ borderTop: "1px solid rgba(0,100,150,0.08)" }}>
-            <div className="flex items-center gap-2.5 rounded-xl px-2 py-1.5" data-testid="md-identity">
-              <div
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[12px] font-black text-[#5b3d00] ring-2 ring-white"
-                style={{ background: MD_GOLD_GRADIENT }}
-              >
-                {initials}
-              </div>
+          <div className="space-y-1.5 border-t border-md-line px-3 pb-3 pt-3">
+            <div className="md-shell-identity" data-testid="md-identity">
+              <div className="md-shell-avatar">{initials}</div>
               <div className="min-w-0">
-                <p className="truncate text-[13px] font-bold text-[#1a3a4a]">{name}</p>
-                <p className="text-[10px] font-extrabold uppercase tracking-widest" style={{ color: "#b8801c" }}>
-                  Managing Director
-                </p>
+                <p className="truncate text-[13px] font-extrabold leading-tight text-md-ink">{name}</p>
+                <p className="md-shell-overline mt-1.5 text-md-wine">Managing Director</p>
               </div>
             </div>
             {hrAccess && (
-              <a href="/hr/dashboard" data-testid="md-to-hr">
-                <div className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] font-medium text-[#1e4d6b] transition-all duration-200 hover:translate-x-1 hover:bg-[#006496]/[0.05] hover:text-[#006496]">
-                  <ArrowLeftRight className="h-4 w-4 shrink-0 text-[#006496]/80" strokeWidth={1.8} />
-                  <span>HR portal</span>
-                </div>
+              <a href="/hr/dashboard" data-testid="md-to-hr" className="md-shell-quiet">
+                <ArrowLeftRight className="h-4 w-4 shrink-0" strokeWidth={1.9} aria-hidden="true" />
+                <span>HR portal</span>
               </a>
             )}
-            <button
-              onClick={logout}
-              data-testid="button-logout"
-              className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] font-medium transition-all duration-200 hover:translate-x-1 hover:bg-[#c0392b]/[0.06] hover:text-[#c0392b]"
-              style={{ color: "rgba(0,100,150,0.55)" }}
-            >
-              <LogOut className="h-4 w-4 shrink-0" strokeWidth={1.8} />
+            <button type="button" onClick={logout} data-testid="button-logout" className="md-shell-quiet">
+              <LogOut className="h-4 w-4 shrink-0" strokeWidth={1.9} aria-hidden="true" />
               <span>Sign Out</span>
             </button>
           </div>

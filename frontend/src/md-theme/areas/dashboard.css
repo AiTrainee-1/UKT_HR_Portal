@@ -1,0 +1,458 @@
+/* MD portal skin, area: dashboard. Owned by the designer of that area (md-portal.md section 11.4). Every selector here must start
+   with an .md-* class of your own (name them md-dashboard-*) or with html[data-md-theme]; md-theme.test.ts checks. Use the palette
+   tokens (var(--md-wine-700) ...), never a hex colour. (No @keyframes here: the test reads their "from" / "to" as selectors.)
+
+   What lives here: the pieces of the MD's dashboard (pages/md/home and pages/md/dashboard) that the shared glass classes do not
+   cover. The surfaces and buttons themselves are the shared md-card / md-panel / md-btn / md-chip / md-hero-* classes.
+
+   .md-dashboard-card        a SectionCard (kit) dressed as a glass card: 20px radius, roomy padding, a hairline under the header
+   .md-dashboard-briefing    a card tinted sand (today's briefing, the one warm card)
+   .md-dashboard-icon        a gradient icon tile  (+ -wine | -ink | -sand, -sm)
+   .md-dashboard-kpi         one headline figure (the Pulse tiles)  (+ -wine | -ink | -sand for the corner glow)
+   .md-dashboard-tile        a quiet link tile inside a card (quick actions)
+   .md-dashboard-locked      an Admin-only tile: frosted, dashed edge
+   .md-dashboard-row         a row inside a card that tints when hovered
+   .md-dashboard-insight     one "needs your attention" row (data-severity picks the colour)
+   .md-dashboard-explore     an Explore tile: a whole-card link with a lift                                                   */
+
+/* ── cards (a SectionCard from the kit) ───────────────────────────────────────────────────────────────────────────────── */
+
+html[data-md-theme] .md-dashboard-card {
+  position: relative;
+  padding: 1.35rem 1.5rem 1.5rem;
+  border-radius: 1.25rem;
+}
+html[data-md-theme] .md-dashboard-card > header {
+  align-items: center;
+  margin-bottom: 1.1rem;
+  padding-bottom: 0.95rem;
+  border-bottom: 1px solid var(--md-line);
+}
+html[data-md-theme] .md-dashboard-card > header h3 {
+  font-size: 1rem;
+  font-weight: 800;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  color: var(--md-ink-800);
+}
+html[data-md-theme] .md-dashboard-card > header p {
+  margin-top: 0.15rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--md-ink-600);
+}
+/* today's briefing: the one warm card (sand glass), with a wine bar down its left edge */
+html[data-md-theme] .md-dashboard-card.md-dashboard-briefing {
+  background: linear-gradient(135deg, rgba(245, 235, 208, 0.9) 0%, rgba(255, 255, 255, 0.55) 72%);
+  border-color: rgba(255, 255, 255, 0.85);
+}
+html[data-md-theme] .md-dashboard-card.md-dashboard-briefing > header {
+  border-bottom-color: rgba(184, 130, 32, 0.2);
+}
+.md-dashboard-accent-bar {
+  position: absolute;
+  top: 1.35rem;
+  bottom: 1.35rem;
+  left: 0;
+  width: 4px;
+  border-radius: 0 9999px 9999px 0;
+  background: linear-gradient(180deg, var(--md-wine-700), var(--md-wine-300));
+}
+
+/* "Ask AI" and "Explain" (the kit's small button) inside the dashboard's cards: the frosted white glass of the button family */
+html[data-md-theme] .md-dashboard-card [data-testid="ask-ai"],
+html[data-md-theme] .md-dashboard-explore [data-testid="ask-ai"] {
+  color: var(--md-wine-700);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.55));
+  border: 1px solid rgba(40, 43, 74, 0.12);
+  box-shadow:
+    0 6px 14px -8px rgba(40, 43, 74, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease,
+    background 0.2s ease;
+}
+html[data-md-theme] .md-dashboard-card [data-testid="ask-ai"]:hover,
+html[data-md-theme] .md-dashboard-explore [data-testid="ask-ai"]:hover {
+  transform: translateY(-1px);
+  border-color: rgba(127, 1, 31, 0.32);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(255, 255, 255, 0.7));
+  box-shadow:
+    0 10px 20px -8px rgba(127, 1, 31, 0.32),
+    inset 0 1px 0 white;
+}
+html[data-md-theme] .md-dashboard-card [data-testid="ask-ai"]:active,
+html[data-md-theme] .md-dashboard-explore [data-testid="ask-ai"]:active {
+  transform: none;
+}
+html[data-md-theme] .md-dashboard-card [data-testid="ask-ai"]:focus-visible,
+html[data-md-theme] .md-dashboard-explore [data-testid="ask-ai"]:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 2px;
+}
+
+/* ── gradient icon tiles ──────────────────────────────────────────────────────────────────────────────────────────────── */
+
+.md-dashboard-icon {
+  --tile-glow: rgba(127, 1, 31, 0.5);
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow:
+    0 8px 18px -8px var(--tile-glow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+.md-dashboard-icon-sm {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.7rem;
+}
+.md-dashboard-icon-wine {
+  color: white;
+  background: linear-gradient(135deg, var(--md-wine-700) 0%, var(--md-wine-500) 100%);
+}
+.md-dashboard-icon-ink {
+  --tile-glow: rgba(40, 43, 74, 0.5);
+  color: var(--md-sand);
+  background: linear-gradient(135deg, var(--md-ink-900) 0%, var(--md-ink-600) 100%);
+}
+.md-dashboard-icon-sand {
+  --tile-glow: rgba(185, 130, 32, 0.4);
+  color: var(--md-wine-700);
+  background: linear-gradient(135deg, var(--md-sand) 0%, var(--md-warning-200) 100%);
+  border-color: rgba(184, 130, 32, 0.3);
+}
+
+/* ── the pulse: headline figure tiles ─────────────────────────────────────────────────────────────────────────────────── */
+
+.md-dashboard-kpi {
+  position: relative;
+  overflow: hidden;
+}
+/* a soft pool of the tile's colour in the top-right corner, so eight tiles read as a set and not as eight white boxes */
+.md-dashboard-kpi::before {
+  content: "";
+  position: absolute;
+  top: -3rem;
+  right: -3rem;
+  width: 9rem;
+  height: 9rem;
+  border-radius: 9999px;
+  pointer-events: none;
+  background: radial-gradient(circle, rgba(127, 1, 31, 0.14), transparent 68%);
+}
+.md-dashboard-kpi-ink::before {
+  background: radial-gradient(circle, rgba(40, 43, 74, 0.15), transparent 68%);
+}
+.md-dashboard-kpi-sand::before {
+  background: radial-gradient(circle, rgba(212, 158, 50, 0.3), transparent 68%);
+}
+.md-dashboard-kpi-link {
+  position: relative;
+  display: block;
+  padding: 1.1rem 1.2rem 1.15rem;
+  border-radius: inherit;
+  color: inherit;
+  text-decoration: none;
+}
+.md-dashboard-kpi-link:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: -3px;
+}
+.md-dashboard-kpi-arrow {
+  color: var(--md-ink-500);
+  transition:
+    transform 0.2s ease,
+    color 0.2s ease;
+}
+.md-dashboard-kpi:hover .md-dashboard-kpi-arrow {
+  color: var(--md-wine-700);
+  transform: translate(2px, -2px);
+}
+.md-dashboard-figure {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.025em;
+}
+/* the sand skeleton a tile shows while the overview is on its way (the pulse is Tailwind's animate-pulse) */
+.md-dashboard-skeleton {
+  background: linear-gradient(135deg, rgba(245, 235, 208, 0.85), rgba(238, 235, 218, 0.55));
+}
+
+/* ── rows inside a card ───────────────────────────────────────────────────────────────────────────────────────────────── */
+
+.md-dashboard-row {
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.2s ease;
+}
+.md-dashboard-row:hover {
+  background: rgba(255, 255, 255, 0.82);
+  border-color: rgba(127, 1, 31, 0.18);
+  box-shadow: 0 10px 22px -16px rgba(40, 43, 74, 0.45);
+}
+.md-dashboard-rule {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--md-line-strong), transparent);
+}
+/* the chip a sentence ends with, linking to its page */
+.md-dashboard-linkchip {
+  text-decoration: none;
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease;
+}
+.md-dashboard-linkchip:hover {
+  background: rgba(127, 1, 31, 0.16);
+  border-color: rgba(127, 1, 31, 0.34);
+}
+.md-dashboard-linkchip:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 2px;
+}
+.md-dashboard-chip-info {
+  color: var(--md-info-700);
+  background: rgba(228, 229, 245, 0.85);
+  border-color: rgba(85, 89, 171, 0.25);
+}
+
+/* ── needs your attention ─────────────────────────────────────────────────────────────────────────────────────────────── */
+
+.md-dashboard-insight {
+  --sev: var(--md-info-500);
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+  padding: 0.95rem 1rem 0.95rem 1.2rem;
+  border-radius: 1rem;
+  border: 1px solid var(--md-line);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.42));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.2s ease;
+}
+.md-dashboard-insight[data-severity="critical"] {
+  --sev: var(--md-danger-500);
+}
+.md-dashboard-insight[data-severity="warning"] {
+  --sev: var(--md-warning-400);
+}
+.md-dashboard-insight[data-severity="good"] {
+  --sev: var(--md-success-500);
+}
+/* the severity bar down the left edge */
+.md-dashboard-insight::before {
+  content: "";
+  position: absolute;
+  top: 0.85rem;
+  bottom: 0.85rem;
+  left: 0;
+  width: 3px;
+  border-radius: 0 9999px 9999px 0;
+  background: var(--sev);
+}
+.md-dashboard-insight:hover {
+  background: rgba(255, 255, 255, 0.88);
+  border-color: color-mix(in srgb, var(--sev) 38%, transparent);
+  box-shadow:
+    0 12px 24px -16px rgba(40, 43, 74, 0.5),
+    inset 0 1px 0 white;
+}
+.md-dashboard-insight-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.8rem;
+  color: color-mix(in srgb, var(--sev) 80%, var(--md-ink-900));
+  background: color-mix(in srgb, var(--sev) 14%, white);
+  border: 1px solid color-mix(in srgb, var(--sev) 26%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+/* ── quick actions and the Admin-only tiles ───────────────────────────────────────────────────────────────────────────── */
+
+.md-dashboard-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.9rem;
+  border-radius: 1rem;
+  color: var(--md-ink-800);
+  text-decoration: none;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.5));
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  box-shadow:
+    0 8px 20px -14px rgba(40, 43, 74, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  transition:
+    transform 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+.md-dashboard-tile:hover {
+  transform: translateY(-2px);
+  border-color: rgba(127, 1, 31, 0.3);
+  box-shadow:
+    0 16px 28px -14px rgba(40, 43, 74, 0.5),
+    inset 0 1px 0 white;
+}
+.md-dashboard-tile:focus-visible,
+.md-dashboard-locked:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 2px;
+}
+.md-dashboard-locked {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.55rem 0.8rem;
+  text-align: left;
+  cursor: pointer;
+  color: var(--md-ink-800);
+  border-radius: 0.95rem;
+  border: 1.5px dashed var(--md-line-strong);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.46), rgba(255, 255, 255, 0.2));
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease,
+    transform 0.18s ease;
+}
+.md-dashboard-locked:hover {
+  transform: translateY(-1px);
+  border-color: rgba(40, 43, 74, 0.38);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.42));
+}
+.md-dashboard-lockdot {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 1.65rem;
+  height: 1.65rem;
+  border-radius: 9999px;
+  color: var(--md-ink-600);
+  background: rgba(40, 43, 74, 0.07);
+  border: 1px solid rgba(40, 43, 74, 0.1);
+}
+
+/* ── explore ──────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+.md-dashboard-explore {
+  position: relative;
+}
+.md-dashboard-explore:has(a:focus-visible) {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 2px;
+}
+.md-dashboard-explore:hover .md-dashboard-explore-arrow {
+  color: var(--md-wine-700);
+  transform: translate(2px, -2px);
+}
+.md-dashboard-explore-arrow {
+  color: var(--md-ink-500);
+  transition:
+    transform 0.2s ease,
+    color 0.2s ease;
+}
+
+/* ── the welcome card (the greeting sits on the shared md-hero-* glass) ───────────────────────────────────────────────── */
+
+/* more air on the sheet than the shared default once there is room (the shared rule shrinks it on a phone) */
+@media (min-width: 641px) {
+  .md-dashboard-hero-sheet {
+    padding: 2.25rem 2.5rem;
+  }
+}
+@media (min-width: 1024px) {
+  .md-dashboard-hero-sheet {
+    padding: 2.5rem 2.9rem;
+  }
+}
+.md-dashboard-greeting {
+  width: fit-content;
+  max-width: 100%;
+  padding-bottom: 0.1em; /* background-clip:text clips a descender that falls below a tight line box */
+  overflow-wrap: anywhere;
+}
+.md-dashboard-overline {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--md-ink-600);
+}
+.md-dashboard-overline::before {
+  content: "";
+  width: 1.5rem;
+  height: 2px;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, var(--md-wine-700), var(--md-wine-300));
+}
+.md-dashboard-ask-input::placeholder {
+  color: var(--md-ink-600);
+  opacity: 1;
+}
+
+/* ── small screens: 36px tap targets, tighter card padding ────────────────────────────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  html[data-md-theme] .md-dashboard-card {
+    padding: 1.1rem 1.05rem 1.2rem;
+  }
+  html[data-md-theme] .md-dashboard-card > header {
+    margin-bottom: 0.9rem;
+    padding-bottom: 0.8rem;
+  }
+  html[data-md-theme] .md-dashboard-card [data-testid="ask-ai"],
+  html[data-md-theme] .md-dashboard-explore [data-testid="ask-ai"] {
+    min-height: 2.25rem;
+  }
+  .md-dashboard-insight {
+    gap: 0.7rem;
+    padding: 0.85rem 0.8rem 0.85rem 1rem;
+  }
+  .md-dashboard-kpi-link {
+    padding: 1rem 0.95rem 1.05rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .md-dashboard-tile,
+  .md-dashboard-locked,
+  .md-dashboard-row,
+  .md-dashboard-insight,
+  .md-dashboard-kpi-arrow,
+  .md-dashboard-explore-arrow,
+  html[data-md-theme] .md-dashboard-card [data-testid="ask-ai"],
+  html[data-md-theme] .md-dashboard-explore [data-testid="ask-ai"] {
+    transition: none;
+  }
+  .md-dashboard-tile:hover,
+  .md-dashboard-locked:hover,
+  .md-dashboard-kpi:hover .md-dashboard-kpi-arrow,
+  .md-dashboard-explore:hover .md-dashboard-explore-arrow,
+  html[data-md-theme] .md-dashboard-card [data-testid="ask-ai"]:hover,
+  html[data-md-theme] .md-dashboard-explore [data-testid="ask-ai"]:hover {
+    transform: none;
+  }
+}

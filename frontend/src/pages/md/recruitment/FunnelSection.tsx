@@ -1,15 +1,14 @@
 import { useState } from "react";
-import { Layers } from "lucide-react";
+import { CheckCheck, Layers } from "lucide-react";
 import AskAiButton from "@/components/md/kit/AskAiButton";
 import BarList from "@/components/md/kit/BarList";
+import { CHART } from "@/components/md/kit/chartTheme";
 import DataTable, { type Column } from "@/components/md/kit/DataTable";
 import SectionCard from "@/components/md/kit/SectionCard";
 import { EmptyBlock } from "@/components/md/kit/states";
-import { PillTabs } from "@/components/ui/pill-tabs";
 import { num, pct } from "@/lib/md/format";
-import { cn } from "@/lib/utils";
 import { funnelBars, stepColor, type FunnelBar } from "./logic";
-import { QueryError } from "./parts";
+import { QueryError, SegTabs } from "./parts";
 import type { FunnelDepartmentRow, FunnelView, QueryLike, RecruitmentFunnel, RecruitmentSources } from "./types";
 
 const VIEWS = [
@@ -18,27 +17,22 @@ const VIEWS = [
   { value: "screening", label: "Resume screening" },
 ];
 
-/** One bar of the funnel: centred in its track so the column narrows as candidates drop out. */
+/** One bar of the funnel: centred in its sand groove so the column narrows as candidates drop out. The colour runs down the
+ *  wine ramp, light at the top to dark at the bottom; "Joined" is counted from the employee records, so it is indigo and
+ *  dashed rather than the next step of the same colour. */
 function FunnelShape({ bar, index, total }: { bar: FunnelBar; index: number; total: number }) {
   if (!bar.tracked) {
-    return (
-      <div className="flex h-9 items-center justify-center rounded-lg border border-dashed border-slate-300 text-xs text-slate-500">
-        Not recorded for this view
-      </div>
-    );
+    return <div className="md-people-funnel-empty">Not recorded for this view</div>;
   }
   return (
-    <div className="h-9 rounded-lg bg-[#006496]/[0.05]" role="img" aria-label={`${bar.label}: ${bar.count} candidates`}>
-      <div
-        className={cn(
-          "mx-auto h-full rounded-lg transition-[width] duration-500 ease-out",
-          bar.standalone && "border-2 border-dashed border-green-500",
-        )}
-        style={{
-          width: `${bar.widthPct}%`,
-          background: bar.standalone ? "rgba(34,197,94,.14)" : stepColor(index, total),
-        }}
-      />
+    <div className="md-people-funnel-track" role="img" aria-label={`${bar.label}: ${bar.count} candidates`}>
+      {bar.widthPct > 0 && (
+        <div
+          className="md-people-funnel-bar"
+          data-standalone={bar.standalone}
+          style={{ width: `${bar.widthPct}%`, background: bar.standalone ? undefined : stepColor(index, total) }}
+        />
+      )}
     </div>
   );
 }
@@ -46,17 +40,22 @@ function FunnelShape({ bar, index, total }: { bar: FunnelBar; index: number; tot
 function FunnelSteps({ bars }: { bars: FunnelBar[] }) {
   const pipeline = bars.filter((b) => !b.standalone).length;
   return (
-    <ol className="space-y-4" data-testid="md-recruitment-funnel-steps">
+    <ol className="md-people-funnel space-y-3.5" data-testid="md-recruitment-funnel-steps">
       {bars.map((b, i) => (
         <li
           key={b.id}
           data-testid={`funnel-step-${b.id}`}
-          className="grid grid-cols-1 items-start gap-x-4 gap-y-1.5 @md:grid-cols-[6.5rem_minmax(0,1fr)]"
+          className="grid grid-cols-1 items-start gap-x-5 gap-y-2 @md:grid-cols-[8rem_minmax(0,1fr)]"
         >
-          <div className="flex items-baseline justify-between gap-2 @md:block">
-            <p className="text-[13px] font-semibold text-[#1a3a4a]">{b.label}</p>
+          <div className="flex items-center justify-between gap-2 @md:block">
+            <p className="flex items-center gap-2 text-[13px] font-bold text-md-ink">
+              <span className="md-people-step-no" data-kind={b.standalone ? "records" : "pipeline"} aria-hidden="true">
+                {b.standalone && <CheckCheck size={12} />}
+              </span>
+              {b.label}
+            </p>
             <p
-              className="text-xl font-black leading-none tabular-nums text-[#1a3a4a] @md:mt-1"
+              className="md-people-figure text-[1.65rem] font-black leading-none tracking-tight text-md-ink @md:mt-1.5 @md:pl-[1.875rem]"
               data-testid={`funnel-count-${b.id}`}
             >
               {b.count == null ? "—" : num(b.count)}
@@ -64,12 +63,12 @@ function FunnelSteps({ bars }: { bars: FunnelBar[] }) {
           </div>
           <div className="min-w-0">
             <FunnelShape bar={b} index={i} total={pipeline} />
-            <p className="mt-1 flex flex-wrap gap-x-3 text-xs leading-snug">
-              {b.conversion && <b className="text-[#006496]">{b.conversion}</b>}
-              {b.dropOff && <span className="text-[#006496]/60">{b.dropOff}</span>}
-              {i === 0 && b.tracked && <span className="text-[#006496]/60">Everyone who entered</span>}
+            <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-snug">
+              {b.conversion && <b className="md-chip md-chip-wine">{b.conversion}</b>}
+              {b.dropOff && <span className="font-medium text-md-ink-soft">{b.dropOff}</span>}
+              {i === 0 && b.tracked && <span className="font-medium text-md-ink-soft">Everyone who entered</span>}
             </p>
-            {b.note && <p className="mt-0.5 text-[11px] italic leading-snug text-[#006496]/60">{b.note}</p>}
+            {b.note && <p className="mt-1 text-[11px] italic leading-snug text-md-ink-soft">{b.note}</p>}
           </div>
         </li>
       ))}
@@ -77,31 +76,31 @@ function FunnelSteps({ bars }: { bars: FunnelBar[] }) {
   );
 }
 
+/** A column of counts: right-aligned, tabular, the last step of the funnel (Joined) in wine. */
+type CountKey = "applied" | "screened" | "shortlisted" | "interviewed" | "offered" | "joined";
+
+const countColumn = (key: CountKey, header: string, emphasis = false): Column<FunnelDepartmentRow> => ({
+  key,
+  header,
+  align: "right",
+  className: "tabular-nums",
+  cell: (r) => (emphasis ? <b className="text-md-wine">{num(r[key])}</b> : num(r[key])),
+  sortValue: (r) => r[key],
+});
+
 const DEPARTMENT_COLUMNS: Column<FunnelDepartmentRow>[] = [
   {
     key: "department",
     header: "Department",
-    cell: (r) => <span className="font-medium text-[#1a3a4a]">{r.department}</span>,
+    cell: (r) => <span className="font-semibold text-md-ink">{r.department}</span>,
     sortValue: (r) => r.department,
   },
-  { key: "applied", header: "Applied", align: "right", cell: (r) => num(r.applied), sortValue: (r) => r.applied },
-  { key: "screened", header: "Screened", align: "right", cell: (r) => num(r.screened), sortValue: (r) => r.screened },
-  {
-    key: "shortlisted",
-    header: "Shortlisted",
-    align: "right",
-    cell: (r) => num(r.shortlisted),
-    sortValue: (r) => r.shortlisted,
-  },
-  {
-    key: "interviewed",
-    header: "Interviewed",
-    align: "right",
-    cell: (r) => num(r.interviewed),
-    sortValue: (r) => r.interviewed,
-  },
-  { key: "offered", header: "Offered", align: "right", cell: (r) => num(r.offered), sortValue: (r) => r.offered },
-  { key: "joined", header: "Joined", align: "right", cell: (r) => num(r.joined), sortValue: (r) => r.joined },
+  countColumn("applied", "Applied"),
+  countColumn("screened", "Screened"),
+  countColumn("shortlisted", "Shortlisted"),
+  countColumn("interviewed", "Interviewed"),
+  countColumn("offered", "Offered"),
+  countColumn("joined", "Joined", true),
 ];
 
 export default function FunnelSection({
@@ -133,13 +132,12 @@ export default function FunnelSection({
           }
         >
           <QueryError query={funnel} />
-          <div className="mb-4 max-w-full overflow-x-auto" data-testid="md-recruitment-funnel-view">
-            <PillTabs
-              size="sm"
+          <div className="mb-5 max-w-full overflow-x-auto pb-1" data-testid="md-recruitment-funnel-view">
+            <SegTabs
+              label="Which candidates the funnel counts"
               items={VIEWS}
               value={view}
               onChange={(v) => setView(v as FunnelView)}
-              baseColor="#006496"
             />
           </div>
           {data &&
@@ -168,19 +166,20 @@ export default function FunnelSection({
           <QueryError query={sources} />
           {sources.data &&
             (sources.data.total === 0 ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">No candidates in this period.</p>
+              <p className="py-6 text-center text-sm text-md-ink-soft">No candidates in this period.</p>
             ) : (
               <>
                 <BarList
                   testId="md-recruitment-sources-list"
-                  items={sources.data.channels.map((c) => ({
+                  items={sources.data.channels.map((c, i) => ({
                     key: c.id,
                     label: c.label,
                     value: c.candidates,
+                    color: CHART.series[i % CHART.series.length], // a route keeps its own colour: wine, then indigo
                     sub: `${num(c.progressed)} ${c.progressedLabel}${c.progressedPct != null ? ` (${pct(c.progressedPct, 0)})` : ""}${c.detail ? ` · ${c.detail}` : ""}`,
                   }))}
                 />
-                <p className="mt-4 text-[11px] text-[#006496]/60">
+                <p className="mt-4 text-[11px] leading-snug text-md-ink-soft">
                   The system records which route a candidate came through, not how they heard of the job (referral,
                   agency, walk-in).
                 </p>

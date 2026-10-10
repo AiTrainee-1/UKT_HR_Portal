@@ -13,10 +13,10 @@ import { ask, trendTick, type AskContext } from "./logic";
 import type { AttendanceOvertime } from "./types";
 
 const DECISIONS: { key: keyof NonNullable<AttendanceOvertime["decisions"]>; label: string; tone: string }[] = [
-  { key: "announcedPay", label: "Pay", tone: "bg-green-50 text-green-800" },
-  { key: "announcedRelaxation", label: "Day off", tone: "bg-blue-50 text-blue-800" },
-  { key: "detected", label: "Not decided", tone: "bg-amber-50 text-amber-800" },
-  { key: "rejected", label: "Rejected", tone: "bg-slate-100 text-slate-600" },
+  { key: "announcedPay", label: "Pay", tone: "md-analytics-tone-good" },
+  { key: "announcedRelaxation", label: "Day off", tone: "md-analytics-tone-info" },
+  { key: "detected", label: "Not decided", tone: "md-analytics-tone-watch" },
+  { key: "rejected", label: "Rejected", tone: "md-analytics-tone-neutral" },
 ];
 
 function notTrackedText(d: AttendanceOvertime): string {
@@ -64,7 +64,7 @@ export default function OvertimeCard({
           return (
             <div className="space-y-4">
               <div className="flex flex-wrap items-end gap-x-3 gap-y-1">
-                <p className="text-3xl font-black text-[#1a3a4a]" data-testid="md-attendance-overtime-total">
+                <p className="md-analytics-big" data-testid="md-attendance-overtime-total">
                   {num(d.totalHours, 1)} h
                 </p>
                 {change != null && (
@@ -74,7 +74,7 @@ export default function OvertimeCard({
                     direction={change > 0 ? "up" : change < 0 ? "down" : "flat"}
                   />
                 )}
-                <p className="text-xs text-[#006496]/65">
+                <p className="text-xs text-md-ink-soft">
                   {d.pctOfScheduledHours != null ? `${pct(d.pctOfScheduledHours)} of scheduled hours · ` : ""}
                   {num(d.days ?? 0)} staff days · {num(d.employees ?? 0)} people
                 </p>
@@ -82,7 +82,7 @@ export default function OvertimeCard({
               {d.decisions && (
                 <div className="flex flex-wrap gap-1.5" data-testid="md-attendance-overtime-decisions">
                   {DECISIONS.map(({ key, label, tone }) => (
-                    <span key={key} className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${tone}`}>
+                    <span key={key} className={`md-chip ${tone}`}>
                       {label}: {num(d.decisions![key].days)} {d.decisions![key].days === 1 ? "day" : "days"} ·{" "}
                       {num(d.decisions![key].hours, 1)} h
                     </span>
@@ -90,7 +90,7 @@ export default function OvertimeCard({
                 </div>
               )}
               <div>
-                <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-[#006496]/60">By department</p>
+                <p className="md-analytics-subhead">By department</p>
                 <BarList
                   items={d.byDepartment.slice(0, 6).map((r) => ({
                     key: r.name,
@@ -99,24 +99,22 @@ export default function OvertimeCard({
                     display: `${num(r.hours, 1)} h`,
                     sub: `${num(r.employees)} ${r.employees === 1 ? "person" : "people"} · ${num(r.days)} days`,
                   }))}
-                  color={CHART.series[4]}
+                  color={CHART.deep}
                 />
               </div>
               {d.topEarners.length > 0 && (
                 <div>
-                  <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-[#006496]/60">
-                    Most overtime
-                  </p>
-                  <ul className="divide-y text-sm" data-testid="md-attendance-overtime-people">
+                  <p className="md-analytics-subhead">Most overtime</p>
+                  <ul className="divide-y divide-md-line text-sm" data-testid="md-attendance-overtime-people">
                     {d.topEarners.slice(0, 5).map((p) => (
                       <li key={p.employeeId} className="flex items-baseline justify-between gap-2 py-1.5">
                         <span className="min-w-0 truncate">
-                          <b className="font-semibold text-[#1a3a4a]">{p.name}</b>{" "}
-                          <span className="text-[11px] text-[#006496]/55">{p.department}</span>
+                          <b className="font-semibold text-md-ink">{p.name}</b>{" "}
+                          <span className="text-[11px] text-md-ink-soft">{p.department}</span>
                         </span>
-                        <span className="shrink-0 tabular-nums text-[#1a3a4a]">
+                        <span className="shrink-0 tabular-nums text-md-ink">
                           {num(p.hours, 1)} h{" "}
-                          <span className="text-[11px] text-[#006496]/55">
+                          <span className="text-[11px] text-md-ink-soft">
                             · {p.days} {p.days === 1 ? "day" : "days"}
                           </span>
                         </span>
@@ -132,7 +130,7 @@ export default function OvertimeCard({
                   xFormat={trendTick(d.trend.granularity)}
                   height={120}
                   legend={false}
-                  series={[{ key: "hours", label: "Overtime hours", kind: "bar", color: CHART.series[4] }]}
+                  series={[{ key: "hours", label: "Overtime hours", kind: "bar", color: CHART.deep }]}
                   yFormat={(v) => `${v} h`}
                 />
               )}

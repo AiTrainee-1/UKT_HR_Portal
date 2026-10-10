@@ -19,6 +19,7 @@ import {
   heatmapShape,
   hourLabel,
   hourText,
+  initialsOf,
   nextPageSize,
   peakText,
   peopleSub,
@@ -33,6 +34,15 @@ import {
   whenText,
 } from "./logic";
 import type { ActivityTrend } from "./types";
+
+describe("avatars", () => {
+  it("takes the first letter of the first two words of a name", () => {
+    expect(initialsOf("Anita Rao")).toBe("AR");
+    expect(initialsOf("admin")).toBe("A");
+    expect(initialsOf("S. Ramanathan (Managing Director)")).toBe("SR");
+    expect(initialsOf(undefined)).toBe("");
+  });
+});
 
 describe("changes against the previous period", () => {
   it("has no chip without a comparison", () => {

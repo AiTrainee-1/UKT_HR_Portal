@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { ArrowUp, Check, Languages, Loader2, Mic, Square, Volume2, VolumeX } from "lucide-react";
+import { ArrowUp, Check, Languages, Loader2, Lock, Mic, Square, Volume2, VolumeX } from "lucide-react";
 import { VOICE_LANGUAGES, type VoiceLanguageChoice } from "@/lib/md/voice";
 import { cn } from "@/lib/utils";
 import type { useVoiceInput } from "./voice/useVoiceInput";
@@ -45,7 +45,7 @@ function LanguageMenu({ value, onChange }: { value: VoiceLanguageChoice; onChang
         aria-expanded={open}
         title="Language for voice input"
         data-testid="assistant-language"
-        className="flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-bold text-[#006496]/75 transition-colors hover:bg-[#006496]/[0.07]"
+        className="md-chip md-assistant-tool"
       >
         <Languages size={13} />
         {current.short}
@@ -53,7 +53,7 @@ function LanguageMenu({ value, onChange }: { value: VoiceLanguageChoice; onChang
       {open && (
         <ul
           role="listbox"
-          className="absolute bottom-full left-0 z-10 mb-1.5 w-44 overflow-hidden rounded-xl border border-[#006496]/12 bg-white py-1 shadow-lg"
+          className="md-assistant-menu absolute bottom-full left-0 z-10 mb-2 w-52 overflow-hidden p-1.5"
         >
           {VOICE_LANGUAGES.map((l) => (
             <li key={l.value}>
@@ -66,10 +66,10 @@ function LanguageMenu({ value, onChange }: { value: VoiceLanguageChoice; onChang
                   setOpen(false);
                 }}
                 data-testid={`assistant-language-${l.value}`}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12.5px] text-[#1a3a4a] hover:bg-[#006496]/[0.06]"
+                className="md-assistant-option flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-left text-[13px] text-md-ink"
               >
                 <span className="flex-1">{l.label}</span>
-                {l.value === value && <Check size={13} className="text-[#006496]" />}
+                {l.value === value && <Check size={14} strokeWidth={2.6} className="text-md-wine" />}
               </button>
             </li>
           ))}
@@ -110,27 +110,27 @@ export default function Composer({
   const micLabel = listening ? "Stop listening" : processing ? "Working on your recording" : "Ask by voice";
 
   return (
-    <div className="border-t border-[#006496]/10 bg-white/90 px-3 pb-3 pt-2.5">
+    <div className="md-assistant-dock px-3 pt-3">
       {voice.notice && (
         <p
-          className="mb-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11.5px] text-amber-900"
+          className="md-panel-sand mb-2.5 px-3 py-2 text-[12px] leading-snug text-md-warning-800"
           role="status"
           data-testid="assistant-voice-notice"
         >
           {voice.notice}
         </p>
       )}
-      <div className="rounded-2xl border border-[#006496]/15 bg-white shadow-sm transition-shadow focus-within:border-[#006496]/40 focus-within:ring-2 focus-within:ring-[#006496]/10">
+      <div className="md-field md-assistant-box" data-listening={listening}>
         {listening || processing ? (
           <div className="px-3.5 pb-1 pt-3" data-testid="assistant-listening">
             <Waveform level={voice.level} active={listening} />
-            <p className="mt-1 min-h-[2.4em] text-center text-[13px] text-[#1a3a4a]">
+            <p className="mt-1 min-h-[2.4em] text-center text-[13.5px] leading-snug text-md-ink">
               {processing ? (
-                <span className="text-[#006496]/70">Turning your voice into text…</span>
+                <span className="text-md-ink-soft">Turning your voice into text…</span>
               ) : voice.interim ? (
                 voice.interim
               ) : (
-                <span className="text-[#006496]/55">
+                <span className="text-md-ink-soft">
                   Listening… speak your question
                   {voice.engine === "server" ? " (it is sent for transcription when you stop)" : ""}
                 </span>
@@ -155,10 +155,10 @@ export default function Composer({
             disabled={!ready}
             aria-label="Your question"
             data-testid="assistant-input"
-            className="block max-h-[120px] w-full resize-none bg-transparent px-3.5 pb-1 pt-3 text-[13.5px] leading-snug text-[#1a3a4a] outline-none placeholder:text-[#006496]/40 disabled:opacity-60"
+            className="block max-h-[120px] w-full resize-none bg-transparent px-3.5 pb-1 pt-3 text-[13.5px] leading-snug text-md-ink outline-none placeholder:text-md-ink-500 disabled:opacity-60"
           />
         )}
-        <div className="flex items-center gap-0.5 px-2 pb-2">
+        <div className="flex items-center gap-1.5 px-2 pb-2">
           <LanguageMenu value={language} onChange={onLanguage} />
           {speechSupported && (
             <button
@@ -167,10 +167,7 @@ export default function Composer({
               aria-pressed={speakAnswers}
               title={speakAnswers ? "Answers are read aloud" : "Read answers aloud"}
               data-testid="assistant-speak-toggle"
-              className={cn(
-                "flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-bold transition-colors",
-                speakAnswers ? "bg-[#fff1cc] text-[#7a5410]" : "text-[#006496]/70 hover:bg-[#006496]/[0.07]",
-              )}
+              className="md-chip md-assistant-tool"
             >
               {speakAnswers ? <Volume2 size={13} /> : <VolumeX size={13} />}
               {speakAnswers ? "Reading aloud" : "Silent"}
@@ -185,16 +182,16 @@ export default function Composer({
               aria-label={micLabel}
               title={micLabel}
               data-testid="assistant-mic"
-              className={cn(
-                "relative mr-1 flex h-9 w-9 items-center justify-center rounded-full border transition-all disabled:opacity-50",
-                listening
-                  ? "border-red-300 bg-gradient-to-br from-red-500 to-rose-600 text-white shadow-md"
-                  : "border-[#006496]/20 bg-white text-[#006496] hover:border-[#e0a83a] hover:bg-[#fff8e6] hover:text-[#7a5410]",
-              )}
+              className={cn("md-btn md-btn-icon", listening ? "md-btn-primary" : "md-btn-soft md-assistant-mic")}
             >
-              {listening && <span className="absolute inset-0 animate-ping rounded-full bg-red-400/40" aria-hidden />}
+              {listening && (
+                <span
+                  className="absolute inset-0 rounded-full bg-md-wine-400/45 motion-safe:animate-ping"
+                  aria-hidden
+                />
+              )}
               {processing ? (
-                <Loader2 size={16} className="animate-spin" />
+                <Loader2 size={16} className="motion-safe:animate-spin" />
               ) : listening ? (
                 <Square size={13} className="relative fill-current" />
               ) : (
@@ -209,7 +206,7 @@ export default function Composer({
               aria-label="Stop"
               title="Stop this answer"
               data-testid="assistant-stop"
-              className="flex h-9 w-9 items-center justify-center rounded-full border border-[#006496]/25 bg-white text-[#006496] shadow-sm transition-all hover:scale-105 hover:border-red-300 hover:text-red-600"
+              className="md-btn md-btn-ink md-btn-icon"
             >
               <Square size={13} className="fill-current" />
             </button>
@@ -220,15 +217,15 @@ export default function Composer({
             disabled={!canSend}
             aria-label="Send"
             data-testid="assistant-send"
-            className="flex h-9 w-9 items-center justify-center rounded-full text-white shadow-sm transition-all enabled:hover:scale-105 enabled:hover:shadow-md disabled:cursor-not-allowed disabled:opacity-35"
-            style={{ background: "linear-gradient(135deg, #006496 0%, #0096c7 100%)" }}
+            className="md-btn md-btn-primary md-btn-icon disabled:cursor-not-allowed"
           >
             <ArrowUp size={17} strokeWidth={2.6} />
           </button>
         </div>
       </div>
-      <p className="mt-1.5 text-center text-[10.5px] text-[#006496]/50">
-        Read-only: I can look at your company data but never change it.
+      <p className="md-assistant-hint mt-2 flex items-center justify-center gap-1.5 text-center">
+        <Lock size={11} className="shrink-0" aria-hidden />
+        <span>Read-only: I can look at your company data but never change it.</span>
         {value.length > maxChars * 0.85 && (
           <span className="ml-1 tabular-nums">
             {value.length}/{maxChars}

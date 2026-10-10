@@ -28,7 +28,7 @@ export default function Heatmap({
 }) {
   const flat = values.flat().filter((v): v is number => v != null);
   if (rows.length === 0 || flat.length === 0) {
-    return <p className="py-8 text-center text-sm text-muted-foreground">Nothing to show.</p>;
+    return <p className="py-8 text-center text-sm text-md-ink-soft">Nothing to show.</p>;
   }
   const [lo, hi] = domain ?? [Math.min(...flat), Math.max(...flat)];
   const span = hi - lo || 1;
@@ -37,7 +37,7 @@ export default function Heatmap({
     return invert ? 1 - p : p;
   };
   return (
-    <div className="overflow-x-auto" data-testid={testId}>
+    <div className="overflow-x-auto p-1" data-testid={testId}>
       <div
         className="grid gap-[3px]"
         style={{
@@ -47,14 +47,14 @@ export default function Heatmap({
       >
         <div />
         {cols.map((c) => (
-          <div key={c} className="truncate text-center text-[10px] font-medium text-[#006496]/60">
+          <div key={c} className="truncate text-center text-[10px] font-semibold text-md-ink-soft">
             {c}
           </div>
         ))}
         {rows.map((r, ri) => (
           <div key={r} className="contents">
             <div
-              className="flex items-center truncate pr-2 text-[11px] font-medium text-[#1a3a4a]"
+              className="flex items-center truncate pr-2 text-[11px] font-semibold text-md-ink"
               style={{ height: cellHeight }}
               title={r}
             >
@@ -63,16 +63,23 @@ export default function Heatmap({
             {cols.map((c, ci) => {
               const v = values[ri]?.[ci] ?? null;
               const p = v == null ? 0 : position(v);
+              // text colour by the ramp step the cell lands on: deep ink on the four lighter steps (4.8:1 or better), white on the
+              // four darker wines (5.6:1 or better)
+              const dark = Math.round(p * (CHART.ramp.length - 1)) <= 3;
               return (
                 <div
                   key={c}
                   title={v == null ? `${r} · ${c}: no data` : `${r} · ${c}: ${format(v)}`}
-                  className="flex items-center justify-center rounded-md text-[9.5px] font-semibold"
-                  style={{
-                    height: cellHeight,
-                    background: v == null ? "rgba(0,100,150,.04)" : rampColor(p),
-                    color: v == null ? "rgba(0,100,150,.3)" : p > 0.55 ? "#fff" : "#0b3b57",
-                  }}
+                  className={
+                    v == null
+                      ? "flex items-center justify-center rounded-lg bg-md-ink/[0.05] text-[9.5px] font-semibold text-md-ink-500"
+                      : "md-shell-heat-cell flex items-center justify-center rounded-lg text-[9.5px] font-bold"
+                  }
+                  style={
+                    v == null
+                      ? { height: cellHeight }
+                      : { height: cellHeight, background: rampColor(p), color: dark ? "var(--md-ink-900)" : "white" }
+                  }
                 >
                   {v == null ? "·" : format(v)}
                 </div>
@@ -81,9 +88,9 @@ export default function Heatmap({
           </div>
         ))}
       </div>
-      <div className="mt-2 flex items-center justify-end gap-1.5 text-[10px] text-[#006496]/55">
+      <div className="mt-3 flex items-center justify-end gap-2 text-[10px] font-semibold text-md-ink-soft">
         <span>{invert ? format(hi) : format(lo)}</span>
-        <span className="flex h-2 w-24 overflow-hidden rounded-full">
+        <span className="md-shell-ramp flex h-2 w-24 overflow-hidden rounded-full">
           {CHART.ramp.map((c) => (
             <i key={c} className="h-full flex-1" style={{ background: c }} />
           ))}

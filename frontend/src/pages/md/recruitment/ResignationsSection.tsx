@@ -1,13 +1,15 @@
 import { FileClock, PieChart } from "lucide-react";
 import AskAiButton from "@/components/md/kit/AskAiButton";
 import BarList from "@/components/md/kit/BarList";
+import { CHART } from "@/components/md/kit/chartTheme";
 import DataTable, { type Column } from "@/components/md/kit/DataTable";
 import DonutChart from "@/components/md/kit/DonutChart";
 import SectionCard from "@/components/md/kit/SectionCard";
 import { EmptyBlock } from "@/components/md/kit/states";
 import { dayLong, dayShort, num } from "@/lib/md/format";
+import { cn } from "@/lib/utils";
 import { daysLeftText, daysText, outlookLine, plural, reasonSlices, waitTone } from "./logic";
-import { Chip, Expandable, QueryError } from "./parts";
+import { Avatar, Chip, Expandable, QueryError } from "./parts";
 import type { OnNoticeRow, OutlookWindow, PendingResignation, QueryLike, RecruitmentResignations } from "./types";
 
 function pendingColumns(warnAfter: number): Column<PendingResignation>[] {
@@ -16,9 +18,12 @@ function pendingColumns(warnAfter: number): Column<PendingResignation>[] {
       key: "employee",
       header: "Employee",
       cell: (r) => (
-        <div className="min-w-[9rem]">
-          <p className="font-semibold text-[#1a3a4a]">{r.employeeName}</p>
-          <p className="text-xs text-[#006496]/60">{[r.department, r.designation].filter(Boolean).join(" · ")}</p>
+        <div className="flex min-w-[10rem] items-center gap-2.5">
+          <Avatar name={r.employeeName} />
+          <div className="min-w-0">
+            <p className="font-semibold text-md-ink">{r.employeeName}</p>
+            <p className="text-xs text-md-ink-soft">{[r.department, r.designation].filter(Boolean).join(" · ")}</p>
+          </div>
         </div>
       ),
       sortValue: (r) => r.employeeName,
@@ -28,7 +33,7 @@ function pendingColumns(warnAfter: number): Column<PendingResignation>[] {
       header: "Raised",
       cell: (r) => (
         <div className="whitespace-nowrap">
-          <p className="tabular-nums text-[#1a3a4a]">{dayShort(r.requestedOn)}</p>
+          <p className="tabular-nums text-md-ink">{dayShort(r.requestedOn)}</p>
           <Chip tone={waitTone(r.daysWaiting, warnAfter)} className="mt-0.5">
             waiting {daysText(r.daysWaiting)}
           </Chip>
@@ -42,15 +47,15 @@ function pendingColumns(warnAfter: number): Column<PendingResignation>[] {
       cell: (r) =>
         r.lastWorkingDate ? (
           <div className="whitespace-nowrap">
-            <p className="tabular-nums text-[#1a3a4a]">{dayShort(r.lastWorkingDate)}</p>
+            <p className="tabular-nums text-md-ink">{dayShort(r.lastWorkingDate)}</p>
             {r.daysToLastDay != null && (
-              <p className="text-[11px] text-[#006496]/55">
+              <p className="text-[11px] text-md-ink-soft">
                 {r.daysToLastDay >= 0 ? daysLeftText(r.daysToLastDay) : "date has passed"}
               </p>
             )}
           </div>
         ) : (
-          <span className="text-xs text-[#006496]/50">Not given</span>
+          <span className="text-xs text-md-ink-soft">Not given</span>
         ),
       sortValue: (r) => r.lastWorkingDate,
     },
@@ -66,17 +71,21 @@ function pendingColumns(warnAfter: number): Column<PendingResignation>[] {
 function NoticeList({ rows, total }: { rows: OnNoticeRow[]; total: number }) {
   if (rows.length === 0) return null;
   return (
-    <div className="mt-4 border-t pt-3" data-testid="md-recruitment-on-notice">
-      <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-[#006496]/60">Serving notice ({total})</p>
-      <ul className="space-y-1.5">
+    <div className="md-panel mt-5 p-4" data-testid="md-recruitment-on-notice">
+      <p className="md-people-overline mb-1.5">Serving notice ({total})</p>
+      <ul>
         {rows.map((r) => (
-          <li key={r.id} className="flex flex-wrap items-baseline justify-between gap-x-3 text-sm">
-            <span className="min-w-0">
-              <b className="text-[#1a3a4a]">{r.employeeName}</b>{" "}
-              <span className="text-xs text-[#006496]/60">{r.department}</span>
+          <li key={r.id} className="md-people-row">
+            <span className="flex min-w-0 items-center gap-2.5">
+              <Avatar name={r.employeeName} className="md-people-avatar-sm" />
+              <span className="min-w-0 text-sm">
+                <b className="font-semibold text-md-ink">{r.employeeName}</b>{" "}
+                <span className="text-xs text-md-ink-soft">{r.department}</span>
+              </span>
             </span>
-            <span className="text-xs text-[#006496]/70">
-              last day {dayLong(r.lastWorkingDate)} · {daysLeftText(r.daysLeft)}
+            <span className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-xs text-md-ink-soft">
+              last day {dayLong(r.lastWorkingDate)}
+              <Chip>{daysLeftText(r.daysLeft)}</Chip>
             </span>
           </li>
         ))}
@@ -85,12 +94,13 @@ function NoticeList({ rows, total }: { rows: OnNoticeRow[]; total: number }) {
   );
 }
 
-function OutlookTile({ window, testId }: { window: OutlookWindow; testId: string }) {
+/** A "next N days" figure on a quiet tinted panel: wine for the nearer window, sand for the longer one. */
+function OutlookTile({ window, testId, tone }: { window: OutlookWindow; testId: string; tone: "wine" | "sand" }) {
   return (
-    <div className="rounded-2xl bg-slate-100 p-3.5 text-slate-800" data-testid={testId}>
-      <p className="text-xs font-medium opacity-70">Next {window.days} days</p>
-      <p className="text-3xl font-black leading-tight">{num(window.total)}</p>
-      <p className="mt-0.5 text-xs opacity-65">{outlookLine(window)}</p>
+    <div className={cn("md-people-outlook", tone === "wine" ? "md-panel-wine" : "md-panel-sand")} data-testid={testId}>
+      <p className="text-xs font-bold text-md-ink-soft">Next {window.days} days</p>
+      <p className="md-people-outlook-figure">{num(window.total)}</p>
+      <p className="text-xs leading-snug text-md-ink-soft">{outlookLine(window)}</p>
     </div>
   );
 }
@@ -162,16 +172,15 @@ export default function ResignationsSection({ query }: { query: QueryLike<Recrui
           {data && (
             <>
               <div className="grid grid-cols-2 gap-3">
-                <OutlookTile window={data.outlook.next30} testId="md-recruitment-outlook-30" />
-                <OutlookTile window={data.outlook.next60} testId="md-recruitment-outlook-60" />
+                <OutlookTile window={data.outlook.next30} testId="md-recruitment-outlook-30" tone="wine" />
+                <OutlookTile window={data.outlook.next60} testId="md-recruitment-outlook-60" tone="sand" />
               </div>
               {data.outlook.byDepartment.length > 0 && (
-                <div className="mt-4">
-                  <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-[#006496]/60">
-                    By department, next 60 days
-                  </p>
+                <div className="mt-5">
+                  <p className="md-people-overline mb-3">By department, next 60 days</p>
                   <BarList
                     testId="md-recruitment-outlook-departments"
+                    color={CHART.deep}
                     items={data.outlook.byDepartment.slice(0, 6).map((d) => ({
                       key: d.departmentId == null ? "none" : String(d.departmentId),
                       label: d.department,
@@ -181,7 +190,7 @@ export default function ResignationsSection({ query }: { query: QueryLike<Recrui
                 </div>
               )}
               {data.outlook.withoutDate > 0 && (
-                <p className="mt-3 text-[11px] text-[#006496]/60">
+                <p className="mt-3 text-[11px] leading-snug text-md-ink-soft">
                   {plural(data.outlook.withoutDate, "waiting request")}{" "}
                   {data.outlook.withoutDate === 1 ? "has" : "have"} no last working day, so{" "}
                   {data.outlook.withoutDate === 1 ? "it is" : "they are"} not counted.
@@ -213,14 +222,14 @@ export default function ResignationsSection({ query }: { query: QueryLike<Recrui
                 data={reasonSlices(data.reasons)}
                 center={
                   <>
-                    <p className="text-2xl font-black text-[#1a3a4a]">{num(total)}</p>
-                    <p className="text-[11px] text-[#006496]/60">raised</p>
+                    <p className="md-people-figure text-2xl font-black text-md-ink">{num(total)}</p>
+                    <p className="text-[11px] font-semibold text-md-ink-soft">raised</p>
                   </>
                 }
               />
             ))}
           {data && data.reasons.length > 0 && (
-            <p className="mt-3 text-[11px] text-[#006496]/60">
+            <p className="mt-3 text-[11px] leading-snug text-md-ink-soft">
               Grouped by keyword from each employee's own words, so it is a guide, not an exact count. Average time to
               decide:{" "}
               {data.summary.avgDaysToDecision == null

@@ -16,6 +16,8 @@ export function StatusBadge({
 }) {
   return (
     <span
+      data-slot="status-badge"
+      data-tone={tone}
       className={cn(
         "inline-flex items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] font-bold",
         TONE[tone],

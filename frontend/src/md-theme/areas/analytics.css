@@ -1,0 +1,574 @@
+/* MD portal skin, area: analytics. Owned by the designer of that area (md-portal.md section 11.4). Every selector here must start
+   with an .md-* class of your own (name them md-analytics-*) or with html[data-md-theme]; md-theme.test.ts checks. Use the palette
+   tokens (var(--md-wine-700) ...), never a hex colour. */
+
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Analytics: the Insights & AI tabs (Geo Attendance, Report Log) and the analytics sections built the same way
+   (attendance, employees, visitors and outpass, tea break). Everything here sits on top of the shared glass classes
+   (md-card, md-panel*, md-chip*, md-btn*, md-seg*, md-icon-tile*): this file only adds what those do not have.
+
+   The one idea: a TONE. A tone class (md-analytics-tone-good | watch | bad | info | wine | neutral | clay | mauve) sets four
+   variables, and every piece below paints itself from them, so a dot, a chip, a verdict banner, a row accent and a stat
+   tile always agree:
+       --tone-ink    the text colour for this tone (7:1 or better on the light glass)
+       --tone-solid  the saturated colour (dots, bars, accents)
+       --tone-wash   a faint fill
+       --tone-edge   a hairline
+   good = sage, watch = ochre, bad = crimson, and nothing else: wine is the accent (information, brand), never "bad".
+   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* ── tones ───────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+.md-analytics-tone-good {
+  --tone-ink: var(--md-success-700);
+  --tone-solid: var(--md-success-500);
+  --tone-wash: color-mix(in srgb, var(--md-success-500) 12%, transparent);
+  --tone-edge: color-mix(in srgb, var(--md-success-600) 28%, transparent);
+}
+.md-analytics-tone-watch {
+  --tone-ink: var(--md-warning-800);
+  --tone-solid: var(--md-warning-500);
+  --tone-wash: color-mix(in srgb, var(--md-warning-400) 17%, transparent);
+  --tone-edge: color-mix(in srgb, var(--md-warning-500) 32%, transparent);
+}
+.md-analytics-tone-bad {
+  --tone-ink: var(--md-danger-700);
+  --tone-solid: var(--md-danger-500);
+  --tone-wash: color-mix(in srgb, var(--md-danger-500) 10%, transparent);
+  --tone-edge: color-mix(in srgb, var(--md-danger-600) 28%, transparent);
+}
+.md-analytics-tone-info {
+  --tone-ink: var(--md-info-700);
+  --tone-solid: var(--md-info-500);
+  --tone-wash: color-mix(in srgb, var(--md-info-500) 11%, transparent);
+  --tone-edge: color-mix(in srgb, var(--md-info-500) 26%, transparent);
+}
+.md-analytics-tone-wine {
+  --tone-ink: var(--md-wine-700);
+  --tone-solid: var(--md-wine-600);
+  --tone-wash: color-mix(in srgb, var(--md-wine-700) 8%, transparent);
+  --tone-edge: color-mix(in srgb, var(--md-wine-700) 20%, transparent);
+}
+.md-analytics-tone-neutral {
+  --tone-ink: var(--md-ink-700);
+  --tone-solid: var(--md-ink-400);
+  --tone-wash: color-mix(in srgb, var(--md-ink-800) 6%, transparent);
+  --tone-edge: color-mix(in srgb, var(--md-ink-800) 14%, transparent);
+}
+.md-analytics-tone-clay {
+  --tone-ink: var(--md-clay-700);
+  --tone-solid: var(--md-clay-500);
+  --tone-wash: color-mix(in srgb, var(--md-clay-500) 11%, transparent);
+  --tone-edge: color-mix(in srgb, var(--md-clay-500) 28%, transparent);
+}
+.md-analytics-tone-mauve {
+  --tone-ink: var(--md-mauve-700);
+  --tone-solid: var(--md-mauve-500);
+  --tone-wash: color-mix(in srgb, var(--md-mauve-500) 11%, transparent);
+  --tone-edge: color-mix(in srgb, var(--md-mauve-500) 26%, transparent);
+}
+
+/* a shared chip (md-chip) takes its colours from the tone when it is given one: md-chip md-analytics-tone-info */
+.md-chip.md-analytics-tone-good,
+.md-chip.md-analytics-tone-watch,
+.md-chip.md-analytics-tone-bad,
+.md-chip.md-analytics-tone-info,
+.md-chip.md-analytics-tone-wine,
+.md-chip.md-analytics-tone-neutral,
+.md-chip.md-analytics-tone-clay,
+.md-chip.md-analytics-tone-mauve {
+  color: var(--tone-ink);
+  background: linear-gradient(180deg, color-mix(in srgb, white 45%, var(--tone-wash)), var(--tone-wash));
+  border-color: var(--tone-edge);
+}
+/* an icon tile (md-icon-tile) in a tone: a glass square that wears the tone's wash, edge and ink */
+.md-icon-tile.md-analytics-tone-good,
+.md-icon-tile.md-analytics-tone-watch,
+.md-icon-tile.md-analytics-tone-bad,
+.md-icon-tile.md-analytics-tone-info,
+.md-icon-tile.md-analytics-tone-wine,
+.md-icon-tile.md-analytics-tone-neutral,
+.md-icon-tile.md-analytics-tone-clay,
+.md-icon-tile.md-analytics-tone-mauve {
+  color: var(--tone-ink);
+  background: linear-gradient(135deg, color-mix(in srgb, white 40%, var(--tone-wash)), var(--tone-wash));
+  border-color: var(--tone-edge);
+}
+/* the compact chip: a tag next to a name or a figure */
+.md-chip.md-analytics-chip-sm {
+  padding: 0.05rem 0.5rem;
+  font-size: 0.6875rem;
+  line-height: 1.45;
+}
+
+/* a dot that says what kind of line this is (always beside words, so meaning never rests on the colour) */
+.md-analytics-dot {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-top: 0.55em;
+  border-radius: 9999px;
+  background: var(--tone-solid, var(--md-wine-600));
+  box-shadow: 0 0 0 3px var(--tone-wash, color-mix(in srgb, var(--md-wine-600) 10%, transparent));
+}
+
+/* ── the strip above an embedded page ("MD insights") ────────────────────────────────────────────────────────────────── */
+
+.md-analytics-strip {
+  margin-bottom: 1rem;
+  padding: 0.85rem 1.15rem 0.95rem;
+}
+.md-analytics-strip-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.6rem;
+}
+.md-analytics-strip-head > .md-analytics-overline {
+  margin-right: 0.5rem;
+}
+.md-analytics-overline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--md-wine-700);
+}
+/* the icon tile that leads the overline: a small wine glass square */
+.md-analytics-overline-icon {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 0.6rem;
+}
+/* a headline figure in the strip: a frosted pill holding the label, the value and a note */
+.md-analytics-figure {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.5rem;
+  padding: 0.3rem 0.85rem;
+  border-radius: 9999px;
+  font-size: 0.8125rem;
+  color: var(--md-ink-800);
+  background: color-mix(in srgb, white 55%, transparent);
+  border: 1px solid var(--md-line);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 80%, transparent);
+}
+.md-analytics-figure-label {
+  font-size: 0.75rem;
+  color: var(--md-ink-600);
+}
+.md-analytics-figure-value {
+  font-size: 1.0625rem;
+  font-weight: 800;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  color: var(--md-ink-800);
+}
+/* "-22.3 pts" or "2 left open" beside a figure: a small tinted pill that takes its tone */
+.md-analytics-figure-note {
+  padding: 0.02rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 1.5;
+  color: var(--tone-ink, var(--md-ink-700));
+  background: var(--tone-wash, color-mix(in srgb, var(--md-ink-800) 6%, transparent));
+}
+.md-analytics-strip-ask {
+  margin-left: auto;
+}
+.md-analytics-strip-list {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.75rem 0 0;
+  padding: 0.7rem 0 0;
+  list-style: none;
+  border-top: 1px solid var(--md-line);
+}
+.md-analytics-strip-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--md-ink-800);
+}
+.md-analytics-strip-text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.md-analytics-strip-text b {
+  font-weight: 700;
+}
+.md-analytics-strip-text span {
+  color: var(--md-ink-600);
+}
+.md-analytics-strip-caveat {
+  margin: 0.7rem 0 0;
+  padding-top: 0.6rem;
+  border-top: 1px dashed var(--md-line);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--md-ink-600);
+}
+
+/* ── "In plain words": the briefing, written from the figures ────────────────────────────────────────────────────────── */
+
+.md-analytics-brief {
+  margin: 0;
+  padding: 0.3rem 1.15rem;
+  list-style: none;
+  border-radius: 1rem;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--md-sand) 78%, transparent),
+    color-mix(in srgb, var(--md-vanilla) 42%, transparent)
+  );
+  border: 1px solid color-mix(in srgb, var(--md-warning-500) 18%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 70%, transparent);
+}
+.md-analytics-brief-item {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.7rem 0;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--md-ink-800);
+}
+.md-analytics-brief-item + .md-analytics-brief-item {
+  border-top: 1px solid color-mix(in srgb, var(--md-ink-800) 8%, transparent);
+}
+
+/* ── the verdict line over a trend chart ─────────────────────────────────────────────────────────────────────────────── */
+
+.md-analytics-verdict {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.8rem;
+  margin-bottom: 0.9rem;
+  padding: 0.8rem 1rem;
+  border-radius: 1rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--md-ink-800);
+  background: linear-gradient(135deg, var(--tone-wash), color-mix(in srgb, white 38%, transparent));
+  border: 1px solid var(--tone-edge);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 70%, transparent);
+}
+.md-analytics-verdict-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  border-radius: 0.7rem;
+  color: var(--tone-ink);
+  background: color-mix(in srgb, white 72%, transparent);
+  border: 1px solid var(--tone-edge);
+  box-shadow: inset 0 1px 0 white;
+}
+
+/* ── rows: a person, a session, a finding ────────────────────────────────────────────────────────────────────────────── */
+
+.md-analytics-row {
+  position: relative;
+  padding: 0.8rem 1rem;
+  border-radius: 1rem;
+  background: color-mix(in srgb, white 62%, transparent);
+  border: 1px solid var(--md-line);
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+.md-analytics-row:hover {
+  background: color-mix(in srgb, white 84%, transparent);
+  border-color: var(--md-line-strong);
+  box-shadow: 0 10px 24px -16px color-mix(in srgb, var(--md-ink-800) 45%, transparent);
+}
+.md-analytics-row-compact {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+/* a short bar in the tone's colour on the left edge: the severity of the row, with the words beside it */
+.md-analytics-row-accent {
+  padding-left: 1.2rem;
+}
+.md-analytics-row-accent::before {
+  content: "";
+  position: absolute;
+  left: 0.5rem;
+  top: 0.8rem;
+  bottom: 0.8rem;
+  width: 3px;
+  border-radius: 9999px;
+  background: var(--tone-solid, var(--md-wine-600));
+}
+
+/* a row that opens something (a person in a list): quiet until hovered, a wine ring on focus */
+.md-analytics-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 0.8rem;
+  text-align: left;
+  border: 1px solid transparent;
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease;
+}
+.md-analytics-item:hover {
+  background: color-mix(in srgb, var(--md-wine-700) 6%, transparent);
+  border-color: color-mix(in srgb, var(--md-wine-700) 12%, transparent);
+}
+.md-analytics-item:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 1px;
+}
+
+/* ── text helpers ────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* the small capitals over a block inside a card ("By person", "Waiting for a decision") */
+.md-analytics-subhead {
+  margin: 0 0 0.6rem;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--md-ink-600);
+}
+/* the line of small print under a chart or a table */
+.md-analytics-note {
+  margin: 0.6rem 0 0;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--md-ink-600);
+}
+.md-analytics-note + .md-analytics-note {
+  margin-top: 0.25rem;
+}
+/* a caveat that deserves a box (a backlog that has waited too long, punches that cannot be placed) */
+.md-analytics-callout {
+  margin: 0.75rem 0 0;
+  padding: 0.55rem 0.85rem;
+  border-radius: 0.85rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--tone-ink, var(--md-warning-800));
+  background: var(--tone-wash, color-mix(in srgb, var(--md-warning-400) 17%, transparent));
+  border: 1px solid var(--tone-edge, color-mix(in srgb, var(--md-warning-500) 32%, transparent));
+}
+/* the same box standing alone between cards (a coverage note): no margin of its own, a little more room inside */
+.md-analytics-callout-block {
+  margin: 0;
+  padding: 0.7rem 1rem;
+  border-radius: 1rem;
+}
+/* a text link inside a card (clear a filter, open a record) */
+.md-analytics-link {
+  display: inline;
+  padding: 0;
+  font-weight: 700;
+  color: var(--md-wine-700);
+  background: none;
+  border: 0;
+  border-radius: 0.35rem;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--md-wine-700) 35%, transparent);
+  text-underline-offset: 3px;
+  transition: text-decoration-color 0.18s ease;
+}
+.md-analytics-link:hover {
+  text-decoration-color: var(--md-wine-700);
+}
+.md-analytics-link:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 2px;
+}
+
+/* ── a figure with a caption: the little stat tiles inside a card ────────────────────────────────────────────────────── */
+
+.md-analytics-stat {
+  min-width: 0;
+  padding: 0.65rem 0.85rem;
+  border-radius: 1rem;
+  background: linear-gradient(
+    135deg,
+    var(--tone-wash, color-mix(in srgb, var(--md-ink-800) 5%, transparent)),
+    color-mix(in srgb, white 36%, transparent)
+  );
+  border: 1px solid var(--tone-edge, color-mix(in srgb, var(--md-ink-800) 10%, transparent));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 70%, transparent);
+}
+.md-analytics-stat-value {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 800;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+  color: var(--tone-ink, var(--md-ink-800));
+}
+.md-analytics-stat-label {
+  margin: 0.15rem 0 0;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--md-ink-600);
+}
+
+/* ── a quiet table (this period against the previous) ────────────────────────────────────────────────────────────────── */
+
+.md-analytics-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.8125rem;
+  color: var(--md-ink-800);
+}
+.md-analytics-table th {
+  padding: 0.4rem 0.8rem;
+  text-align: left;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--md-ink-600);
+  border-bottom: 1px solid var(--md-line);
+}
+.md-analytics-table td {
+  padding: 0.65rem 0.8rem;
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid color-mix(in srgb, var(--md-ink-800) 7%, transparent);
+  transition: background 0.18s ease;
+}
+.md-analytics-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.md-analytics-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--md-wine-700) 4%, transparent);
+}
+.md-analytics-table tbody tr td:first-child {
+  border-top-left-radius: 0.7rem;
+  border-bottom-left-radius: 0.7rem;
+}
+.md-analytics-table tbody tr td:last-child {
+  border-top-right-radius: 0.7rem;
+  border-bottom-right-radius: 0.7rem;
+}
+.md-analytics-table .md-analytics-num {
+  text-align: right;
+}
+
+/* ── tabs: the segmented switch (md-seg) that scrolls sideways on a phone instead of widening the page ──────────────────── */
+
+.md-analytics-segs {
+  max-width: 100%;
+  margin: 0 -0.5rem -0.9rem;
+  padding: 0 0.5rem 0.9rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.md-analytics-segs::-webkit-scrollbar {
+  display: none;
+}
+.md-analytics-segs > .md-seg {
+  min-width: max-content;
+}
+.md-analytics-segs .md-seg-item {
+  min-height: 2.25rem;
+  white-space: nowrap;
+}
+.md-analytics-seg-count {
+  min-width: 1.3rem;
+  padding: 0 0.4rem;
+  border-radius: 9999px;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  line-height: 1.35rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--md-ink-800) 9%, transparent);
+}
+.md-seg-item:where([aria-selected="true"], [aria-pressed="true"], .is-active) .md-analytics-seg-count {
+  color: white;
+  background: color-mix(in srgb, white 24%, transparent);
+}
+
+/* ── the heading of a group of cards ("Visitors", "Outpasses") ───────────────────────────────────────────────────────── */
+
+.md-analytics-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.8rem;
+  padding-top: 0.25rem;
+}
+.md-analytics-heading-title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 800;
+  line-height: 1.25;
+  letter-spacing: -0.005em;
+  color: var(--md-ink-800);
+}
+.md-analytics-heading-sub {
+  margin: 0.2rem 0 0;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--md-ink-600);
+}
+
+/* ── the side sheet that opens a person ──────────────────────────────────────────────────────────────────────────────── */
+
+html[data-md-theme] .md-analytics-sheet {
+  background:
+    radial-gradient(520px 300px at 100% 0%, color-mix(in srgb, var(--md-wine-700) 8%, transparent), transparent 62%),
+    linear-gradient(160deg, var(--md-alabaster) 0%, var(--md-vanilla) 100%);
+  border-left: 1px solid var(--md-glass-edge);
+  box-shadow: -24px 0 60px -24px color-mix(in srgb, var(--md-ink-800) 45%, transparent);
+}
+
+/* ── a person's story: the moments joined by a hairline ──────────────────────────────────────────────────────────────────── */
+
+.md-analytics-timeline > li {
+  position: relative;
+}
+.md-analytics-timeline > li:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: calc(1rem - 0.5px);
+  top: 2.4rem;
+  bottom: -0.65rem;
+  width: 1px;
+  background: var(--md-line-strong);
+}
+
+/* ── small things ────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* the number that stands alone in a card: a total of days, of hours */
+.md-analytics-big {
+  margin: 0;
+  font-size: 1.875rem;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--md-ink-800);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .md-analytics-row,
+  .md-analytics-item,
+  .md-analytics-table td,
+  .md-analytics-link {
+    transition: none;
+  }
+}

@@ -54,6 +54,9 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       <Comp
         className={cn(buttonVariants({ variant, size, className }))}
         ref={ref}
+        // markers only (no style of their own): the MD portal's skin finds buttons through them (md-theme/glass.css)
+        data-slot="button"
+        data-variant={variant ?? "default"}
         {...props}
       />
     )

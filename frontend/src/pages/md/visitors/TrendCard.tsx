@@ -6,9 +6,9 @@ import { CHART } from "@/components/md/kit/chartTheme";
 import SectionCard from "@/components/md/kit/SectionCard";
 import { EmptyBlock, ErrorBanner } from "@/components/md/kit/states";
 import TrendChart, { type TrendSeries } from "@/components/md/kit/TrendChart";
-import { PillTabs } from "@/components/ui/pill-tabs";
 import { describeMdError } from "@/lib/api-client/custom-hooks/md";
 import { minutesText, num } from "@/lib/md/format";
+import SegTabs from "../embedded/shared/SegTabs";
 import { hasTrendData, periodPhrase, trendLabel, trendRows, type TrendView } from "./logic";
 import type { TrendResponse } from "./types";
 
@@ -28,7 +28,7 @@ export default function TrendCard({ query }: { query: UseQueryResult<TrendRespon
     view === "counts"
       ? [
           { key: "visits", label: "Visits", kind: "bar", color: CHART.brand },
-          { key: "passes", label: "Outpass requests", kind: "line", color: CHART.warn },
+          { key: "passes", label: "Outpass requests", kind: "line", color: CHART.deep },
           ...(showForms
             ? [
                 {
@@ -41,7 +41,7 @@ export default function TrendCard({ query }: { query: UseQueryResult<TrendRespon
               ]
             : []),
         ]
-      : [{ key: "minutesOut", label: "Time out on outpasses", kind: "area", color: CHART.warn }];
+      : [{ key: "minutesOut", label: "Time out on outpasses", kind: "area", color: CHART.deep }];
 
   return (
     <SectionCard
@@ -67,8 +67,8 @@ export default function TrendCard({ query }: { query: UseQueryResult<TrendRespon
         </EmptyBlock>
       ) : (
         <div className="space-y-3">
-          <div className="max-w-full overflow-x-auto pb-1" data-testid="md-visitors-trend-tabs">
-            <PillTabs size="sm" items={VIEWS} value={view} onChange={(v) => setView(v as TrendView)} />
+          <div className="max-w-full" data-testid="md-visitors-trend-tabs">
+            <SegTabs label="What to chart" items={VIEWS} value={view} onChange={(v) => setView(v as TrendView)} />
           </div>
           <TrendChart
             data={rows}
@@ -79,7 +79,7 @@ export default function TrendCard({ query }: { query: UseQueryResult<TrendRespon
             height={250}
           />
           {d && (
-            <p className="mt-2 text-xs text-[#006496]/60" data-testid="md-visitors-trend-totals">
+            <p className="md-analytics-note" data-testid="md-visitors-trend-totals">
               In the period: {num(d.totals.visits)} visits · {num(d.totals.passes)} outpass requests ·{" "}
               {minutesText(d.totals.minutesOut)} out
               {showForms ? ` · ${num(d.totals.gateFormExits)} gate-form exits` : ""}

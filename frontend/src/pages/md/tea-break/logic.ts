@@ -189,11 +189,12 @@ export function hasMeasuredBreaks(trend: TeaTrend): boolean {
   return trend.points.some((p) => p.measured > 0);
 }
 
+/** The verdict banner's tone (md-theme/areas/analytics.css): better is sage, worse crimson, too early to say is to watch. */
 export const VERDICT_STYLE: Record<Verdict, { label: string; box: string }> = {
-  better: { label: "Getting better", box: "border-green-200 bg-green-50 text-green-900" },
-  worse: { label: "Getting worse", box: "border-red-200 bg-red-50 text-red-900" },
-  steady: { label: "Holding steady", box: "border-slate-200 bg-slate-50 text-slate-800" },
-  unclear: { label: "Too early to say", box: "border-amber-200 bg-amber-50 text-amber-900" },
+  better: { label: "Getting better", box: "md-analytics-tone-good" },
+  worse: { label: "Getting worse", box: "md-analytics-tone-bad" },
+  steady: { label: "Holding steady", box: "md-analytics-tone-neutral" },
+  unclear: { label: "Too early to say", box: "md-analytics-tone-watch" },
 };
 
 // ─── rankings ───────────────────────────────────────────────────────────────────────────────────────────────────

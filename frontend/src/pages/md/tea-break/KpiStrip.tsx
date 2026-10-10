@@ -40,7 +40,7 @@ export default function KpiStrip({
   return (
     <div>
       <div
-        className={`grid grid-cols-2 gap-3 @3xl:grid-cols-3 @6xl:grid-cols-6 ${refreshingClass(summary)}`}
+        className={`grid grid-cols-1 gap-3 @sm:grid-cols-2 @3xl:grid-cols-3 @6xl:grid-cols-6 ${refreshingClass(summary)}`}
         data-testid="md-tea-break-kpis"
       >
         {data
@@ -76,7 +76,7 @@ export default function KpiStrip({
             ))}
       </div>
       {data && (
-        <p className="mt-2 px-1 text-[11px] text-[#006496]/55" data-testid="md-tea-break-compare">
+        <p className="md-analytics-note px-1" data-testid="md-tea-break-compare">
           Changes compare with {previousText(data)}, the same number of days just before.
         </p>
       )}

@@ -3,7 +3,6 @@ import { ChevronDown, Search, ShieldCheck, X } from "lucide-react";
 import AskAiButton from "@/components/md/kit/AskAiButton";
 import SectionCard from "@/components/md/kit/SectionCard";
 import { EmptyBlock, ErrorBanner } from "@/components/md/kit/states";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { describeMdError, useMdQuery } from "@/lib/api-client/custom-hooks/md";
 import { num } from "@/lib/md/format";
@@ -74,11 +73,7 @@ export default function SensitiveCard({
       loading={query.isPending}
       actions={
         <>
-          <div
-            className="flex rounded-full border border-[#006496]/15 bg-white p-0.5"
-            role="group"
-            aria-label="What to list"
-          >
+          <div className="md-seg" role="group" aria-label="What to list">
             {MODES.map((m) => (
               <button
                 key={m.id}
@@ -86,10 +81,7 @@ export default function SensitiveCard({
                 aria-pressed={mode === m.id}
                 onClick={() => setMode(m.id)}
                 data-testid={`md-activity-mode-${m.id}`}
-                className={cn(
-                  "rounded-full px-3 py-1 text-[11px] font-semibold transition-colors",
-                  mode === m.id ? "bg-[#006496] text-white" : "text-[#006496] hover:bg-[#006496]/[0.06]",
-                )}
+                className="md-seg-item min-h-9 whitespace-nowrap"
               >
                 {m.label}
               </button>
@@ -129,7 +121,8 @@ export default function SensitiveCard({
           <div className="relative min-w-[12rem] flex-1 sm:max-w-sm">
             <Search
               size={14}
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-md-ink-soft"
+              aria-hidden="true"
             />
             <Input
               value={text}
@@ -137,7 +130,7 @@ export default function SensitiveCard({
               placeholder="Search a person, a word or an area"
               aria-label="Search the activity"
               data-testid="md-activity-search"
-              className="h-9 pl-9 text-sm"
+              className="h-10 pl-9 text-sm"
             />
           </div>
           {user && (
@@ -145,7 +138,7 @@ export default function SensitiveCard({
               type="button"
               onClick={() => onUserChange(null)}
               data-testid="md-activity-user-filter"
-              className="inline-flex items-center gap-1.5 rounded-full border border-[#e0a83a]/50 bg-[#e0a83a]/10 px-3 py-1 text-xs font-semibold text-[#5b3d00]"
+              className="md-people-pill is-on"
             >
               Only {user}
               <X size={12} aria-label="Show everyone" />
@@ -175,12 +168,12 @@ export default function SensitiveCard({
           </EmptyBlock>
         ) : data ? (
           <>
-            <ul className="divide-y" data-testid="md-activity-feed">
+            <ul data-testid="md-activity-feed">
               {data.items.map((item) => (
                 <FeedRow key={item.id} item={item} />
               ))}
             </ul>
-            <div className="flex items-center justify-between border-t pt-2 text-xs text-muted-foreground">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-md-line pt-3 text-xs font-medium text-md-ink-soft">
               <span data-testid="md-activity-feed-count">
                 Showing {num(data.items.length)} of {num(data.total)}
                 {data.pageSize >= MAX_PAGE_SIZE && data.total > data.items.length
@@ -188,30 +181,33 @@ export default function SensitiveCard({
                   : ""}
               </span>
               {canShowMore(data.total, data.items.length, pageSize) && (
-                <Button
-                  variant="ghost"
-                  size="sm"
+                <button
+                  type="button"
                   onClick={() => setSize({ key: questionKey, n: nextPageSize(pageSize) })}
                   data-testid="md-activity-show-more"
+                  className="md-btn md-btn-soft md-btn-sm min-h-9"
                 >
                   Show more
-                </Button>
+                </button>
               )}
             </div>
           </>
         ) : null}
 
         {mode === "sensitive" && sensitive.data?.rules && (
-          <div className="border-t pt-3">
+          <div className="border-t border-md-line pt-4">
             <button
               type="button"
               onClick={() => setRulesOpen((v) => !v)}
               aria-expanded={rulesOpen}
               data-testid="md-activity-rules-toggle"
-              className="inline-flex items-center gap-1 text-xs font-semibold text-[#006496]"
+              className="md-btn md-btn-soft md-btn-sm min-h-9"
             >
               What counts as sensitive?
-              <ChevronDown size={14} className={cn("transition-transform", rulesOpen && "rotate-180")} />
+              <ChevronDown
+                size={14}
+                className={cn("transition-transform motion-reduce:transition-none", rulesOpen && "rotate-180")}
+              />
             </button>
             {rulesOpen && (
               <div className="mt-3">
@@ -221,7 +217,7 @@ export default function SensitiveCard({
           </div>
         )}
         {coverage && (
-          <p className="text-[11px] leading-snug text-[#006496]/55" data-testid="md-activity-coverage">
+          <p className="text-[11px] leading-snug text-md-ink-soft" data-testid="md-activity-coverage">
             {coverage}
           </p>
         )}

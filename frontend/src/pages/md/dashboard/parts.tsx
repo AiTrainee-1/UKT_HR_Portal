@@ -10,7 +10,7 @@ import { isSectionError } from "./types";
 /** What a section says when the overview could not be loaded at all (the reason and the Retry are at the top). */
 export function Unavailable() {
   return (
-    <p className="py-6 text-center text-sm text-muted-foreground" data-testid="md-dashboard-unavailable">
+    <p className="py-6 text-center text-sm font-medium text-md-ink-soft" data-testid="md-dashboard-unavailable">
       This could not be loaded, so nothing is shown here. The reason is at the top of the page.
     </p>
   );
@@ -18,26 +18,20 @@ export function Unavailable() {
 
 /** A small label pill under a chart. */
 export function Chip({ children, className }: { children: ReactNode; className?: string }) {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-[#006496]/[0.06] px-2.5 py-1 text-[11px] font-semibold text-[#1a3a4a]",
-        className,
-      )}
-    >
-      {children}
-    </span>
-  );
+  return <span className={cn("md-chip whitespace-nowrap tabular-nums", className)}>{children}</span>;
 }
 
-/** A heading above a group of cards. */
+/** A heading above a group of cards: the title, what the group is, and a hairline that runs out to the edge. */
 export function GroupHeading({ id, title, children }: { id: string; title: string; children?: ReactNode }) {
   return (
-    <div className="mb-3">
-      <h3 id={id} className="text-base font-black text-[#1a3a4a]">
-        {title}
-      </h3>
-      {children && <p className="text-xs text-[#006496]/60">{children}</p>}
+    <div className="mb-4 flex items-end gap-4">
+      <div className="min-w-0">
+        <h3 id={id} className="text-lg font-black tracking-tight text-md-ink">
+          {title}
+        </h3>
+        {children && <p className="mt-0.5 text-xs font-medium text-md-ink-soft">{children}</p>}
+      </div>
+      <span aria-hidden className="md-dashboard-rule mb-2 hidden sm:block" />
     </div>
   );
 }

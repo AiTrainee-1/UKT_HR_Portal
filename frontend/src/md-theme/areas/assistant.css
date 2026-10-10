@@ -1,0 +1,715 @@
+/* MD portal skin, area: assistant. Owned by the designer of that area (md-portal.md section 11.4). Every selector here must start
+   with an .md-* class of your own (name them md-assistant-*) or with html[data-md-theme]; md-theme.test.ts checks. Use the palette
+   tokens (var(--md-wine-700) ...), never a hex colour. */
+
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   The AI assistant. Layers, from the back:
+     the page  >  the panel (a frosted vanilla sheet, the only big blur)  >  glass cards (the answers, the suggestions)
+     >  quieter inner panels (the explanation)  >  controls (one glass family: md-btn, md-chip, md-seg, md-field).
+   Only the panel and the launcher bubble blur what is behind them. Everything inside the panel is a tint, not a second blur.
+   The radio character itself is never restyled; only the frame around its small face is.
+
+   Keyframes live in AssistantHost.tsx (md-theme.test.ts does not accept percentage selectors in an area file).
+   Classes here override md-btn / md-chip / md-field where they must, and they are unlayered and later in the cascade
+   than glass.css, so they win over it at equal specificity (and over Tailwind utilities, which are layered).
+   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* ── launcher: the radio with a glass "Ask AI" bubble ─────────────────────────────────────────────────────────────── */
+
+.md-assistant-launcher button:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: -12px;
+  border-radius: 9999px;
+}
+/* a soft wine glow behind the character, so it sits on the page instead of floating over it */
+.md-assistant-launcher-halo {
+  border-radius: 9999px;
+  background: radial-gradient(
+    closest-side,
+    color-mix(in srgb, var(--md-wine) 24%, transparent) 0%,
+    color-mix(in srgb, var(--md-wine) 9%, transparent) 58%,
+    transparent 100%
+  );
+  filter: blur(4px);
+}
+.md-assistant-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.9rem 0.45rem 0.7rem;
+  border-radius: 9999px;
+  font-size: 0.78125rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  line-height: 1.2;
+  white-space: nowrap;
+  color: var(--md-sand);
+  background: linear-gradient(
+    100deg,
+    color-mix(in srgb, var(--md-indigo) 95%, transparent) 0%,
+    color-mix(in srgb, var(--md-ink-700) 92%, transparent) 54%,
+    color-mix(in srgb, var(--md-wine-700) 94%, transparent) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  box-shadow:
+    0 16px 30px -12px rgba(40, 43, 74, 0.62),
+    0 4px 10px -4px rgba(127, 1, 31, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.38);
+  -webkit-backdrop-filter: blur(12px) saturate(1.5);
+  backdrop-filter: blur(12px) saturate(1.5);
+}
+/* the tail, pointing at the character */
+.md-assistant-bubble::after {
+  content: "";
+  position: absolute;
+  right: -6px;
+  top: 50%;
+  margin-top: -6px;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-left: 7px solid var(--md-wine-700);
+  filter: drop-shadow(0 3px 3px rgba(127, 1, 31, 0.25));
+}
+.md-assistant-bubble-icon {
+  color: var(--md-wine-200);
+}
+
+/* ── the panel: a frosted vanilla sheet ───────────────────────────────────────────────────────────────────────────── */
+
+.md-assistant-panel {
+  background: rgba(243, 239, 231, 0.93);
+  background:
+    radial-gradient(480px 300px at 100% -4%, color-mix(in srgb, var(--md-wine) 12%, transparent), transparent 66%),
+    radial-gradient(420px 320px at -10% 106%, color-mix(in srgb, var(--md-sand) 85%, transparent), transparent 64%),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--md-alabaster) 90%, transparent) 0%,
+      color-mix(in srgb, var(--md-vanilla) 88%, transparent) 100%
+    );
+  border-left: 1px solid rgba(255, 255, 255, 0.75);
+  box-shadow:
+    -28px 0 64px -22px rgba(40, 43, 74, 0.4),
+    -3px 0 14px rgba(40, 43, 74, 0.07),
+    inset 1px 0 0 rgba(255, 255, 255, 0.5);
+  -webkit-backdrop-filter: blur(28px) saturate(1.5);
+  backdrop-filter: blur(28px) saturate(1.5);
+}
+
+.md-assistant-header {
+  z-index: 3;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.38));
+  border-bottom: 1px solid var(--md-line);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    0 10px 24px -18px rgba(40, 43, 74, 0.4);
+}
+
+/* the small avatar's frame (the face inside is the character, untouched): a white ring, a wine hairline and a wine glow */
+.md-assistant-face {
+  background-color: var(--md-sand);
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.96),
+    0 0 0 3px rgba(127, 1, 31, 0.16),
+    0 8px 18px -6px rgba(127, 1, 31, 0.45);
+}
+.md-assistant-face[data-mood="working"] {
+  animation: md-assistant-face-pulse 1.8s ease-in-out infinite;
+}
+
+/* round ghost icon buttons in the header (and the delete buttons in the history list): ink, wine on hover */
+.md-assistant-iconbtn {
+  --btn-fg: var(--md-ink-700);
+}
+.md-assistant-iconbtn:hover,
+.md-assistant-iconbtn:focus-visible {
+  --btn-fg: var(--md-wine-700);
+}
+.md-assistant-iconbtn[aria-expanded="true"] {
+  --btn-fg: var(--md-wine-700);
+  --btn-bg: linear-gradient(180deg, rgba(127, 1, 31, 0.12), rgba(127, 1, 31, 0.06));
+  --btn-line: rgba(127, 1, 31, 0.22);
+  --btn-edge: rgba(255, 255, 255, 0.6);
+}
+.md-assistant-iconbtn-danger:hover,
+.md-assistant-iconbtn-danger:focus-visible {
+  --btn-fg: var(--md-danger-700);
+  --btn-bg: linear-gradient(180deg, rgba(253, 241, 240, 0.95), rgba(250, 221, 219, 0.7));
+  --btn-line: rgba(183, 45, 51, 0.28);
+}
+
+/* the history list drops from the header: a near-opaque glass sheet (no blur on a blur) */
+.md-assistant-menu {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(250, 248, 242, 0.96));
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  border-radius: 1.1rem;
+  box-shadow:
+    0 24px 48px -16px rgba(40, 43, 74, 0.42),
+    0 2px 8px rgba(40, 43, 74, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 1);
+}
+.md-assistant-menu-row {
+  border-radius: 0.8rem;
+  transition: background 0.18s ease;
+}
+.md-assistant-menu-row:hover,
+.md-assistant-menu-row:focus-within {
+  background: rgba(127, 1, 31, 0.06);
+}
+.md-assistant-option {
+  min-height: 2.25rem;
+  transition: background 0.15s ease;
+}
+.md-assistant-option:hover,
+.md-assistant-option:focus-visible {
+  background: rgba(127, 1, 31, 0.07);
+  outline: none;
+}
+.md-assistant-option[aria-selected="true"] {
+  color: var(--md-wine-700);
+  font-weight: 700;
+}
+
+/* the conversation scrolls under a soft fade at its top and bottom edge */
+.md-assistant-scroll {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 12px, black calc(100% - 12px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, black 12px, black calc(100% - 12px), transparent 100%);
+}
+.md-assistant-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.md-assistant-scroll::-webkit-scrollbar-thumb {
+  background: rgba(40, 43, 74, 0.22);
+  background-clip: padding-box;
+  border: 1px solid transparent;
+}
+
+/* ── welcome ──────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+.md-assistant-orb-glow {
+  background: radial-gradient(
+    closest-side,
+    color-mix(in srgb, var(--md-wine) 30%, transparent) 0%,
+    color-mix(in srgb, var(--md-wine) 10%, transparent) 56%,
+    transparent 100%
+  );
+  animation: md-assistant-orb 3.6s ease-in-out infinite;
+}
+/* the frosted disc the character stands in */
+.md-assistant-orb-disc {
+  background:
+    radial-gradient(circle at 50% 22%, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.55) 55%, transparent 100%),
+    linear-gradient(
+      160deg,
+      color-mix(in srgb, var(--md-sand) 80%, transparent),
+      color-mix(in srgb, var(--md-vanilla) 60%, transparent)
+    );
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  box-shadow:
+    0 22px 44px -16px rgba(127, 1, 31, 0.5),
+    0 2px 6px rgba(40, 43, 74, 0.08),
+    inset 0 1px 0 white,
+    inset 0 -10px 22px -10px rgba(127, 1, 31, 0.16);
+}
+.md-assistant-orb-ring {
+  border: 1px solid rgba(127, 1, 31, 0.22);
+  animation: md-assistant-ring 3.6s ease-in-out infinite;
+}
+
+.md-assistant-overline {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  line-height: 1.2;
+  color: var(--md-ink-600);
+}
+
+.md-assistant-overline-wine {
+  font-size: 0.65625rem;
+  color: var(--md-wine-700);
+}
+/* a smaller icon tile (28px): the radius follows the size */
+.md-assistant-tile-sm {
+  border-radius: 0.65rem;
+}
+
+/* "Try asking": glass cards that lift on hover. No blur of their own: the panel behind them is already frosted. */
+.md-assistant-suggest {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 3.25rem;
+  padding: 0.65rem 0.8rem;
+  border-radius: 1rem;
+  text-align: left;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--md-ink-800);
+  cursor: pointer;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.84) 0%, rgba(255, 255, 255, 0.5) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.92);
+  box-shadow:
+    0 12px 26px -16px rgba(40, 43, 74, 0.38),
+    0 1px 3px rgba(40, 43, 74, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.22s ease,
+    border-color 0.2s ease,
+    background 0.2s ease;
+}
+.md-assistant-suggest:enabled:hover {
+  transform: translateY(-2px);
+  border-color: rgba(127, 1, 31, 0.3);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.68) 100%);
+  box-shadow:
+    0 18px 34px -14px rgba(127, 1, 31, 0.3),
+    0 2px 6px rgba(40, 43, 74, 0.07),
+    inset 0 1px 0 white;
+}
+.md-assistant-suggest:enabled:active {
+  transform: translateY(0) scale(0.99);
+}
+.md-assistant-suggest:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 2px;
+}
+.md-assistant-suggest:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.md-assistant-suggest-go {
+  flex-shrink: 0;
+  color: var(--md-wine-600);
+  opacity: 0.35;
+  transform: translateY(2px);
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+}
+.md-assistant-suggest:enabled:hover .md-assistant-suggest-go,
+.md-assistant-suggest:focus-visible .md-assistant-suggest-go {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ── messages ─────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* what the MD asked: a wine glass bubble with white text */
+.md-assistant-user {
+  position: relative;
+  isolation: isolate;
+  color: white;
+  background: linear-gradient(135deg, var(--md-wine-700) 0%, var(--md-wine-600) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 1.15rem 1.15rem 0.35rem 1.15rem;
+  box-shadow:
+    0 16px 28px -14px rgba(127, 1, 31, 0.66),
+    0 2px 4px rgba(127, 1, 31, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+.md-assistant-user::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.28) 0%, rgba(255, 255, 255, 0) 56%);
+  pointer-events: none;
+}
+
+/* what the assistant answers: a glass card (md-card), with the corner nearest its face squared off. The card's own blur
+   is dropped: it sits on the panel's frosted sheet, where a second blur would cost frames and show nothing. */
+.md-card.md-assistant-answer {
+  border-radius: 0.35rem 1.25rem 1.25rem 1.25rem;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+/* an answer in the making: a wine light sliding along its bottom edge */
+.md-assistant-working {
+  position: relative;
+  overflow: hidden;
+}
+.md-assistant-working::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--md-wine-500), var(--md-wine-300), transparent) no-repeat;
+  background-size: 45% 100%;
+  animation: md-assistant-slide 1.6s ease-in-out infinite;
+}
+.md-assistant-shimmer {
+  background: linear-gradient(90deg, var(--md-wine-800) 0%, var(--md-wine-400) 48%, var(--md-wine-800) 92%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: md-assistant-shimmer 1.6s linear infinite;
+}
+
+.md-assistant-error {
+  background: linear-gradient(135deg, rgba(253, 241, 240, 0.95), rgba(250, 221, 219, 0.6));
+  border: 1px solid rgba(183, 45, 51, 0.26);
+  border-radius: 0.35rem 1.25rem 1.25rem 1.25rem;
+  box-shadow:
+    0 10px 24px -14px rgba(183, 45, 51, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  color: var(--md-danger-800);
+}
+
+/* copy, listen, try again: small ghost / glass buttons under an answer */
+.md-assistant-act {
+  min-height: 2rem;
+  padding: 0.25rem 0.7rem;
+  font-size: 0.75rem;
+  --btn-fg: var(--md-ink-700);
+}
+.md-assistant-act:hover,
+.md-assistant-act:focus-visible {
+  --btn-fg: var(--md-wine-700);
+}
+.md-assistant-act[data-active="true"] {
+  --btn-fg: var(--md-wine-700);
+  --btn-bg: linear-gradient(180deg, rgba(127, 1, 31, 0.12), rgba(127, 1, 31, 0.06));
+  --btn-line: rgba(127, 1, 31, 0.22);
+}
+.md-assistant-act-wine {
+  --btn-fg: var(--md-wine-700);
+}
+.md-assistant-act.md-btn-danger,
+.md-assistant-act.md-btn-danger:hover {
+  --btn-fg: var(--md-danger-700);
+}
+
+/* a page the assistant suggests: a warm glass card with a wine icon tile */
+.md-assistant-page {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  width: 100%;
+  min-height: 3rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 1rem;
+  text-align: left;
+  cursor: pointer;
+  background: linear-gradient(135deg, rgba(245, 235, 208, 0.85) 0%, rgba(255, 255, 255, 0.6) 100%);
+  border: 1px solid rgba(184, 130, 32, 0.24);
+  box-shadow:
+    0 10px 22px -16px rgba(40, 43, 74, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.22s ease,
+    border-color 0.2s ease;
+}
+.md-assistant-page:hover {
+  transform: translateY(-2px);
+  border-color: rgba(127, 1, 31, 0.32);
+  box-shadow:
+    0 18px 32px -14px rgba(127, 1, 31, 0.32),
+    inset 0 1px 0 white;
+}
+.md-assistant-page:active {
+  transform: translateY(0) scale(0.99);
+}
+.md-assistant-page:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 2px;
+}
+
+/* follow-up questions: wine pills */
+.md-assistant-chipbtn {
+  min-height: 2rem;
+  padding: 0.4rem 0.85rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.3;
+  text-align: left;
+  color: var(--md-wine-700);
+  cursor: pointer;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.56));
+  border-color: rgba(127, 1, 31, 0.2);
+  box-shadow:
+    0 8px 16px -10px rgba(127, 1, 31, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.2s ease,
+    background 0.2s ease,
+    border-color 0.2s ease;
+}
+.md-assistant-chipbtn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(127, 1, 31, 0.4);
+  background: linear-gradient(180deg, white, rgba(127, 1, 31, 0.06));
+  box-shadow:
+    0 12px 22px -10px rgba(127, 1, 31, 0.45),
+    inset 0 1px 0 white;
+}
+.md-assistant-chipbtn:active {
+  transform: translateY(0) scale(0.98);
+}
+.md-assistant-chipbtn:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 2px;
+}
+
+/* ── markdown inside an answer ────────────────────────────────────────────────────────────────────────────────────── */
+
+.md-assistant-md a {
+  color: var(--md-wine-700);
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-color: rgba(127, 1, 31, 0.35);
+  text-underline-offset: 2px;
+}
+.md-assistant-md a:hover {
+  text-decoration-color: var(--md-wine-700);
+}
+.md-assistant-table {
+  border: 1px solid var(--md-line);
+  border-radius: 0.9rem;
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+.md-assistant-table thead tr {
+  background: linear-gradient(180deg, rgba(245, 235, 208, 0.85), rgba(245, 235, 208, 0.5));
+}
+.md-assistant-table th {
+  padding: 0.5rem 0.7rem;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--md-ink-700);
+  white-space: nowrap;
+}
+.md-assistant-table td {
+  padding: 0.5rem 0.7rem;
+}
+.md-assistant-table tbody tr {
+  border-top: 1px solid var(--md-line);
+  transition: background 0.15s ease;
+}
+.md-assistant-table tbody tr:hover {
+  background: rgba(127, 1, 31, 0.04);
+}
+.md-assistant-table tbody td:first-child {
+  font-weight: 600;
+}
+.md-assistant-ol-no {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 1.25rem;
+  height: 1.25rem;
+  margin-top: 0.1rem;
+  border-radius: 9999px;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--md-wine-700);
+  background: linear-gradient(135deg, rgba(127, 1, 31, 0.12), rgba(127, 1, 31, 0.05));
+  border: 1px solid rgba(127, 1, 31, 0.16);
+}
+
+/* ── "How I got this" ─────────────────────────────────────────────────────────────────────────────────────────────── */
+
+.md-assistant-explain-toggle {
+  border-radius: 1rem;
+  cursor: pointer;
+  transition: background 0.18s ease;
+}
+.md-assistant-explain-toggle:hover {
+  background: rgba(127, 1, 31, 0.04);
+}
+.md-assistant-explain-toggle:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: -2px;
+}
+/* the three tabs are an md-seg, a little smaller so they fit the width of an answer; on a phone the row scrolls sideways
+   (the wrapper has room around the pill for its shadow, which an overflow would otherwise clip) */
+.md-assistant-tabs-scroll {
+  display: flex;
+  overflow-x: auto;
+  padding: 0.1rem 0.4rem 0.85rem;
+  margin: -0.1rem -0.4rem 0;
+  scrollbar-width: none;
+}
+.md-assistant-tabs-scroll::-webkit-scrollbar {
+  display: none;
+}
+.md-assistant-tabs {
+  flex-shrink: 0;
+}
+.md-assistant-tabs .md-seg-item {
+  flex-shrink: 0;
+  white-space: nowrap;
+  padding: 0.3rem 0.7rem;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+}
+.md-assistant-step-no {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 1.25rem;
+  height: 1.25rem;
+  margin-top: 0.1rem;
+  border-radius: 9999px;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--md-wine-700);
+  background: linear-gradient(135deg, rgba(127, 1, 31, 0.12), rgba(127, 1, 31, 0.05));
+  border: 1px solid rgba(127, 1, 31, 0.16);
+}
+.md-assistant-step-no.is-warn {
+  color: var(--md-warning-800);
+  background: rgba(246, 234, 201, 0.9);
+  border-color: rgba(185, 130, 32, 0.34);
+}
+.md-assistant-formula {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--md-wine-800);
+  background: rgba(245, 235, 208, 0.7);
+  border: 1px solid rgba(184, 130, 32, 0.2);
+  border-radius: 0.6rem;
+}
+
+/* ── composer ─────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+.md-assistant-dock {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0.72));
+  border-top: 1px solid var(--md-line);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 -14px 30px -22px rgba(40, 43, 74, 0.4);
+}
+/* the question box (md-field): rounder, no blur of its own, a wine ring while it has focus or the microphone is open */
+.md-field.md-assistant-box {
+  border-radius: 1.25rem;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.72));
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.md-field.md-assistant-box[data-listening="true"] {
+  border-color: var(--md-wine-600);
+  box-shadow:
+    0 0 0 3px rgba(127, 1, 31, 0.14),
+    inset 0 1px 2px rgba(40, 43, 74, 0.05);
+}
+
+/* the language and speak toggles: small chips that are buttons */
+.md-assistant-tool {
+  min-height: 2rem;
+  padding: 0.25rem 0.7rem;
+  font-size: 0.71875rem;
+  cursor: pointer;
+  color: var(--md-ink-700);
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease,
+    transform 0.18s ease;
+}
+.md-assistant-tool:hover {
+  color: var(--md-wine-700);
+  border-color: rgba(127, 1, 31, 0.3);
+  background: linear-gradient(180deg, white, rgba(127, 1, 31, 0.05));
+}
+.md-assistant-tool:focus-visible {
+  outline: 2px solid var(--md-wine-500);
+  outline-offset: 2px;
+}
+.md-assistant-tool[aria-pressed="true"] {
+  color: var(--md-wine-700);
+  background: linear-gradient(180deg, rgba(127, 1, 31, 0.12), rgba(127, 1, 31, 0.06));
+  border-color: rgba(127, 1, 31, 0.26);
+}
+.md-assistant-mic {
+  --btn-fg: var(--md-wine-700);
+}
+.md-assistant-hint {
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  color: var(--md-ink-600);
+}
+
+/* ── notices: sand panels with an ochre tile ──────────────────────────────────────────────────────────────────────── */
+
+.md-assistant-notice-icon {
+  color: var(--md-warning-700);
+  background: linear-gradient(135deg, rgba(237, 213, 150, 0.6), rgba(237, 213, 150, 0.28));
+  border-color: rgba(185, 130, 32, 0.34);
+}
+
+/* ── small screens: tap targets of at least 36px ──────────────────────────────────────────────────────────────────── */
+
+@media (max-width: 639px), (pointer: coarse) {
+  .md-assistant-act,
+  .md-assistant-tool,
+  .md-assistant-chipbtn {
+    min-height: 2.25rem;
+  }
+}
+
+/* the bubble breathes a little (the individual translate property, so it composes with the entrance animation) */
+@media (prefers-reduced-motion: no-preference) {
+  .md-assistant-bubble {
+    animation: md-assistant-bob 4.2s ease-in-out infinite;
+  }
+}
+
+/* ── reduced motion: nothing moves, the shimmer becomes a plain wine ──────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .md-assistant-orb-glow,
+  .md-assistant-orb-ring,
+  .md-assistant-face[data-mood="working"],
+  .md-assistant-working::after {
+    animation: none;
+  }
+  .md-assistant-shimmer {
+    animation: none;
+    background: none;
+    color: var(--md-wine-700);
+  }
+  .md-assistant-working::after {
+    background-size: 100% 100%;
+  }
+  .md-assistant-suggest,
+  .md-assistant-suggest-go,
+  .md-assistant-page,
+  .md-assistant-chipbtn,
+  .md-assistant-tool,
+  .md-assistant-menu-row {
+    transition: none;
+  }
+  .md-assistant-suggest:enabled:hover,
+  .md-assistant-page:hover,
+  .md-assistant-chipbtn:hover {
+    transform: none;
+  }
+}
+
+/* browsers without backdrop-filter get a more opaque sheet so text stays readable */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .md-assistant-panel {
+    background: rgba(243, 239, 231, 0.98);
+  }
+  .md-assistant-bubble {
+    background: var(--md-ink-800);
+  }
+}

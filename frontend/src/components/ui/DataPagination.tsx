@@ -75,6 +75,7 @@ function NavButton({
         <button
           type="button"
           aria-label={label}
+          data-slot="page-step"
           disabled={disabled}
           onClick={onClick}
           className={cn(
@@ -126,7 +127,7 @@ export function DataPagination({
         )}
       >
         {/* ── Counter ── */}
-        <p className="text-sm text-gray-400">
+        <p className="text-sm text-gray-400" data-slot="page-info">
           Page <span className="font-semibold text-gray-900">{page}</span> of{" "}
           <span className="font-semibold text-gray-900">{totalPages}</span>
           {from != null && totalItems != null && totalItems > 0 && (
@@ -157,6 +158,7 @@ export function DataPagination({
                   <button
                     type="button"
                     aria-label={`Page ${item}`}
+                    data-slot="page-number"
                     aria-current={item === page ? "page" : undefined}
                     onClick={() => go(item)}
                     className={cn(

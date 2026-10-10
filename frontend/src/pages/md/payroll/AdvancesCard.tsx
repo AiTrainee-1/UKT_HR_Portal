@@ -5,7 +5,7 @@ import SectionCard from "@/components/md/kit/SectionCard";
 import { EmptyBlock, NoteBanner } from "@/components/md/kit/states";
 import { inrCompact, num } from "@/lib/md/format";
 import { signedInrCompact } from "./logic";
-import { CardError, Metric, cardNotes, failed } from "./parts";
+import { CardError, Metric, OVERLINE, cardNotes, failed } from "./parts";
 import type { PayrollQueries } from "./queries";
 
 const people = (n: number) => `${num(n)} ${n === 1 ? "person" : "people"}`;
@@ -31,9 +31,10 @@ export default function AdvancesCard({ query, label }: { query: PayrollQueries["
           No salary advance or loan is outstanding or moved in this selection.
         </EmptyBlock>
       ) : (
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-2" data-testid="md-payroll-advances-metrics">
+        <div className="space-y-5">
+          <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2" data-testid="md-payroll-advances-metrics">
             <Metric
+              emphasis
               testId="md-payroll-advances-outstanding"
               label="Outstanding today"
               value={inrCompact(data.outstanding.amount)}
@@ -63,9 +64,7 @@ export default function AdvancesCard({ query, label }: { query: PayrollQueries["
             />
           </div>
           <div>
-            <h4 className="mb-2 text-[11px] font-bold uppercase tracking-wider text-[#006496]/60">
-              How long ago they were sanctioned
-            </h4>
+            <h4 className={`mb-3 ${OVERLINE}`}>How long ago they were sanctioned</h4>
             <BarList
               testId="md-payroll-advances-ageing"
               color={CHART.warn}

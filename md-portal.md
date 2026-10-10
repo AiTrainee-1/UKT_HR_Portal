@@ -464,7 +464,7 @@ date / what the page is for                                                     
 ```
 
 * The pieces are in `components/md/kit/MdHeaderParts.tsx` (`LiveChip`, `ModeTabs`, `UpdatedRefresh`). The pages the MD
-  portal owns (Dashboard, Payroll, Reports, Recruitment, Activity Logs) get the row from `kit/MdPageHeader` (`title`,
+  portal owns (Payroll, Reports, Recruitment, Activity Logs) get the row from `kit/MdPageHeader`; the **Dashboard has no title strip** (owner's choice, 2026-10-10: the welcome card is the top of the page and its greeting is the page's `h1`) (`title`,
   `subtitle`, `actions`, `updatedAt`; `icon` is accepted and ignored). **Use it for any new MD-owned page.** Do not draw a
   title row of your own, and do not add a Refresh button: the stack has one (it reloads every query on screen).
 * The HR pages' copies keep the HR page's own title row, and the frame slots the pieces into it
@@ -540,3 +540,82 @@ Ask (in your final report) for a change there; do not make it. New generic kit c
 `e2e/md-hr-pages.spec.ts` opens every copy and fails on any refused API call (a 403 means `MD_HR_GRANTS` lacks a module the
 page reads); `e2e/md-insights.spec.ts` checks the Insights tabs; `tests_md_hr_access.py` pins the access;
 `lib/md/embed.test.ts` the address mapping; `md-nav.test.ts` the page list.
+
+## 11. The skin: wine, indigo and sand (2026-10-10)
+
+The MD portal has its own colours; **the HR portal, the login pages and the employee app keep theirs.** The product owner's
+palette: **Wine red #7F011F**, **Midnight indigo #282B4A**, and three light backgrounds **Light sand #F5EBD0**, **Vanilla
+#EEEBDA**, **Alabaster #F3EFE7** (given as "#F3FE7", five digits; #F3EFE7 is the reading used, one variable to change:
+`--md-alabaster`). Backgrounds use the three light colours; wine and indigo are for everything else (text, icons, buttons,
+borders, charts, the dark hero). Everything below lives in `frontend/src/md-theme/`.
+
+### 11.1 How it is scoped (read this before touching a colour)
+
+* `MdLayout` calls `useMdTheme()` (`lib/md/theme.ts`), which puts **`data-md-theme` on `<html>`** while an MD page is
+  mounted. It is on `<html>`, not on the page root, because dialogs, menus, toasts and tooltips render in a portal under
+  `<body>`. It is removed when the MD leaves the portal.
+* Every rule that **changes how an existing thing looks** is scoped to `html[data-md-theme]`: `base.css`
+  (shadcn tokens `--background`, `--primary` ..., page background), `tailwind-remap.css` (Tailwind's own `blue`, `slate`,
+  `teal`, `green`, `red`, `amber` ... colour families are re-pointed at the palette ramps, so `text-blue-700` or
+  `bg-slate-50` inside an embedded HR page takes the new colours with no edit to that page), `hr-copies.css` (the shared
+  `.clay-*` classes and the shared components that the HR pages use), and the `[data-slot="button"]` part of `glass.css`.
+  `md-theme.test.ts` fails if a selector in those files is not scoped. **Do not edit an HR page to change how it looks in
+  the MD portal; add a scoped rule to `hr-copies.css`.**
+* New classes for MD code (`.md-card`, `.md-btn` ...) and the palette variables (`tokens.css`) are not scoped: nothing
+  outside MD code uses them.
+
+### 11.2 Vocabulary
+
+| | |
+| --- | --- |
+| Palette variables | `--md-wine`, `--md-indigo`, `--md-sand`, `--md-vanilla`, `--md-alabaster`; ramps `--md-wine-50..950`, `--md-ink-50..950` (ink = indigo), `--md-n-*` (warm neutrals), `--md-info-*` (periwinkle), `--md-sky-*`, `--md-rose-*`, `--md-sage-*`, `--md-success-*`, `--md-warning-*` (ochre), `--md-danger-*` (crimson), `--md-clay-*`, `--md-mauve-*` |
+| Tailwind utilities | `text-md-wine`, `bg-md-ink/10`, `border-md-line`, `from-md-wine-500`, `text-md-ink-soft`, `bg-md-sand`, `bg-md-warning-100`, `text-md-success`, `border-md-n-200` ... (any ramp shade 50-900 and the five colours; opacity works) |
+| Roles | text `text-md-ink` (11.9:1 on the backgrounds), secondary text `text-md-ink-soft` (6.4:1) or `text-md-ink-600`; never ink-400 for text. Brand / links / key figures / active states `text-md-wine`, `bg-md-wine`. Hairlines `border-md-line`. Good `md-success`, watch `md-warning`, bad `md-danger` (a brighter red than the wine, on purpose), information `md-info`. |
+| Glass classes | `.md-card` (a surface: translucent white, blur, light edge, soft indigo shadow; `.md-card-strong` more opaque), `.md-panel` / `.md-panel-sand` / `.md-panel-wine` (quiet inner surfaces, no blur), `.md-hero` (the dark indigo statement card with a wine glow), `.md-btn` + `.md-btn-primary` (wine glass) / `-ink` (indigo glass) / `-soft` (frosted white) / `-ghost` / `-danger` and sizes `-sm`, `-lg`, `-icon`, `.md-chip` (+ `-wine`, `-ink`, `-sand`, `-success`, `-warning`, `-danger`), `.md-seg` + `.md-seg-item` (segmented switch, chosen item = wine glass), `.md-field` (text field), `.md-icon-tile` (+ `-ink`, `-solid`), `.md-app-bg` (the page background) |
+| Shared Button | `components/ui/button.tsx` carries `data-slot="button"` and `data-variant`; in the MD portal `default` is wine glass, `outline` frosted white, `secondary` sand glass, `destructive` crimson glass, `ghost` clear until hovered, `link` wine text (`glass.css`) |
+| Charts | colours come from `MD_CHART` (`lib/md/theme.ts`) / `CHART` (`kit/chartTheme.ts`): wine, indigo, dusty rose, ochre, sage, periwinkle ... Never a hex in a chart file |
+| JS constants | `MD_PALETTE`, `MD_CHART` in `lib/md/theme.ts`; `md-theme.test.ts` keeps them equal to `tokens.css` |
+
+### 11.3 Rules for MD-owned code
+
+1. **No hard-coded colours** (`#...`, `rgb(...)` of the old blue/gold) in `components/md`, `pages/md`, `lib/md`: use the
+   vocabulary. `md-theme/no-hard-coded-colours.test.ts` counts lines with a hex and may only go down (goal: 0). White is
+   `white` / `#fff`.
+2. **Surfaces are glass, controls are glass.** A card is `md-card`; do not stack blur inside blur (inside a card use
+   `md-panel` or a plain tint). Every `<button>` is an `md-btn` (or the shared `Button`) or an `md-chip` / `md-seg-item`;
+   no flat, unstyled, or old gold-gradient buttons. Icon-only buttons get `md-btn md-btn-ghost md-btn-icon` and an `aria-label`.
+3. **Backgrounds are the three light colours** (page: `md-app-bg`; panels: sand / vanilla / alabaster tints). Dark surfaces
+   are midnight indigo (`md-hero`, the sidebar's active detail). Wine is the accent, not a background.
+4. **Contrast**: body text `text-md-ink` or `text-md-ink-soft` on light glass; white or sand on wine and indigo; verify any
+   new pairing is at least 4.5:1 (3:1 for large text and icons).
+5. **Motion**: transitions 150-250 ms, hover lift at most 2 px, nothing that moves without `motion-safe:`; reduced motion
+   is already handled in `glass.css`.
+6. **Mobile (390 px)**: glass cards stack, nothing overflows sideways, tap targets at least 36 px.
+7. The AI character (the radio, section 6) stays as it is; around it, the launcher bubble and the panel use the palette.
+8. Status colours keep their meaning (sage good, ochre watch, crimson bad); never use wine for "bad".
+
+### 11.4 Who edits what
+
+`md-theme/tokens.css`, `tailwind-remap.css`, `base.css`, `glass.css`: the integrator (add a class to `glass.css` only through
+the integrator). `md-theme/hr-copies.css` and `components/ui/*` (additive `data-slot` markers only): the HR-copies skin
+owner. Pages and components: whoever owns the folder (section 10.6).
+
+### 11.5 Type (2026-10-10)
+
+| | |
+| --- | --- |
+| **Whole Chomp** | the **title of each page** (Employees, Manage Branch, Staff Attendance, Payroll Analysis, Add New Employee ...): `[data-md-title]` (the heading of an embedded HR page: `embedded/headerRow.ts` marks it, and `embedded/titleMark.ts` marks the first heading of a page that has no title row, such as a form or a record) and `[data-testid="md-page-title"]` (`kit/MdPageHeader`). |
+| The dashboard | keeps **all its headings** in Whole Chomp (the greeting and the card headings): the rule is under `[data-testid="md-dashboard-page"]`. The owner asked for the dashboard's fonts to stay as they were. |
+| Everything else | the previous fonts (Hanken Grotesk, then Inter): card and section headings on other pages, dialogs, the sidebar (the "UK Textiles" brand), the AI assistant, figures. |
+| Times New Roman | **not used anywhere.** It was applied to Reports and to money / key figures and then withdrawn by the owner ("for everything else, restore the previous fonts"). To bring it back, add a `font-family` rule where the owner names. |
+| Scope | the MD portal only: the rules are under `html[data-md-theme]` (`md-theme/typography.css`). |
+
+* **The font file is the free 1001Fonts cut and draws only the 52 letters A-Z / a-z.** Its digits, punctuation, brackets, accented
+  letters and the rupee sign are empty glyphs (they take room and draw nothing; `fontTools` shows `bounds None`). So the
+  `@font-face` is limited with `unicode-range: U+0041-005A, U+0061-007A` and declared for weights 100-900 (no faked bold):
+  everything else in a title is drawn by Hanken Grotesk at the title's own weight. If a full version of the font is bought,
+  widen the range (or remove it) and check the digits.
+* **Licence:** `frontend/public/fonts/1001fonts-whole-chomp-eula.txt` says "free for personal use": business use (websites, apps
+  for companies) needs written permission or a paid licence from the author (Decograph Studio). The files were supplied by the
+  product owner; settle the licence before production. The font is not modified (the EULA forbids it); it is served as supplied.
+* **Rules for MD code:** a page's title is a real `h1` / `h2` and needs nothing else; do not set `font-family` in components.

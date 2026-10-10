@@ -8,9 +8,9 @@ import DonutChart from "@/components/md/kit/DonutChart";
 import SectionCard from "@/components/md/kit/SectionCard";
 import { EmptyBlock } from "@/components/md/kit/states";
 import TrendChart from "@/components/md/kit/TrendChart";
-import { PillTabs } from "@/components/ui/pill-tabs";
 import { dayLong, num, pct } from "@/lib/md/format";
 import { attritionBars, bandRows, exitTick, reasonSlices, type Asks } from "./logic";
+import SegTabs from "../embedded/shared/SegTabs";
 import { PersonCell, Unavailable } from "./parts";
 import type { EarlyLeaver, EmployeesAttrition } from "./types";
 
@@ -36,7 +36,7 @@ const EARLY_COLUMNS: Column<EarlyLeaver>[] = [
     cell: (r) => (
       <span className="whitespace-nowrap">
         {dayLong(r.left)}
-        {r.approximate && <span className="ml-1 text-[10px] font-semibold text-amber-700">approx.</span>}
+        {r.approximate && <span className="ml-1 text-[11px] font-semibold text-md-warning">approx.</span>}
       </span>
     ),
   },
@@ -105,8 +105,8 @@ export default function AttritionSection({
         actions={<AskAiButton question={asks.attrition} />}
         testId="md-employees-attrition-groups"
       >
-        <div className="mb-3 overflow-x-auto">
-          <PillTabs size="sm" items={GROUPS} value={group} onChange={(v) => setGroup(v as Group)} />
+        <div className="mb-4">
+          <SegTabs label="Group by" items={GROUPS} value={group} onChange={(v) => setGroup(v as Group)} />
         </div>
         <BarList
           items={attritionBars(rows)}
@@ -117,14 +117,14 @@ export default function AttritionSection({
           <button
             type="button"
             onClick={onShowAll}
-            className="mt-3 w-full rounded-lg border border-dashed border-[#006496]/25 py-1.5 text-xs font-semibold text-[#006496] hover:bg-[#006496]/[0.05]"
+            className="md-btn md-btn-soft md-btn-sm mt-4 w-full"
             data-testid="md-employees-attrition-more"
           >
             Show {num(hiddenDepartments)} more {hiddenDepartments === 1 ? "department" : "departments"}
           </button>
         )}
         {group === "department" && a.departmentsTotal > a.departmentsWithLeavers && (
-          <p className="mt-3 text-[11px] text-[#006496]/55">
+          <p className="md-analytics-note">
             {num(a.departmentsTotal - a.departmentsWithLeavers)} other{" "}
             {a.departmentsTotal - a.departmentsWithLeavers === 1 ? "department" : "departments"} had no leavers.
           </p>
@@ -164,8 +164,8 @@ export default function AttritionSection({
           data={reasonSlices(a.reasons)}
           center={
             <>
-              <p className="text-2xl font-black text-[#1a3a4a]">{num(company.leavers)}</p>
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-[#006496]/55">left</p>
+              <p className="text-2xl font-black tabular-nums text-md-ink">{num(company.leavers)}</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-md-ink-soft">left</p>
             </>
           }
           height={160}
@@ -195,7 +195,7 @@ export default function AttritionSection({
           testId="md-employees-early-table"
         />
         {a.early.count > a.early.items.length && (
-          <p className="mt-2 text-[11px] text-[#006496]/55">
+          <p className="md-analytics-note">
             The {num(a.early.items.length)} most recent of {num(a.early.count)} are listed.
           </p>
         )}

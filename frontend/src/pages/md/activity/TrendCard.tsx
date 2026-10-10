@@ -9,9 +9,11 @@ import { dayShort, num } from "@/lib/md/format";
 import { ask, trendCaption, trendRows } from "./logic";
 import type { ActivityTrend } from "./types";
 
+// Actions are the story (a wine area); the sensitive ones are laid over them in indigo and the after-hours ones in a dashed
+// ochre line, so each stays readable where the lines cross. The legend names them: colour is not the only cue.
 const SERIES: TrendSeries[] = [
   { key: "actions", label: "Actions", kind: "area", color: CHART.brand },
-  { key: "sensitive", label: "Sensitive", kind: "line", color: CHART.bad },
+  { key: "sensitive", label: "Sensitive", kind: "line", color: CHART.deep },
   { key: "afterHours", label: "After hours", kind: "line", color: CHART.warn, dashed: true },
 ];
 
@@ -45,7 +47,7 @@ export default function TrendCard({ params, label }: { params: MdQueryParams; la
             yFormat={(n) => num(n)}
             height={240}
           />
-          <p className="mt-2 text-xs text-[#006496]/60" data-testid="md-activity-trend-caption">
+          <p className="mt-2 text-xs leading-snug text-md-ink-soft" data-testid="md-activity-trend-caption">
             {trendCaption(t)}
           </p>
         </>

@@ -24,7 +24,7 @@ const columns = (what: string): Column<DayGroup>[] => [
   {
     key: "name",
     header: what,
-    cell: (r) => <span className="font-semibold text-[#1a3a4a]">{r.name}</span>,
+    cell: (r) => <span className="font-semibold text-md-ink">{r.name}</span>,
     sortValue: (r) => r.name,
   },
   { key: "present", header: "In", align: "right", sortValue: (r) => r.present, cell: (r) => num(r.present) },
@@ -79,7 +79,7 @@ export default function DayCard({
           value={picked}
           aria-label="Day to show"
           data-testid="md-attendance-day-input"
-          className="mb-3 h-8 w-[10rem] text-xs"
+          className="md-field mb-3 h-9 w-[10.5rem] text-xs"
           onChange={(e) => setPicked(e.target.value)}
         />
       )}
@@ -93,7 +93,7 @@ export default function DayCard({
               </EmptyBlock>
             ) : (
               <div className="space-y-3">
-                <p className="text-sm text-[#1a3a4a]" data-testid="md-attendance-day-totals">
+                <p className="text-[13px] leading-relaxed text-md-ink" data-testid="md-attendance-day-totals">
                   <b>{num(d.totals.present)}</b> of {num(d.totals.expected)} in ({pct(d.totals.attendancePct, 0)}) ·{" "}
                   <b>{num(d.totals.absent)}</b> {d.provisional ? "not in yet" : "absent"}
                   {d.totals.late != null ? ` · ${num(d.totals.late)} late` : ""}

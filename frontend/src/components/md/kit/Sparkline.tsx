@@ -1,9 +1,10 @@
 import { useId } from "react";
+import { CHART } from "./chartTheme";
 
 /** A tiny trend line for stat cards. Plain SVG (no chart library): cheap enough to put on every card. */
 export default function Sparkline({
   values,
-  color = "#006496",
+  color = CHART.brand,
   width = 84,
   height = 26,
 }: {
@@ -35,13 +36,14 @@ export default function Sparkline({
     >
       <defs>
         <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={color} stopOpacity={0.28} />
+          <stop offset="0%" stopColor={color} stopOpacity={0.24} />
           <stop offset="100%" stopColor={color} stopOpacity={0} />
         </linearGradient>
       </defs>
       <path d={area} fill={`url(#${id})`} />
-      <path d={line} fill="none" stroke={color} strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx={last[0]} cy={last[1]} r={2.4} fill={color} />
+      <path d={line} fill="none" stroke={color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
+      {/* the latest value: a dot with a white ring, so it stands out from the line and the card behind it */}
+      <circle cx={last[0]} cy={last[1]} r={2.8} fill={color} stroke="white" strokeWidth={1.5} />
     </svg>
   );
 }

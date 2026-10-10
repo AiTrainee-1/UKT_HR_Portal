@@ -6,10 +6,11 @@ import { ruleLegend, ruleUpdatedText, type LegendItem } from "./logic";
 import { QueryError } from "./parts";
 import type { TeaRule } from "./types";
 
+/** The dot in front of each class of break: sage is on time, crimson an overrun, grey the breaks the page leaves out. */
 const DOT: Record<LegendItem["tone"], string> = {
-  good: "bg-green-500",
-  bad: "bg-red-500",
-  muted: "bg-slate-300",
+  good: "md-analytics-tone-good",
+  bad: "md-analytics-tone-bad",
+  muted: "md-analytics-tone-neutral",
 };
 
 /** What counts as an overrun, in plain words: the allowance HR has set, how a break is classified from shortest to
@@ -29,26 +30,32 @@ export default function RuleCard({ query, ask }: { query: UseQueryResult<TeaRule
         <QueryError query={query} />
       ) : rule ? (
         <div className="grid grid-cols-1 gap-5 @3xl:grid-cols-[11rem_1fr]">
-          <div className="flex flex-col items-center justify-center rounded-2xl bg-blue-50 px-4 py-5 text-center">
-            <p className="text-4xl font-black leading-none text-[#006496]" data-testid="md-tea-break-allowed">
+          <div className="md-panel-sand flex flex-col items-center justify-center px-4 py-6 text-center">
+            <p
+              className="text-5xl font-black leading-none tabular-nums text-md-wine"
+              data-testid="md-tea-break-allowed"
+            >
               {rule.allowedMinutes}
             </p>
-            <p className="mt-1 text-xs font-medium text-[#006496]/70">minutes allowed</p>
-            <p className="mt-2 text-[11px] text-[#006496]/55">{ruleUpdatedText(rule)}</p>
+            <p className="mt-2 text-xs font-semibold text-md-ink">minutes allowed</p>
+            <p className="mt-2 text-[11px] text-md-ink-soft">{ruleUpdatedText(rule)}</p>
           </div>
           <div className="min-w-0 space-y-4">
-            <ul className="grid grid-cols-1 gap-2 @xl:grid-cols-2" data-testid="md-tea-break-legend">
+            <ul className="grid grid-cols-1 gap-2.5 @xl:grid-cols-2" data-testid="md-tea-break-legend">
               {ruleLegend(rule).map((item) => (
-                <li key={item.id} className="flex items-start gap-2 rounded-xl border bg-white p-2.5">
-                  <span className={cn("mt-1 h-2.5 w-2.5 shrink-0 rounded-full", DOT[item.tone])} aria-hidden="true" />
+                <li key={item.id} className="md-panel flex items-start gap-3 p-3 text-[13px] leading-5">
+                  <span className={cn("md-analytics-dot", DOT[item.tone])} aria-hidden="true" />
                   <div>
-                    <p className="text-[13px] font-bold text-[#1a3a4a]">{item.title}</p>
-                    <p className="text-xs text-gray-600">{item.text}</p>
+                    <p className="text-[13px] font-bold text-md-ink">{item.title}</p>
+                    <p className="text-xs text-md-ink-soft">{item.text}</p>
                   </div>
                 </li>
               ))}
             </ul>
-            <ul className="list-disc space-y-1.5 pl-5 text-[13px] text-gray-700" data-testid="md-tea-break-statements">
+            <ul
+              className="list-disc space-y-1.5 pl-5 text-[13px] leading-relaxed text-md-ink marker:text-md-wine-400"
+              data-testid="md-tea-break-statements"
+            >
               {rule.statements.map((line) => (
                 <li key={line}>{line}</li>
               ))}

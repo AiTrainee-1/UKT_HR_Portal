@@ -1,0 +1,19 @@
+/* The Managing Director portal's skin. Imported once, from src/index.css. Everything that changes how something looks is
+   scoped to html[data-md-theme] (set by MdLayout), so nothing here affects the HR portal. See lib/md/theme.ts and
+   md-portal.md section 11. */
+@import "./tokens.css";
+@import "./typography.css";
+@import "./tailwind-remap.css";
+@import "./base.css";
+@import "./glass.css";
+@import "./hr-copies.css";
+@import "./hr-copies-controls.css";
+@import "./hr-copies-overlays.css";
+@import "./hr-copies-data.css";
+@import "./hr-copies-report.css";
+@import "./areas/shell.css";
+@import "./areas/assistant.css";
+@import "./areas/dashboard.css";
+@import "./areas/money.css";
+@import "./areas/people.css";
+@import "./areas/analytics.css";

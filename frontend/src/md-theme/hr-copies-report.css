@@ -1,0 +1,170 @@
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   hr-copies: the Report Center workspace inside /md/reports/<report> (pages/hr/report-center, mounted by
+   pages/md/reports/OpenReport.tsx, whose root carries data-testid="md-report-screen"). The workspace is the HR page's own
+   code, so this is CSS only, scoped to that root. Cards, fields, buttons, pill tabs, popovers and pagination inside it come
+   from the other hr-copies files; this file adds what is specific to a report: the report rail, the summary cards, the result
+   grid (sand header, soft stripes, a wine wash under the pointer) and the empty, loading and error states.
+   Every selector starts with html[data-md-theme] (md-theme.test.ts).
+   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* ── the report rail (the list of reports beside an open one) ─────────────────────────────────────────────────────── */
+
+html[data-md-theme] [data-testid="md-report-screen"] nav[aria-label="Reports"] a {
+  border-radius: 0.75rem;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+html[data-md-theme] [data-testid="md-report-screen"] nav[aria-label="Reports"] > a:first-child {
+  color: var(--md-wine-700);
+  font-weight: 700;
+}
+html[data-md-theme] [data-testid="md-report-screen"] nav[aria-label="Reports"] a:hover:not([aria-current="page"]) {
+  background: var(--hrc-wash);
+  color: var(--md-wine-800);
+}
+html[data-md-theme] [data-testid="md-report-screen"] nav[aria-label="Reports"] a[aria-current="page"] {
+  background: linear-gradient(135deg, rgba(127, 1, 31, 0.12), rgba(127, 1, 31, 0.05));
+  color: var(--md-wine-800);
+  font-weight: 700;
+  box-shadow:
+    inset 3px 0 0 var(--md-wine-600),
+    inset 0 0 0 1px rgba(127, 1, 31, 0.12);
+}
+html[data-md-theme] [data-testid="md-report-screen"] nav[aria-label="Reports"] p {
+  color: var(--md-ink-600);
+}
+
+/* ── the report's title row ───────────────────────────────────────────────────────────────────────────────────────── */
+
+/* the category icon beside the title: a glass tile, in the colour of the report's category */
+html[data-md-theme] [data-testid="md-report-screen"] span.rounded-xl.ring-1 {
+  border-radius: 0.9rem;
+  box-shadow:
+    0 8px 18px -10px rgba(40, 43, 74, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.75);
+}
+html[data-md-theme] [data-testid="md-report-screen"] h3 {
+  letter-spacing: -0.015em;
+}
+
+/* ── a report's headline figures ──────────────────────────────────────────────────────────────────────────────────── */
+
+html[data-md-theme] [data-testid="report-summary"] > div {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(245, 235, 208, 0.5) 100%);
+  border: 1px solid var(--md-glass-edge);
+  border-radius: 1rem;
+  box-shadow:
+    0 10px 26px -14px rgba(40, 43, 74, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    inset 3px 0 0 rgba(127, 1, 31, 0.75);
+}
+html[data-md-theme] [data-testid="report-summary"] > div > p:first-child {
+  color: var(--md-ink-600);
+}
+html[data-md-theme] [data-testid="report-summary"] > div > p:last-child {
+  color: var(--md-ink-800);
+  letter-spacing: -0.01em;
+}
+
+/* the filters that were applied: small frosted pills */
+html[data-md-theme] [data-testid="report-applied-filters"] > span {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.55));
+  border-color: var(--hrc-hair);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+/* a chip for a chosen department or branch (what the HR page draws in sky blue) is a wine-tinted pill */
+html[data-md-theme] [data-testid="md-report-screen"] span[class~="rounded-full"][class~="bg-sky-50"] {
+  background: rgba(127, 1, 31, 0.07);
+  border-color: rgba(127, 1, 31, 0.18);
+  color: var(--md-wine-800);
+}
+html[data-md-theme] [data-testid="md-report-screen"] span[class~="rounded-full"][class~="bg-sky-50"] button {
+  color: var(--md-wine-700);
+}
+html[data-md-theme] [data-testid="md-report-screen"] span[class~="rounded-full"][class~="bg-sky-50"] button:hover {
+  background: rgba(127, 1, 31, 0.12);
+}
+
+/* the file buttons: PDF and Excel are colour-coded red and green by the HR page; here red and green mean bad and good,
+   so they are plain frosted buttons like every other action */
+html[data-md-theme]
+  [data-testid="md-report-screen"]
+  [data-slot="button"][data-testid="report-download-pdf"][data-variant][type="button"],
+html[data-md-theme]
+  [data-testid="md-report-screen"]
+  [data-slot="button"][data-testid="report-download-xlsx"][data-variant][type="button"] {
+  --btn-fg: var(--md-ink-800);
+  --btn-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.82) 0%, rgba(255, 255, 255, 0.5) 100%);
+  --btn-line: rgba(40, 43, 74, 0.14);
+  --btn-edge: rgba(255, 255, 255, 0.9);
+  --btn-shadow: 0 8px 20px -8px rgba(40, 43, 74, 0.38), 0 1px 2px rgba(40, 43, 74, 0.08);
+  --btn-shadow-hover: 0 14px 28px -8px rgba(40, 43, 74, 0.46), 0 2px 4px rgba(40, 43, 74, 0.1);
+}
+
+/* ── states: nothing yet, loading, no records, something to read ──────────────────────────────────────────────────── */
+
+html[data-md-theme] [data-testid="md-report-screen"] .rounded-xl.border-dashed {
+  background: linear-gradient(135deg, rgba(245, 235, 208, 0.55), rgba(255, 255, 255, 0.4));
+  border-color: rgba(127, 1, 31, 0.22);
+  border-radius: 1.25rem;
+}
+html[data-md-theme] [data-testid="md-report-screen"] .rounded-xl.border.bg-white {
+  background: rgba(255, 255, 255, 0.84);
+  border: 1px solid var(--md-glass-edge);
+  border-radius: 1.25rem;
+  box-shadow:
+    var(--md-glass-shadow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+html[data-md-theme] [data-testid="md-report-screen"] .rounded-xl.border.bg-white > :is(.border-b, .border-t).bg-white {
+  background: rgba(245, 235, 208, 0.38);
+  border-color: rgba(184, 130, 32, 0.2);
+}
+html[data-md-theme] [data-testid="md-report-screen"] :is([role="alert"], [role="note"]) {
+  border-radius: 1rem;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+html[data-md-theme] [data-testid="md-report-screen"] .rounded-lg.border[class~="bg-slate-50"] {
+  background: rgba(245, 235, 208, 0.5);
+  border-color: rgba(184, 130, 32, 0.2);
+  border-radius: 1rem;
+}
+
+/* ── the result grid ──────────────────────────────────────────────────────────────────────────────────────────────── */
+/* The header and the first column are sticky, so every surface here is opaque: sand, soft stripes, a wine-tinted hover. */
+
+html[data-md-theme] [data-testid="md-report-screen"] table thead th {
+  background-color: var(--md-sand);
+  border-bottom-color: rgba(184, 130, 32, 0.3);
+  color: var(--md-ink-700);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+html[data-md-theme] [data-testid="md-report-screen"] table thead th button:hover {
+  color: var(--md-wine-700);
+}
+html[data-md-theme] [data-testid="md-report-screen"] table tbody tr.bg-white {
+  background-color: rgb(253, 252, 249);
+}
+html[data-md-theme] [data-testid="md-report-screen"] table tbody tr.bg-slate-50 {
+  background-color: rgb(248, 244, 234);
+}
+html[data-md-theme] [data-testid="md-report-screen"] table tbody tr.bg-slate-100 {
+  background-color: rgb(240, 230, 204);
+}
+html[data-md-theme] [data-testid="md-report-screen"] table tbody tr.bg-slate-200 {
+  background-color: rgb(234, 220, 186);
+}
+html[data-md-theme] [data-testid="md-report-screen"] table tbody tr:not(.font-bold):hover {
+  background-color: rgb(248, 236, 234);
+}
+html[data-md-theme] [data-testid="md-report-screen"] table tbody td {
+  border-bottom-color: rgba(40, 43, 74, 0.07);
+}
+html[data-md-theme] [data-testid="md-report-screen"] table tfoot td {
+  background-color: rgb(240, 230, 204);
+  border-top-color: rgba(127, 1, 31, 0.28);
+  color: var(--md-ink-800);
+}

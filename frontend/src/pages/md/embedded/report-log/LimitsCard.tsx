@@ -13,14 +13,14 @@ export default function LimitsCard({ query, ask }: { query: UseQueryResult<RlSum
     <SectionCard
       title={
         <span className="inline-flex items-center gap-1.5">
-          <Info size={14} className="text-[#006496]" /> What this page cannot tell you
+          <Info size={14} className="text-md-wine" /> What this page cannot tell you
         </span>
       }
       subtitle="The data behind the Report Log does not record these, so no figure is shown for them"
       actions={<AskAiButton question={ask} />}
       testId="md-reportlog-limits"
     >
-      <ul className="list-disc space-y-1.5 pl-5 text-sm text-gray-700">
+      <ul className="list-disc space-y-1.5 pl-5 text-sm leading-relaxed text-md-ink marker:text-md-wine-400">
         {unknowns.map((text) => (
           <li key={text}>{text}</li>
         ))}

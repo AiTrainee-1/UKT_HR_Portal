@@ -1,7 +1,7 @@
 import AskAiButton from "@/components/md/kit/AskAiButton";
 import { sortInsights, toInsight } from "@/components/md/kit/dto";
-import InsightList from "@/components/md/kit/InsightList";
 import SectionCard from "@/components/md/kit/SectionCard";
+import AttentionList from "./AttentionList";
 import { moreText } from "./logic";
 import { Unavailable } from "./parts";
 import type { DashboardOverview } from "./types";
@@ -24,15 +24,16 @@ export default function AttentionCard({
       provenanceIds={["dashboard-attention"]}
       loading={!overview && !failed}
       actions={<AskAiButton question="What needs my attention first today, and why?" />}
+      className="md-dashboard-card"
       testId="md-dashboard-attention"
     >
       {overview ? (
-        <InsightList items={items} emptyText="Nothing across the company needs your attention right now." />
+        <AttentionList items={items} emptyText="Nothing across the company needs your attention right now." />
       ) : (
         <Unavailable />
       )}
       {more && (
-        <p className="mt-2 text-center text-xs text-muted-foreground" data-testid="md-dashboard-attention-more">
+        <p className="mt-3 text-center text-xs font-medium text-md-ink-soft" data-testid="md-dashboard-attention-more">
           {more}
         </p>
       )}

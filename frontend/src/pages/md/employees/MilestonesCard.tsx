@@ -28,18 +28,18 @@ function Column({
 }) {
   const hasRows = Array.isArray(children) ? children.length > 0 : !!children;
   return (
-    <div className="min-w-0 rounded-2xl border bg-white/60 p-3" data-testid={testId}>
+    <div className="md-panel min-w-0 p-3.5" data-testid={testId}>
       <div className="mb-2 flex items-center gap-2">
-        <span className={cn("rounded-lg p-1.5", tone)}>
-          <Icon size={14} />
+        <span className={cn("md-icon-tile h-8 w-8", tone)}>
+          <Icon size={15} />
         </span>
-        <p className="text-[13px] font-bold text-[#1a3a4a]">{title}</p>
-        <span className="ml-auto text-[13px] font-black tabular-nums text-[#1a3a4a]">{figure}</span>
+        <p className="text-[13px] font-bold text-md-ink">{title}</p>
+        <span className="ml-auto text-[13px] font-black tabular-nums text-md-ink">{figure}</span>
       </div>
       {hasRows ? (
         <ul className="space-y-1">{children}</ul>
       ) : (
-        <p className="py-4 text-center text-xs text-muted-foreground">{empty}</p>
+        <p className="py-4 text-center text-xs text-md-ink-soft">{empty}</p>
       )}
     </div>
   );
@@ -59,17 +59,17 @@ function Row({
       <button
         type="button"
         onClick={() => onSelect(person.id)}
-        className="flex w-full items-center gap-2.5 rounded-lg p-1.5 text-left transition-colors hover:bg-[#006496]/[0.06]"
+        className="md-analytics-item"
         data-testid={`md-employees-milestone-${person.code}`}
       >
         <PersonAvatar name={person.name} size="sm" />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] font-semibold text-[#1a3a4a]">{person.name}</span>
-          <span className="block truncate text-[11px] text-[#006496]/55">
+          <span className="block truncate text-[13px] font-semibold text-md-ink">{person.name}</span>
+          <span className="block truncate text-[11px] text-md-ink-soft">
             {[person.designation, person.department].filter(Boolean).join(" · ")}
           </span>
         </span>
-        <span className="shrink-0 text-right text-[11px] text-[#006496]/70">{right}</span>
+        <span className="shrink-0 text-right text-[11px] text-md-ink-soft">{right}</span>
       </button>
     </li>
   );
@@ -104,7 +104,7 @@ export default function MilestonesCard({
             icon={Award}
             title={`${m.anniversaries.minYears}+ years of service`}
             figure={num(m.anniversaries.total)}
-            tone="bg-amber-100 text-amber-800"
+            tone="md-analytics-tone-watch"
             empty={`No one completes ${m.anniversaries.minYears} or more years in the next ${m.windowDays} days.`}
             testId="md-employees-anniversaries"
           >
@@ -115,7 +115,7 @@ export default function MilestonesCard({
                 onSelect={onSelect}
                 right={
                   <>
-                    <b className="block text-[12px] text-[#1a3a4a]">{yearsText(p.years)}</b>
+                    <b className="block text-[12px] text-md-ink">{yearsText(p.years)}</b>
                     {whenText(p.date, m.asOf)}
                   </>
                 }
@@ -126,7 +126,7 @@ export default function MilestonesCard({
             icon={Cake}
             title={`Birthdays, next ${m.birthdays.windowDays} days`}
             figure={num(m.birthdays.total)}
-            tone="bg-rose-100 text-rose-800"
+            tone="md-analytics-tone-wine"
             empty="No birthdays coming up."
             testId="md-employees-birthdays"
           >
@@ -137,7 +137,7 @@ export default function MilestonesCard({
                 onSelect={onSelect}
                 right={
                   <>
-                    <b className="block text-[12px] text-[#1a3a4a]">{dayShort(p.date)}</b>
+                    <b className="block text-[12px] text-md-ink">{dayShort(p.date)}</b>
                     {weekdayShort(p.date)}
                   </>
                 }
@@ -148,7 +148,7 @@ export default function MilestonesCard({
             icon={Hourglass}
             title={`Probation ending, next ${m.probation.dueSoonDays} days`}
             figure={num(m.probation.dueSoon)}
-            tone="bg-blue-100 text-blue-800"
+            tone="md-analytics-tone-info"
             empty={
               m.probation.recorded === 0
                 ? "No probation end dates are recorded."
@@ -163,7 +163,7 @@ export default function MilestonesCard({
                 onSelect={onSelect}
                 right={
                   <>
-                    <b className="block text-[12px] text-[#1a3a4a]">{dayShort(p.date)}</b>
+                    <b className="block text-[12px] text-md-ink">{dayShort(p.date)}</b>
                     {whenText(p.date, m.asOf)}
                   </>
                 }
@@ -172,7 +172,7 @@ export default function MilestonesCard({
           </Column>
           {m.probation.pendingConfirmation > 0 && (
             <p
-              className="@3xl:col-span-3 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-900"
+              className="md-analytics-callout md-analytics-callout-block md-analytics-tone-watch @3xl:col-span-3"
               data-testid="md-employees-unconfirmed"
             >
               <b>{num(m.probation.pendingConfirmation)}</b>{" "}

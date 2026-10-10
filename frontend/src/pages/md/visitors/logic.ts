@@ -177,7 +177,7 @@ export function buildKpis(s: SummaryResponse): KpiSpec[] {
       sub: peakDay
         ? `${num(v.peakHour?.visits)} ${plural(v.peakHour?.visits ?? 0, "visit")} · busiest day ${peakDay.weekday} ${dayShort(peakDay.date)} (${num(peakDay.visits)})`
         : "No visits in this period",
-      tone: "teal",
+      tone: "purple",
       delta: null,
       provenanceIds: ["peak"],
     },
@@ -436,7 +436,7 @@ export function durationItems(buckets: DurationBucket[]): BarItem[] {
 
 const AGING_COLORS: Record<string, string> = {
   under_1h: CHART.good,
-  "1_4h": CHART.teal,
+  "1_4h": CHART.gold,
   "4_24h": CHART.warn,
   over_24h: CHART.bad,
 };

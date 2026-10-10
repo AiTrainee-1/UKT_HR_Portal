@@ -11,9 +11,11 @@ export default function PlaceholderPage({ id }: { id: string }) {
     <MdLayout>
       <div className="mx-auto max-w-[1500px] space-y-5">
         <MdPageHeader icon={page.icon} title={page.title} subtitle="This page is being built." />
-        <EmptyBlock icon={Hammer} title="Coming together">
-          {page.title} is not ready yet.
-        </EmptyBlock>
+        <div className="md-card">
+          <EmptyBlock icon={Hammer} title="Coming together" className="py-14">
+            {page.title} is not ready yet.
+          </EmptyBlock>
+        </div>
       </div>
     </MdLayout>
   );
