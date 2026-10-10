@@ -45,6 +45,12 @@ html[data-md-theme] :is([data-md-title], [data-testid="md-page-title"]) {
   text-transform: none;
 }
 
+/* what sits inside a page's title but is not the title (the Live chip, a "26 pending" badge) keeps the previous font */
+html[data-md-theme] [data-md-title] :is([data-slot="badge"], [data-md-slot="live"]) {
+  font-family: "Hanken Grotesk", Inter, "Segoe UI", system-ui, sans-serif;
+  letter-spacing: normal;
+}
+
 /* ── the dashboard keeps all its headings in Whole Chomp ──────────────────────────────────────────────────────────── */
 html[data-md-theme]
   [data-testid="md-dashboard-page"]

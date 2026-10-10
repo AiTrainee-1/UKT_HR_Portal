@@ -68,8 +68,14 @@ from .email_control_views import (
     email_control_templates, email_control_test,
     email_employees, email_messages, email_overview,
 )
+from .hr_requests_views import hr_requests
 from .whatsapp_views import (
     whatsapp_status, whatsapp_templates, whatsapp_template_update, whatsapp_media, whatsapp_webhook,
+)
+from .branch_summary_views import branches_summary
+from .org_structure_views import (
+    departments_overview, department_employees,
+    designations_tree, designation_employees,
 )
 from .org_views import (
     branches, branch_detail,
@@ -150,7 +156,7 @@ from .attendance_views import (
 from .growth_views import (
     employee_monthly_attendance, attendance_day_override, attendance_override_requests,
     promotions, promotion_detail,
-    increment_summary, add_increment, increment_dashboard,
+    increment_summary, add_increment, increment_dashboard, increment_history,
     bonus_calculate, bonus_generate, bonus_list, bonus_detail, bonus_export,
     idcard_data, verify_employee, email_idcard, idcard_whatsapp,
 )
@@ -231,10 +237,15 @@ urlpatterns = [
     # ── Organisation ────────────────────────────────────────────────────────
     path("branches", branches),
     path("branches/<int:pk>", branch_detail),
+    path("branches/summary", branches_summary),
     path("departments", views.departments),
     path("departments/<int:pk>", views.delete_department),
+    path("departments/overview", departments_overview),
+    path("departments/<int:pk>/employees", department_employees),
     path("designations", designations),
     path("designations/<int:pk>", designation_detail),
+    path("designations/tree", designations_tree),
+    path("designations/<int:pk>/employees", designation_employees),
 
     # ── Employees ───────────────────────────────────────────────────────────
     path("employees", views.employees),
@@ -255,6 +266,9 @@ urlpatterns = [
     path("shift-assignments/end", end_shift_assignments),
     path("shift-assignments/sync-production", sync_production_shifts),
     path("shift-assignments/<int:pk>", shift_assignment_detail),
+
+    # ── Requests hub (read-only, every kind of request in one list) ─────────
+    path("hr-requests", hr_requests),
 
     # ── Leave & Holiday ─────────────────────────────────────────────────────
     path("leave-types", leave_types),
@@ -486,6 +500,7 @@ urlpatterns = [
     path("promotions/<int:pk>", promotion_detail),
     path("increments/summary", increment_summary),
     path("increments/dashboard", increment_dashboard),
+    path("increments/history", increment_history),
     path("increments", add_increment),
     path("bonus/calculate", bonus_calculate),
     path("bonus/generate", bonus_generate),

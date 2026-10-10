@@ -1,493 +1,396 @@
-import { useState } from "react";
-import { TONE } from "@/lib/statusTones";
-import HrLayout from "@/components/HrLayout";
-import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
-import { PillTabs } from "@/components/ui/pill-tabs";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Separator } from "@/components/ui/separator";
-import { useToast } from "@/hooks/use-toast";
-import {
-  useListLeaveRequests, useUpdateLeaveStatus,
-  getListLeaveRequestsQueryKey,
-  useListPermissions, useUpdatePermissionStatus,
-  getListPermissionsQueryKey,
-  useListOutpassRequests, useUpdateOutpassRequestStatus,
-  getListOutpassRequestsQueryKey,
-} from "@/lib/api-client";
-import { permissionOutcome, permissionTypeKey, permissionTypeLabel } from "@/lib/late-detection";
-import { useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
-import { Calendar, Clock, CheckCircle, XCircle, RefreshCw, Bell, DoorOpen, MapPin, User, FileText, Building2, Briefcase } from "lucide-react";
-import { CircleLoader } from "@/components/ui/CircleLoader";
-import { ApprovalTrail, ApprovalTrailLine, PipelineSummary, WaitingChip } from "@/components/ApprovalTrail";
-import { explainsWaiting, hrCanAct, hrCanReject, type ApprovalProgress } from "@/lib/approval-workflow";
+import { Bell, CheckCircle2, Hourglass, ShieldAlert, UserCheck, XCircle } from "lucide-react";
+import HrLayout from "@/components/HrLayout";
+import { RefreshButton } from "@/components/PageRefreshBar";
+import { PipelineSummary } from "@/components/ApprovalTrail";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { PillTabs } from "@/components/ui/pill-tabs";
+import { useAuth } from "@/contexts/AuthContext";
+import { useToast } from "@/hooks/use-toast";
+import { downloadBlob, downloadWorkbook, fileSafe, newWorkbook, styleHeaderCell, todayStamp } from "@/lib/exportUtils";
+import { DetailDialog, DecisionDialog, HandleDialog } from "./requests/dialogs";
+import { useDecide, useHandleRequest, useHubRequests } from "./requests/api";
+import {
+  EXPORT_HEADERS,
+  NO_FILTERS,
+  buildTabs,
+  daysText,
+  dayStamp,
+  exportRows,
+  filterItems,
+  filtersActive,
+  normalizeHub,
+  serverParams,
+  sortItems,
+  tabFromAddress,
+  toCsv,
+  type Filters,
+  type HubItem,
+  type HubKind,
+} from "./requests/logic";
+import { FigureCard, type ActionHandlers } from "./requests/parts";
+import RequestList, { EmptyState, ErrorState, ListSkeleton } from "./requests/RequestList";
+import Toolbar from "./requests/Toolbar";
 
-type Period = "today" | "week" | "all";
+/** Requests shown before "Show more": a long list is paged on the page, the server has already narrowed it. */
+const PAGE_SIZE = 50;
 
-const PERIOD_LABELS: Record<Period, string> = {
-  today: "Today",
-  week: "This Week",
-  all: "All",
-};
-
-type UnifiedItem = {
-  kind: "leave" | "permission" | "outpass";
-  id: number; employeeName: string; employeeId: number; createdAt: string; status: string; label: string; meta: string;
-  // Permission only: the policy's own words for where the request stands (Pending / Allowed / Not Allowed /
-  // Overdue / Excess) in place of the raw status, and whether it still has no type (which HR must set before an
-  // approval can shift anything -done on the Permissions tab, not with the quick Approve button).
-  outcome?: { label: string; className: string };
-  needsType?: boolean;
-  // Where the request stands in its approval pipeline (User Management -> Approval Workflow Control) and who can act.
-  approval?: ApprovalProgress | null;
-};
-
-const STATUS_CLS: Record<string, string> = {
-  pending:  TONE.warning,
-  approved: TONE.success,
-  rejected: TONE.danger,
-};
-
-function isWithinPeriod(dateStr: string, period: Period): boolean {
-  const d = new Date(dateStr);
-  const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  if (period === "today") return d >= todayStart;
-  if (period === "week") {
-    const weekStart = new Date(todayStart);
-    weekStart.setDate(todayStart.getDate() - 6);
-    return d >= weekStart;
+const readTab = () => {
+  try {
+    return new URLSearchParams(window.location.search).get("kind");
+  } catch {
+    return null;
   }
-  return true;
-}
+};
 
+const writeTab = (tab: string) => {
+  try {
+    const url = new URL(window.location.href);
+    if (tab === "all") url.searchParams.delete("kind");
+    else url.searchParams.set("kind", tab);
+    window.history.replaceState(window.history.state, "", url);
+  } catch {
+    /* the address just is not updated */
+  }
+};
+
+/** Requests: every kind of request in the HRMS (leave, permission, casual leave, missing punch, on-duty, outpass, general
+ *  requests, attendance corrections, resignations, advances) in one place, as sub-tabs, with who each is waiting for. */
 export default function ApprovedRequests() {
   const { toast } = useToast();
-  const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [, navigate] = useLocation();
-  const [period, setPeriod] = useState<Period>("today");
-  const [selectedOutpassId, setSelectedOutpassId] = useState<number | null>(null);
 
-  const { data: leaves, isLoading: leavesLoading } = useListLeaveRequests(undefined, {
-    query: { refetchInterval: 30_000 },
-  } as any);
-  const { data: perms, isLoading: permsLoading } = useListPermissions(undefined, {
-    refetchInterval: 30_000,
-  } as any);
-  // Only manually-requested Outpasses show up here for HR review -an
-  // On-Duty-derived one is already approved by definition (see
-  // geo_attendance_views.py::_create_outpass_from_on_duty), so it would
-  // never have anything for HR to act on.
-  const { data: outpasses, isLoading: outpassesLoading } = useListOutpassRequests();
+  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  const [rawTab, setRawTab] = useState<string | null>(readTab);
+  const [visible, setVisible] = useState(PAGE_SIZE);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [deciding, setDeciding] = useState<{ item: HubItem; mode: "approve" | "reject" } | null>(null);
+  const [handling, setHandling] = useState<HubItem | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
 
-  const updateLeaveMutation  = useUpdateLeaveStatus();
-  const updatePermMutation   = useUpdatePermissionStatus();
-  const updateOutpassMutation = useUpdateOutpassRequestStatus();
+  const today = dayStamp(new Date());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const params = useMemo(() => serverParams(filters, new Date()), [filters, today]);
+  const query = useHubRequests(params);
+  const hub = useMemo(() => normalizeHub(query.data), [query.data]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const now = useMemo(() => new Date(), [query.dataUpdatedAt]);
 
-  const isLoading = leavesLoading || permsLoading || outpassesLoading;
+  const decide = useDecide();
+  const handle = useHandleRequest();
 
-  const unified: UnifiedItem[] = [
-    ...(leaves ?? []).map(l => ({
-      kind:         "leave" as const,
-      id:           l.id,
-      employeeName: l.employeeName ?? (l as any).employeeCode ?? `#${l.employeeId}`,
-      employeeId:   l.employeeId,
-      createdAt:    l.createdAt,
-      status:       l.status,
-      label:        l.isHalfDay
-        ? `Half Day Leave (${l.halfDaySlot === "afternoon" ? "Afternoon" : "Morning"})`
-        : `${l.type.charAt(0).toUpperCase() + l.type.slice(1)} Leave`,
-      meta:         `${l.startDate} → ${l.endDate}${l.reason ? ` · ${l.reason}` : ""}`,
-      approval:     l.approval,
-    })),
-    ...(perms ?? []).map(p => ({
-      kind:         "permission" as const,
-      id:           p.id,
-      employeeName: p.employeeName,
-      employeeId:   p.employeeId,
-      createdAt:    p.createdAt ?? "",
-      status:       p.status,
-      label:        `Permission · ${permissionTypeLabel(p) ?? "Type not set"}`,
-      meta:         `${p.date}${p.permissionTime ? ` at ${p.permissionTime}` : ""}${p.reason ? ` · ${p.reason}` : ""}`,
-      outcome:      permissionOutcome(p),
-      needsType:    permissionTypeKey(p) == null,
-      approval:     p.approval,
-    })),
-    ...(outpasses ?? []).filter(o => o.source === "manual").map(o => ({
-      kind:         "outpass" as const,
-      id:           o.id,
-      employeeName: o.employee?.name ?? `#${o.employeeId}`,
-      employeeId:   o.employeeId,
-      createdAt:    o.createdAt,
-      status:       o.status,
-      label:        "Outpass Request",
-      meta:         `${o.destination} · ${o.reason}`,
-      approval:     o.approval,
-    })),
-  ]
-    .filter(item => item.createdAt && isWithinPeriod(item.createdAt, period))
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const kinds = useMemo(
+    () => Object.fromEntries(hub.kinds.map((k) => [k.key, k])) as Record<string, HubKind>,
+    [hub.kinds],
+  );
+  const tabs = useMemo(() => buildTabs(hub.kinds, hub.stats), [hub.kinds, hub.stats]);
+  const tab = tabFromAddress(rawTab, hub.kinds);
+  const activeKind = tab === "all" ? undefined : kinds[tab];
 
-  const hrDecides = (item: { status: string; approval?: ApprovalProgress | null }) =>
-    hrCanAct(item.approval, item.status === "pending");
-  const hrRejects = (item: { status: string; approval?: ApprovalProgress | null }) =>
-    hrCanReject(item.approval, item.status === "pending");
+  const inTab = useMemo(() => (tab === "all" ? hub.items : hub.items.filter((i) => i.kind === tab)), [hub.items, tab]);
+  const shown = useMemo(() => sortItems(filterItems(hub.items, filters, tab), filters.sort), [hub.items, filters, tab]);
+
+  // a different tab or filter starts at the top again
+  useEffect(() => setVisible(PAGE_SIZE), [filters, tab]);
+
+  const selectTab = (next: string) => {
+    setRawTab(next);
+    setFilters((f) => (f.requestType === "all" ? f : { ...f, requestType: "all" }));
+    writeTab(next);
+  };
+
+  const kindLabel = (item: Pick<HubItem, "kind">) => kinds[item.kind]?.label ?? item.kind;
 
   // The server's reason when it refuses (not this role's turn, workflow switched off, ...) beats a bare "Failed".
   const failed = (title: string, err: unknown) =>
     toast({ title, description: err instanceof Error ? err.message : undefined, variant: "destructive" });
 
-  const pendingCount  = unified.filter(i => i.status === "pending").length;
-  const approvedCount = unified.filter(i => i.status === "approved").length;
-  const rejectedCount = unified.filter(i => i.status === "rejected").length;
-
-  const approveLeave = async (id: number) => {
+  const decideNow = async (item: HubItem, status: "approved" | "rejected", comment?: string) => {
+    setBusyKey(item.key);
     try {
-      await updateLeaveMutation.mutateAsync({ id, data: { status: "approved" as any } });
-      toast({ title: "Leave approved" });
-      queryClient.invalidateQueries({ queryKey: getListLeaveRequestsQueryKey() });
+      await decide.mutateAsync({ item, status, comment });
+      toast({ title: `${kindLabel(item)} ${status}` });
+      return true;
     } catch (err) {
-      failed("Failed to approve", err);
+      failed(status === "approved" ? "Failed to approve" : "Failed to reject", err);
+      return false;
+    } finally {
+      setBusyKey(null);
     }
   };
 
-  const rejectLeave = async (id: number) => {
+  const handlers: ActionHandlers = {
+    // an On-Duty approval also accepts the punches already captured, so it asks first
+    onApprove: (item) =>
+      item.kind === "on_duty" ? setDeciding({ item, mode: "approve" }) : void decideNow(item, "approved"),
+    onReject: (item) => setDeciding({ item, mode: "reject" }),
+    onHandle: (item) => setHandling(item),
+    onOpenPage: (_item, kind) => kind.openPath && navigate(kind.openPath),
+  };
+
+  // the detail dialog closes before another dialog opens over it
+  const detailHandlers: ActionHandlers = {
+    ...handlers,
+    onReject: (item) => {
+      setSelectedKey(null);
+      handlers.onReject(item);
+    },
+    onHandle: (item) => {
+      setSelectedKey(null);
+      handlers.onHandle(item);
+    },
+    onApprove: (item) => {
+      if (item.kind === "on_duty") setSelectedKey(null);
+      handlers.onApprove(item);
+    },
+  };
+
+  const confirmDecision = async (comment: string) => {
+    if (!deciding) return;
+    const ok = await decideNow(deciding.item, deciding.mode === "approve" ? "approved" : "rejected", comment);
+    if (ok) setDeciding(null);
+  };
+
+  const submitHandling = async (status: string, notes: string) => {
+    if (!handling) return;
+    setBusyKey(handling.key);
     try {
-      await updateLeaveMutation.mutateAsync({ id, data: { status: "rejected" as any } });
-      toast({ title: "Leave rejected" });
-      queryClient.invalidateQueries({ queryKey: getListLeaveRequestsQueryKey() });
+      await handle.mutateAsync({ id: handling.id, status, hrNotes: notes.trim() || undefined, handledBy: user?.name });
+      toast({ title: "Request updated" });
+      setHandling(null);
     } catch (err) {
-      failed("Failed to reject", err);
+      failed("Could not update the request", err);
+    } finally {
+      setBusyKey(null);
     }
   };
 
-  const approvePerm = async (id: number) => {
-    try {
-      await updatePermMutation.mutateAsync({ id, data: { status: "approved" } });
-      toast({ title: "Permission approved" });
-      queryClient.invalidateQueries({ queryKey: getListPermissionsQueryKey() });
-    } catch (err) {
-      failed("Failed to approve", err);
-    }
+  const exportList = useCallback(
+    async (format: "xlsx" | "csv") => {
+      const labels = Object.fromEntries(hub.kinds.map((k) => [k.key, k.label]));
+      const rows = exportRows(shown, labels);
+      const name = `requests-${fileSafe(activeKind?.label ?? "all")}-${todayStamp()}`;
+      try {
+        if (format === "csv") {
+          downloadBlob(new Blob([toCsv(rows)], { type: "text/csv;charset=utf-8" }), `${name}.csv`);
+          return;
+        }
+        const wb = newWorkbook();
+        const ws = wb.addWorksheet("Requests");
+        ws.columns = EXPORT_HEADERS.map((h) => ({ header: h, width: h === "Details" || h === "Reason" ? 34 : 18 }));
+        ws.getRow(1).eachCell((cell) => styleHeaderCell(cell, { fill: "FF006496" }));
+        rows.forEach((r) => ws.addRow(r));
+        ws.views = [{ state: "frozen", ySplit: 1 }];
+        await downloadWorkbook(wb, `${name}.xlsx`);
+      } catch (err) {
+        failed("Could not export the list", err);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [shown, hub.kinds, activeKind],
+  );
+
+  // the cards narrow the list to what they count
+  const focusWaiting = (status: Filters["status"]) => {
+    setRawTab("all");
+    writeTab("all");
+    setFilters({ ...NO_FILTERS, status });
   };
 
-  const rejectPerm = async (id: number) => {
-    try {
-      await updatePermMutation.mutateAsync({ id, data: { status: "rejected" } });
-      toast({ title: "Permission rejected" });
-      queryClient.invalidateQueries({ queryKey: getListPermissionsQueryKey() });
-    } catch (err) {
-      failed("Failed to reject", err);
-    }
-  };
-
-  const approveOutpass = async (id: number) => {
-    try {
-      await updateOutpassMutation.mutateAsync({ id, data: { status: "approved" } });
-      toast({ title: "Outpass approved" });
-      queryClient.invalidateQueries({ queryKey: getListOutpassRequestsQueryKey() });
-    } catch (err) {
-      failed("Failed to approve", err);
-    }
-  };
-
-  const rejectOutpass = async (id: number) => {
-    try {
-      await updateOutpassMutation.mutateAsync({ id, data: { status: "rejected" } });
-      toast({ title: "Outpass rejected" });
-      queryClient.invalidateQueries({ queryKey: getListOutpassRequestsQueryKey() });
-    } catch (err) {
-      failed("Failed to reject", err);
-    }
-  };
-
-  const goToDetail = (item: UnifiedItem) => {
-    if (item.kind === "leave")           navigate("/hr/leave?tab=leaves");
-    else if (item.kind === "permission") navigate("/hr/leave?tab=permissions");
-    else                                 setSelectedOutpassId(item.id);
-  };
-
-  const selectedOutpass = outpasses?.find(o => o.id === selectedOutpassId) ?? null;
-
-  const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: getListLeaveRequestsQueryKey() });
-    queryClient.invalidateQueries({ queryKey: getListPermissionsQueryKey() });
-    queryClient.invalidateQueries({ queryKey: getListOutpassRequestsQueryKey() });
-    toast({ title: "Refreshed" });
-  };
+  const selected = selectedKey ? (hub.items.find((i) => i.key === selectedKey) ?? null) : null;
+  const stats = hub.stats;
+  const oldest = stats.oldestWaiting;
+  const oldestDays = oldest
+    ? Math.max(0, Math.floor((now.getTime() - Date.parse(oldest.submittedAt)) / 86_400_000))
+    : 0;
+  const filtered = filtersActive(filters);
+  const hasData = !!query.data;
+  const page = shown.slice(0, visible);
 
   return (
     <HrLayout>
-      <div className="space-y-6">
+      <div className="space-y-5" data-testid="requests-hub">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-2xl font-black text-gray-900 flex items-center gap-2">
+            <h2 className="flex items-center gap-2 text-2xl font-black text-gray-900">
               <Bell size={22} className="text-amber-500" />
               Requests
-              {pendingCount > 0 && (
-                <Badge className="bg-amber-500 text-white text-xs">{pendingCount} pending</Badge>
-              )}
+              {stats.waiting > 0 && <Badge className="bg-amber-500 text-xs text-white">{stats.waiting} pending</Badge>}
             </h2>
-            <p className="text-muted-foreground text-sm mt-0.5">
-              Leave, Permission & Outpass requests from the Employee App -auto-refreshes every 30 s
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              Every request employees and HR raise, and who it is waiting for - auto-refreshes every 30 s
             </p>
-            <PipelineSummary workflows={["leave", "permission", "outpass"]} className="mt-1" />
           </div>
-          <Button variant="outline" size="sm" className="gap-2" onClick={refresh}>
-            <RefreshCw size={14} /> Refresh
-          </Button>
+          <RefreshButton />
         </div>
 
-        {/* Stats */}
-        <div className="grid grid-cols-3 gap-3">
-          {[
-            { label: "Pending",  value: pendingCount,  color: "text-amber-700 bg-amber-50 border-amber-100" },
-            { label: "Approved", value: approvedCount, color: "text-green-700 bg-green-50 border-green-100" },
-            { label: "Rejected", value: rejectedCount, color: "text-red-700 bg-red-50 border-red-100" },
-          ].map(s => (
-            <Card key={s.label} className={`border ${s.color.split(" ").slice(1).join(" ")}`}>
-              <CardContent className="p-4">
-                <p className={`text-2xl font-black ${s.color.split(" ")[0]}`}>{s.value}</p>
-                <p className="text-xs font-medium text-gray-600 mt-0.5">{s.label}</p>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-
-        {/* Period filter */}
-        <div className="flex items-center gap-2">
-          <PillTabs
-            items={(["today", "week", "all"] as Period[]).map((p) => ({ value: p, label: PERIOD_LABELS[p] }))}
-            value={period}
-            onChange={(v) => setPeriod(v as Period)}
+        {/* Figures */}
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5" data-testid="requests-figures">
+          <FigureCard
+            label="Waiting for HR now"
+            value={stats.waitingHr}
+            sub="HR can decide these today"
+            icon={UserCheck}
+            tone="bg-blue-50 text-blue-800"
+            onClick={() => focusWaiting("waiting_hr")}
+            active={filters.status === "waiting_hr"}
+            testId="figure-waiting-hr"
           />
-          <span className="text-xs text-gray-400 ml-1">{unified.length} request{unified.length !== 1 ? "s" : ""}</span>
+          <FigureCard
+            label="Waiting for HOD"
+            value={stats.waitingHod}
+            sub={
+              stats.waitingOther > 0
+                ? `HR cannot decide yet · ${stats.waitingOther} with someone else`
+                : "HR cannot decide these yet"
+            }
+            icon={Hourglass}
+            tone="bg-amber-50 text-amber-800"
+            onClick={() => focusWaiting("waiting_hod")}
+            active={filters.status === "waiting_hod"}
+            testId="figure-waiting-hod"
+          />
+          <FigureCard
+            label="Approved this month"
+            value={stats.approvedThisMonth}
+            icon={CheckCircle2}
+            tone="bg-green-50 text-green-800"
+            testId="figure-approved"
+          />
+          <FigureCard
+            label="Rejected this month"
+            value={stats.rejectedThisMonth}
+            icon={XCircle}
+            tone="bg-red-50 text-red-800"
+            testId="figure-rejected"
+          />
+          <FigureCard
+            label="Oldest waiting"
+            value={oldest ? daysText(oldestDays) : "None"}
+            sub={oldest ? `${oldest.employeeName} · ${oldest.label}` : "Nothing is waiting"}
+            icon={ShieldAlert}
+            tone={oldestDays >= 3 ? "bg-rose-50 text-rose-800" : "bg-slate-50 text-slate-700"}
+            onClick={oldest ? () => focusWaiting("waiting") : undefined}
+            testId="figure-oldest"
+          />
         </div>
 
-        {/* List */}
-        <div className="space-y-3">
-          {isLoading ? (
-            <CircleLoader texts={["UK Textiles", "Requests", "Loading"]} />
-          ) : unified.length === 0 ? (
-            <div className="text-center py-16">
-              <Bell size={36} className="mx-auto text-gray-200 mb-3" />
-              <p className="text-muted-foreground text-sm">
-                {period === "today" ? "No requests received today." : "No requests found."}
-              </p>
-            </div>
-          ) : (
-            unified.map((item, idx) => {
-              const statusCls = STATUS_CLS[item.status] ?? STATUS_CLS.pending;
-              const Icon = item.kind === "leave" ? Calendar : item.kind === "permission" ? Clock : DoorOpen;
-              const iconColor = item.kind === "leave" ? "text-blue-600 bg-blue-50"
-                : item.kind === "permission" ? "text-cyan-600 bg-cyan-50" : "text-teal-600 bg-teal-50";
-              const timeStr = item.createdAt
-                ? new Date(item.createdAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })
-                : "";
-              const dateStr = item.createdAt
-                ? new Date(item.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })
-                : "";
-
-              return (
-                <Card key={`${item.kind}-${item.id}`}
-                  data-testid={`request-${item.kind}-${item.id}`}
-                  className="border hover:shadow-sm transition-shadow cursor-pointer"
-                  onClick={() => goToDetail(item)}>
-                  <CardContent className="p-4">
-                    <div className="flex items-start gap-3">
-                      <div className={`p-2 rounded-lg shrink-0 mt-0.5 ${iconColor}`}>
-                        <Icon size={15} />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <p className="font-bold text-sm text-gray-900">{item.employeeName}</p>
-                          <Badge className={`text-xs border ${item.outcome?.className ?? statusCls}`}>
-                            {item.outcome?.label ?? item.status}
-                          </Badge>
-                          {item.status === "pending" && explainsWaiting(item.approval) && (
-                            <WaitingChip approval={item.approval} className="text-xs" />
-                          )}
-                          <span className="text-xs font-medium text-gray-500">{item.label}</span>
-                        </div>
-                        <p className="text-xs text-gray-500 mt-0.5 truncate">{item.meta}</p>
-                        <ApprovalTrailLine approval={item.approval} className="mt-0.5" />
-                        <p className="text-xs text-gray-300 mt-1">{dateStr} · {timeStr}</p>
-                      </div>
-                      {item.status === "pending" && (hrDecides(item) || hrRejects(item)) && (
-                        <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
-                          {hrDecides(item) && (
-                            <Button size="sm" variant="outline"
-                              className="h-7 gap-1 text-green-700 border-green-200 hover:bg-green-50 text-xs px-2"
-                              onClick={() => item.kind === "leave" ? approveLeave(item.id)
-                                : item.kind === "permission" ? (item.needsType ? goToDetail(item) : approvePerm(item.id))
-                                : approveOutpass(item.id)}
-                              disabled={updateLeaveMutation.isPending || updatePermMutation.isPending || updateOutpassMutation.isPending}>
-                              <CheckCircle size={12} /> {item.kind === "permission" && item.needsType ? "Set type & approve" : "Approve"}
-                            </Button>
-                          )}
-                          {hrRejects(item) && (
-                            <Button size="sm" variant="outline"
-                              className="h-7 gap-1 text-red-600 border-red-200 hover:bg-red-50 text-xs px-2"
-                              onClick={() => item.kind === "leave" ? rejectLeave(item.id) : item.kind === "permission" ? rejectPerm(item.id) : rejectOutpass(item.id)}
-                              disabled={updateLeaveMutation.isPending || updatePermMutation.isPending || updateOutpassMutation.isPending}>
-                              <XCircle size={12} /> Reject
-                            </Button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })
+        {/* Sub-tabs: all, then one per kind with how many are waiting */}
+        <div className="space-y-2">
+          <div className="overflow-x-auto pb-1" data-testid="requests-tabs">
+            <PillTabs size="sm" items={tabs} value={tab} onChange={selectTab} />
+          </div>
+          {activeKind && (
+            <p className="text-xs text-muted-foreground" data-testid="requests-tab-note">
+              Approval pipeline: <strong className="text-gray-700">{activeKind.pipeline}</strong>
+              {!activeKind.enabled && (
+                <span className="ml-2 font-semibold text-red-600">Switched off: new requests are refused</span>
+              )}
+              {activeKind.mode === "link" && activeKind.openPath && (
+                <>
+                  {" "}
+                  · decided on its own page:{" "}
+                  <button
+                    type="button"
+                    className="font-semibold text-blue-600 hover:underline"
+                    onClick={() => navigate(activeKind.openPath!)}
+                  >
+                    Open in {activeKind.openLabel}
+                  </button>
+                </>
+              )}
+            </p>
           )}
         </div>
 
-        {/* ── Outpass Request Detail Dialog ─────────────────────────────── */}
-        {selectedOutpass && (
-          <Dialog open onOpenChange={() => setSelectedOutpassId(null)}>
-            <DialogContent className="max-w-lg">
-              <DialogHeader>
-                <DialogTitle>Outpass Request Details</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4 py-1">
-                <div className="rounded-xl border bg-gray-50 p-4 space-y-3">
-                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Employee</p>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="flex items-start gap-2">
-                      <User size={14} className="mt-0.5 text-gray-400 shrink-0" />
-                      <div>
-                        <p className="text-xs text-gray-400">Name</p>
-                        <p className="text-sm font-semibold text-gray-900">{selectedOutpass.employee?.name ?? `#${selectedOutpass.employeeId}`}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <FileText size={14} className="mt-0.5 text-gray-400 shrink-0" />
-                      <div>
-                        <p className="text-xs text-gray-400">Employee ID</p>
-                        <p className="text-sm font-semibold text-gray-900">{selectedOutpass.employee?.employeeCode ?? `#${selectedOutpass.employeeId}`}</p>
-                      </div>
-                    </div>
-                    {selectedOutpass.employee?.department && (
-                      <div className="flex items-start gap-2">
-                        <Building2 size={14} className="mt-0.5 text-gray-400 shrink-0" />
-                        <div>
-                          <p className="text-xs text-gray-400">Department</p>
-                          <p className="text-sm font-semibold text-gray-900">{selectedOutpass.employee.department}</p>
-                        </div>
-                      </div>
-                    )}
-                    {selectedOutpass.employee?.designation && (
-                      <div className="flex items-start gap-2">
-                        <Briefcase size={14} className="mt-0.5 text-gray-400 shrink-0" />
-                        <div>
-                          <p className="text-xs text-gray-400">Designation</p>
-                          <p className="text-sm font-semibold text-gray-900">{selectedOutpass.employee.designation}</p>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
+        <Toolbar
+          filters={filters}
+          onFilters={setFilters}
+          options={hub.options}
+          showRequestType={tab === "request"}
+          shown={shown.length}
+          total={inTab.length}
+          canExport={shown.length > 0}
+          onExport={exportList}
+        />
 
-                <Separator />
-
-                <div className="space-y-3">
-                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Outpass Details</p>
-                  <div className="flex items-start gap-2">
-                    <MapPin size={14} className="mt-0.5 text-gray-400 shrink-0" />
-                    <div>
-                      <p className="text-xs text-gray-400">Destination</p>
-                      <p className="text-sm font-semibold text-gray-900">{selectedOutpass.destination}</p>
-                    </div>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-400">Status</p>
-                    {explainsWaiting(selectedOutpass.approval) ? (
-                      <WaitingChip approval={selectedOutpass.approval} className="text-xs" />
-                    ) : (
-                      <Badge className={`text-xs border ${STATUS_CLS[selectedOutpass.status] ?? STATUS_CLS.pending}`}>{selectedOutpass.status}</Badge>
-                    )}
-                  </div>
-                  {selectedOutpass.approval && (
-                    <div>
-                      <p className="text-xs text-gray-400 mb-2">Approval</p>
-                      <ApprovalTrail approval={selectedOutpass.approval} />
-                    </div>
-                  )}
-                  {selectedOutpass.reason && (
-                    <div>
-                      <p className="text-xs text-gray-400 mb-1">Reason</p>
-                      <p className="text-sm text-gray-700 bg-gray-50 rounded-lg p-3 border">{selectedOutpass.reason}</p>
-                    </div>
-                  )}
-                  {selectedOutpass.reviewComment && (
-                    <div>
-                      <p className="text-xs text-gray-400 mb-1">HR/HOD Comment</p>
-                      <p className="text-sm text-blue-700 bg-blue-50 rounded-lg p-3 border border-blue-100">{selectedOutpass.reviewComment}</p>
-                    </div>
-                  )}
-                  {selectedOutpass.approvedBy && (
-                    <p className="text-xs text-gray-500">
-                      {selectedOutpass.status === "rejected" ? "Rejected By" : "Approved By"}: <strong>{selectedOutpass.approvedBy}</strong>
-                      {selectedOutpass.approverRole === "dept_head" ? " (Department Head)" : selectedOutpass.approverRole ? " (HR)" : ""}
-                    </p>
-                  )}
-                  {selectedOutpass.scanStatus && selectedOutpass.scanStatus !== "not_applicable" && (
-                    <div className="grid grid-cols-2 gap-3 rounded-lg border bg-gray-50 p-3">
-                      <div>
-                        <p className="text-xs text-gray-400">Gate Scan Status</p>
-                        <p className="text-sm font-semibold text-gray-900">
-                          {selectedOutpass.scanStatus === "exited" ? "Exited"
-                            : selectedOutpass.scanStatus === "expired_unscanned" ? "Expired, Not Scanned"
-                            : "Awaiting Exit Scan"}
-                        </p>
-                      </div>
-                      {selectedOutpass.exitGateName && (
-                        <div>
-                          <p className="text-xs text-gray-400">Exit Gate</p>
-                          <p className="text-sm font-semibold text-gray-900">{selectedOutpass.exitGateName}</p>
-                        </div>
-                      )}
-                      {selectedOutpass.exitedAt && (
-                        <div className="col-span-2">
-                          <p className="text-xs text-gray-400">Exit Time</p>
-                          <p className="text-sm font-semibold text-gray-900">{new Date(selectedOutpass.exitedAt).toLocaleString("en-IN")}</p>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  <p className="text-xs text-gray-300">
-                    Submitted: {selectedOutpass.createdAt ? new Date(selectedOutpass.createdAt).toLocaleString("en-IN") : "—"}
-                  </p>
-                </div>
-
-                {selectedOutpass.status === "pending" && (hrDecides(selectedOutpass) || hrRejects(selectedOutpass)) && (
-                  <div className="flex gap-2 pt-1">
-                    {hrDecides(selectedOutpass) && (
-                      <Button className="flex-1 gap-1 bg-green-600 hover:bg-green-700"
-                        onClick={() => { approveOutpass(selectedOutpass.id); setSelectedOutpassId(null); }}
-                        disabled={updateOutpassMutation.isPending}>
-                        <CheckCircle size={14} /> Approve
-                      </Button>
-                    )}
-                    {hrRejects(selectedOutpass) && (
-                      <Button variant="outline" className="flex-1 gap-1 text-red-600 border-red-200 hover:bg-red-50"
-                        onClick={() => { rejectOutpass(selectedOutpass.id); setSelectedOutpassId(null); }}
-                        disabled={updateOutpassMutation.isPending}>
-                        <XCircle size={14} /> Reject
-                      </Button>
-                    )}
-                  </div>
-                )}
+        {/* The list */}
+        <Card className="overflow-hidden rounded-2xl">
+          <CardContent className="p-0">
+            {query.isError && !hasData ? (
+              <ErrorState onRetry={() => void query.refetch()} />
+            ) : !hasData ? (
+              <ListSkeleton />
+            ) : hub.kinds.length === 0 ? (
+              <div className="px-6 py-14 text-center text-sm text-muted-foreground" data-testid="requests-no-access">
+                Your role cannot open any kind of request.
               </div>
-            </DialogContent>
-          </Dialog>
+            ) : shown.length === 0 ? (
+              <EmptyState
+                filtered={filtered}
+                tabLabel={activeKind?.label ?? null}
+                onClear={() => setFilters({ ...NO_FILTERS, sort: filters.sort })}
+              />
+            ) : (
+              <RequestList
+                items={page}
+                kinds={kinds}
+                now={now}
+                busyKey={busyKey}
+                handlers={handlers}
+                onOpen={(item) => setSelectedKey(item.key)}
+              />
+            )}
+          </CardContent>
+        </Card>
+
+        {shown.length > visible && (
+          <div className="flex justify-center">
+            <Button variant="outline" onClick={() => setVisible((v) => v + PAGE_SIZE)} data-testid="requests-more">
+              Show {Math.min(PAGE_SIZE, shown.length - visible)} more ({shown.length - visible} left)
+            </Button>
+          </div>
         )}
+
+        {hub.kinds.some((k) => k.truncated) && (
+          <p className="text-center text-xs text-amber-700" data-testid="requests-truncated">
+            {hub.kinds
+              .filter((k) => k.truncated)
+              .map((k) => `${k.label}: the newest ${hub.limit} of ${k.matched}`)
+              .join(" · ")}
+            . Narrow the period to see older ones.
+          </p>
+        )}
+
+        <PipelineSummary workflows={hub.kinds.map((k) => k.key)} />
       </div>
+
+      <DetailDialog
+        item={selected}
+        kind={selected ? kinds[selected.kind] : undefined}
+        now={now}
+        busy={busyKey === selected?.key}
+        handlers={detailHandlers}
+        onClose={() => setSelectedKey(null)}
+      />
+      <DecisionDialog
+        item={deciding?.item ?? null}
+        mode={deciding?.mode ?? "reject"}
+        busy={busyKey !== null}
+        onClose={() => setDeciding(null)}
+        onConfirm={(comment) => void confirmDecision(comment)}
+      />
+      <HandleDialog
+        item={handling}
+        busy={busyKey !== null}
+        onClose={() => setHandling(null)}
+        onSubmit={(status, notes) => void submitHandling(status, notes)}
+      />
     </HrLayout>
   );
 }

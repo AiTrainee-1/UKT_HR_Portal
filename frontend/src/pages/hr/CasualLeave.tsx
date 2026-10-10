@@ -1,467 +1,457 @@
-import { useState } from "react";
-import { TONE, REQUEST_STATUS_TONE } from "@/lib/statusTones";
-import { StatusBadge } from "@/components/ui/status-badge";
+import { useMemo, useState } from "react";
+import { CalendarCheck, CalendarHeart, Hourglass, ListChecks, UserCheck, UserX } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
+import { PipelineNote } from "@/components/ApprovalTrail";
 import { RefreshButton } from "@/components/PageRefreshBar";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { PillTabs } from "@/components/ui/pill-tabs";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { CircleLoader } from "@/components/ui/CircleLoader";
-import { ApprovalTrailLine, PipelineNote, WaitingChip } from "@/components/ApprovalTrail";
-import { explainsWaiting, hrCanAct, hrCanReject, waitingText } from "@/lib/approval-workflow";
+import { waitingText } from "@/lib/approval-workflow";
 import {
-  useListCasualLeaves,
-  useCasualLeaveEligibility,
   useCreateCasualLeave,
   useDecideCasualLeave,
   useDeleteCasualLeave,
-  type CasualLeaveItem,
+  useListCasualLeaves,
 } from "@/lib/api-client/custom-hooks";
-import { CalendarHeart, CheckCircle2, XCircle, Hourglass, Users, Plus, Trash2, ShieldCheck, Info } from "lucide-react";
+import { ConfirmDialog } from "./leave/ConfirmDialog";
+import { exportSheet } from "./leave/export";
+import { ALL, branchOptions, departmentOptions, longDate, type PersonFilters } from "./leave/logic";
+import { MonthPicker, StatCard, useVisibleCount } from "./leave/parts";
+import ApplyDialog from "./casual-leave/ApplyDialog";
+import ClTab from "./casual-leave/ClTab";
+import { useClBoard } from "./casual-leave/api";
+import { EligibleList, NotEligibleList, RequestList } from "./casual-leave/lists";
+import {
+  BOARD_EXPORT_HEADERS,
+  NO_CL_FILTERS,
+  REQUEST_EXPORT_HEADERS,
+  boardExportRows,
+  clFiltersActive,
+  eligibleRows,
+  filterBoard,
+  filterRequests,
+  isCurrentMonth,
+  monthTitle,
+  notEligibleRows,
+  requestExportRows,
+  sortRequests,
+  summarize,
+  takenRows,
+  type BoardRow,
+  type ClRequest,
+} from "./casual-leave/logic";
 
-const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+type Tab = "taken" | "eligible" | "not-eligible" | "requests";
 
-const STATUS_BADGE: Record<string, string> = {
-  pending: TONE.warning,
-  approved: TONE.success,
-  rejected: TONE.danger,
+const localToday = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
 export default function CasualLeave() {
   const { toast } = useToast();
-  const now = new Date();
-  const [month, setMonth] = useState(now.getMonth() + 1);
-  const [year, setYear] = useState(now.getFullYear());
-  const [tab, setTab] = useState("pending");
+  const today = useMemo(localToday, []);
+  const [{ year, month }, setMonth] = useState(() => ({
+    year: Number(today.slice(0, 4)),
+    month: Number(today.slice(5, 7)),
+  }));
+  const [tab, setTab] = useState<Tab>("taken");
 
-  // "Apply on behalf" dialog -carries the eligibility reason so HR sees
-  // immediately why an employee can't get another CL, instead of finding out
-  // only after clicking Submit.
-  const [applyFor, setApplyFor] = useState<{
-    employeeId: number;
-    name: string;
-    eligible: boolean;
-    reason?: string | null;
-  } | null>(null);
-  const [applyDate, setApplyDate] = useState(now.toISOString().slice(0, 10));
-  const [applyReason, setApplyReason] = useState("");
+  // each view keeps its own search and filters
+  const [takenF, setTakenF] = useState<PersonFilters>(NO_CL_FILTERS);
+  const [eligibleF, setEligibleF] = useState<PersonFilters>(NO_CL_FILTERS);
+  const [notF, setNotF] = useState<PersonFilters>(NO_CL_FILTERS);
+  const [reqF, setReqF] = useState<PersonFilters>(NO_CL_FILTERS);
+  const [takenStatus, setTakenStatus] = useState(ALL);
+  const [reqStatus, setReqStatus] = useState(ALL);
+  const [reason, setReason] = useState(ALL);
+  const takenMore = useVisibleCount();
+  const eligibleMore = useVisibleCount();
+  const notMore = useVisibleCount();
+  const reqMore = useVisibleCount();
 
-  const { data: leaves, isLoading } = useListCasualLeaves({ month, year });
-  const { data: eligibility, isLoading: eligLoading } = useCasualLeaveEligibility(month, year);
+  const [applyFor, setApplyFor] = useState<{ employeeId: number; name: string } | null>(null);
+  const [applyProblem, setApplyProblem] = useState<string | null>(null);
+  const [toDelete, setToDelete] = useState<ClRequest | null>(null);
+
+  const boardQuery = useClBoard(month, year);
+  const requestsQuery = useListCasualLeaves({ month, year });
   const createMutation = useCreateCasualLeave();
   const decideMutation = useDecideCasualLeave();
   const deleteMutation = useDeleteCasualLeave();
 
-  const all = leaves ?? [];
-  const pending = all.filter((l) => l.status === "pending");
-  const approved = all.filter((l) => l.status === "approved");
-  const rejected = all.filter((l) => l.status === "rejected");
-  const eligibleCount = (eligibility?.employees ?? []).filter((e) => e.eligible).length;
-  const usedThisMonthCount = (eligibility?.employees ?? []).filter((e) => e.usedThisMonth).length;
+  const board = useMemo(() => boardQuery.data?.employees ?? [], [boardQuery.data]);
+  const requests = useMemo(() => (requestsQuery.data ?? []) as unknown as ClRequest[], [requestsQuery.data]);
+  const summary = useMemo(() => summarize(board, requests), [board, requests]);
+  const months = boardQuery.data?.eligibilityMonths ?? 6;
+  const label = monthTitle(year, month);
+  const current = isCurrentMonth(year, month, today);
 
-  const decide = async (l: CasualLeaveItem, status: "approved" | "rejected") => {
+  const people = useMemo(() => [...board, ...requests], [board, requests]);
+  const branches = useMemo(() => branchOptions(people), [people]);
+  const departments = useMemo(() => departmentOptions(people), [people]);
+
+  const retryBoard = () => void boardQuery.refetch();
+  const retryRequests = () => void requestsQuery.refetch();
+
+  // ── what each view lists ──
+  const taken = useMemo(
+    () => filterRequests(takenRows(requests), takenF, takenStatus),
+    [requests, takenF, takenStatus],
+  );
+  const takenAll = useMemo(() => takenRows(requests), [requests]);
+  const eligible = useMemo(() => filterBoard(eligibleRows(board), eligibleF), [board, eligibleF]);
+  const eligibleAll = useMemo(() => eligibleRows(board), [board]);
+  const notAll = useMemo(() => notEligibleRows(board), [board]);
+  const notEligible = useMemo(
+    () => filterBoard(notAll, notF).filter((r) => reason === ALL || r.reasonCode === reason),
+    [notAll, notF, reason],
+  );
+  const reqAll = useMemo(() => sortRequests(requests), [requests]);
+  const reqShown = useMemo(() => filterRequests(reqAll, reqF, reqStatus), [reqAll, reqF, reqStatus]);
+
+  // What HR may decide follows the approval pipeline (User Management -> Approval Workflow Control); the list buttons
+  // ask it per request, so this only carries out a decision.
+  const decide = async (r: ClRequest, status: "approved" | "rejected") => {
     try {
-      const result = await decideMutation.mutateAsync({ id: l.id, status });
+      const result = await decideMutation.mutateAsync({ id: r.id, status });
       const passedOn = status === "approved" && result != null && result.status === "pending";
       toast({
         title: passedOn ? "Casual leave approved" : `Casual leave ${status}`,
         description: passedOn
           ? `${waitingText(result.approval) ?? "Waiting for the next approval"} before it is final.`
           : status === "approved"
-            ? `${l.employeeName}'s attendance for ${l.date} is now marked Present (paid full day).`
-            : `${l.employeeName}'s attendance for ${l.date} is marked as Leave.`,
+            ? `${r.employeeName}'s attendance for ${r.date} is now marked Present (paid full day).`
+            : `${r.employeeName}'s attendance for ${r.date} is marked as Leave.`,
       });
     } catch (err: any) {
       toast({ title: err?.message ?? "Failed to update", variant: "destructive" });
     }
   };
 
-  const submitOnBehalf = async () => {
-    if (!applyFor) return;
+  const remove = async (r: ClRequest) => {
     try {
-      await createMutation.mutateAsync({
-        employeeId: applyFor.employeeId,
-        date: applyDate,
-        reason: applyReason || undefined,
-      });
-      toast({ title: `CL request created for ${applyFor.name}` });
-      setApplyFor(null);
-      setApplyReason("");
-    } catch (err: any) {
-      const reason = err?.data?.error ?? "Failed to create request";
-      toast({ title: `Not eligible for ${applyFor.name}`, description: reason, variant: "destructive" });
+      await deleteMutation.mutateAsync(r.id);
+      toast({ title: "Record deleted" });
+    } catch {
+      toast({ title: "Delete failed", variant: "destructive" });
     }
   };
 
-  // What HR may decide follows the approval pipeline (User Management -> Approval Workflow Control); an older
-  // backend sends none and HR then decides any pending request, as it always did.
-  const hrDecides = (l: CasualLeaveItem) => hrCanAct(l.approval, l.status === "pending");
-  const hrRejects = (l: CasualLeaveItem) => hrCanReject(l.approval, l.status === "pending");
+  const submitOnBehalf = async (input: { employeeId: number; date: string; reason: string }) => {
+    if (!applyFor) return;
+    setApplyProblem(null);
+    try {
+      await createMutation.mutateAsync({
+        employeeId: input.employeeId,
+        date: input.date,
+        reason: input.reason || undefined,
+      });
+      toast({ title: `CL request created for ${applyFor.name}` });
+      setApplyFor(null);
+    } catch (err: any) {
+      // the server's own words ("already used this month", "eligible after 6 months")
+      setApplyProblem(err?.data?.error ?? err?.message ?? "Failed to create request");
+    }
+  };
 
-  const CLRow = ({ l, showActions }: { l: CasualLeaveItem; showActions?: boolean }) => (
-    <div className="flex items-center gap-3 p-3 border rounded-xl hover:bg-gray-50 transition-colors">
-      <div className="w-9 h-9 rounded-lg bg-pink-50 flex items-center justify-center shrink-0">
-        <CalendarHeart size={15} className="text-pink-500" />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <p className="text-sm font-bold text-gray-900">{l.employeeName}</p>
-          <span className="text-xs font-mono text-gray-400">{l.employeeCode}</span>
-          {l.department && <span className="text-xs text-gray-400">· {l.department}</span>}
-        </div>
-        <p className="text-xs text-gray-500 mt-0.5">
-          <strong className="font-mono">{l.date}</strong>
-          {l.reason ? ` -${l.reason}` : ""}
-        </p>
-        {l.reviewedBy && (
-          <p className="text-[11px] text-gray-400 mt-0.5">
-            {l.status === "approved" ? "Approved" : "Rejected"} by {l.reviewedBy}
-            {l.reviewerRole === "dept_head" ? " (Dept Head)" : " (HR)"}
-            {l.reviewComment ? ` -${l.reviewComment}` : ""}
-          </p>
-        )}
-        <ApprovalTrailLine approval={l.approval} className="mt-0.5" />
-      </div>
-      {explainsWaiting(l.approval) ? (
-        <WaitingChip approval={l.approval} className="text-xs font-semibold shrink-0" />
-      ) : (
-        <StatusBadge
-          tone={REQUEST_STATUS_TONE[l.status] ?? "neutral"}
-          className="text-xs font-semibold shrink-0 capitalize"
-        >
-          {l.status}
-        </StatusBadge>
-      )}
-      {showActions && l.status === "pending" && (hrDecides(l) || hrRejects(l)) && (
-        <div className="flex items-center gap-1.5 shrink-0">
-          {hrDecides(l) && (
-            <Button
-              size="sm"
-              className="h-8 gap-1 bg-green-600 hover:bg-green-700 text-xs"
-              onClick={() => decide(l, "approved")}
-              disabled={decideMutation.isPending}
-            >
-              <CheckCircle2 size={12} /> Approve
-            </Button>
-          )}
-          {hrRejects(l) && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-8 gap-1 text-red-500 border-red-200 text-xs"
-              onClick={() => decide(l, "rejected")}
-              disabled={decideMutation.isPending}
-            >
-              <XCircle size={12} /> Reject
-            </Button>
-          )}
-        </div>
-      )}
-      {l.status !== "pending" && (
-        <button
-          onClick={async () => {
-            try {
-              await deleteMutation.mutateAsync(l.id);
-              toast({ title: "Record deleted" });
-            } catch {
-              toast({ title: "Delete failed", variant: "destructive" });
-            }
-          }}
-          className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 shrink-0"
-          title="Delete record"
-        >
-          <Trash2 size={13} />
-        </button>
-      )}
-    </div>
-  );
+  const apply = (r: BoardRow) => {
+    setApplyProblem(null);
+    setApplyFor({ employeeId: r.employeeId, name: r.employeeName ?? r.employeeCode ?? `#${r.employeeId}` });
+  };
+
+  const decideProps = {
+    busy: decideMutation.isPending || deleteMutation.isPending,
+    onDecide: decide,
+    onDelete: setToDelete,
+  };
+  const boardState = { loading: boardQuery.isLoading, failed: boardQuery.isError, onRetry: retryBoard };
+  const requestState = { loading: requestsQuery.isLoading, failed: requestsQuery.isError, onRetry: retryRequests };
+  const pills = (counts: Record<string, number>, labels: [string, string][]) =>
+    labels.map(([value, text]) => ({ value, label: text, count: counts[value] }));
 
   return (
     <HrLayout>
       <div className="space-y-5">
-        {/* Header */}
-        <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="text-2xl font-black text-gray-900">Casual Leave (CL)</h2>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              Paid leave · staff only · 1 per month · eligible after 6 months of service
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              Paid leave · staff only · 1 per month · eligible after {months} months of service
             </p>
             <PipelineNote workflow="casual_leave" className="mt-1" />
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <RefreshButton />
-            <select
-              value={month}
-              onChange={(e) => setMonth(Number(e.target.value))}
-              className="h-9 rounded-md border px-2 text-sm bg-background"
-            >
-              {MONTH_NAMES.map((m, i) => (
-                <option key={i} value={i + 1}>
-                  {m}
-                </option>
-              ))}
-            </select>
-            <Input
-              type="number"
-              min={2020}
-              max={2035}
-              value={year}
-              onChange={(e) => setYear(Number(e.target.value))}
-              className="w-24 h-9"
+            <MonthPicker year={year} month={month} onChange={setMonth} />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatCard
+            label="Taken this month"
+            value={boardQuery.isLoading && requestsQuery.isLoading ? "…" : summary.taken}
+            sub={`approved in ${label}`}
+            icon={CalendarCheck}
+            tone="bg-emerald-50 text-emerald-800"
+            testId="cl-stat-taken"
+            onClick={() => setTab("taken")}
+            active={tab === "taken"}
+          />
+          <StatCard
+            label="Eligible"
+            value={boardQuery.isLoading ? "…" : summary.eligible}
+            sub={current ? "can still take CL this month" : `could take CL in ${label}`}
+            icon={UserCheck}
+            tone="bg-blue-50 text-blue-800"
+            testId="cl-stat-eligible"
+            onClick={() => setTab("eligible")}
+            active={tab === "eligible"}
+          />
+          <StatCard
+            label="Not eligible"
+            value={boardQuery.isLoading ? "…" : summary.notEligible}
+            sub={`${summary.byReason.not_staff} production · ${summary.byReason.under_service} under ${months} months · ${summary.byReason.used_this_month} used`}
+            icon={UserX}
+            tone="bg-slate-100 text-slate-700"
+            testId="cl-stat-not-eligible"
+            onClick={() => setTab("not-eligible")}
+            active={tab === "not-eligible"}
+          />
+          <StatCard
+            label="Pending"
+            value={requestsQuery.isLoading ? "…" : summary.pending}
+            sub={summary.pending ? "waiting for a decision" : "nothing waiting"}
+            icon={Hourglass}
+            tone="bg-amber-50 text-amber-800"
+            testId="cl-stat-pending"
+            onClick={() => {
+              setReqStatus("pending");
+              setTab("requests");
+            }}
+            active={tab === "requests" && reqStatus === "pending"}
+          />
+        </div>
+
+        <div>
+          <div className="max-w-full overflow-x-auto pb-1">
+            <PillTabs
+              items={[
+                { value: "taken", label: "Taken this month", icon: <CalendarHeart size={14} /> },
+                { value: "eligible", label: "Eligible", icon: <UserCheck size={14} /> },
+                { value: "not-eligible", label: "Not eligible", icon: <UserX size={14} /> },
+                { value: "requests", label: "Requests", icon: <ListChecks size={14} /> },
+              ]}
+              value={tab}
+              onChange={(v) => setTab(v as Tab)}
             />
           </div>
-        </div>
 
-        {/* Stat cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-          {[
-            {
-              label: "Pending Requests",
-              value: pending.length,
-              icon: Hourglass,
-              cls: "text-amber-700",
-              iconCls: "bg-amber-500",
-            },
-            {
-              label: "Approved",
-              value: approved.length,
-              icon: CheckCircle2,
-              cls: "text-green-700",
-              iconCls: "bg-green-600",
-            },
-            { label: "Rejected", value: rejected.length, icon: XCircle, cls: "text-red-600", iconCls: "bg-red-500" },
-            {
-              label: "Eligible Employees",
-              value: eligLoading ? "…" : eligibleCount,
-              icon: Users,
-              cls: "text-blue-700",
-              iconCls: "bg-blue-600",
-            },
-            {
-              label: "Used This Month",
-              value: eligLoading ? "…" : usedThisMonthCount,
-              icon: CalendarHeart,
-              cls: "text-pink-700",
-              iconCls: "bg-pink-500",
-            },
-          ].map(({ label, value, icon: Icon, cls, iconCls }) => (
-            <Card key={label} className="border">
-              <CardContent className="p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">{label}</p>
-                  <div className={`p-1.5 rounded-lg ${iconCls}`}>
-                    <Icon size={14} className="text-white" />
-                  </div>
-                </div>
-                <p className={`text-3xl font-black leading-none ${cls}`}>{value}</p>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+          {tab === "taken" && (
+            <ClTab
+              id="taken"
+              filters={takenF}
+              onFilters={setTakenF}
+              noFilters={NO_CL_FILTERS}
+              branches={branches}
+              departments={departments}
+              searchLabel="Search who took casual leave"
+              pills={{
+                items: pills(
+                  {
+                    all: takenAll.length,
+                    approved: takenAll.filter((r) => r.status === "approved").length,
+                    pending: takenAll.filter((r) => r.status === "pending").length,
+                  },
+                  [
+                    ["all", "All"],
+                    ["approved", "Approved"],
+                    ["pending", "Pending"],
+                  ],
+                ),
+                value: takenStatus,
+                onChange: setTakenStatus,
+              }}
+              {...requestState}
+              total={takenAll.length}
+              shown={taken.length}
+              visible={takenMore.count}
+              onMore={takenMore.more}
+              noun="casual leaves"
+              active={clFiltersActive(takenF, [takenStatus])}
+              empty={{
+                icon: CalendarHeart,
+                title: `Nobody has taken casual leave in ${label}`,
+                text: current
+                  ? "Approved and pending Casual Leave for this month will be listed here, with who approved it."
+                  : "No approved or pending Casual Leave was recorded for this month.",
+              }}
+              onExport={() =>
+                exportSheet(`Casual leave taken ${label}`, REQUEST_EXPORT_HEADERS, requestExportRows(taken))
+              }
+            >
+              <RequestList rows={taken.slice(0, takenMore.count)} {...decideProps} />
+            </ClTab>
+          )}
 
-        {/* Workflow note */}
-        <div className="flex items-start gap-2 p-3 bg-blue-50 border border-blue-100 rounded-xl text-xs text-blue-700">
-          <Info size={14} className="shrink-0 mt-0.5" />
-          <span>
-            Requests are submitted from the employee mobile app. Either the <strong>Department Head</strong> (mobile,
-            when "Can approve casual leave" is enabled in User Management) or <strong>HR</strong> (here) can decide.
-            <strong> Approved</strong> → attendance for that date becomes <strong>Present (paid full day)</strong>.
-            <strong> Rejected</strong> → the date is marked as <strong>Leave</strong>.
-          </span>
-        </div>
+          {tab === "eligible" && (
+            <ClTab
+              id="eligible"
+              filters={eligibleF}
+              onFilters={setEligibleF}
+              noFilters={NO_CL_FILTERS}
+              branches={branches}
+              departments={departments}
+              showEmployeeType={false}
+              searchLabel="Search eligible employees"
+              {...boardState}
+              total={eligibleAll.length}
+              shown={eligible.length}
+              visible={eligibleMore.count}
+              onMore={eligibleMore.more}
+              noun="eligible employees"
+              active={clFiltersActive(eligibleF)}
+              empty={{
+                icon: UserCheck,
+                title: "Nobody is eligible",
+                text: `Staff who have completed ${months} months of service and have not used this month's Casual Leave appear here.`,
+              }}
+              onExport={() =>
+                exportSheet(`Casual leave eligible ${label}`, BOARD_EXPORT_HEADERS, boardExportRows(eligible))
+              }
+            >
+              <EligibleList rows={eligible.slice(0, eligibleMore.count)} onApply={apply} monthLabel={label} />
+            </ClTab>
+          )}
 
-        {/* Tabs */}
-        <Tabs value={tab} onValueChange={setTab}>
-          <PillTabs
-            items={[
-              { value: "pending", label: `Pending (${pending.length})` },
-              { value: "approved", label: `Approved (${approved.length})` },
-              { value: "rejected", label: `Rejected (${rejected.length})` },
-              { value: "eligible", label: "Eligibility Board" },
-            ]}
-            value={tab}
-            onChange={(v) => setTab(v)}
-          />
+          {tab === "not-eligible" && (
+            <ClTab
+              id="not-eligible"
+              filters={notF}
+              onFilters={setNotF}
+              noFilters={NO_CL_FILTERS}
+              branches={branches}
+              departments={departments}
+              searchLabel="Search employees who are not eligible"
+              pills={{
+                items: pills(
+                  {
+                    all: notAll.length,
+                    ...summary.byReason,
+                  },
+                  [
+                    ["all", "All"],
+                    ["used_this_month", "Used this month"],
+                    ["under_service", `Under ${months} months`],
+                    ["not_staff", "Production"],
+                    ["no_join_date", "No join date"],
+                  ],
+                ),
+                value: reason,
+                onChange: setReason,
+              }}
+              {...boardState}
+              total={notAll.length}
+              shown={notEligible.length}
+              visible={notMore.count}
+              onMore={notMore.more}
+              noun="employees"
+              active={clFiltersActive(notF, [reason])}
+              empty={{
+                icon: UserX,
+                title: "Everyone is eligible",
+                text: "Nobody is held back from Casual Leave this month.",
+              }}
+              onExport={() =>
+                exportSheet(`Casual leave not eligible ${label}`, BOARD_EXPORT_HEADERS, boardExportRows(notEligible))
+              }
+            >
+              <NotEligibleList rows={notEligible.slice(0, notMore.count)} eligibilityMonths={months} />
+            </ClTab>
+          )}
 
-          {(["pending", "approved", "rejected"] as const).map((t) => (
-            <TabsContent key={t} value={t} className="mt-4 space-y-2">
-              {isLoading ? (
-                <CircleLoader texts={["UK Textiles", "Casual Leave", "Loading"]} />
-              ) : (t === "pending" ? pending : t === "approved" ? approved : rejected).length === 0 ? (
-                <div className="text-center py-12 text-muted-foreground text-sm">
-                  No {t} casual leave requests for {MONTH_NAMES[month - 1]} {year}.
-                </div>
-              ) : (
-                (t === "pending" ? pending : t === "approved" ? approved : rejected).map((l) => (
-                  <CLRow key={l.id} l={l} showActions={t === "pending"} />
-                ))
-              )}
-            </TabsContent>
-          ))}
-
-          {/* Eligibility board */}
-          <TabsContent value="eligible" className="mt-4">
-            <Card className="border">
-              <CardHeader className="pb-3 pt-4 px-4">
-                <CardTitle className="text-sm font-bold flex items-center gap-2">
-                  <ShieldCheck size={14} className="text-blue-500" />
-                  CL Eligibility -{MONTH_NAMES[month - 1]} {year}
-                </CardTitle>
-                <p className="text-xs text-muted-foreground">
-                  Staff employees only. Eligibility requires {eligibility?.eligibilityMonths ?? 6}+ months of service
-                  and no CL already used this month.
+          {tab === "requests" && (
+            <ClTab
+              id="requests"
+              filters={reqF}
+              onFilters={setReqF}
+              noFilters={NO_CL_FILTERS}
+              branches={branches}
+              departments={departments}
+              searchLabel="Search casual leave requests"
+              pills={{
+                items: pills(
+                  {
+                    all: reqAll.length,
+                    pending: summary.pending,
+                    approved: summary.taken,
+                    rejected: summary.rejected,
+                  },
+                  [
+                    ["all", "All"],
+                    ["pending", "Pending"],
+                    ["approved", "Approved"],
+                    ["rejected", "Rejected"],
+                  ],
+                ),
+                value: reqStatus,
+                onChange: setReqStatus,
+              }}
+              {...requestState}
+              total={reqAll.length}
+              shown={reqShown.length}
+              visible={reqMore.count}
+              onMore={reqMore.more}
+              noun="requests"
+              active={clFiltersActive(reqF, [reqStatus])}
+              empty={{
+                icon: ListChecks,
+                title: `No casual leave requests for ${label}`,
+                text: "Requests come from the employee mobile app, or from Apply CL on the Eligible tab.",
+              }}
+              onExport={() =>
+                exportSheet(`Casual leave requests ${label}`, REQUEST_EXPORT_HEADERS, requestExportRows(reqShown))
+              }
+              note={
+                <p className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-xs text-blue-700">
+                  Requests are submitted from the employee mobile app. The Department Head (on mobile, when "Can approve
+                  casual leave" is enabled in User Management) or HR (here) can decide, as the approval pipeline allows.{" "}
+                  <strong>Approved</strong> marks that date Present (paid full day); <strong>Rejected</strong> marks it
+                  as Leave.
                 </p>
-              </CardHeader>
-              <CardContent className="p-0">
-                {eligLoading ? (
-                  <div className="p-4 space-y-2">
-                    {Array.from({ length: 4 }).map((_, i) => (
-                      <Skeleton key={i} className="h-10" />
-                    ))}
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead className="bg-gray-50 border-t border-b">
-                        <tr>
-                          {["Employee", "Department", "Joined", "Service", "This Month", "Status", ""].map((h) => (
-                            <th
-                              key={h}
-                              className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase whitespace-nowrap"
-                            >
-                              {h}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(eligibility?.employees ?? []).map((e) => (
-                          <tr
-                            key={e.employeeId}
-                            className={`border-b hover:bg-gray-50 ${e.eligible ? "" : "opacity-60"}`}
-                          >
-                            <td className="px-4 py-2.5">
-                              <p className="font-semibold text-gray-900">{e.employeeName}</p>
-                              <p className="text-[11px] font-mono text-gray-400">{e.employeeCode}</p>
-                            </td>
-                            <td className="px-4 py-2.5 text-xs text-gray-600">{e.department ?? "—"}</td>
-                            <td className="px-4 py-2.5 text-xs font-mono text-gray-600">{e.joinDate ?? "—"}</td>
-                            <td className="px-4 py-2.5 text-xs text-gray-600">
-                              {e.serviceMonths != null ? `${e.serviceMonths} months` : "—"}
-                            </td>
-                            <td className="px-4 py-2.5 text-xs">
-                              {e.usedThisMonth ? (
-                                <span className="text-gray-600">
-                                  CL {e.usedStatus} · <span className="font-mono">{e.usedDate}</span>
-                                </span>
-                              ) : (
-                                <span className="text-gray-300">—</span>
-                              )}
-                            </td>
-                            <td className="px-4 py-2.5">
-                              {e.eligible ? (
-                                <StatusBadge tone="success" className="text-xs font-semibold">
-                                  Eligible
-                                </StatusBadge>
-                              ) : (
-                                <span className="text-xs text-gray-400">
-                                  {e.reason ?? (e.usedThisMonth ? "Already used" : "Not eligible")}
-                                </span>
-                              )}
-                            </td>
-                            <td className="px-4 py-2.5 text-right">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 gap-1 text-xs"
-                                onClick={() =>
-                                  setApplyFor({
-                                    employeeId: e.employeeId,
-                                    name: e.employeeName,
-                                    eligible: e.eligible,
-                                    reason: e.reason,
-                                  })
-                                }
-                              >
-                                <Plus size={11} /> Apply CL
-                              </Button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
+              }
+            >
+              <RequestList rows={reqShown.slice(0, reqMore.count)} {...decideProps} />
+            </ClTab>
+          )}
+        </div>
       </div>
 
-      {/* Apply-on-behalf dialog */}
-      <Dialog
-        open={!!applyFor}
-        onOpenChange={(open) => {
-          if (!open) setApplyFor(null);
+      <ApplyDialog
+        target={applyFor}
+        year={year}
+        month={month}
+        today={today}
+        saving={createMutation.isPending}
+        problem={applyProblem}
+        onClose={() => setApplyFor(null)}
+        onSubmit={submitOnBehalf}
+      />
+      <ConfirmDialog
+        open={toDelete !== null}
+        title="Delete this record?"
+        description={
+          toDelete
+            ? `${toDelete.employeeName}'s ${toDelete.status} Casual Leave for ${longDate(toDelete.date)} will be removed from the list. Attendance already written for that date is not changed.`
+            : ""
+        }
+        confirmLabel="Delete"
+        onCancel={() => setToDelete(null)}
+        onConfirm={() => {
+          if (toDelete) void remove(toDelete);
+          setToDelete(null);
         }}
-      >
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Apply Casual Leave -{applyFor?.name}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 pt-1">
-            {applyFor && !applyFor.eligible && (
-              <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
-                <XCircle size={14} className="shrink-0 mt-0.5" />
-                <span>
-                  <strong>Not eligible for Casual Leave.</strong>{" "}
-                  {applyFor.reason ?? "This employee does not currently qualify."}
-                </span>
-              </div>
-            )}
-            <div className="space-y-1.5">
-              <Label className="text-xs">CL Date</Label>
-              <Input
-                type="date"
-                value={applyDate}
-                onChange={(e) => setApplyDate(e.target.value)}
-                disabled={!applyFor?.eligible}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Reason (optional)</Label>
-              <Input
-                placeholder="e.g. Family function"
-                value={applyReason}
-                onChange={(e) => setApplyReason(e.target.value)}
-                disabled={!applyFor?.eligible}
-              />
-            </div>
-            <div className="flex gap-3">
-              <Button variant="outline" className="flex-1" onClick={() => setApplyFor(null)}>
-                Cancel
-              </Button>
-              <Button
-                className="flex-1"
-                onClick={submitOnBehalf}
-                disabled={createMutation.isPending || !applyFor?.eligible}
-              >
-                {createMutation.isPending ? "Submitting…" : "Submit Request"}
-              </Button>
-            </div>
-            <p className="text-[10px] text-muted-foreground -mt-1">
-              The request starts as Pending -approve it from the Pending tab (or the Department Head can approve it on
-              mobile).
-            </p>
-          </div>
-        </DialogContent>
-      </Dialog>
+        testId="confirm-delete-cl"
+      />
     </HrLayout>
   );
 }

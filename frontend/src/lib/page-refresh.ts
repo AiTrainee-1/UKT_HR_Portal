@@ -15,6 +15,29 @@ const PAGES_WITHOUT_REFRESH: (string | RegExp)[] = [
   // The report builder has its own full-height layout, and chat is live already.
   "/hr/reports",
   "/hr/chat",
+  // The owner asked for the Refresh strip to go from these pages' headers (2026-10-10).
+  "/hr/dashboard",
+  "/hr/employees",
+  "/hr/departments",
+  "/hr/designations",
+  "/hr/branches",
+  "/hr/attendance/staff",
+  "/hr/attendance/production",
+  "/hr/attendance/search",
+  "/hr/attendance/report-log",
+  "/hr/promotion",
+  "/hr/increment",
+  "/hr/bonus",
+  "/hr/id-cards",
+  "/hr/payroll",
+  "/hr/production-payroll",
+  "/hr/compensation",
+  "/hr/settlement",
+  "/hr/account-management",
+  "/hr/user-management",
+  "/hr/notifications",
+  // Biometric Device Status and Device Control (with its Fetch / Push / Connectors tabs); the router ignores case here
+  /^\/hr\/biometric-connectors\/(device-status|devicecontrol)(\/|$)/,
   // These put their own Refresh button in the title row (RefreshButton, or an older one of their own).
   "/hr/requests",
   "/hr/activity-logs",
@@ -35,11 +58,11 @@ const PAGES_WITHOUT_REFRESH: (string | RegExp)[] = [
   "/hr/outpass-visitors/tea-break",
   "/hr/geo-attendance",
   "/hr/missing-punch",
-  "/hr/attendance/search",
 ];
 
 export function pageHasRefresh(pathname: string): boolean {
-  const path = pathname.split(/[?#]/)[0].replace(/\/+$/, "") || "/";
+  // the router matches paths without regard to case (/hr/Biometric-Connectors = /hr/biometric-connectors), so does this
+  const path = (pathname.split(/[?#]/)[0].replace(/\/+$/, "") || "/").toLowerCase();
   return !PAGES_WITHOUT_REFRESH.some((p) => (typeof p === "string" ? p === path : p.test(path)));
 }
 

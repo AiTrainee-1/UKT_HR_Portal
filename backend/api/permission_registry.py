@@ -205,6 +205,9 @@ URL_MODULE_MAP: dict[str, str] = {
     "employee-requests": "requests",
     "permissions": "requests",
     "outpass-requests": "requests",
+    # the Requests page's unified list: its own module gates the endpoint, and the view then drops every kind whose own
+    # module (leave, casual_leave, geo_attendance, settlement ...) the caller cannot open
+    "hr-requests": "requests",
 
     "promotions": "promotion",
 

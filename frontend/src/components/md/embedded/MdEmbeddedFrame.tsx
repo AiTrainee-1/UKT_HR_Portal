@@ -17,6 +17,18 @@ import { useHeaderAdoption } from "./useHeaderAdoption";
 
 export type { FrameTab };
 
+/** The pages whose title row is laid out as a grid (md-portal.md 11.6): their own title row is tall (a subtitle, a sub-tab strip,
+ *  a group of buttons), and the owner asked for those seven to be aligned alike. The other pages keep the flowing row. */
+const GRID_HEADER_PAGES: ReadonlySet<string> = new Set([
+  "employees",
+  "attendance",
+  "attendance-production",
+  "outpass",
+  "visitors",
+  "shifts",
+  "requests",
+]);
+
 /** MD pages that are not copies of an HR page: the dashboard is the MD's own (pages/md/home). */
 const OWN_PAGES: ReadonlySet<string> = new Set(["dashboard"]);
 
@@ -77,7 +89,7 @@ export default function MdEmbeddedFrame({ children }: { children: ReactNode }) {
   };
 
   const [ops, setOps] = useState<HTMLDivElement | null>(null);
-  const adopted = useHeaderAdoption(ops);
+  const adopted = useHeaderAdoption(ops, GRID_HEADER_PAGES.has(page?.id ?? ""));
   // a page with no title row of its own (a form, a record): its first heading is still its title
   const [plain, setPlain] = useState<HTMLDivElement | null>(null);
   useTitleMark(plain);

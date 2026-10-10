@@ -6,15 +6,10 @@ import { pageHasRefresh, runPageRefreshers, usePageRefresh } from "./page-refres
 describe("pageHasRefresh", () => {
   it("gives the button to the pages that show data", () => {
     for (const path of [
-      "/hr/dashboard",
-      "/hr/employees",
       "/hr/employees/42",
       "/hr/attendance",
-      "/hr/attendance/staff",
-      "/hr/payroll",
       "/hr/user-management/7",
       "/hr/recruitment/resume-screening",
-      "/hr/notifications",
     ]) {
       expect(pageHasRefresh(path), path).toBe(true);
     }
@@ -29,6 +24,40 @@ describe("pageHasRefresh", () => {
       "/hr/settings",
       "/hr/reports",
       "/hr/chat",
+    ]) {
+      expect(pageHasRefresh(path), path).toBe(false);
+    }
+  });
+
+  it("skips the pages whose header the owner asked to have no Refresh (2026-10-10), in any letter case", () => {
+    for (const path of [
+      "/hr/dashboard",
+      "/hr/employees",
+      "/hr/departments",
+      "/hr/designations",
+      "/hr/branches",
+      "/hr/attendance/staff",
+      "/hr/attendance/production",
+      "/hr/attendance/search",
+      "/hr/attendance/report-log",
+      "/hr/promotion",
+      "/hr/increment",
+      "/hr/bonus",
+      "/hr/id-cards",
+      "/hr/payroll",
+      "/hr/production-payroll",
+      "/hr/compensation",
+      "/hr/settlement",
+      "/hr/account-management",
+      "/hr/user-management",
+      "/hr/notifications",
+      "/hr/Biometric-Connectors/device-status",
+      "/hr/Biometric-Connectors/DeviceControl",
+      "/hr/Biometric-Connectors/DeviceControl/fetch",
+      "/hr/Biometric-Connectors/DeviceControl/push",
+      "/hr/Biometric-Connectors/DeviceControl/connectors",
+      "/hr/biometric-connectors/devicecontrol",
+      "/HR/Dashboard",
     ]) {
       expect(pageHasRefresh(path), path).toBe(false);
     }
@@ -55,7 +84,6 @@ describe("pageHasRefresh", () => {
       "/hr/outpass-visitors/tea-break",
       "/hr/geo-attendance",
       "/hr/missing-punch",
-      "/hr/attendance/search",
     ]) {
       expect(pageHasRefresh(path), path).toBe(false);
     }
@@ -64,7 +92,8 @@ describe("pageHasRefresh", () => {
   it("ignores a trailing slash, a query string and a hash", () => {
     expect(pageHasRefresh("/hr/settings/")).toBe(false);
     expect(pageHasRefresh("/hr/requests?tab=leave")).toBe(false);
-    expect(pageHasRefresh("/hr/employees?page=2#top")).toBe(true);
+    expect(pageHasRefresh("/hr/employees?page=2#top")).toBe(false);
+    expect(pageHasRefresh("/hr/attendance?tab=history#top")).toBe(true);
   });
 });
 

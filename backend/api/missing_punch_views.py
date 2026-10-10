@@ -47,6 +47,8 @@ def _missing_punch_dict(r: MissingPunchRequest, cfg: approval.Config | None = No
         "employeeName": f"{emp.first_name} {emp.last_name}",
         "department": emp.department.name if emp.department_id and emp.department else None,
         "designation": emp.designation.title if emp.designation_id and emp.designation else None,
+        "branchId": emp.branch_id,
+        "branch": emp.branch.name if emp.branch_id and emp.branch else None,
         "date": str(r.date),
         "punchTime": r.punch_time.strftime("%H:%M") if r.punch_time else None,
         "punchType": r.punch_type,
@@ -137,7 +139,7 @@ def resolve_missing_punch_hr(req: MissingPunchRequest, decision: str, reviewer_n
 def missing_punch_requests(request: Request) -> Response:
     if request.method == "GET":
         qs = MissingPunchRequest.objects.select_related(
-            "employee__department", "employee__designation"
+            "employee__department", "employee__designation", "employee__branch"
         )
         qs = scope_to_branch(qs, request, field="employee__branch_id")
         # Employees see only their own requests

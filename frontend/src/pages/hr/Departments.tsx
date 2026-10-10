@@ -1,525 +1,446 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { Briefcase, Building2, CircleOff, Download, Factory, Plus, Search, Users, X } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
-import { Card, CardContent } from "@/components/ui/card";
+import { EmployeeAssignmentLookup } from "@/components/EmployeeAssignmentLookup";
 import { Button } from "@/components/ui/button";
+import { DataPagination } from "@/components/ui/DataPagination";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
+import { PillTabs } from "@/components/ui/pill-tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
-} from "@/components/ui/dialog";
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
-  AlertDialogTrigger,
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  useListDepartments, useDeleteDepartment,
-  getListDepartmentsQueryKey,
-} from "@/lib/api-client";
-import {
-  useSearchEmployees, useAssignEmployee,
-} from "@/lib/api-client";
-import { useListEmployees, getListEmployeesQueryKey } from "@/lib/api-client";
-import { useCreateDepartmentWithBranch, useListBranches, getListBranchesQueryKey } from "@/lib/api-client/custom-hooks";
 import { useAuth } from "@/contexts/AuthContext";
-import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { useAssignEmployee, useDeleteDepartment } from "@/lib/api-client";
+import AssignDialog from "./org-structure/AssignDialog";
+import DepartmentDialog from "./org-structure/DepartmentDialog";
+import DepartmentList from "./org-structure/DepartmentList";
+import PeopleDrawer from "./org-structure/PeopleDrawer";
 import {
-  Building2, Plus, Trash2, Users, Search, ChevronDown, ChevronRight,
-  UserPlus, X, UserMinus,
-} from "lucide-react";
-import type { Department, Employee } from "@/lib/api-client";
-import { DataPagination } from "@/components/ui/DataPagination";
-import { EmployeeAssignmentLookup } from "@/components/EmployeeAssignmentLookup";
+  errorMessage,
+  useDepartmentPeople,
+  useDepartmentsOverview,
+  useRefreshOrg,
+  type DepartmentRow,
+  type Person,
+} from "./org-structure/api";
+import { downloadSheet } from "./org-structure/exportSheet";
+import {
+  DEPT_SORTS,
+  NONE,
+  NO_DEPT_FILTERS,
+  departmentDeleteImpact,
+  departmentSheet,
+  deptFiltersActive,
+  filterDepartments,
+  plural,
+  sortDepartments,
+  summarizeDepartments,
+  type DeptFilters,
+  type DeptSort,
+} from "./org-structure/logic";
+import { BranchChip, EmptyState, LoadError, StatCard } from "./org-structure/parts";
 
-// ── Employee search dialog used for assigning an employee to a department ──
-function AssignEmployeeDialog({
-  dept,
-  onClose,
-}: {
-  dept: Department;
-  onClose: () => void;
-}) {
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
-  const [query, setQuery] = useState("");
-  const { data: results, isFetching } = useSearchEmployees(query);
-  const assignMutation = useAssignEmployee();
-
-  const assign = async (emp: Employee) => {
-    if (emp.departmentId === dept.id) {
-      toast({ title: `${emp.firstName} is already in this department` });
-      return;
-    }
-    try {
-      await assignMutation.mutateAsync({ id: emp.id, departmentId: dept.id });
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: getListDepartmentsQueryKey() }),
-        queryClient.invalidateQueries({ queryKey: getListEmployeesQueryKey() }),
-      ]);
-      toast({ title: `${emp.firstName} ${emp.lastName} assigned to ${dept.name}` });
-    } catch {
-      toast({ title: "Failed to assign employee", variant: "destructive" });
-    }
-  };
-
-  return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>Assign Employee to {dept.name}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4 py-2">
-          <div className="space-y-1.5">
-            <Label>Search by Employee ID or Phone Number</Label>
-            <div className="relative">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              <Input
-                autoFocus
-                className="pl-9"
-                placeholder="e.g. EMP001 or 9876543210"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </div>
-            {query.length < 2 && (
-              <p className="text-xs text-muted-foreground">Type at least 2 characters to search</p>
-            )}
-          </div>
-
-          <div className="space-y-2 max-h-64 overflow-y-auto">
-            {isFetching && (
-              <div className="text-xs text-center text-muted-foreground py-4">Searching…</div>
-            )}
-            {!isFetching && query.length >= 2 && (!results || results.length === 0) && (
-              <div className="text-xs text-center text-muted-foreground py-4">No employees found</div>
-            )}
-            {(results ?? []).map((emp) => (
-              <div
-                key={emp.id}
-                className="flex items-center justify-between gap-3 p-3 rounded-lg border hover:bg-gray-50"
-              >
-                <div>
-                  <p className="font-semibold text-sm">{emp.firstName} {emp.lastName}</p>
-                  <p className="text-xs text-gray-400">
-                    {emp.employeeCode} · {emp.phone ?? "—"}
-                  </p>
-                  {emp.departmentName && (
-                    <p className="text-xs text-amber-600 mt-0.5">
-                      Currently in: {emp.departmentName}
-                    </p>
-                  )}
-                </div>
-                <Button
-                  size="sm"
-                  className="h-7 text-xs shrink-0"
-                  onClick={() => assign(emp)}
-                  disabled={assignMutation.isPending || emp.departmentId === dept.id}
-                >
-                  {emp.departmentId === dept.id ? "Already here" : "Assign"}
-                </Button>
-              </div>
-            ))}
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Done</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ── Department card with expandable employee list ────────────────────────────
-function DeptCard({
-  dept,
-  onDelete,
-}: {
-  dept: Department;
-  onDelete: (id: number) => void;
-}) {
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
-  const [expanded, setExpanded] = useState(false);
-  const [showAssign, setShowAssign] = useState(false);
-  const assignMutation = useAssignEmployee();
-
-  const { data: employees, isLoading: empLoading } = useListEmployees(
-    { departmentId: dept.id, status: "active" } as any,
-    { query: { enabled: expanded } } as any,
-  );
-
-  const removeEmployee = async (emp: Employee) => {
-    try {
-      await assignMutation.mutateAsync({ id: emp.id, departmentId: null });
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: getListDepartmentsQueryKey() }),
-        queryClient.invalidateQueries({ queryKey: getListEmployeesQueryKey() }),
-      ]);
-      toast({ title: `${emp.firstName} removed from department` });
-    } catch {
-      toast({ title: "Failed to remove employee", variant: "destructive" });
-    }
-  };
-
-  return (
-    <>
-      <Card className="border-0 shadow-sm hover:shadow-md transition-shadow">
-        <CardContent className="p-0">
-          {/* Header row */}
-          <div
-            className="flex items-center gap-4 p-4 cursor-pointer"
-            onClick={() => setExpanded((v) => !v)}
-          >
-            <div
-              className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
-              style={{ background: "linear-gradient(135deg, #3b82f6, #06b6d4)" }}
-            >
-              <Building2 size={18} className="text-white" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="font-bold text-gray-900 truncate">{dept.name}</p>
-              {dept.description && (
-                <p className="text-sm text-muted-foreground truncate mt-0.5">{dept.description}</p>
-              )}
-            </div>
-            <div className="flex items-center gap-3 shrink-0">
-              <Badge variant="secondary" className="gap-1.5">
-                <Users size={11} />
-                {dept.employeeCount ?? 0} employees
-              </Badge>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 text-blue-500 hover:text-blue-700 hover:bg-blue-50"
-                onClick={(e) => { e.stopPropagation(); setShowAssign(true); }}
-                title="Assign employee"
-              >
-                <UserPlus size={14} />
-              </Button>
-              <AlertDialog>
-                <AlertDialogTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-muted-foreground hover:text-red-600 hover:bg-red-50"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <Trash2 size={15} />
-                  </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>Delete department?</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      This will permanently delete <strong>{dept.name}</strong>. Employees
-                      assigned to this department will become unassigned.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction
-                      onClick={() => onDelete(dept.id)}
-                      className="bg-red-600 hover:bg-red-700"
-                    >
-                      Delete
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-              {expanded ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
-            </div>
-          </div>
-
-          {/* Expanded employee list */}
-          {expanded && (
-            <div className="border-t px-4 pb-4 pt-3 space-y-2">
-              {empLoading ? (
-                Array.from({ length: 3 }).map((_, i) => (
-                  <div key={i} className="flex items-center gap-3">
-                    <Skeleton className="h-8 w-8 rounded-full" />
-                    <Skeleton className="h-4 w-40" />
-                  </div>
-                ))
-              ) : (employees ?? []).length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-4">
-                  No employees assigned yet.{" "}
-                  <button
-                    className="text-blue-600 underline"
-                    onClick={() => setShowAssign(true)}
-                  >
-                    Assign one
-                  </button>
-                </p>
-              ) : (
-                (employees ?? []).map((emp) => (
-                  <div
-                    key={emp.id}
-                    className="flex items-center justify-between gap-3 py-1.5 px-2 rounded-lg hover:bg-gray-50"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white text-xs font-bold shrink-0">
-                        {emp.firstName.charAt(0).toUpperCase()}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-gray-800 truncate">
-                          {emp.firstName} {emp.lastName}
-                        </p>
-                        <p className="text-xs text-gray-400">
-                          {emp.employeeCode}
-                          {(emp as any).designationTitle ? ` · ${(emp as any).designationTitle}` : ""}
-                        </p>
-                      </div>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-gray-300 hover:text-red-500 hover:bg-red-50 shrink-0"
-                      title="Remove from department"
-                      onClick={() => removeEmployee(emp)}
-                      disabled={assignMutation.isPending}
-                    >
-                      <UserMinus size={13} />
-                    </Button>
-                  </div>
-                ))
-              )}
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full gap-2 mt-1 h-8 text-xs border-dashed"
-                onClick={() => setShowAssign(true)}
-              >
-                <UserPlus size={13} /> Assign Employee
-              </Button>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {showAssign && (
-        <AssignEmployeeDialog dept={dept} onClose={() => setShowAssign(false)} />
-      )}
-    </>
-  );
-}
-
-// ── Main Departments page ─────────────────────────────────────────────────────
 export default function Departments() {
-  const { toast } = useToast();
   const { user } = useAuth();
-  const queryClient = useQueryClient();
-  const [search, setSearch] = useState("");
-  const [showDialog, setShowDialog] = useState(false);
-  const [form, setForm] = useState({ name: "", description: "", branchId: "" });
+  const { toast } = useToast();
+  const refresh = useRefreshOrg();
+  const overview = useDepartmentsOverview();
+  const rows = useMemo(() => overview.data?.departments ?? [], [overview.data]);
+  const branches = useMemo(() => overview.data?.branches ?? [], [overview.data]);
+  const summary = useMemo(() => summarizeDepartments(rows, overview.data?.unassigned), [rows, overview.data]);
 
-  // A branch-scoped HR user's own branch is implicit server-side (see
-  // views.py::_departments_create) -only an unscoped user (super admin /
-  // branch-less role) needs to pick one explicitly, so this only fetches
-  // the branch list when it'll actually be shown.
-  const needsBranchPicker = !user?.branchId;
-  const { data: branches } = useListBranches({ enabled: needsBranchPicker, queryKey: getListBranchesQueryKey() });
-
-  const { data: departments, isLoading } = useListDepartments();
-  const createMutation = useCreateDepartmentWithBranch();
-  const deleteMutation = useDeleteDepartment();
-
-  const filtered = (departments ?? []).filter((d) =>
-    d.name.toLowerCase().includes(search.toLowerCase()) ||
-    (d.description ?? "").toLowerCase().includes(search.toLowerCase()),
-  );
-
-  // Pagination. `safePage` clamps rather than resetting on every render, so a
-  // search that shrinks the list can't strand the user on an empty page.
+  const [view, setView] = useState<"list" | "find">("list");
+  const [filters, setFilters] = useState<DeptFilters>(NO_DEPT_FILTERS);
+  const [sort, setSort] = useState<DeptSort>("name-asc");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const [dialog, setDialog] = useState<{ department: DepartmentRow | null } | null>(null);
+  const [confirm, setConfirm] = useState<DepartmentRow | null>(null);
+  const [drawerId, setDrawerId] = useState<number | null>(null);
+  const [assignFor, setAssignFor] = useState<DepartmentRow | null>(null);
+  const [removingId, setRemovingId] = useState<number | null>(null);
+
+  const people = useDepartmentPeople(drawerId);
+  const assignMutation = useAssignEmployee();
+  const deleteMutation = useDeleteDepartment();
+
+  // A branch login's own branch is implied by the server; only an unscoped login picks one.
+  const needsBranch = !user?.branchId;
+  const set = (patch: Partial<DeptFilters>) => {
+    setFilters((f) => ({ ...f, ...patch }));
+    setPage(1);
+  };
+
+  const shown = useMemo(() => sortDepartments(filterDepartments(rows, filters), sort), [rows, filters, sort]);
+  const active = deptFiltersActive(filters);
+  // `safePage` clamps rather than resetting on every render, so a search that shrinks the list can't strand the user.
+  const totalPages = Math.max(1, Math.ceil(shown.length / pageSize));
   const safePage = Math.min(page, totalPages);
-  const pagedDepts = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const paged = shown.slice((safePage - 1) * pageSize, safePage * pageSize);
 
-  async function handleCreate() {
-    if (!form.name.trim()) {
-      toast({ title: "Department name is required", variant: "destructive" });
-      return;
-    }
-    if (needsBranchPicker && !form.branchId) {
-      toast({ title: "Select a branch", description: "A department with no branch is hidden from every branch login.", variant: "destructive" });
-      return;
-    }
+  const drawerDept = rows.find((d) => d.id === drawerId) ?? null;
+  const withBranchless = rows.some((d) => d.branchId == null);
+
+  const removePerson = async (p: Person) => {
+    setRemovingId(p.id);
     try {
-      await createMutation.mutateAsync({
-        name: form.name.trim(),
-        description: form.description.trim() || undefined,
-        branchId: form.branchId ? Number(form.branchId) : undefined,
-      });
-    } catch {
-      toast({ title: "Failed to create department", variant: "destructive" });
-      return;
+      await assignMutation.mutateAsync({ id: p.id, departmentId: null });
+      await refresh();
+      toast({ title: `${p.name} removed from the department` });
+    } catch (e) {
+      toast({ title: "Failed to remove employee", description: errorMessage(e), variant: "destructive" });
+    } finally {
+      setRemovingId(null);
     }
-    toast({ title: "Department created" });
-    setShowDialog(false);
-    setForm({ name: "", description: "", branchId: "" });
-    queryClient.invalidateQueries({ queryKey: getListDepartmentsQueryKey() });
-  }
+  };
 
-  async function handleDelete(id: number) {
+  const runDelete = async () => {
+    const d = confirm;
+    setConfirm(null);
+    if (!d) return;
     try {
-      await deleteMutation.mutateAsync({ id });
-    } catch {
-      toast({ title: "Failed to delete department", variant: "destructive" });
+      await deleteMutation.mutateAsync({ id: d.id });
+    } catch (e) {
+      toast({ title: "Failed to delete department", description: errorMessage(e), variant: "destructive" });
       return;
     }
-    toast({ title: "Department deleted" });
-    queryClient.invalidateQueries({ queryKey: getListDepartmentsQueryKey() });
-  }
+    if (drawerId === d.id) setDrawerId(null);
+    await refresh();
+    toast({ title: `Department ${d.name} deleted` });
+  };
 
-  const totalEmployees = (departments ?? []).reduce((s, d) => s + (d.employeeCount ?? 0), 0);
+  const exportList = async () => {
+    try {
+      await downloadSheet("Departments", "departments", departmentSheet(shown));
+    } catch {
+      toast({ title: "Could not create the Excel file", variant: "destructive" });
+    }
+  };
+
+  const loading = overview.isLoading;
+  const dash = (n: number) => (loading ? "—" : n);
 
   return (
     <HrLayout>
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div className="space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-2xl font-black text-gray-900">Departments</h2>
-            <p className="text-muted-foreground text-sm mt-0.5">
-              Manage departments and assign employees -click a card to expand
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              Every department with its staff and production head-count. Click one to see who is in it.
             </p>
           </div>
-          <Button onClick={() => setShowDialog(true)} className="gap-2 self-start sm:self-auto">
-            <Plus size={16} /> New Department
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              className="gap-1.5"
+              onClick={exportList}
+              disabled={loading || shown.length === 0}
+              data-testid="export-departments"
+            >
+              <Download size={15} /> Export
+            </Button>
+            <Button onClick={() => setDialog({ department: null })} className="gap-1.5" data-testid="new-department">
+              <Plus size={16} /> New Department
+            </Button>
+          </div>
         </div>
 
-        {/* Answers "which department is this person in?" directly, instead of
-            requiring you to guess the department and open its Assign dialog. */}
-        <EmployeeAssignmentLookup
-          kind="department"
-          options={(departments ?? []).map((d) => ({ id: d.id, label: d.name }))}
-          listSearch={search}
-          onListSearchChange={setSearch}
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+          <StatCard
+            testId="stat-departments"
+            label="Departments"
+            value={dash(summary.departments)}
+            sub={loading ? undefined : `in ${plural(summary.branches, "branch", "branches")}`}
+            icon={Building2}
+            tone="bg-slate-100 text-slate-800"
+          />
+          <StatCard
+            testId="stat-employees"
+            label="Active employees"
+            value={dash(summary.active)}
+            sub={loading ? undefined : `${summary.unassigned} with no department`}
+            icon={Users}
+            tone="bg-green-50 text-green-800"
+          />
+          <StatCard
+            testId="stat-staff"
+            label="Staff"
+            value={dash(summary.staff)}
+            sub={
+              loading || !summary.active
+                ? undefined
+                : `${Math.round((summary.staff / summary.active) * 100)}% of employees`
+            }
+            icon={Briefcase}
+            tone="bg-blue-50 text-blue-800"
+          />
+          <StatCard
+            testId="stat-production"
+            label="Production"
+            value={dash(summary.production)}
+            sub={
+              loading || !summary.active
+                ? undefined
+                : `${Math.round((summary.production / summary.active) * 100)}% of employees`
+            }
+            icon={Factory}
+            tone="bg-amber-50 text-amber-800"
+          />
+          <StatCard
+            testId="stat-empty"
+            label="No employees"
+            value={dash(summary.empty)}
+            sub="departments with nobody active"
+            icon={CircleOff}
+            tone="bg-gray-100 text-gray-700"
+          />
+        </div>
+
+        <PillTabs
+          items={[
+            { value: "list", label: "Departments", icon: <Building2 size={14} />, count: rows.length },
+            { value: "find", label: "Find & assign employees", icon: <Users size={14} /> },
+          ]}
+          value={view}
+          onChange={(v) => setView(v as "list" | "find")}
         />
 
-        {/* Summary */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          <Card className="border-0 shadow-sm">
-            <CardContent className="p-4">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Departments</p>
-              <p className="text-2xl font-black text-blue-600 mt-0.5">{departments?.length ?? 0}</p>
-            </CardContent>
-          </Card>
-          <Card className="border-0 shadow-sm">
-            <CardContent className="p-4">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Total Employees</p>
-              <p className="text-2xl font-black text-green-600 mt-0.5">{totalEmployees}</p>
-            </CardContent>
-          </Card>
-          <Card className="border-0 shadow-sm">
-            <CardContent className="p-4">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Avg / Dept</p>
-              <p className="text-2xl font-black text-purple-600 mt-0.5">
-                {departments?.length ? Math.round(totalEmployees / departments.length) : 0}
-              </p>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* List */}
-        <div className="grid gap-3">
-          {isLoading ? (
-            Array.from({ length: 4 }).map((_, i) => (
-              <Card key={i} className="border-0 shadow-sm">
-                <CardContent className="p-4">
-                  <Skeleton className="h-5 w-40 mb-2" />
-                  <Skeleton className="h-4 w-64" />
-                </CardContent>
-              </Card>
-            ))
-          ) : filtered.length === 0 ? (
-            <Card className="border-0 shadow-sm">
-              <CardContent className="p-10 flex flex-col items-center text-center">
-                <Building2 size={32} className="text-muted-foreground/30 mb-3" />
-                <p className="font-semibold text-gray-700">
-                  {search ? "No departments match your search" : "No departments yet"}
-                </p>
-                {!search && (
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Create your first department to get started.
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          ) : (
-            pagedDepts.map((dept) => (
-              <DeptCard key={dept.id} dept={dept} onDelete={handleDelete} />
-            ))
-          )}
-        </div>
-
-        <DataPagination
-          page={safePage}
-          totalPages={totalPages}
-          totalItems={filtered.length}
-          pageSize={pageSize}
-          onPageChange={setPage}
-          onPageSizeChange={setPageSize}
-        />
-      </div>
-
-      {/* Create Dialog */}
-      <Dialog open={showDialog} onOpenChange={setShowDialog}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>New Department</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="dept-name">Name <span className="text-red-500">*</span></Label>
-              <Input
-                id="dept-name"
-                placeholder="e.g. Production"
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                onKeyDown={(e) => e.key === "Enter" && handleCreate()}
-                autoFocus
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="dept-desc">Description</Label>
-              <Input
-                id="dept-desc"
-                placeholder="Optional description"
-                value={form.description}
-                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-              />
-            </div>
-            {needsBranchPicker && (
-              <div className="space-y-1.5">
-                <Label htmlFor="dept-branch">Branch <span className="text-red-500">*</span></Label>
-                <select
-                  id="dept-branch"
-                  value={form.branchId}
-                  onChange={(e) => setForm((f) => ({ ...f, branchId: e.target.value }))}
-                  className="w-full h-9 rounded-md border px-3 text-sm bg-background"
-                >
-                  <option value="">— Select Branch —</option>
-                  {(branches ?? []).map((b) => (
-                    <option key={b.id} value={b.id}>{b.name}</option>
-                  ))}
-                </select>
+        {view === "find" ? (
+          <EmployeeAssignmentLookup
+            kind="department"
+            options={rows.map((d) => ({
+              id: d.id,
+              label: d.branchName && branches.length > 1 ? `${d.name} (${d.branchName})` : d.name,
+            }))}
+          />
+        ) : (
+          <div className="space-y-3">
+            <div className="space-y-3 rounded-2xl border bg-white p-3">
+              <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+                <div className="relative flex-1">
+                  <Search
+                    size={15}
+                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+                  />
+                  <Input
+                    value={filters.query}
+                    onChange={(e) => set({ query: e.target.value })}
+                    placeholder="Search by department, description or branch"
+                    aria-label="Search departments"
+                    className="h-10 pl-9 pr-9"
+                    data-testid="dept-search"
+                  />
+                  {filters.query && (
+                    <button
+                      type="button"
+                      onClick={() => set({ query: "" })}
+                      aria-label="Clear search"
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-gray-400 hover:text-gray-700"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-2 lg:flex">
+                  {(branches.length > 1 || withBranchless) && (
+                    <Select value={filters.branch} onValueChange={(v) => set({ branch: v })}>
+                      <SelectTrigger className="h-10 lg:w-44" aria-label="Filter by branch" data-testid="filter-branch">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All branches</SelectItem>
+                        {withBranchless && <SelectItem value={NONE}>No branch</SelectItem>}
+                        {branches.map((b) => (
+                          <SelectItem key={b.id} value={String(b.id)}>
+                            {b.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  <Select value={sort} onValueChange={(v) => setSort(v as DeptSort)}>
+                    <SelectTrigger
+                      className="h-10 lg:w-44"
+                      aria-label="Sort departments"
+                      data-testid="sort-departments"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DEPT_SORTS.map((s) => (
+                        <SelectItem key={s.value} value={s.value}>
+                          {s.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <PillTabs
+                  size="sm"
+                  items={[
+                    { value: "all", label: "All", count: rows.length },
+                    { value: "with", label: "With employees", count: rows.length - summary.empty },
+                    { value: "empty", label: "No employees", count: summary.empty },
+                  ]}
+                  value={filters.show}
+                  onChange={(v) => set({ show: v as DeptFilters["show"] })}
+                />
+                <p className="text-xs text-gray-500" data-testid="dept-count">
+                  Showing <b>{shown.length}</b> of {rows.length}
+                  {active && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFilters(NO_DEPT_FILTERS);
+                        setPage(1);
+                      }}
+                      className="ml-2 font-semibold text-blue-600 hover:underline"
+                      data-testid="dept-clear-filters"
+                    >
+                      Clear filters
+                    </button>
+                  )}
+                </p>
+              </div>
+            </div>
+
+            {loading ? (
+              <div className="space-y-3 rounded-2xl border bg-white p-4" data-testid="departments-loading">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-3">
+                    <Skeleton className="h-10 w-10 rounded-xl" />
+                    <div className="flex-1 space-y-1.5">
+                      <Skeleton className="h-4 w-48" />
+                      <Skeleton className="h-3 w-32" />
+                    </div>
+                    <Skeleton className="hidden h-2 w-40 sm:block" />
+                  </div>
+                ))}
+              </div>
+            ) : overview.isError ? (
+              <LoadError what="the departments" onRetry={() => overview.refetch()} />
+            ) : shown.length === 0 ? (
+              <EmptyState
+                testId={rows.length === 0 ? "departments-empty" : "departments-no-match"}
+                filtered={rows.length > 0}
+                title="No departments yet"
+                hint="Create the first department, then assign employees to it."
+                onClear={() => {
+                  setFilters(NO_DEPT_FILTERS);
+                  setPage(1);
+                }}
+                action={
+                  <Button onClick={() => setDialog({ department: null })} className="gap-1.5">
+                    <Plus size={15} /> Create the first department
+                  </Button>
+                }
+              />
+            ) : (
+              <>
+                <DepartmentList
+                  rows={paged}
+                  onOpen={(d) => setDrawerId(d.id)}
+                  onEdit={(d) => setDialog({ department: d })}
+                  onDelete={setConfirm}
+                />
+                <DataPagination
+                  page={safePage}
+                  totalPages={totalPages}
+                  totalItems={shown.length}
+                  pageSize={pageSize}
+                  onPageChange={setPage}
+                  onPageSizeChange={(n) => {
+                    setPageSize(n);
+                    setPage(1);
+                  }}
+                />
+              </>
             )}
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowDialog(false)}>Cancel</Button>
-            <Button onClick={handleCreate} disabled={createMutation.isPending}>
-              {createMutation.isPending ? "Creating…" : "Create Department"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        )}
+      </div>
+
+      {drawerId != null && (
+        <PeopleDrawer
+          key={drawerId}
+          open
+          onClose={() => setDrawerId(null)}
+          title={drawerDept?.name ?? people.data?.department.name ?? "Department"}
+          subtitle={
+            <>
+              <BranchChip name={drawerDept?.branchName ?? people.data?.department.branchName} />
+              {drawerDept?.description && <span className="text-gray-500">{drawerDept.description}</span>}
+            </>
+          }
+          kind="department"
+          people={people.data?.employees}
+          loading={people.isLoading}
+          failed={people.isError}
+          onRetry={() => people.refetch()}
+          showOther="designation"
+          onAssign={() => drawerDept && setAssignFor(drawerDept)}
+          onRemove={removePerson}
+          removingId={removingId}
+        />
+      )}
+
+      {assignFor && (
+        <AssignDialog
+          target={{ kind: "department", id: assignFor.id, name: assignFor.name }}
+          onClose={() => setAssignFor(null)}
+        />
+      )}
+
+      {dialog && (
+        <DepartmentDialog
+          key={dialog.department?.id ?? "new"}
+          department={dialog.department}
+          branches={branches}
+          needsBranch={needsBranch}
+          existing={rows}
+          defaultBranchId={filters.branch !== "all" && filters.branch !== NONE ? Number(filters.branch) : null}
+          onClose={() => setDialog(null)}
+        />
+      )}
+
+      <AlertDialog open={confirm !== null} onOpenChange={(o) => !o && setConfirm(null)}>
+        <AlertDialogContent data-testid="confirm-delete">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete department "{confirm?.name}"?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <p>This cannot be undone. Here is what happens:</p>
+                <ul className="list-disc space-y-1 pl-5">
+                  {confirm && departmentDeleteImpact(confirm).map((line) => <li key={line}>{line}</li>)}
+                </ul>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="confirm-cancel">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={runDelete}
+              className="bg-red-600 text-white hover:bg-red-700"
+              data-testid="confirm-delete-yes"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </HrLayout>
   );
 }

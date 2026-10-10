@@ -76,6 +76,10 @@ def advance_json(a: Advance, include_repayments: bool = False) -> dict:
         "employeeDesignation": emp.designation.title if emp.designation_id else None,
         "employeePhone": emp.phone,
         "employeeEmail": emp.email,
+        "employeeBranchId": emp.branch_id,
+        "employeeBranch": emp.branch.name if emp.branch_id else None,
+        "employeeType": emp.employment_type,
+        "employeeStatus": emp.status,
         "advanceType": a.advance_type,
         "amount": float(a.amount),
         "purpose": a.purpose,
@@ -126,7 +130,7 @@ def advances(request: Request) -> Response:
         adv_status = request.query_params.get("status")
         qs = (
             Advance.objects
-            .select_related("employee", "employee__department", "employee__designation")
+            .select_related("employee", "employee__department", "employee__designation", "employee__branch")
             .prefetch_related("repayments")
             .order_by("-created_at")
         )
@@ -188,7 +192,7 @@ def advance_detail(request: Request, pk: int) -> Response:
     try:
         adv = (
             Advance.objects
-            .select_related("employee", "employee__department", "employee__designation")
+            .select_related("employee", "employee__department", "employee__designation", "employee__branch")
             .prefetch_related("repayments")
             .get(pk=pk)
         )
@@ -246,7 +250,7 @@ def advance_repayments(request: Request, pk: int) -> Response:
     try:
         adv = (
             Advance.objects
-            .select_related("employee", "employee__department", "employee__designation")
+            .select_related("employee", "employee__department", "employee__designation", "employee__branch")
             .prefetch_related("repayments")
             .get(pk=pk)
         )

@@ -10,48 +10,62 @@ function countRequests(page: Page, needle: string) {
   return () => count;
 }
 
-test("Refresh reloads the data on a page and keeps what you were doing", async ({ page }) => {
+test("Refresh reloads the data on a page that still has it (the Attendance hub)", async ({ page }) => {
   await loginAsHr(page);
   const employeeCalls = countRequests(page, "/api/employees");
-  await page.goto("/hr/employees");
+  await page.goto("/hr/attendance");
 
   const refresh = page.getByTestId("button-page-refresh");
   await expect(refresh).toBeVisible();
   await expect(page.getByTestId("page-last-updated")).toContainText("Updated");
-  await expect(page.getByText("Asha Kumar").first()).toBeVisible();
+  await expect.poll(employeeCalls).toBeGreaterThan(0);
 
-  // What the person typed stays put...
-  const search = page.getByPlaceholder(/search/i).first();
-  await search.fill("Asha");
-  await expect(search).toHaveValue("Asha");
-
-  // ...while the data is fetched again from the server.
+  // the data is fetched again from the server
   const before = employeeCalls();
   await refresh.click();
   await expect.poll(employeeCalls).toBeGreaterThan(before);
-  await expect(search).toHaveValue("Asha");
   await expect(refresh).toBeEnabled();
 });
 
-test("Refresh also reloads a page that loads its data by hand (Staff Payroll)", async ({ page }) => {
-  await loginAsHr(page);
-  const payrollCalls = countRequests(page, "/api/payroll?");
-  await page.goto("/hr/payroll");
-  await expect(page.getByTestId("button-page-refresh")).toBeVisible();
-  await expect.poll(payrollCalls).toBeGreaterThan(0);
-  const before = payrollCalls();
-  await page.getByTestId("button-page-refresh").click();
-  await expect.poll(payrollCalls).toBeGreaterThan(before);
-});
-
-test("the button is on data pages and left off the pages that don't need it", async ({ page }) => {
+test("the header has no Refresh on the pages the owner listed, and the strip stays on the others", async ({ page }) => {
   await loginAsHr(page);
 
-  for (const path of ["/hr/dashboard", "/hr/departments", "/hr/attendance/staff"]) {
+  // 2026-10-10: removed from these headers (the Biometric Connectors pages are in the same list)
+  for (const path of [
+    "/hr/dashboard",
+    "/hr/employees",
+    "/hr/departments",
+    "/hr/designations",
+    "/hr/branches",
+    "/hr/attendance/staff",
+    "/hr/attendance/production",
+    "/hr/attendance/search",
+    "/hr/attendance/report-log",
+    "/hr/promotion",
+    "/hr/increment",
+    "/hr/bonus",
+    "/hr/id-cards",
+    "/hr/payroll",
+    "/hr/production-payroll",
+    "/hr/compensation",
+    "/hr/settlement",
+    "/hr/account-management",
+    "/hr/user-management",
+    "/hr/notifications",
+    "/hr/Biometric-Connectors/device-status",
+    "/hr/Biometric-Connectors/DeviceControl",
+  ]) {
     await page.goto(path);
-    await expect(page.getByTestId("page-refresh-bar"), path).toBeVisible();
-    await expect(page.getByTestId("button-page-refresh"), path).toBeVisible();
+    await expect(page.locator("main"), path).toBeVisible();
+    await expect(page.getByTestId("page-refresh-bar"), path).toHaveCount(0);
+    await expect(page.getByTestId("button-page-refresh"), path).toHaveCount(0);
+    await expect(page.getByTestId("page-last-updated"), path).toHaveCount(0);
   }
+
+  // a data page that was not listed keeps the strip
+  await page.goto("/hr/attendance");
+  await expect(page.getByTestId("page-refresh-bar")).toBeVisible();
+  await expect(page.getByTestId("button-page-refresh")).toBeVisible();
 
   // Settings and data-entry forms: nothing to refresh, and a reload must never replace typed values.
   for (const path of ["/hr/settings", "/hr/employees/new"]) {
@@ -61,7 +75,7 @@ test("the button is on data pages and left off the pages that don't need it", as
   }
 
   // Pages with their own Refresh keep exactly one.
-  for (const path of ["/hr/requests", "/hr/whatsapp-control", "/hr/gmail-control", "/hr/attendance/search"]) {
+  for (const path of ["/hr/requests", "/hr/whatsapp-control", "/hr/gmail-control"]) {
     await page.goto(path);
     await expect(page.getByRole("button", { name: /^\s*Refresh( this page)?\s*$/ }), path).toHaveCount(1);
     await expect(page.getByTestId("page-refresh-bar"), path).toHaveCount(0);

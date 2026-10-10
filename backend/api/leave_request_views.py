@@ -24,7 +24,14 @@ WORKFLOW = "leave"
 def _leave_with_name(record: LeaveRequest, cfg: approval.Config | None = None) -> dict:
     emp = getattr(record, "employee", None)
     name = f"{emp.first_name} {emp.last_name}" if emp else _employee_name(record.employee_id)
-    return leave_request_json(record, name, cfg)
+    data = leave_request_json(record, name, cfg)
+    # for the HR page's branch / department / employee-type filters (added fields: older readers ignore them)
+    if emp is not None:
+        data["departmentId"] = emp.department_id
+        data["branchId"] = emp.branch_id
+        data["branch"] = emp.branch.name if emp.branch_id and emp.branch else None
+        data["employmentType"] = emp.employment_type
+    return data
 
 
 def _deduct_leave_balance(record: LeaveRequest) -> None:
@@ -92,7 +99,9 @@ def _resolve_employee_filter(params) -> int | None:
 
 
 def _leave_requests_list(request: Request) -> Response:
-    qs = LeaveRequest.objects.select_related("employee__department", "employee__designation").order_by("-id")
+    qs = LeaveRequest.objects.select_related(
+        "employee__department", "employee__designation", "employee__branch"
+    ).order_by("-id")
     qs = scope_to_branch(qs, request, field="employee__branch_id")
     employee_id = _resolve_employee_filter(request.query_params)
     # An employee token only ever sees its own requests, whatever the filter says.

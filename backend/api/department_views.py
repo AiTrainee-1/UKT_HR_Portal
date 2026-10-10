@@ -1,8 +1,8 @@
-"""Department list/create/delete."""
+"""Department list/create/edit/delete."""
 
 from .auth import require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
-from .models import Department
+from .models import Branch, Department
 from .serializers import department_json
 from .view_common import _error
 from django.db.models import Count, Q
@@ -56,15 +56,23 @@ def _departments_create(request: Request) -> Response:
             {"error": "Select a branch -a department with no branch is hidden from every branch login"},
             status=400,
         )
+    name = (request.data.get("name") or "").strip()
+    if not name:
+        return Response({"error": "Department name is required"}, status=400)
+    if not Branch.objects.filter(pk=branch_id).exists():
+        return Response({"error": "Branch not found"}, status=400)
+    # The (name, branch) pair is unique: say so, instead of letting the database constraint answer with a 500.
+    if Department.objects.filter(branch_id=branch_id, name=name).exists():
+        return Response({"error": f'A department called "{name}" already exists in this branch'}, status=400)
     dept = Department.objects.create(
-        name=request.data.get("name"),
-        description=request.data.get("description"),
+        name=name,
+        description=(request.data.get("description") or "").strip() or None,
         branch_id=branch_id,
     )
     return Response(department_json(dept, 0), status=201)
 
 
-@api_view(["GET", "DELETE"])
+@api_view(["GET", "PUT", "PATCH", "DELETE"])
 @require_hr
 def delete_department(request: Request, pk: int) -> Response:
     try:
@@ -75,6 +83,25 @@ def delete_department(request: Request, pk: int) -> Response:
     if request.method == "GET":
         emp_count = dept.employees.filter(status="active").count()
         return Response(department_json(dept, emp_count))
+
+    if request.method in ("PUT", "PATCH"):
+        # Name and description only: moving a department to another branch would silently re-home its designations
+        # and change which branch logins can see it.
+        data = request.data
+        if "name" in data:
+            name = (data.get("name") or "").strip()
+            if not name:
+                return Response({"error": "Department name is required"}, status=400)
+            if (
+                name != dept.name
+                and Department.objects.filter(branch_id=dept.branch_id, name=name).exclude(pk=dept.pk).exists()
+            ):
+                return Response({"error": f'A department called "{name}" already exists in this branch'}, status=400)
+            dept.name = name
+        if "description" in data:
+            dept.description = (data.get("description") or "").strip() or None
+        dept.save()
+        return Response(department_json(dept, dept.employees.filter(status="active").count()))
 
     dept.delete()
     return Response({"message": "Department deleted"})

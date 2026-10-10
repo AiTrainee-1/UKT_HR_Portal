@@ -12,9 +12,11 @@ Attendance integration:
 Both are written as source="manual" so payroll treats them as authoritative.
 """
 
-from datetime import date as date_type, datetime
+import calendar
+from datetime import date as date_type, datetime, timedelta
 from decimal import Decimal
 
+from django.db.models import Count, Max, Q
 from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
@@ -56,6 +58,36 @@ def _service_months(emp: Employee, today: date_type | None = None) -> int | None
     return max(0, months)
 
 
+def _months_between(joined: date_type, on: date_type) -> int:
+    """Completed months from `joined` to `on` (the same count as _service_months, for any date)."""
+    months = (on.year - joined.year) * 12 + (on.month - joined.month)
+    if on.day < joined.day:
+        months -= 1
+    return max(0, months)
+
+
+def eligible_from(joined: date_type) -> date_type:
+    """The first day on which `joined` counts ELIGIBILITY_MONTHS completed months of service. Joining on the 31st lands
+    on a shorter month's end, where the month count is still one short, so move forward a day until it is not."""
+    total = joined.month - 1 + ELIGIBILITY_MONTHS
+    year, month = joined.year + total // 12, total % 12 + 1
+    day = min(joined.day, calendar.monthrange(year, month)[1])
+    on = date_type(year, month, day)
+    while _months_between(joined, on) < ELIGIBILITY_MONTHS:
+        on += timedelta(days=1)
+    return on
+
+
+def board_reference_date(year: int, month: int, today: date_type) -> date_type:
+    """The day the Casual Leave board judges service length on. This month: today, which is the very rule a submission is
+    checked with (check_cl_eligibility), so the board never promises what Submit would refuse. A past month: its last day
+    (who had qualified by then). A future month: its 15th, as the board always did."""
+    if (year, month) == (today.year, today.month):
+        return today
+    month_end = date_type(year, month, calendar.monthrange(year, month)[1])
+    return month_end if month_end < today else date_type(year, month, 15)
+
+
 def _cl_used_in_month(emp_id: int, year: int, month: int, exclude_id: int | None = None) -> bool:
     qs = CasualLeaveRequest.objects.filter(
         employee_id=emp_id, date__year=year, date__month=month,
@@ -94,6 +126,10 @@ def _cl_dict(r: CasualLeaveRequest, cfg: approval.Config | None = None) -> dict:
         "employeeName": f"{emp.first_name} {emp.last_name}",
         "department": emp.department.name if emp.department_id and emp.department else None,
         "designation": emp.designation.title if emp.designation_id and emp.designation else None,
+        "departmentId": emp.department_id,
+        "branchId": emp.branch_id,
+        "branch": emp.branch.name if emp.branch_id and emp.branch else None,
+        "employmentType": emp.employment_type,
         "date": str(r.date),
         "reason": r.reason,
         "status": r.status,
@@ -179,7 +215,7 @@ def apply_cl_decision(cl: CasualLeaveRequest, status: str, reviewer: str,
 def casual_leaves(request: Request) -> Response:
     if request.method == "GET":
         qs = CasualLeaveRequest.objects.select_related(
-            "employee__department", "employee__designation"
+            "employee__department", "employee__designation", "employee__branch"
         )
         qs = scope_to_branch(qs, request, field="employee__branch_id")
         # Employees see only their own CLs
@@ -279,27 +315,63 @@ def casual_leave_detail(request: Request, pk: int) -> Response:
 @api_view(["GET"])
 @require_hr
 def casual_leave_eligibility(request: Request) -> Response:
-    """All staff employees with their CL eligibility status for a month."""
+    """Every active employee's Casual Leave standing for a month: who has taken (or asked for) it, who still can, and for
+    everyone who cannot, why. Staff only by default; `?scope=all` adds production employees (never eligible, with that as
+    the reason) so the HR page can name them too. Fields are only ever added to a row: older readers keep working."""
     today = ist_today()
-    month = int(request.query_params.get("month", today.month))
-    year = int(request.query_params.get("year", today.year))
-    check_date = date_type(year, month, 15)  # representative day of the month
+    try:
+        month = int(request.query_params.get("month", today.month))
+        year = int(request.query_params.get("year", today.year))
+        month_start = date_type(year, month, 1)
+    except (TypeError, ValueError):
+        return Response({"error": "month and year must be a valid month"}, status=400)
+    month_end = date_type(year, month, calendar.monthrange(year, month)[1])
+    check_date = board_reference_date(year, month, today)
+    cfg = approval.get_config(WORKFLOW)
 
     used_map: dict[int, CasualLeaveRequest] = {}
     for r in scope_to_branch(
         CasualLeaveRequest.objects, request, field="employee__branch_id"
     ).filter(
         date__year=year, date__month=month, status__in=["pending", "approved"]
-    ).select_related("employee"):
-        used_map[r.employee_id] = r
+    ).select_related("employee").order_by("-id"):
+        # one a month is the rule, but if data ever holds two, show the approved one
+        held = used_map.get(r.employee_id)
+        if held is None or (held.status != "approved" and r.status == "approved"):
+            used_map[r.employee_id] = r
+
+    employees = scope_to_branch(Employee.objects, request).filter(status="active")
+    if request.query_params.get("scope") != "all":
+        employees = employees.filter(employment_type="staff")
+    employees = list(employees.select_related("department", "designation", "branch"))
+
+    history = {
+        row["employee_id"]: row
+        for row in CasualLeaveRequest.objects.filter(
+            employee_id__in=[e.id for e in employees], status="approved", date__lte=month_end
+        )
+        .values("employee_id")
+        .annotate(last=Max("date"), this_year=Count("id", filter=Q(date__year=year)))
+    }
 
     rows = []
-    for emp in scope_to_branch(Employee.objects, request).filter(
-        status="active", employment_type="staff"
-    ).select_related("department", "designation"):
-        months = _service_months(emp, check_date)
+    for emp in employees:
+        joined = _parse_join_date(emp.join_date)
+        months = _months_between(joined, check_date) if joined else None
+        is_staff = emp.employment_type == "staff"
         service_ok = months is not None and months >= ELIGIBILITY_MONTHS
         used = used_map.get(emp.id)
+        if not is_staff:
+            code, reason = "not_staff", "Casual Leave is available only for staff employees"
+        elif months is None:
+            code, reason = "no_join_date", "Join date not set"
+        elif not service_ok:
+            code, reason = "under_service", f"{months}/{ELIGIBILITY_MONTHS} months of service"
+        elif used is not None:
+            code, reason = "used_this_month", "Casual Leave already used this month (limit: 1 per month)"
+        else:
+            code, reason = None, None
+        past = history.get(emp.id)
         rows.append({
             "employeeId": emp.id,
             "employeeCode": emp.employee_code,
@@ -308,16 +380,24 @@ def casual_leave_eligibility(request: Request) -> Response:
             "designation": emp.designation.title if emp.designation_id and emp.designation else None,
             "joinDate": emp.join_date,
             "serviceMonths": months,
-            "eligible": service_ok and used is None,
-            "reason": (
-                "Casual Leave already used this month (limit: 1 per month)" if service_ok and used is not None
-                else None if service_ok
-                else ("Join date not set" if months is None
-                      else f"{months}/{ELIGIBILITY_MONTHS} months of service")
-            ),
+            "eligible": code is None,
+            "reason": reason,
             "usedThisMonth": bool(used),
             "usedStatus": used.status if used else None,
             "usedDate": str(used.date) if used else None,
+            # added for the redesigned page
+            "employmentType": emp.employment_type,
+            "departmentId": emp.department_id,
+            "branchId": emp.branch_id,
+            "branch": emp.branch.name if emp.branch_id and emp.branch else None,
+            "reasonCode": code,
+            "eligibleFrom": str(eligible_from(joined)) if joined and is_staff else None,
+            "lastClDate": str(past["last"]) if past else None,
+            "approvedThisYear": past["this_year"] if past else 0,
+            "usedRequestId": used.id if used else None,
+            "usedReviewedBy": used.reviewed_by if used else None,
+            "usedReviewerRole": used.reviewer_role if used else None,
+            "usedApproval": approval.progress(WORKFLOW, used, cfg) if used else None,
         })
 
     rows.sort(key=lambda r: (not r["eligible"], r["employeeName"]))
@@ -325,6 +405,14 @@ def casual_leave_eligibility(request: Request) -> Response:
         "month": month,
         "year": year,
         "eligibilityMonths": ELIGIBILITY_MONTHS,
+        "referenceDate": str(check_date),
+        "monthStart": str(month_start),
+        "monthEnd": str(month_end),
+        "counts": {
+            "eligible": sum(1 for r in rows if r["eligible"]),
+            "notEligible": sum(1 for r in rows if not r["eligible"]),
+            "usedThisMonth": sum(1 for r in rows if r["usedThisMonth"]),
+        },
         "employees": rows,
     })
 

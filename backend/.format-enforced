@@ -261,3 +261,12 @@ config/__init__.py
 config/wsgi.py
 e2e_setup.py
 fake_zk_device.py
+api/branch_summary_views.py
+api/tests_branch_summary.py
+api/tests_org_structure.py
+api/org_structure_views.py
+api/tests_career_pages.py
+api/tests_leave_casual_overview.py
+api/hr_requests_views.py
+api/tests_hr_requests.py
+api/tests_settlement_missing_punch.py

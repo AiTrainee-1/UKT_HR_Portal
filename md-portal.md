@@ -482,6 +482,9 @@ date / what the page is for                                                     
 * Checked by `headerRow.test.ts`, `MdPageHeader` use in the page tests, and e2e `md-hr-pages.spec.ts` ("every MD page opens
   with the same title row": the same left edge and the same right edge on all 18 pages, Live on the title's line, the stack
   at the top of the row, one Refresh).
+* **Seven pages are laid out as a grid instead (2026-10-10, section 11.6):** Employees, Staff Attendance, Production
+  Attendance, Outpass, Visitors, Manage Shifts and Requests. Their own title rows differ in height, so the switch and the
+  stack used to land at a different place on each. The other pages keep the flowing row described above.
 
 ### 10.3 What every Insights tab must contain
 
@@ -619,3 +622,36 @@ owner. Pages and components: whoever owns the folder (section 10.6).
   for companies) needs written permission or a paid licence from the author (Decograph Studio). The files were supplied by the
   product owner; settle the licence before production. The font is not modified (the EULA forbids it); it is served as supplied.
 * **Rules for MD code:** a page's title is a real `h1` / `h2` and needs nothing else; do not set `font-family` in components.
+
+### 11.6 The title row of the seven tall pages (2026-10-10)
+
+The owner reported the header alignment as wrong on Employees, Staff Attendance, Production Attendance, Outpass, Visitors,
+Manage Shifts and Requests, and asked for those pages only to be made uniform. Their own title rows are tall (a subtitle, a
+sub-tab strip, a group of buttons), so with the switch and the stack slotted into a flowing row the switch landed at a
+different x on each page and the stack at a different y.
+
+```
+[ Title (Live) ] ........................... [ Operations | Insights & AI ]  |  Updated 10:31:22 am
+[ what the page is for ] ..........................................................  |  Refresh
+[ the page's own tabs / strip ] ......... [ the page's own buttons, right edge = the stack's ]
+```
+
+* **Opt-in, by page id:** `GRID_HEADER_PAGES` in `embedded/MdEmbeddedFrame.tsx` -> `useHeaderAdoption(root, grid)` ->
+  `adoptHeaderRow(root, { grid: true })`. Adding a page to that set is the whole change for a new page; every other page
+  is untouched.
+* **DOM side (`embedded/headerRow.ts`):** only markers are added, nothing of the page is restyled by script: `data-md-aligned`
+  (the row is one of the seven, wide or narrow), `data-md-grid` (wide: 720px of content or more, the row is a grid and the stack
+  is a cell of it, not pinned), `data-md-titleblock` (the block holding the heading, subtitle and strip; not set when the
+  block is the heading itself) and `data-md-actions` (every other child of the row: the page's buttons). The grid is not used
+  when the heading is nested deeper than the title block's first level (the block cannot be dissolved into the grid).
+* **CSS side (`md-theme/areas/shell.css`, "the title row of the embedded HR pages laid out as a grid"):** columns
+  `auto minmax(0,1fr) auto auto`; the title block is `display: contents` so the heading, subtitle and strip are cells; the
+  title and the switch and the stack are in row 1 (so they share a centre line whatever the subtitle is), the subtitle in row 2
+  (max 52rem), the strip and the buttons in row 3. A page's own icon before its title (Outpass, Visitors, Requests) is hidden
+  so all seven titles start at the same x. Narrow (below 720px) the row flows as on every page, and the page's buttons wrap
+  instead of running off a phone.
+* **Title decorations keep the previous font:** a Live chip or a "26 pending" badge inside a title is set in Hanken Grotesk
+  (`typography.css`), not in Whole Chomp.
+* Checked by `headerRow.test.ts` ("the grid layout") and e2e `md-hr-pages.spec.ts` ("the seven pages with a tall title row
+  line up alike": same title x, same title / switch / stack centre lines relative to the row, buttons ending on the stack's
+  right edge, no icon before the title).

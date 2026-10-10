@@ -354,7 +354,16 @@ def _promotion_dict(p: Promotion) -> dict:
         "notes": p.notes,
         "promotedBy": p.promoted_by,
         "createdAt": p.created_at.isoformat() if p.created_at else None,
+        # Who the record belongs to today: lets the Promotion page filter by branch / type without a second lookup.
+        "branchName": p.employee.branch.name if p.employee.branch_id else None,
+        "employmentType": p.employee.employment_type,
     }
+
+
+# The Promotion list used to be a fixed 200 rows. `?limit=` lets the page ask for more (it needs every promotion to
+# work out who is due for review); without it the answer is the same 200 as before.
+_PROMOTION_DEFAULT_LIMIT = 200
+_PROMOTION_MAX_LIMIT = 2000
 
 
 @api_view(["GET", "POST"])
@@ -362,7 +371,7 @@ def _promotion_dict(p: Promotion) -> dict:
 def promotions(request: Request) -> Response:
     if request.method == "GET":
         qs = Promotion.objects.select_related(
-            "employee", "previous_department", "previous_designation",
+            "employee__branch", "previous_department", "previous_designation",
             "new_department", "new_designation",
         )
         emp_id = request.query_params.get("employeeId")
@@ -371,7 +380,12 @@ def promotions(request: Request) -> Response:
             qs = qs.filter(employee_id=emp_id)
         elif code:
             qs = qs.filter(employee__employee_code__iexact=code.strip())
-        return Response([_promotion_dict(p) for p in qs[:200]])
+        try:
+            limit = int(request.query_params.get("limit", _PROMOTION_DEFAULT_LIMIT))
+        except (TypeError, ValueError):
+            limit = _PROMOTION_DEFAULT_LIMIT
+        limit = max(1, min(limit, _PROMOTION_MAX_LIMIT))
+        return Response([_promotion_dict(p) for p in qs[:limit]])
 
     # POST -promote: record history AND apply to the employee
     data = request.data
@@ -525,6 +539,41 @@ def add_increment(request: Request) -> Response:
     salary_split.apply_to_employee(emp, parts)
     emp.save(update_fields=["salary_amount", "initial_salary", "updated_at", *salary_split.COLUMN_NAMES])
     return Response(_increment_dict(inc), status=201)
+
+
+_INCREMENT_HISTORY_DEFAULT_LIMIT = 3000
+_INCREMENT_HISTORY_MAX_LIMIT = 10000
+
+
+@api_view(["GET"])
+@require_hr
+def increment_history(request: Request) -> Response:
+    """Every salary increment (newest first), within the requester's branch, for the Increment page's list, filters,
+    summary figures and "due for an increment" view. Read-only. `total` is the full count, so the page can say when
+    `results` was cut at `limit`."""
+    qs = scope_to_branch(
+        SalaryIncrement.objects.select_related(
+            "employee__department", "employee__designation", "employee__branch"
+        ),
+        request,
+        field="employee__branch_id",
+    )
+    try:
+        limit = int(request.query_params.get("limit", _INCREMENT_HISTORY_DEFAULT_LIMIT))
+    except (TypeError, ValueError):
+        limit = _INCREMENT_HISTORY_DEFAULT_LIMIT
+    limit = max(1, min(limit, _INCREMENT_HISTORY_MAX_LIMIT))
+    rows = []
+    for i in qs[:limit]:
+        e = i.employee
+        rows.append({
+            **_increment_dict(i),
+            "department": e.department.name if e.department_id else None,
+            "designation": e.designation.title if e.designation_id else None,
+            "branchName": e.branch.name if e.branch_id else None,
+            "employmentType": e.employment_type,
+        })
+    return Response({"results": rows, "total": qs.count()})
 
 
 @api_view(["GET"])

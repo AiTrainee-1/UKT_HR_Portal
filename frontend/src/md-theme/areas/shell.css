@@ -915,6 +915,91 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.85);
 }
 
+/* ── the title row of the embedded HR pages that are laid out as a grid (embedded/headerRow.ts sets [data-md-grid]) ───────
+   Employees, Staff / Production Attendance, Outpass, Visitors, Manage Shifts and Requests: their own title rows differ in height
+   (a subtitle, a sub-tab strip, a group of buttons), so with the Operations / Insights switch and the Updated / Refresh stack
+   slotted in, the switch landed at a different x and the stack at a different y on each. One grid for all of them:
+
+     [ Title (live) ]  ......................  [ Operations | Insights ]  | Updated
+     [ what the page is for ]  ..............                              | Refresh
+     [ the page's own tabs / strip ]  .....  [ the page's own buttons, right-aligned ]
+
+   The page's own elements are only placed, never restyled. Below 720 px the row flows (flex-wrap) as it does on every page. */
+
+html[data-md-theme] [data-md-header-row][data-md-grid] {
+  display: grid !important;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  justify-content: stretch;
+  column-gap: 0.75rem !important;
+  row-gap: 0 !important;
+  padding-right: 0 !important;
+}
+html[data-md-theme] [data-md-header-row][data-md-grid] > [data-md-titleblock] {
+  display: contents;
+}
+/* the title (and the subtitle) span the first two columns, so a long one has the room up to the switch */
+html[data-md-theme] [data-md-header-row][data-md-grid] [data-md-title] {
+  grid-column: 1 / 3;
+  grid-row: 1;
+  min-width: 0;
+  margin: 0;
+  align-self: center;
+}
+html[data-md-theme] [data-md-header-row][data-md-grid] [data-md-subtitle] {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  max-width: min(100%, 52rem);
+  margin: 0.125rem 0 0;
+  align-self: start;
+}
+/* the seven pages, wide or narrow ([data-md-aligned]): a page's own icon before its title (Outpass, Visitors, Requests) is not
+   drawn, the others have none, so the titles would start at different x; and the page's buttons wrap rather than run off a phone */
+html[data-md-theme] [data-md-header-row][data-md-aligned] [data-md-title] > svg:first-child {
+  display: none;
+}
+html[data-md-theme] [data-md-header-row][data-md-aligned]:not([data-md-grid]) > [data-md-actions] {
+  flex-wrap: wrap;
+  max-width: 100%;
+  margin-left: 0 !important;
+}
+/* whatever else the title block holds (a sub-tab strip, a pipeline line) is the left half of the page's own toolbar row */
+html[data-md-theme]
+  [data-md-header-row][data-md-grid]
+  > [data-md-titleblock]
+  > :not([data-md-title], [data-md-subtitle]) {
+  grid-column: 1;
+  grid-row: 3;
+  margin: 0.875rem 0 0;
+  align-self: center;
+  min-width: 0;
+}
+/* the switch: right after the title, in the first row, at the same place on every page */
+html[data-md-theme] [data-md-header-row][data-md-grid] > [data-md-slot="mid"] > * {
+  grid-column: 3;
+  grid-row: 1;
+  align-self: center;
+  margin: 0 !important;
+}
+/* the stack: the far right, in the first row with the title and the switch, so it is at the same height whatever the subtitle is */
+html[data-md-theme] [data-md-header-row][data-md-grid] > [data-md-slot="end"] > * {
+  grid-column: 4;
+  grid-row: 1;
+  align-self: center;
+  margin: 0 !important;
+}
+/* the page's own buttons: the right half of the toolbar row */
+html[data-md-theme] [data-md-header-row][data-md-grid] > [data-md-actions] {
+  grid-column: 2 / -1;
+  grid-row: 3;
+  justify-self: end;
+  align-self: center;
+  margin: 0.875rem 0 0 !important;
+  max-width: 100%;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 /* ── motion: nothing moves for someone who asked for less ────────────────────────────────────────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {

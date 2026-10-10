@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import HrLayout from "@/components/HrLayout";
-import { RefreshButton } from "@/components/PageRefreshBar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -673,7 +672,6 @@ export default function AttendancePunchSearch() {
         <div>
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-2xl font-black text-gray-900">Attendance Search</h2>
-            <RefreshButton />
           </div>
           <p className="mt-0.5 max-w-2xl text-sm text-muted-foreground">
             Find an employee by code or name to see their shift, every punch, and any late, early out, leave or

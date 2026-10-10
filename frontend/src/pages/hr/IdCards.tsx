@@ -1,103 +1,111 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import html2canvas from "html2canvas-pro";
 import JSZip from "jszip";
+import { AlertTriangle, Camera, CheckCircle2, CreditCard, Download, Printer, RefreshCw, Users } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
-import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
-import { PillTabs } from "@/components/ui/pill-tabs";
+import { Card, CardContent } from "@/components/ui/card";
+import { CircleLoader } from "@/components/ui/CircleLoader";
 import { useToast } from "@/hooks/use-toast";
 import { useListEmployees } from "@/lib/api-client";
-import { CircleLoader } from "@/components/ui/CircleLoader";
-import {
-  useIdCards, useEmailIdCard, useWhatsAppIdCard, type IdCardData,
-} from "@/lib/api-client/custom-hooks";
-import {
-  useQrCodes, StaffCardFront, StaffCardBack, ProductionCardFront, ProductionCardBack,
-} from "@/components/idcard/IdCardViews";
-import {
-  CreditCard, Search, Printer, Mail, CheckSquare, Square,
-  Briefcase, Factory, Download, MessageCircle,
-} from "lucide-react";
+import { useEmailIdCard, useWhatsAppIdCard, type IdCardData } from "@/lib/api-client/custom-hooks";
+import { useQrCodes } from "@/components/idcard/IdCardViews";
+import { StatCard } from "./account-management/parts";
+import { useIdCardsInChunks } from "./id-cards/api";
+import CardPreview from "./id-cards/CardPreview";
+import EmployeePicker from "./id-cards/EmployeePicker";
+import { cardFileName, keepKnown, removeIds, summarizeEmployees, summarizeSelection, toggleId } from "./id-cards/logic";
 
 // ── Page ───────────────────────────────────────────────────────────────────
 
+/** A card (the element holding its front and back) as a PNG. */
+async function capture(el: HTMLElement): Promise<Blob | null> {
+  const canvas = await html2canvas(el, { backgroundColor: "#ffffff", scale: 3, useCORS: true });
+  return new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+}
+
+function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.download = filename;
+  link.href = url;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function IdCards() {
   const { toast } = useToast();
-  const [search, setSearch] = useState("");
-  const [typeFilter, setTypeFilter] = useState<"all" | "staff" | "production">("all");
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
 
-  const { data: employees } = useListEmployees({ status: "active" });
-  const { data: cards, isLoading: cardsLoading } = useIdCards(selectedIds);
+  const {
+    data,
+    isLoading: employeesLoading,
+    isError: employeesError,
+    refetch,
+  } = useListEmployees({ status: "active" });
+  const employees = useMemo(() => data ?? [], [data]);
+  const {
+    cards,
+    isLoading: cardsLoading,
+    isFetching: cardsFetching,
+    isError: cardsError,
+    refetch: refetchCards,
+  } = useIdCardsInChunks(selectedIds);
   const emailMutation = useEmailIdCard();
   const whatsappMutation = useWhatsAppIdCard();
   const cardRefs = useRef<Record<number, HTMLDivElement | null>>({});
-  const [downloading, setDownloading] = useState(false);
+  const [downloading, setDownloading] = useState<number | "all" | null>(null);
 
-  const filtered = useMemo(() => (employees ?? []).filter(e => {
-    const q = search.trim().toLowerCase();
-    const matchQ = !q ||
-      e.employeeCode.toLowerCase().includes(q) ||
-      `${e.firstName} ${e.lastName}`.toLowerCase().includes(q);
-    const matchT = typeFilter === "all" || e.employmentType === typeFilter;
-    return matchQ && matchT;
-  }), [employees, search, typeFilter]);
+  const qrs = useQrCodes(cards);
+  const summary = useMemo(() => summarizeEmployees(employees), [employees]);
+  const selection = useMemo(() => summarizeSelection(employees, selectedIds), [employees, selectedIds]);
 
-  const qrs = useQrCodes(cards ?? []);
+  // an employee who left (or moved out of this viewer's branch) while the page was open cannot be on a card
+  useEffect(() => {
+    if (employees.length === 0) return;
+    setSelectedIds((ids) => {
+      const kept = keepKnown(ids, employees);
+      return kept.length === ids.length ? ids : kept;
+    });
+  }, [employees]);
 
-  const toggle = (id: number) =>
-    setSelectedIds(ids => ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]);
-
-  const toggleAll = () =>
-    setSelectedIds(ids =>
-      ids.length === filtered.length ? [] : filtered.map(e => e.id));
+  const qrReady = cards.length > 0 && cards.every((c) => !!qrs[c.code]);
 
   const handlePrint = () => {
-    if ((cards ?? []).length === 0) {
+    if (cards.length === 0) {
       toast({ title: "Select at least one employee first", variant: "destructive" });
+      return;
+    }
+    if (!qrReady) {
+      toast({ title: "Still preparing QR codes -try again in a moment", variant: "destructive" });
       return;
     }
     window.print();
   };
 
   const handleDownload = async () => {
-    const list = cards ?? [];
-    if (list.length === 0) {
+    if (cards.length === 0) {
       toast({ title: "Select at least one employee first", variant: "destructive" });
       return;
     }
-    if (!list.every(c => !!qrs[c.code])) {
+    if (!qrReady) {
       toast({ title: "Still preparing QR codes -try again in a moment", variant: "destructive" });
       return;
     }
-    setDownloading(true);
+    setDownloading("all");
     try {
       const zip = new JSZip();
       let captured = 0;
-      for (const card of list) {
+      for (const card of cards) {
         const el = cardRefs.current[card.id];
         if (!el) continue;
-        const canvas = await html2canvas(el, {
-          backgroundColor: "#ffffff",
-          scale: 3,
-          useCORS: true,
-        });
-        const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/png"));
+        const blob = await capture(el);
         if (!blob) continue;
-        const safeName = `${card.name}`.replace(/[^a-z0-9]+/gi, "_");
-        zip.file(`ID-Card-${card.code}-${safeName}.png`, blob);
+        zip.file(cardFileName(card), blob);
         captured++;
       }
       if (captured === 0) throw new Error("No cards could be captured");
-      const zipBlob = await zip.generateAsync({ type: "blob" });
-      const url = URL.createObjectURL(zipBlob);
-      const link = document.createElement("a");
-      link.download = `ID-Cards-${new Date().toISOString().slice(0, 10)}.zip`;
-      link.href = url;
-      link.click();
-      URL.revokeObjectURL(url);
+      saveBlob(await zip.generateAsync({ type: "blob" }), `ID-Cards-${new Date().toISOString().slice(0, 10)}.zip`);
       toast({ title: `${captured} ID card${captured === 1 ? "" : "s"} downloaded` });
     } catch (err) {
       console.error("ID card download failed:", err);
@@ -107,7 +115,26 @@ export default function IdCards() {
         variant: "destructive",
       });
     } finally {
-      setDownloading(false);
+      setDownloading(null);
+    }
+  };
+
+  const handleDownloadOne = async (card: IdCardData) => {
+    const el = cardRefs.current[card.id];
+    if (!el) return;
+    setDownloading(card.id);
+    try {
+      const blob = await capture(el);
+      if (!blob) throw new Error("The card could not be drawn");
+      saveBlob(blob, cardFileName(card));
+    } catch (err) {
+      toast({
+        title: "Failed to download the ID card",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setDownloading(null);
     }
   };
 
@@ -115,8 +142,11 @@ export default function IdCards() {
     try {
       const res = await emailMutation.mutateAsync({ employeeId: card.id });
       toast({ title: `ID card emailed to ${res.sentTo}` });
-    } catch (err: any) {
-      toast({ title: err?.message ?? "Email failed -check SMTP settings", variant: "destructive" });
+    } catch (err: unknown) {
+      toast({
+        title: err instanceof Error && err.message ? err.message : "Email failed -check SMTP settings",
+        variant: "destructive",
+      });
     }
   };
 
@@ -124,10 +154,15 @@ export default function IdCards() {
     try {
       const res = await whatsappMutation.mutateAsync(card.id);
       toast({ title: `ID card sent to ${res.sentTo}` });
-    } catch (err: any) {
-      toast({ title: err?.message ?? "WhatsApp send failed", variant: "destructive" });
+    } catch (err: unknown) {
+      toast({
+        title: err instanceof Error && err.message ? err.message : "WhatsApp send failed",
+        variant: "destructive",
+      });
     }
   };
+
+  const busy = downloading !== null;
 
   return (
     <HrLayout>
@@ -143,147 +178,178 @@ export default function IdCards() {
       `}</style>
 
       <div className="space-y-5">
-        <div className="flex items-start justify-between gap-3 flex-wrap no-print">
+        <div className="no-print flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="text-2xl font-black text-gray-900">ID Card Generator</h2>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              Garments-style employee identity cards · staff = vertical, production = horizontal ·
-              QR verification built in
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              Garments-style employee identity cards · staff = vertical, production = horizontal · QR verification built
+              in
             </p>
           </div>
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
               onClick={handleDownload}
-              className="gap-2 h-9"
-              disabled={(cards ?? []).length === 0 || downloading}
+              className="h-9 gap-2"
+              disabled={cards.length === 0 || busy}
+              data-testid="id-download-all"
             >
-              <Download size={14} /> {downloading ? "Preparing…" : `Download Selected (${selectedIds.length})`}
+              <Download size={14} />{" "}
+              {downloading === "all" ? "Preparing…" : `Download Selected (${selectedIds.length})`}
             </Button>
-            <Button onClick={handlePrint} className="gap-2 h-9" disabled={(cards ?? []).length === 0}>
+            <Button
+              onClick={handlePrint}
+              className="h-9 gap-2"
+              disabled={cards.length === 0 || busy}
+              data-testid="id-print"
+            >
               <Printer size={14} /> Print Selected ({selectedIds.length})
             </Button>
           </div>
         </div>
 
-        <div className="grid lg:grid-cols-[320px_1fr] gap-4 items-start">
-          {/* ── Employee picker ── */}
-          <Card className="border no-print">
-            <CardContent className="p-3 space-y-2.5">
-              <div className="relative">
-                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-                <Input
-                  className="pl-8 h-8 text-xs"
-                  placeholder="Search employees…"
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                />
-              </div>
-              <div className="flex items-center gap-1">
-                <PillTabs
-                  items={[
-                    { value: "all", label: "All" },
-                    { value: "staff", label: "Staff" },
-                    { value: "production", label: "Production" },
-                  ]}
-                  value={typeFilter}
-                  onChange={(v) => setTypeFilter(v as "all" | "staff" | "production")}
-                  size="sm"
-                />
-                <button
-                  onClick={toggleAll}
-                  className="ml-auto text-[11px] text-blue-600 font-semibold hover:underline"
-                >
-                  {selectedIds.length === filtered.length && filtered.length > 0 ? "Clear all" : "Select all"}
-                </button>
-              </div>
-              <div className="max-h-[520px] overflow-y-auto space-y-1">
-                {filtered.map(emp => {
-                  const checked = selectedIds.includes(emp.id);
-                  return (
-                    <button
-                      key={emp.id}
-                      onClick={() => toggle(emp.id)}
-                      className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-left transition-colors ${
-                        checked ? "bg-blue-50 border border-blue-200" : "hover:bg-gray-50 border border-transparent"
-                      }`}
-                    >
-                      {checked
-                        ? <CheckSquare size={14} className="text-blue-600 shrink-0" />
-                        : <Square size={14} className="text-gray-300 shrink-0" />}
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs font-semibold truncate">{emp.firstName} {emp.lastName}</p>
-                        <p className="text-[10px] text-gray-400 font-mono">{emp.employeeCode}</p>
-                      </div>
-                      {emp.employmentType === "production"
-                        ? <Factory size={11} className="text-orange-400 shrink-0" />
-                        : <Briefcase size={11} className="text-blue-400 shrink-0" />}
-                    </button>
-                  );
-                })}
-                {filtered.length === 0 && (
-                  <p className="text-xs text-center text-gray-400 py-6">No employees match.</p>
-                )}
-              </div>
-            </CardContent>
-          </Card>
+        <div className="no-print grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatCard
+            testId="stat-employees"
+            label="Active employees"
+            value={employeesLoading ? "-" : summary.total}
+            sub={employeesLoading ? undefined : `${summary.staff} staff · ${summary.production} production`}
+            icon={Users}
+            tone="bg-slate-100 text-slate-800"
+          />
+          <StatCard
+            testId="stat-photos"
+            label="Photos on file"
+            value={employeesLoading ? "-" : `${summary.withPhoto} of ${summary.total}`}
+            sub={
+              employeesLoading
+                ? undefined
+                : summary.withoutPhoto === 0
+                  ? "every card has a photo"
+                  : `${summary.withoutPhoto} would print without one`
+            }
+            icon={Camera}
+            tone={
+              !employeesLoading && summary.withoutPhoto > 0
+                ? "bg-amber-50 text-amber-800"
+                : "bg-green-50 text-green-800"
+            }
+          />
+          <StatCard
+            testId="stat-complete"
+            label="Ready to print"
+            value={employeesLoading ? "-" : summary.complete}
+            sub={employeesLoading ? undefined : `${summary.incomplete} miss a photo, blood group or contact`}
+            icon={CheckCircle2}
+            tone="bg-blue-50 text-blue-800"
+          />
+          <StatCard
+            testId="stat-selected"
+            label="Selected"
+            value={selection.count}
+            sub={
+              selection.count === 0
+                ? "tick employees on the left"
+                : `${selection.staff} staff · ${selection.production} production`
+            }
+            icon={CreditCard}
+            tone="bg-teal-50 text-teal-800"
+          />
+        </div>
+
+        <div className="grid items-start gap-4 lg:grid-cols-[340px_1fr]">
+          <EmployeePicker
+            employees={employees}
+            loading={employeesLoading}
+            error={employeesError}
+            onRetry={() => refetch()}
+            selectedIds={selectedIds}
+            onSelect={setSelectedIds}
+          />
 
           {/* ── Card previews ── */}
-          <div className="print-area">
+          <div className="print-area min-w-0">
             {selectedIds.length === 0 ? (
-              <Card className="border no-print">
+              <Card className="no-print rounded-2xl border" data-testid="id-preview-empty">
                 <CardContent className="py-20 text-center">
-                  <CreditCard size={40} className="text-gray-200 mx-auto mb-3" />
+                  <CreditCard size={40} className="mx-auto mb-3 text-gray-200" />
                   <p className="text-sm text-gray-500">Select employees on the left to generate their ID cards.</p>
-                  <p className="text-xs text-muted-foreground mt-1">
+                  <p className="mt-1 text-xs text-muted-foreground">
                     Staff cards are vertical with photo · production cards are horizontal.
                   </p>
                 </CardContent>
               </Card>
-            ) : cardsLoading ? (
+            ) : cardsError && cards.length === 0 ? (
+              <div
+                className="no-print flex flex-col items-center gap-3 rounded-2xl border bg-white px-6 py-14 text-center"
+                data-testid="id-cards-error"
+              >
+                <AlertTriangle size={26} className="text-red-500" />
+                <p className="font-bold text-gray-900">The ID cards could not be loaded</p>
+                <Button variant="outline" onClick={() => refetchCards()} className="gap-1.5">
+                  <RefreshCw size={14} /> Retry
+                </Button>
+              </div>
+            ) : cardsLoading && cards.length === 0 ? (
               <CircleLoader texts={["UK Textiles", "ID Cards", "Loading"]} className="w-full" />
             ) : (
               <div className="space-y-6">
-                {(cards ?? []).map(card => (
-                  <div key={card.id} className="space-y-2">
-                    <div className="flex items-center gap-2 no-print">
-                      <p className="text-xs font-bold text-gray-600">
-                        {card.name} <span className="font-mono text-gray-400">({card.code})</span>
-                      </p>
-                      <Button
-                        size="sm" variant="outline"
-                        className="h-7 gap-1.5 text-xs ml-auto"
-                        onClick={() => handleEmail(card)}
-                        disabled={emailMutation.isPending}
-                      >
-                        <Mail size={11} /> Email to employee
-                      </Button>
-                      <Button
-                        size="sm" variant="outline"
-                        className="h-7 gap-1.5 text-xs border-emerald-200 text-emerald-700 hover:bg-emerald-50"
-                        onClick={() => handleWhatsApp(card)}
-                        disabled={whatsappMutation.isPending}
-                      >
-                        <MessageCircle size={11} /> Send via WhatsApp
-                      </Button>
-                    </div>
-                    <div
-                      ref={el => { cardRefs.current[card.id] = el; }}
-                      className="flex gap-4 flex-wrap"
+                {selection.noPhoto.length > 0 && (
+                  <div
+                    className="no-print flex flex-wrap items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900"
+                    data-testid="id-photo-warning"
+                  >
+                    <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                    <p className="min-w-0 flex-1">
+                      <b>
+                        {selection.noPhoto.length} selected{" "}
+                        {selection.noPhoto.length === 1 ? "employee has" : "employees have"} no photo
+                      </b>{" "}
+                      and will print an empty silhouette:{" "}
+                      {selection.noPhoto
+                        .slice(0, 4)
+                        .map((e) => e.firstName)
+                        .join(", ")}
+                      {selection.noPhoto.length > 4 && ` and ${selection.noPhoto.length - 4} more`}.
+                    </p>
+                    <button
+                      type="button"
+                      className="font-semibold underline"
+                      onClick={() =>
+                        setSelectedIds((ids) =>
+                          removeIds(
+                            ids,
+                            selection.noPhoto.map((e) => e.id),
+                          ),
+                        )
+                      }
+                      data-testid="id-deselect-no-photo"
                     >
-                      {card.employmentType === "production" ? (
-                        <>
-                          <ProductionCardFront card={card} />
-                          <ProductionCardBack card={card} qr={qrs[card.code]} />
-                        </>
-                      ) : (
-                        <>
-                          <StaffCardFront card={card} />
-                          <StaffCardBack card={card} qr={qrs[card.code]} />
-                        </>
-                      )}
-                    </div>
+                      Deselect them
+                    </button>
                   </div>
+                )}
+                {cardsFetching && (
+                  <p className="no-print text-xs text-muted-foreground" data-testid="id-cards-updating">
+                    Updating the cards…
+                  </p>
+                )}
+                {cards.map((card) => (
+                  <CardPreview
+                    key={card.id}
+                    card={card}
+                    qr={qrs[card.code]}
+                    cardRef={(el) => {
+                      cardRefs.current[card.id] = el;
+                    }}
+                    emailBusy={emailMutation.isPending}
+                    whatsappBusy={whatsappMutation.isPending}
+                    downloadBusy={busy}
+                    onEmail={() => handleEmail(card)}
+                    onWhatsApp={() => handleWhatsApp(card)}
+                    onDownload={() => handleDownloadOne(card)}
+                    onRemove={() => setSelectedIds((ids) => toggleId(ids, card.id))}
+                  />
                 ))}
               </div>
             )}

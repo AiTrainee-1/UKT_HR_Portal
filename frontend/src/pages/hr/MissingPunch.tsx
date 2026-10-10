@@ -1,66 +1,74 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Download,
+  Fingerprint,
+  Hourglass,
+  Info,
+  ListChecks,
+  ShieldCheck,
+  XCircle,
+} from "lucide-react";
 import HrLayout from "@/components/HrLayout";
+import { PipelineNote } from "@/components/ApprovalTrail";
 import { RefreshButton } from "@/components/PageRefreshBar";
-import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent } from "@/components/ui/tabs";
-import { PillTabs } from "@/components/ui/pill-tabs";
+import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { PipelineNote, WaitingChip } from "@/components/ApprovalTrail";
-import { explainsWaiting, hrCanAct, hrCanReject, waitingText } from "@/lib/approval-workflow";
+import { waitingText } from "@/lib/approval-workflow";
+import { useMissingPunchRequestsHR, useUpdateMissingPunchHR } from "@/lib/api-client/custom-hooks";
+import { EmptyState, StatCard } from "./settlement/parts";
+import { downloadTable } from "./settlement/shared";
+import BulkDialog from "./missing-punch/BulkDialog";
+import DetailSheet from "./missing-punch/DetailSheet";
+import RequestCard from "./missing-punch/RequestCard";
+import Toolbar from "./missing-punch/Toolbar";
 import {
-  useMissingPunchRequestsHR, useUpdateMissingPunchHR,
-  type MissingPunchItem, type MissingPunchSlot,
-} from "@/lib/api-client/custom-hooks";
-import {
-  Fingerprint, CheckCircle2, XCircle, Hourglass, ShieldAlert, ShieldCheck, Info,
-} from "lucide-react";
+  DEFAULT_FILTERS,
+  DEFAULT_SORT,
+  LIST_CAP,
+  NO_FILTERS,
+  bulkApprovable,
+  exportTable,
+  filterRows,
+  punchLabel,
+  sortRows,
+  summarize,
+  type Filters,
+  type MissingRow,
+  type Sort,
+} from "./missing-punch/logic";
 
-const STAGE_LABEL: Record<string, string> = {
-  pending_hod: "Awaiting Department Head",
-  pending_hr: "Awaiting HR",
-  approved: "Approved",
-  rejected: "Rejected",
-};
-
-// Mirrors the employee-facing apps -purely descriptive, never the source of
-// truth for real P1-P4 identity (the attendance engine derives that from
-// punch time, not a stored label).
-const PUNCH_SLOT_LABEL: Record<MissingPunchSlot, string> = {
-  morning_in: "Morning Check-In",
-  lunch_out: "Lunch Check-Out",
-  lunch_in: "Lunch Check-In",
-  evening_out: "Evening Check-Out",
-};
-
-function punchLabel(r: MissingPunchItem): string {
-  return r.punchSlot ? PUNCH_SLOT_LABEL[r.punchSlot] : (r.punchType === "IN" ? "Check-In" : "Check-Out");
-}
-
+/** Missing Punch: forgotten punches that employees report, decided through the approval pipeline (Department Head, then HR). */
 export default function MissingPunch() {
   const { toast } = useToast();
-  const [tab, setTab] = useState("pending");
+  const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
+  const [sort, setSort] = useState<Sort>(DEFAULT_SORT);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [detailId, setDetailId] = useState<number | null>(null);
+  const [bulkRows, setBulkRows] = useState<MissingRow[]>([]);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [bulkRunning, setBulkRunning] = useState(false);
 
-  const { data: items, isLoading } = useMissingPunchRequestsHR("all");
+  const { data: items, isLoading, isError, refetch } = useMissingPunchRequestsHR("all");
   const updateMutation = useUpdateMissingPunchHR();
 
-  const all = items ?? [];
-  const pendingHod = all.filter(r => r.status === "pending_hod");
-  const pendingHr  = all.filter(r => r.status === "pending_hr");
-  const pending    = [...pendingHod, ...pendingHr];
-  const approved   = all.filter(r => r.status === "approved");
-  const rejected   = all.filter(r => r.status === "rejected");
+  const all = useMemo(() => (items ?? []) as MissingRow[], [items]);
+  const summary = useMemo(() => summarize(all), [all]);
+  const shown = useMemo(() => sortRows(filterRows(all, filters), sort), [all, filters, sort]);
+  const decidable = useMemo(() => bulkApprovable(shown), [shown]);
+  const picked = useMemo(() => decidable.filter((r) => selected.has(r.id)), [decidable, selected]);
+  const detail = useMemo(() => all.find((r) => r.id === detailId) ?? null, [all, detailId]);
+  const statsLoading = isLoading || isError;
+  const noneAtAll = !isLoading && !isError && all.length === 0;
 
-  // What HR may decide follows the approval pipeline (User Management -> Approval Workflow Control), not the status
-  // label: an older backend sends no pipeline, and then HR decides at "Awaiting HR" only, as it always did.
-  const hrDecides = (r: MissingPunchItem) => hrCanAct(r.approval, r.status === "pending_hr");
-  const hrRejects = (r: MissingPunchItem) => hrCanReject(r.approval, r.status === "pending_hr");
-  const awaitingHr = pending.filter(hrDecides);
-
-  const decide = async (r: MissingPunchItem, status: "approved" | "rejected") => {
+  const decide = async (r: MissingRow, status: "approved" | "rejected", comment?: string) => {
+    setBusyId(r.id);
     try {
-      const result = await updateMutation.mutateAsync({ id: r.id, status });
+      const result = await updateMutation.mutateAsync({ id: r.id, status, comment: comment || undefined });
       const passedOn = status === "approved" && result?.status !== "approved";
       toast({
         title: passedOn ? "Missing Punch approved" : `Missing Punch ${status}`,
@@ -70,170 +78,270 @@ export default function MissingPunch() {
             ? `${punchLabel(r)} at ${r.punchTime} on ${r.date} has been added to ${r.employeeName}'s attendance.`
             : `${r.employeeName}'s Missing Punch request for ${r.date} was rejected.`,
       });
-    } catch (err: any) {
-      toast({ title: err?.data?.error ?? err?.message ?? "Failed to update", variant: "destructive" });
+    } catch (err) {
+      const e = err as { data?: { error?: string }; message?: string };
+      toast({ title: e?.data?.error ?? e?.message ?? "Failed to update", variant: "destructive" });
+    } finally {
+      setBusyId(null);
     }
   };
 
-  const Row = ({ r }: { r: MissingPunchItem }) => (
-    <div
-      className="flex items-start gap-4 p-4 border rounded-xl hover:bg-gray-50 transition-colors flex-wrap"
-      data-testid={`missing-punch-${r.id}`}
-    >
-      <div className="w-9 h-9 rounded-lg bg-violet-50 flex items-center justify-center shrink-0">
-        <Fingerprint size={15} className="text-violet-500" />
-      </div>
-      <div className="flex-1 min-w-[220px]">
-        <div className="flex items-center gap-2 flex-wrap">
-          <p className="text-sm font-bold text-gray-900">{r.employeeName}</p>
-          <span className="text-xs font-mono text-gray-400">{r.employeeCode}</span>
-          {r.department && <span className="text-xs text-gray-400">· {r.department}</span>}
-          {explainsWaiting(r.approval) ? (
-            <WaitingChip approval={r.approval} className="rounded" />
-          ) : (
-            <span className={`flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded ${
-              r.status === "approved" ? "bg-green-50 text-green-700"
-              : r.status === "rejected" ? "bg-red-50 text-red-600"
-              : r.status === "pending_hr" ? "bg-blue-50 text-blue-700"
-              : "bg-amber-50 text-amber-700"
-            }`}>
-              {r.status === "pending_hod" ? <ShieldAlert size={10} /> : r.status === "pending_hr" ? <ShieldCheck size={10} /> : null}
-              {STAGE_LABEL[r.status]}
-            </span>
-          )}
-        </div>
-        <p className="text-xs text-gray-500 mt-1">
-          <strong className="font-mono">{r.date}</strong> · {punchLabel(r)} at{" "}
-          <strong className="font-mono">{r.punchTime}</strong>
-        </p>
-        <p className="text-xs text-gray-700 mt-1 italic">"{r.reason}"</p>
-        {r.hodReviewedBy && (
-          <p className="text-[11px] text-gray-400 mt-1.5">
-            HOD: {r.status === "rejected" && !r.hrReviewedBy ? "rejected" : "approved"} by {r.hodReviewedBy}
-            {r.hodReviewComment ? ` -"${r.hodReviewComment}"` : ""}
-          </p>
-        )}
-        {r.hrReviewedBy && (
-          <p className="text-[11px] text-gray-400">
-            HR: {r.status === "rejected" ? "rejected" : "approved"} by {r.hrReviewedBy}
-            {r.hrReviewComment ? ` -"${r.hrReviewComment}"` : ""}
-          </p>
-        )}
-        {!r.approval && r.status === "pending_hod" && (
-          <p className="text-[11px] text-amber-600 mt-1">
-            No Department Head has acted yet -HR can only approve once the Department Head approves first.
-          </p>
-        )}
-        {r.approval && r.approval.currentStep !== null && !hrDecides(r) && (
-          <p className="text-[11px] text-amber-600 mt-1">
-            {waitingText(r.approval)}: HR cannot decide this request until that step is done.
-          </p>
-        )}
-        {r.status === "approved" && (
-          <p className="text-[11px] text-green-600 mt-1">
-            Added to attendance as a real punch (source: Missing Punch) -flows through the normal attendance engine.
-          </p>
-        )}
-      </div>
-      {(hrDecides(r) || hrRejects(r)) && (
-        <div className="flex items-center gap-2 shrink-0">
-          {hrDecides(r) && (
-            <Button
-              size="sm" className="h-8 gap-1.5 text-xs bg-green-600 hover:bg-green-700"
-              disabled={updateMutation.isPending}
-              onClick={() => decide(r, "approved")}
-            >
-              <CheckCircle2 size={12} /> Approve
-            </Button>
-          )}
-          {hrRejects(r) && (
-            <Button
-              size="sm" variant="destructive" className="h-8 gap-1.5 text-xs"
-              disabled={updateMutation.isPending}
-              onClick={() => decide(r, "rejected")}
-            >
-              <XCircle size={12} /> Reject
-            </Button>
-          )}
-        </div>
-      )}
-    </div>
-  );
+  const approveSelected = async () => {
+    const rows = bulkRows;
+    setBulkRows([]);
+    setBulkRunning(true);
+    let added = 0;
+    let passedOn = 0;
+    const failures: string[] = [];
+    // one at a time: each goes through the pipeline on its own, and a refusal of one must not stop the rest
+    for (const r of rows) {
+      try {
+        const result = await updateMutation.mutateAsync({ id: r.id, status: "approved" });
+        if (result?.status === "approved") added += 1;
+        else passedOn += 1;
+      } catch (err) {
+        const e = err as { data?: { error?: string }; message?: string };
+        failures.push(`${r.employeeName} (${r.date}): ${e?.data?.error ?? e?.message ?? "failed"}`);
+      }
+    }
+    setBulkRunning(false);
+    setSelected(new Set());
+    const done = [
+      added > 0 ? `${added} added to attendance` : "",
+      passedOn > 0 ? `${passedOn} passed on to the next approval` : "",
+    ].filter(Boolean);
+    toast({
+      title:
+        failures.length === 0
+          ? `Approved ${rows.length} ${rows.length === 1 ? "request" : "requests"}`
+          : `${failures.length} of ${rows.length} could not be approved`,
+      description: [done.join(", "), failures.slice(0, 3).join("; ")].filter(Boolean).join(". "),
+      variant: failures.length > 0 ? "destructive" : undefined,
+    });
+  };
+
+  const toggle = (id: number, on: boolean) =>
+    setSelected((s) => {
+      const next = new Set(s);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+
+  const allPicked = decidable.length > 0 && picked.length === decidable.length;
+
+  const exportList = async () => {
+    try {
+      await downloadTable(exportTable(shown), "Missing_punch_requests");
+    } catch {
+      toast({ title: "Could not create the export", variant: "destructive" });
+    }
+  };
 
   return (
     <HrLayout>
       <div className="space-y-5">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-2xl font-black text-gray-900">Missing Punch</h2>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              Employee-reported forgotten punches.
-            </p>
+            <p className="mt-0.5 text-sm text-muted-foreground">Employee-reported forgotten punches.</p>
             <PipelineNote workflow="missing_punch" className="mt-1" />
           </div>
-          <RefreshButton />
+          <div className="flex flex-wrap items-center gap-2">
+            <span data-view-safe>
+              <Button
+                variant="outline"
+                className="gap-2"
+                onClick={exportList}
+                disabled={shown.length === 0}
+                data-testid="mp-export"
+              >
+                <Download size={15} /> Export
+              </Button>
+            </span>
+            <RefreshButton />
+          </div>
         </div>
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {[
-            { label: "Pending", value: pending.length, icon: Hourglass, cls: "text-amber-700", iconCls: "bg-amber-500" },
-            { label: "HR can decide", value: awaitingHr.length, icon: ShieldCheck, cls: "text-blue-700", iconCls: "bg-blue-600" },
-            { label: "Approved", value: approved.length, icon: CheckCircle2, cls: "text-green-700", iconCls: "bg-green-600" },
-            { label: "Rejected", value: rejected.length, icon: XCircle, cls: "text-red-600", iconCls: "bg-red-500" },
-          ].map(({ label, value, icon: Icon, cls, iconCls }) => (
-            <Card key={label} className="border">
-              <CardContent className="p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">{label}</p>
-                  <div className={`p-1.5 rounded-lg ${iconCls}`}>
-                    <Icon size={14} className="text-white" />
-                  </div>
-                </div>
-                <p className={`text-3xl font-black leading-none ${cls}`}>{value}</p>
-              </CardContent>
-            </Card>
-          ))}
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatCard
+            testId="mp-stat-hr"
+            label="Awaiting HR"
+            value={statsLoading ? "-" : summary.awaitingHr}
+            sub={statsLoading ? undefined : `${summary.hrCanDecide} that HR can decide now`}
+            icon={ShieldCheck}
+            tone="bg-blue-50 text-blue-800"
+          />
+          <StatCard
+            testId="mp-stat-hod"
+            label="Awaiting Department Head"
+            value={statsLoading ? "-" : summary.awaitingHod}
+            sub="HR cannot decide these yet"
+            icon={Hourglass}
+            tone="bg-amber-50 text-amber-800"
+          />
+          <StatCard
+            testId="mp-stat-approved"
+            label="Approved this month"
+            value={statsLoading ? "-" : summary.approvedThisMonth}
+            sub="added to attendance"
+            icon={CheckCircle2}
+            tone="bg-green-50 text-green-800"
+          />
+          <StatCard
+            testId="mp-stat-rejected"
+            label="Rejected this month"
+            value={statsLoading ? "-" : summary.rejectedThisMonth}
+            sub="nothing written to attendance"
+            icon={XCircle}
+            tone="bg-red-50 text-red-800"
+          />
         </div>
 
-        <div className="flex items-start gap-2 p-3 bg-blue-50 border border-blue-100 rounded-xl text-xs text-blue-700">
-          <Info size={14} className="shrink-0 mt-0.5" />
+        <div className="flex items-start gap-2 rounded-xl border border-blue-100 bg-blue-50 p-3 text-xs text-blue-700">
+          <Info size={14} className="mt-0.5 shrink-0" />
           <span>
-            Requests are submitted from the employee mobile/web app with a date, time and reason.
-            Who approves them, and in what order, is set in <strong>User Management → Approval Workflow Control</strong>
-            (shown above); a Department Head decides from the mobile app when "Can approve missing punch" is switched
-            on for them in HOD Assignment. Once the final approval is given, the punch is written to attendance and
-            flows through the normal engine (punch-order rules, punctuality window, cross-midnight logic) exactly like
-            a real biometric punch.
+            Requests are submitted from the employee mobile/web app with a date, time and reason. Who approves them, and
+            in what order, is set in <strong>User Management → Approval Workflow Control</strong> (shown above); a
+            Department Head decides from the mobile app when "Can approve missing punch" is switched on for them in HOD
+            Assignment. Once the final approval is given, the punch is written to attendance and flows through the
+            normal engine (punch-order rules, punctuality window, cross-midnight logic) exactly like a real biometric
+            punch.
           </span>
         </div>
 
-        <Tabs value={tab} onValueChange={setTab}>
-          <PillTabs
-            items={[
-              { value: "pending", label: `Pending (${pending.length})` },
-              { value: "approved", label: `Approved (${approved.length})` },
-              { value: "rejected", label: `Rejected (${rejected.length})` },
-            ]}
-            value={tab}
-            onChange={(v) => setTab(v)}
-          />
+        {all.length >= LIST_CAP && (
+          <div
+            className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900"
+            data-testid="mp-truncated"
+          >
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <p>Only the latest {LIST_CAP} requests are loaded: older ones are not listed here.</p>
+          </div>
+        )}
 
-          {(["pending", "approved", "rejected"] as const).map(t => (
-            <TabsContent key={t} value={t} className="mt-4 space-y-2">
-              {isLoading ? (
-                Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)
-              ) : (t === "pending" ? pending : t === "approved" ? approved : rejected).length === 0 ? (
-                <div className="text-center py-12 text-muted-foreground text-sm">
-                  No {t} Missing Punch requests.
-                </div>
-              ) : (
-                (t === "pending" ? pending : t === "approved" ? approved : rejected).map(r => (
-                  <Row key={r.id} r={r} />
-                ))
-              )}
-            </TabsContent>
-          ))}
-        </Tabs>
+        {!noneAtAll && (
+          <Toolbar
+            rows={all}
+            filters={filters}
+            onFilters={setFilters}
+            sort={sort}
+            onSort={setSort}
+            shown={shown.length}
+          />
+        )}
+
+        {decidable.length > 0 && (
+          <div
+            className="flex flex-wrap items-center gap-3 rounded-2xl border border-blue-100 bg-blue-50/60 px-4 py-2.5"
+            data-testid="mp-bulk-bar"
+          >
+            <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-blue-900">
+              <Checkbox
+                checked={allPicked}
+                onCheckedChange={(v) => setSelected(v === true ? new Set(decidable.map((r) => r.id)) : new Set())}
+                aria-label="Select every request HR can approve"
+                data-testid="mp-select-all"
+              />
+              {picked.length > 0
+                ? `${picked.length} of ${decidable.length} selected`
+                : `${decidable.length} ${decidable.length === 1 ? "request" : "requests"} HR can approve now`}
+            </label>
+            {picked.length > 0 && (
+              <>
+                <Button
+                  size="sm"
+                  className="ml-auto h-8 gap-1.5 bg-green-600 text-xs hover:bg-green-700"
+                  disabled={bulkRunning}
+                  onClick={() => setBulkRows(picked)}
+                  data-testid="mp-bulk-approve"
+                >
+                  <ListChecks size={13} /> Approve selected ({picked.length})
+                </Button>
+                <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={() => setSelected(new Set())}>
+                  Clear selection
+                </Button>
+              </>
+            )}
+          </div>
+        )}
+
+        <div className="space-y-3" data-testid="mp-list">
+          {isLoading ? (
+            Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-28 rounded-2xl" />)
+          ) : isError ? (
+            <Card className="rounded-2xl">
+              <CardContent className="p-0">
+                <EmptyState
+                  icon={AlertTriangle}
+                  tone="bg-red-50 text-red-600"
+                  title="The requests could not be loaded"
+                  text="Check your connection and try again."
+                  testId="mp-error"
+                >
+                  <Button variant="outline" onClick={() => refetch()}>
+                    Retry
+                  </Button>
+                </EmptyState>
+              </CardContent>
+            </Card>
+          ) : noneAtAll ? (
+            <Card className="rounded-2xl">
+              <CardContent className="p-0">
+                <EmptyState
+                  icon={Fingerprint}
+                  title="No missing punch requests yet"
+                  text="When an employee reports a forgotten punch from the mobile or web app, it appears here."
+                  testId="mp-empty"
+                />
+              </CardContent>
+            </Card>
+          ) : shown.length === 0 ? (
+            <Card className="rounded-2xl">
+              <CardContent className="p-0">
+                <EmptyState
+                  icon={Fingerprint}
+                  tone="bg-gray-100 text-gray-500"
+                  title="No request matches"
+                  text="Try fewer words, another status, or clear the filters."
+                  testId="mp-no-match"
+                >
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setFilters(NO_FILTERS);
+                      setSort(DEFAULT_SORT);
+                    }}
+                  >
+                    Clear filters
+                  </Button>
+                </EmptyState>
+              </CardContent>
+            </Card>
+          ) : (
+            shown.map((r) => (
+              <RequestCard
+                key={r.id}
+                r={r}
+                selected={selected.has(r.id)}
+                onSelect={(on) => toggle(r.id, on)}
+                busy={busyId === r.id || bulkRunning}
+                onApprove={(row) => decide(row, "approved")}
+                onReject={(row) => decide(row, "rejected")}
+                onOpen={(row) => setDetailId(row.id)}
+              />
+            ))
+          )}
+        </div>
+
+        <BulkDialog rows={bulkRows} onConfirm={approveSelected} onCancel={() => setBulkRows([])} />
+
+        <DetailSheet
+          row={detail}
+          busy={busyId !== null || bulkRunning}
+          onClose={() => setDetailId(null)}
+          onDecide={decide}
+        />
       </div>
     </HrLayout>
   );

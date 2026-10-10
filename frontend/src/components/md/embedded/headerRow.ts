@@ -92,7 +92,15 @@ const isOwnRefresh = (button: HTMLElement) =>
   !button.closest("[data-md-slot]") &&
   (button.getAttribute("data-testid") === "button-page-refresh" || (button.textContent ?? "").trim() === "Refresh");
 
-export function adoptHeaderRow(root: HTMLElement): HeaderAdoption | null {
+export type AdoptOptions = {
+  /** Lay the title row out as a grid (md-theme/areas/shell.css, [data-md-grid]): the title and the subtitle on the left, the
+   *  Operations / Insights switch and the Updated / Refresh stack always in the same place on the right, and below them the
+   *  title block's own extra (a sub-tab strip, a pipeline line) on the left with the page's buttons on the right. Used by
+   *  the pages whose own title row is tall (md-portal.md 11.6); the others keep the flowing row. */
+  grid?: boolean;
+};
+
+export function adoptHeaderRow(root: HTMLElement, options: AdoptOptions = {}): HeaderAdoption | null {
   const found = findHeader(root);
   if (!found) return null;
   const { heading, titleBlock, row, subtitle } = found;
@@ -129,6 +137,8 @@ export function adoptHeaderRow(root: HTMLElement): HeaderAdoption | null {
   heading.setAttribute("data-md-title", "");
   subtitle?.setAttribute("data-md-subtitle", "");
   row.setAttribute("data-md-header-row", "");
+  if (titleBlock !== heading) titleBlock.setAttribute("data-md-titleblock", "");
+  if (options.grid) row.setAttribute("data-md-aligned", "");
 
   // A page that centres itself in a padded, width-limited container of its own (the Report Log) would start its title
   // further in and lower than every other page, which sit straight in the MD's content area: take that padding off.
@@ -164,6 +174,21 @@ export function adoptHeaderRow(root: HTMLElement): HeaderAdoption | null {
     if (target) target.style.marginLeft = "auto";
   };
 
+  // whatever else the page puts in its title row (its buttons) is marked, so the grid layout can place it
+  const markedActions = new Set<Element>();
+  const markActions = () => {
+    for (const child of Array.from(row.children)) {
+      const own = child === titleBlock || child === mid || child === end;
+      if (!own && !child.hasAttribute("data-md-actions")) {
+        child.setAttribute("data-md-actions", "");
+        markedActions.add(child);
+      } else if (own && child.hasAttribute("data-md-actions")) {
+        child.removeAttribute("data-md-actions");
+        markedActions.delete(child);
+      }
+    }
+  };
+
   // below goes after the subtitle when that is a sibling of the row (a page whose title row holds only the heading)
   const anchor = () => (subtitle && subtitle.parentElement === row.parentElement ? subtitle : row);
   const place = () => {
@@ -175,18 +200,26 @@ export function adoptHeaderRow(root: HTMLElement): HeaderAdoption | null {
     // a title row whose subtitle sits outside it is not spaced by the page's own `space-y`
     below.style.marginTop = a === row ? "" : "1.25rem";
     pushActions();
+    markActions();
   };
 
   const layout = () => {
     const wide = root.clientWidth >= WIDE_PX;
-    row.style.position = wide ? "relative" : was.position;
-    row.style.paddingRight = wide ? STACK_ROOM : was.paddingRight;
-    end.style.display = wide ? "flex" : "contents";
-    end.style.position = wide ? "absolute" : "";
-    end.style.top = wide ? "0" : "";
-    end.style.right = wide ? "0" : "";
-    end.style.minHeight = wide ? "2.75rem" : "";
-    end.style.alignItems = wide ? "center" : "";
+    // wide: either the grid (the stack is a cell of it) or the flowing row with the stack pinned in the corner;
+    // narrow: the flowing row, the stack last in it
+    // (a title block that holds the heading deeper down than its first level cannot be dissolved into the grid)
+    const asGrid = wide && options.grid === true && (titleBlock === heading || heading.parentElement === titleBlock);
+    const pinned = wide && !asGrid;
+    if (asGrid) row.setAttribute("data-md-grid", "");
+    else row.removeAttribute("data-md-grid");
+    row.style.position = pinned ? "relative" : was.position;
+    row.style.paddingRight = pinned ? STACK_ROOM : was.paddingRight;
+    end.style.display = pinned ? "flex" : "contents";
+    end.style.position = pinned ? "absolute" : "";
+    end.style.top = pinned ? "0" : "";
+    end.style.right = pinned ? "0" : "";
+    end.style.minHeight = pinned ? "2.75rem" : "";
+    end.style.alignItems = pinned ? "center" : "";
   };
 
   place();
@@ -224,6 +257,11 @@ export function adoptHeaderRow(root: HTMLElement): HeaderAdoption | null {
       row.style.paddingRight = was.paddingRight;
       for (const { el, padding } of flattened) el.style.padding = padding;
       row.removeAttribute("data-md-header-row");
+      row.removeAttribute("data-md-grid");
+      row.removeAttribute("data-md-aligned");
+      titleBlock.removeAttribute("data-md-titleblock");
+      for (const el of markedActions) el.removeAttribute("data-md-actions");
+      markedActions.clear();
       heading.removeAttribute("data-md-title");
       subtitle?.removeAttribute("data-md-subtitle");
       for (const button of hidden) button.style.display = "";

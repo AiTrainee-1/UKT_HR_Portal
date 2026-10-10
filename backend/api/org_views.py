@@ -42,6 +42,12 @@ def designation_json(d, employee_count: int | None = None):
 
 # ── Branches ──────────────────────────────────────────────────────────────────
 
+def _clean_branch_code(value):
+    """A branch code is unique, so a blank one is stored as NULL (two "" codes would collide)."""
+    value = (value or "").strip() if isinstance(value, str) or value is None else str(value).strip()
+    return value or None
+
+
 @api_view(["GET", "POST"])
 @require_hr
 def branches(request: Request) -> Response:
@@ -53,13 +59,17 @@ def branches(request: Request) -> Response:
     if not data.get("name"):
         return Response({"error": "name is required"}, status=400)
 
+    code = _clean_branch_code(data.get("code"))
+    if code and Branch.objects.filter(code=code).exists():
+        return Response({"error": f"Branch code {code} is already used (a deleted branch keeps its code)"}, status=400)
+
     is_head_office = bool(data.get("isHeadOffice"))
     if is_head_office:
         Branch.objects.filter(is_head_office=True).update(is_head_office=False)
 
     b = Branch.objects.create(
         name=data["name"],
-        code=data.get("code"),
+        code=code,
         location=data.get("location"),
         address=data.get("address"),
         manager_name=data.get("managerName"),
@@ -85,6 +95,12 @@ def branch_detail(request: Request, pk: int) -> Response:
 
     if request.method == "PUT":
         data = request.data
+        if "code" in data:
+            code = _clean_branch_code(data.get("code"))
+            if code and Branch.objects.filter(code=code).exclude(pk=b.pk).exists():
+                return Response(
+                    {"error": f"Branch code {code} is already used (a deleted branch keeps its code)"}, status=400
+                )
         if data.get("isHeadOffice"):
             Branch.objects.filter(is_head_office=True).exclude(pk=b.pk).update(is_head_office=False)
         for field, attr in [
@@ -95,7 +111,7 @@ def branch_detail(request: Request, pk: int) -> Response:
             ("geofenceRadiusM", "geofence_radius_m"),
         ]:
             if field in data:
-                setattr(b, attr, data[field])
+                setattr(b, attr, _clean_branch_code(data[field]) if field == "code" else data[field])
         b.save()
         return Response(branch_json(b))
 
@@ -167,6 +183,14 @@ def designation_detail(request: Request, pk: int) -> Response:
 
     if request.method == "PUT":
         data = request.data
+        if "title" in data and not str(data.get("title") or "").strip():
+            return Response({"error": "title is required"}, status=400)
+        # Same rule as create: a branch user may only keep a designation under one of their own departments.
+        if "departmentId" in data and get_branch_scope(request) is not None:
+            if not data["departmentId"]:
+                return Response({"error": "Select a department -a designation must belong to one"}, status=400)
+            if not scope_to_branch(Department.objects, request).filter(pk=data["departmentId"]).exists():
+                return Response({"error": "Department not found"}, status=404)
         for field, attr in [
             ("title", "title"), ("departmentId", "department_id"), ("level", "level"),
         ]:

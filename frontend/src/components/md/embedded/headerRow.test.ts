@@ -227,3 +227,88 @@ describe("adopting the row", () => {
     expect(adoptHeaderRow(mount("<div><div><h2>Plain</h2></div></div>"))).toBeNull();
   });
 });
+
+describe("the grid layout (the seven pages whose title row is tall)", () => {
+  const width = (px: number) => Object.defineProperty(root, "clientWidth", { value: px, configurable: true });
+  /** A title block with a subtitle and a strip of its own, and a group of buttons: Employees' shape. */
+  const TALL = `
+    <div>
+      <div id="row" style="${FLEX}">
+        <div id="block"><h2 id="h">Employees</h2><p>80 records</p><div id="strip">Staff Production</div></div>
+        <div id="actions"><button>Inactive</button><button>Add Employee</button></div>
+      </div>
+    </div>`;
+
+  it("marks the title block and the page's buttons, so the stylesheet can place them", () => {
+    adoptHeaderRow(mount(TALL), { grid: true });
+    expect(root.querySelector("#block")?.hasAttribute("data-md-titleblock")).toBe(true);
+    expect(root.querySelector("#actions")?.hasAttribute("data-md-actions")).toBe(true);
+    expect(root.querySelector("#row")?.hasAttribute("data-md-aligned")).toBe(true);
+    // the slots, the title block and the heading itself are not "buttons"
+    expect(root.querySelectorAll("[data-md-actions]")).toHaveLength(1);
+  });
+
+  it("is a grid with the stack in the flow when wide, and a flowing row when narrow", () => {
+    const a = adoptHeaderRow(mount(TALL), { grid: true })!;
+    const row = root.querySelector<HTMLElement>("#row")!;
+
+    width(1100);
+    a.layout();
+    expect(row.hasAttribute("data-md-grid")).toBe(true);
+    expect(a.end.style.position).toBe("");
+    expect(a.end.style.display).toBe("contents");
+    expect(row.style.paddingRight).toBe("");
+
+    width(400);
+    a.layout();
+    expect(row.hasAttribute("data-md-grid")).toBe(false);
+  });
+
+  it("is not used by a page that did not ask for it: it keeps the stack pinned in the corner", () => {
+    const a = adoptHeaderRow(mount(TALL))!;
+    width(1100);
+    a.layout();
+    expect(root.querySelector("#row")?.hasAttribute("data-md-grid")).toBe(false);
+    expect(a.end.style.position).toBe("absolute");
+  });
+
+  it("does not dissolve a title block that holds the heading deeper down, and leaves a bare heading as it is", () => {
+    const deep = adoptHeaderRow(
+      mount(
+        `<div><div id="row" style="${FLEX}"><div id="block"><div><h2>Deep</h2></div><p>x</p></div><button>Add</button></div></div>`,
+      ),
+      { grid: true },
+    )!;
+    width(1100);
+    deep.layout();
+    expect(root.querySelector("#row")?.hasAttribute("data-md-grid")).toBe(false);
+    root.remove();
+
+    const bare = adoptHeaderRow(
+      mount(`<div><div id="row" style="${FLEX}"><h2 id="h">Search</h2><button>Find</button></div><p>x</p></div>`),
+      { grid: true },
+    )!;
+    width(1100);
+    bare.layout();
+    expect(root.querySelector("#row")?.hasAttribute("data-md-grid")).toBe(true);
+    expect(root.querySelector("#h")?.hasAttribute("data-md-titleblock")).toBe(false);
+  });
+
+  it("marks a button that shows up later, and takes every mark off on release", () => {
+    const a = adoptHeaderRow(mount(TALL), { grid: true })!;
+    width(1100);
+    a.layout();
+    const late = document.createElement("button");
+    late.textContent = "Late";
+    root.querySelector("#row")!.append(late);
+    a.tidy();
+    expect(late.hasAttribute("data-md-actions")).toBe(true);
+
+    a.release();
+    expect(
+      root.querySelector(
+        "[data-md-grid], [data-md-aligned], [data-md-titleblock], [data-md-actions], [data-md-header-row]",
+      ),
+    ).toBeNull();
+  });
+});

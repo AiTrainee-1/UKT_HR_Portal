@@ -9,7 +9,7 @@ export type AdoptedHeader = { adoption: HeaderAdoption; title: string; subtitle:
  * frame then draws a title row of its own. Follows the page when it re-renders its header, and gives the page's header
  * back when the frame goes away.
  */
-export function useHeaderAdoption(root: HTMLElement | null): AdoptedHeader | null {
+export function useHeaderAdoption(root: HTMLElement | null, grid = false): AdoptedHeader | null {
   const [adopted, setAdopted] = useState<AdoptedHeader | null>(null);
 
   useLayoutEffect(() => {
@@ -39,7 +39,7 @@ export function useHeaderAdoption(root: HTMLElement | null): AdoptedHeader | nul
       current = null;
       const heading = root.querySelector("h1, h2");
       if (heading && heading !== gaveUp) {
-        current = adoptHeaderRow(root);
+        current = adoptHeaderRow(root, { grid });
         if (!current) gaveUp = heading;
       }
       publish();
@@ -59,7 +59,7 @@ export function useHeaderAdoption(root: HTMLElement | null): AdoptedHeader | nul
       current = null;
       setAdopted(null);
     };
-  }, [root]);
+  }, [root, grid]);
 
   return adopted;
 }

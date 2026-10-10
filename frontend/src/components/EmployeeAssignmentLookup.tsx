@@ -51,9 +51,10 @@ export function EmployeeAssignmentLookup({
   /** The departments or designations that can be assigned. */
   options: Option[];
   /** The page's own department/designation filter, hosted here so the two
-   *  searches sit side by side instead of stacking down the page. */
-  listSearch: string;
-  onListSearchChange: (v: string) => void;
+   *  searches sit side by side instead of stacking down the page. Leave both
+   *  out when the page has a filter bar of its own. */
+  listSearch?: string;
+  onListSearchChange?: (v: string) => void;
 }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -141,26 +142,28 @@ export function EmployeeAssignmentLookup({
             onChange={(v) => setTab(v as "search" | "unassigned")}
           />
 
-          <div className="relative w-full sm:w-64">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              placeholder={kind === "department" ? "Search departments…" : "Search designations…"}
-              value={listSearch}
-              onChange={(e) => onListSearchChange(e.target.value)}
-              className="h-9 pl-9 pr-8 text-sm"
-            />
-            {listSearch && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="absolute right-1 top-1/2 h-6 w-6 -translate-y-1/2"
-                onClick={() => onListSearchChange("")}
-                aria-label="Clear"
-              >
-                <X size={12} />
-              </Button>
-            )}
-          </div>
+          {onListSearchChange && (
+            <div className="relative w-full sm:w-64">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder={kind === "department" ? "Search departments…" : "Search designations…"}
+                value={listSearch ?? ""}
+                onChange={(e) => onListSearchChange(e.target.value)}
+                className="h-9 pl-9 pr-8 text-sm"
+              />
+              {listSearch && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-1 top-1/2 h-6 w-6 -translate-y-1/2"
+                  onClick={() => onListSearchChange("")}
+                  aria-label="Clear"
+                >
+                  <X size={12} />
+                </Button>
+              )}
+            </div>
+          )}
         </div>
 
         {tab === "search" ? (

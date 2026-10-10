@@ -190,6 +190,57 @@ test("every MD page opens with the same title row: Live beside the title, the sw
   expect(Math.max(...stackRight) - Math.min(...stackRight), `right edges: ${stackRight}`).toBeLessThan(3);
 });
 
+test("the seven pages with a tall title row line up alike: same title edge, switch and stack in the same place, buttons on the stack's right edge", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  const paths = [
+    "/md/employees",
+    "/md/attendance/staff",
+    "/md/attendance/production",
+    "/md/outpass-visitors/outpass",
+    "/md/outpass-visitors/visitors",
+    "/md/shifts",
+    "/md/requests",
+  ];
+  const seen: Record<string, number[]> = { titleX: [], titleMid: [], tabsX: [], tabsMid: [], stackX: [], stackMid: [] };
+
+  for (const path of paths) {
+    await open(page, path);
+    const row = page.locator("[data-md-header-row][data-md-grid][data-md-aligned]");
+    await expect(row, `${path}: laid out as the grid`).toHaveCount(1);
+    const box = async (loc: ReturnType<Page["locator"]>, what: string) => {
+      const b = await loc.first().boundingBox();
+      expect(b, `${path}: ${what}`).not.toBeNull();
+      return b!;
+    };
+    const rowBox = await box(row, "the title row");
+    const title = await box(page.locator("[data-md-title]"), "the title");
+    const tabs = await box(page.getByTestId("md-tabs"), "the switch");
+    const stack = await box(page.getByTestId("md-refresh-stack"), "the Updated / Refresh stack");
+    seen.titleX.push(Math.round(title.x));
+    seen.titleMid.push(Math.round(title.y + title.height / 2 - rowBox.y));
+    seen.tabsX.push(Math.round(tabs.x));
+    seen.tabsMid.push(Math.round(tabs.y + tabs.height / 2 - rowBox.y));
+    seen.stackX.push(Math.round(stack.x));
+    seen.stackMid.push(Math.round(stack.y + stack.height / 2 - rowBox.y));
+
+    // the page's own buttons end on the stack's right edge, under it, and never on the title line
+    const actions = page.locator("[data-md-header-row] > [data-md-actions]:visible");
+    for (let i = 0; i < (await actions.count()); i++) {
+      const a = await box(actions.nth(i), "the page's buttons");
+      expect(Math.abs(a.x + a.width - (stack.x + stack.width)), `${path}: buttons on the right edge`).toBeLessThan(3);
+      expect(a.y, `${path}: buttons under the title row`).toBeGreaterThanOrEqual(title.y + title.height);
+    }
+    // the page's own icon is not drawn before the title: it starts where every other title starts
+    await expect(page.locator("[data-md-title] > svg:first-child"), path).toBeHidden();
+  }
+
+  for (const [what, values] of Object.entries(seen)) {
+    expect(Math.max(...values) - Math.min(...values), `${what}: ${values}`).toBeLessThan(3);
+  }
+});
+
 test("the old analytics addresses go to the pages that now hold them", async ({ page }) => {
   await goto(page, "/md/visitors");
   await expect(page).toHaveURL(/\/md\/outpass-visitors\/visitors$/);

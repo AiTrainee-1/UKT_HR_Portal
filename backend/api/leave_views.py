@@ -214,6 +214,8 @@ def holiday_detail(request: Request, pk: int) -> Response:
                 setattr(h, attr, data[field])
         h.save()
         _holiday_dates_for_month.cache_clear()
+        # the date (and branch / department) were set from request text: read the row back so the reply is built from real values
+        h = Holiday.objects.select_related("branch", "department").get(pk=h.pk)
         return Response(holiday_json(h))
 
     h.delete()
@@ -431,6 +433,11 @@ def _permission_json(p, monthly_used=None, settings=None, cap_cache=None, cfg=No
         "employeeCode": emp.employee_code,
         "department": emp.department.name if emp.department_id and emp.department else None,
         "designation": emp.designation.title if emp.designation_id and emp.designation else None,
+        # for the HR page's branch / department / employee-type filters (added fields: older readers ignore them)
+        "departmentId": emp.department_id,
+        "branchId": emp.branch_id,
+        "branch": emp.branch.name if emp.branch_id and emp.branch else None,
+        "employmentType": emp.employment_type,
         "date": p.date.isoformat() if p.date else None,
         "permissionTime": p.permission_time.strftime("%H:%M") if p.permission_time else None,
         "reason": p.reason,
@@ -463,7 +470,9 @@ def _permission_json(p, monthly_used=None, settings=None, cap_cache=None, cfg=No
 @require_auth
 def employee_permissions(request: Request) -> Response:
     if request.method == "GET":
-        qs = EmployeePermission.objects.select_related("employee__department", "employee__designation").order_by("-date", "-created_at")
+        qs = EmployeePermission.objects.select_related(
+            "employee__department", "employee__designation", "employee__branch"
+        ).order_by("-date", "-created_at")
         qs = scope_to_branch(qs, request, field="employee__branch_id")
         # Resolve employee by code or ID; employees can only see their own
         token_emp_id = get_token_employee_id(request)

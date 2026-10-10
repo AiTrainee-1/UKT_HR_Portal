@@ -112,13 +112,10 @@ test("finds an employee, and keeps them chosen while the period changes", async 
   await loginAsHr(page);
   await page.goto("/hr/attendance/search");
 
-  // Refresh sits in the title row, once, with no strip above it.
+  // The header has no Refresh button (the owner asked for it to go, 2026-10-10), and no strip above it.
   await expect(page.getByRole("heading", { name: "Attendance Search" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /^\s*Refresh( this page)?\s*$/ })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: /^\s*Refresh( this page)?\s*$/ })).toHaveCount(0);
   await expect(page.getByTestId("page-refresh-bar")).toHaveCount(0);
-  const title = await page.getByRole("heading", { name: "Attendance Search" }).boundingBox();
-  const refresh = await page.getByRole("button", { name: /^\s*Refresh( this page)?\s*$/ }).boundingBox();
-  expect(title && refresh && Math.abs(refresh.y - title.y) < 45).toBe(true);
 
   await expect(page.getByTestId("attendance-search-intro")).toBeVisible();
 
