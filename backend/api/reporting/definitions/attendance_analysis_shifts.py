@@ -26,7 +26,8 @@ from api.models import (
     UnmatchedPunch,
 )
 from api.payroll_views import _d2
-from api.production_period import InvalidPeriodConfig, resolve_production_period
+from api.production_cycles import CYCLE_LABELS, CYCLES
+from api.production_period import InvalidPeriodConfig, resolve_cycle_period
 from api.shift_engine import _t2s
 
 from ..common import EMP_COLS, EMP_COLS_SHORT, emp_cells
@@ -641,11 +642,17 @@ def _production_run(ctx):
         "switched on, uses the assigned shift template instead. Gross = total shifts x rate per shift, exactly as production payroll "
         "computes it before deductions.",
     ]
-    try:
-        p_from, p_to = resolve_production_period(ctx.today, payroll_settings())
-        notes.append(f"Current production payroll period: {display_date(p_from)} to {display_date(p_to)}.")
-    except InvalidPeriodConfig:
-        pass  # the period hint is a courtesy: an incomplete period setting must not break the register
+    # one line naming the period each pay cycle is in today (a courtesy: a cycle with no first period start yet is left out)
+    settings = payroll_settings()
+    current = []
+    for cycle in CYCLES:
+        try:
+            p_from, p_to = resolve_cycle_period(ctx.today, settings, cycle)
+        except InvalidPeriodConfig:
+            continue
+        current.append(f"{CYCLE_LABELS[cycle]} {display_date(p_from)} to {display_date(p_to)}")
+    if current:
+        notes.append("Current production payroll periods: " + "; ".join(current) + ".")
     if pdf_without_days:
         notes.append(
             f"The range is longer than {PDF_MAX_DAY_COLUMNS} days, so the daily columns are left out of this PDF (they cannot be "

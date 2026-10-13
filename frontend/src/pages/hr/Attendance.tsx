@@ -773,7 +773,7 @@ export default function AttendancePage() {
                   <strong>08:30–12:30</strong> First Half (0.5) ·{" "}
                   <strong>13:30–17:30</strong> Second Half (0.5) ·{" "}
                   <strong>17:50–20:00</strong> Additional Half (0.5) -up to{" "}
-                  <strong>1.5 shifts/day</strong>. Windows are configurable in Settings → Attendance.
+                  <strong>1.5 shifts/day</strong>. Windows are set in Manage Shifts (Production).
                 </p>
               </div>
             </CardContent>

@@ -139,7 +139,7 @@ test("a production employee paid per shift has no salary split", async ({ page }
   await loginAsHr(page);
   await page.goto("/hr/employees/new");
   await page.getByRole("combobox", { name: "Employment Type *" }).click();
-  await page.getByRole("option", { name: "Production (Weekly)" }).click();
+  await page.getByRole("option", { name: "Production (Per Shift)" }).click();
   await expect(page.getByText("Salary Per Shift (₹) *")).toBeVisible();
   await expect(page.getByTestId("salary-split")).toHaveCount(0);
 });
@@ -286,11 +286,13 @@ test("the Compensation page's CTC Breakdown shows the split: recorded, automatic
   expect(cell("E2E003", "SALARY SPLIT")).toBe("");
 });
 
-test("Settings -> Payroll -> Compensation no longer has Basic % / HRA % boxes", async ({ page }) => {
+test("Settings -> Payroll explains the salary split and has no Basic % / HRA % boxes", async ({ page }) => {
   await loginAsHr(page);
   await page.goto("/hr/settings");
   await page.getByRole("tab", { name: "Payroll", exact: true }).click();
-  await page.getByRole("tab", { name: "Compensation", exact: true }).click();
+  // The empty "Compensation" sub-tab is gone; its note now sits under Payroll Rules -> Staff PF and ESI.
+  await expect(page.getByRole("tab", { name: "Payroll Rules", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Compensation", exact: true })).toHaveCount(0);
   const note = page.getByTestId("compensation-split-note");
   await expect(note).toContainText("First portion (50%)");
   await expect(note).toContainText("Second portion (50%)");

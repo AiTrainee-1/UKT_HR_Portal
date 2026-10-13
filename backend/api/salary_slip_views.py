@@ -1,5 +1,6 @@
 import logging
 
+from django.db.models import Q
 from django.http import HttpResponse
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
@@ -9,6 +10,7 @@ from .auth import require_hr, require_auth, get_token_employee_id
 from .user_settings import settings_for
 from .branch_scope import get_branch_scope, scope_to_branch
 from .models import SalarySlip, PayrollSettings, LeaveBalance
+from .production_cycles import normalize_cycle
 from .view_common import paginate
 
 MONTHS = ["","January","February","March","April","May","June",
@@ -50,6 +52,11 @@ def slip_json(s: SalarySlip, include_settings: bool = False) -> dict:
         "month": s.month,
         "year": s.year,
         "weekNumber": s.week_number,
+        # Production pay cycle the slip was generated on (weekly | biweekly | monthly), null for staff / older slips.
+        "payCycle": s.pay_cycle,
+        # The dates a production slip covers (null for a monthly staff slip).
+        "periodStart": s.period_start.isoformat() if s.period_start else None,
+        "periodEnd": s.period_end.isoformat() if s.period_end else None,
         "slipNumber": s.slip_number,
         "basic": float(s.basic),
         "hra": float(s.hra),
@@ -104,6 +111,7 @@ def _filtered_slip_qs(request: Request, params=None):
     year       = params.get("year")
     week_num   = params.get("weekNumber")
     emp_type   = params.get("employmentType")
+    pay_cycle  = params.get("payCycle")
 
     qs = (
         SalarySlip.objects
@@ -140,6 +148,13 @@ def _filtered_slip_qs(request: Request, params=None):
         if not week_num:
             qs = qs.filter(period_start__isnull=False)
     if week_num: qs = qs.filter(week_number=int(week_num))
+    if pay_cycle:
+        # One production pay cycle (Weekly / BiWeekly / Monthly): the slips generated on it, plus slips from before the
+        # cycles existed (no cycle stamped) whose employee is assigned to it now -same rule as the payroll list.
+        cycle = normalize_cycle(pay_cycle)
+        qs = qs.filter(
+            Q(pay_cycle=cycle) | Q(pay_cycle__isnull=True, employee__production_pay_cycle=cycle)
+        ) if cycle else qs.none()
     return qs
 
 

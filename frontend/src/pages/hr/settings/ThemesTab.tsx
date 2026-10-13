@@ -1,0 +1,261 @@
+import { useEffect, useState } from "react";
+import { Eye, GitBranch, Palette, SlidersHorizontal, SwatchBook } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
+import { useTheme } from "@/contexts/ThemeContext";
+import { usePayrollSettings } from "@/lib/api-client/custom-hooks";
+import { THEMES, type ThemeId } from "@/lib/themes";
+import { ManagedElsewhere, PreviewCard, PreviewLine, SettingBlock, SettingsSection } from "./kit/SettingBlock";
+import { THEMES_SETTINGS } from "./ThemesTab.meta";
+import { errorText } from "./identity/errors";
+import { metaOf } from "./identity/meta";
+import { CustomizeDialog } from "./themes/CustomizeDialog";
+import { EDITABLE, editableOf, hex, LIGHT_TEXT, TEXT_ON } from "./themes/palettes";
+import { TOKEN_TEXT } from "./themes/text";
+import { ThemeCard } from "./themes/ThemeCard";
+
+const labelOf = (id: ThemeId) => THEMES.find((t) => t.id === id)?.label ?? id;
+const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+
+/**
+ * Settings -> Themes: the colour scheme of the whole portal frontend, for every user. The choice is saved on the
+ * server (PayrollSettings.theme_name / theme_custom) the moment a theme is switched on, and ThemeContext applies it as
+ * data-theme on <html> (src/index.css) with the custom colours as inline tokens.
+ */
+export default function ThemesTab({ readOnly = false }: { readOnly?: boolean }) {
+  const { toast } = useToast();
+  const { theme, effectiveTheme, isPreviewing, custom, preview, save, isSaving } = useTheme();
+  const { data: settings } = usePayrollSettings();
+  const [customizing, setCustomizing] = useState(false);
+  const [pending, setPending] = useState<ThemeId | null>(null);
+
+  // A theme has no branch copy: the server refuses a branch login's save, so the switches are off for one.
+  const branchLogin = settings?.companyWideRulesEditable === false;
+  const locked = readOnly || branchLogin;
+  const saved = editableOf(custom);
+  const savedCount = Object.keys(saved).length;
+  const activeLabel = labelOf(theme);
+
+  // Leaving the page with a preview still showing would be confusing: back to the saved theme on unmount.
+  useEffect(() => () => preview(null, null), [preview]);
+
+  const activate = async (id: ThemeId) => {
+    setPending(null);
+    try {
+      // Custom colours belong to the theme they were picked on; another theme starts from its own palette.
+      await save(id, id === theme ? custom : {});
+      toast({
+        title: "Theme applied",
+        description: `${labelOf(id)} is now active for everyone.${
+          id !== theme && savedCount > 0
+            ? ` The ${plural(savedCount, "custom colour")} of ${activeLabel} were dropped.`
+            : ""
+        }`,
+      });
+    } catch (e) {
+      toast({ title: "Failed to apply theme", description: errorText(e), variant: "destructive" });
+    }
+  };
+
+  // Switching away from a theme that has custom colours loses them, so that is asked first.
+  const askActivate = (id: ThemeId) => {
+    if (id === theme || locked) return;
+    if (savedCount > 0) setPending(id);
+    else void activate(id);
+  };
+
+  // Preview a theme exactly as switching it on would show it: another theme without this one's custom colours.
+  const previewTheme = (id: ThemeId) => preview(id, id === theme ? null : {});
+
+  return (
+    <div className="space-y-4">
+      {isPreviewing && (
+        <div
+          className="settings-glass flex flex-wrap items-center justify-between gap-2 rounded-2xl px-3.5 py-2.5 text-[12px] font-semibold text-amber-900 !bg-amber-50/70"
+          data-testid="theme-previewing"
+        >
+          <span className="flex items-center gap-1.5">
+            <Eye size={14} /> Previewing {labelOf(effectiveTheme)} on your screen only - nothing is saved until you
+            switch a theme on.
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-[11px]"
+            onClick={() => preview(null, null)}
+            data-view-safe
+          >
+            Stop preview
+          </Button>
+        </div>
+      )}
+
+      {branchLogin && (
+        <div
+          className="flex items-start gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2.5 text-[12px] leading-snug text-violet-900"
+          data-testid="theme-branch-note"
+        >
+          <GitBranch size={14} className="mt-0.5 shrink-0" />
+          <span>
+            <b>You are signed in with a branch login.</b> The theme is company-wide and has no branch copy, so only an
+            administrator or a login without a branch can change it. You can still preview any theme on your own screen.
+          </span>
+        </div>
+      )}
+
+      <SettingsSection
+        icon={Palette}
+        title="Themes"
+        purpose="The colour scheme every page of this portal is drawn in, for every user at once. Preview a theme on your own screen first, then switch it on. The Employee Mobile App and the Employee Web App are not themed."
+        usedBy={[
+          { label: "HR portal pages" },
+          { label: "Employee pages in the portal" },
+          { label: "Sign-in pages", to: "/employee-login" },
+          { label: "MD portal (custom colours only)" },
+        ]}
+        testId="themes-section"
+      >
+        <SettingBlock
+          {...metaOf(THEMES_SETTINGS, "theme-active")}
+          affects={[
+            {
+              where: "Every HR portal page",
+              what: "the page background, cards, text, switches, badges, links and highlights take the theme's colours; the main blue buttons and the left menu keep their fixed look",
+            },
+            {
+              where: "Employee pages inside the portal and the sign-in pages",
+              what: "the same colours (a sign-in page shows the copy this browser kept from its last visit; a browser that never signed in shows the Default Theme)",
+              to: "/employee-login",
+            },
+            { where: "MD portal", what: "keeps its own skin; only custom colours reach it" },
+            { where: "Activity log", what: 'an entry "Changed portal theme to ..." each time' },
+          ]}
+          defaultText="Default Theme"
+          note="Not changed by a theme: the Employee Mobile App, the Employee Web App, PDFs, ID cards and emails, which have colours of their own. Switching to another theme drops any custom colours set on this one."
+        >
+          <div className="grid gap-3 sm:grid-cols-2" data-testid="theme-cards">
+            {THEMES.map((t) => (
+              <ThemeCard
+                key={t.id}
+                def={t}
+                active={theme === t.id}
+                showing={effectiveTheme === t.id}
+                custom={custom}
+                disabled={locked || isSaving}
+                onActivate={() => askActivate(t.id)}
+                onPreview={() => previewTheme(t.id)}
+                onCustomize={() => setCustomizing(true)}
+              >
+                {pending === t.id && (
+                  <div
+                    className="space-y-1.5 rounded-xl bg-amber-50/80 px-2.5 py-2 text-[11px] font-medium leading-snug text-amber-900 ring-1 ring-amber-200"
+                    role="alert"
+                    data-testid="theme-switch-confirm"
+                  >
+                    <p>
+                      Switching to {t.label} drops the {plural(savedCount, "custom colour")} set on {activeLabel}; they
+                      cannot be brought back.
+                    </p>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        className="h-7 text-[11px]"
+                        onClick={() => void activate(t.id)}
+                        disabled={isSaving}
+                      >
+                        Switch anyway
+                      </Button>
+                      <Button variant="ghost" size="sm" className="h-7 text-[11px]" onClick={() => setPending(null)}>
+                        Keep {activeLabel}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </ThemeCard>
+            ))}
+          </div>
+        </SettingBlock>
+
+        <SettingBlock
+          {...metaOf(THEMES_SETTINGS, "theme-custom")}
+          affects={EDITABLE.map((token) => ({ where: TOKEN_TEXT[token].label, what: TOKEN_TEXT[token].colours }))}
+          defaultText="None: the theme's own colours"
+          note="They belong to the theme they were picked on: switching to another theme drops them. Where a colour would leave its text unreadable, a readable text colour (white or near-black) is saved with it, because the matching text colours cannot be edited here."
+          preview={
+            <PreviewCard title="Colours in force" scenario={`What everyone sees on top of ${activeLabel} right now.`}>
+              {savedCount === 0 ? (
+                <PreviewLine
+                  label="No custom colours"
+                  result={`${activeLabel} as it comes`}
+                  tone="neutral"
+                  testId="custom-none"
+                />
+              ) : (
+                EDITABLE.filter((token) => token in saved).map((token) => {
+                  const on = TEXT_ON[token];
+                  const textToken = on && custom[on.token];
+                  return (
+                    <PreviewLine
+                      key={token}
+                      label={
+                        <span className="inline-flex items-center gap-1.5">
+                          <span
+                            className="inline-block h-3.5 w-3.5 rounded-full ring-1 ring-black/10"
+                            style={{ background: `hsl(${saved[token]})` }}
+                          />
+                          {TOKEN_TEXT[token].label}
+                        </span>
+                      }
+                      result={`${hex(saved[token])}${
+                        textToken ? ` with ${textToken === LIGHT_TEXT ? "white" : "near-black"} text` : ""
+                      }`}
+                      testId={`custom-${token.slice(2)}`}
+                    />
+                  );
+                })
+              )}
+            </PreviewCard>
+          }
+        >
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5"
+            onClick={() => setCustomizing(true)}
+            disabled={locked || isSaving}
+            data-testid="theme-customize-open"
+          >
+            <SlidersHorizontal size={13} /> Customize {activeLabel}
+          </Button>
+          <p className="text-xs leading-snug text-gray-500">
+            Opens the six colours of the active theme. Each pick shows on your screen at once; Save colours applies them
+            to everyone, Reset to theme default removes them all.
+          </p>
+        </SettingBlock>
+      </SettingsSection>
+
+      <SettingsSection
+        icon={SwatchBook}
+        title="Colours set elsewhere"
+        purpose="The theme colours the screen only. Printed and sent things have colours of their own, kept with the thing they colour."
+      >
+        <div className="grid gap-3 md:grid-cols-2">
+          <ManagedElsewhere title="ID card colours" to="/hr/settings?tab=idcard" linkLabel="ID Card tab">
+            The primary, secondary and text colours of employee ID cards, on the ID Cards page, in the Employee Mobile
+            App and on the e-mailed card picture.
+          </ManagedElsewhere>
+          <ManagedElsewhere
+            title="Letter and salary slip colours"
+            to="/hr/settings?tab=documents"
+            linkLabel="Company Documents"
+          >
+            The theme and accent colours of offer letters, experience letters, salary slips and resignation letters, one
+            set per document.
+          </ManagedElsewhere>
+        </div>
+      </SettingsSection>
+
+      <CustomizeDialog open={customizing} onClose={() => setCustomizing(false)} themeId={theme} readOnly={locked} />
+    </div>
+  );
+}

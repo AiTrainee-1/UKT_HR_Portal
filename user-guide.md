@@ -578,9 +578,23 @@ Production attendance is broken into **named shift segments**:
 
 Each segment is worth a specific pay proportion. If a production worker only attends one segment, they are paid only for that segment — not a full day.
 
-#### Production Pay Period
+#### Pay Cycles: Weekly, BiWeekly, Monthly
 
-Production payroll uses a **custom period** (configurable — e.g., runs from the 26th of one month to the 25th of the next) rather than a strict calendar month. This is configured in **Settings → Production Payroll**.
+Production payroll is not paid by calendar month. Every production employee is paid on **one of three pay cycles**, and each cycle has its own page under **Production Payroll** in the sidebar:
+
+| Page | Period | Calculation |
+|------|--------|-------------|
+| **Weekly** | 7 days | one-week calculation |
+| **BiWeekly** | 14 days | two-week calculation |
+| **Monthly** | 28 days (four weeks) | four-week calculation |
+
+**Who is paid on which page** is decided on **Employees → Production Employees** (see below): an employee is paid only on the page of the cycle they are assigned to, and an employee who is not assigned yet is in no payroll at all.
+
+**Where the periods come from:** **Settings → Production Payroll → Weekly / BiWeekly / Monthly** — the weekday a week starts on (any of the seven: a Monday week runs Monday to Sunday, a Wednesday week Wednesday to Tuesday, a Sunday week Sunday to Saturday) and the date the first period starts. Weekly needs no date; BiWeekly and Monthly do (it decides how the weeks pair up), and their page says so until it is set. The same tabs hold each cycle's free late days and late-deduction slabs.
+
+#### Production Employees (Employees → Production Employees)
+
+Lists **only production employees**. Tabs: **All**, **Unassigned**, **Weekly**, **BiWeekly**, **Monthly** (each with its count). Pick employees (the box in the header selects everyone in the current list) and press **Assign to Weekly / BiWeekly / Monthly**, or use the **Assign** menu on one row. **Remove from cycle** takes someone off their cycle. Moving someone from one cycle to another asks first. Payroll already generated keeps the cycle it was generated on; new production employees start **Unassigned**. A production employee with no **Salary per shift** is flagged: payroll skips them until it is set.
 
 #### Shift Configuration
 
@@ -588,11 +602,14 @@ Multiple **named shifts** can be set up (e.g., Day Shift, Night Shift) with thei
 
 #### Generating Production Payroll
 
-Same general flow as Staff Payroll:
+On the page of a cycle (Weekly, BiWeekly or Monthly):
 1. Sync attendance.
-2. Click **Generate** for the production period.
-3. Review the draft — each employee shows their segment breakdown.
-4. Finalize and export slips.
+2. Pick the **pay period** (the next one due is selected; an older one can be opened by typing a date inside it). A period can be generated once it has ended.
+3. **Payroll** tab → **Generate Payroll** pays everyone assigned to the cycle who has no payroll for the period yet. **Skipped Employees** shows who would be skipped and why (no salary per shift, or the dates overlap payroll already paid), without writing anything.
+4. **Employees** tab → generate **one employee** (or a few selected ones) on their own; a pending payslip can be generated again after correcting attendance (this replaces the payslip: bonus / deduction adjustments on it are lost).
+5. Review each payslip's breakdown, **Mark Paid**, then use the **Salary** and **Payslip** tabs (all limited to this cycle).
+
+Generating is safe to repeat: employees who already have payroll for the period are left as they are, a paid payslip is never recomputed, and a period that overlaps days already paid for an employee is refused for them.
 
 ---
 
@@ -871,9 +888,9 @@ Changes here apply to all **newly generated** documents. Previously generated do
 
 | Setting | What it controls |
 |---------|-----------------|
-| Production Period | The non-calendar-month pay period (e.g., 26th to 25th) |
-| Next Period Date | The upcoming period's dates |
-| Shift Configuration | Define named shifts with their first-half/second-half/extra time windows |
+| Weekly / BiWeekly / Monthly (4 weeks) | Per pay cycle: the day a week starts, the date the first period starts, the free late days and the late-deduction slabs |
+| Late Detection | The switch for production late deductions and what counts as late (Strict / Simple) |
+| Attendance & Shift | Read-only overview of how a production payslip is worked out; shift windows live in Manage Shifts |
 
 ---
 

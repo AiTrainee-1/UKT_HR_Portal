@@ -5,7 +5,9 @@ import { loginAsHr } from "./helpers";
 // Compensation FEATURES (after a confirmation); it must never hide the page or leave it unable to load.
 
 const tab = (page: Page, name: string) => page.getByRole("tab", { name, exact: true });
-const sidebarLink = (page: Page) => page.getByRole("link", { name: "Compensation", exact: true });
+// (the Settings page also links to Compensation from its headings: the sidebar is the <aside>)
+const sidebarLink = (page: Page) =>
+  page.getByRole("complementary").getByRole("link", { name: "Compensation", exact: true });
 
 async function hrToken(page: Page) {
   return page.evaluate(() => localStorage.getItem("uk_textile_token"));

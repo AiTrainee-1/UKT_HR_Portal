@@ -1,725 +1,252 @@
-import { useEffect, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useMemo, useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Clock, Gift, IndianRupee, Layers } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { PillTabs } from "@/components/ui/pill-tabs";
-import { Switch } from "@/components/ui/switch";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Clock, IndianRupee, X, Info, Landmark } from "lucide-react";
-import { usePayrollSettings, useUpdatePayrollSettings } from "@/lib/api-client/custom-hooks";
+import {
+  getPayrollSettingsQueryKey,
+  usePayrollSettings,
+  useUpdatePayrollSettings,
+  type PayrollSettingsItem,
+} from "@/lib/api-client/custom-hooks";
+import { PAYROLL_SUB_TAB_OF, type PayrollSubTab } from "./PayrollTab.meta";
+import { addressSetting, numberOr, RANGES, saveErrorText, useDraft, useSubTabFromAddress } from "./payroll/form";
+import { bonusPayload, otPayload, pfEfPayload, ratesPayload, savedPayroll } from "./payroll/sections";
+import { RatesPanel } from "./payroll/RatesPanel";
+import { BonusPanel } from "./payroll/BonusPanel";
+import { OtPanel } from "./payroll/OtPanel";
+import { PfEfPanel } from "./payroll/PfEfPanel";
+import { BranchNotice } from "./payroll/ui";
 
-export default function PayrollTab() {
+const SUB_TABS: { value: PayrollSubTab; label: string; icon: ReactNode }[] = [
+  { value: "rates", label: "Payroll Rules", icon: <IndianRupee size={13} /> },
+  { value: "bonus", label: "Bonus", icon: <Gift size={13} /> },
+  { value: "otCompensation", label: "OT / Compensation", icon: <Clock size={13} /> },
+  { value: "prodPfEf", label: "Production PF/EF", icon: <Layers size={13} /> },
+];
+
+type Saving = "rates" | "bonus" | "ot" | "pfEf";
+
+/**
+ * Settings -> Payroll. Four sub-tabs, each a group with its own Save button that sends only that group's keys, so
+ * saving one never saves or resets another group's unsaved edits. The OT & Compensation master switch saves itself.
+ */
+export default function PayrollTab({ readOnly = false }: { readOnly?: boolean }) {
   const { toast } = useToast();
-  const updatePayrollSettings = useUpdatePayrollSettings();
-  const { data: payrollSettingsData, isLoading: psLoading } = usePayrollSettings();
+  const queryClient = useQueryClient();
+  const update = useUpdatePayrollSettings();
+  const { data: settings, isLoading, isError, refetch } = usePayrollSettings();
 
-  const [payroll, setPayroll] = useState({
-    // Staff
-    pfRate: 0,
-    esiRate: 0,
-    esiApplicableBelow: 21000,
-    // Production
-    prodPfRate: 0,
-    prodEsiRate: 0,
-    prodEsiApplicableBelow: 21000,
-    // Statutory Bonus (Payment of Bonus Act)
-    bonusPercent: 8.33,
-    bonusWageCeiling: 7000,
-    bonusEligibilityCeiling: 21000,
-    bonusFyStartMonth: 4,
-    // General
-    payDay: 5,
-    defaultSalaryPerShift: 0,
-  });
+  const saved = useMemo(() => savedPayroll(settings), [settings]);
+  const rates = useDraft(saved.rates);
+  const bonus = useDraft(saved.bonus);
+  const ot = useDraft(saved.ot);
+  const pfEf = useDraft(saved.pfEf);
 
-  // Payroll tab split into its independent settings groups.
-  const [payrollSubTab, setPayrollSubTab] = useState<
-    "rates" | "compensation" | "bonus" | "otCompensation" | "prodPfEf"
-  >("rates");
+  const [subTab, setSubTab] = useState<PayrollSubTab>(() => PAYROLL_SUB_TAB_OF[addressSetting()] ?? "rates");
+  useSubTabFromAddress(PAYROLL_SUB_TAB_OF, setSubTab);
 
-  // OT / Compensation -loaded from DB
-  const [compensationFeatureEnabled, setCompensationFeatureEnabled] = useState(true);
-  // Turning the background features OFF stops OT being paid in payroll, so it asks first.
-  const [confirmFeaturesOff, setConfirmFeaturesOff] = useState(false);
+  const [saving, setSaving] = useState<Saving | null>(null);
+  const [featuresPending, setFeaturesPending] = useState<boolean | null>(null);
+  const featuresOn = featuresPending ?? settings?.compensationFeatureEnabled ?? true;
+  const branchLogin = settings?.companyWideRulesEditable === false;
 
-  const [otDetectionEnabled, setOtDetectionEnabled] = useState(false);
+  const keepSaved = (next: PayrollSettingsItem) => queryClient.setQueryData(getPayrollSettingsQueryKey(), next);
 
-  const [otThresholdMinutes, setOtThresholdMinutes] = useState(60);
-
-  const [otCompensationType, setOtCompensationType] = useState<"pay" | "relaxation">("pay");
-
-  // Production PF/EF salary-range rules (takes precedence over flat rates when enabled)
-  const [pfEfEnabled, setPfEfEnabled] = useState(false);
-
-  const [pfEfRules, setPfEfRules] = useState<
-    { label: string; minSalary: number; maxSalary: number; pfRate: number; efRate: number }[]
-  >([]);
-
-  // Master switches for the flat PF/ESI payroll rules (default OFF -no
-  // deduction is applied for that employee class until explicitly enabled)
-  const [staffRulesEnabled, setStaffRulesEnabled] = useState(false);
-
-  const [prodRulesEnabled, setProdRulesEnabled] = useState(false);
-
-  useEffect(() => {
-    if (!payrollSettingsData) return;
-    setPayroll({
-      pfRate: payrollSettingsData.pfRate,
-      esiRate: payrollSettingsData.esiRate,
-      esiApplicableBelow: payrollSettingsData.esiApplicableBelow,
-      prodPfRate: payrollSettingsData.prodPfRate,
-      prodEsiRate: payrollSettingsData.prodEsiRate,
-      prodEsiApplicableBelow: payrollSettingsData.prodEsiApplicableBelow,
-      bonusPercent: payrollSettingsData.bonusPercent ?? 8.33,
-      bonusWageCeiling: payrollSettingsData.bonusWageCeiling ?? 7000,
-      bonusEligibilityCeiling: payrollSettingsData.bonusEligibilityCeiling ?? 21000,
-      bonusFyStartMonth: payrollSettingsData.bonusFyStartMonth ?? 4,
-      payDay: payrollSettingsData.payDay,
-      defaultSalaryPerShift: payrollSettingsData.defaultSalaryPerShift ?? 0,
-    });
-    setCompensationFeatureEnabled(payrollSettingsData.compensationFeatureEnabled ?? true);
-    setOtDetectionEnabled(payrollSettingsData.otDetectionEnabled ?? false);
-    setOtThresholdMinutes(payrollSettingsData.otThresholdMinutes ?? 60);
-    setOtCompensationType((payrollSettingsData.otCompensationType as "pay" | "relaxation") ?? "pay");
-    setPfEfEnabled(payrollSettingsData.prodPfEfEnabled ?? false);
-    setPfEfRules(payrollSettingsData.prodPfEfRules ?? []);
-    setStaffRulesEnabled(payrollSettingsData.staffPayrollRulesEnabled ?? false);
-    setProdRulesEnabled(payrollSettingsData.prodPayrollRulesEnabled ?? false);
-  }, [payrollSettingsData]);
-
-  // Company/Attendance/Payroll/Salary Slip/SMTP all persist to one shared
-  // PayrollSettings record via one endpoint, but each tab now sends only its
-  // own fields (rather than one bundled payload covering every tab) -the
-  // backend checks edit permission per settings.* field group (see
-  // FIELD_GROUPS in payroll_views.py), so a role with edit on only e.g.
-  // Payroll must not have its save blocked by SMTP/Salary Slip fields it
-  // never touched riding along in the same request.
-  const savePayrollRates = async (result?: { title: string; description?: string }, errorTitle?: string) => {
+  const runSave = async (
+    group: Saving,
+    payload: Partial<PayrollSettingsItem>,
+    done: () => void,
+    ok: { title: string; description: string },
+    failTitle: string,
+  ) => {
+    setSaving(group);
     try {
-      await updatePayrollSettings.mutateAsync({
-        pfRate: payroll.pfRate,
-        esiRate: payroll.esiRate,
-        esiApplicableBelow: payroll.esiApplicableBelow,
-        prodPfRate: payroll.prodPfRate,
-        prodEsiRate: payroll.prodEsiRate,
-        prodEsiApplicableBelow: payroll.prodEsiApplicableBelow,
-        payDay: payroll.payDay,
-        defaultSalaryPerShift: payroll.defaultSalaryPerShift,
-        prodPfEfEnabled: pfEfEnabled,
-        prodPfEfRules: pfEfRules,
-        staffPayrollRulesEnabled: staffRulesEnabled,
-        prodPayrollRulesEnabled: prodRulesEnabled,
-      } as never);
-      toast(
-        result ?? {
-          title: "Payroll settings saved",
-          description: "New rates will apply to all payroll generated from now.",
-        },
-      );
-    } catch {
-      toast({ title: errorTitle ?? "Failed to save payroll settings", variant: "destructive" });
+      keepSaved(await update.mutateAsync(payload));
+      done();
+      toast(ok);
+    } catch (err) {
+      toast({ title: failTitle, description: saveErrorText(err), variant: "destructive" });
+    } finally {
+      setSaving(null);
     }
   };
 
-  const saveBonusSettings = async () => {
+  const applyFeatures = async (enabled: boolean) => {
+    setFeaturesPending(enabled);
     try {
-      await updatePayrollSettings.mutateAsync({
-        bonusPercent: payroll.bonusPercent,
-        bonusWageCeiling: payroll.bonusWageCeiling,
-        bonusEligibilityCeiling: payroll.bonusEligibilityCeiling,
-        bonusFyStartMonth: payroll.bonusFyStartMonth,
-      } as never);
-      toast({ title: "Bonus settings saved" });
-    } catch {
-      toast({ title: "Failed to save bonus settings", variant: "destructive" });
-    }
-  };
-
-  const saveOtCompensationSettings = async () => {
-    try {
-      await updatePayrollSettings.mutateAsync({
-        otDetectionEnabled,
-        otThresholdMinutes,
-        otCompensationType,
-      } as never);
-      toast({ title: "OT / Compensation settings saved" });
-    } catch {
-      toast({ title: "Failed to save OT / Compensation settings", variant: "destructive" });
-    }
-  };
-
-  const applyCompensationFeatures = async (enabled: boolean) => {
-    setCompensationFeatureEnabled(enabled);
-    try {
-      await updatePayrollSettings.mutateAsync({ compensationFeatureEnabled: enabled } as never);
+      keepSaved(await update.mutateAsync({ compensationFeatureEnabled: enabled }));
       toast({
         title: enabled ? "OT & Compensation features ON" : "OT & Compensation features OFF",
         description: enabled
-          ? "OT detection, the Compensation-Leave exemption and OT pay in payroll are active again."
-          : "OT detection, the Compensation-Leave exemption and OT pay in payroll are switched off. The Compensation page stays available and existing records are kept.",
+          ? "OT detection, the Compensation-Leave exemption and OT pay on payslips generated from now on are active again."
+          : "OT detection, the Compensation-Leave exemption and OT pay on payslips generated from now on are switched off. The Compensation page stays available and existing records are kept.",
       });
-    } catch {
-      setCompensationFeatureEnabled(!enabled);
-      toast({ title: "Failed to update setting", variant: "destructive" });
+    } catch (err) {
+      toast({ title: "Failed to update setting", description: saveErrorText(err), variant: "destructive" });
+    } finally {
+      setFeaturesPending(null);
     }
   };
 
+  const branchOnly = branchLogin ? " They apply to your branch's employees only." : "";
+  const staffRates = {
+    rulesOn: rates.form.staffRulesEnabled,
+    pfRate: numberOr(rates.form.pfRate, RANGES.percent, Number(saved.rates.pfRate) || 0),
+    esiRate: numberOr(rates.form.esiRate, RANGES.percent, Number(saved.rates.esiRate) || 0),
+    esiCeiling: numberOr(rates.form.esiApplicableBelow, RANGES.amount, Number(saved.rates.esiApplicableBelow) || 0),
+  };
+  const flatProduction = {
+    on: rates.form.prodRulesEnabled,
+    pfRate: numberOr(rates.form.prodPfRate, RANGES.percent, Number(saved.rates.prodPfRate) || 0),
+    esiRate: numberOr(rates.form.prodEsiRate, RANGES.percent, Number(saved.rates.prodEsiRate) || 0),
+    esiCeiling: numberOr(
+      rates.form.prodEsiApplicableBelow,
+      RANGES.amount,
+      Number(saved.rates.prodEsiApplicableBelow) || 0,
+    ),
+  };
+  const unsavedElsewhere = SUB_TABS.filter(
+    (t) => t.value !== subTab && { rates, bonus, otCompensation: ot, prodPfEf: pfEf }[t.value].dirty,
+  ).map((t) => t.label);
+
   return (
-    <>
-      <PillTabs
-        items={[
-          { value: "rates", label: "Payroll Rules", icon: <IndianRupee size={13} /> },
-          { value: "compensation", label: "Compensation", icon: <IndianRupee size={13} /> },
-          { value: "bonus", label: "Bonus", icon: <IndianRupee size={13} /> },
-          { value: "otCompensation", label: "OT / Compensation", icon: <Clock size={13} /> },
-          { value: "prodPfEf", label: "Production PF/EF", icon: <IndianRupee size={13} /> },
-        ]}
-        value={payrollSubTab}
-        onChange={(v) => setPayrollSubTab(v as "rates" | "compensation" | "bonus" | "otCompensation" | "prodPfEf")}
-        baseColor="#0f172a"
-        pillBg="#f1f5f9"
-      />
-      {payrollSubTab === "rates" && (
+    <div className="space-y-4">
+      {branchLogin && (
+        <BranchNotice>
+          You are signed in to a branch. What you save on this tab is kept apart from the company values and applies to
+          your branch's employees only (payroll and bonus). OT detection, the Compensation page, the MD portal and
+          Report Center always use the company values.
+        </BranchNotice>
+      )}
+
+      <div className="flex flex-wrap items-center gap-3">
+        <PillTabs
+          items={SUB_TABS}
+          value={subTab}
+          onChange={(v) => setSubTab(v as PayrollSubTab)}
+          baseColor="#0f172a"
+          pillBg="#f1f5f9"
+        />
+        {unsavedElsewhere.length > 0 && (
+          <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800 ring-1 ring-amber-200">
+            Not saved yet: {unsavedElsewhere.join(", ")}
+          </span>
+        )}
+      </div>
+
+      {isLoading ? (
+        <div className="space-y-3" data-testid="payroll-settings-loading">
+          <Skeleton className="h-40 w-full rounded-2xl" />
+          <Skeleton className="h-64 w-full rounded-2xl" />
+        </div>
+      ) : isError || !settings ? (
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-red-50 p-4 text-sm text-red-800">
+          Could not load the payroll settings.
+          <Button size="sm" variant="outline" onClick={() => void refetch()}>
+            Try again
+          </Button>
+        </div>
+      ) : (
         <>
-          <Card className="border-0 shadow-sm">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-bold flex items-center gap-2">
-                <IndianRupee size={15} className="text-green-500" /> Payroll Rules
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Info banner */}
-              <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800">
-                <strong>Note:</strong> Payroll rules are <strong>disabled by default</strong>. Use the switch on each
-                column to enable PF/ESI deductions for that employee class -while a switch is off, no deduction is
-                applied even if rates are set. Changes apply to all new payroll runs -existing records are not affected.
-              </div>
-
-              {psLoading ? (
-                <p className="text-sm text-muted-foreground">Loading settings…</p>
-              ) : (
-                <div className="grid sm:grid-cols-2 gap-6">
-                  {/* ── Staff column ── */}
-                  <div className={`space-y-3 ${staffRulesEnabled ? "" : "opacity-60"}`}>
-                    <div className="flex items-center gap-2 pb-1 border-b">
-                      <span className="text-xs font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded">Staff</span>
-                      <span className="text-xs text-muted-foreground">Monthly salary employees</span>
-                      <div className="ml-auto flex items-center gap-2">
-                        <span
-                          className={`text-[10px] font-bold ${staffRulesEnabled ? "text-green-600" : "text-gray-400"}`}
-                        >
-                          {staffRulesEnabled ? "ENABLED" : "DISABLED"}
-                        </span>
-                        <Switch checked={staffRulesEnabled} onCheckedChange={setStaffRulesEnabled} />
-                      </div>
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">
-                        PF Rate (%) <span className="text-muted-foreground font-normal">0 = disabled</span>
-                      </Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        max={100}
-                        step={0.01}
-                        value={payroll.pfRate}
-                        onChange={(e) => setPayroll((p) => ({ ...p, pfRate: Number(e.target.value) }))}
-                        placeholder="e.g. 12"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">
-                        ESI Rate (%) <span className="text-muted-foreground font-normal">0 = disabled</span>
-                      </Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        max={100}
-                        step={0.01}
-                        value={payroll.esiRate}
-                        onChange={(e) => setPayroll((p) => ({ ...p, esiRate: Number(e.target.value) }))}
-                        placeholder="e.g. 0.75"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">ESI Applicable Below (&#8377;)</Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        value={payroll.esiApplicableBelow}
-                        onChange={(e) => setPayroll((p) => ({ ...p, esiApplicableBelow: Number(e.target.value) }))}
-                      />
-                    </div>
-                  </div>
-
-                  {/* ── Production column ── */}
-                  <div className={`space-y-3 ${prodRulesEnabled ? "" : "opacity-60"}`}>
-                    <div className="flex items-center gap-2 pb-1 border-b">
-                      <span className="text-xs font-semibold text-orange-700 bg-orange-50 px-2 py-0.5 rounded">
-                        Production
-                      </span>
-                      <span className="text-xs text-muted-foreground">Shift-based employees</span>
-                      <div className="ml-auto flex items-center gap-2">
-                        <span
-                          className={`text-[10px] font-bold ${prodRulesEnabled ? "text-green-600" : "text-gray-400"}`}
-                        >
-                          {prodRulesEnabled ? "ENABLED" : "DISABLED"}
-                        </span>
-                        <Switch checked={prodRulesEnabled} onCheckedChange={setProdRulesEnabled} />
-                      </div>
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">
-                        PF Rate (%) <span className="text-muted-foreground font-normal">0 = disabled</span>
-                      </Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        max={100}
-                        step={0.01}
-                        value={payroll.prodPfRate}
-                        onChange={(e) => setPayroll((p) => ({ ...p, prodPfRate: Number(e.target.value) }))}
-                        placeholder="e.g. 12"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">
-                        ESI Rate (%) <span className="text-muted-foreground font-normal">0 = disabled</span>
-                      </Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        max={100}
-                        step={0.01}
-                        value={payroll.prodEsiRate}
-                        onChange={(e) => setPayroll((p) => ({ ...p, prodEsiRate: Number(e.target.value) }))}
-                        placeholder="e.g. 0.75"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">
-                        ESI Applicable Below (&#8377;){" "}
-                        <span className="text-muted-foreground font-normal">based on monthly estimate</span>
-                      </Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        value={payroll.prodEsiApplicableBelow}
-                        onChange={(e) => setPayroll((p) => ({ ...p, prodEsiApplicableBelow: Number(e.target.value) }))}
-                      />
-                    </div>
-                  </div>
-
-                  {/* ── General (full width) ── */}
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">Salary Pay Day (of month)</Label>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={28}
-                      value={payroll.payDay}
-                      onChange={(e) => setPayroll((p) => ({ ...p, payDay: Number(e.target.value) }))}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">
-                      Default Salary Per Shift (&#8377;){" "}
-                      <span className="text-muted-foreground font-normal">pre-filled for new production employees</span>
-                    </Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      step={0.01}
-                      value={payroll.defaultSalaryPerShift}
-                      onChange={(e) => setPayroll((p) => ({ ...p, defaultSalaryPerShift: Number(e.target.value) }))}
-                      placeholder="e.g. 300"
-                    />
-                  </div>
-                </div>
-              )}
-
-              <Button
-                size="sm"
-                onClick={() => savePayrollRates()}
-                disabled={updatePayrollSettings.isPending || psLoading}
-              >
-                {updatePayrollSettings.isPending ? "Saving…" : "Save Payroll Settings"}
-              </Button>
-            </CardContent>
-          </Card>
+          {subTab === "rates" && (
+            <RatesPanel
+              draft={rates}
+              saved={saved.rates}
+              settings={settings}
+              bandsOn={pfEf.form.prodPfEfEnabled}
+              bandCount={pfEf.form.prodPfEfRules.length}
+              readOnly={readOnly}
+              saving={saving === "rates"}
+              busy={saving !== null}
+              onSave={() =>
+                runSave(
+                  "rates",
+                  ratesPayload(rates.form),
+                  rates.discard,
+                  {
+                    title: "Payroll settings saved",
+                    description: `Payroll generated from now on uses them; payslips already generated keep their amounts until they are generated again.${branchOnly}`,
+                  },
+                  "Failed to save payroll settings",
+                )
+              }
+            />
+          )}
+          {subTab === "bonus" && (
+            <BonusPanel
+              draft={bonus}
+              saved={saved.bonus}
+              fyStartMonth={settings.bonusFyStartMonth ?? 4}
+              readOnly={readOnly}
+              saving={saving === "bonus"}
+              busy={saving !== null}
+              onSave={() =>
+                runSave(
+                  "bonus",
+                  bonusPayload(bonus.form),
+                  bonus.discard,
+                  {
+                    title: "Bonus settings saved",
+                    description: `The Bonus page's figures use them at once; a bonus register already generated changes only when Generate is run again.${branchOnly}`,
+                  },
+                  "Failed to save bonus settings",
+                )
+              }
+            />
+          )}
+          {subTab === "otCompensation" && (
+            <OtPanel
+              draft={ot}
+              saved={saved.ot}
+              featuresOn={featuresOn}
+              onFeatures={(enabled) => void applyFeatures(enabled)}
+              staffRates={staffRates}
+              branchLogin={branchLogin}
+              readOnly={readOnly}
+              saving={saving === "ot"}
+              busy={saving !== null || featuresPending !== null}
+              onSave={() =>
+                runSave(
+                  "ot",
+                  otPayload(ot.form, settings),
+                  ot.discard,
+                  {
+                    title: "OT / Compensation settings saved",
+                    description:
+                      "OT detection uses them the next time Compensation -> OT Detection is opened for a month.",
+                  },
+                  "Failed to save OT / Compensation settings",
+                )
+              }
+            />
+          )}
+          {subTab === "prodPfEf" && (
+            <PfEfPanel
+              draft={pfEf}
+              saved={saved.pfEf}
+              flat={flatProduction}
+              readOnly={readOnly}
+              saving={saving === "pfEf"}
+              busy={saving !== null}
+              onSave={() =>
+                runSave(
+                  "pfEf",
+                  pfEfPayload(pfEf.form, saved.pfEf, settings),
+                  pfEf.discard,
+                  {
+                    title: "PF/EF rules saved",
+                    description: `Production payslips generated from now on use them.${branchOnly}`,
+                  },
+                  "Failed to save PF/EF rules",
+                )
+              }
+            />
+          )}
         </>
       )}
-
-      {payrollSubTab === "compensation" && (
-        <Card className="border-0 shadow-sm mt-4">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-bold flex items-center gap-2">
-              <IndianRupee size={15} className="text-teal-500" /> Compensation Breakdown
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div
-              className="p-3 rounded-lg bg-blue-50 border border-blue-100 text-xs text-blue-700 space-y-2"
-              data-testid="compensation-split-note"
-            >
-              <p>
-                Nothing to set here any more. The <strong>Compensation</strong> page's CTC Breakdown shows each
-                employee's own <strong>salary split</strong>, entered on Add / Edit Employee and Bulk Upload:
-              </p>
-              <ul className="list-disc pl-5 space-y-0.5">
-                <li>
-                  <strong>First portion (50%)</strong> = Basic + DA + Retaining Allowance
-                </li>
-                <li>
-                  <strong>Second portion (50%)</strong> = Other Allowance + Petrol Allowance + HRA + Special Allowance +
-                  CA
-                </li>
-              </ul>
-              <p>
-                Employer PF is the PF rate (Payroll Rules tab) applied to the first portion. The Basic % and HRA % boxes
-                that used to be on this tab are no longer used. None of this affects payroll generation or salary slips.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {payrollSubTab === "bonus" && (
-        <>
-          {/* ── Statutory Bonus (Bonus page) ── */}
-          <Card className="border-0 shadow-sm mt-4">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-bold flex items-center gap-2">
-                <IndianRupee size={15} className="text-amber-500" /> Statutory Bonus
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800">
-                Payment of Bonus Act, 1965: bonus % must be between 8.33 (minimum) and 20 (maximum). Used by the{" "}
-                <strong>Bonus</strong> page's calculation engine.
-              </div>
-              <div className="grid sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Bonus (%)</Label>
-                  <Input
-                    type="number"
-                    min={8.33}
-                    max={20}
-                    step={0.01}
-                    value={payroll.bonusPercent}
-                    onChange={(e) => setPayroll((p) => ({ ...p, bonusPercent: Number(e.target.value) }))}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Wage Ceiling (&#8377;)</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    value={payroll.bonusWageCeiling}
-                    onChange={(e) => setPayroll((p) => ({ ...p, bonusWageCeiling: Number(e.target.value) }))}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Eligibility Ceiling (&#8377;)</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    value={payroll.bonusEligibilityCeiling}
-                    onChange={(e) => setPayroll((p) => ({ ...p, bonusEligibilityCeiling: Number(e.target.value) }))}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Financial Year Start Month</Label>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={12}
-                    value={payroll.bonusFyStartMonth}
-                    onChange={(e) => setPayroll((p) => ({ ...p, bonusFyStartMonth: Number(e.target.value) }))}
-                    placeholder="4 = April"
-                  />
-                </div>
-              </div>
-              <Button
-                size="sm"
-                onClick={() => saveBonusSettings()}
-                disabled={updatePayrollSettings.isPending || psLoading}
-              >
-                {updatePayrollSettings.isPending ? "Saving…" : "Save Bonus Settings"}
-              </Button>
-            </CardContent>
-          </Card>
-        </>
-      )}
-
-      {payrollSubTab === "otCompensation" && (
-        <>
-          {/* ── OT / Compensation background features master switch ── */}
-          <Card className="border-0 shadow-sm">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-sm font-bold flex items-center gap-2">
-                  <Landmark size={15} className="text-teal-600" /> OT &amp; Compensation Features
-                </CardTitle>
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`text-xs font-bold ${compensationFeatureEnabled ? "text-green-600" : "text-gray-400"}`}
-                  >
-                    {compensationFeatureEnabled ? "ON" : "OFF"}
-                  </span>
-                  <Switch
-                    checked={compensationFeatureEnabled}
-                    aria-label="OT and Compensation features"
-                    data-testid="toggle-compensation-features"
-                    onCheckedChange={(v) => (v ? applyCompensationFeatures(true) : setConfirmFeaturesOff(true))}
-                  />
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <p className="text-xs text-gray-500 leading-relaxed">
-                Master switch for what the Compensation feature <strong>does in the background</strong>: detecting OT,
-                adding announced OT pay to a generated payslip, and letting Compensation-Leave announcements exempt
-                Late/Permission detection. The <strong>Compensation page is mandatory</strong> and always stays in the
-                sidebar, whatever this says. With this off the page still opens and every record and report on it can be
-                read, but OT is no longer detected or paid and announcements are paused. Turn it back on any time;
-                nothing is deleted while it's off. The settings below only matter while this is on.
-              </p>
-            </CardContent>
-          </Card>
-
-          <AlertDialog open={confirmFeaturesOff} onOpenChange={setConfirmFeaturesOff}>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Turn off the OT &amp; Compensation features?</AlertDialogTitle>
-                <AlertDialogDescription asChild>
-                  <div className="space-y-2 text-sm text-muted-foreground">
-                    <p>While they are off:</p>
-                    <ul className="list-disc pl-5 space-y-1">
-                      <li>OT is no longer detected.</li>
-                      <li>Announced OT no longer adds pay to payslips generated from now on.</li>
-                      <li>Compensation Days stop exempting Late / Permission detection.</li>
-                      <li>Announcing OT, adding Compensation Days and redeeming credits are paused.</li>
-                    </ul>
-                    <p>
-                      The <strong>Compensation page stays in the sidebar</strong> and all existing records are kept, not
-                      deleted. You can turn this back on at any time.
-                    </p>
-                  </div>
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Keep them on</AlertDialogCancel>
-                <AlertDialogAction
-                  onClick={() => applyCompensationFeatures(false)}
-                  data-testid="confirm-compensation-features-off"
-                >
-                  Turn off
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-
-          <Card className="border-0 shadow-sm bg-slate-50/60">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-bold flex items-center gap-2">
-                <Info size={15} className="text-slate-500" /> How OT / Compensation Works
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="text-xs text-slate-600 leading-relaxed space-y-2">
-              <p>
-                Staff only. Off by default. When enabled, an employee working more than the threshold below past their
-                assigned shift's end time is auto-detected as OT-eligible on the{" "}
-                <strong>Compensation → OT Detection</strong> page -HR reviews and Announces each one as{" "}
-                <strong>Pay</strong> (one day's equivalent salary, added to that employee's next payroll run) or{" "}
-                <strong>Relaxation</strong>
-                (a paid Alternative Day credit HR can redeem later). Nothing is paid or credited until announced.
-              </p>
-              <p className="text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">
-                Compensation type is a single company-wide default here -employees never choose or self-assign their own
-                compensation.
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card className="border-0 shadow-sm">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-bold flex items-center gap-2">
-                <Clock size={15} className="text-amber-500" /> OT Detection
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center justify-between bg-slate-50 rounded-lg border p-3">
-                <div>
-                  <Label className="text-xs">Enable OT Detection</Label>
-                  <p className="text-[11px] text-gray-500">No employee is flagged for OT until this is on.</p>
-                </div>
-                <Switch checked={otDetectionEnabled} onCheckedChange={setOtDetectionEnabled} />
-              </div>
-              <div className="grid sm:grid-cols-2 gap-4 max-w-lg">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Threshold (minutes past shift end)</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    step={5}
-                    value={otThresholdMinutes}
-                    onChange={(e) => setOtThresholdMinutes(Math.max(0, Number(e.target.value) || 0))}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Compensation Type (company-wide default)</Label>
-                  <select
-                    className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
-                    value={otCompensationType}
-                    onChange={(e) => setOtCompensationType(e.target.value as "pay" | "relaxation")}
-                  >
-                    <option value="pay">Pay -one day's equivalent salary</option>
-                    <option value="relaxation">Relaxation -paid Alternative Day</option>
-                  </select>
-                </div>
-              </div>
-              <Button size="sm" onClick={saveOtCompensationSettings} disabled={updatePayrollSettings.isPending}>
-                {updatePayrollSettings.isPending ? "Saving…" : "Save OT / Compensation Settings"}
-              </Button>
-            </CardContent>
-          </Card>
-        </>
-      )}
-
-      {payrollSubTab === "prodPfEf" && (
-        <>
-          {/* ── Production PF / EF salary-range rules ── */}
-          <Card className="border-0 shadow-sm mt-4">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-sm font-bold flex items-center gap-2">
-                  <IndianRupee size={15} className="text-purple-500" /> Production PF / EF Salary-Range Rules
-                </CardTitle>
-                <div className="flex items-center gap-2">
-                  <span className={`text-xs font-bold ${pfEfEnabled ? "text-green-600" : "text-gray-400"}`}>
-                    {pfEfEnabled ? "ENABLED" : "DISABLED"}
-                  </span>
-                  <Switch checked={pfEfEnabled} onCheckedChange={setPfEfEnabled} />
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="p-3 rounded-lg bg-blue-50 border border-blue-100 text-xs text-blue-700">
-                When <strong>enabled</strong>, production payroll picks the rule matching the employee's
-                monthly-equivalent earnings (bi-weekly gross × 2) and deducts PF / EF at that rule's rates — overriding
-                the flat Production PF/ESI rates above. Amounts appear in the payroll breakdown and the salary slip. Max
-                Salary <strong>0</strong> = no upper limit. When disabled, the flat rates above apply.
-              </div>
-              {pfEfRules.length === 0 ? (
-                <p className="text-xs text-center text-muted-foreground py-3">No rules configured yet.</p>
-              ) : (
-                <div className="space-y-2">
-                  <div className="grid grid-cols-[1fr_100px_100px_80px_80px_32px] gap-2 text-[10px] text-gray-400 uppercase font-semibold px-1">
-                    <span>Category</span>
-                    <span>Min Salary</span>
-                    <span>Max Salary</span>
-                    <span>PF %</span>
-                    <span>EF %</span>
-                    <span />
-                  </div>
-                  {pfEfRules.map((rule, i) => (
-                    <div key={i} className="grid grid-cols-[1fr_100px_100px_80px_80px_32px] gap-2 items-center">
-                      <Input
-                        placeholder="Category / label"
-                        value={rule.label}
-                        onChange={(e) =>
-                          setPfEfRules((rs) => rs.map((r, j) => (j === i ? { ...r, label: e.target.value } : r)))
-                        }
-                        className="h-8 text-xs"
-                      />
-                      <Input
-                        type="number"
-                        placeholder="Min ₹"
-                        value={rule.minSalary}
-                        onChange={(e) =>
-                          setPfEfRules((rs) =>
-                            rs.map((r, j) => (j === i ? { ...r, minSalary: Number(e.target.value) } : r)),
-                          )
-                        }
-                        className="h-8 text-xs"
-                      />
-                      <Input
-                        type="number"
-                        placeholder="Max ₹ (0 = no limit)"
-                        value={rule.maxSalary}
-                        onChange={(e) =>
-                          setPfEfRules((rs) =>
-                            rs.map((r, j) => (j === i ? { ...r, maxSalary: Number(e.target.value) } : r)),
-                          )
-                        }
-                        className="h-8 text-xs"
-                      />
-                      <Input
-                        type="number"
-                        placeholder="PF %"
-                        value={rule.pfRate}
-                        onChange={(e) =>
-                          setPfEfRules((rs) =>
-                            rs.map((r, j) => (j === i ? { ...r, pfRate: Number(e.target.value) } : r)),
-                          )
-                        }
-                        className="h-8 text-xs"
-                      />
-                      <Input
-                        type="number"
-                        placeholder="EF %"
-                        value={rule.efRate}
-                        onChange={(e) =>
-                          setPfEfRules((rs) =>
-                            rs.map((r, j) => (j === i ? { ...r, efRate: Number(e.target.value) } : r)),
-                          )
-                        }
-                        className="h-8 text-xs"
-                      />
-                      <button
-                        onClick={() => setPfEfRules((rs) => rs.filter((_, j) => j !== i))}
-                        className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50"
-                      >
-                        <X size={13} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() =>
-                    setPfEfRules((rs) => [...rs, { label: "", minSalary: 0, maxSalary: 0, pfRate: 0, efRate: 0 }])
-                  }
-                >
-                  + Add Rule
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={() => savePayrollRates({ title: "PF/EF rules saved" }, "Failed to save PF/EF rules")}
-                  disabled={updatePayrollSettings.isPending}
-                >
-                  {updatePayrollSettings.isPending ? "Saving…" : "Save PF/EF Rules"}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </>
-      )}
-    </>
+    </div>
   );
 }

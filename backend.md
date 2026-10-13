@@ -165,7 +165,7 @@ New Joinees (offer letter + email/WhatsApp), Resignations (department-head then 
 ### 4.7 Payroll, Salary & Settlement
 Full engine for both employment types:
 - **Staff:** monthly salary ÷ working days × effective present days (Full/Half Shift), plus Late Detection and Without Permission deduction pools (Section 6).
-- **Production:** shift-based, on a configurable pay-period cycle (weekly/2-weekly/3-weekly/monthly) -**not** tied to calendar months, so a given month can span more than one still-unpaid pay period. This is why any "how many employees are pending" figure for Production must count **distinct employees**, not raw Payroll rows -a fix applied to the Payslip list query and the Production Payroll page's KPI card after exactly this miscount was found (August 2026).
+- **Production:** shift-based, paid on one of three **pay cycles** -Weekly (7 days), BiWeekly (14 days) or Monthly (four weeks, 28 days)- chosen per employee on Employees → Production Employees (`Employee.production_pay_cycle`; an unassigned employee is in no payroll). Each cycle has its own Production Payroll page, period rule and late rules (Settings → Production Payroll). **Not** tied to calendar months, so a given month can span more than one still-unpaid pay period. This is why any "how many employees are pending" figure for Production must count **distinct employees**, not raw Payroll rows -a fix applied to the Payslip list query and the Production Payroll page's KPI card after exactly this miscount was found (August 2026).
 - **Skipped Employees:** a dry-run preview (before generating) of exactly which employees would be skipped and why (no Salary Amount / no Salary Per Shift / zero working days in the period) -surfaced as a KPI card on both Staff and Production Payroll pages. Staff's check runs automatically on page load (~14s for ~120 employees); Production's is click-triggered instead, since its equivalent check is measurably slower (~84s for ~114 employees, since the production engine's per-employee work is heavier) and firing it automatically on every page visit would be a bad tradeoff.
 - Deductions: PF, ESI, advances, Late Attendance penalty, Without Permission penalty.
 - Full day-by-day breakdown drawer per payroll record.
@@ -336,7 +336,8 @@ All endpoints prefixed `/api/`. JWT in `Authorization: Bearer <token>`. This cov
 | Attendance | `GET /attendance/summary`, `/daily`, `/monthly-trend`, `/employee/<id>`; `POST /attendance/manual`, `/attendance/sync-biometric`, `/biometric/punch` |
 | Leave & Holiday | `GET/POST /leave-types`, `/leave-requests`, `/permissions`, `/holidays`; `PATCH /leave-requests/<id>/status` |
 | Payroll | `GET/POST /payroll`, `GET /payroll/<id>/breakdown`, `POST /payroll/skip-check`, `GET/PUT /payroll-settings` |
-| Production Payroll | `GET/POST /payroll/production`, `GET /payroll/production/skip-check`, `/next-period` |
+| Production Payroll | `GET /payroll/production?cycle=`, `POST /payroll/production/generate` (`cycle`, optional period / `employeeIds`), `GET /payroll/production/skip-check`, `/next-period`, `/periods`, `/period-status`, `/cycles` |
+| Production Employees | `GET /employees/production`, `POST /employees/production/assign` |
 | Salary Slip | `GET/POST /salary-slips`, `/<id>/email`, `/<id>/whatsapp`, `/bulk-email`, `/bulk-whatsapp` |
 | WhatsApp | `GET /whatsapp/status`, `GET/PUT /whatsapp/templates` |
 | HR / support contact | `GET /support-contact` (public, read-only; edited under Settings → HR Contact via `PUT /payroll-settings`) |

@@ -2066,6 +2066,17 @@ class ProductionRegisterTests(_Base):
             (by[("AA006",)]["day_2026-03-18"], by[("AA006",)]["day_2026-03-19"]), (0.0, None)
         )  # holiday, no punch
 
+    def test_footnote_names_the_current_period_of_each_configured_cycle(self):
+        # Weekly needs no first period start; BiWeekly has one; Monthly has none yet, so it is left out
+        PayrollSettings.objects.filter(pk=1).update(
+            prod_cycles={"biweekly": {"weekStart": "monday", "anchorDate": "2026-02-02"}}
+        )
+        body = self.run_report("production-shift-register", **self.P)
+        note = next(n for n in body["notes"] if n.startswith("Current production payroll periods:"))
+        self.assertIn("Weekly ", note)
+        self.assertIn("; BiWeekly ", note)
+        self.assertNotIn("Monthly", note)
+
     def test_filters_scoping_and_access(self):
         body = self.run_report("production-shift-register", **self.P, employeeIds=str(self.e6.id))
         self.assertEqual([r["employeeCode"] for r in self.data(body)], ["AA006"])

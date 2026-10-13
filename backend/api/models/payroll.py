@@ -4,6 +4,7 @@ from datetime import time
 from decimal import Decimal
 from django.db import models
 
+from ..production_cycles import CYCLE_CHOICES
 from .core import Department, Designation, Employee
 
 
@@ -220,6 +221,9 @@ class SalarySlip(models.Model):
     # docstring. NULL for staff and legacy production slips.
     period_start = models.DateField(null=True, blank=True, db_column="period_start")
     period_end = models.DateField(null=True, blank=True, db_column="period_end")
+    # The production pay cycle (Weekly / BiWeekly / Monthly) this slip was generated on; NULL for staff and for
+    # production slips generated before the cycles existed. Same meaning as Payroll.pay_cycle.
+    pay_cycle = models.TextField(choices=CYCLE_CHOICES, null=True, blank=True, db_column="pay_cycle")
 
     class Meta:
         db_table = "salary_slips"
@@ -314,6 +318,10 @@ class Payroll(models.Model):
     # the source of truth for the date range.
     period_start = models.DateField(null=True, blank=True, db_column="period_start")
     period_end = models.DateField(null=True, blank=True, db_column="period_end")
+    # The production pay cycle this row was generated on (production_cycles.py): Weekly, BiWeekly or Monthly.
+    # NULL for staff rows and for production rows generated before the cycles existed; those are shown with the
+    # cycle their employee is assigned to now.
+    pay_cycle = models.TextField(choices=CYCLE_CHOICES, null=True, blank=True, db_column="pay_cycle")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
@@ -489,6 +497,11 @@ class PayrollSettings(models.Model):
         null=True, blank=True, db_column="prod_period_custom_days",
         help_text="Fixed day-length of each period. Only used when prod_period_style = custom_recurring.",
     )
+    # Production pay cycles (Settings -> Production Payroll -> Weekly / BiWeekly / Monthly): {cycle: {weekStart,
+    # anchorDate, lateFreeAllowance, lateSlabs}}, see production_cycles.py. Supersedes the five prod_period_* columns
+    # above for production payroll (they are no longer read by it); a cycle with no late rules of its own uses the
+    # shared prod_late_* values below. NULL = nothing configured yet.
+    prod_cycles = models.JSONField(null=True, blank=True, db_column="prod_cycles")
 
     # ── Production attendance mode + Late Detection (Settings → Payroll →
     # Production) ─────────────────────────────────────────────────────────

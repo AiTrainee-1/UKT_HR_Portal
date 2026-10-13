@@ -15,6 +15,8 @@ type BulkWhatsAppParams = {
   year: number;
   employmentType?: "staff" | "production";
   weekNumber?: number;
+  /** Only the slips of one production pay cycle: weekly | biweekly | monthly. */
+  payCycle?: string;
 };
 
 interface WhatsAppBulkState {

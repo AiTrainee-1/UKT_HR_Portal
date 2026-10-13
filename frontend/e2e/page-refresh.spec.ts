@@ -18,7 +18,9 @@ test("Refresh reloads the data on a page that still has it (the Attendance hub)"
   const refresh = page.getByTestId("button-page-refresh");
   await expect(refresh).toBeVisible();
   await expect(page.getByTestId("page-last-updated")).toContainText("Updated");
+  // let the page's own first load finish: the count must be taken when nothing is still on its way
   await expect.poll(employeeCalls).toBeGreaterThan(0);
+  await page.waitForLoadState("networkidle");
 
   // the data is fetched again from the server
   const before = employeeCalls();
@@ -47,6 +49,10 @@ test("the header has no Refresh on the pages the owner listed, and the strip sta
     "/hr/id-cards",
     "/hr/payroll",
     "/hr/production-payroll",
+    "/hr/production-payroll/weekly",
+    "/hr/production-payroll/biweekly",
+    "/hr/production-payroll/monthly",
+    "/hr/employees/productionEmployee",
     "/hr/compensation",
     "/hr/settlement",
     "/hr/account-management",

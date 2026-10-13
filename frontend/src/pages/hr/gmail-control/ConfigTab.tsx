@@ -10,6 +10,9 @@ import { AlertTriangle, CheckCircle2, Info, Send } from "lucide-react";
 import { useGmailControlSettings, useGmailTestEmail, type GmailTestResult } from "@/lib/api-client/custom-hooks";
 import { Row, StatusPill } from "./shared";
 
+// Opens Settings on the SMTP / Email tab itself (the bare /hr/settings that the server's settingsPath gives opens Company).
+const SMTP_SETTINGS_PATH = "/hr/settings?tab=smtp";
+
 function Check({ ok, label, hint }: { ok: boolean; label: string; hint?: React.ReactNode }) {
   return (
     <li className="flex items-start gap-2 py-2">
@@ -123,7 +126,7 @@ export default function ConfigTab() {
                 ) : (
                   <>
                     The SMTP host, user or app password is missing.{" "}
-                    <Link href={c.settingsPath} className="underline font-semibold">
+                    <Link href={SMTP_SETTINGS_PATH} className="underline font-semibold">
                       Open Settings → SMTP
                     </Link>{" "}
                     and save them.
@@ -194,7 +197,7 @@ export default function ConfigTab() {
         <Info size={14} className="mt-0.5 shrink-0" />
         <span>
           The Gmail login is kept in{" "}
-          <Link href={c.settingsPath} className="underline font-semibold">
+          <Link href={SMTP_SETTINGS_PATH} className="underline font-semibold">
             Settings → SMTP
           </Link>{" "}
           and is deliberately not shown or editable here; the password is never sent to this page. Gmail needs 2-Step

@@ -178,8 +178,10 @@ from .missing_punch_views import (
     missing_punch_requests, missing_punch_request_hr_status,
 )
 from .auto_sync_views import auto_sync_rules, auto_sync_rule_detail
+from .production_employee_views import assign_production_pay_cycle, production_employees
 from .production_payroll_views import (
-    production_next_period, production_generate_payroll,
+    production_cycles_summary, production_next_period, production_generate_payroll,
+    production_period_status, production_periods,
     production_skip_check, production_payroll_list,
 )
 from .payroll_views import (
@@ -249,6 +251,8 @@ urlpatterns = [
 
     # ── Employees ───────────────────────────────────────────────────────────
     path("employees", views.employees),
+    path("employees/production", production_employees),
+    path("employees/production/assign", assign_production_pay_cycle),
     path("employees/<int:pk>", views.employee_detail),
     path("employees/<int:pk>/photo", views.employee_photo),
     path("employees/<int:pk>/status", views.employee_status),
@@ -583,6 +587,9 @@ urlpatterns = [
     path("payroll/generate", generate_payroll),
     path("payroll/generate-progress", generate_payroll_progress),
     path("payroll/production", production_payroll_list),
+    path("payroll/production/cycles", production_cycles_summary),
+    path("payroll/production/periods", production_periods),
+    path("payroll/production/period-status", production_period_status),
     path("payroll/production/next-period", production_next_period),
     path("payroll/production/generate", production_generate_payroll),
     path("payroll/production/skip-check", production_skip_check),

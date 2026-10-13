@@ -222,6 +222,7 @@ api/tests_mobile_app_versions.py
 api/tests_otp.py
 api/tests_pagination.py
 api/tests_payroll_engine.py
+api/tests_payroll_settings_ranges.py
 api/tests_reporting_all.py
 api/tests_reporting_attendance_analysis.py
 api/tests_reporting_attendance_core.py
@@ -238,6 +239,7 @@ api/tests_reporting_requests_leave.py
 api/tests_reporting_requests_permission_duty.py
 api/tests_request_window.py
 api/tests_salary_split.py
+api/tests_settings_comms.py
 api/tests_shift_assignment_plan.py
 api/tests_support_contact.py
 api/tests_whatsapp_alerts.py
@@ -270,3 +272,7 @@ api/tests_leave_casual_overview.py
 api/hr_requests_views.py
 api/tests_hr_requests.py
 api/tests_settlement_missing_punch.py
+api/production_cycles.py
+api/production_employee_views.py
+api/production_payroll_views.py
+api/tests_production_cycles.py

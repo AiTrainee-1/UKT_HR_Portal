@@ -92,6 +92,8 @@ def employee_json(emp, department_name: str | None = None) -> dict:
         # The mandatory 50% + 50% split of salaryAmount (salary_split.py), or null when none is recorded.
         "salaryBreakup": salary_split.json_of(emp),
         "salaryPerShift": _float_or_none(emp.salary_per_shift),
+        # Production employees only: weekly | biweekly | monthly (production_cycles.py), null = not assigned yet.
+        "productionPayCycle": emp.production_pay_cycle,
         "status": emp.status,
         "bankName": emp.bank_name,
         "bankAccount": emp.bank_account,

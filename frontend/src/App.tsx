@@ -79,7 +79,10 @@ const Branches = lazy(() => import("@/pages/hr/Branches"));
 const ManageShift = lazy(() => import("@/pages/hr/ManageShift"));
 const LeaveHoliday = lazy(() => import("@/pages/hr/LeaveHoliday"));
 const ApprovedRequests = lazy(() => import("@/pages/hr/ApprovedRequests"));
-const ProductionPayroll = lazy(() => import("@/pages/hr/ProductionPayroll"));
+const ProductionPayrollWeekly = lazy(() => import("@/pages/hr/ProductionPayrollWeekly"));
+const ProductionPayrollBiweekly = lazy(() => import("@/pages/hr/ProductionPayrollBiweekly"));
+const ProductionPayrollMonthly = lazy(() => import("@/pages/hr/ProductionPayrollMonthly"));
+const ProductionEmployees = lazy(() => import("@/pages/hr/ProductionEmployees"));
 const Settlement = lazy(() => import("@/pages/hr/Settlement"));
 const Compensation = lazy(() => import("@/pages/hr/Compensation"));
 const Reports = lazy(() => import("@/pages/hr/Reports"));
@@ -291,6 +294,10 @@ function Router() {
         <Route path="/hr/employees/bulk-upload">
           {() => <ProtectedRoute component={BulkUploadEmployees} allowedRoles={["hr"]} />}
         </Route>
+        {/* a literal path, so it must come before the :id routes below */}
+        <Route path="/hr/employees/productionEmployee">
+          {() => <ProtectedRoute component={ProductionEmployees} allowedRoles={["hr"]} />}
+        </Route>
         <Route path="/hr/employees/:id/edit">
           {() => <ProtectedRoute component={EditEmployee} allowedRoles={["hr"]} />}
         </Route>
@@ -376,9 +383,17 @@ function Router() {
         <Route path="/hr/leave">{() => <ProtectedRoute component={LeaveHoliday} allowedRoles={["hr"]} />}</Route>
         <Route path="/hr/requests">{() => <ProtectedRoute component={ApprovedRequests} allowedRoles={["hr"]} />}</Route>
         <Route path="/hr/payroll">{() => <ProtectedRoute component={StaffPayroll} allowedRoles={["hr"]} />}</Route>
-        <Route path="/hr/production-payroll">
-          {() => <ProtectedRoute component={ProductionPayroll} allowedRoles={["hr"]} />}
+        {/* Production Payroll is one page per pay cycle; the bare address (links, the dashboard) opens Weekly */}
+        <Route path="/hr/production-payroll/weekly">
+          {() => <ProtectedRoute component={ProductionPayrollWeekly} allowedRoles={["hr"]} />}
         </Route>
+        <Route path="/hr/production-payroll/biweekly">
+          {() => <ProtectedRoute component={ProductionPayrollBiweekly} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/production-payroll/monthly">
+          {() => <ProtectedRoute component={ProductionPayrollMonthly} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/production-payroll">{() => <Redirect to="/hr/production-payroll/weekly" replace />}</Route>
         <Route path="/hr/salary">{() => <Redirect to="/hr/payroll" />}</Route>
         <Route path="/hr/compensation">{() => <ProtectedRoute component={Compensation} allowedRoles={["hr"]} />}</Route>
         <Route path="/hr/settlement">{() => <ProtectedRoute component={Settlement} allowedRoles={["hr"]} />}</Route>

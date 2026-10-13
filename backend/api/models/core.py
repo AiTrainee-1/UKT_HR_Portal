@@ -2,6 +2,8 @@
 
 from django.db import models
 
+from ..production_cycles import CYCLE_CHOICES
+
 
 # ──────────────────────────────────────────────
 #  Organisation Structure
@@ -152,6 +154,12 @@ class Employee(models.Model):
     # Production employees only: fixed pay per shift. Payroll = total_shifts * salary_per_shift.
     salary_per_shift = models.DecimalField(
         max_digits=8, decimal_places=2, null=True, blank=True, db_column="salary_per_shift"
+    )
+    # Production employees only: which pay cycle their payroll runs on -Weekly, BiWeekly or Monthly (four weeks), see
+    # production_cycles.py. NULL = not assigned yet, so no cycle's payroll includes them. Set on Employees ->
+    # Production Employees; cleared when an employee stops being production.
+    production_pay_cycle = models.TextField(
+        choices=CYCLE_CHOICES, null=True, blank=True, db_index=True, db_column="production_pay_cycle"
     )
     status = models.TextField(default="active")
     bank_name = models.TextField(null=True, blank=True, db_column="bank_name")

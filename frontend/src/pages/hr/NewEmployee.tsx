@@ -245,7 +245,7 @@ export default function NewEmployee() {
                       <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
                       <SelectContent>
                         <SelectItem value="staff">Staff (Monthly)</SelectItem>
-                        <SelectItem value="production">Production (Weekly)</SelectItem>
+                        <SelectItem value="production">Production (Per Shift)</SelectItem>
                       </SelectContent>
                     </Select>
                   <FormMessage /></FormItem>

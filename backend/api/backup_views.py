@@ -21,6 +21,7 @@ Restore is split into two requests on purpose:
 
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -124,6 +125,22 @@ def download_backup(request: Request, filename: str) -> Response:
 
 # ── Schedule ─────────────────────────────────────────────────────────────────
 
+_WEEKDAY = r"(?:mon|tue|wed|thu|fri|sat|sun)"
+_DAY_TOKEN = re.compile(rf"{_WEEKDAY}(?:-{_WEEKDAY})?")
+
+
+def _clean_days_of_week(value) -> str | None:
+    """The weekdays the scheduler's CronTrigger understands ("*", "mon,wed,fri", "mon-fri"), lower-cased and
+    de-duplicated; None when the value is anything else. Empty means every day, as before."""
+    text = str(value or "*").strip().lower().replace(" ", "")
+    if text == "*":
+        return "*"
+    tokens = text.split(",")
+    if not all(_DAY_TOKEN.fullmatch(token) for token in tokens):
+        return None
+    return ",".join(dict.fromkeys(tokens))
+
+
 @api_view(["GET", "PUT"])
 @require_hr
 def backup_schedule_view(request: Request) -> Response:
@@ -139,7 +156,11 @@ def backup_schedule_view(request: Request) -> Response:
             except ValueError:
                 return _error("time must be in HH:MM 24-hour format.")
         if "daysOfWeek" in data:
-            schedule.days_of_week = str(data["daysOfWeek"] or "*")
+            days = _clean_days_of_week(data["daysOfWeek"])
+            if days is None:
+                # A malformed value would be saved, then fail CronTrigger at the next boot and stop every backup.
+                return _error("daysOfWeek must be * (every day) or weekdays such as mon,wed,fri.")
+            schedule.days_of_week = days
         if "retentionCount" in data:
             try:
                 schedule.retention_count = max(0, int(data["retentionCount"]))
@@ -178,6 +199,13 @@ def backup_drive_view(request: Request) -> Response:
         # means "leave the existing key alone", not "clear it".
         if data.get("serviceAccountJson"):
             drive.service_account_json = str(data["serviceAccountJson"])
+        # The scheduled job skips the upload without a word when the folder or the key is missing, so "on" with
+        # either blank would look saved and do nothing. Turning it off is always allowed.
+        if drive.is_enabled and not (drive.folder_id and drive.service_account_json):
+            return _error(
+                "Google Drive upload needs a Shared Drive folder ID and a service account key "
+                "before it can be switched on."
+            )
         drive.save()
         log_action(request, "update", "settings", description="Backup Google Drive config updated")
 

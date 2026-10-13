@@ -1,11 +1,20 @@
 import { expect, test, type Page } from "@playwright/test";
 import { loginAsHr } from "./helpers";
 
-// Settings -> Attendance -> Staff -> Arrival timeline: where a morning arrival falls, measured from each shift's own
-// start and grace, and what HR can change. The engine itself is covered in the backend tests; this is the page.
+// Settings -> Attendance -> "Full Day, Half Day or Absent" (the arrival timeline): where a morning arrival falls,
+// measured from each shift's own start and grace, and what HR can change. The example shift (Shift start / Grace) is at
+// the top of the tab and every example follows it. The engine itself is covered in the backend tests; this is the page.
 
 const tab = (page: Page, name: string) => page.getByRole("tab", { name, exact: true });
 const row = (page: Page, zone: string) => page.getByTestId(`arrival-preview-${zone}`);
+
+/** Save Attendance Settings asks first (the rules re-judge past days): read the change, then confirm it. */
+async function saveAndConfirm(page: Page) {
+  await page.getByRole("button", { name: "Save Attendance Settings" }).click();
+  await expect(page.getByTestId("confirm-save")).toContainText("Past days are re-judged");
+  await page.getByRole("button", { name: "Confirm and save" }).click();
+  await expect(page.getByText("Attendance settings saved").first()).toBeVisible();
+}
 
 async function openTimeline(page: Page) {
   await loginAsHr(page);
@@ -75,8 +84,7 @@ test("a change saves and reaches the API; an invalid one is refused before anyth
   await page.getByLabel("Permission window (minutes)").fill("30");
   await page.getByLabel("Extra minutes", { exact: true }).fill("10");
   await page.getByLabel("Quarter-shift deduction (shifts)").fill("0.5");
-  await page.getByRole("button", { name: "Save Attendance Settings" }).click();
-  await expect(page.getByText("Attendance settings saved").first()).toBeVisible();
+  await saveAndConfirm(page);
 
   let s = await apiSettings(page);
   expect([
@@ -93,13 +101,13 @@ test("a change saves and reaches the API; an invalid one is refused before anyth
   await expect(page.getByLabel("Late window (minutes)")).toHaveValue("45");
   await expect(row(page, "late")).toContainText("09:11 - 09:55");
 
-  // out of range: the message shows next to the fields and Save refuses to send it
+  // out of range: the message shows next to the fields and Save cannot be pressed until it is fixed
   await page.getByLabel("Late window (minutes)").fill("300");
   await expect(page.getByTestId("arrival-error")).toContainText(
     "Late window must be a whole number of minutes between 0 and 240",
   );
-  await page.getByRole("button", { name: "Save Attendance Settings" }).click();
-  await expect(page.getByText("Arrival timeline is not valid").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save Attendance Settings" })).toBeDisabled();
+  await expect(page.getByTestId("save-bar")).toContainText("Fix this first");
   s = await apiSettings(page);
   expect(s.arrivalLateWindowMinutes).toBe(45);
 
@@ -116,8 +124,7 @@ test("a change saves and reaches the API; an invalid one is refused before anyth
   await page.getByLabel("Permission window (minutes)").fill("60");
   await page.getByLabel("Extra minutes", { exact: true }).fill("20");
   await page.getByLabel("Quarter-shift deduction (shifts)").fill("0.25");
-  await page.getByRole("button", { name: "Save Attendance Settings" }).click();
-  await expect(page.getByText("Attendance settings saved").first()).toBeVisible();
+  await saveAndConfirm(page);
   s = await apiSettings(page);
   expect([
     s.arrivalLateWindowMinutes,

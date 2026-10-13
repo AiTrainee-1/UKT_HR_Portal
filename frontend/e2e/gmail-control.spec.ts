@@ -85,6 +85,10 @@ test("with an account saved, a failed send is recorded with its reason; the pass
     const body = await (await page.request.get(`/api/gmail-control/${path}`, { headers: auth })).text();
     expect(body, path).not.toContain("e2e-app-password-SECRET");
   }
+  // Nor does the settings API every HR page reads: it only says whether one is saved.
+  const settings = await (await page.request.get("/api/payroll-settings", { headers: auth })).text();
+  expect(settings).not.toContain("e2e-app-password-SECRET");
+  expect(JSON.parse(settings).smtpPasswordSet).toBe(true);
 
   await page.goto("/hr/gmail-control");
   await expect(page.getByTestId("not-configured-banner")).toHaveCount(0);

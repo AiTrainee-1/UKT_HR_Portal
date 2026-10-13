@@ -21,6 +21,7 @@ const Employees = lazy(() => import("@/pages/hr/Employees"));
 const NewEmployee = lazy(() => import("@/pages/hr/NewEmployee"));
 const BulkUploadEmployees = lazy(() => import("@/pages/hr/BulkUploadEmployees"));
 const EmployeeDetail = lazy(() => import("@/pages/hr/EmployeeDetail"));
+const ProductionEmployees = lazy(() => import("@/pages/hr/ProductionEmployees"));
 const EditEmployee = lazy(() => import("@/pages/hr/EditEmployee"));
 const Branches = lazy(() => import("@/pages/hr/Branches"));
 const Attendance = lazy(() => import("@/pages/hr/Attendance"));
@@ -68,6 +69,7 @@ export default function MdHrApp() {
 
             <Route path="/hr/employees/new">{page(NewEmployee)}</Route>
             <Route path="/hr/employees/bulk-upload">{page(BulkUploadEmployees)}</Route>
+            <Route path="/hr/employees/productionEmployee">{page(ProductionEmployees)}</Route>
             <Route path="/hr/employees/:id/edit">{page(EditEmployee)}</Route>
             <Route path="/hr/employees/:id">{page(EmployeeDetail)}</Route>
             <Route path="/hr/employees">{page(Employees)}</Route>

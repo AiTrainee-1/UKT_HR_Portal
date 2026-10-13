@@ -16,6 +16,8 @@ type BulkSlipParams = {
   year: number;
   employmentType?: "staff" | "production";
   weekNumber?: number;
+  /** Only the slips of one production pay cycle: weekly | biweekly | monthly. */
+  payCycle?: string;
 };
 
 interface SalarySlipBulkState {
@@ -41,6 +43,7 @@ function buildQuery(params: BulkSlipParams): string {
   qs.set("year", String(params.year));
   if (params.employmentType) qs.set("employmentType", params.employmentType);
   if (params.weekNumber) qs.set("weekNumber", String(params.weekNumber));
+  if (params.payCycle) qs.set("payCycle", params.payCycle);
   return qs.toString();
 }
 

@@ -14,7 +14,7 @@ const TAB_HEADINGS: Record<string, string> = {
   "ID Card": "Employee ID Card Template",
   "Company Documents": "Offer Letter",
   Payroll: "Payroll Rules",
-  "Production Payroll": "Period Configuration",
+  "Production Payroll": "Weekly pay period",
   "Salary Slip": "Salary Slip Settings",
   "SMTP / Email": "SMTP / Email Configuration",
   WhatsApp: "WAClient WhatsApp API",
@@ -52,7 +52,11 @@ test("saves from different tabs persist and do not overwrite each other", async 
   await page.getByRole("button", { name: "Save SMTP Settings" }).click();
   await expect(page.getByText("SMTP settings saved").first()).toBeVisible();
 
+  // the address carries the open tab (?tab=smtp), so a reload comes back to the SMTP tab
   await page.reload();
+  await expect(page.getByRole("tab", { name: "SMTP / Email", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(field(page, "SMTP Host")).toHaveValue("smtp.e2e.example");
+  await openTab(page, "Company");
   await expect(field(page, "Company Name")).toHaveValue("E2E Textiles Pvt Ltd");
   await openTab(page, "SMTP / Email");
   await expect(field(page, "SMTP Host")).toHaveValue("smtp.e2e.example");
@@ -60,4 +64,44 @@ test("saves from different tabs persist and do not overwrite each other", async 
   // Saving SMTP must not have reset the company name (each tab sends only its own fields).
   await openTab(page, "Company");
   await expect(field(page, "Company Name")).toHaveValue("E2E Textiles Pvt Ltd");
+});
+
+test("the glass-and-clay look is on the Settings page only", async ({ page }) => {
+  await loginAsHr(page);
+  await page.goto("/hr/settings");
+  await expect(page.getByTestId("settings-page")).toBeVisible();
+  const html = page.locator("html");
+  await expect(html).toHaveClass(/settings-skin-on/);
+
+  // frosted glass on the section cards and the navigation rail, a sunken clay field, a raised clay open tab
+  const style = (selector: string, property: string) =>
+    page
+      .locator(selector)
+      .first()
+      .evaluate((el, p) => getComputedStyle(el).getPropertyValue(p), property);
+  expect(await style(".settings-glass", "backdrop-filter")).toContain("blur");
+  expect(await style('[data-slot="input"]', "box-shadow")).toContain("inset");
+  expect(await style('[role="tab"][aria-selected="true"]', "box-shadow")).not.toBe("none");
+
+  // the dialogs the page opens are glass too (they render outside the page, so <html> carries the class)
+  await openTab(page, "Themes");
+  await page
+    .getByRole("button", { name: /Customize/ })
+    .first()
+    .click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  expect(await dialog.evaluate((el) => getComputedStyle(el).backdropFilter)).not.toBe("none");
+  await page.keyboard.press("Escape");
+
+  // any other page: no class on <html>, and its cards are not glass
+  await page.getByRole("link", { name: "Dashboard", exact: true }).first().click();
+  await expect(page).toHaveURL(/\/hr\/dashboard/);
+  await expect(html).not.toHaveClass(/settings-skin-on/);
+  await expect(page.locator(".settings-skin")).toHaveCount(0);
+  const cardBackdrop = await page
+    .locator('[data-slot="card"], .clay-card')
+    .first()
+    .evaluate((el) => getComputedStyle(el).backdropFilter);
+  expect(cardBackdrop).toBe("none");
 });

@@ -30,7 +30,9 @@ const PAGES_WITHOUT_REFRESH: (string | RegExp)[] = [
   "/hr/bonus",
   "/hr/id-cards",
   "/hr/payroll",
-  "/hr/production-payroll",
+  // Production Payroll is one page per pay cycle, and Production Employees sits under Employees
+  /^\/hr\/production-payroll(\/|$)/,
+  "/hr/employees/productionemployee",
   "/hr/compensation",
   "/hr/settlement",
   "/hr/account-management",

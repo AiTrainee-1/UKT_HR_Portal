@@ -74,6 +74,8 @@ test("HR fills in the contacts: typos are caught, the preview follows, and it sa
   await box(page, "hrContactHours").fill("Mon-Sat, 9:00 AM - 6:00 PM");
   await box(page, "contactNote").fill("HR office is on the first floor.");
   await expect(page.getByText("Unsaved changes")).toBeVisible();
+  // The field's own example works the chat link out the way the server will (checked against the endpoint below).
+  await expect(page.getByTestId("whatsapp-link-hr")).toContainText("wa.me/919876543210");
 
   // The preview shows what employees will get; with no support contact of its own, HR is shown for a server problem.
   const hrCard = preview.locator('[data-situation="hr"]');

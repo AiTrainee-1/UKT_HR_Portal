@@ -4,6 +4,8 @@ import { customFetch } from "@/lib/api-client/custom-fetch";
 import { useToast } from "@/hooks/use-toast";
 import {
   useGeneratePayrollProgress,
+  type GenerateProductionArgs,
+  type GenerateProductionResult,
   type PayrollGenerateProgress,
 } from "@/lib/api-client/custom-hooks";
 
@@ -25,12 +27,6 @@ type GeneratePayrollResult = {
   skippedDetails: { employeeId: number; name: string; reason: string }[];
 };
 
-type GenerateProductionPayrollParams = { periodStart: string; periodEnd: string } | undefined;
-
-type GenerateProductionPayrollResult = GeneratePayrollResult & {
-  periodStart: string;
-  periodEnd: string;
-};
 
 interface PayrollGenerationState {
   isGenerating: boolean;
@@ -38,7 +34,7 @@ interface PayrollGenerationState {
   progress: PayrollGenerateProgress | undefined;
   lastResult: GeneratePayrollResult | null;
   triggerGenerate: (params: GeneratePayrollParams) => Promise<GeneratePayrollResult | null>;
-  triggerGenerateProduction: (params?: GenerateProductionPayrollParams) => Promise<GenerateProductionPayrollResult | null>;
+  triggerGenerateProduction: (params: GenerateProductionArgs) => Promise<GenerateProductionResult | null>;
   dismiss: () => void;
 }
 
@@ -95,24 +91,27 @@ export function PayrollGenerationProvider({ children }: { children: ReactNode })
     }
   }, [toast, queryClient]);
 
-  const triggerGenerateProduction = useCallback(async (params?: GenerateProductionPayrollParams) => {
+  const triggerGenerateProduction = useCallback(async (params: GenerateProductionArgs) => {
     setIsGenerating(true);
     setShowPipeline(true);
     try {
-      const result = await customFetch<GenerateProductionPayrollResult>("/api/payroll/production/generate", {
+      const result = await customFetch<GenerateProductionResult>("/api/payroll/production/generate", {
         method: "POST",
-        body: JSON.stringify(params ?? {}),
+        body: JSON.stringify(params),
       });
       setIsGenerating(false);
       setLastResult(result);
       setTimeout(() => setShowPipeline(false), COMPLETION_LINGER_MS);
 
       const skippedCount = result.skippedDetails?.length ?? 0;
+      const already = result.alreadyGenerated ?? 0;
       toast({
         title: `Production payroll generated -${result.generated} record(s) computed`,
         description: skippedCount > 0
-          ? `${skippedCount} employee(s) skipped. Open Generate again to see reasons.`
-          : `${result.periodStart} – ${result.periodEnd} is ready.`,
+          ? `${skippedCount} employee(s) skipped${already ? `, ${already} already had payroll` : ""}. Use Skipped Employees to see why.`
+          : already > 0
+            ? `${already} employee(s) already had payroll for ${result.periodStart} – ${result.periodEnd} and were left as they are.`
+            : `${result.periodStart} – ${result.periodEnd} is ready.`,
         variant: skippedCount > 0 ? "destructive" : "default",
       });
       queryClient.invalidateQueries({

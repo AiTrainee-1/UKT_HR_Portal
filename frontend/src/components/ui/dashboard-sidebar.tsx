@@ -53,6 +53,7 @@ const navGroups: NavGroupData[] = [
         icon: Users,
         children: [
           { path: '/hr/employees', label: 'All Employees' },
+          { path: '/hr/employees/productionEmployee', label: 'Production Employees' },
           { path: '/hr/departments', label: 'Departments' },
           { path: '/hr/designations', label: 'Designations' },
           { path: '/hr/branches', label: 'Manage Branch' },
@@ -101,7 +102,17 @@ const navGroups: NavGroupData[] = [
     heading: 'Payroll',
     items: [
       { path: '/hr/payroll', label: 'Staff Payroll', icon: IndianRupee },
-      { path: '/hr/production-payroll', label: 'Production Payroll', icon: Factory },
+      {
+        path: '/hr/production-payroll',
+        label: 'Production Payroll',
+        icon: Factory,
+        // one page per pay cycle: the employees on each cycle are set on Employees -> Production Employees
+        children: [
+          { path: '/hr/production-payroll/weekly', label: 'Weekly' },
+          { path: '/hr/production-payroll/biweekly', label: 'BiWeekly' },
+          { path: '/hr/production-payroll/monthly', label: 'Monthly' },
+        ],
+      },
       { path: '/hr/compensation', label: 'Compensation', icon: Landmark },
       { path: '/hr/settlement', label: 'Settlement', icon: Wallet },
       { path: '/hr/reports', label: 'Reports', icon: BarChart3 },

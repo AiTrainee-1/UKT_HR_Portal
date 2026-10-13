@@ -341,7 +341,7 @@ function EditEmployeeForm({ empId, employee }: { empId: number; employee: Employ
                         data-testid="select-employment-type"
                       >
                         <option value="staff">Staff (Monthly)</option>
-                        <option value="production">Production (Weekly)</option>
+                        <option value="production">Production (Per Shift)</option>
                       </select>
                     </FormControl>
                     <FormMessage />

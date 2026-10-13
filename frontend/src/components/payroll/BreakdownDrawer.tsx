@@ -639,7 +639,7 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                     </p>
                     <p>
                       Checked against the employee's assigned Production shift (Manage Shift) start/end time + grace
-                      period, per the Attendance Mode configured in Settings → Payroll → Production.
+                      period, per the Attendance Mode configured in Settings → Production Payroll → Late Detection.
                     </p>
                     <p>
                       <strong>{bd.deductions.lateSummary.totalLateCount}</strong> late occurrence

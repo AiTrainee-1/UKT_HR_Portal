@@ -1,154 +1,151 @@
-import { useEffect, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
-import { useToast } from "@/hooks/use-toast";
-import { AlertTriangle, MessageCircle, CheckCircle2 } from "lucide-react";
-import {
-  useWhatsAppStatus,
-  useWhatsAppTemplates,
-  useUpdateWhatsAppTemplate,
-  type WhatsAppDocumentType,
-} from "@/lib/api-client/custom-hooks";
+import { MessageCircle, SlidersHorizontal } from "lucide-react";
+import { permissionLevel, useAuth } from "@/contexts/AuthContext";
+import { ManagedElsewhere, PreviewCard, PreviewLine, SettingBlock, SettingsSection } from "./kit/SettingBlock";
+import { WhatsAppBubble } from "./whatsapp/WhatsAppBubble";
 
-const WHATSAPP_DOCUMENT_TYPES: { value: WhatsAppDocumentType; label: string }[] = [
-  { value: "salary_slip", label: "Salary Slip" },
-  { value: "id_card", label: "ID Card" },
-  { value: "offer_letter", label: "Offer Letter" },
-  { value: "experience_letter", label: "Experience Letter" },
-  { value: "resignation_letter", label: "Resignation Letter" },
-  { value: "other", label: "Other Employee Documents" },
-  { value: "visitor_notification", label: "Visitor Notification (Reception)" },
-];
+const CONTROL = "/hr/whatsapp-control";
 
-function WhatsAppMessageRow({ documentType, label }: { documentType: WhatsAppDocumentType; label: string }) {
-  const { toast } = useToast();
-  const { data: templates } = useWhatsAppTemplates();
-  const updateTemplate = useUpdateWhatsAppTemplate();
-  const existing = templates?.find((t) => t.documentType === documentType);
-
-  const [messageBody, setMessageBody] = useState("");
-  const [isEnabled, setIsEnabled] = useState(true);
-
-  useEffect(() => {
-    if (existing) {
-      setMessageBody(existing.messageBody);
-      setIsEnabled(existing.isEnabled);
-    }
-  }, [existing?.messageBody, existing?.isEnabled]);
-
-  const save = async () => {
-    try {
-      await updateTemplate.mutateAsync({ documentType, data: { messageBody, isEnabled } });
-      toast({ title: `${label} WhatsApp message saved` });
-    } catch {
-      toast({ title: "Failed to save", variant: "destructive" });
-    }
-  };
-
-  return (
-    <div className="p-3 rounded-lg border border-gray-200 space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-sm font-semibold text-gray-800">{label}</p>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-400">{isEnabled ? "Enabled" : "Disabled"}</span>
-          <Switch checked={isEnabled} onCheckedChange={setIsEnabled} />
-        </div>
-      </div>
-      <div className="space-y-1.5">
-        <Label className="text-xs">Message text</Label>
-        <Textarea
-          rows={5}
-          value={messageBody}
-          onChange={(e) => setMessageBody(e.target.value)}
-          placeholder={existing?.defaultMessage ?? ""}
-        />
-        <p className="text-[11px] text-gray-400">
-          Leave blank to send the default shown above. Placeholders: {existing?.placeholders}
-        </p>
-      </div>
-      <div className="flex gap-2">
-        <Button size="sm" variant="outline" onClick={save} disabled={updateTemplate.isPending}>
-          {updateTemplate.isPending ? "Saving…" : "Save Message"}
-        </Button>
-        {messageBody && (
-          <Button size="sm" variant="ghost" onClick={() => setMessageBody("")}>
-            Use default
-          </Button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function WhatsAppSettingsCard() {
-  const { data: status, isLoading: statusLoading } = useWhatsAppStatus();
+/**
+ * Settings -> WhatsApp. Everything WhatsApp is set on WhatsApp Control (the wording and on/off of all 24 messages, the
+ * feature switches and timings, the connection status) or in the server's environment (the WAClient credentials). This
+ * tab used to repeat the status and 7 of the messages; it now explains where each part lives and links there.
+ */
+export default function WhatsAppTab() {
+  const { user } = useAuth();
+  const blocked = Boolean(user) && permissionLevel(user, "whatsapp_control") === "hidden";
+  const noAccess = blocked ? " Your role cannot open WhatsApp Control; ask an administrator." : "";
 
   return (
     <div className="space-y-4">
-      <Card className="border-0 shadow-sm">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-bold flex items-center gap-2">
-            <MessageCircle size={15} className="text-emerald-500" /> WAClient WhatsApp API
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="p-3 rounded-lg bg-amber-50 border border-amber-100 text-xs text-amber-700">
-            Credentials (instance ID and access token) are configured directly in the server's <code>.env</code> file,
-            never stored in the database or entered here -this keeps them out of reach of anything that reads Settings
-            data, including database backups.
-          </div>
-          {statusLoading ? (
-            <div className="h-10 w-full rounded-lg bg-gray-100 animate-pulse" />
-          ) : status?.configured ? (
-            <div className="flex items-center gap-2 p-3 rounded-lg bg-green-50 border border-green-100 text-xs text-green-700">
-              <CheckCircle2 size={14} />
-              <span>
-                Configured -instance ending in <strong>{status.instanceId}</strong>.
-              </span>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 border border-red-100 text-xs text-red-700">
-              <AlertTriangle size={14} />
-              <span>
-                Not configured -set <code>WACLIENT_INSTANCE_ID</code> and <code>WACLIENT_ACCESS_TOKEN</code> in{" "}
-                <code>.env</code> and restart the server.
-              </span>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      <SettingsSection
+        icon={MessageCircle}
+        title="WAClient WhatsApp API"
+        purpose="WhatsApp messages go out through a WhatsApp number linked to a WAClient instance. Nothing about the connection is set on this page."
+        usedBy={[{ label: "WhatsApp Control", to: CONTROL }]}
+        testId="whatsapp-connection-section"
+      >
+        <SettingBlock
+          id="whatsapp-connection"
+          title="Connection and credentials"
+          purpose="The WAClient instance ID and access token are kept only in the server's environment (the .env file, or the hosting's variables), never in the database or on any page, so a database backup or a screenshot cannot leak them. Changing them needs a server restart."
+          affects={[
+            {
+              where: "Every WhatsApp message",
+              what: "is sent only while the connection is configured: salary slips, ID cards and letters, sign-in codes, attendance alerts, approval notices, visitor and gate pass messages",
+            },
+            {
+              where: "Employee sign-in",
+              what: "without the connection employees get no one-time code and sign in with their password instead",
+            },
+            {
+              where: "WhatsApp Control > Configuration",
+              to: CONTROL,
+              what: "shows whether it is configured, which instance, the webhook address for delivery receipts and a setup checklist",
+            },
+          ]}
+          note='On a development machine (debug mode on, or started with runserver) sending is switched off on purpose unless WHATSAPP_ALLOW_SENDING=true is set. WhatsApp Control then says "Not configured" even though the credentials are there.'
+        >
+          <ManagedElsewhere
+            title="Connection status and setup checklist"
+            to={CONTROL}
+            linkLabel="Open WhatsApp Control"
+            testId="whatsapp-managed-connection"
+          >
+            {`Open the Configuration tab.${noAccess}`}
+          </ManagedElsewhere>
+        </SettingBlock>
+      </SettingsSection>
 
-      <Card className="border-0 shadow-sm">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-bold flex items-center gap-2">
-            <MessageCircle size={15} className="text-emerald-500" /> Message Text
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="p-3 rounded-lg bg-blue-50 border border-blue-100 text-xs text-blue-700">
-            Messages go out through the WhatsApp number linked to your WAClient instance, so there are no templates to
-            get approved -edit the wording freely. Use <code>{"{{1}}"}</code>, <code>{"{{2}}"}</code> … where the
-            employee's name, the month and so on should appear. Every document type works out of the box with the
-            default text; turn a type off here to stop it being sent.
-          </div>
-          <div className="grid gap-3">
-            {WHATSAPP_DOCUMENT_TYPES.map(({ value, label }) => (
-              <WhatsAppMessageRow key={value} documentType={value} label={label} />
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+      <SettingsSection
+        icon={SlidersHorizontal}
+        title="WhatsApp messages and switches"
+        purpose="What each WhatsApp message says and whether it is sent. All of it is set on WhatsApp Control, next to the record of every message sent."
+        usedBy={[{ label: "WhatsApp Control", to: CONTROL }]}
+        testId="whatsapp-messages-section"
+      >
+        <SettingBlock
+          id="whatsapp-message-text"
+          title="Message text and per-message on/off"
+          purpose="The wording of each of the 24 WhatsApp messages (salary slip, ID card, the letters, other documents, the visitor notice, sign-in codes, attendance alerts, approval and gate pass messages) and a switch that stops one kind of message."
+          affects={[
+            {
+              where: "WhatsApp Control > Message Text",
+              to: CONTROL,
+              what: "edit the wording with a live preview and the variables each message can use; a blank text sends the built-in wording",
+            },
+            {
+              where: "Every message of that kind",
+              what: "uses the saved wording from the next send. A document switched off is refused and listed as failed; a visitor notice switched off is skipped without a record",
+            },
+          ]}
+          note="This tab used to have its own copy of 7 of these messages. It changed the same wording and the same switch as WhatsApp Control, so they now live only there."
+          preview={
+            <PreviewCard
+              title="Example"
+              scenario="Asha Kumar's August 2026 salary slip, sent on WhatsApp from Payroll. It goes out only when all four are true:"
+              testId="whatsapp-send-chain"
+            >
+              <PreviewLine label="1. The connection is configured" result="server environment" tone="info" />
+              <PreviewLine label="2. This server is allowed to send" result="not a development setup" tone="info" />
+              <PreviewLine
+                label='3. "Document notifications" is on'
+                result="WhatsApp Control > Feature Controls"
+                tone="info"
+              />
+              <PreviewLine
+                label='4. The "Salary Slip" message is on'
+                result="WhatsApp Control > Message Text"
+                tone="info"
+              />
+              <WhatsAppBubble
+                text={
+                  "*Salary Slip*\n\nHello Asha Kumar,\n\nYour salary slip for *August 2026* is attached.\n\nRegards,\nUK Textiles HRMS"
+                }
+                attachment="Salary slip (PDF)"
+              />
+              <p className="text-[11px] text-gray-500">
+                The built-in wording, with the slip attached. WhatsApp Control &gt; Messages then shows it as sent,
+                delivered and read.
+              </p>
+            </PreviewCard>
+          }
+        >
+          <ManagedElsewhere
+            title="Wording and on/off of every message"
+            to={CONTROL}
+            linkLabel="Open WhatsApp Control"
+            testId="whatsapp-managed-messages"
+          >
+            {`Open the Message Text tab.${noAccess}`}
+          </ManagedElsewhere>
+        </SettingBlock>
+
+        <SettingBlock
+          id="whatsapp-feature-controls"
+          title="Feature switches and timings"
+          purpose="Turn whole WhatsApp features on or off (sign-in codes, document messages, attendance alerts, approval notices for each workflow, visitor and gate pass messages) and set their timings, such as how long a sign-in code lasts and when attendance alerts go out."
+          affects={[
+            {
+              where: "WhatsApp Control > Feature Controls",
+              to: CONTROL,
+              what: "a feature switched off stops every message of that feature, whatever each message's own switch says",
+            },
+            {
+              where: "Employee sign-in",
+              what: "the sign-in code switches decide whether employees can sign in, reset a password or activate an account with a WhatsApp code",
+            },
+          ]}
+        >
+          <ManagedElsewhere
+            title="Feature switches and timings"
+            to={CONTROL}
+            linkLabel="Open WhatsApp Control"
+            testId="whatsapp-managed-features"
+          >
+            {`Open the Feature Controls tab.${noAccess}`}
+          </ManagedElsewhere>
+        </SettingBlock>
+      </SettingsSection>
     </div>
-  );
-}
-
-export default function WhatsAppTab() {
-  return (
-    <>
-      <WhatsAppSettingsCard />
-    </>
   );
 }

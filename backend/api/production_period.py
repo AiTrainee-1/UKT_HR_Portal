@@ -38,6 +38,14 @@ uniform across Weekly/2-Weeks/3-Weeks rather than special-casing 14 days.
 from .clock import ist_today
 import calendar
 from datetime import date as date_type, timedelta
+from .production_cycles import (
+    CYCLE_DAYS,
+    CYCLE_LABELS,
+    WEEKLY,
+    WEEK_START_WEEKDAY,
+    CycleConfig,
+    cycle_config,
+)
 
 _FREQ_DAYS = {"weekly": 7, "2weeks": 14, "3weeks": 21}  # "monthly" has no fixed length
 _WEEKDAY_ANCHOR_PY = {"mon_sat": 0, "sun_sat": 6}  # date.weekday(): Mon=0 ... Sun=6
@@ -143,3 +151,86 @@ def get_next_production_period(ps) -> tuple[date_type, date_type]:
     last_end = get_last_generated_period_end()
     candidate_ref = last_end + timedelta(days=1) if last_end is not None else ist_today()
     return resolve_production_period(candidate_ref, ps)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Pay cycles: Weekly / BiWeekly / Monthly (4 weeks) -see production_cycles.py
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Each cycle is a run of whole weeks (1, 2 or 4) counted forward and backward from an anchor: the configured
+# "first period start" moved back to the cycle's start weekday (any of the seven: a Wednesday week runs Wednesday to
+# Tuesday). Months play no part. A Weekly cycle needs no date at all (every week starts on the start weekday);
+# BiWeekly and Monthly must be told which week a block begins on, because that decides how the weeks pair up.
+
+# 2000-01-03 was a Monday: the fixed reference a Weekly cycle with no date counts from (moved back to the start weekday).
+_WEEKLY_REFERENCE = date_type(2000, 1, 3)
+
+
+def cycle_anchor(cfg: CycleConfig) -> date_type:
+    """The date a cycle's periods are counted from, on the cycle's start weekday."""
+    if cfg.anchor_date is None:
+        if cfg.cycle != WEEKLY:
+            label = CYCLE_LABELS[cfg.cycle]
+            raise InvalidPeriodConfig(
+                f"Set the first period start date for {label} in Settings -> Production Payroll -> {label}."
+            )
+        base = _WEEKLY_REFERENCE
+    else:
+        base = cfg.anchor_date
+    return base - timedelta(days=(base.weekday() - WEEK_START_WEEKDAY[cfg.week_start]) % 7)
+
+
+def resolve_cycle_period(ref_date: date_type, ps, cycle: str) -> tuple[date_type, date_type]:
+    """The (start, end) -both inclusive- of the `cycle` period that `ref_date` falls in."""
+    cfg = cycle_config(ps, cycle)
+    return _rolling_period(ref_date, cycle_anchor(cfg), cfg.days)
+
+
+def is_cycle_period(period_start: date_type, period_end: date_type, ps, cycle: str) -> bool:
+    """Whether (start, end) is exactly one of the cycle's periods under the current settings."""
+    return resolve_cycle_period(period_start, ps, cycle) == (period_start, period_end)
+
+
+def last_generated_cycle_end(cycle: str, branch_id: int | None = None):
+    """The latest period_end among the payroll already generated for this cycle, or None. Periods are one schedule
+    for everyone the caller can see: a login scoped to a branch counts only that branch's payroll, so another branch
+    generating a period never moves this branch's "next period"."""
+    from django.db.models import Max
+    from .models import Payroll
+
+    rows = Payroll.objects.filter(salary_mode="shift", pay_cycle=cycle, period_start__isnull=False)
+    if branch_id is not None:
+        rows = rows.filter(employee__branch_id=branch_id)
+    return rows.aggregate(Max("period_end"))["period_end__max"]
+
+
+def next_cycle_period(
+    ps, cycle: str, today: date_type | None = None, branch_id: int | None = None
+) -> tuple[date_type, date_type]:
+    """The period a cycle should be generated for next: the one right after the latest generated period, or --on
+    the very first run-- the most recent period that has already ended, so the last finished week/fortnight/month
+    can be paid straight away (the period holding today cannot be generated yet)."""
+    today = today or ist_today()
+    last_end = last_generated_cycle_end(cycle, branch_id)
+    if last_end is not None:
+        return resolve_cycle_period(last_end + timedelta(days=1), ps, cycle)
+    current = resolve_cycle_period(today, ps, cycle)
+    if current[1] <= today:
+        return current
+    return resolve_cycle_period(current[0] - timedelta(days=1), ps, cycle)
+
+
+def recent_cycle_periods(
+    ps, cycle: str, today: date_type | None = None, back: int = 8, branch_id: int | None = None
+) -> list[tuple[date_type, date_type]]:
+    """The periods worth picking from, newest first: the next one to generate, every period after it up to the one
+    holding today, and `back` periods before it (so an earlier period can be filled in or looked at)."""
+    today = today or ist_today()
+    days = CYCLE_DAYS[cycle]
+    first = next_cycle_period(ps, cycle, today, branch_id)
+    ahead = max(0, min(12, (today - first[0]).days // days))
+    out = []
+    for k in range(ahead, -back, -1):
+        start = first[0] + timedelta(days=k * days)
+        out.append((start, start + timedelta(days=days - 1)))
+    return out

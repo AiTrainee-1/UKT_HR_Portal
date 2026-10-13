@@ -39,6 +39,13 @@ from .geo_attendance_views import source_label
 from .permission_registry import resolve_permission
 from .support_contact_views import FIELDS as SUPPORT_CONTACT_FIELDS, clean_updates
 from .clock import ist_today
+from .production_cycles import (
+    DEFAULT_MONTHLY_EQUIVALENT_FACTOR,
+    MONTHLY_EQUIVALENT_FACTOR,
+    cycle_late_rules,
+    merge_prod_cycles,
+    prod_cycles_response,
+)
 from .models import (
     AdvanceRepayment,
     Attendance,
@@ -184,7 +191,9 @@ def _mark_repayments_processed(advance_details: list[dict]) -> None:
             pass
 
 
-def late_shift_deduction(billable_late: int, settings, slabs_field: str = "late_deduction_slabs") -> Decimal:
+def late_shift_deduction(
+    billable_late: int, settings, slabs_field: str = "late_deduction_slabs", slabs: list | None = None
+) -> Decimal:
     """
     Shifts deducted for `billable_late` chargeable occurrences, per an
     HR-editable slab table (Settings → Late Detection). `slabs_field` picks
@@ -206,7 +215,8 @@ def late_shift_deduction(billable_late: int, settings, slabs_field: str = "late_
     of the box. The Production pool ships empty.
     """
     rows: list[tuple[int, Decimal]] = []
-    for row in (getattr(settings, slabs_field, None) or []):
+    # `slabs` (a production cycle's own table) wins over the settings field when it is given.
+    for row in (slabs if slabs is not None else (getattr(settings, slabs_field, None) or [])):
         if not isinstance(row, dict):
             continue
         try:
@@ -742,17 +752,24 @@ def _session_completed(first_in: time, last_out: time | None, min_checkout: time
     return in_secs <= cutoff_secs and out_secs >= cutoff_secs
 
 
-def _generate_production_payroll(emp: Employee, period_start: date, period_end: date, settings=None) -> dict:
+def _generate_production_payroll(
+    emp: Employee, period_start: date, period_end: date, settings=None, pay_cycle: str | None = None
+) -> dict:
     """
     Shift-based payroll for production employees -completely separate from
     the staff engine. No monthly salary, no proration, no leave/permission/
     CL: pay = total shifts earned x salary_per_shift.
 
     period_start/period_end (both inclusive) come from
-    production_period.py::resolve_production_period, driven by Settings →
-    Payroll → Production (frequency + period style). Callers are
-    responsible for confirming period_end has already elapsed before
-    calling this.
+    production_period.py::resolve_cycle_period, driven by Settings →
+    Production Payroll (one period rule per pay cycle). `pay_cycle` is the
+    cycle (Weekly / BiWeekly / Monthly, production_cycles.py) the row is
+    generated on: it is stamped on the payroll and the slip, picks the
+    cycle's own late rules and scales the period's gross to a month for the
+    PF/ESI bands. Without one (older callers, tests) the shared late rules
+    and the BiWeekly x2 apply, exactly as before the cycles existed.
+    Callers are responsible for confirming period_end has already elapsed
+    before calling this.
     """
     if not emp.salary_per_shift or emp.salary_per_shift <= 0:
         raise PayrollSkip("No Salary Per Shift set on this employee's profile")
@@ -799,8 +816,9 @@ def _generate_production_payroll(emp: Employee, period_start: date, period_end: 
     late_summary = None
     if ps.prod_late_detection_enabled:
         late_count, late_reasons = _production_late_days(emp, records, ps)
-        billable_late = max(0, late_count - (ps.prod_late_free_allowance or 0))
-        deduction_shifts = late_shift_deduction(billable_late, ps, slabs_field="prod_late_deduction_slabs")
+        allowance, slabs = cycle_late_rules(ps, pay_cycle)
+        billable_late = max(0, late_count - (allowance or 0))
+        deduction_shifts = late_shift_deduction(billable_late, ps, slabs_field="prod_late_deduction_slabs", slabs=slabs)
         if deduction_shifts > 0:
             late_penalty = _d2(deduction_shifts * emp.salary_per_shift)
         late_summary = {
@@ -817,7 +835,10 @@ def _generate_production_payroll(emp: Employee, period_start: date, period_end: 
     gross_amount = _d2(total_shifts * salary_per_shift)
 
     # PF / EF for production -either salary-range rules (when enabled) or flat rates
-    monthly_equiv = _d2(gross_amount * 2)  # biweekly * 2 = monthly estimate
+    # A production month is four weeks: the period's gross is scaled to one (Weekly x4, BiWeekly x2, Monthly x1)
+    # before it is tested against the monthly PF/ESI bands and ceiling.
+    monthly_factor = MONTHLY_EQUIVALENT_FACTOR.get(pay_cycle, DEFAULT_MONTHLY_EQUIVALENT_FACTOR)
+    monthly_equiv = _d2(gross_amount * monthly_factor)
 
     matched_rule = None
     if ps.prod_pf_ef_enabled:
@@ -874,6 +895,7 @@ def _generate_production_payroll(emp: Employee, period_start: date, period_end: 
 
     breakdown = {
         "type": "production",
+        "payCycle": pay_cycle,
         "periodStart": period_start.isoformat(),
         "periodEnd": period_end.isoformat(),
         "dateFrom": date_from.isoformat(),
@@ -898,6 +920,7 @@ def _generate_production_payroll(emp: Employee, period_start: date, period_end: 
             "esiRate": float(applied_ef_rate),
             "esiApplicableBelow": float(ps.prod_esi_applicable_below),
             "monthlyEquivalent": float(monthly_equiv),
+            "monthlyEquivalentFactor": monthly_factor,
             # Which salary-range rule was applied (null = flat rates were used)
             "pfEfRule": (
                 {
@@ -916,9 +939,13 @@ def _generate_production_payroll(emp: Employee, period_start: date, period_end: 
         "netSalary": float(net_salary),
     }
 
+    # Stamped only when a cycle is given, so regenerating a row from an older caller never wipes its cycle.
+    cycle_stamp = {"pay_cycle": pay_cycle} if pay_cycle else {}
+
     payroll, _ = Payroll.objects.update_or_create(
         employee=emp, period_start=period_start, period_end=period_end,
         defaults=dict(
+            **cycle_stamp,
             salary_mode="shift",
             month=month, year=year, week_number=None,
             total_working_days=total_days,
@@ -944,6 +971,7 @@ def _generate_production_payroll(emp: Employee, period_start: date, period_end: 
     slip, _ = SalarySlip.objects.update_or_create(
         employee=emp, period_start=period_start, period_end=period_end,
         defaults=dict(
+            **cycle_stamp,
             month=month, year=year, week_number=None,
             payroll_run=None,
             slip_number=slip_number,
@@ -1034,6 +1062,7 @@ def _payroll_json(p: Payroll, employee_name: str | None = None) -> dict:
         "weekNumber": p.week_number,
         "periodStart": p.period_start.isoformat() if p.period_start else None,
         "periodEnd": p.period_end.isoformat() if p.period_end else None,
+        "payCycle": p.pay_cycle,
         "totalWorkingDays": p.total_working_days,
         "presentDays": float(p.present_days),
         "absentDays": float(p.absent_days),
@@ -1662,6 +1691,9 @@ def _ps_response(ps) -> dict:
         "prodPeriodWeekdayAnchor": ps.prod_period_weekday_anchor,
         "prodPeriodAnchorDate": ps.prod_period_anchor_date.isoformat() if ps.prod_period_anchor_date else None,
         "prodPeriodCustomDays": ps.prod_period_custom_days,
+        # Production pay cycles (Settings → Production Payroll → Weekly / BiWeekly / Monthly): the period rule and the
+        # late rules of each, with the shared late values filled in where a cycle has none of its own.
+        "prodCycles": prod_cycles_response(ps),
         # Production attendance mode + Late Detection (Settings → Payroll → Production)
         "prodAttendanceMode": ps.prod_attendance_mode,
         "prodLateDetectionEnabled": ps.prod_late_detection_enabled,
@@ -1730,7 +1762,9 @@ def _ps_response(ps) -> dict:
         "smtpHost": ps.smtp_host,
         "smtpPort": ps.smtp_port,
         "smtpUsername": ps.smtp_username,
-        "smtpPassword": ps.smtp_password,
+        # The App Password is write-only: every HR login can read this endpoint (it feeds every page's
+        # sidebar), so only whether one is saved is ever sent back, never the password itself.
+        "smtpPasswordSet": bool(ps.smtp_password),
         "smtpFromEmail": ps.smtp_from_email,
         "smtpFromName": ps.smtp_from_name,
         # HR / software-support contacts (Settings -> HR Contact)
@@ -1829,6 +1863,7 @@ FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "prodPeriodWeekdayAnchor": ("settings.production_payroll",),
     "prodPeriodAnchorDate": ("settings.production_payroll",),
     "prodPeriodCustomDays": ("settings.production_payroll",),
+    "prodCycles": ("settings.production_payroll",),
     "prodAttendanceMode": ("settings.production_payroll",),
     "prodLateDetectionEnabled": ("settings.production_payroll",),
     "prodLateFreeAllowance": ("settings.production_payroll",),
@@ -1869,6 +1904,30 @@ def _hr_role_permissions(request) -> tuple[dict, bool]:
     if hr_user is None:
         return {}, False
     return (hr_user.role.permissions if hr_user.role else {}) or {}, hr_user.is_super_admin
+
+
+_SMTP_HOST_FORBIDDEN = re.compile(r"[\s/\\@:]")
+
+
+def _smtp_problem(data, ps) -> str | None:
+    """Why the mail-server fields of this save cannot be stored, or None. Only fields that were sent are judged.
+    A blank host/username or a port outside 1-65535 used to be accepted and then silently switch every email off
+    (a cleared port was stored as 0, which smtplib reads as port 25). Host and username are stored trimmed."""
+    if "smtpHost" in data:
+        host = str(data["smtpHost"] or "").strip()
+        if not host:
+            return "SMTP host cannot be blank (for Gmail use smtp.gmail.com)."
+        if _SMTP_HOST_FORBIDDEN.search(host):
+            return "SMTP host must be just the server name, such as smtp.gmail.com (no spaces, port or https://)."
+        ps.smtp_host = host
+    if "smtpPort" in data and not 1 <= int(ps.smtp_port) <= 65535:
+        return "SMTP port must be a number from 1 to 65535 (587 for Gmail)."
+    if "smtpUsername" in data:
+        username = str(data["smtpUsername"] or "").strip()
+        if not username:
+            return "SMTP username cannot be blank (for Gmail this is the full Gmail address)."
+        ps.smtp_username = username
+    return None
 
 
 @api_view(["GET", "PUT"])
@@ -2013,6 +2072,8 @@ def payroll_settings_view(request: Request) -> Response:
     for key, (attr, cast) in field_map.items():
         if key in data:
             val = data[key]
+            if key == "smtpPassword" and not str(val or "").strip():
+                continue  # empty or absent = keep the saved App Password (GET never sends it back)
             if val is None and attr in _nullable_text:
                 setattr(ps, attr, None)
             else:
@@ -2021,6 +2082,9 @@ def payroll_settings_view(request: Request) -> Response:
                 except (TypeError, ValueError, ArithmeticError):
                     # "abc" for an integer setting used to surface as a 500 -it is a bad request.
                     return _error(f"Invalid value for {key}")
+    smtp_problem = _smtp_problem(data, ps)
+    if smtp_problem:
+        return _error(smtp_problem)
     # Half-Day Detection / Permission policy: these decide Full vs Half vs Absent and who is charged
     # for what, so a contradictory or nonsensical value is rejected at the door -nothing has been
     # saved yet (the assignments above are in-memory only until ps.save() below).
@@ -2061,6 +2125,17 @@ def payroll_settings_view(request: Request) -> Response:
         return _error("Permission monthly cap must be between 0 and 31")
     if "lateFreeAllowance" in data and int(ps.late_free_allowance) < 0:
         return _error("Free late allowance cannot be negative")
+    # Payroll / Production Payroll tabs: a value outside its range (or too big for its column, which used to be a
+    # 500) is refused with a message. A value equal to the stored one always passes -see _payroll_range_problem.
+    range_problem = _payroll_range_problem(data, ps, settings_for(request))
+    if range_problem:
+        return _error(range_problem)
+    if "prodCycles" in data:
+        # Only the cycles and keys that were sent change: saving Weekly never touches BiWeekly or Monthly.
+        merged_cycles, cycles_problem = merge_prod_cycles(ps.prod_cycles, data["prodCycles"])
+        if cycles_problem:
+            return _error(cycles_problem)
+        ps.prod_cycles = merged_cycles or None
     if "prodPfEfRules" in data and isinstance(data["prodPfEfRules"], list):
         ps.prod_pf_ef_rules = data["prodPfEfRules"]
     if "lateDeductionSlabs" in data and isinstance(data["lateDeductionSlabs"], list):
@@ -2136,6 +2211,157 @@ def payroll_settings_view(request: Request) -> Response:
         log_action(request, "update", "settings", description="Universal settings updated")
 
     return Response(_ps_response(ps))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Payroll / Production Payroll settings: range checks (payroll_settings_view)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_PERCENT = (Decimal("0"), Decimal("100"), 2)  # DECIMAL(5,2) columns: 1000 or more used to be a database error
+_AMOUNT = (Decimal("0"), Decimal("99999999.99"), 2)  # DECIMAL(10,2) columns
+
+# Request key -> (model attribute, (lowest, highest, decimal places), what the message calls it)
+_PAYROLL_NUMBER_RANGES: dict[str, tuple[str, tuple[Decimal, Decimal, int], str]] = {
+    "pfRate": ("pf_rate", _PERCENT, "Staff PF rate"),
+    "esiRate": ("esi_rate", _PERCENT, "Staff ESI rate"),
+    "esiApplicableBelow": ("esi_applicable_below", _AMOUNT, "Staff ESI ceiling"),
+    "prodPfRate": ("prod_pf_rate", _PERCENT, "Production PF rate"),
+    "prodEsiRate": ("prod_esi_rate", _PERCENT, "Production ESI rate"),
+    "prodEsiApplicableBelow": ("prod_esi_applicable_below", _AMOUNT, "Production ESI ceiling"),
+    "basicPercent": ("basic_percent", _PERCENT, "Basic %"),
+    "hraPercent": ("hra_percent", _PERCENT, "HRA %"),
+    "bonusPercent": ("bonus_percent", _PERCENT, "Bonus rate"),
+    "bonusWageCeiling": ("bonus_wage_ceiling", _AMOUNT, "Bonus wage ceiling"),
+    "bonusEligibilityCeiling": ("bonus_eligibility_ceiling", _AMOUNT, "Bonus eligibility limit"),
+    "defaultSalaryPerShift": (
+        "default_salary_per_shift", (Decimal("0"), Decimal("999999.99"), 2), "Default salary per shift",
+    ),
+    "bonusFyStartMonth": ("bonus_fy_start_month", (Decimal("1"), Decimal("12"), 0), "Financial year start month"),
+    "payDay": ("pay_day", (Decimal("1"), Decimal("28"), 0), "Salary pay day"),
+    "otThresholdMinutes": ("ot_threshold_minutes", (Decimal("0"), Decimal("1440"), 0), "OT threshold (minutes)"),
+    "prodPeriodCustomDays": ("prod_period_custom_days", (Decimal("1"), Decimal("366"), 0), "Custom Days"),
+    "prodLateFreeAllowance": (
+        "prod_late_free_allowance", (Decimal("0"), Decimal("366"), 0), "Production free late allowance",
+    ),
+}
+
+# Request key -> (model attribute, accepted values, what the message calls it). Payroll and the period maths only
+# know these values: anything else used to be stored and then fail (a 500 or a 400) where it was used.
+_PAYROLL_CHOICES: dict[str, tuple[str, tuple, str]] = {
+    "otCompensationType": ("ot_compensation_type", ("pay", "relaxation"), "OT compensation type"),
+    "prodPeriodFrequency": (
+        "prod_period_frequency", ("weekly", "2weeks", "3weeks", "monthly"), "Production pay period frequency",
+    ),
+    "prodPeriodStyle": (
+        "prod_period_style", ("calendar_month", "weekday_anchored", "custom_recurring"), "Production period style",
+    ),
+    "prodPeriodWeekdayAnchor": ("prod_period_weekday_anchor", (None, "", "mon_sat", "sun_sat"), "Weekday anchor"),
+    "prodAttendanceMode": ("prod_attendance_mode", ("strict", "simple"), "Production attendance mode"),
+}
+
+
+def _settings_decimal(value) -> Decimal | None:
+    """A JSON value as a Decimal the way payroll reads it (blank -> 0), or None when it is not a plain number."""
+    if value is None or value == "":
+        return Decimal("0")
+    if isinstance(value, bool) or not isinstance(value, (int, float, str, Decimal)):
+        return None
+    try:
+        return Decimal(str(value).strip())
+    except ArithmeticError:
+        return None
+
+
+def _range_message(label: str, low: Decimal, high: Decimal, places: int) -> str:
+    if places == 0:
+        return f"{label} must be a whole number from {low} to {high}."
+    return f"{label} must be between {low} and {high}, with at most {places} decimals."
+
+
+def _in_range(number: Decimal, low: Decimal, high: Decimal, places: int) -> bool:
+    return (
+        number.is_finite()
+        and low <= number <= high
+        and number == number.quantize(Decimal(1).scaleb(-places))
+    )
+
+
+def _pf_ef_rule_problem(rule) -> str | None:
+    """Why one Production PF/EF salary-range rule cannot be stored, or None."""
+    if not isinstance(rule, dict):
+        return "each rule needs a label, minSalary, maxSalary, pfRate and efRate."
+    if rule.get("label") is not None and not isinstance(rule.get("label"), str):
+        return "the label must be text."
+    values = {}
+    for key, name, limits in (
+        ("minSalary", "Min Salary", _AMOUNT),
+        ("maxSalary", "Max Salary", _AMOUNT),
+        ("pfRate", "PF %", _PERCENT),
+        ("efRate", "EF %", _PERCENT),
+    ):
+        number = _settings_decimal(rule.get(key))
+        if number is None or not number.is_finite():
+            return f"{name} must be a number."
+        if not _in_range(number, *limits):
+            return _range_message(name, *limits)
+        values[key] = number
+    if values["maxSalary"] > 0 and values["maxSalary"] < values["minSalary"]:
+        return "Max Salary must be 0 (no upper limit) or at least Min Salary."
+    return None
+
+
+def _payroll_range_problem(data, ps, stored) -> str | None:
+    """Why a Payroll / Production Payroll value of this save cannot be stored, or None.
+
+    Only keys that were sent are judged, after the casts in payroll_settings_view (`ps` holds the new values, `stored`
+    the ones saved before this request). A value equal to the stored one always passes, so a section saved again
+    unchanged is never refused because an older page once stored something outside today's ranges.
+    """
+    for key, (attr, (low, high, places), label) in _PAYROLL_NUMBER_RANGES.items():
+        value = getattr(ps, attr)
+        if key not in data or value is None:
+            continue
+        raw = data[key]
+        # int() quietly turns 5.5 into 5 and True into 1: those were never what was typed.
+        if isinstance(raw, bool) or (places == 0 and isinstance(raw, float) and not raw.is_integer()):
+            return _range_message(label, low, high, places)
+        number = Decimal(value)
+        # Finite first: comparing a NaN Decimal raises, which would be a 500 again.
+        if number.is_finite() and value == getattr(stored, attr, None):
+            continue
+        if not _in_range(number, low, high, places):
+            return _range_message(label, low, high, places)
+
+    for key, (attr, choices, label) in _PAYROLL_CHOICES.items():
+        if key not in data:
+            continue
+        value = getattr(ps, attr)
+        if value != getattr(stored, attr, None) and value not in choices:
+            names = ", ".join(c for c in choices if c)
+            return f"{label} must be one of: {names}."
+
+    style, frequency = ps.prod_period_style, ps.prod_period_frequency
+    if (
+        ("prodPeriodStyle" in data or "prodPeriodFrequency" in data)
+        and (style, frequency) == ("weekday_anchored", "monthly")
+        and (style, frequency) != (stored.prod_period_style, stored.prod_period_frequency)
+    ):
+        return "Monthly frequency cannot be used with Weekday Anchored periods: choose Weekly, 2 Weeks or 3 Weeks."
+
+    rules = data.get("prodPfEfRules")
+    if isinstance(rules, list) and rules != (stored.prod_pf_ef_rules or []):
+        for position, rule in enumerate(rules, start=1):
+            problem = _pf_ef_rule_problem(rule)
+            if problem:
+                return f"Production PF/EF rule {position}: {problem}"
+
+    slabs = data.get("prodLateDeductionSlabs")
+    if isinstance(slabs, list):
+        for row in slabs:
+            shifts = _settings_decimal(row.get("deductionShifts")) if isinstance(row, dict) else None
+            if shifts is not None and not shifts.is_finite():
+                return "Production Late slab values must be finite numbers"
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

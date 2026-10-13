@@ -2,6 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UseQueryOptions } from "@tanstack/react-query";
 import { customFetch } from "../custom-fetch";
+import type { ProdCyclesSettings } from "./production-cycles";
 
 // ── Salary Slips ──────────────────────────────────────────────────────────────
 
@@ -29,6 +30,11 @@ export type SalarySlipItem = {
   bankIfsc?: string;
   bankName?: string;
   employmentType?: string;
+  /** Production pay cycle the slip was generated on (null for staff and for slips from before the cycles). */
+  payCycle?: string | null;
+  /** The dates a production slip covers (null for a monthly staff slip). */
+  periodStart?: string | null;
+  periodEnd?: string | null;
   payrollRunId?: number | null;
   month: number;
   year: number;
@@ -253,10 +259,19 @@ export const getListSalarySlipsQueryKey = (params?: {
   year?: number;
   weekNumber?: number;
   employmentType?: string;
+  payCycle?: string;
 }) => ["/api/salary-slips", params] as const;
 
 export const useListSalarySlips = <TData = SalarySlipItem[]>(
-  params?: { employeeId?: number; month?: number; year?: number; weekNumber?: number; employmentType?: string },
+  params?: {
+    employeeId?: number;
+    month?: number;
+    year?: number;
+    weekNumber?: number;
+    employmentType?: string;
+    /** One production pay cycle: weekly | biweekly | monthly. */
+    payCycle?: string;
+  },
   options?: UseQueryOptions<SalarySlipItem[], unknown, TData>,
 ) => {
   const qs = new URLSearchParams();
@@ -265,6 +280,7 @@ export const useListSalarySlips = <TData = SalarySlipItem[]>(
   if (params?.year) qs.set("year", String(params.year));
   if (params?.weekNumber) qs.set("weekNumber", String(params.weekNumber));
   if (params?.employmentType) qs.set("employmentType", params.employmentType);
+  if (params?.payCycle) qs.set("payCycle", params.payCycle);
   const q = qs.toString();
   return useQuery<SalarySlipItem[], unknown, TData>({
     queryKey: getListSalarySlipsQueryKey(params),
@@ -292,6 +308,8 @@ export type PayrollRunItem = {
   weekNumber?: number | null;
   periodStart?: string | null;
   periodEnd?: string | null;
+  /** The production pay cycle the row was generated on; null for staff rows and rows from before the cycles. */
+  payCycle?: string | null;
   totalWorkingDays: number;
   presentDays: number;
   absentDays: number;
@@ -443,91 +461,7 @@ export type SalarySlipBulkEmailResult = {
   failures: { employeeName: string; employeeCode: string; error: string }[];
 };
 
-// ── Production Payroll (period-driven, fully separate from Staff Payroll) ─────
-// Periods come entirely from Settings → Payroll → Production
-// (PayrollSettingsItem.prodPeriod*); these endpoints never take a
-// month/year/weekNumber input -only an optional explicit periodStart/
-// periodEnd pair for backfilling a past period.
-
-export type ProductionNextPeriod = {
-  periodStart: string;
-  periodEnd: string;
-  periodEnded: boolean;
-  frequency: PayrollSettingsItem["prodPeriodFrequency"];
-  style: PayrollSettingsItem["prodPeriodStyle"];
-};
-
-export const getProductionNextPeriodQueryKey = () => ["/api/payroll/production/next-period"] as const;
-
-export const useProductionNextPeriod = () =>
-  useQuery<ProductionNextPeriod>({
-    queryKey: getProductionNextPeriodQueryKey(),
-    queryFn: () => customFetch<ProductionNextPeriod>("/api/payroll/production/next-period"),
-  });
-
-export const getProductionSkipCheckQueryKey = (params: { periodStart: string; periodEnd: string } | null) =>
-  ["/api/payroll/production/skip-check", params] as const;
-
-export const useProductionSkipCheck = (params: { periodStart: string; periodEnd: string } | null) => {
-  const qs = new URLSearchParams();
-  if (params) {
-    qs.set("periodStart", params.periodStart);
-    qs.set("periodEnd", params.periodEnd);
-  }
-  return useQuery<PayrollSkipCheckResult & { periodStart: string; periodEnd: string }>({
-    queryKey: getProductionSkipCheckQueryKey(params),
-    queryFn: () =>
-      customFetch<PayrollSkipCheckResult & { periodStart: string; periodEnd: string }>(
-        `/api/payroll/production/skip-check?${qs.toString()}`,
-      ),
-    enabled: !!params,
-  });
-};
-
-export const useGenerateProductionPayroll = () =>
-  useMutation({
-    mutationFn: (data?: { periodStart: string; periodEnd: string }) =>
-      customFetch<{
-        message: string;
-        periodStart: string;
-        periodEnd: string;
-        generated: number;
-        skipped: number;
-        skippedDetails: { employeeId: number; name: string; reason: string }[];
-      }>("/api/payroll/production/generate", {
-        method: "POST",
-        body: JSON.stringify(data ?? {}),
-      }),
-  });
-
-export type ProductionPayrollItem = PayrollRunItem & {
-  employeeCode: string;
-  bankAccount: string;
-  bankIfsc: string;
-  bankName: string;
-  email: string;
-  departmentId: number | null;
-  departmentName: string | null;
-};
-
-export const getListProductionPayrollQueryKey = (params?: { employeeId?: number; status?: string; limit?: number }) =>
-  ["/api/payroll/production", params] as const;
-
-export const useListProductionPayroll = <TData = ProductionPayrollItem[]>(
-  params?: { employeeId?: number; status?: string; limit?: number },
-  options?: UseQueryOptions<ProductionPayrollItem[], unknown, TData>,
-) => {
-  const qs = new URLSearchParams();
-  if (params?.employeeId) qs.set("employeeId", String(params.employeeId));
-  if (params?.status) qs.set("status", params.status);
-  if (params?.limit) qs.set("limit", String(params.limit));
-  const q = qs.toString();
-  return useQuery<ProductionPayrollItem[], unknown, TData>({
-    queryKey: getListProductionPayrollQueryKey(params),
-    queryFn: () => customFetch<ProductionPayrollItem[]>(`/api/payroll/production${q ? `?${q}` : ""}`),
-    ...options,
-  });
-};
+// Production Payroll (one page per pay cycle) lives in ./production-cycles.ts.
 
 // ── Session Configs ───────────────────────────────────────────────────────────
 
@@ -618,7 +552,10 @@ export type PayrollSettingsItem = {
   payDay: number;
   productionPayType: string;
   defaultSalaryPerShift?: number;
-  // Production Payroll period configuration (Settings → Payroll → Production)
+  // Production pay cycles (Settings → Production Payroll → Weekly / BiWeekly / Monthly): one period rule and one set of
+  // late rules per cycle. The five prodPeriod* values below are the old single schedule: no longer used by payroll.
+  prodCycles?: ProdCyclesSettings;
+  // Old single production period configuration (superseded by prodCycles)
   prodPeriodFrequency: "weekly" | "2weeks" | "3weeks" | "monthly";
   prodPeriodStyle: "calendar_month" | "weekday_anchored" | "custom_recurring";
   prodPeriodWeekdayAnchor?: "mon_sat" | "sun_sat" | null;
@@ -703,7 +640,10 @@ export type PayrollSettingsItem = {
   smtpHost: string;
   smtpPort: number;
   smtpUsername: string;
-  smtpPassword: string;
+  // The App Password is write-only: GET never returns it (every HR login can read this endpoint), only whether one is
+  // saved. On PUT, a non-empty smtpPassword replaces the saved one; an empty or absent one keeps it.
+  smtpPassword?: string;
+  smtpPasswordSet?: boolean;
   smtpFromEmail: string;
   smtpFromName: string;
   // HR / software-support contacts (Settings -> HR Contact); blank = not set. Company-wide: a branch login

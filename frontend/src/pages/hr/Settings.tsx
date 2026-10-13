@@ -1,64 +1,80 @@
-import { useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useLocation, useSearch } from "wouter";
 import HrLayout from "@/components/HrLayout";
-import { Tabs, TabsContent } from "@/components/ui/tabs";
-import { PillTabs } from "@/components/ui/pill-tabs";
-import {
-  Building2,
-  Headset,
-  Clock,
-  Mail,
-  Database,
-  IndianRupee,
-  FileText,
-  Fingerprint,
-  CreditCard,
-  FileSignature,
-  Eye,
-  AlertTriangle,
-  Factory,
-  MessageCircle,
-  Palette,
-} from "lucide-react";
-import { ThemesPanel } from "@/components/ThemesPanel";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth, permissionLevel } from "@/contexts/AuthContext";
 import { lockMutatingControls } from "@/lib/view-only-lock";
-import CompanyTab from "./settings/CompanyTab";
-import HrContactTab from "./settings/HrContactTab";
-import DevicesTab from "./settings/DevicesTab";
-import IdCardTab from "./settings/IdCardTab";
-import DocumentsTab from "./settings/DocumentsTab";
-import AttendanceTab from "./settings/AttendanceTab";
-import LateDetectionTab from "./settings/LateDetectionTab";
-import PayrollTab from "./settings/PayrollTab";
-import ProductionPayrollTab from "./settings/ProductionPayrollTab";
-import SmtpTab from "./settings/SmtpTab";
-import WhatsAppTab from "./settings/WhatsAppTab";
-import BackupTab from "./settings/BackupTab";
-import SalarySlipTab from "./settings/SalarySlipTab";
+import "./settings/settings-skin.css";
 import { SETTINGS_TAB_MODULE } from "./settings/constants";
+import { SETTINGS_TABS, SETTINGS_TAB_COMPONENTS } from "./settings/tabs";
+import { ALL_SETTINGS } from "./settings/metas";
+import { SettingsNav } from "./settings/kit/SettingsNav";
+import { SettingsSearch } from "./settings/kit/SettingsSearch";
+import { ViewOnlyNotice } from "./settings/kit/SettingBlock";
+import { focusSetting, parseSettingsAddress, settingsAddress } from "./settings/kit/jump";
+import type { SettingMeta } from "./settings/kit/catalog";
+import { ArrowUpRight } from "lucide-react";
+
+const FIRST_TAB = SETTINGS_TABS[0].id;
+const isTab = (id: string | null): id is string => !!id && SETTINGS_TABS.some((t) => t.id === id);
 
 export default function Settings() {
   const { user } = useAuth();
+  const [, navigate] = useLocation();
+  const search = useSearch();
 
-  const [settingsTab, setSettingsTab] = useState("company");
+  const tabLevel = useCallback((tab: string) => permissionLevel(user, SETTINGS_TAB_MODULE[tab] ?? "settings"), [user]);
+  const visibleTabs = useMemo(() => SETTINGS_TABS.filter((t) => tabLevel(t.id) !== "hidden"), [tabLevel]);
 
-  const tabLevel = (tab: string) => permissionLevel(user, SETTINGS_TAB_MODULE[tab] ?? "settings");
+  // The tab (and the setting) come from the address, so a link such as /hr/settings?tab=attendance#late-window works.
+  const asked = parseSettingsAddress(search, typeof window === "undefined" ? "" : window.location.hash);
+  const [settingsTab, setSettingsTabState] = useState<string>(isTab(asked.tab) ? asked.tab : FIRST_TAB);
 
-  const isTabViewOnly = tabLevel(settingsTab) === "view";
+  const setSettingsTab = useCallback(
+    (id: string, setting?: string | null) => {
+      setSettingsTabState(id);
+      navigate(settingsAddress(id, setting), { replace: true });
+    },
+    [navigate],
+  );
 
-  // Land on the first tab this role can actually see if the default
-  // ("company") -or whichever tab was active before a permission change —
-  // is hidden for them.
+  // Follow the address when it changes from outside (a link on another page, the back button).
+  useEffect(() => {
+    const next = parseSettingsAddress(search, window.location.hash);
+    if (isTab(next.tab)) setSettingsTabState(next.tab);
+  }, [search]);
+
+  // Land on the first tab this role can actually see if the one asked for is hidden for them.
   useEffect(() => {
     if (tabLevel(settingsTab) === "hidden") {
-      const firstVisible = Object.keys(SETTINGS_TAB_MODULE).find((t) => tabLevel(t) !== "hidden");
-      if (firstVisible) setSettingsTab(firstVisible);
+      const first = visibleTabs[0];
+      if (first) setSettingsTabState(first.id);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, settingsTab]);
+  }, [settingsTab, tabLevel, visibleTabs]);
 
-  // Radix Tabs only mounts the active TabsContent, so locking document.body
-  // whenever the active tab is view-only (same mechanism HrLayout uses
+  // A setting named in the address (or picked in the search) is scrolled to once its tab has drawn it.
+  const [wanted, setWanted] = useState<{ id: string; n: number } | null>(
+    asked.setting ? { id: asked.setting, n: 0 } : null,
+  );
+  useEffect(() => {
+    if (!wanted) return;
+    return focusSetting(wanted.id);
+  }, [wanted]);
+
+  const tab = SETTINGS_TABS.find((t) => t.id === settingsTab) ?? SETTINGS_TABS[0];
+  const Panel = SETTINGS_TAB_COMPONENTS[tab.id];
+  const level = tabLevel(tab.id);
+  const isTabViewOnly = level === "view";
+
+  // The glass-and-clay look is for this page only (settings/settings-skin.css): the page root carries `.settings-skin`, and
+  // <html> carries `.settings-skin-on` while the page is open so the dialogs and menus it opens (they render in a portal)
+  // get the same look. Leaving the page takes it off again.
+  useEffect(() => {
+    document.documentElement.classList.add("settings-skin-on");
+    return () => document.documentElement.classList.remove("settings-skin-on");
+  }, []);
+
+  // Only the open tab is mounted, so locking document.body while it is view-only (the mechanism HrLayout uses
   // page-wide) only ever touches that one tab's controls.
   useEffect(() => {
     if (!isTabViewOnly) return;
@@ -69,112 +85,82 @@ export default function Settings() {
     return () => observer.disconnect();
   }, [isTabViewOnly, settingsTab]);
 
+  const pick = (meta: SettingMeta) => {
+    setSettingsTab(meta.tab, meta.id);
+    setWanted((w) => ({ id: meta.id, n: (w?.n ?? 0) + 1 }));
+  };
+
+  const TabIcon = tab.icon;
+
   return (
     <HrLayout>
-      <div className="space-y-6">
-        <div>
-          <h2 className="text-2xl font-black text-gray-900">Settings</h2>
-          <p className="text-muted-foreground text-sm mt-0.5">
-            Configure system, attendance, payroll, and notification settings
-          </p>
+      <div className="settings-skin space-y-5" data-testid="settings-page">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div className="min-w-0 flex-1 basis-[26rem]">
+            <h2 className="text-2xl font-black text-gray-900">Settings</h2>
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              The defaults the whole system runs on. Every setting says what it is for and what changes when you change
+              it.
+            </p>
+          </div>
+          <SettingsSearch metas={ALL_SETTINGS} tabs={visibleTabs} onPick={pick} />
         </div>
 
-        <Tabs value={settingsTab} onValueChange={setSettingsTab}>
-          <PillTabs
-            className="flex-wrap h-auto"
-            items={[
-              { value: "company", label: "Company", icon: <Building2 size={13} /> },
-              { value: "hr_contact", label: "HR Contact", icon: <Headset size={13} /> },
-              { value: "attendance", label: "Attendance", icon: <Clock size={13} /> },
-              { value: "late_detection", label: "Late Detection", icon: <AlertTriangle size={13} /> },
-              { value: "devices", label: "Devices", icon: <Fingerprint size={13} /> },
-              { value: "idcard", label: "ID Card", icon: <CreditCard size={13} /> },
-              { value: "documents", label: "Company Documents", icon: <FileSignature size={13} /> },
-              { value: "payroll", label: "Payroll", icon: <IndianRupee size={13} /> },
-              { value: "production_payroll", label: "Production Payroll", icon: <Factory size={13} /> },
-              { value: "salary-slip", label: "Salary Slip", icon: <FileText size={13} /> },
-              { value: "smtp", label: "SMTP / Email", icon: <Mail size={13} /> },
-              { value: "whatsapp", label: "WhatsApp", icon: <MessageCircle size={13} /> },
-              { value: "backup", label: "Backup", icon: <Database size={13} /> },
-              { value: "themes", label: "Themes", icon: <Palette size={13} /> },
-            ].filter((t) => tabLevel(t.value) !== "hidden")}
-            value={settingsTab}
-            onChange={setSettingsTab}
-            size="sm"
-          />
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
+          <SettingsNav tabs={visibleTabs} value={settingsTab} onChange={(id) => setSettingsTab(id)} />
 
-          {isTabViewOnly && (
-            <div
-              className="flex items-center gap-2 mt-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold"
-              style={{
-                background: "rgba(245,158,11,0.08)",
-                color: "#b45309",
-                boxShadow: "inset 3px 3px 8px rgba(245,158,11,0.06), inset -3px -3px 8px rgba(255,255,255,0.9)",
-              }}
+          <div
+            id="settings-panel"
+            role="tabpanel"
+            aria-labelledby={`settings-tab-${tab.id}`}
+            className="min-w-0 space-y-4"
+            data-testid={`settings-panel-${tab.id}`}
+          >
+            <header className="settings-hero flex items-start gap-3.5 rounded-3xl p-5 text-white">
+              <span className="mt-0.5 rounded-2xl bg-white/20 p-3 ring-1 ring-white/40 backdrop-blur">
+                <TabIcon size={18} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-lg font-black leading-tight">{tab.label}</h3>
+                <p className="mt-0.5 text-[13px] leading-snug text-white/85">{tab.purpose}</p>
+                {tab.usedBy.length > 0 && (
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] font-bold uppercase tracking-wide text-white/60">Used by</span>
+                    {tab.usedBy.map((u) =>
+                      u.to ? (
+                        <Link
+                          key={u.label}
+                          href={u.to}
+                          className="inline-flex items-center gap-0.5 rounded-full bg-white/15 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-white/25"
+                        >
+                          {u.label}
+                          <ArrowUpRight size={10} />
+                        </Link>
+                      ) : (
+                        <span key={u.label} className="rounded-full bg-white/15 px-2 py-0.5 text-[11px] font-semibold">
+                          {u.label}
+                        </span>
+                      ),
+                    )}
+                  </div>
+                )}
+              </div>
+            </header>
+
+            {isTabViewOnly && <ViewOnlyNotice />}
+
+            <Suspense
+              fallback={
+                <div className="space-y-3" data-testid="settings-loading">
+                  <Skeleton className="h-32 w-full rounded-2xl" />
+                  <Skeleton className="h-48 w-full rounded-2xl" />
+                </div>
+              }
             >
-              <Eye size={15} strokeWidth={2} />
-              View only -browse and inspect freely, changes can't be saved.
-            </div>
-          )}
-
-          {/* Company */}
-
-          <TabsContent value="company" className="mt-4">
-            <CompanyTab />
-          </TabsContent>
-
-          <TabsContent value="hr_contact" className="mt-4">
-            <HrContactTab />
-          </TabsContent>
-
-          <TabsContent value="devices" className="mt-4">
-            <DevicesTab />
-          </TabsContent>
-
-          <TabsContent value="idcard" className="mt-4">
-            <IdCardTab />
-          </TabsContent>
-
-          <TabsContent value="documents" className="mt-4 space-y-4">
-            <DocumentsTab />
-          </TabsContent>
-
-          <TabsContent value="attendance" className="mt-4 space-y-4">
-            <AttendanceTab />
-          </TabsContent>
-
-          <TabsContent value="late_detection" className="mt-4 space-y-4">
-            <LateDetectionTab />
-          </TabsContent>
-
-          <TabsContent value="payroll" className="mt-4 space-y-4">
-            <PayrollTab />
-          </TabsContent>
-
-          <TabsContent value="production_payroll" className="mt-4 space-y-4">
-            <ProductionPayrollTab />
-          </TabsContent>
-
-          <TabsContent value="smtp" className="mt-4">
-            <SmtpTab />
-          </TabsContent>
-
-          <TabsContent value="whatsapp" className="mt-4">
-            <WhatsAppTab />
-          </TabsContent>
-
-          <TabsContent value="backup" className="mt-4 space-y-4">
-            <BackupTab />
-          </TabsContent>
-
-          <TabsContent value="salary-slip" className="mt-4">
-            <SalarySlipTab />
-          </TabsContent>
-
-          <TabsContent value="themes" className="mt-4">
-            <ThemesPanel readOnly={isTabViewOnly} />
-          </TabsContent>
-        </Tabs>
+              <Panel readOnly={isTabViewOnly} />
+            </Suspense>
+          </div>
+        </div>
       </div>
     </HrLayout>
   );

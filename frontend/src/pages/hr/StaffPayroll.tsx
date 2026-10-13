@@ -187,7 +187,7 @@ function SessionConfigPanel() {
         </div>
         <p className="text-xs text-muted-foreground mt-0.5">
           Not used by current production payroll -pay is now Total Shifts × Salary Per Shift
-          (configure shift segments and punch times in Settings → Payroll). This panel only affects
+          (set shift segments and punch times in Manage Shifts). This panel only affects
           historical payroll records still shown in the old session format.
         </p>
       </CardHeader>
