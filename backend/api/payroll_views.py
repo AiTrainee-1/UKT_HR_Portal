@@ -365,7 +365,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
     #    rows are returned untouched) -payroll no longer needs (or has) its
     #    own separate classification path.
     from .models import PayrollSettings as _PS
-    from .attendance_final import compute_month_records
+    from .attendance_final import compensation_marker_json, compute_month_records
     _settings = _PS.get()
     use_simple = _settings.attendance_mode == "simple"
     final_records = compute_month_records(emp, year, month, _settings)
@@ -465,6 +465,9 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             "leaveType": info["leave_type"],
             "shiftsCompleted": float(day_shifts) if status == "present" else 0.0,
             "isHalfShift": is_half,
+            # What compensation shaped the day (OT allowance used, announced window, birthday leave, relaxation).
+            # Information only: the pay above follows the shifts earned, never this marker.
+            **compensation_marker_json(fr),
         })
 
     # 7. Salary calculation
@@ -511,15 +514,22 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
     # (see compensation_views.py). Master off-switch: when the Compensation
     # feature is disabled in Settings, no OT pay is added regardless of any
     # already-announced records -mirrors _compensation_day_for's own gate.
+    #
+    # Compensation overhaul: a Type 2 (shift-based) record HR assigned as PAY pays `shifts x daily_rate` (0.25 / 0.50 /
+    # 0.75 / 1 shift); a record made before the overhaul has no shifts and pays ONE day, exactly as it always did. Type 1
+    # (the next-day allowance, never HR-assigned and never given a compensation type) and relaxation records never pay.
     ot_amount = Decimal("0")
     ot_days = 0
+    ot_shifts = Decimal("0")
     if ps.compensation_feature_enabled:
         from .models import OvertimeRecord
-        ot_days = OvertimeRecord.objects.filter(
+        ot_pay_shifts = list(OvertimeRecord.objects.filter(
             employee=emp, status=OvertimeRecord.STATUS_ANNOUNCED, compensation_type=OvertimeRecord.TYPE_PAY,
             date__gte=month_start, date__lte=month_end,
-        ).count()
-        ot_amount = _d2(daily_rate * ot_days) if ot_days else Decimal("0")
+        ).exclude(ot_type=OvertimeRecord.OT_TYPE_ALLOWANCE).values_list("shifts", flat=True))
+        ot_days = len(ot_pay_shifts)
+        ot_shifts = sum((Decimal(s) if s is not None else Decimal("1") for s in ot_pay_shifts), Decimal("0"))
+        ot_amount = _d2(daily_rate * ot_shifts) if ot_shifts else Decimal("0")
 
     esi_ceiling = ps.esi_applicable_below
     if ps.staff_payroll_rules_enabled:
@@ -650,6 +660,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             "allowances": float(allowances),
             "grossSalary": float(base_gross),
             "otDays": ot_days,
+            "otShifts": float(ot_shifts),
             "otAmount": float(ot_amount),
         },
         "deductions": {
@@ -1791,6 +1802,12 @@ COMPANY_WIDE_RULE_KEYS: tuple[str, ...] = (
     "arrivalPermissionWindowMinutes",
     "arrivalExtraMinutes",
     "arrivalQuarterDeduction",
+    # The OT / Compensation master switch and the old OT fields it mirrors are one company-wide value
+    # (user_settings.COMPANY_WIDE_FIELDS): a branch override would be dropped, so refuse it plainly.
+    "compensationFeatureEnabled",
+    "otDetectionEnabled",
+    "otThresholdMinutes",
+    "otCompensationType",
 )
 
 FIELD_GROUPS: dict[str, tuple[str, ...]] = {
@@ -1969,8 +1986,8 @@ def payroll_settings_view(request: Request) -> Response:
             {
                 "error": "company_wide_rule",
                 "message": (
-                    "Late Detection switches, Half-Day times and the Permission monthly cap are "
-                    "company-wide rules. Ask an administrator to change them."
+                    "Late Detection switches, Half-Day times, the Permission monthly cap and the OT / "
+                    "Compensation switch are company-wide rules. Ask an administrator to change them."
                 ),
                 "fields": [k for k in COMPANY_WIDE_RULE_KEYS if k in data],
             },

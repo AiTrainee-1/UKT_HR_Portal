@@ -246,7 +246,10 @@ export type AttendanceOvertime = MdEnvelope & {
   employees?: number;
   pctOfScheduledHours?: number | null;
   scheduledHours?: number | null;
-  decisions?: Record<"announcedPay" | "announcedRelaxation" | "detected" | "rejected", OvertimeDecision>;
+  decisions?: Record<"announcedPay" | "announcedRelaxation" | "detected" | "rejected", OvertimeDecision> & {
+    /** The automatic next-day late-in allowance (Type 1): no HR decision, never paid. Absent on an older server. */
+    allowance?: OvertimeDecision;
+  };
   tracking: { featureEnabled: boolean; detectionEnabled: boolean };
   byDepartment: { name: string; hours: number; days: number; employees: number; sharePct: number | null }[];
   departmentsTotal?: number;

@@ -18,6 +18,7 @@ export const SETTINGS_TAB_MODULE: Record<string, string> = {
   hr_contact: "settings.hr_contact",
   attendance: "settings.attendance",
   late_detection: "settings.late_detection",
+  compensation: "settings.compensation",
   devices: "settings.devices",
   idcard: "id_cards",
   documents: "settings.documents",

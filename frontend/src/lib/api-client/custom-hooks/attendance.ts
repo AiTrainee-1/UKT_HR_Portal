@@ -6,6 +6,23 @@ import { SyncResult } from "./shared";
 
 // ── Attendance (enhanced) ─────────────────────────────────────────────────────
 
+/** What shaped an attendance day beyond the shift rules (AttendanceDayRecord.compensation_kind). */
+export type AttendanceCompensationKind =
+  "ot_allowance" | "window_late_in" | "window_early_out" | "birthday" | "relaxation";
+
+/**
+ * The compensation marker every attendance JSON that shows a day carries (compensation_marker_json in
+ * attendance_final.py; permission_flags_json spreads it, so it rides along with the permission flags). null / absent =
+ * an ordinary day; an older backend sends none of the three. Draw it with components/attendance-compensation.
+ */
+export type DayCompensationMarker = {
+  compensationKind?: AttendanceCompensationKind | null;
+  /** ot_allowance: the allowance minutes the arrival used. */
+  compensationMinutes?: number | null;
+  /** One plain sentence saying what happened on the day. */
+  compensationNote?: string | null;
+};
+
 /**
  * The Late Detection / Permission flags every HR attendance endpoint attaches to a day (permission_flags_json in
  * attendance_final.py). "Applied" = an Allowed (within the monthly cap) Morning Late-In / Evening Early-Out
@@ -13,7 +30,7 @@ import { SyncResult } from "./shared";
  * emits the older permissionMorning / permissionDeparture / permissionZoneCount / permissionEscalatedToHalfShift keys
  * for the installed mobile app; the HR portal deliberately ignores them.
  */
-export type DayPermissionFlags = {
+export type DayPermissionFlags = DayCompensationMarker & {
   morningPermissionApplied?: boolean;
   eveningPermissionApplied?: boolean;
   morningPermissionExcess?: boolean;
@@ -43,7 +60,9 @@ export type AttendanceSummary = {
   };
 };
 
-export type AttendanceDailyRecord = {
+// GET /api/attendance/daily is a punch-based list (present / manual / on_leave / absent, no day verdict), so it carries no
+// compensation marker today; the optional keys are read if it ever does.
+export type AttendanceDailyRecord = DayCompensationMarker & {
   employeeId: number;
   employeeCode: string;
   employeeName: string;
@@ -667,7 +686,7 @@ export const useSetDayInformed = () => {
 
 export type AttendanceSheetDayStatus = "present" | "half_shift" | "absent" | "on_leave" | "holiday" | null;
 
-export type AttendanceSheetDayCell = {
+export type AttendanceSheetDayCell = DayCompensationMarker & {
   date: string;
   status: AttendanceSheetDayStatus;
   isLate?: boolean;

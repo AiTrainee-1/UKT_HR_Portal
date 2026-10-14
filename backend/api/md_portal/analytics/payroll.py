@@ -645,9 +645,9 @@ def _p_overtime() -> dict:
         "Overtime",
         dataset="Salary slips",
         definition=(
-            "Overtime pay on the slips: one day's salary for each announced pay-type overtime day, added outside gross "
-            "salary, PF and ESI. Staff only; production extra shifts are already inside their gross pay. The share is "
-            "overtime divided by gross pay."
+            "Overtime pay on the slips: one day's salary times the shifts (0.25 to 1) HR assigned for each announced "
+            "pay-type overtime day, added outside gross salary, PF and ESI. Staff only; production extra shifts are "
+            "already inside their gross pay. The share is overtime divided by gross pay."
         ),
         formula="overtime share = overtime pay / gross pay x 100",
     )

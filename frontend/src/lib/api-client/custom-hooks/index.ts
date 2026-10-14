@@ -9,6 +9,7 @@ export * from "./device-status";
 export * from "./device-control";
 export * from "./chat";
 export * from "./compensation";
+export * from "./compensation-settings";
 export * from "./documents";
 export * from "./gate";
 export * from "./geo";

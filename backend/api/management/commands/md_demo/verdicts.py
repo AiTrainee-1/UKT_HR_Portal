@@ -20,7 +20,7 @@ from decimal import Decimal
 from api.arrival_rules import ZONE_EXCUSED, ZONE_LATE, ZONE_QUARTER, ZONE_SECOND_HALF, explain, limits_for, zone_of
 from api.attendance_final import _compute_production, _effective_shift_for_day, _half_day_status, _late_basis_notes
 from api.attendance_final import _reason_without
-from api.overtime import _ot_minutes_for
+from api.compensation_engine import ot_extra_for_day
 from api.shift_engine import (
     ZONE_HALF_SHIFT,
     ZONE_LATE as AFTERNOON_LATE,
@@ -156,7 +156,13 @@ def staff_verdict(settings, shift, times: list[time], permissions: list[str]) ->
             shifts = ONE - deduction
 
     last_punch = p4 or (times[-1] if len(times) > 1 else None)
-    overtime = _ot_minutes_for(last_punch, shift.end_time) if last_punch and status in ("present", "half_shift") else 0
+    # Measured exactly as the engine stores AttendanceDayRecord.ot_extra_minutes (compensation_engine.ot_extra_for_day: the
+    # last punch past the real shift end in whole minutes, and one punch alone is an arrival, not a departure).
+    overtime = (
+        ot_extra_for_day([_t2s(t) for t in times], shift, off_day=False)
+        if last_punch and status in ("present", "half_shift")
+        else 0
+    )
     return Day(
         status=status,
         shifts=Decimal(shifts).quantize(Decimal("0.01")),

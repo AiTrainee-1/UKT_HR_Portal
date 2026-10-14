@@ -655,8 +655,8 @@ def _offday_run(ctx):
         )
     elif not settings.ot_detection_enabled:
         notes.append(
-            "Overtime detection is switched off in Settings > Payroll: no new Detected overtime is recorded, so a worked "
-            "weekly-off or holiday only turns into pay when HR announces it by hand."
+            "Overtime detection is switched off in Settings > Compensation: no new Detected overtime is recorded, so a "
+            "worked weekly-off or holiday only turns into pay when HR announces it by hand."
         )
     if sub_note:
         notes.append(sub_note)

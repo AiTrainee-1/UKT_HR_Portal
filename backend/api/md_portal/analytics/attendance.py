@@ -25,7 +25,7 @@ import threading
 from bisect import bisect_left, bisect_right
 from collections import defaultdict, namedtuple
 from dataclasses import dataclass
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any, Callable, Iterable
 
 from django.db.models import Count, Min, Q
@@ -321,8 +321,11 @@ class Frame:
 
     def late_minutes(self) -> dict[tuple[int, date], int]:
         """Minutes late for each late-flagged day, re-derived the way the Late Coming Detail report does it: the ADR
-        stores only the flag, so minutes = first punch - the shift's (permission-shifted) start. A day whose shift
-        cannot be found or whose flag no longer matches the shift gets no entry (never a guess)."""
+        stores only the flag, so minutes = first punch - the shift's (permission-shifted) start. A Type 1 next-day
+        allowance moved that start later by the minutes the day record carries (``compensation_minutes``), so they are
+        added to it; a company late-in window moved it to an announced time the record does not keep, so such a day is
+        not measured. A day whose shift cannot be found or whose flag no longer matches the shift gets no entry
+        (never a guess)."""
         if self._late is None:
             wanted = {(eid, d) for d, eid, _code, flags in self.rows if flags & LATE_FLAG}
             out: dict[tuple[int, date], int] = {}
@@ -333,19 +336,30 @@ class Frame:
                         self.scope.employee_q("employee__"), date__gte=self.start, date__lte=self.end, is_late=True
                     )
                     .order_by()
-                    .values_list("employee_id", "date", "first_punch", "morning_permission_applied")
+                    .values_list(
+                        "employee_id",
+                        "date",
+                        "first_punch",
+                        "morning_permission_applied",
+                        "compensation_kind",
+                        "compensation_minutes",
+                    )
                 )
-                for eid, d, first_punch, permission in late_rows:
+                for eid, d, first_punch, permission, comp_kind, comp_minutes in late_rows:
                     if (eid, d) not in wanted:
                         continue
                     emp = self.people[eid]
                     if emp.employment_type == "production":
                         start, grace, exact = pcfg.punch1_time, pcfg.grace_minutes or 10, True
                     else:
+                        if "window_late_in" in (comp_kind or ""):
+                            continue  # the start was the announced window time, which the record does not keep
                         shift = self.roster.shift_on(eid, d)
                         if shift is None:
                             continue
                         start, grace, exact = shift.start_time, shift.grace_period_minutes, False
+                        if comp_minutes and start is not None:  # a Type 1 allowance moved the start later
+                            start = (datetime.combine(d, start) + timedelta(minutes=comp_minutes)).time()
                     late = morning_lateness(first_punch, start, grace, permission, exact_seconds=exact)
                     if late is not None:
                         out[(eid, d)] = late[2]
@@ -638,7 +652,8 @@ def _prov_avg_late(rows: int | None, unknown: int) -> dict:
     ]
     if unknown:
         caveats.append(
-            f"{_plural(unknown, 'late day')} could not be measured (no shift found for the day) and "
+            f"{_plural(unknown, 'late day')} could not be measured (no shift found for the day, or a company "
+            f"late-in window moved its start) and "
             f"{'is' if unknown == 1 else 'are'} left out."
         )
     return prov(
@@ -654,9 +669,11 @@ def _prov_avg_late(rows: int | None, unknown: int) -> dict:
 
 def _prov_overtime(rows: int | None, settings: Any) -> dict:
     caveats = [
-        "Overtime appears only once HR's overtime detection has run (Compensation > Overtime); days not yet detected "
-        "are not counted.",
-        "Overtime is paid as one day's pay per announced 'Pay' day, not by the hour: the rupee cost is on the Payroll Analysis page.",
+        "Overtime appears only once the overtime rules have run (Settings > Compensation, OT Detection); days not "
+        "yet detected are not counted.",
+        "Overtime is never paid by the hour. Only a shift-based day (Type 2) that HR announces as 'Pay' is paid, as "
+        "0.25 to 1 shift of one day's pay; the next-day late-in allowance (Type 1) is never paid. The rupee cost is "
+        "on the Payroll Analysis page.",
     ]
     if not getattr(settings, "compensation_feature_enabled", True):
         caveats.append("The Compensation feature is switched off in Settings, so no overtime is detected or paid.")
@@ -670,8 +687,8 @@ def _prov_overtime(rows: int | None, settings: Any) -> dict:
         "Overtime hours",
         dataset="Overtime records (staff)",
         definition=(
-            "Time worked beyond the shift's end on days HR has detected or announced as overtime. "
-            "Days HR rejected are left out."
+            "Time worked beyond the shift's end on days it was detected, given as the automatic next-day allowance or "
+            "announced by HR. Days HR rejected are left out."
         ),
         formula="sum of overtime minutes ÷ 60",
         rows=rows,
@@ -2040,7 +2057,11 @@ def attendance_exceptions(scope: Scope, period: Period, limit: int = LIST_LIMIT_
         scope=scope,
         provenance=_prov_exceptions(counts, t_scheduled(tally_rows(rows))),
         notes=_notes(frame, win, cov)
-        + (["Minutes late are left out for days whose shift could not be found."] if frame.late_unknown else []),
+        + (
+            ["Minutes late are left out for days whose shift could not be found or whose start a late-in window moved."]
+            if frame.late_unknown
+            else []
+        ),
     )
 
 
@@ -2080,8 +2101,9 @@ def _prov_ot_share() -> dict:
 @cached()
 def attendance_overtime(scope: Scope, period: Period, limit: int = LIST_LIMIT_DEFAULT) -> dict:
     """Overtime hours by department, the people with the most overtime, the trend, the mix of HR decisions (pay,
-    relaxation, detected, rejected) and overtime as a share of scheduled hours. Hours are informational: payroll pays
-    one day's pay per announced 'Pay' day (the rupee cost is on the Payroll Analysis page)."""
+    relaxation, allowance, detected, rejected) and overtime as a share of scheduled hours. Hours are informational:
+    payroll pays only the shift-based days HR announced as 'Pay', 0.25 to 1 shift of one day's pay each (the rupee
+    cost is on the Payroll Analysis page)."""
     limit = _clamp_limit(limit)
     frame, win = frame_for(scope, period)
     settings = frame.settings
@@ -2144,12 +2166,15 @@ def attendance_overtime(scope: Scope, period: Period, limit: int = LIST_LIMIT_DE
     decisions: dict[str, list] = {
         "announcedPay": [0, 0],
         "announcedRelaxation": [0, 0],
+        "allowance": [0, 0],
         "detected": [0, 0],
         "rejected": [0, 0],
     }
     for _e, _d, minutes, status, ctype in cur_rows:
         if status == "announced":
             key = "announcedRelaxation" if ctype == "relaxation" else "announcedPay"
+        elif status == "auto":  # the automatic next-day late-in allowance (Type 1): no HR decision, never paid
+            key = "allowance"
         elif status in ("detected", "rejected"):
             key = status
         else:
@@ -2225,8 +2250,10 @@ def attendance_overtime(scope: Scope, period: Period, limit: int = LIST_LIMIT_DE
                 "Overtime by HR decision",
                 dataset="Overtime records",
                 definition=(
-                    "Detected: found from the punches, not yet decided. Announced Pay: HR will pay one day's pay. "
-                    "Announced Relaxation: HR grants an alternative day off. Rejected: HR refused it (not counted in hours)."
+                    "Detected: found from the punches, not yet decided. Announced Pay: HR pays the shifts it assigned "
+                    "(0.25 to 1) at one day's pay each. Announced Relaxation: HR gives those shifts as time off. Allowance: "
+                    "enough extra time was worked to arrive later next morning without a Late mark (automatic, never paid). "
+                    "Rejected: HR refused it (not counted in hours)."
                 ),
                 formula="count and hours of records per status",
                 rows=len(cur_rows),
@@ -2982,9 +3009,10 @@ TOOLS = [
     tool(
         "attendance_overtime",
         "Overtime in a period: total hours against the previous period, hours by department, the people with the most "
-        "overtime, the trend, the mix of HR decisions (pay, relaxation, detected, rejected) and overtime as a share of "
-        "scheduled hours. Staff only. Hours are informational: payroll pays one day's pay per announced Pay day, so use "
-        "the payroll tools for the rupee cost. Use it for 'how much overtime' or 'who works the most overtime'.",
+        "overtime, the trend, the mix of HR decisions (pay, relaxation, allowance, detected, rejected) and overtime as a "
+        "share of scheduled hours. Staff only. Hours are informational: payroll pays only the shift-based days HR "
+        "announced as Pay (0.25 to 1 shift of one day's pay), so use the payroll tools for the rupee cost. Use it for "
+        "'how much overtime' or 'who works the most overtime'.",
         attendance_overtime,
         page="attendance",
         period="last_30_days",

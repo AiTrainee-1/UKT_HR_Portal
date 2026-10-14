@@ -57,13 +57,15 @@ from functools import lru_cache
 
 from django.db.models import Q
 
+from . import compensation_engine as comp
+from . import compensation_rules as comp_rules
 from .arrival_rules import (
-    ZONE_EXCUSED, ZONE_LATE, ZONE_QUARTER, ZONE_SECOND_HALF,
-    explain as explain_arrival, limits_for as arrival_limits_for, zone_of as arrival_zone_of,
+    ZONE_EXCUSED, ZONE_LATE, ZONE_ON_TIME, ZONE_QUARTER, ZONE_SECOND_HALF,
+    explain as explain_arrival, hhmm as arrival_hhmm, limits_for as arrival_limits_for, zone_of as arrival_zone_of,
 )
 from .clock import ist_today
 from .models import (
-    AttendanceDayRecord, AttendanceLog, Attendance, Holiday,
+    AttendanceDayRecord, AttendanceLog, Attendance, CompensationDayAnnouncement, Holiday,
     LeaveRequest, PayrollSettings, ProductionShiftConfig, ProductionShiftSegment,
 )
 from .shift_engine import (
@@ -180,7 +182,7 @@ def _compensation_days_by_date(date_from: date_type, date_to: date_type, setting
     return out
 
 
-def _compensation_day_for(emp, d: date_type, settings=None, prefetched=None):
+def _compensation_day_for(emp, d: date_type, settings=None, prefetched=None, kinds=None):
     """
     The CompensationDayAnnouncement covering (emp, d), or None. Scoping
     (Holiday's nullable-FK convention, extended with an explicit employee
@@ -194,6 +196,14 @@ def _compensation_day_for(emp, d: date_type, settings=None, prefetched=None):
     _compensation_days_by_date, employees already prefetched) -otherwise a
     roster-wide month view issues one query per employee-day. Without it,
     it queries fresh per call (single-day callers).
+
+    `kinds`, when given, narrows the announcements considered to those kinds
+    (CompensationDayAnnouncement.kind): the attendance engine passes ("day",)
+    because only a legacy Compensation Day exempts the whole day -a company-
+    announced late-in / early-out WINDOW only moves one edge (see
+    compensation_engine.window_times). None = any kind, which is what the
+    WhatsApp alerts want: no alert is sent on a day the company announced
+    anything.
 
     Master off-switch: PayrollSettings.compensation_feature_enabled. Checked
     here -the single choke point compute_day_record already goes through -
@@ -211,16 +221,10 @@ def _compensation_day_for(emp, d: date_type, settings=None, prefetched=None):
         from .models import CompensationDayAnnouncement
         announcements = CompensationDayAnnouncement.objects.filter(date=d).prefetch_related("employees")
     for ann in announcements:
-        listed = {e.pk for e in ann.employees.all()}
-        if emp.pk in listed:
+        if kinds is not None and ann.kind not in kinds:
+            continue
+        if comp.announcement_applies(emp, ann):
             return ann
-        if listed:
-            continue
-        if ann.branch_id and ann.branch_id != emp.branch_id:
-            continue
-        if ann.department_id and ann.department_id != emp.department_id:
-            continue
-        return ann
     return None
 
 
@@ -454,10 +458,77 @@ def _effective_shift_for_day(shift, comp_day, day_perms):
     return effective, applied_morning, applied_evening
 
 
+def _announced_start(shift, when):
+    """A copy of `shift` whose Morning Late-In deadline is exactly `when`: a company-announced late-in. Staff may arrive
+    up to `when` and the shift's own start AND grace do not apply (zero grace), so every later boundary (the Late window,
+    the quarter-shift and first-half limits) is measured from `when`. Grace is one number for both edges of a shift, so
+    the start is moved back by it: deadline = (when - grace) + grace."""
+    from copy import copy
+
+    moved = copy(shift)
+    moved.start_time = _s2t(_t2s(when) - (shift.grace_period_minutes or 0) * 60)
+    return moved
+
+
+def _announced_end(shift, when):
+    """A copy of `shift` whose Evening Early-Out deadline is exactly `when`: a company-announced early-out. Staff may leave
+    from `when` on and the shift's own end AND grace do not apply: deadline = (when + grace) - grace."""
+    from copy import copy
+
+    moved = copy(shift)
+    moved.end_time = _s2t(_t2s(when) + (shift.grace_period_minutes or 0) * 60)
+    return moved
+
+
+def _relaxing_windows(shift, win_late, win_early):
+    """The company-announced windows (compensation_engine.window_times) that actually RELAX `shift`.
+
+    window_times picks the day's windows without looking at the employee's own shift, and an announcement covers every
+    staff member (the default scope) whatever shift they are on. A window is a concession, never a tightening, so for one
+    employee: a late-in time at or before their own on-time limit (shift start + grace) is ignored, and so is an early-out
+    time at or after their own leaving limit (shift end - grace). Applying either would make the day STRICTER than no
+    announcement at all: a 10:00-shift employee arriving 10:00 would be Late against a 09:30 window, and a 06:00-14:00
+    employee leaving at 14:00 would be an Early-Out with the Evening-Half cut-off pushed past their whole day. What is
+    left is applied exactly as before, so the verdict, the notes and the marker follow one decision.
+    Returns (win_late, win_early), each None when it does not apply to this shift."""
+    if shift is None:
+        return None, None
+    grace = (shift.grace_period_minutes or 0) * 60
+    if win_late is not None and _t2s(win_late) <= _t2s(shift.start_time) + grace:
+        win_late = None
+    if win_early is not None and _t2s(win_early) >= _t2s(shift.end_time) - grace:
+        win_early = None
+    return win_late, win_early
+
+
+def _start_plus(shift, minutes: int):
+    """A copy of `shift` that starts `minutes` later: the Type 1 next-day allowance. Its own grace still applies on top."""
+    from copy import copy
+
+    moved = copy(shift)
+    moved.start_time = _s2t(_t2s(shift.start_time) + minutes * 60)
+    return moved
+
+
+def compensation_marker_json(rec) -> dict:
+    """What compensation shaped a day (AttendanceDayRecord.compensation_kind / _minutes / _note) as the camelCase keys
+    every attendance endpoint returns (None = no record). `compensationKind` is null, "ot_allowance", "window_late_in",
+    "window_early_out", "birthday" or "relaxation"; `compensationMinutes` the allowance minutes the arrival used."""
+    kind = getattr(rec, "compensation_kind", "") or ""
+    note = getattr(rec, "compensation_note", "") or ""
+    return {
+        "compensationKind": kind or None,
+        "compensationMinutes": int(getattr(rec, "compensation_minutes", 0) or 0),
+        "compensationNote": note or None,
+    }
+
+
 def permission_flags_json(rec) -> dict:
     """
     The Late Detection / Permission flags of an AttendanceDayRecord (None = no record) as the
     camelCase keys every attendance endpoint returns -built in ONE place so no endpoint can drift.
+    The compensation marker keys (compensationKind / compensationMinutes / compensationNote, see
+    compensation_marker_json) ride along, so every endpoint that already spreads this shows them too.
 
     Two generations of keys are emitted on purpose:
       * current: morningPermissionApplied / eveningPermissionApplied (an approved, in-cap Morning
@@ -494,6 +565,7 @@ def permission_flags_json(rec) -> dict:
         "permissionDepartureWithRequest": applied_e,
         "permissionZoneCount": int(applied_m) + int(applied_e) + int(afternoon),
         "permissionEscalatedToHalfShift": False,
+        **compensation_marker_json(rec),
     }
 
 
@@ -585,12 +657,19 @@ def _reason_without(reason, prefix: str):
     return "; ".join(kept) or None
 
 
-def _late_basis_notes(shift, comp_day, applied_morning: bool, applied_evening: bool) -> dict:
+def _late_basis_notes(
+    shift, comp_day, applied_morning: bool, applied_evening: bool,
+    window_late=None, window_early=None, allowance_minutes: int = 0,
+) -> dict:
     """
     Plain-language account of how each Late Detection boundary was built for the day, echoed into
     the reason text ("... is after 09:40 (shift start 08:30 + 60 min Morning Late-In permission +
     10 min grace)") so HR can read the exact rule back to an employee who asks why they were
     flagged. `shift` is the REAL assigned shift, not the permission-adjusted copy.
+
+    `window_late` / `window_early` (a time) are a company-announced late-in / early-out for the day: that time
+    replaces the shift's own start / end and grace as the basis. `allowance_minutes` is a Type 1 next-day allowance the
+    arrival used, added to the start.
     """
     from .models import EmployeePermission
 
@@ -599,19 +678,29 @@ def _late_basis_notes(shift, comp_day, applied_morning: bool, applied_evening: b
     grace = shift.grace_period_minutes or 0
     perm_min = EmployeePermission.FIXED_DURATION_MINUTES
 
-    morning = f"shift start {shift.start_time.strftime('%H:%M')}"
+    if window_late is not None:
+        morning = f"company-announced late-in {window_late.strftime('%H:%M')}, no grace"
+    else:
+        morning = f"shift start {shift.start_time.strftime('%H:%M')}"
     if applied_morning:
         morning += f" + {perm_min} min Morning Late-In permission"
-    if grace:
+    if allowance_minutes:
+        morning += f" + {allowance_minutes} min OT late-in allowance"
+    if window_late is None and grace:
         morning += f" + {grace} min grace"
 
     if comp_day is not None and comp_day.leave_until_time:
         evening = f"compensation-day release {comp_day.leave_until_time.strftime('%H:%M')}"
+        no_grace = False
+    elif window_early is not None:
+        evening = f"company-announced early-out {window_early.strftime('%H:%M')}, no grace"
+        no_grace = True
     else:
         evening = f"shift end {shift.end_time.strftime('%H:%M')}"
+        no_grace = False
     if applied_evening:
         evening += f" - {perm_min} min Evening Early-Out permission"
-    if grace:
+    if grace and not no_grace:
         evening += f" - {grace} min grace"
     return {"morning": morning, "evening": evening}
 
@@ -791,8 +880,20 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
                                  before the month through the month's end,
                                  used by resolve_day_punch_logs' cross-midnight
                                  punch reattribution (see below)
+      compensation_days_by_date -{date: [CompensationDayAnnouncement, ...]}
+      compensation_ctx        -compensation_engine.CompContext: the OT /
+                                 Compensation switches, the Type 1 rules and
+                                 the relaxation HR granted, for the whole range
     Omitted (the default), every one of these is looked up fresh exactly as
     before -every other caller is unaffected.
+
+    Compensation (staff only; master switch, the feature's own switch and its
+    effective-from date all apply -see compensation_engine.py): a Type 1 OT
+    allowance moves the first-punch limits later, a company-announced late-in /
+    early-out window replaces the shift's start / end and grace, a birthday is
+    a paid full day with no detection, and an OT relaxation / redeemed balance
+    tops the day up to at most one shift. What shaped the day is recorded in
+    compensation_kind / _minutes / _note.
     """
     prefetch = prefetch or {}
     assignments = prefetch.get("assignments")
@@ -864,6 +965,8 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         "arrival_zone": "",
         "late_reason": None,
         "first_punch": None, "last_punch": None,
+        "compensation_kind": "", "compensation_minutes": 0, "compensation_note": "",
+        "ot_extra_minutes": 0,
     }
 
     is_production = emp.employment_type == "production"
@@ -887,13 +990,46 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         has_permission = bool(day_perms)
         permission_time = day_perms[0][0].permission_time if day_perms else None
 
-    # This day's Compensation Day announcement, if any -staff only. See
-    # _compensation_day_for's docstring for scoping rules.
-    comp_day = None if is_production else _compensation_day_for(
-        emp, d, settings=settings, prefetched=prefetch.get("compensation_days_by_date"),
-    )
+    # The OT / Compensation context (switches, Type 1 rules, relaxation granted) and this day's announcements -staff
+    # only; a master-off installation gets an empty context and no queries. A bulk caller supplies both once.
+    comp_ctx = comp.CompContext()
+    anns_today: list = []
+    comp_day = None
+    if not is_production:
+        comp_ctx = prefetch.get("compensation_ctx")
+        if comp_ctx is None:
+            comp_ctx = comp.build_context(settings, d, d, employee_ids=[emp.pk])
+        if comp_ctx.master:
+            by_date = prefetch.get("compensation_days_by_date")
+            if by_date is not None:
+                anns_today = by_date.get(d, [])
+            else:
+                anns_today = list(CompensationDayAnnouncement.objects.filter(date=d).prefetch_related("employees"))
+        # This day's legacy Compensation Day announcement (kind "day": the whole day is exempt from Late / Permission
+        # detection), if any. A company-announced late-in / early-out window is NOT one: it only moves one edge (see
+        # compensation_engine.window_times). See _compensation_day_for's docstring for scoping rules.
+        comp_day = _compensation_day_for(
+            emp, d, settings=settings, prefetched={d: anns_today}, kinds=("day",),
+        )
 
-    if day_times or has_manual:
+    ot_shift = None  # the REAL shift, for the day's OT measurement (set below when a staff day has punches)
+    marks: list = []  # [(kind, minutes, note)] compensation that shaped this day, most important first
+
+    # Paid birthday leave (Compensation Leave C): a whole paid day whatever the punches say -no Late / Early-Out /
+    # Permission / Half-Day detection. Manual overrides were returned above, so they still win.
+    birthday = (not is_production) and comp.birthday_applies(emp, d, comp_ctx, assignments)
+    if birthday:
+        computed = {
+            "status": AttendanceDayRecord.STATUS_PRESENT, "shifts_earned": Decimal("1.00"), "is_half_shift": False,
+            "first_punch": day_times[0] if day_times else None,
+            "last_punch": day_times[-1] if len(day_times) > 1 else None,
+        }
+        marks.append((
+            comp.KIND_BIRTHDAY, 0,
+            "Birthday: paid compensation leave for the whole day, so no late, early-out, permission or half-day "
+            "detection applies",
+        ))
+    elif day_times or has_manual:
         if not day_times and has_manual:
             computed = {"status": "present", "shifts_earned": Decimal("1.00")}
         elif is_production:
@@ -902,8 +1038,74 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
             from .models import EmployeePermission
 
             shift = _get_shift_for_date(emp, d, assignments=assignments)
-            effective_shift, applied_morning, applied_evening = _effective_shift_for_day(shift, comp_day, day_perms)
-            notes = _late_basis_notes(shift, comp_day, applied_morning, applied_evening)
+            ot_shift = shift
+            # Company-announced late-in / early-out windows (Compensation Leave A): for this date the announced time
+            # replaces the shift's own start / end AND grace, so the day is judged from it. Needs a shift to move, and
+            # only ever relaxes it: a window stricter than this employee's own limit is ignored (_relaxing_windows).
+            win_late, win_early = _relaxing_windows(
+                shift, *(comp.window_times(emp, anns_today, comp_ctx) if shift is not None else (None, None))
+            )
+            shift_day = shift
+            if win_late is not None:
+                shift_day = _announced_start(shift_day, win_late)
+            if win_early is not None:
+                shift_day = _announced_end(shift_day, win_early)
+            effective_shift, applied_morning, applied_evening = _effective_shift_for_day(shift_day, comp_day, day_perms)
+
+            # Where the first punch falls with nothing compensating (the real shift), and with the announced window.
+            first_s = day_secs[0]
+            limits = arrival_limits_for(shift_day, settings)
+            zone_real = zone_window = None
+            if limits is not None:
+                real_limits = arrival_limits_for(shift, settings)
+                zone_real = arrival_zone_of(first_s, real_limits, permission_covers=applied_morning)
+                zone_window = arrival_zone_of(first_s, limits, permission_covers=applied_morning)
+
+            # Type 1: the next-day allowance (from the previous working day's extra work) shifts the limits later, but
+            # only for an arrival that is still late after the window / an approved permission - an on-time or
+            # permission-excused arrival leaves it unused - and only when it changes how the day is judged. A Half-Day
+            # Leave for the MORNING expects no morning arrival, so there is nothing to cover; one for the afternoon
+            # still owes a normal morning arrival (its Late verdict is kept below), so the allowance covers it.
+            grant = None
+            if (
+                comp_ctx.allowance_on and limits is not None and not comp_day
+                and half_day_slot != LeaveRequest.HALF_DAY_MORNING
+                and zone_window not in (ZONE_ON_TIME, ZONE_EXCUSED)
+            ):
+                candidate = comp.allowance_for_arrival(emp, d, comp_ctx, settings, prefetch)
+                if candidate is not None:
+                    allowed_shift = _start_plus(shift_day, candidate.minutes)
+                    allowed_limits = arrival_limits_for(allowed_shift, settings)
+                    allowed_zone = arrival_zone_of(first_s, allowed_limits, permission_covers=applied_morning)
+                    if comp_rules.zone_rank(allowed_zone) < comp_rules.zone_rank(zone_window):
+                        grant = candidate
+                        used = min(candidate.minutes, max(1, first_s // 60 - limits.on_time_until // 60))
+                        plain_deadline = arrival_hhmm(limits.on_time_until)
+                        shift_day = allowed_shift
+                        limits = allowed_limits
+                        effective_shift, applied_morning, applied_evening = _effective_shift_for_day(
+                            shift_day, comp_day, day_perms)
+                        marks.append((
+                            comp.KIND_OT_ALLOWANCE, used,
+                            f"OT allowance: first punch {arrival_hhmm(first_s)} is after the on-time limit "
+                            f"{plain_deadline}; covered by the {candidate.minutes} min late-in allowance earned from "
+                            f"{comp_rules.describe_duration(candidate.extra)} of extra work on "
+                            f"{candidate.source_date.strftime('%d %b')}",
+                        ))
+            if (
+                win_late is not None and not comp_day and zone_real is not None
+                and comp_rules.zone_rank(zone_window) < comp_rules.zone_rank(zone_real)
+            ):
+                marks.insert(0, (
+                    comp.KIND_WINDOW_LATE_IN, 0,
+                    f"Company-announced late-in: staff may arrive until {win_late.strftime('%H:%M')} today (no grace), "
+                    f"so the first punch {arrival_hhmm(first_s)} is judged from there",
+                ))
+
+            notes = _late_basis_notes(
+                shift, comp_day, applied_morning, applied_evening,
+                window_late=win_late, window_early=win_early, allowance_minutes=grant.minutes if grant else 0,
+            )
             if settings.attendance_mode == "simple":
                 computed = _compute_staff_simple(
                     emp, d, day_times, settings, effective_shift, notes=notes, punch_secs=day_secs
@@ -946,9 +1148,12 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
             # rule for both modes. A Compensation Day's leave_until_time, if
             # set, replaces the Evening Half cutoff for the day.
             second_half_override = comp_day.leave_until_time if (comp_day and comp_day.leave_until_time) else None
+            if second_half_override is None and win_early is not None:
+                # a company-announced early-out moves the Evening Half cut-off to its time, as leave_until_time does
+                second_half_override = win_early
             # The morning arrival timeline: where the FIRST punch falls, measured from THIS shift's own start
-            # and grace (arrival_rules.py). An employee with no shift has no timeline (the fixed cut-off applies).
-            limits = arrival_limits_for(shift, settings)
+            # and grace (arrival_rules.py) -or the announced late-in / the allowance-shifted start, worked out above.
+            # An employee with no shift has no timeline (the fixed cut-off applies).
             status, shifts_earned, is_half = _half_day_status(
                 day_secs, settings, second_half_start_override=second_half_override,
                 first_half_limit_s=limits.first_half_until if limits else None,
@@ -986,6 +1191,18 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
                     # punch) is not docked twice.
                     deduction = max(Decimal("0"), min(Decimal("1"), Decimal(str(settings.arrival_quarter_deduction))))
                     computed["shifts_earned"] = Decimal("1.00") - deduction
+
+            if win_early is not None and not comp_day and settings.evening_early_out_enabled and len(day_times) > 1:
+                # An announced early-out was USED when the same exit would have been an Early-Out against the shift's
+                # own end (with any approved permission) but is not one against the announced time.
+                real_end_shift, _m, _e = _effective_shift_for_day(shift, comp_day, day_perms)
+                would_be_early, _why = evening_early_out(day_times[-1], real_end_shift, punch_secs=day_secs[-1])
+                if would_be_early and not computed.get("early_leave"):
+                    marks.append((
+                        comp.KIND_WINDOW_EARLY_OUT, 0,
+                        f"Company-announced early-out: staff may leave from {win_early.strftime('%H:%M')} today "
+                        f"(no grace), so leaving at {day_times[-1].strftime('%H:%M')} is not an early-out",
+                    ))
 
         if comp_day:
             # Suppress every Late/Permission flag -a compensation day is
@@ -1042,6 +1259,33 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
     else:
         computed = {"status": "absent", "shifts_earned": Decimal("0")}
 
+    if not is_production:
+        # OT measurement (a plain fact, whatever the switches say): minutes the last punch is past the REAL shift end.
+        if ot_shift is not None and len(day_secs) > 1:
+            fields["ot_extra_minutes"] = comp.ot_extra_for_day(day_secs, ot_shift, comp.is_off_day(emp, d, assignments))
+        # An OT relaxation HR assigned / a balance HR redeemed for this date tops the day up to at most one shift.
+        entries = comp.relaxation_entries(emp, d, comp_ctx)
+        if (
+            entries
+            and computed.get("status") in ("present", "half_shift", "absent", "on_leave")
+            and not comp.is_off_day(emp, d, assignments)
+        ):
+            total, added = comp.relaxation_topup(Decimal(str(computed.get("shifts_earned") or 0)), entries)
+            if added > 0:
+                computed["status"], computed["is_half_shift"] = comp.status_for_total(total)
+                computed["shifts_earned"] = total
+                sources = ", ".join(dict.fromkeys(label for _s, label in entries))
+                marks.append((comp.KIND_RELAXATION, 0, f"Compensation relaxation: {added:.2f} shift added from {sources}"))
+        if marks:
+            order = [
+                comp.KIND_BIRTHDAY, comp.KIND_RELAXATION, comp.KIND_WINDOW_LATE_IN, comp.KIND_WINDOW_EARLY_OUT,
+                comp.KIND_OT_ALLOWANCE,
+            ]
+            marks.sort(key=lambda m: order.index(m[0]))
+            fields["compensation_kind"] = marks[0][0]
+            fields["compensation_minutes"] = next((m[1] for m in marks if m[0] == comp.KIND_OT_ALLOWANCE), 0)
+            fields["compensation_note"] = "; ".join(m[2] for m in marks)
+
     fields.update(computed)
     fields["is_compensation_day"] = bool(comp_day)
 
@@ -1076,7 +1320,33 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
     return record
 
 
-def compute_month_records(emp, year: int, month: int, settings=None):
+def compensation_prefetch_for_day(settings, d: date_type, employee_ids) -> dict:
+    """The compensation prefetch keys for a ROSTER day (many employees, one date): hand them to every employee's
+    compute_day_record(prefetch=...), so the roster costs a fixed handful of queries instead of a few per employee.
+    With the Type 1 allowance on, the previous working day's facts of the whole roster are loaded together (three
+    queries) the first time a late arrival needs them, instead of a few queries per late arrival."""
+    ids = list(employee_ids)
+    ctx = comp.build_context(settings, d, d, employee_ids=ids)
+    if ctx.allowance_on:
+        ctx.roster = comp.RosterLookback(ids, d)
+    return {
+        "compensation_ctx": ctx,
+        "compensation_days_by_date": _compensation_days_by_date(d, d, settings),
+    }
+
+
+def compensation_prefetch_for_range(settings, date_from: date_type, date_to: date_type) -> dict:
+    """The employee-independent compensation facts of [date_from, date_to] (the switches, the Type 1 rules, the relaxation
+    granted to anybody, the announcements), built ONCE. A loop over many employees passes it as `comp_prefetch` to every
+    compute_month_records / compute_range_records call, so each employee costs only their own look-back instead of
+    re-reading the company-wide facts. The range must cover every employee's range in the loop."""
+    return {
+        "compensation_ctx": comp.build_context(settings, date_from, date_to),
+        "compensation_days_by_date": _compensation_days_by_date(date_from, date_to, settings),
+    }
+
+
+def compute_month_records(emp, year: int, month: int, settings=None, comp_prefetch=None):
     """
     Compute final records for every elapsed day of the month. Returns list.
 
@@ -1088,6 +1358,9 @@ def compute_month_records(emp, year: int, month: int, settings=None):
     Payroll generation) would otherwise be an O(employees × days) query
     storm -this keeps each employee's month to a small, fixed number of
     queries regardless of how many days are in it.
+
+    `comp_prefetch`, when given, is compensation_prefetch_for_range() built once by a loop over many employees: the
+    company-wide compensation facts are then not re-read for every employee.
     """
     if settings is None:
         settings = PayrollSettings.get()
@@ -1097,12 +1370,26 @@ def compute_month_records(emp, year: int, month: int, settings=None):
     month_start = date_type(year, month, 1)
     month_end = date_type(year, month, days_in_month)
 
+    # The OT / Compensation context for the whole month, built ONCE (a fixed handful of queries whatever the number of
+    # days): the switches, the Type 1 rules, the relaxation granted. Production employees have none. When the Type 1
+    # allowance is on, the first days of the month need the previous working day's OT, which can lie up to
+    # LOOKBACK_DAYS back (a Sunday and a festival in between), so the punches / shift assignments reach back that far.
+    comp_days_by_date = None
+    if emp.employment_type == "production":
+        comp_ctx = comp.CompContext()
+    elif comp_prefetch is not None:
+        comp_ctx = comp.with_lookback(comp_prefetch["compensation_ctx"], emp, month_start)
+        comp_days_by_date = comp_prefetch["compensation_days_by_date"]
+    else:
+        comp_ctx = comp.build_context(settings, month_start, month_end, employee_ids=[emp.pk], lookback_employee=emp)
+    lookback = comp_rules.LOOKBACK_DAYS if comp_ctx.allowance_on else 1
+
     # One day before AND after the month too -cross-midnight punch
     # reattribution (resolve_day_punch_logs) for the LAST day of the month
     # needs the following day's early punches to check, and for symmetry the
     # first day of the month also gets the previous day's punches available.
     logs = AttendanceLog.objects.filter(
-        employee=emp, date__gte=month_start - timedelta(days=1), date__lte=month_end + timedelta(days=1),
+        employee=emp, date__gte=month_start - timedelta(days=lookback), date__lte=month_end + timedelta(days=1),
     ).order_by("punch_time")
     logs_by_date = {}
     for log in logs:
@@ -1122,7 +1409,7 @@ def compute_month_records(emp, year: int, month: int, settings=None):
 
     assignments = list(
         EmployeeShiftAssignment.objects.filter(employee=emp, effective_from__lte=month_end)
-        .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=month_start - timedelta(days=1)))
+        .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=month_start - timedelta(days=lookback)))
         .select_related("shift")
     )
     existing_day_records = {
@@ -1158,8 +1445,10 @@ def compute_month_records(emp, year: int, month: int, settings=None):
         "approved_permissions_this_month": approved_permissions_this_month,
         "compensation_days_by_date": (
             None if emp.employment_type == "production"
+            else comp_days_by_date if comp_days_by_date is not None
             else _compensation_days_by_date(month_start, month_end, settings)
         ),
+        "compensation_ctx": comp_ctx,
     }
 
     records = []
@@ -1167,7 +1456,7 @@ def compute_month_records(emp, year: int, month: int, settings=None):
         d = date_type(year, month, day)
         if d > today:
             break
-        records.append(compute_day_record(
+        rec = compute_day_record(
             emp, d,
             punch_logs=logs_by_date.get(d, []),
             settings=settings,
@@ -1177,11 +1466,14 @@ def compute_month_records(emp, year: int, month: int, settings=None):
             prod_config=prod_config,
             prod_segments=prod_segments,
             prefetch=prefetch,
-        ))
+        )
+        records.append(rec)
+        # The days after this one read it back (the Type 1 allowance needs the previous working day's FRESH OT).
+        existing_day_records[d] = rec
     return records
 
 
-def compute_range_records(emp, date_from: date_type, date_to: date_type, settings=None):
+def compute_range_records(emp, date_from: date_type, date_to: date_type, settings=None, comp_prefetch=None):
     """
     Compute final records for every day in [date_from, date_to] (inclusive).
 
@@ -1195,16 +1487,28 @@ def compute_range_records(emp, date_from: date_type, date_to: date_type, setting
     calls this once per employee across the whole roster, which turned that
     per-day gap into exactly the O(employees × days) query storm
     compute_month_records's docstring warns about avoiding.
+
+    `comp_prefetch`: see compute_month_records.
     """
     if settings is None:
         settings = PayrollSettings.get()
 
     today = ist_today()
+    # The OT / Compensation context for the range, built once (see compute_month_records).
+    comp_days_by_date = None
+    if emp.employment_type == "production":
+        comp_ctx = comp.CompContext()
+    elif comp_prefetch is not None:
+        comp_ctx = comp.with_lookback(comp_prefetch["compensation_ctx"], emp, date_from)
+        comp_days_by_date = comp_prefetch["compensation_days_by_date"]
+    else:
+        comp_ctx = comp.build_context(settings, date_from, date_to, employee_ids=[emp.pk], lookback_employee=emp)
+    lookback = comp_rules.LOOKBACK_DAYS if comp_ctx.allowance_on else 1
     # One day of padding on each side -cross-midnight punch reattribution
     # (resolve_day_punch_logs) for the last day needs the following day's
     # early punches to check.
     logs = AttendanceLog.objects.filter(
-        employee=emp, date__gte=date_from - timedelta(days=1), date__lte=date_to + timedelta(days=1),
+        employee=emp, date__gte=date_from - timedelta(days=lookback), date__lte=date_to + timedelta(days=1),
     ).order_by("punch_time")
     logs_by_date = {}
     for log in logs:
@@ -1235,7 +1539,7 @@ def compute_range_records(emp, date_from: date_type, date_to: date_type, setting
 
     assignments = list(
         EmployeeShiftAssignment.objects.filter(employee=emp, effective_from__lte=date_to)
-        .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=date_from - timedelta(days=1)))
+        .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=date_from - timedelta(days=lookback)))
         .select_related("shift")
     )
     existing_day_records = {
@@ -1281,8 +1585,10 @@ def compute_range_records(emp, date_from: date_type, date_to: date_type, setting
         "approved_permissions_this_month": approved_permissions_this_month,
         "compensation_days_by_date": (
             None if emp.employment_type == "production"
+            else comp_days_by_date if comp_days_by_date is not None
             else _compensation_days_by_date(date_from, date_to, settings)
         ),
+        "compensation_ctx": comp_ctx,
     }
 
     records = []
@@ -1290,7 +1596,7 @@ def compute_range_records(emp, date_from: date_type, date_to: date_type, setting
     while d <= date_to:
         if d > today:
             break
-        records.append(compute_day_record(
+        rec = compute_day_record(
             emp, d,
             punch_logs=logs_by_date.get(d, []),
             settings=settings,
@@ -1300,7 +1606,9 @@ def compute_range_records(emp, date_from: date_type, date_to: date_type, setting
             prod_config=prod_config,
             prod_segments=prod_segments,
             prefetch=prefetch,
-        ))
+        )
+        records.append(rec)
+        existing_day_records[d] = rec
         d += timedelta(days=1)
     return records
 

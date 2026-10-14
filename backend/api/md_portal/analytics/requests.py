@@ -7,7 +7,7 @@ request that goes through an approval pipeline (``approval_workflow.py``), becau
 get stuck?") does not stop at the three the HR page shows. ``kind=page`` narrows any figure to those three.
 
   leave, permission, casual leave, outpass (employee-requested), missing punch, on-duty, resignation  raised by the employee
-  attendance correction, advance                                                                    raised by HR
+  attendance correction, holiday / Sunday work compensation, advance                                raised by HR
 
 General "other requests" tickets (documents, letters, queries) are not approvals and are left out.
 
@@ -66,6 +66,7 @@ from ...models import (
     AttendanceOverrideRequest,
     CasualLeaveRequest,
     EmployeePermission,
+    HolidayWorkClaim,
     LeaveRequest,
     MissingPunchRequest,
     OnDutySession,
@@ -494,6 +495,18 @@ KINDS: tuple[Kind, ...] = (
         "Attendance correction",
         AttendanceOverrideRequest,
         "attendance_correction",
+        ("pending",),
+        ("approved",),
+        ("rejected",),
+        raised_by="hr",
+        decided_columns=("reviewed_at",),
+        approver_columns=("reviewed_by",),
+    ),
+    Kind(
+        "holiday_work",
+        "Holiday / Sunday work",
+        HolidayWorkClaim,
+        "holiday_work",
         ("pending",),
         ("approved",),
         ("rejected",),

@@ -145,7 +145,7 @@ class StepValidationTests(SimpleTestCase):
             self.assertIn(fragment, error, raw)
 
     def test_a_fixed_pipeline_cannot_be_edited(self):
-        for key in ("advance", "request", "on_duty_punch", "attendance_correction"):
+        for key in ("advance", "request", "on_duty_punch", "attendance_correction", "holiday_work"):
             steps, error = self.check(key, [{"roles": ["hod"]}])
             self.assertIsNone(steps, key)
             self.assertIn("is fixed", error)
@@ -205,6 +205,7 @@ class CatalogTests(ConfigCacheMixin, TestCase):
             "on_duty": HOD_OPTIONAL_THEN_HR,
             "resignation": HOD_THEN_HR,
             "attendance_correction": HOD_ONLY,
+            "holiday_work": HOD_ONLY,
             "on_duty_punch": HR_ONLY,
             "advance": HR_ONLY,
             "request": HR_ONLY,
@@ -223,7 +224,7 @@ class CatalogTests(ConfigCacheMixin, TestCase):
                 self.assertIsNotNone(approval.adapter(d.key), d.key)
 
     def test_status_projection_keeps_the_names_older_clients_know(self):
-        for key in ("leave", "permission", "casual_leave", "outpass", "attendance_correction"):
+        for key in ("leave", "permission", "casual_leave", "outpass", "attendance_correction", "holiday_work"):
             self.assertEqual(approval.project_status(key, (HOD,)), "pending")
             self.assertEqual(approval.project_status(key, (HR,)), "pending")
         for key in ("missing_punch", "on_duty"):

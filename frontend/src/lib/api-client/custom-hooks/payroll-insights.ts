@@ -5,6 +5,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type { UseQueryOptions } from "@tanstack/react-query";
 import { customFetch } from "../custom-fetch";
+import type { DayCompensationMarker } from "./attendance";
 import type { PayCycle } from "./production-cycles";
 
 // ── Which payroll ─────────────────────────────────────────────────────────────
@@ -233,7 +234,9 @@ export type MoneyLine = {
 };
 
 /** One day of the period in the same shape for staff and production. */
-export type PayrollDay = {
+// A day may carry the compensation marker (compensationKind / Minutes / Note) once the details endpoint sends it; it
+// does not today (payroll_insights.py builds the day from the stored breakdown), so the screens draw it only when present.
+export type PayrollDay = DayCompensationMarker & {
   date: string;
   day: string;
   /** staff: present | absent | paid_leave | unpaid_leave; production: present | half_shift | absent | holiday | ... */

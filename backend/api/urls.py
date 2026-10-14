@@ -162,11 +162,20 @@ from .growth_views import (
 )
 from .compensation_views import (
     compensation_list,
-    overtime_list, overtime_announce, overtime_reject,
+    overtime_list, overtime_announce, overtime_assign, overtime_reject,
+    compensation_balance, balance_redeem,
     compensation_credits_list, compensation_credit_redeem,
     compensation_leave_days, compensation_leave_day_detail,
     compensation_summary,
 )
+from .compensation_settings_views import compensation_config, compensation_settings
+# Compensation overhaul (claims, announced windows, birthdays, reports, employee apps): see the block of routes below.
+from .compensation_birthday_views import compensation_birthdays
+from .compensation_reports_views import compensation_reports
+from .compensation_windows_views import compensation_window_detail, compensation_windows
+from .employee_compensation_views import employee_compensation, employee_hod
+from .holiday_work_views import holiday_work_claim_detail, holiday_work_claims, holiday_work_eligible
+from .manager_views import manager_update_holiday_work_status
 from .system_settings_views import (
     biometric_devices, biometric_device_detail, idcard_settings_view,
     production_shift_config_view, production_shift_segments, production_shift_segment_detail,
@@ -519,12 +528,27 @@ urlpatterns = [
     path("compensation", compensation_list),
     path("compensation/ot", overtime_list),
     path("compensation/ot/announce", overtime_announce),
+    path("compensation/ot/assign", overtime_assign),
     path("compensation/ot/reject", overtime_reject),
+    path("compensation/balance", compensation_balance),
+    path("compensation/balance/redeem", balance_redeem),
+    # Settings -> Compensation (module `settings.compensation`) and its read-only twin for the page (module `compensation`)
+    path("compensation/settings", compensation_settings),
+    path("compensation/config", compensation_config),
     path("compensation/credits", compensation_credits_list),
     path("compensation/credits/<int:pk>/redeem", compensation_credit_redeem),
     path("compensation/leave-days", compensation_leave_days),
     path("compensation/leave-days/<int:pk>", compensation_leave_day_detail),
     path("compensation/summary", compensation_summary),
+    # ── Compensation overhaul, claims / windows / birthdays / reports (permission module `compensation`) ──
+    path("compensation/holiday-work", holiday_work_claims),
+    path("compensation/holiday-work/eligible", holiday_work_eligible),
+    path("compensation/holiday-work/<int:pk>", holiday_work_claim_detail),
+    path("compensation/birthdays", compensation_birthdays),
+    path("compensation/windows", compensation_windows),
+    path("compensation/windows/<int:pk>", compensation_window_detail),
+    path("compensation/reports", compensation_reports),
+    # ── end of the Compensation overhaul claims / windows / birthdays / reports block ──
     path("idcard", idcard_data),
     path("idcard/email", email_idcard),
     path("idcard/whatsapp", idcard_whatsapp),
@@ -660,6 +684,10 @@ urlpatterns = [
     path("manager/on-duty-sessions/<int:pk>/status", manager_update_on_duty_status),
     path("manager/missing-punch-requests/<int:pk>/status", manager_update_missing_punch_status),
     path("manager/outpass-requests/<int:pk>/status", manager_update_outpass_status),
+    # Compensation overhaul: the HOD decides a Holiday / Sunday work claim, and the employee apps' compensation / HOD pages
+    path("manager/holiday-work/<int:pk>/status", manager_update_holiday_work_status),
+    path("employee/compensation", employee_compensation),
+    path("employee/hod", employee_hod),
 
     # ── Outpass Approval -employee-requested (or On-Duty-derived) Outpass,
     #    approved by either HOD (manager/outpass-requests above) or HR ────────

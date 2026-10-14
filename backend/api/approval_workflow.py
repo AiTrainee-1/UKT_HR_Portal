@@ -189,6 +189,23 @@ DEFINITIONS: tuple[WorkflowDef, ...] = (
         on_off_effect="HR cannot raise new corrections while it is off; corrections already waiting can still be decided.",
     ),
     WorkflowDef(
+        key="holiday_work",
+        label="Holiday / Sunday work compensation",
+        group="Leave & attendance",
+        purpose=(
+            "HR records that a staff member worked on a Sunday or a company holiday and asks for 0.25 to 1 shift of "
+            "compensation. The Department Head must approve it before the shifts are added to the employee's "
+            "compensation balance, which HR later redeems as an alternative day off."
+        ),
+        requested_by="HR",
+        default_steps=(_step(HOD),),
+        allowed_roles=(HOD,),
+        editable=False,
+        hod_flag="can_approve_compensation",
+        fixed_note="HR is the one who raises the claim, so the Department Head always decides it.",
+        on_off_effect="HR cannot raise new holiday-work claims while it is off; claims already waiting can still be decided.",
+    ),
+    WorkflowDef(
         key="outpass",
         label="Gate Outpass",
         group="Requests",
@@ -522,6 +539,7 @@ ADAPTERS: dict[str, Adapter] = {
     "casual_leave": Adapter("CasualLeaveRequest", **_PLAIN),
     "outpass": Adapter("OutpassRequest", extra_filter={"source": "manual"}, **_PLAIN),
     "attendance_correction": Adapter("AttendanceOverrideRequest", **_PLAIN),
+    "holiday_work": Adapter("HolidayWorkClaim", **_PLAIN),
     "missing_punch": Adapter(
         "MissingPunchRequest", ("pending_hod", "pending_hr"), _project_hod_hr, _legacy_hod_hr_stamps
     ),

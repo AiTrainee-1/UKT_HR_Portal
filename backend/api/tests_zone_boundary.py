@@ -14,11 +14,18 @@ from django.test import TestCase
 from .models import (
     Employee, ShiftTemplate, EmployeeShiftAssignment, AttendanceLog,
     PayrollSettings, EmployeePermission, CompensationDayAnnouncement,
-    OvertimeRecord, CompensationLeaveCredit,
+    OvertimeRecord, CompensationLeaveCredit, CompensationConfig,
 )
 from .attendance_final import compute_day_record
 from .overtime import detect_overtime_for_month
 from .compensation_views import _compensation_summary_data
+
+
+def _enable_shift_detection():
+    """OT detection is governed by Settings -> Compensation now (migration 0119 carried the old ot_detection_enabled /
+    ot_threshold_minutes over). Type 2 needs MORE than shift_min_extra_minutes past the shift end, so 59 keeps the
+    old "60 minutes and up" these tests were written for."""
+    CompensationConfig.objects.update_or_create(pk=1, defaults={"shift_enabled": True, "shift_min_extra_minutes": 59})
 
 
 class ZoneBoundaryTests(TestCase):
@@ -307,6 +314,7 @@ class OvertimeDetectionTests(TestCase):
         self.settings.ot_detection_enabled = True
         self.settings.ot_threshold_minutes = 60
         self.settings.save()
+        _enable_shift_detection()
 
         self.shift = ShiftTemplate.objects.create(
             name="OT Test Shift", shift_type="staff",
@@ -343,8 +351,7 @@ class OvertimeDetectionTests(TestCase):
         self.assertEqual(rec.ot_minutes, 60)
 
     def test_disabled_setting_detects_nothing(self):
-        self.settings.ot_detection_enabled = False
-        self.settings.save()
+        CompensationConfig.objects.filter(pk=1).update(shift_enabled=False)
         d = date(2026, 4, 8)
         self._punch(d, time(9, 0), time(21, 0))
         compute_day_record(self.emp, d, settings=self.settings)
@@ -399,6 +406,7 @@ class CompensationSummaryTests(TestCase):
         self.settings.ot_detection_enabled = True
         self.settings.ot_threshold_minutes = 60
         self.settings.save()
+        _enable_shift_detection()
 
         self.shift = ShiftTemplate.objects.create(
             name="Summary Test Shift", shift_type="staff",
@@ -498,6 +506,7 @@ class CompensationMasterSwitchTests(TestCase):
         self.settings.ot_threshold_minutes = 60
         self.settings.attendance_mode = "strict"
         self.settings.save()
+        _enable_shift_detection()  # so the master switch, not an idle feature switch, is what keeps detection off
 
         self.shift = ShiftTemplate.objects.create(
             name="Master Switch Test Shift", shift_type="staff",

@@ -82,6 +82,10 @@ from .payroll import (
     OvertimeRecord,
     CompensationLeaveCredit,
     CompensationDayAnnouncement,
+    CompensationConfig,
+    CompensationRule,
+    HolidayWorkClaim,
+    CompensationLedger,
     ProductionShiftConfig,
     ProductionShiftSegment,
 )

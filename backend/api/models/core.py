@@ -282,6 +282,9 @@ class DepartmentManager(models.Model):
     can_approve_casual_leave = models.BooleanField(default=True, db_column="can_approve_casual_leave")
     can_approve_on_duty = models.BooleanField(default=True, db_column="can_approve_on_duty")
     can_approve_missing_punch = models.BooleanField(default=True, db_column="can_approve_missing_punch")
+    # Holiday / Sunday work compensation (approval_workflow key `holiday_work`). db_default: an old instance still
+    # running during a rolling deploy inserts rows without knowing this column.
+    can_approve_compensation = models.BooleanField(default=True, db_default=True, db_column="can_approve_compensation")
     is_active = models.BooleanField(default=True, db_column="is_active")
     notes = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")

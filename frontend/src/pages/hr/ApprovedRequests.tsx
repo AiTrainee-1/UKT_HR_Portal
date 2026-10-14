@@ -58,7 +58,8 @@ const writeTab = (tab: string) => {
 };
 
 /** Requests: every kind of request in the HRMS (leave, permission, casual leave, missing punch, on-duty, outpass, general
- *  requests, attendance corrections, resignations, advances) in one place, as sub-tabs, with who each is waiting for. */
+ *  requests, attendance corrections, Holiday / Sunday work, resignations, advances) in one place, as sub-tabs, with who each
+ *  is waiting for. */
 export default function ApprovedRequests() {
   const { toast } = useToast();
   const { user } = useAuth();

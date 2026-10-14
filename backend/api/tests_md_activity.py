@@ -380,7 +380,7 @@ class VocabularyGuardTests(SimpleTestCase):
     CALL = re.compile(r"\b(?:log_action|build_log_entry|_log)\(\s*request,\s*\"(\w+)\",\s*\"(\w+)\"", re.S)
     KNOWN_ACTIONS = {
         "login", "logout", "login_failed", "login_blocked", "create", "update", "delete", "export", "approve",
-        "reject", "upload", "restore", "backup", "announce", "redeem", "lock", "reset",
+        "reject", "upload", "restore", "backup", "announce", "assign", "redeem", "lock", "reset",
         "check",  # a device connection test (device_status_views.py): read-only, so routine, no sensitive rule
     }  # fmt: skip
 

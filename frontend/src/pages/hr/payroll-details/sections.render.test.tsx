@@ -620,6 +620,76 @@ describe("the days of the period", () => {
     expect(text(q("pd-attendance-empty"))).toContain("No day records were stored for this payroll");
     expect(q("pd-view-table")).toBeNull();
   });
+
+  // The details endpoint does not send the compensation marker today (payroll_insights.py builds a day from the stored
+  // breakdown, which has none), so the page draws it only when a day carries it: these days are the shape it would take.
+  describe("a day that used a compensation", () => {
+    const withMarkers = () => {
+      const base = staffDetails();
+      world.staff.set(
+        101,
+        staffDetails({
+          days: base.days.map((d) =>
+            d.date === "2026-10-13"
+              ? {
+                  ...d,
+                  compensationKind: "ot_allowance" as const,
+                  compensationMinutes: 30,
+                  compensationNote: "Arrived 09:42, inside the 30 min allowance.",
+                }
+              : d.date === "2026-10-22"
+                ? { ...d, compensationKind: "relaxation" as const, compensationNote: "0.5 shift relaxation applied." }
+                : d,
+          ),
+        }),
+      );
+    };
+
+    it("is marked in the calendar with a symbol, a screen-reader sentence and a legend", async () => {
+      withMarkers();
+      await openStaff();
+      const ot = cell("2026-10-13");
+      expect(ot.querySelector('[data-testid="compensation-symbol-ot_allowance"]')?.textContent).toBe("OT");
+      expect(ot.getAttribute("aria-label")).toBe(
+        "Tue, 13 Oct 2026: Late. OT allowance used (30 min): Arrived 09:42, inside the 30 min allowance. first in 09:42, last out 18:07. flagged: Late arrival",
+      );
+      expect(cell("2026-10-22").querySelector('[data-testid="compensation-symbol-relaxation"]')?.textContent).toBe(
+        "RX",
+      );
+      expect(cell("2026-10-01").querySelector('[data-testid^="compensation-symbol-"]')).toBeNull();
+      const legend = q("compensation-legend");
+      expect(legend).not.toBeNull();
+      expect(text(q("compensation-legend-ot_allowance"))).toContain("×1");
+      expect(text(q("compensation-legend-relaxation"))).toContain("×1");
+      expect(q("compensation-legend-birthday")).toBeNull();
+    });
+
+    it("is a chip with its note when the day is chosen, and a chip in the table", async () => {
+      withMarkers();
+      await openStaff();
+      click(cell("2026-10-13"));
+      const panel = must("pd-day-panel");
+      expect(text(panel.querySelector('[data-testid="compensation-chip-ot_allowance"]'))).toContain(
+        "OT allowance used (30 min)",
+      );
+      expect(text(panel.querySelector('[data-testid="compensation-note"]'))).toBe(
+        "Arrived 09:42, inside the 30 min allowance.",
+      );
+      click(q("pd-view-table"));
+      expect(text(must("pd-row-2026-10-13").querySelector('[data-testid="compensation-chip-ot_allowance"]'))).toContain(
+        "OT allowance used (30 min)",
+      );
+      expect(text(must("pd-row-2026-10-22").querySelector('[data-testid="compensation-chip-relaxation"]'))).toContain(
+        "Relaxation (compensation day)",
+      );
+      expect(must("pd-row-2026-10-01").querySelector('[data-testid^="compensation-chip-"]')).toBeNull();
+    });
+
+    it("leaves a payroll whose days carry no marker exactly as it was", async () => {
+      await openStaff();
+      expect(document.body.querySelector('[data-testid^="compensation-"]')).toBeNull();
+    });
+  });
 });
 
 describe("pay and deductions", () => {

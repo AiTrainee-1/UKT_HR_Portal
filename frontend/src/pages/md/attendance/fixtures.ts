@@ -315,6 +315,7 @@ export const OVERTIME: AttendanceOvertime = {
   decisions: {
     announcedPay: { days: 1, hours: 2 },
     announcedRelaxation: { days: 1, hours: 3 },
+    allowance: { days: 1, hours: 1 },
     detected: { days: 1, hours: 1.5 },
     rejected: { days: 1, hours: 1 },
   },

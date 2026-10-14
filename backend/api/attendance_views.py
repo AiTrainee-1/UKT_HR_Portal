@@ -15,10 +15,10 @@ from .user_settings import settings_for
 from .branch_scope import get_branch_scope, scope_to_branch
 from .geo_attendance_views import source_label
 from .arrival_rules import ZONE_LATE, limits_for as arrival_limits_for, zone_of as arrival_zone_of
-from .attendance_final import permission_flags_json
+from .attendance_final import compensation_marker_json, permission_flags_json
 from .clock import ist_today
 from .models import (
-    Attendance, AttendanceLog, Employee, EmployeePermission, EmployeeShiftAssignment,
+    Attendance, AttendanceDayRecord, AttendanceLog, Employee, EmployeePermission, EmployeeShiftAssignment,
     LeaveRequest, DailyShiftLog, MonthlyShiftSummary, Holiday,
     ProductionShiftConfig, ProductionShiftSegment, PayrollSettings,
 )
@@ -90,8 +90,13 @@ def _half_day_leave_slots(d: date_type) -> dict[int, str]:
 
 def _late_count(d: date_type, allowed_ids: set[int] | None = None) -> int:
     """Employees whose first punch fell in the Late window: after their shift start + grace, but not so late that
-    it is a quarter-shift or second-half arrival (those are not Late - see arrival_rules.py). Permissions are
-    not looked at here, as before; the day records themselves carry the exact verdict."""
+    it is a quarter-shift or second-half arrival (those are not Late - see arrival_rules.py).
+
+    That is a judgement of the raw punch against the plain shift. Where the attendance engine has already judged the
+    day (an AttendanceDayRecord exists) ITS verdict decides instead: it knows what a raw punch cannot - a company-
+    announced late-in window, a Type 1 next-day allowance, a paid birthday, an approved permission, a compensation day -
+    so this card never shows a Late that the day records, the late pool and payroll do not have. A day not judged yet
+    keeps the raw verdict."""
     settings = PayrollSettings.get()
     logs = (
         AttendanceLog.objects
@@ -103,7 +108,7 @@ def _late_count(d: date_type, allowed_ids: set[int] | None = None) -> int:
         if log.employee_id not in first_punch:
             first_punch[log.employee_id] = log.punch_time
 
-    late = 0
+    late_ids = []
     for emp_id, pt in first_punch.items():
         if allowed_ids is not None and emp_id not in allowed_ids:
             continue
@@ -122,8 +127,13 @@ def _late_count(d: date_type, allowed_ids: set[int] | None = None) -> int:
             # Whole minutes: a punch at 9:10:20 against a 9:10 limit is on time, as everywhere else.
             limits = arrival_limits_for(asgn.shift, settings)
             if arrival_zone_of(pt.hour * 3600 + pt.minute * 60 + pt.second, limits, False) == ZONE_LATE:
-                late += 1
-    return late
+                late_ids.append(emp_id)
+    if not late_ids:
+        return 0
+    judged = dict(
+        AttendanceDayRecord.objects.filter(date=d, employee_id__in=late_ids).values_list("employee_id", "is_late")
+    )
+    return sum(1 for emp_id in late_ids if judged.get(emp_id, True))
 
 
 # ── Summary ──────────────────────────────────────────────────────────────────
@@ -229,7 +239,7 @@ def attendance_company_summary(request: Request) -> Response:
     compute_day_record with no prefetch at all across a ~230-employee roster
     measured at ~57s per request; this keeps it to a small, fixed number of
     bulk queries regardless of roster size."""
-    from .attendance_final import compute_day_record
+    from .attendance_final import compensation_prefetch_for_day, compute_day_record
     from .models import AttendanceDayRecord, EmployeeShiftAssignment
 
     d = _today()
@@ -279,6 +289,9 @@ def attendance_company_summary(request: Request) -> Response:
     ).order_by("updated_at"):
         permissions_by_emp.setdefault(p.employee_id, {}).setdefault(p.date, []).append(p)
 
+    # The OT / Compensation switches, rules, announcements and relaxation for the day: once for the whole roster.
+    comp_prefetch = compensation_prefetch_for_day(ps, d, emp_ids)
+
     present = half_shift = absent = on_leave = late = 0
     total_shifts_earned = Decimal("0")
     for emp in employees:
@@ -290,6 +303,7 @@ def attendance_company_summary(request: Request) -> Response:
             "manual_attendance_dates": manual_present_by_emp.get(emp.id, set()),
             "night_logs_by_date": emp_logs_by_date,
             "approved_permissions_by_date": permissions_by_emp.get(emp.id, {}),
+            **comp_prefetch,
         }
         rec = compute_day_record(
             emp, d,
@@ -422,6 +436,44 @@ def attendance_live_feed(request: Request) -> Response:
 
 # ── Daily employee list ───────────────────────────────────────────────────────
 
+def _daily_compensation_records(ps, d: date_type, employees, logs_by_emp, leave_emp_ids) -> dict:
+    """{employee_id: AttendanceDayRecord} of the STAFF whose day `d` compensation counts whatever the punches say: a paid
+    birthday leave, or a relaxation HR assigned / redeemed for that date. The daily list is punch-based, so without this
+    such an employee would read Absent. Master switch off = nothing is queried or computed; on, the context is built once
+    and only the few affected employees go through the day engine (the same compute_day_record every other screen uses),
+    so the wording and the numbers can never differ from the Report Log or the history dialog."""
+    if not getattr(ps, "compensation_feature_enabled", False):
+        return {}
+    from . import compensation_engine as comp
+    from .attendance_final import compensation_prefetch_for_day, compute_day_record
+
+    staff = [e for e in employees if e.employment_type == "staff"]
+    if not staff:
+        return {}
+    prefetch = compensation_prefetch_for_day(ps, d, [e.id for e in staff])
+    ctx = prefetch["compensation_ctx"]
+    holiday_dates = {d} if Holiday.objects.filter(date=d).exists() else set()
+    half_slots = None
+    records: dict = {}
+    for emp in staff:
+        if not (comp.birthday_applies(emp, d, ctx) or comp.relaxation_entries(emp, d, ctx)):
+            continue
+        if half_slots is None:
+            half_slots = _half_day_leave_slots(d)
+        rec = compute_day_record(
+            emp, d,
+            punch_logs=logs_by_emp.get(emp.id, []),
+            settings=ps,
+            leave_dates={d} if emp.id in leave_emp_ids else set(),
+            holiday_dates=holiday_dates,
+            half_day_leave_dates={d: half_slots[emp.id]} if emp.id in half_slots else None,
+            prefetch=prefetch,
+        )
+        if rec.compensation_kind:
+            records[emp.id] = rec
+    return records
+
+
 @api_view(["GET"])
 @require_hr
 def attendance_daily(request: Request) -> Response:
@@ -447,9 +499,13 @@ def attendance_daily(request: Request) -> Response:
     qs = scope_to_branch(qs, request)
     if emp_type:
         qs = qs.filter(employment_type=emp_type)
+    employees = list(qs)
+
+    # A paid birthday leave / a relaxation HR assigned counts the day whatever the punches say (see the helper).
+    comp_recs = _daily_compensation_records(settings_for(request), d, employees, logs_by_emp, leave_emp_ids)
 
     results = []
-    for emp in qs:
+    for emp in employees:
         emp_logs = logs_by_emp.get(emp.id, [])
         manual = manual_by_emp.get(emp.id)
 
@@ -481,6 +537,11 @@ def attendance_daily(request: Request) -> Response:
             status = "absent"
             source = None
 
+        comp_rec = comp_recs.get(emp.id)
+        if comp_rec is not None and status == "absent":
+            # counted by compensation although nobody punched (paid birthday leave / relaxation): not an absence
+            status = "on_leave"
+
         results.append({
             "employeeId": emp.id,
             "employeeCode": emp.employee_code,
@@ -494,6 +555,7 @@ def attendance_daily(request: Request) -> Response:
             "source": source,
             "sourceLabel": source_label(source) if source else None,
             "totalPunches": len(emp_logs),
+            **compensation_marker_json(comp_rec),
         })
 
     return Response(results)
@@ -1208,7 +1270,7 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
     counts. View-only aside from compute_day_record's own normal persistence
     side effect (same as every other page that reads attendance).
     """
-    from .attendance_final import compute_day_record
+    from .attendance_final import compensation_prefetch_for_day, compute_day_record
     from .models import AttendanceDayRecord, EmployeeShiftAssignment
 
     try:
@@ -1272,6 +1334,8 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
     ).order_by("updated_at"):
         permissions_by_emp.setdefault(p.employee_id, {}).setdefault(p.date, []).append(p)
 
+    comp_prefetch = compensation_prefetch_for_day(settings, d, emp_ids)
+
     rows = []
     for emp in employees:
         emp_logs_by_date = logs_by_emp_date.get(emp.id, {})
@@ -1281,6 +1345,7 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
             "manual_attendance_dates": manual_present_by_emp.get(emp.id, set()),
             "night_logs_by_date": emp_logs_by_date,
             "approved_permissions_by_date": permissions_by_emp.get(emp.id, {}),
+            **comp_prefetch,
         }
         rec = compute_day_record(
             emp, d,
@@ -1337,7 +1402,7 @@ def attendance_report_log(request: Request) -> Response:
     side effect, same as every other page that reads attendance).
     """
     from .models import CasualLeaveRequest, EmployeePermission
-    from .attendance_final import compute_month_records, month_summary_from_records
+    from .attendance_final import compensation_prefetch_for_range, compute_month_records, month_summary_from_records
     from .shift_engine import _get_shift_for_date
 
     settings = settings_for(request)
@@ -1469,9 +1534,13 @@ def attendance_report_log(request: Request) -> Response:
     ):
         perm_counts[row["employee_id"]] = row["n"]
 
+    # The company-wide compensation facts, read once for the whole roster instead of once per employee.
+    comp_prefetch = compensation_prefetch_for_range(
+        settings, date_type(y, m, 1), date_type(y, m, calendar.monthrange(y, m)[1])
+    )
     employees = []
     for emp in emps:
-        records = compute_month_records(emp, y, m, settings)
+        records = compute_month_records(emp, y, m, settings, comp_prefetch=comp_prefetch)
         summary = month_summary_from_records(records)
         employees.append(_month_summary_row(emp, summary, cl_counts[emp.id], perm_counts[emp.id]))
 
@@ -1502,7 +1571,9 @@ def attendance_report_log_sheet(request: Request) -> Response:
     at 31 days so the payload stays bounded regardless of how the frontend
     drives it.
     """
-    from .attendance_final import compute_range_records, half_period, month_summary_from_records
+    from .attendance_final import (
+        compensation_prefetch_for_range, compute_range_records, half_period, month_summary_from_records,
+    )
 
     date_from_param = request.query_params.get("dateFrom")
     date_to_param = request.query_params.get("dateTo")
@@ -1547,10 +1618,13 @@ def attendance_report_log_sheet(request: Request) -> Response:
     # Which half a Half Shift day was worked comes from the day record itself (attendance_final.half_period):
     # the arrival timeline says whether the first half was made (see arrival_rules.py).
 
+    # The company-wide compensation facts, read once for the whole grid instead of once per employee.
+    comp_prefetch = compensation_prefetch_for_range(settings, date_from, date_to)
+
     employees = []
     strength_by_date: dict = defaultdict(int)
     for emp in emps:
-        records = compute_range_records(emp, date_from, date_to, settings)
+        records = compute_range_records(emp, date_from, date_to, settings, comp_prefetch=comp_prefetch)
         by_date = {r.date: r for r in records}
         days = []
         for d in dates:
@@ -1560,7 +1634,11 @@ def attendance_report_log_sheet(request: Request) -> Response:
                 continue
             half_day_period = None
             if r.status == "half_shift":
-                half_day_period = "morning" if half_period(r, settings) == "morning" else "afternoon"
+                period = half_period(r, settings)
+                # No first punch (a relaxation topped an absent day up, a day set by hand) says nothing about which half
+                # was worked: null, not a made-up "afternoon" (clients that do not check compensationKind first would
+                # show "Half day (afternoon)").
+                half_day_period = None if period is None else ("morning" if period == "morning" else "afternoon")
             days.append({
                 "date": d.isoformat(),
                 "status": r.status,
@@ -1573,6 +1651,9 @@ def attendance_report_log_sheet(request: Request) -> Response:
                 "firstPunch": r.first_punch.strftime("%H:%M") if r.first_punch else None,
                 "lastPunch": r.last_punch.strftime("%H:%M") if r.last_punch else None,
                 "shiftsEarned": str(r.shifts_earned) if r.shifts_earned is not None else None,
+                # The compensation keys only on a day that has a marker (a missing key reads as null): three null keys on
+                # every cell of a 230 x 31 grid are +0.5 MB of nothing.
+                **(compensation_marker_json(r) if r.compensation_kind else {}),
             })
             if r.status in ("present", "half_shift"):
                 strength_by_date[d.isoformat()] += 1

@@ -86,6 +86,7 @@ MODULE_TREE: list[dict] = [
         {"key": "settings.whatsapp", "label": "WhatsApp"},
         {"key": "settings.backup", "label": "Backup"},
         {"key": "settings.themes", "label": "Themes"},
+        {"key": "settings.compensation", "label": "Compensation"},
     ]},
 ]
 
@@ -285,6 +286,9 @@ URL_MODULE_MAP: dict[str, str] = {
     "payroll/production": "production_payroll",
     "payroll": "payroll",
     "compensation": "compensation",
+    # Settings -> Compensation tab: the rules and switches of the OT / Compensation features. Longest prefix wins, so this
+    # beats "compensation" above; "compensation/config" (the read-only copy for the page) stays under "compensation".
+    "compensation/settings": "settings.compensation",
     "bonus": "bonus",
 
     "department-managers": "user_management",

@@ -101,7 +101,7 @@ test("HR Reports holds Employee Confo Details: the requested columns, an employe
   await loginAsHr(page);
   await page.goto("/hr/reports");
   await expect(page.getByRole("heading", { name: "HR Reports", exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: /HR Reports\s*1/ })).toBeVisible(); // the chip row
+  await expect(page.getByRole("link", { name: /HR Reports\s*2/ })).toBeVisible(); // the chip row
   await page.getByRole("link", { name: /Employee Confo Details/ }).click();
   await expect(page).toHaveURL(/report=employee-confo-details/);
 
@@ -246,4 +246,101 @@ test("the existing Attendance Report Log page still works", async ({ page }) => 
   await loginAsHr(page);
   await page.goto("/hr/attendance/report-log");
   await expect(page.getByText(/Report Log|Monthly Report/i).first()).toBeVisible();
+});
+
+test("Production Daily Punches: a date shows every punch to the second, a week is date-wise, both downloads work", async ({
+  page,
+}) => {
+  await loginAsHr(page);
+  const t = await token(page);
+  const call = (method: string, url: string, data?: unknown) =>
+    page.request.fetch(url, { method, headers: auth(t), data });
+  const testPeople = async () =>
+    ((await (await call("GET", "/api/employees?search=PP-")).json()) as { id: number; employeeCode: string }[]).filter(
+      (e) => e.employeeCode.startsWith("PP-"),
+    );
+  const clean = async () => {
+    for (const e of await testPeople()) await call("DELETE", `/api/employees/${e.id}`);
+  };
+
+  await clean();
+  try {
+    const branches = (await (await call("GET", "/api/branches")).json()) as { id: number }[];
+    for (const [code, first] of [
+      ["PP-1", "Alpha"],
+      ["PP-2", "Beta"],
+    ]) {
+      const res = await call("POST", "/api/employees", {
+        employeeCode: code,
+        firstName: first,
+        lastName: "Puncher",
+        phone: "9000000088",
+        employmentType: "production",
+        branchId: branches[0].id,
+        salaryType: "monthly",
+      });
+      expect(res.status(), await res.text()).toBe(201);
+    }
+    const ids = new Map((await testPeople()).map((e) => [e.employeeCode, e.id]));
+    const punch = async (code: string, date: string, time: string) => {
+      const res = await call("POST", "/api/attendance/manual", {
+        employeeId: ids.get(code),
+        date,
+        punchTime: time,
+        punchType: "IN",
+      });
+      expect(res.status(), await res.text()).toBe(201);
+    };
+    for (const time of ["08:00", "12:00", "13:00", "17:30"]) await punch("PP-1", "2026-03-02", time);
+    for (const time of ["08:10", "17:20"]) await punch("PP-1", "2026-03-03", time);
+    await punch("PP-2", "2026-03-02", "08:05");
+
+    // one date: every punch of each production employee, to the second, with the punch count
+    const base = "/hr/reports?report=production-daily-punches&run=1";
+    await page.goto(`${base}&dateFrom=2026-03-02&dateTo=2026-03-02`);
+    await expect(page.locator("thead th")).toHaveText([
+      "Employee Name",
+      "Employee Code",
+      "Designation",
+      "Department",
+      "Date",
+      "Day",
+      "Total Punch Count",
+      "All Punches (exact times)",
+    ]);
+    const alpha = page.getByRole("row", { name: /Alpha Puncher/ });
+    await expect(alpha).toContainText("08:00:00, 12:00:00, 13:00:00, 17:30:00");
+    await expect(alpha).toContainText("Mon");
+    await expect(page.getByRole("row", { name: /Beta Puncher/ })).toContainText("08:05:00");
+    await expect(page.getByRole("row", { name: /\(PP-1\) total/ })).toHaveCount(0); // one line per employee: no total lines
+
+    // a week: each employee's days in date order, then a total line
+    await page.goto(`${base}&dateFrom=2026-03-02&dateTo=2026-03-08`);
+    await expect(page.getByRole("row", { name: /Alpha Puncher \(PP-1\) total/ })).toContainText("2 days with punches");
+    await expect(page.getByRole("row", { name: /Beta Puncher \(PP-2\) total/ })).toContainText("1 day with punches");
+    await expect(page.getByRole("row", { name: /Alpha Puncher.*Tue/ })).toContainText("08:10:00, 17:20:00");
+
+    // the quick ranges are the weekly / monthly filters; the day is picked with the two date boxes
+    await page.goto("/hr/reports?report=production-daily-punches");
+    await expect(page.getByRole("button", { name: "Today" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "This week" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "This month" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Last month" })).toBeVisible();
+
+    await page.goto(`${base}&dateFrom=2026-03-02&dateTo=2026-03-08`);
+    await expect(page.getByTestId("report-applied-filters")).toContainText("Mar-2026");
+    const [xlsx] = await Promise.all([page.waitForEvent("download"), page.getByTestId("report-download-xlsx").click()]);
+    expect(xlsx.suggestedFilename()).toMatch(/^production_daily_punches_.*\.xlsx$/);
+    const [pdf] = await Promise.all([page.waitForEvent("download"), page.getByTestId("report-download-pdf").click()]);
+    expect(pdf.suggestedFilename()).toMatch(/^production_daily_punches_.*\.pdf$/);
+
+    // more than a month is explained, not sent
+    await page.goto("/hr/reports?report=production-daily-punches");
+    await page.getByLabel("From date").fill("2026-01-01");
+    await page.getByLabel("To date").fill("2026-03-08");
+    await page.getByTestId("report-show").click();
+    await expect(page.getByTestId("report-form-error")).toContainText(/31/);
+  } finally {
+    await clean();
+  }
 });

@@ -19,6 +19,7 @@ from openpyxl import load_workbook
 
 from .jwt_utils import sign_token
 from .models import (
+    AttendanceLog,
     Branch,
     Department,
     DepartmentManager,
@@ -242,7 +243,7 @@ class CatalogAndAccessTests(_World):
         body = self.client.get("/api/reports/catalog", **hdr(self.admin)).json()
         group = next(c for c in body["categories"] if c["id"] == "hr")
         self.assertEqual(group["label"], "HR Reports")
-        self.assertEqual(group["count"], 1)
+        self.assertEqual(group["count"], 2)  # Employee Confo Details and Production Daily Punches
         ids = [c["id"] for c in body["categories"]]
         self.assertEqual(ids.index("hr"), ids.index("employees") + 1)  # sits beside Employees
         report = next(r for r in body["reports"] if r["id"] == RID)
@@ -278,7 +279,12 @@ class CatalogAndAccessTests(_World):
         for who in (self.employees_user, self.plain_user):
             catalog = self.client.get("/api/reports/catalog", **hdr(who)).json()
             self.assertNotIn(RID, [r["id"] for r in catalog["reports"]], who.username)
-            self.assertNotIn("hr", [c["id"] for c in catalog["categories"]], who.username)
+            hr_group = [c for c in catalog["categories"] if c["id"] == "hr"]
+            if who is self.employees_user:  # may see the attendance-gated punches report, never the salary one
+                self.assertEqual([c["count"] for c in hr_group], [1], who.username)
+                self.assertEqual([r["id"] for r in catalog["reports"] if r["category"] == "hr"], [PID], who.username)
+            else:
+                self.assertEqual(hr_group, [], who.username)
             r = self.client.get(f"/api/reports/run/{RID}", **hdr(who))
             self.assertEqual(r.status_code, 403, who.username)
             self.assertEqual(r.json()["error"], "report_forbidden")
@@ -631,5 +637,358 @@ class CostAndSafetyTests(_World):
     def test_a_row_over_the_limit_is_refused_for_export_not_silently_cut(self):
         with patch("api.reporting.runner.XLSX_ROW_LIMIT", 3):
             r = self.client.get(f"/api/reports/export/{RID}", {"fmt": "xlsx"}, **hdr(self.admin))
+        self.assertEqual(r.status_code, 413)
+        self.assertEqual(r.json()["error"], "too_many_rows")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Production Daily Punches
+# ═════════════════════════════════════════════════════════════════════════════
+
+PID = "production-daily-punches"
+PUNCH_LABELS = [
+    "Employee Name",
+    "Employee Code",
+    "Designation",
+    "Department",
+    "Date",
+    "Day",
+    "Total Punch Count",
+    "All Punches (exact times)",
+]
+PUNCH_KEYS = ["employeeName", "employeeCode", "designation", "department", "date", "day", "punchCount", "punches"]
+D29 = date(2026, 9, 29)  # Tuesday = today
+D28 = date(2026, 9, 28)  # Monday
+D27 = date(2026, 9, 27)  # Sunday, nobody punched
+
+
+def _punch(emp, day, *times, source="biometric:dev1"):
+    for hh, mm, ss in times:
+        AttendanceLog.objects.create(
+            employee=emp, date=day, punch_time=time(hh, mm, ss), punch_type="IN", source=source
+        )
+
+
+class _PunchWorld(TestCase):
+    """Production people in two units, with one day of punches that has every shape the report meets."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.b1 = Branch.objects.create(name="Unit 1", code="U1")
+        cls.b2 = Branch.objects.create(name="Unit 2", code="U2")
+        cls.d_st = Department.objects.create(name="STITCHING", branch=cls.b1)
+        cls.d_pk = Department.objects.create(name="PACKING", branch=cls.b2)
+        cls.des_op = Designation.objects.create(title="Operator", department=cls.d_st, level="junior")
+        cls.des_hp = Designation.objects.create(title="Helper", department=cls.d_st, level="junior")
+
+        def mk(code, first, last, **kw):
+            kw.setdefault("employment_type", "production")
+            kw.setdefault("branch", cls.b1)
+            kw.setdefault("department", cls.d_st)
+            kw.setdefault("designation", cls.des_op)
+            return Employee.objects.create(employee_code=code, first_name=first, last_name=last, **kw)
+
+        cls.p1 = mk("P1", "Priya", "Sharma")
+        cls.p2 = mk("P2", "Ravi", "Kumar", designation=cls.des_hp)
+        cls.p10 = mk("P10", "Sita", "Devi", branch=cls.b2, department=cls.d_pk)
+        cls.p3 = mk("P3", "Old", "Hand", status="inactive")
+        cls.p4 = mk("P4", "Quiet", "Qadir")  # active, never punches
+        cls.s1 = mk("S1", "Staff", "Sam", employment_type="staff")
+
+        punch = _punch
+        # Today: Priya four punches, entered out of order; Ravi two; Sita one (odd); the ex-employee two; staff two
+        punch(cls.p1, D29, (17, 2, 59), (7, 58, 12), (13, 0, 40), (12, 1, 5))
+        punch(cls.p2, D29, (8, 5, 0), (17, 0, 30))
+        punch(cls.p10, D29, (8, 0, 0))
+        punch(cls.p3, D29, (8, 0, 0), (17, 0, 0))
+        punch(cls.s1, D29, (9, 0, 0), (18, 0, 0))
+        # Yesterday: Priya four, Ravi three (odd), manual and geo sources count too
+        punch(cls.p1, D28, (8, 0, 0), (12, 0, 0), (13, 0, 0), (17, 0, 0))
+        punch(cls.p2, D28, (8, 0, 0), (12, 0, 0), source="manual:hr")
+        punch(cls.p2, D28, (17, 30, 0), source="geo:auto")
+        # Far outside any week: must stay out of a daily / weekly view
+        punch(cls.p1, date(2026, 8, 1), (8, 0, 0), (17, 0, 0))
+
+        cls.admin = HRUser.objects.create(username="hr_admin", password_hash="x", is_super_admin=True)
+
+        def user(name, perms, **kw):
+            role = Role.objects.create(name=name, permissions={"reports": "view", **perms})
+            return HRUser.objects.create(username=name, password_hash="x", role=role, **kw)
+
+        cls.attendance_user = user("hr_att", {"attendance": "view"})
+        cls.salary_user = user("hr_sal", {"salary": "view", "payroll": "view"})
+        cls.branch_user = user("hr_branch1", {"attendance": "view"}, branch=cls.b1)
+
+    def setUp(self):
+        p = patch("api.reporting.filters.ist_today", return_value=TODAY)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def get(self, user=None, expect=200, **params):
+        r = self.client.get(f"/api/reports/run/{PID}", params, **hdr(user or self.admin))
+        self.assertEqual(r.status_code, expect, r.content[:400])
+        return r.json()
+
+    def export(self, fmt, user=None, expect=200, **params):
+        r = self.client.get(f"/api/reports/export/{PID}", {"fmt": fmt, **params}, **hdr(user or self.admin))
+        self.assertEqual(r.status_code, expect, r.content[:400])
+        return r
+
+    @staticmethod
+    def data(body) -> list[dict]:
+        return [r for r in body["rows"] if not r.get("_kind")]
+
+    @staticmethod
+    def totals(body) -> list[dict]:
+        return [r for r in body["rows"] if r.get("_kind") == "subtotal"]
+
+
+class PunchCatalogTests(_PunchWorld):
+    def test_it_is_registered_in_the_hr_reports_group_with_the_requested_columns(self):
+        spec = next(s for s in registry.all_specs() if s.id == PID)
+        self.assertEqual(registry.LOAD_ERRORS, {})
+        self.assertEqual((spec.title, spec.category, spec.modules), ("Production Daily Punches", "hr", ("attendance",)))
+        self.assertEqual([c.label for c in spec.columns], PUNCH_LABELS)
+        self.assertEqual([c.key for c in spec.columns], PUNCH_KEYS)
+        self.assertTrue(set(spec.modules) <= set(all_module_keys()))
+
+    def test_the_catalog_offers_a_date_range_no_wider_than_a_month_and_the_scope_filters(self):
+        body = self.client.get("/api/reports/catalog", **hdr(self.admin)).json()
+        report = next(r for r in body["reports"] if r["id"] == PID)
+        self.assertEqual(report["category"], "hr")
+        self.assertEqual(
+            [(f["key"], f["kind"]) for f in report["filters"]],
+            [
+                ("dateRange", "dateRange"),
+                ("branch", "branch"),
+                ("department", "department"),
+                ("designation", "designation"),
+                ("employee", "employee"),
+                ("employeeStatus", "employeeStatus"),
+            ],
+        )
+        date_filter = next(f for f in report["filters"] if f["key"] == "dateRange")
+        self.assertEqual((date_filter["label"], date_filter["maxDays"]), ("Date", 31))
+        self.assertEqual(date_filter["default"]["dateFrom"], date_filter["default"]["dateTo"])  # opens on one day
+        status = next(f for f in report["filters"] if f["key"] == "employeeStatus")
+        self.assertEqual(status["default"], "all")
+
+    def test_attendance_access_opens_it_and_salary_access_alone_does_not(self):
+        for who in (self.attendance_user, self.admin):
+            self.assertEqual(self.get(user=who)["rows"][0]["employeeCode"], "P1")
+            self.assertEqual(self.export("xlsx", user=who).status_code, 200)
+        catalog = self.client.get("/api/reports/catalog", **hdr(self.salary_user)).json()
+        self.assertNotIn(PID, [r["id"] for r in catalog["reports"]])
+        self.get(user=self.salary_user, expect=403)
+        self.export("pdf", user=self.salary_user, expect=403)
+
+    def test_it_needs_an_hr_login(self):
+        self.assertEqual(self.client.get(f"/api/reports/run/{PID}").status_code, 401)
+
+
+class PunchDayTests(_PunchWorld):
+    def test_a_single_day_lists_every_punch_of_each_production_employee_to_the_second(self):
+        body = self.get(dateFrom="2026-09-29", dateTo="2026-09-29")
+        rows = {r["employeeCode"]: r for r in body["rows"]}
+        self.assertEqual(list(rows), ["P1", "P2", "P3", "P10"])  # natural code order; P4 never punched
+        self.assertEqual(
+            rows["P1"],
+            {
+                "employeeName": "Priya Sharma",
+                "employeeCode": "P1",
+                "designation": "Operator",
+                "department": "STITCHING",
+                "date": "2026-09-29",
+                "day": "Tue",
+                "punches": "07:58:12, 12:01:05, 13:00:40, 17:02:59",  # in the order they were made, not entered
+                "punchCount": 4,
+            },
+        )
+        self.assertEqual(
+            (rows["P2"]["designation"], rows["P2"]["punches"], rows["P2"]["punchCount"]),
+            ("Helper", "08:05:00, 17:00:30", 2),
+        )
+        self.assertEqual((rows["P10"]["department"], rows["P10"]["punchCount"]), ("PACKING", 1))
+        self.assertEqual(self.totals(body), [])  # one line per employee: no per-person total lines
+        self.assertEqual(body["totals"]["punchCount"], 9)
+
+    def test_the_default_is_today(self):
+        self.assertEqual(
+            [(r["employeeCode"], r["date"]) for r in self.data(self.get())],
+            [("P1", "2026-09-29"), ("P2", "2026-09-29"), ("P3", "2026-09-29"), ("P10", "2026-09-29")],
+        )
+
+    def test_staff_never_appear_even_when_asked_for_by_name(self):
+        self.assertNotIn("S1", [r["employeeCode"] for r in self.data(self.get())])
+        body = self.get(employeeIds=str(self.s1.id))
+        self.assertEqual(self.data(body), [])
+
+    def test_the_cards_count_what_is_shown(self):
+        cards_ = cards(self.get())
+        self.assertEqual(cards_["Production employees with punches"], 4)
+        self.assertEqual(cards_["Employee-days with punches"], 4)
+        self.assertEqual(cards_["Total punches"], 4 + 2 + 1 + 2)
+        self.assertEqual(cards_["Days with an odd punch count"], 1)  # Sita's single punch
+        self.assertEqual(cards_["Active with no punches"], 1)  # Quiet Qadir; the ex-employee is not counted
+
+    def test_an_empty_day_is_an_empty_report_not_an_error(self):
+        body = self.get(dateFrom="2026-09-27", dateTo="2026-09-27")
+        self.assertEqual(self.data(body), [])
+        self.assertEqual(cards(body)["Total punches"], 0)
+        self.assertEqual(cards(body)["Active with no punches"], 4)
+
+    def test_the_notes_say_how_the_punches_are_read(self):
+        text = " ".join(self.get()["notes"])
+        self.assertIn("One line per employee for 29-Sep-2026", text)
+        self.assertIn("exact time (hh:mm:ss)", text)
+        self.assertIn("calendar date the device stamped", text)
+        self.assertIn("1 active production employee(s) made no punch", text)
+
+
+class PunchRangeTests(_PunchWorld):
+    def test_a_week_is_date_wise_for_each_employee_with_a_total_line(self):
+        body = self.get(dateFrom="2026-09-28", dateTo="2026-09-29")
+        shown = [(r.get("employeeCode"), r.get("date"), r.get("punchCount"), r.get("_kind")) for r in body["rows"]]
+        self.assertEqual(
+            shown[:7],
+            [
+                ("P1", "2026-09-28", 4, None),
+                ("P1", "2026-09-29", 4, None),
+                (None, None, 8, "subtotal"),
+                ("P2", "2026-09-28", 3, None),
+                ("P2", "2026-09-29", 2, None),
+                (None, None, 5, "subtotal"),
+                ("P3", "2026-09-29", 2, None),
+            ],
+        )
+        total_line = self.totals(body)[0]
+        self.assertEqual(total_line["employeeName"], "Priya Sharma (P1) total")
+        self.assertEqual(total_line["punches"], "2 days with punches")
+        self.assertEqual(self.totals(body)[2]["punches"], "1 day with punches")  # singular (P3)
+        self.assertEqual([r["day"] for r in self.data(body)[:2]], ["Mon", "Tue"])
+
+    def test_the_grand_total_does_not_count_the_total_lines_twice(self):
+        body = self.get(dateFrom="2026-09-28", dateTo="2026-09-29")
+        self.assertEqual(body["totals"]["punchCount"], sum(r["punchCount"] for r in self.data(body)))
+        self.assertEqual(cards(body)["Total punches"], body["totals"]["punchCount"])
+
+    def test_every_source_counts(self):
+        body = self.get(dateFrom="2026-09-28", dateTo="2026-09-28")
+        ravi = next(r for r in self.data(body) if r["employeeCode"] == "P2")
+        self.assertEqual((ravi["punches"], ravi["punchCount"]), ("08:00:00, 12:00:00, 17:30:00", 3))  # manual + geo too
+
+    def test_days_with_no_punch_are_not_listed(self):
+        body = self.get(dateFrom="2026-09-27", dateTo="2026-09-29")
+        self.assertNotIn("2026-09-27", [r.get("date") for r in body["rows"]])
+
+    def test_the_month_view_is_the_same_shape(self):
+        body = self.get(dateFrom="2026-09-01", dateTo="2026-09-30")
+        self.assertEqual(len(self.data(body)), 6)  # P1 x2, P2 x2, P3, P10 and nothing from August
+        self.assertEqual(len(self.totals(body)), 4)
+        self.assertIn("Date-wise breakdown for 01-Sep-2026 to 30-Sep-2026", " ".join(body["notes"]))
+
+    def test_a_range_wider_than_a_month_is_a_400_naming_the_field(self):
+        r = self.client.get(
+            f"/api/reports/run/{PID}", {"dateFrom": "2026-08-01", "dateTo": "2026-09-29"}, **hdr(self.admin)
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json().get("field"), "dateTo")
+        self.assertIn("max 31", r.json()["message"])
+
+    def test_a_bad_date_is_a_400_never_a_500(self):
+        for params in (
+            {"dateFrom": "nope", "dateTo": "2026-09-29"},
+            {"dateFrom": "2026-09-29", "dateTo": "2026-09-01"},
+        ):
+            r = self.client.get(f"/api/reports/run/{PID}", params, **hdr(self.admin))
+            self.assertEqual(r.status_code, 400, params)
+
+
+class PunchFilterTests(_PunchWorld):
+    def test_the_status_filter_defaults_to_everybody_so_a_leaver_is_not_hidden(self):
+        self.assertIn("P3", [r["employeeCode"] for r in self.data(self.get())])
+        self.assertNotIn("P3", [r["employeeCode"] for r in self.data(self.get(employeeStatus="active"))])
+        self.assertEqual([r["employeeCode"] for r in self.data(self.get(employeeStatus="inactive"))], ["P3"])
+
+    def test_department_designation_branch_and_employee_filters_narrow_the_list(self):
+        codes_ = lambda **p: [r["employeeCode"] for r in self.data(self.get(**p))]  # noqa: E731
+        self.assertEqual(codes_(departmentIds=str(self.d_pk.id)), ["P10"])
+        self.assertEqual(codes_(designationIds=str(self.des_hp.id)), ["P2"])
+        self.assertEqual(codes_(branchIds=str(self.b2.id)), ["P10"])
+        self.assertEqual(codes_(employeeIds=f"{self.p1.id},{self.p2.id}"), ["P1", "P2"])
+
+    def test_a_branch_user_sees_only_their_own_branch_and_cannot_widen_it(self):
+        mine = [r["employeeCode"] for r in self.data(self.get(user=self.branch_user))]
+        self.assertEqual(mine, ["P1", "P2", "P3"])
+        widened = self.get(user=self.branch_user, branchIds=str(self.b2.id))
+        self.assertEqual(self.data(widened), [])
+        self.assertNotIn("P10", [r["employeeCode"] for r in widened["rows"]])
+
+
+class PunchExportAndSafetyTests(_PunchWorld):
+    def test_excel_carries_the_same_columns_and_rows_as_the_screen(self):
+        params = {"dateFrom": "2026-09-28", "dateTo": "2026-09-29"}
+        screen = self.get(**params)
+        r = self.export("xlsx", **params)
+        sheet = load_workbook(io.BytesIO(r.content)).active
+        header = [c.value for c in sheet[HEADER_ROW]]
+        self.assertEqual(header, PUNCH_LABELS)
+        body_rows = [
+            [c.value for c in row] for row in sheet.iter_rows(min_row=HEADER_ROW + 1) if row[1].value and row[0].value
+        ]
+        punches = [r_["punches"] for r_ in self.data(screen)]
+        for text in punches:
+            self.assertIn(text, [row[7] for row in body_rows])
+
+    def test_pdf_renders(self):
+        r = self.export("pdf", dateFrom="2026-09-28", dateTo="2026-09-29")
+        self.assertTrue(r.content.startswith(b"%PDF"))
+
+    def test_the_query_count_does_not_grow_with_the_number_of_employees_or_punches(self):
+        def queries() -> int:
+            self.get()  # warm-up (permission caches)
+            with CaptureQueriesContext(connection) as q:
+                self.get(dateFrom="2026-09-28", dateTo="2026-09-29")
+            return len(q)
+
+        before = queries()
+        for i in range(20):
+            emp = Employee.objects.create(
+                employee_code=f"X{i}", first_name=f"Xa{i}", last_name="Extra", employment_type="production",
+                branch=self.b1, department=self.d_st, designation=self.des_op,
+            )  # fmt: skip
+            _punch(emp, D29, (8, 0, 0), (12, 0, 0), (13, 0, 0), (17, 0, 0))
+            _punch(emp, D28, (8, 0, 0), (17, 0, 0))
+        self.assertEqual(queries(), before)
+        self.assertEqual(len(self.data(self.get(dateFrom="2026-09-28", dateTo="2026-09-29"))), 6 + 40)
+
+    def test_photo_and_password_columns_are_never_selected(self):
+        with CaptureQueriesContext(connection) as q:
+            self.get()
+            self.export("xlsx")
+        for query in q.captured_queries:
+            self.assertNotIn("photo_url", query["sql"])
+            if '"hr_users"' not in query["sql"]:
+                self.assertNotIn("password_hash", query["sql"])
+
+    def test_running_and_exporting_never_writes(self):
+        from django.apps import apps
+
+        def counts():
+            return {
+                m.__name__: m.objects.count()
+                for m in apps.get_app_config("api").get_models()
+                if m.__name__ != "AuditLog"
+            }
+
+        before = counts()
+        self.get(dateFrom="2026-09-28", dateTo="2026-09-29")
+        self.export("xlsx")
+        self.export("pdf")
+        self.assertEqual(counts(), before)
+
+    def test_a_row_over_the_limit_is_refused_for_export_not_silently_cut(self):
+        with patch("api.reporting.runner.XLSX_ROW_LIMIT", 2):
+            r = self.client.get(f"/api/reports/export/{PID}", {"fmt": "xlsx"}, **hdr(self.admin))
         self.assertEqual(r.status_code, 413)
         self.assertEqual(r.json()["error"], "too_many_rows")

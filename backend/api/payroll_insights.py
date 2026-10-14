@@ -127,6 +127,18 @@ def shifts_text(n) -> str:
     return plural(n, "shift")
 
 
+def ot_shifts_beyond_days(earnings: dict, ot_days: int) -> Decimal | None:
+    """The shifts a slip's OT pay covers when that is NOT simply one whole day per record. `otDays` is the NUMBER OF PAY
+    RECORDS; an assigned Type 2 record pays `shifts` (0.25 / 0.5 / 0.75 / 1) x the daily rate and the slip says how many
+    in `otShifts`. None for a slip from before the shift-based rules (no `otShifts`: one day each) and when the shifts
+    do add up to one day per record, so the old wording stays true."""
+    raw = earnings.get("otShifts")
+    if raw is None:
+        return None
+    shifts = dec(raw)
+    return None if shifts == ot_days else shifts
+
+
 def parse_iso_date(value) -> date | None:
     if isinstance(value, datetime):
         return value.date()
@@ -223,8 +235,12 @@ SETTINGS: dict[str, SettingRef] = {
     "staff_esi_ceiling": SettingRef("Staff ESI ceiling", "payroll", "staff-esi-ceiling"),
     "pay_day": SettingRef("Salary pay day", "payroll", "pay-day"),
     "compensation_features": SettingRef("OT & Compensation features", "payroll", "compensation-features"),
-    "ot_detection": SettingRef("Find overtime automatically", "payroll", "ot-detection"),
-    "ot_threshold": SettingRef("OT threshold", "payroll", "ot-threshold"),
+    # Settings -> Compensation (the OT rules moved there on 2026-10-14)
+    "ot_allowance": SettingRef("Next-day late-in allowance (Type 1)", "compensation", "allowance-enabled"),
+    "ot_shift": SettingRef("Shift-based OT compensation (Type 2)", "compensation", "shift-enabled"),
+    "ot_shift_threshold": SettingRef("Type 2 starts after", "compensation", "shift-threshold"),
+    "ot_shift_ladder": SettingRef("Type 2 shifts by last punch-out", "compensation", "shift-ladder"),
+    "ot_shift_pay": SettingRef("Give Type 2 as payment", "compensation", "shift-pay"),
     "prod_pf_esi_switch": SettingRef("Production flat-rate PF and ESI switch", "payroll", "prod-pf-esi-switch"),
     "prod_pf_rate": SettingRef("Production PF rate", "payroll", "prod-pf-rate"),
     "prod_esi_rate": SettingRef("Production ESI rate", "payroll", "prod-esi-rate"),
@@ -940,12 +956,23 @@ def _staff_period_issues(em: _Emitter, payroll: Payroll, bd: dict) -> None:
     ot = dec(earnings.get("otAmount"))
     if ot > 0:
         ot_days = int(earnings.get("otDays") or 0)
+        shifts = ot_shifts_beyond_days(earnings, ot_days)
+        basis = (
+            f"{plural(ot_days, 'announced overtime day')} paid at one day's pay each ({inr(daily)})"
+            if shifts is None
+            else f"{shifts_text(shifts)} of announced overtime ({plural(ot_days, 'record')}) paid at the daily rate "
+            f"({inr(daily)})"
+        )
         em.add(
             "ot_pay",
-            f"{plural(ot_days, 'announced overtime day')} paid at one day's pay each ({inr(daily)}): {inr(ot)} was added to the net salary",
+            f"{basis}: {inr(ot)} was added to the net salary",
             impact=_impact(amount=ot, label="Added to pay"),
             rule=rule_of(SETTINGS["compensation_features"]),
-            facts={"otDays": ot_days, "dailyRate": money(daily)},
+            facts={
+                "otDays": ot_days,
+                "otShifts": money(shifts) if shifts is not None else float(ot_days),
+                "dailyRate": money(daily),
+            },
         )
 
 
@@ -1265,13 +1292,19 @@ def money_lines(payroll: Payroll, slip: SalarySlip | None, bd: dict | None) -> t
             )
         if ot > 0:
             days_ = int(e.get("otDays") or 0)
+            shifts = ot_shifts_beyond_days(e, days_)
             earnings.append(
                 _line(
                     "ot_pay",
                     "Overtime pay",
                     ot,
                     "earning",
-                    f"{plural(days_, 'announced overtime day')} x one day's pay ({inr(daily)})"
+                    (
+                        f"{plural(days_, 'announced overtime day')} x one day's pay ({inr(daily)})"
+                        if shifts is None
+                        else f"{shifts_text(shifts)} of announced overtime ({plural(days_, 'record')}) x the daily "
+                        f"rate ({inr(daily)})"
+                    )
                     if days_ and daily
                     else None,
                     "compensation_features",
@@ -1405,6 +1438,7 @@ def normalized_days(bd: dict | None, issues: list[dict]) -> list[dict]:
             )
         else:
             first, last, shifts, status = d.get("firstIn"), d.get("lastOut"), d.get("shiftsCompleted"), d.get("status")
+        minutes = d.get("compensationMinutes")
         out.append(
             {
                 "date": day,
@@ -1415,6 +1449,10 @@ def normalized_days(bd: dict | None, issues: list[dict]) -> list[dict]:
                 "shifts": money(shifts) if shifts is not None else None,
                 "flags": flags.get(day, []),
                 "note": d.get("lateReason") or None,
+                # What compensation shaped the day; only payrolls generated since the Compensation overhaul carry it
+                "compensationKind": d.get("compensationKind") or None,
+                "compensationMinutes": minutes if isinstance(minutes, int) and not isinstance(minutes, bool) else 0,
+                "compensationNote": d.get("compensationNote") or None,
             }
         )
     return out

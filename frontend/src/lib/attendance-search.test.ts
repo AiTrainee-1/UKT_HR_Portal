@@ -269,6 +269,30 @@ describe("a day's flags", () => {
     const notes = dayNotes(day({ isLate: true, lateReason: " Morning Late-In: 09:40 ", leave: null }));
     expect(notes).toEqual([{ key: "why", label: "Why flagged", text: "Morning Late-In: 09:40" }]);
   });
+
+  it("adds what the compensation did on the day, after the other reasons", () => {
+    const notes = dayNotes(
+      day({
+        isLate: false,
+        permission: { status: "approved", time: "10:00", reason: "Bank work" },
+        compensationKind: "ot_allowance",
+        compensationMinutes: 30,
+        compensationNote: " Arrived 09:47, inside the 30 min allowance. ",
+      }),
+    );
+    expect(notes).toEqual([
+      { key: "perm", label: "Permission", text: "Bank work" },
+      { key: "comp", label: "Compensation", text: "Arrived 09:47, inside the 30 min allowance." },
+    ]);
+    // a marker with no sentence adds no note line
+    expect(dayNotes(day({ compensationKind: "birthday", compensationNote: null }))).toEqual([]);
+  });
+
+  it("does not turn the compensation marker into a late / early-out flag: a compensated arrival is not Late", () => {
+    const compensated = day({ compensationKind: "ot_allowance", compensationMinutes: 30, isLate: false });
+    expect(dayFlags(compensated)).toEqual([]);
+    expect(isIssueDay(compensated)).toBe(false);
+  });
 });
 
 describe("a period's summary", () => {
@@ -292,8 +316,20 @@ describe("a period's summary", () => {
       late: 1,
       earlyOut: 0,
       permission: 1,
+      compensation: 0,
       issues: 3,
     });
+  });
+
+  it("counts the days that used a compensation, whatever the kind", () => {
+    const used = [
+      day({ compensationKind: "birthday" }),
+      day({ compensationKind: "relaxation", status: "half_shift", isHalfShift: true }),
+      day({ compensationKind: null }),
+      day(),
+    ];
+    expect(summarize(used).compensation).toBe(2);
+    expect(summarize([]).compensation).toBe(0);
   });
 
   it("an issue is an absence, a half shift or a late mark, not leave or a holiday", () => {

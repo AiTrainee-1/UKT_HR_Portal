@@ -15,6 +15,7 @@ import type { AttendanceOvertime } from "./types";
 const DECISIONS: { key: keyof NonNullable<AttendanceOvertime["decisions"]>; label: string; tone: string }[] = [
   { key: "announcedPay", label: "Pay", tone: "md-analytics-tone-good" },
   { key: "announcedRelaxation", label: "Day off", tone: "md-analytics-tone-info" },
+  { key: "allowance", label: "Allowance", tone: "md-analytics-tone-info" },
   { key: "detected", label: "Not decided", tone: "md-analytics-tone-watch" },
   { key: "rejected", label: "Rejected", tone: "md-analytics-tone-neutral" },
 ];
@@ -27,7 +28,7 @@ function notTrackedText(d: AttendanceOvertime): string {
   return "No overtime is on record for this period.";
 }
 
-/** Overtime hours (informational: payroll pays one day's pay per announced Pay day), where it comes from, and who. */
+/** Overtime hours (informational: only shift-based days HR announced as Pay are paid), where it comes from, and who. */
 export default function OvertimeCard({
   query,
   context,
@@ -42,7 +43,7 @@ export default function OvertimeCard({
       testId="md-attendance-overtime"
       className={className}
       title="Overtime"
-      subtitle="Staff, on days HR detected or announced it: hours, not rupees (see Payroll Analysis for cost)"
+      subtitle="Staff, on days it was detected, allowed automatically or announced by HR: hours, not rupees (see Payroll Analysis for cost)"
       loading={query.isPending}
       provenance={query.data?.provenance}
       actions={<AskAiButton question={ask.overtimeByDepartment(context)} />}
@@ -81,12 +82,15 @@ export default function OvertimeCard({
               </div>
               {d.decisions && (
                 <div className="flex flex-wrap gap-1.5" data-testid="md-attendance-overtime-decisions">
-                  {DECISIONS.map(({ key, label, tone }) => (
-                    <span key={key} className={`md-chip ${tone}`}>
-                      {label}: {num(d.decisions![key].days)} {d.decisions![key].days === 1 ? "day" : "days"} ·{" "}
-                      {num(d.decisions![key].hours, 1)} h
-                    </span>
-                  ))}
+                  {DECISIONS.map(({ key, label, tone }) => {
+                    const item = d.decisions?.[key];
+                    if (!item) return null;
+                    return (
+                      <span key={key} className={`md-chip ${tone}`}>
+                        {label}: {num(item.days)} {item.days === 1 ? "day" : "days"} · {num(item.hours, 1)} h
+                      </span>
+                    );
+                  })}
                 </div>
               )}
               <div>

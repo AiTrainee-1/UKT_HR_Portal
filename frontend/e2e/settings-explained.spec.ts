@@ -12,6 +12,7 @@ const TABS: [id: string, label: string][] = [
   ["themes", "Themes"],
   ["attendance", "Attendance"],
   ["late_detection", "Late Detection"],
+  ["compensation", "Compensation"],
   ["devices", "Devices"],
   ["payroll", "Payroll"],
   ["production_payroll", "Production Payroll"],

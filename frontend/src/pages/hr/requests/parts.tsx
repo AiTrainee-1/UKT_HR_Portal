@@ -9,6 +9,7 @@ import {
   ExternalLink,
   Fingerprint,
   Inbox,
+  Landmark,
   LogOut,
   MapPin,
   Sun,
@@ -36,6 +37,7 @@ export const KIND_VISUAL: Record<KindKey, { icon: IconType; tile: string }> = {
   outpass: { icon: DoorOpen, tile: "bg-teal-50 text-teal-600" },
   request: { icon: Inbox, tile: "bg-indigo-50 text-indigo-600" },
   attendance_correction: { icon: ClipboardCheck, tile: "bg-orange-50 text-orange-600" },
+  holiday_work: { icon: Landmark, tile: "bg-pink-50 text-pink-600" },
   resignation: { icon: LogOut, tile: "bg-rose-50 text-rose-600" },
   advance: { icon: Wallet, tile: "bg-sky-50 text-sky-600" },
 };

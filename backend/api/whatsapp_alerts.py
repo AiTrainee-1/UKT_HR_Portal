@@ -33,10 +33,12 @@ Control page (plus one for attendance as a whole):
                       One message per missing punch, never repeated.
 
 Nobody is messaged on Sundays, holidays, a Saturday-off, on approved leave (full or half day), when HR
-has already set their day by hand, or on a Compensation Day. While an employee has an On-Duty request
+has already set their day by hand, on a Compensation Day, or on their own paid birthday leave (no
+attendance detection applies to it). While an employee has an On-Duty request
 today only the punch reminders apply (they have their own punches to make). A permission covering the
-employee excuses the late alert. Employees with no shift, or a shift that runs past midnight, are left
-alone -there is no reliable deadline to judge them by.
+employee excuses the late alert, and so does a Type 1 next-day late-in allowance: the on-time limit
+moves exactly as the attendance engine moves it. Employees with no shift, or a shift that runs past
+midnight, are left alone -there is no reliable deadline to judge them by.
 
 "HR has already handled the day" means an AttendanceDayRecord written by hand (source "manual": an HR
 override or an approved casual leave), or an Attendance presence row for someone with NO punches at all
@@ -57,6 +59,8 @@ from django.conf import settings as dj_settings
 from django.db.models import Q
 from django.utils import timezone
 
+from . import compensation_engine as comp_engine
+from . import compensation_rules as comp_rules
 from . import whatsapp_service
 from .arrival_rules import (
     ZONE_EXCUSED,
@@ -69,6 +73,7 @@ from .arrival_rules import (
 from .attendance_final import (
     _compensation_day_for,
     _holiday_dates_for_month,
+    _start_plus,
     bulk_permission_cap_status,
     infer_permission_type,
 )
@@ -309,6 +314,9 @@ class DayData:
     permitted: dict  # employee id -> extra seconds an approved in-cap Morning Late-In moves today's start
     on_duty: dict
     already: set = field(default_factory=set)
+    # The OT / Compensation switches and rules (compensation_engine.CompContext): the paid birthday leave and the Type 1
+    # next-day allowance both change what counts as late or absent today, exactly as the attendance engine judges it.
+    comp_ctx: object = None
 
     @property
     def iso(self) -> str:
@@ -419,6 +427,7 @@ def load_day(now: datetime, switches=None) -> DayData:
         permitted=permitted,
         on_duty=on_duty,
         already=already,
+        comp_ctx=comp_engine.build_context(payroll, today, today),
     )
 
 
@@ -491,7 +500,8 @@ def evaluate(emp, day: DayData, trace: list | None = None) -> list[Due]:
         + f". Time now {_fmt_time(now_s)}."
     )
 
-    # Compensation days are never penalised; looked up only if something is due.
+    # Compensation days are never penalised, and neither is a paid birthday (the whole day is compensation leave, so no
+    # attendance detection applies to it); looked up only if something is due.
     comp = {}
 
     def excused() -> bool:
@@ -499,6 +509,11 @@ def evaluate(emp, day: DayData, trace: list | None = None) -> list[Due]:
             comp["v"] = bool(_compensation_day_for(emp, day.today, settings=day.payroll))
             if comp["v"]:
                 say("Today is a Compensation Day for this employee: never penalised, no alerts.")
+            elif day.comp_ctx is not None and comp_engine.birthday_applies(
+                emp, day.today, day.comp_ctx, emp_assignments
+            ):
+                comp["v"] = True
+                say("Today is this employee's paid birthday leave: no attendance detection applies, so no alerts.")
         return comp["v"]
 
     if emp.id in day.on_duty:
@@ -569,6 +584,31 @@ def evaluate(emp, day: DayData, trace: list | None = None) -> list[Due]:
     allowed_s = limits.on_time_until
     first_minute_s = times[0] // 60 * 60 if times else None
     zone = zone_of(times[0], limits, permission_covers) if times else None
+    # Type 1: an arrival past the plain limit may be covered by the next-day late-in allowance (extra work on the previous
+    # working day), which moves the limits later exactly as compute_day_record moves them: judged from the shifted start
+    # the arrival may be on time (no alert) or, from a quarter-shift arrival, Late (an alert, as the engine marks it).
+    # Looked up only when this alert could be sent at all, so an alert that is off, sent or stale costs no query.
+    if (
+        sw.late_alert_enabled
+        and day.payroll.morning_late_in_enabled
+        and zone not in (None, ZONE_ON_TIME, ZONE_EXCUSED)
+        and times[0] <= end_s
+        and now_s - first_minute_s <= LATE_FRESH_S
+        and day.comp_ctx is not None
+        and day.comp_ctx.allowance_on
+        and not tag_sent("late")
+    ):
+        grant = comp_engine.allowance_for_arrival(emp, day.today, day.comp_ctx, day.payroll)
+        if grant is not None:
+            shifted_limits = arrival_limits_for(_start_plus(shift, grant.minutes), day.payroll)
+            shifted_zone = zone_of(times[0], shifted_limits, permission_covers)
+            if comp_rules.zone_rank(shifted_zone) < comp_rules.zone_rank(zone):
+                say(
+                    f"Type 1 allowance: {_plural(grant.minutes, 'minute')} earned from "
+                    f"{comp_rules.describe_duration(grant.extra)} of extra work on {_fmt_date(grant.source_date)} move "
+                    f"the on-time limit to {_fmt_time(shifted_limits.on_time_until)}."
+                )
+                zone, limits, allowed_s = shifted_zone, shifted_limits, shifted_limits.on_time_until
     if not sw.late_alert_enabled:
         say("Late alert: switch is OFF.")
     elif not day.payroll.morning_late_in_enabled:

@@ -461,6 +461,8 @@ export type DepartmentManagerItem = {
   canApproveOnDuty: boolean;
   /** Older backends do not send it; the switch defaults to on. */
   canApproveMissingPunch?: boolean;
+  /** Holiday / Sunday work compensation that HR raises. Older backends do not send it; the switch defaults to on. */
+  canApproveCompensation?: boolean;
   isActive: boolean;
   notes?: string | null;
   createdAt?: string | null;
@@ -513,6 +515,7 @@ export const useCreateDepartmentManager = () => {
       canApproveCasualLeave?: boolean;
       canApproveOnDuty?: boolean;
       canApproveMissingPunch?: boolean;
+      canApproveCompensation?: boolean;
       notes?: string;
     }) =>
       customFetch<DepartmentManagerItem>("/api/department-managers", {
@@ -541,6 +544,7 @@ export const useUpdateDepartmentManager = () => {
         canApproveCasualLeave: boolean;
         canApproveOnDuty: boolean;
         canApproveMissingPunch: boolean;
+        canApproveCompensation: boolean;
         isActive: boolean;
         notes: string;
       }>;

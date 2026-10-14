@@ -58,6 +58,7 @@ APPROVAL_MODULES = {
     "missing_punch": "Missing Punch",
     "outpass": "Gate Outpass",
     "attendance_correction": "Attendance Correction",
+    "holiday_work": "Holiday Work Compensation",
     "resignation": "Resignation",
     "advance": "Advance",
     "request": "Other Requests",

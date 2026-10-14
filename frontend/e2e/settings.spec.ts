@@ -10,6 +10,7 @@ const TAB_HEADINGS: Record<string, string> = {
   "HR Contact": "HR & Software Support Contacts",
   Attendance: "Attendance Calculation Mode",
   "Late Detection": "Late Detection Policy",
+  Compensation: "OT Detection - Type 1: next-day late-in allowance",
   Devices: "Biometric / Punching Devices",
   "ID Card": "Employee ID Card Template",
   "Company Documents": "Offer Letter",

@@ -381,7 +381,7 @@ export function DaySection({ draft, patch, errors, access, loaded, shift, arriva
             { where: "Staff Payroll", what: "a Half Day earns 0.5 of the day", to: "/hr/payroll" },
             {
               where: "Compensation",
-              what: "a Compensation Day's release time replaces it for that one day",
+              what: "a company-announced early-out time (or a Compensation Day's release time) replaces it for that one day",
               to: "/hr/compensation",
             },
             { where: "Employee apps", what: "the My Shift screen shows this time" },

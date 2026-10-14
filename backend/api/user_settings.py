@@ -29,9 +29,28 @@ Resolution differs by purpose, and getting this wrong is a payroll bug:
 
 The overlay refuses save(). That is what stops one branch's private change
 from silently becoming a company-wide one.
+
+Some fields are ONE company-wide answer and can never be a branch's private
+one (COMPANY_WIDE_FIELDS): the overlay ignores any stored override of them, so
+settings_for(request), settings_for_employee(e) and PayrollSettings.get() all
+read the same value. The OT / Compensation master switch is one: the Settings
+-> Compensation tab, every compensation endpoint, the attendance engine and the
+payroll OT-pay block must agree on whether the features act, and the features
+are decided for the whole company, never per branch.
 """
 
 from __future__ import annotations
+
+# PayrollSettings fields that are never a branch-private value (see the module docstring). The legacy OT fields are
+# mirrors of the company-wide Settings -> Compensation tab (compensation_settings_views._mirror_legacy_ot_settings).
+COMPANY_WIDE_FIELDS = frozenset(
+    {
+        "compensation_feature_enabled",
+        "ot_detection_enabled",
+        "ot_threshold_minutes",
+        "ot_compensation_type",
+    }
+)
 
 
 class _SettingsOverlay:
@@ -50,7 +69,7 @@ class _SettingsOverlay:
 
     def __getattr__(self, name):
         overrides = object.__getattribute__(self, "_overrides")
-        if name in overrides:
+        if name in overrides and name not in COMPANY_WIDE_FIELDS:
             return _coerce(object.__getattribute__(self, "_base"), name, overrides[name])
         return getattr(object.__getattribute__(self, "_base"), name)
 
@@ -202,6 +221,8 @@ def persist_overlay(overlay) -> dict:
     base = overlay.base
     kept = {}
     for name, value in overlay.overrides.items():
+        if name in COMPANY_WIDE_FIELDS:
+            continue  # one company-wide answer: never stored as a branch's private value
         try:
             universal = getattr(base, name)
         except AttributeError:

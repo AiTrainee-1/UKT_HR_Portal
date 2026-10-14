@@ -1040,10 +1040,14 @@ class OvertimeRecord(models.Model):
     STATUS_DETECTED = "detected"
     STATUS_ANNOUNCED = "announced"
     STATUS_REJECTED = "rejected"
+    # Type 1 (the automatic next-day allowance) rows are never decided by HR: they are "auto", listed for information.
+    # An assigned Type 2 record is stored as "announced" (the value payroll, the summary and the reports key on).
+    STATUS_AUTO = "auto"
     STATUS_CHOICES = [
         (STATUS_DETECTED, "Detected"),
         (STATUS_ANNOUNCED, "Announced"),
         (STATUS_REJECTED, "Rejected"),
+        (STATUS_AUTO, "Automatic"),
     ]
     TYPE_PAY = "pay"
     TYPE_RELAXATION = "relaxation"
@@ -1065,6 +1069,26 @@ class OvertimeRecord(models.Model):
     announced_at = models.DateTimeField(null=True, blank=True, db_column="announced_at")
     notes = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    # ── Compensation overhaul (additive; see the master spec) ──────────────────────────────────────────
+    # "legacy" = a record made before the overhaul (announced by HR, pay = ONE day, relaxation = one credit);
+    # "allowance" = Type 1, the automatic next-day late-in allowance (never paid, never needs HR);
+    # "shift" = Type 2, 0.25 / 0.50 / 0.75 / 1 shift that HR assigns by hand.
+    OT_TYPE_LEGACY = "legacy"
+    OT_TYPE_ALLOWANCE = "allowance"
+    OT_TYPE_SHIFT = "shift"
+    OT_TYPE_CHOICES = [
+        (OT_TYPE_LEGACY, "Legacy"), (OT_TYPE_ALLOWANCE, "Next-day allowance"), (OT_TYPE_SHIFT, "Shift-based"),
+    ]
+    ot_type = models.CharField(max_length=10, choices=OT_TYPE_CHOICES, default=OT_TYPE_LEGACY, db_default=OT_TYPE_LEGACY, db_column="ot_type")
+    # Type 1: the minutes the rule table granted for the next morning.
+    allowance_minutes = models.IntegerField(default=0, db_default=0, db_column="allowance_minutes")
+    # Type 2: what the rule table SUGGESTS for this day, and what HR assigned (null until assigned; a legacy
+    # announced `pay` record has null here and counts as 1.00 shift in payroll, exactly what it always paid).
+    suggested_shifts = models.DecimalField(max_digits=3, decimal_places=2, null=True, blank=True, db_column="suggested_shifts")
+    shifts = models.DecimalField(max_digits=3, decimal_places=2, null=True, blank=True, db_column="shifts")
+    # Type 2: the date the compensation is granted for (same month as `date`): the day off for relaxation.
+    claim_date = models.DateField(null=True, blank=True, db_column="claim_date")
 
     class Meta:
         db_table = "overtime_records"
@@ -1125,9 +1149,166 @@ class CompensationDayAnnouncement(models.Model):
     announced_by = models.TextField(null=True, blank=True, db_column="announced_by")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
 
+    # Compensation overhaul: what the announcement does. "day" = the legacy kind (the day is exempt from Late /
+    # Permission detection, optional `leave_until_time`); "late_in" = for this date staff may arrive up to
+    # `allowed_time` (their own start and grace do not apply); "early_out" = for this date staff may leave from
+    # `leave_until_time` on (their own end and grace do not apply).
+    KIND_DAY = "day"
+    KIND_LATE_IN = "late_in"
+    KIND_EARLY_OUT = "early_out"
+    KIND_CHOICES = [(KIND_DAY, "Day exemption"), (KIND_LATE_IN, "Late-in"), (KIND_EARLY_OUT, "Early-out")]
+    kind = models.CharField(max_length=10, choices=KIND_CHOICES, default=KIND_DAY, db_default=KIND_DAY, db_column="kind")
+    allowed_time = models.TimeField(null=True, blank=True, db_column="allowed_time")
+
     class Meta:
         db_table = "compensation_day_announcements"
         ordering = ["-date"]
+
+
+class CompensationConfig(models.Model):
+    """The Compensation tab of Settings: one row (pk=1) of switches and thresholds. Every feature has its own
+    switch; PayrollSettings.compensation_feature_enabled stays the master switch above all of them. The
+    `*_effective_from` dates keep a feature from reaching back into months that are already paid: the attendance
+    engine applies it only to dates on or after it (set the day a feature is first switched on)."""
+
+    # Type 1: automatic next-day late-in allowance (rules: CompensationRule kind=allowance)
+    allowance_enabled = models.BooleanField(default=False, db_column="allowance_enabled")
+    allowance_effective_from = models.DateField(null=True, blank=True, db_column="allowance_effective_from")
+    # Type 2: shift-based compensation HR assigns (rules: CompensationRule kind=shift)
+    shift_enabled = models.BooleanField(default=False, db_column="shift_enabled")
+    # extra minutes past the shift end where Type 2 starts (Type 1 covers everything up to it)
+    shift_min_extra_minutes = models.IntegerField(default=150, db_column="shift_min_extra_minutes")
+    relaxation_enabled = models.BooleanField(default=True, db_column="relaxation_enabled")
+    pay_enabled = models.BooleanField(default=False, db_column="pay_enabled")
+    # Compensation Leave A: company-announced late-in / early-out windows
+    windows_enabled = models.BooleanField(default=False, db_column="windows_enabled")
+    # Compensation Leave B: work on Sundays / company holidays (HOD-approved, goes to the balance)
+    holiday_work_enabled = models.BooleanField(default=False, db_column="holiday_work_enabled")
+    # Compensation Leave C: paid birthday leave
+    birthday_enabled = models.BooleanField(default=False, db_column="birthday_enabled")
+    birthday_effective_from = models.DateField(null=True, blank=True, db_column="birthday_effective_from")
+    updated_by = models.TextField(null=True, blank=True, db_column="updated_by")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "compensation_config"
+
+    @classmethod
+    def get(cls) -> "CompensationConfig":
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
+class CompensationRule(models.Model):
+    """One editable row of a Settings rule table (HR can edit, disable and ADD rows).
+
+    kind=allowance (Type 1): `min_extra_minutes` of work past the shift end earns `allowance_minutes` for the
+      next morning's first punch. The row with the biggest min_extra_minutes the day reaches wins.
+    kind=shift (Type 2): a ladder on the clock time of the day's LAST punch-out, in minutes since the OT day's
+      midnight (a punch after midnight is 1440 + its clock minutes). The first enabled row, in `until_minutes`
+      order, whose `until_minutes` is greater than the last punch gives `shifts`; `until_minutes` null = no upper
+      limit (the last row). Only days past CompensationConfig.shift_min_extra_minutes are looked up."""
+
+    KIND_ALLOWANCE = "allowance"
+    KIND_SHIFT = "shift"
+    KIND_CHOICES = [(KIND_ALLOWANCE, "Next-day allowance"), (KIND_SHIFT, "Shift-based")]
+    kind = models.CharField(max_length=10, choices=KIND_CHOICES, db_column="kind")
+    label = models.TextField(default="", blank=True)
+    enabled = models.BooleanField(default=True)
+    sort_order = models.IntegerField(default=0, db_column="sort_order")
+    min_extra_minutes = models.IntegerField(null=True, blank=True, db_column="min_extra_minutes")
+    allowance_minutes = models.IntegerField(null=True, blank=True, db_column="allowance_minutes")
+    until_minutes = models.IntegerField(null=True, blank=True, db_column="until_minutes")
+    shifts = models.DecimalField(max_digits=3, decimal_places=2, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "compensation_rules"
+        ordering = ["kind", "sort_order", "id"]
+
+
+class HolidayWorkClaim(models.Model):
+    """Compensation for working on a Sunday or a company holiday: HR assigns 0.25 / 0.50 / 0.75 / 1 shift and the
+    Department Head must approve it (approval_workflow key `holiday_work`, HR-requested like an attendance
+    correction). Approval adds the shifts to the employee's compensation balance (CompensationLedger) exactly once."""
+
+    STATUS_PENDING = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_REJECTED = "rejected"
+    STATUS_CHOICES = [(STATUS_PENDING, "Pending"), (STATUS_APPROVED, "Approved"), (STATUS_REJECTED, "Rejected")]
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="holiday_work_claims",
+    )
+    work_date = models.DateField(db_column="work_date")
+    shifts = models.DecimalField(max_digits=3, decimal_places=2)
+    reason = models.TextField(null=True, blank=True)
+    status = models.TextField(choices=STATUS_CHOICES, default=STATUS_PENDING)
+    requested_by = models.TextField(null=True, blank=True, db_column="requested_by")
+    reviewed_by = models.TextField(null=True, blank=True, db_column="reviewed_by")
+    review_comment = models.TextField(null=True, blank=True, db_column="review_comment")
+    reviewed_at = models.DateTimeField(null=True, blank=True, db_column="reviewed_at")
+    # The approval pipeline's progress (approval_workflow.py): [{role, decision, by, at, comment, skipped}].
+    approval_trail = models.JSONField(null=True, blank=True, db_column="approval_trail")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "holiday_work_claims"
+        ordering = ["-created_at"]
+        constraints = [
+            # One pending-or-approved claim per employee per work date (a rejected one can be raised again): the
+            # database refuses what the row locks in holiday_work_views are meant to prevent, whoever writes.
+            models.UniqueConstraint(
+                fields=["employee", "work_date"],
+                condition=models.Q(status__in=["pending", "approved"]),
+                name="uniq_open_holiday_work_claim",
+            ),
+        ]
+
+
+class CompensationLedger(models.Model):
+    """The compensation balance of an employee, in shifts: entries are only ever added, never edited. A credit comes
+    from an approved HolidayWorkClaim (or a migrated legacy credit); a debit is HR redeeming shifts on a date.
+    balance = sum(credits) - sum(debits)."""
+
+    ENTRY_CREDIT = "credit"
+    ENTRY_DEBIT = "debit"
+    ENTRY_CHOICES = [(ENTRY_CREDIT, "Credit"), (ENTRY_DEBIT, "Debit")]
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="compensation_ledger",
+    )
+    entry_type = models.CharField(max_length=6, choices=ENTRY_CHOICES, db_column="entry_type")
+    shifts = models.DecimalField(max_digits=3, decimal_places=2)  # always positive
+    # credit: the day it was earned (the work date); debit: the day it was taken
+    date = models.DateField()
+    source = models.CharField(max_length=24, default="")  # holiday_work | legacy_credit | redemption | ot_shift
+    claim = models.ForeignKey(
+        HolidayWorkClaim, on_delete=models.SET_NULL, null=True, blank=True, db_column="claim_id", related_name="ledger_entries",
+    )
+    overtime_record = models.ForeignKey(
+        OvertimeRecord, on_delete=models.SET_NULL, null=True, blank=True, db_column="overtime_record_id", related_name="ledger_entries",
+    )
+    note = models.TextField(null=True, blank=True)
+    created_by = models.TextField(null=True, blank=True, db_column="created_by")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "compensation_ledger"
+        ordering = ["-created_at"]
+        constraints = [
+            # An approved claim is credited exactly once, and an OT record announced to the balance exactly once.
+            models.UniqueConstraint(
+                fields=["claim"],
+                condition=models.Q(entry_type="credit", claim__isnull=False),
+                name="uniq_ledger_credit_per_claim",
+            ),
+            models.UniqueConstraint(
+                fields=["overtime_record"],
+                condition=models.Q(source="ot_shift", overtime_record__isnull=False),
+                name="uniq_ledger_ot_credit_per_record",
+            ),
+        ]
 
 
 # ──────────────────────────────────────────────

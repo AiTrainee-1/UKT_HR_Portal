@@ -261,12 +261,13 @@ def _run(ctx) -> ReportResult:
         + ("minus the shift's lunch break when it lies inside the span." if deduct else "including any lunch break."),
         "Late (min) = first punch minus shift start (a Morning Late-In permission moves the start by 60 minutes); "
         "the day is flagged late only after the shift's grace period. OT (min) = last punch beyond shift end, "
-        f"shown when at least the Settings threshold ({data.settings.ot_threshold_minutes or 60} min); "
-        "overtime is paid only after HR announces it.",
+        f"shown when at least the Settings > Compensation threshold ({data.settings.ot_threshold_minutes or 60} min, "
+        "the earliest OT rule); only a shift-based day HR announces as Pay is paid, and the next-day late-in allowance "
+        "is never paid.",
     ]
     if not (data.settings.ot_detection_enabled and data.settings.compensation_feature_enabled):
         notes.append(
-            "Overtime detection is switched off in Settings: OT minutes are shown for information only "
+            "Overtime detection is switched off in Settings > Compensation: OT minutes are shown for information only "
             "(no overtime record is created, announced or paid from them)."
         )
     notes += detection_notes(data.settings)

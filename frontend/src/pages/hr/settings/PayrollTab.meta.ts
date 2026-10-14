@@ -11,7 +11,6 @@ export const PAYROLL_SECTIONS = {
   calendar: "Pay calendar and defaults",
   bonus: "Statutory bonus",
   features: "OT & Compensation Features",
-  otDetection: "OT Detection",
   bands: "Production PF / EF salary bands",
 } as const;
 
@@ -151,26 +150,8 @@ const BLOCKS: PayrollSettingMeta[] = [
     section: S.features,
     title: "OT & Compensation features",
     purpose:
-      "One switch that pauses or resumes everything the Compensation feature does by itself: finding overtime, adding announced OT pay to payslips, and letting Compensation Days excuse late and permission marks. The Compensation page always stays in the sidebar.",
-    keywords: ["overtime", "compensation", "master switch", "compensation day", "ot pay"],
-  },
-  {
-    id: "ot-detection",
-    subTab: "otCompensation",
-    section: S.otDetection,
-    title: "Find overtime automatically",
-    purpose:
-      "Lets the system flag staff who keep working past the end of their own shift, so HR can review each day on the Compensation page. A flag alone pays nothing.",
-    keywords: ["enable ot detection", "overtime", "ot"],
-  },
-  {
-    id: "ot-threshold",
-    subTab: "otCompensation",
-    section: S.otDetection,
-    title: "OT threshold",
-    purpose:
-      "How many minutes after their shift's end a staff member's last punch must be for that day to count as overtime. Exactly the threshold counts.",
-    keywords: ["overtime", "minutes", "shift end", "ot"],
+      "One switch that pauses or resumes everything the Compensation features do by themselves: finding overtime and giving the next-day allowance, adding OT pay to payslips, announced late-in / early-out days, birthday leave, and Compensation Days excusing late and permission marks. The Compensation page always stays in the sidebar; each feature has its own switch on the Compensation tab.",
+    keywords: ["overtime", "compensation", "master switch", "compensation day", "ot pay", "birthday", "allowance"],
   },
   {
     id: "pf-ef-switch",

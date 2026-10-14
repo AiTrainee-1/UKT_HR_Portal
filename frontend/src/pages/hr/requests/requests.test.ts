@@ -594,3 +594,109 @@ describe("the Managing Director's view-only lock and this page's controls", () =
     expect(isMutatingControl(button("Export"))).toBe(true);
   });
 });
+
+describe("Holiday / Sunday work: HR raises it, the Department Head decides it", () => {
+  const holiday = kind({
+    key: "holiday_work",
+    label: "Holiday / Sunday work",
+    group: "compensation",
+    mode: "link",
+    openPath: "/hr/compensation",
+    openLabel: "Compensation",
+    pipeline: "HR → HOD",
+    waiting: 2,
+    waitingHod: 2,
+  });
+  const claim = item({
+    kind: "holiday_work",
+    key: "holiday_work-7",
+    id: 7,
+    label: "Holiday / Sunday work",
+    summary: "2026-10-11 · 0.5 shift",
+    reason: "Dispatch rush",
+    date: "2026-10-11",
+    details: [
+      { label: "Work date", value: "2026-10-11" },
+      { label: "Day", value: "Sunday" },
+      { label: "Shifts claimed", value: "0.50" },
+      { label: "Raised by", value: "Meena" },
+    ],
+    queue: "hod",
+    approval: approval({
+      workflow: "holiday_work",
+      label: "Holiday / Sunday work compensation",
+      steps: [{ index: 0, roles: ["hod"], mandatory: true, state: "pending", label: "HOD" }],
+      waitingFor: ["hod"],
+      canAct: { hod: true, hr: false },
+      canReject: { hod: true, hr: false },
+    }),
+  });
+
+  it("opens the Holiday work sub-tab of the Compensation page, not just the page", () => {
+    const hub = normalizeHub({ kinds: [holiday, kind({ key: "attendance_correction", openPath: "/hr/attendance" })] });
+    expect(hub.kinds[0].openPath).toBe("/hr/compensation?tab=leave&sub=holiday-work");
+    expect(hub.kinds[0].openLabel).toBe("Compensation");
+    // nothing else is rewritten
+    expect(hub.kinds[1].openPath).toBe("/hr/attendance");
+  });
+
+  it("leaves an address the server already narrowed, and a kind with no address, alone", () => {
+    const narrowed = kind({ ...holiday, openPath: "/hr/compensation?tab=leave&sub=holiday-work" });
+    const none = kind({ ...holiday, openPath: null });
+    const other = kind({ ...holiday, openPath: "/hr/compensation?tab=history" });
+    expect(normalizeHub({ kinds: [narrowed, none, other] }).kinds.map((k) => k.openPath)).toEqual([
+      "/hr/compensation?tab=leave&sub=holiday-work",
+      null,
+      "/hr/compensation?tab=history",
+    ]);
+  });
+
+  it("has its own sub-tab with how many claims wait, and the address can open it", () => {
+    const kinds = [kind({ key: "leave", label: "Leave", waiting: 1 }), holiday];
+    expect(
+      buildTabs(kinds, { ...normalizeHub(null).stats, waiting: 3 }).map((t) => [t.value, t.label, t.count]),
+    ).toEqual([
+      ["all", "All", 3],
+      ["leave", "Leave", 1],
+      ["holiday_work", "Holiday / Sunday work", 2],
+    ]);
+    expect(tabFromAddress("holiday_work", kinds)).toBe("holiday_work");
+    expect(tabFromAddress("holiday_work", [kinds[0]])).toBe("all"); // a role without the kind does not see the tab
+  });
+
+  it("a claim is found by its day, its shifts and its reason, and by its own tab", () => {
+    const leave = item();
+    expect(haystack(claim)).toContain("sunday");
+    expect(matchesQuery(claim, "sunday 0.5")).toBe(true);
+    expect(matchesQuery(claim, "dispatch")).toBe(true);
+    expect(matchesQuery(claim, "holiday meena")).toBe(true);
+    expect(filterItems([leave, claim], filters(), "holiday_work")).toEqual([claim]);
+    expect(filterItems([leave, claim], filters(), "all")).toHaveLength(2);
+    expect(filterItems([leave, claim], filters({ status: "waiting_hod" }), "all")).toEqual([claim]);
+    expect(filterItems([leave, claim], filters({ status: "waiting_hr" }), "all")).toEqual([leave]);
+  });
+
+  it("is waiting for the HOD, and HR has nothing to press on this page except the way to the Compensation page", () => {
+    expect(waitingLine(claim)).toBe("Waiting for HOD");
+    expect(statusChip(claim)).toEqual({ label: "pending", tone: "warning" });
+    // HR neither approves nor rejects (the HOD decides): no Approve / Reject / notes form
+    expect(decisionsHere(claim, holiday)).toEqual({
+      approve: false,
+      reject: false,
+      needsType: false,
+      notes: false,
+      why: null,
+    });
+    expect(decisionCall({ item: claim, status: "approved" })).toBeNull();
+    expect(decisionCall({ item: claim, status: "rejected", comment: "no" })).toBeNull();
+  });
+
+  it("says in the export what it is and who it waits for", () => {
+    const [row] = exportRows([claim], { holiday_work: "Holiday / Sunday work" });
+    expect(row[0]).toBe("Holiday / Sunday work");
+    expect(row[7]).toBe("2026-10-11 · 0.5 shift");
+    expect(row[8]).toBe("Dispatch rush");
+    expect(row[10]).toBe("pending");
+    expect(row[11]).toBe("Waiting for HOD");
+  });
+});

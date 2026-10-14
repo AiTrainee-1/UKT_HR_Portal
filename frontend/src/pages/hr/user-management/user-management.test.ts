@@ -31,16 +31,17 @@ const item = (
   steps: ReturnType<typeof step>[],
   enabled = true,
   label = "Leave",
+  requestedBy: ApprovalSummaryItem["requestedBy"] = "Employee",
 ): ApprovalSummaryItem => ({
   label,
   enabled,
-  requestedBy: "Employee",
+  requestedBy,
   steps,
   path,
 });
 
 describe("the approval permissions an HOD can be given", () => {
-  it("covers each server switch exactly once, Missing Punch included", () => {
+  it("covers each server switch exactly once, Missing Punch and Compensation included", () => {
     expect(PERM_KEYS).toEqual([
       "canApproveLeaves",
       "canApprovePermissions",
@@ -49,6 +50,7 @@ describe("the approval permissions an HOD can be given", () => {
       "canApproveMissingPunch",
       "canApproveOnDuty",
       "canApproveResignations",
+      "canApproveCompensation",
     ]);
     expect(new Set(PERM_KEYS).size).toBe(PERMISSIONS.length);
     for (const p of PERMISSIONS) {
@@ -63,14 +65,27 @@ describe("the approval permissions an HOD can be given", () => {
     expect(flows.canApprovePermissions).toEqual(["permission", "outpass"]); // outpasses share the permissions switch
     expect(flows.canApproveAttendance).toEqual(["attendance_correction"]);
     expect(flows.canApproveMissingPunch).toEqual(["missing_punch"]);
+    expect(flows.canApproveCompensation).toEqual(["holiday_work"]);
+  });
+
+  it("says in words what the Compensation switch covers: Holiday / Sunday work, approved into the balance", () => {
+    const comp = PERMISSIONS.find((p) => p.key === "canApproveCompensation")!;
+    expect(comp.title).toBe("Compensation");
+    expect(comp.short).toBe("Compensation");
+    expect(comp.description).toContain("Can approve compensation");
+    expect(comp.description).toContain("Holiday / Sunday work");
+    expect(comp.description).toContain("compensation balance");
   });
 
   it("switches everything on or off, and counts what is on", () => {
-    expect(enabledCount(allPermissions(true))).toBe(7);
+    expect(enabledCount(allPermissions(true))).toBe(8);
     expect(enabledCount(allPermissions(false))).toBe(0);
     const some = { ...allPermissions(false), canApproveLeaves: true, canApproveOnDuty: true };
     expect(enabledPermissions(some).map((p) => p.short)).toEqual(["Leave", "On-Duty"]);
-    expect(disabledPermissions(some)).toHaveLength(5);
+    expect(disabledPermissions(some)).toHaveLength(6);
+    // the new switch is one of the eight a new department user starts with, and one of the ones "Disable all" clears
+    expect(allPermissions(true).canApproveCompensation).toBe(true);
+    expect(allPermissions(false).canApproveCompensation).toBe(false);
   });
 
   it("reads the switches from the server, treating a missing one (an older server) as on", () => {
@@ -78,6 +93,9 @@ describe("the approval permissions an HOD can be given", () => {
     expect(values.canApproveLeaves).toBe(false);
     expect(values.canApproveOnDuty).toBe(true);
     expect(values.canApproveMissingPunch).toBe(true);
+    // an older server has no Compensation switch yet: the server's own default for a new switch is on
+    expect(values.canApproveCompensation).toBe(true);
+    expect(permissionValuesOf({ canApproveCompensation: false }).canApproveCompensation).toBe(false);
   });
 });
 
@@ -110,6 +128,35 @@ describe("what the approval pipelines say about a switch", () => {
     const note = pipelineNote(summary, perm("canApprovePermissions"));
     expect(note?.tone).toBe("ok"); // the permission pipeline still has an HOD step
     expect(note?.text).toBe("Permission: Employee → HOD or HR · Gate Outpass: Employee → HR");
+  });
+
+  it("reads a request HR raises and only the HOD decides as exactly that", () => {
+    const summary = {
+      holiday_work: item("HR → HOD", [step("hod")], true, "Holiday / Sunday work compensation", "HR"),
+    };
+    expect(pipelineNote(summary, perm("canApproveCompensation"))).toEqual({
+      tone: "ok",
+      text: "HR raises it, the Department Head approves (HR → HOD)",
+    });
+    // the attendance edits HR proposes read the same way
+    const edits = { attendance_correction: item("HR → HOD", [step("hod")], true, "Attendance correction", "HR") };
+    expect(pipelineNote(edits, perm("canApproveAttendance"))?.text).toBe(
+      "HR raises it, the Department Head approves (HR → HOD)",
+    );
+  });
+
+  it("does not describe a request an employee raises as 'HR raises it'", () => {
+    const summary = { leave: item("Employee → HOD", [step("hod")]) };
+    expect(pipelineNote(summary, perm("canApproveLeaves"))?.text).toBe("Employee → HOD");
+  });
+
+  it("warns on the Compensation switch when the Holiday / Sunday work pipeline has no HOD step, says when it is off", () => {
+    const noHod = { holiday_work: item("HR → HR", [step("hr")], true, "Holiday / Sunday work compensation", "HR") };
+    const warn = pipelineNote(noHod, perm("canApproveCompensation"));
+    expect(warn?.tone).toBe("warn");
+    expect(warn?.text).toContain("no step");
+    const off = { holiday_work: item("HR → HOD", [step("hod")], false, "Holiday / Sunday work compensation", "HR") };
+    expect(pipelineNote(off, perm("canApproveCompensation"))?.tone).toBe("off");
   });
 
   it("is quiet until the pipelines are known", () => {

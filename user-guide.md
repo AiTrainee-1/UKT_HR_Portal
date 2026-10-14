@@ -27,6 +27,8 @@
    - [5.3 Salary Slips](#53-salary-slips)
    - [5.4 Profile](#54-profile)
    - [5.5 Notifications](#55-notifications)
+   - [5.6 Compensation](#56-compensation)
+   - [5.7 HOD Assignment](#57-hod-assignment)
 6. [End-to-End Workflow Diagrams](#6-end-to-end-workflow-diagrams)
    - [6.1 Monthly Payroll Workflow](#61-monthly-payroll-workflow)
    - [6.2 Attendance Sync Workflow](#62-attendance-sync-workflow)
@@ -120,6 +122,7 @@ Super Admin
   - Attendance correction requests
   - Resignation requests
   - On-Duty (field visit) sessions
+  - Holiday / Sunday work compensation claims that HR raises
 - They can be assigned to cover specific departments or individual employees.
 
 #### 👷 Employee
@@ -342,6 +345,21 @@ Select a **Month** and **Year** to see the attendance calendar for all employees
 - 🏖️ On Leave (approved)
 - 🔴 Late (present but arrived late)
 
+#### Compensation marks on attendance screens
+When a staff member's day was shaped by a compensation, the attendance screens mark it, so HR can see that the employee used it. Each mark has its own symbol, a two-letter code and words (colour is never the only sign), and a legend lists the marks in view with how many days of each.
+
+| Mark | Code | What it means |
+|---|---|---|
+| **OT allowance used** (with the minutes, for example *30 min*) | OT | Worked extra hours the day before and arrived inside the next-day late-in allowance, so no Late mark |
+| **Announced late-in** | LI | The company announced a late-in time for the day; arriving up to it is not Late |
+| **Announced early-out** | EO | The company announced an early-out time for the day; leaving from it is not an Early Out |
+| **Birthday leave** | BD | The employee's birthday: paid compensation leave, no attendance rule applies that day |
+| **Relaxation (compensation day)** | RX | A compensation day off (an OT relaxation or a redeemed balance) was applied to the day; no punches are needed for it |
+
+- **Where you see them:** **Staff Attendance** (beside the day's status, and in an employee's day-by-day record with a sentence saying what happened), the **Employee Attendance Search** card, **Attendance Search** (a small symbol on the day in the month grid, and a chip on the day), **Report Log** (a symbol in the corner of the cell; hover for the sentence), an employee's attendance on **Manage Shift → Assignments**, and the day-by-day calendar on a payroll's **Details** page. Report Log's **Excel** export writes the code after the day's own (for example *P·OT*) with a cell note, and its PDF carries the legend.
+- If more than one applies to a day, the most important is shown (birthday, then relaxation, announced late-in, announced early-out, OT allowance) and the sentence tells all of them. A day made paid only by a relaxation has no punches: it shows the Relaxation mark instead of *Half day*.
+- Staff only: production days never carry a mark. The older purple **Comp Day** badge (Compensation Days announced before the overhaul) is unchanged.
+
 #### Manual Attendance Override
 If a biometric record is incorrect (machine malfunction, forgot to punch):
 1. Click on the specific attendance cell for that employee and date.
@@ -373,6 +391,7 @@ Where an employee's **first punch** falls decides what the morning costs — onc
 - **The four numbers** — Late window, Permission window, Extra minutes, Quarter-shift deduction — are Settings, together with *Second Half Start*. The page shows a live table of the timeline for an example shift, so you can see the clock times behind the numbers. (The old fixed *First Half End Time* is retired: the limit for the first half is now each shift's start + grace + the three windows.)
 - **What HR sees:** each day's *reason* says which zone it fell in and why (for example "Quarter-shift arrival: first punch 11:00 is after the Late window ended (10:10) … 0.25 shift deducted"). Payroll pays the day by the shifts earned, so a quarter-shift day is paid at 0.75.
 - **WhatsApp:** the "Late Attendance" alert is sent only for the Late window. A quarter-shift or second-half arrival gets no Late alert.
+- **Compensation:** a next-day late-in allowance, a company-announced late-in time or birthday leave can move these limits later, or switch the detection off, for that one morning or day. The day then carries a Compensation mark (see *Compensation marks on attendance screens*). Staff only.
 
 #### Without Permission (WP) Policy
 Similarly configured — if an employee is absent without a prior leave approval, it's tracked separately and may carry a different deduction slab.
@@ -570,6 +589,22 @@ The payroll page also shows older sessions from before the current payroll syste
 - ❌ Do not publish payroll if any employee's pay looks incorrect — re-check attendance first.
 - ❌ Do not generate payroll twice for the same month (this creates duplicate records).
 
+#### The Compensation page (four tabs)
+**Compensation** (sidebar, under **Payroll**) is where HR sees and gives compensation for extra work and for days the company treats differently. It has four tabs. The tab and its filters are kept in the page's address, so a reload or a shared link opens the same screen.
+
+| Tab | What it is for |
+|---|---|
+| **CTC Breakdown** | Every employee's salary split and annual CTC (unchanged: described just below) |
+| **OT Detection** | Staff who worked past their shift end: the automatic **next-day late-in allowance** (Type 1) and the **shift-based compensation** that HR assigns (Type 2) |
+| **Compensation Leave** | **A.** company-announced late-in / early-out days, **B.** work on Sundays and company holidays (with the compensation balance), **C.** birthday leave |
+| **History & Reports** | Who benefited from each kind of compensation, by Today / Week / Month, with Excel and CSV export |
+
+- **Staff employees only.** OT Detection, Compensation Leave and History & Reports never list, detect or change anything for production employees. (CTC Breakdown still covers every active employee.)
+- **Every rule is in Settings.** The times, minutes, shifts and the on/off switch of each feature are on **Settings → Compensation** (see *Compensation* under 4.10 Settings). A part of the page whose feature is switched off says so and links to the switch; what it already recorded stays readable.
+- **Master switch.** **Settings → Payroll → OT / Compensation** switches all of this on or off at once. While it is off nothing is detected, allowed, announced or paid and the buttons that change something are paused, but the page stays in the sidebar and every record can still be read. Nothing is deleted.
+- **Not retroactive.** A feature that changes how a day is judged works only from the date set for it in Settings, so opening an old month again does not change it, and payslips that are already generated are never rewritten.
+- **Who can use it.** The page follows the **Compensation** permission and the Settings tab follows **Settings → Compensation** (both set in Account Management). With View Only you can browse, filter and export, but not assign, reject, announce, raise, redeem or save.
+
 #### Compensation page — CTC Breakdown
 The **Compensation** page (sidebar) has a **CTC Breakdown** tab that lists every active employee's salary the way it was entered on Add / Edit Employee — the **50% + 50% salary split**:
 
@@ -585,6 +620,102 @@ followed by **Employer PF**, **Employer ESI**, **Gross Monthly** and **Annual CT
 - An employee with no monthly salary (paid per shift) shows dashes.
 - **Export to Excel** includes the same columns plus the two portion totals and whether the split is *Recorded* or *Automatic*. The Report Center's *Employer Cost / CTC Statement* uses the very same figures.
 - Display only: payroll generation and salary slips are never affected. The old Basic % / HRA % boxes (Settings → Payroll → Compensation) are no longer used.
+
+#### Compensation page — OT Detection
+**What it's for:** staff who keep working after their own shift end earn compensation, in one of two ways. The page shows one month at a time (month, year, department and a search box at the top), under five tiles (*Type 1 earned*, *Type 1 used*, *Type 2 waiting for HR*, *Assigned this month*, *Rejected*), with the two types in two separate lists. The overtime is found from the punches in the background (about every 15 minutes, whether or not anybody has this page open), so the lists and the employees' own Compensation page are always up to date. Nothing is listed for Sundays, company holidays (use **Compensation Leave → B** for those) or production employees.
+
+##### Type 1: next-day late-in allowance (automatic, never paid)
+Nobody assigns or claims it. A staff member who works extra time after the shift end gets extra minutes for the **first punch of the next working day** (Sundays, company holidays and a Saturday off are skipped). If they arrive late **within** the allowance, that morning is **not** marked Late and is not cut by the quarter-shift rule: attendance marks it **Compensation** instead. If they arrive on time, the allowance is simply not used and nothing is marked. Using it is the employee's choice.
+
+The minutes come from a table in **Settings → Compensation**. The default:
+
+| Extra work after the shift end | Allowance for the next morning |
+|---|---|
+| 1 hour | 30 minutes |
+| 1 hour 30 minutes | 30 minutes |
+| 2 hours | 60 minutes |
+| 2 hours 30 minutes | 60 minutes |
+
+- A day earns the allowance of the row with the most extra work it reaches (1 h 45 min earns the 1 h 30 min row: 30 minutes). Less than the smallest row earns nothing.
+- Type 1 covers extra work **up to** where Type 2 starts (2 h 30 min by default). More than that is Type 2 and earns no allowance.
+- The allowance moves the Late limit of that one morning later: shift start + allowance + the shift's own grace. Example: a 09:00 shift with 10 minutes' grace and a 60-minute allowance is not Late until 10:10. An approved Morning Late-In permission is used first, so the allowance only helps when the arrival is still late after it; the same lateness is never excused twice.
+- The list is read-only: employee, OT date, shift end, last punch, extra time, the allowance, and **Used?** (*Used on 12 Oct 2026 (18 min)* or *Not used*). **How the allowance is worked out** unfolds the table now in force.
+
+##### Type 2: shift-based compensation (HR assigns it)
+For staff whose last punch-out is **more than 2 hours 30 minutes** past their shift end. It is not automatic: each such day waits under **Waiting for HR** with the shifts the rules **suggest** (0.25, 0.50, 0.75 or 1 shift) from the time of the day's last punch-out. The default:
+
+| Last punch-out | Suggested shifts |
+|---|---|
+| before 9:00 PM | 0.25 |
+| 9:00 PM up to midnight | 0.50 |
+| midnight up to 2:00 AM | 0.75 |
+| 2:00 AM or later | 1 |
+
+A punch-out exactly at 9:00 PM is already in the 0.50 row, and exactly at midnight in the 0.75 row.
+
+- **Assign:** tick the days and press **Assign**. The window asks:
+  1. **How to give it:** **Relaxation** (an alternative day off) or **Payment**. Only the ones switched on in Settings are offered.
+  2. **Shifts** for each record. It starts at the suggestion; HR may choose any of 0.25, 0.50, 0.75 or 1.
+  3. **The date it is granted:** any date in the **same month** as the overtime, past or future. Required for Relaxation, optional for Payment.
+
+  The window says what will happen before anything is sent. A record the system refuses stays in the window with the reason; the others are assigned. A record can be assigned only once, and every assignment is logged.
+- **Relaxation:** the granted day is topped up by the shifts and marked **Compensation**, so the employee is paid for that day while taking time off. It can be an absent or half day, but not a Sunday, a company holiday or a weekly off, and a day never goes above 1 shift in all (the system refuses, and says how much the day can still take).
+- **Payment:** that month's payroll adds **shifts × one day's pay** (the month's salary divided by its working days) as OT pay on top of the salary. A payslip already generated keeps its amount until that month's payroll is generated again. Payment is for Type 2 only.
+- **Reject:** for a day that was authorised work, not real overtime. A rejected record gets no compensation, leaves the list and cannot be put back from this page.
+- **Assigned and rejected** (below the waiting list, filterable by status) shows what HR already dealt with: the shifts, how it was given (for example *Relaxation on 5 Mar 2026*) and who assigned it.
+
+##### Earlier records (before the new OT rules)
+Overtime recorded before the overhaul keeps its old meaning: *Pay* is one day's pay and *Relaxation* is one Alternative-Day credit (it counts as 1 shift in the balance, see B below). A still-waiting old record can be announced as Pay or Relaxation, or rejected. New overtime is never listed there.
+
+#### Compensation page — Compensation Leave
+Three parts, each with its own switch in **Settings → Compensation**. Choose the part with the three buttons at the top; the part is kept in the address, so a link can open the one you want (the **Requests** page links straight to B).
+
+##### A. Announce late-in / early-out
+For a day when the company lets staff arrive later or leave earlier (heavy rain, a transport strike, a festival).
+1. Choose **Late-in** (staff may arrive up to a time) or **Early-out** (staff may leave from a time).
+2. Enter the **Date** (today or later, up to 180 days ahead), the time (*Latest arrival time* or *Earliest leaving time*) and a **Reason** (required; staff see it with the announcement).
+3. Leave **Department** and **Branch** on *Any* to cover all staff, or pick one to narrow it.
+4. Press **Add announcement**. A sentence under the form says exactly what it will do, and the list shows how many staff each announcement covers.
+
+What it does, **on that date only:** the shift's own start (or end) and its grace do not apply, so arriving by the announced time is not Late (after it, the usual Late rules count from that time) and leaving at or after the announced time is not an Early Out. Staff who used it get the **Announced late-in / early-out** mark in attendance. It is a company announcement, not a leave: a day nobody attended is still absent. Production employees are never covered. A person has one late-in and one early-out per date. Only a **future** announcement can be deleted (after a question). Older *Compensation Day* announcements keep their old meaning and stay in the list.
+
+##### B. Work on Sundays and company holidays
+Compensation for staff who worked on a Sunday or a company holiday, in 0.25, 0.50, 0.75 or 1 shift. **Only HR raises it, and it counts only after the employee's Department Head approves it.**
+1. **Raise a claim.** Pick the **Date of the work** (a Sunday or a declared holiday, up to 45 days ago; **Last Sunday** is a shortcut). The staff who punched in that day are listed with their punches: tick who worked, choose the **shifts** for each (one choice can be applied to everyone ticked), write a **Reason** (required: the Department Head reads it) and press **Submit … for HOD approval**. It is all or nothing: if one person cannot be claimed for (for example a claim for that day already exists), none is raised and the page says who. One claim per person per date; a rejected one can be raised again.
+2. **The Department Head decides** in **Approvals** (see *Holiday / Sunday work: the Department Head's side* under 4.9). HR cannot approve it. An approval adds the shifts to the employee's **compensation balance**, once; a rejection adds nothing. If the employee has no Department Head, is one themself, or the head's **Compensation** switch is off, the claim is still raised but the page warns that nobody can decide it yet.
+3. **Follow it** in the **Claims** list: tiles for *Waiting for HOD*, *Approved* and *Rejected* (with the shifts), filters (month of the work or *Whole year*, year, status), and each claim's step and who decided it. A claim that is still waiting can be **Withdrawn** (it leaves the Department Head's queue and can be raised again).
+4. **Redeem the balance.** The **Compensation balance** card lists every employee with shifts to take. **Details** shows every credit and every day off taken. **Redeem** asks for the **day off** and how many **shifts** (0.25 to 1, not more than the balance); that day is topped up by those shifts and marked **Compensation**, and the balance goes down by the same amount. The day cannot be a Sunday, a company holiday or a weekly off, and never goes above 1 shift. Employees cannot redeem for themselves. **Earlier Alternative-Day credits** (from overtime announced before the overhaul) are listed below: each available one counts as 1 shift in the balance.
+
+Claims can be raised only while the **Holiday work** switch (Settings → Compensation) and the **Holiday / Sunday work compensation** approval (User Management → Approval Workflow Control) are both on; the page says which one is off.
+
+##### C. Birthdays
+**Automatic: HR does nothing.** On a staff member's birthday (from the date of birth on their employee record) they get **paid compensation leave for the whole day**: the day counts as Present with one full shift whether they attend, stay absent, work half a day, arrive late or leave early, and no Late, Early Out, half-day or permission rule applies to it. Payroll pays it as a full working day. A day HR set by hand in attendance is kept as HR set it.
+- Nothing extra is given when the birthday falls on a Sunday, a company holiday or a weekly off (already a day off), before the employee joined, or when there is no date of birth on file. A 29 February birthday is given on 28 February in other years. It applies from the date set in Settings: earlier birthdays are never changed.
+- The page lists who has a birthday (**Today**, **Week** or **Month**, with arrows and a date box), whether they **get the paid leave** (and the reason when not), what their attendance shows and whether the day is already **marked** in attendance. The year of birth is never shown.
+
+#### Compensation page — History & Reports
+**What it's for:** who benefited from each kind of compensation. Choose **Today**, **Week** (Monday to Sunday) or **Month** and a date inside it (the arrows step one period; **Go to today**), and optionally narrow it to one **type**, a **department** or a **branch**. It can always be read, whatever the switches say.
+- Three tiles show the period, the employees who benefited and the number of records. **Who benefited from each type** lists the seven types with their counts: click one to jump to its table.
+- Each type has its own summary and a table with the columns that matter for it, filed under the date it belongs to:
+
+| Type | Who is listed | Filed under |
+|---|---|---|
+| OT: next-day late-in allowance | Days that earned an allowance, and whether the employee used it | The overtime day |
+| OT: shift compensation as relaxation | Type 2 days given as a day off: applied, or coming up | The day off granted |
+| OT: shift compensation as pay | Type 2 days given as pay, with the amount (marked as an estimate until the month's payslip has the figure) | The granted date |
+| Company late-in window, Company early-out window | Staff who actually used an announcement | The day |
+| Holiday / Sunday work | Every claim with its status and who raised and approved it, plus the balance redeemed as days off in the period | The work date |
+| Birthday leave | Staff with a birthday in the period who get the paid leave | The birthday |
+
+- **Export** gives **Excel (.xlsx)** (one workbook: a *Summary* sheet and a sheet for each type with all its columns) or **CSV** (every row on screen in one plain table).
+- A type switched off in Settings says so; what it gave earlier stays listed. Overtime from before the overhaul is not in this report: it stays on OT Detection under *Earlier records*.
+
+#### What NOT to do in Compensation
+- ❌ Do not use the master switch to pause one feature: it stops all of them, and attendance pages re-judge the affected days. Use that feature's own switch on **Settings → Compensation**.
+- ❌ Do not switch a feature on with an *applies from* date in the past unless you want those days judged with it when they are opened or their month is generated again. Leave the date at today.
+- ❌ Do not assign Type 2 as **Payment** before checking the punches: it adds OT pay the next time that month's payroll is generated.
+- ❌ Do not Reject a day you may still want to compensate: a rejected record cannot be put back from the page.
+- ❌ Do not raise a Sunday / holiday work claim without a clear reason: the Department Head decides from what you write, and an approval puts shifts in the balance.
 
 ---
 
@@ -734,8 +865,9 @@ Click the Pending Resignations card — it will tell you to go to the **Resignat
 **Step 1: Create User**
 - Click **Create User**. The **Add Department User** window has three parts: who, what they can approve, and an optional note.
 - Search for and select the employee who should become an approver (anyone who already is an approver is not offered). Their name, designation and department are shown once chosen.
-- Choose what they can approve. Each kind of request is a card you switch on or off (all seven are on by default), with **Enable all** / **Disable all** shortcuts and a count of how many are on:
-  - Leave · Permissions & Outpass · Casual leave · Attendance edits · Missing punch · On-Duty (geo punch) · Resignations
+- Choose what they can approve. Each kind of request is a card you switch on or off (all eight are on by default), with **Enable all** / **Disable all** shortcuts and a count of how many are on:
+  - Leave · Permissions & Outpass · Casual leave · Attendance edits · Missing punch · On-Duty (geo punch) · Resignations · Compensation
+  - **Compensation** (called *Can approve compensation* in Approval Workflow Control) lets the Department Head decide the Holiday / Sunday work claims that HR raises: see *Holiday / Sunday work: the Department Head's side* below.
   - Under each card you see **how that request is routed** (for example *Employee → HOD or HR*). If the Department Head has **no step** in that request's pipeline, or the approval is switched **off**, the card says so, because the switch would then change nothing. The routing itself is set in Approval Workflow Control.
 - Press **Add User**, or **Add & choose departments** to go straight to the next step.
 
@@ -782,6 +914,7 @@ Open **User Management → Approval Workflow Control**. Every approval in the sy
 | Resignation | Employee → HOD → HR (HR can always reject) | Yes |
 | On-Duty punch verification | Employee → HR | No — only HR sees the punch photos; it follows On-Duty |
 | Attendance correction | HR → HOD | No — HR asks for the change, the Department Head must approve it |
+| Holiday / Sunday work compensation | HR → HOD | No — HR raises the claim, the Department Head must approve it; it can only be switched on or off |
 | Other requests (tickets) | Employee → HR | No — there is no Department Head screen for them |
 | Advance | HR → HR | No — advances are entered and approved by HR only |
 
@@ -809,6 +942,14 @@ Each card shows what the request is for, the **current approval pipeline**, an *
 - ❌ Do not make a Department Head step **mandatory** if some employees have no Department Head (or are Department Heads themselves): their requests would wait until that changes. Make the step optional, or leave HR able to decide.
 - ❌ Do not remove HR from a pipeline unless you mean it: HR then sees those requests but can no longer approve or reject them.
 - ❌ Do not switch an approval OFF just to hide it: employees get an error when they try to submit.
+
+#### Holiday / Sunday work: the Department Head's side
+Holiday / Sunday work compensation is the one request that **starts with HR**. HR raises it on **Compensation → Compensation Leave → B**, and the employee's Department Head is the only approver. Staff only: production employees have no such claims.
+- **Where the Department Head sees it:** in **Approvals**, on the **Compensation** tab of the Mobile App (**Holiday Work** in the Employee Web App). Each claim shows the employee, the work date, whether it was a Sunday or a holiday, the shifts claimed, the reason and who raised it. The tab appears only for a head whose **Compensation** switch is on (HOD Assignment), and a waiting claim counts in their pending total.
+- **Deciding:** **Approve** adds the claimed shifts to the employee's compensation balance, once (the sheet says how many, and to whom). **Reject** adds nothing and is final. A claim is decided only once, and a head cannot decide a claim about themself. The employee is told either way.
+- **HR cannot approve or reject it.** HR sees it on the **Requests** page as its own tab, **Holiday / Sunday work** (waiting for HOD, approved, rejected); **Open in Compensation** goes to the claims list.
+- **Switching it off:** the approval has an ON / OFF switch in Approval Workflow Control (its pipeline is fixed: HR → HOD). OFF stops new claims; claims already waiting can still be decided.
+- If the employee has no Department Head, or is one themself, a claim can still be raised, but nobody can decide it until a head is assigned: HR sees a warning when raising it.
 
 ---
 
@@ -871,6 +1012,37 @@ Configures the automatic late penalty rules:
 - **Free Allowance:** Number of late arrivals allowed per month before any deduction.
 - **Late Slabs:** After the free allowance is used, each additional late arrival triggers a salary deduction. Example: "After 3 lates total, each additional late = 0.5 shift deduction."
 - **Without-Permission (WP) Slabs:** Separate table for unplanned absences (no prior leave approval). Same structure as late slabs.
+
+---
+
+#### Compensation
+
+**What it's for:** the rules and the on/off switch of every compensation feature, **for staff employees only** (production employees are never affected). It works like the Late-In and Early-Out controls: each feature has its own switch, and every time, minute and shift amount can be edited. What the features do on the Compensation page is described under *The Compensation page (four tabs)* in 4.5.
+
+The tab is **one form with one Save button** (**Save Compensation Settings**; it says who saved last and when). Every setting explains itself (what it does, what it changes and where, its default), and Type 1 and Type 2 each have a **Worked example** you can try with your own numbers without saving anything.
+
+**The master switch.** The strip at the top shows whether the **OT and Compensation features** master switch is ON or OFF. It can be changed only in **Settings → Payroll → OT / Compensation** (turning it off asks first). A feature acts only while **its own switch and the master switch are both on**. While the master switch is off this tab can still be edited and saved, but nothing is detected, allowed, announced or paid, and attendance pages re-judge the affected days straight away, past ones included. Nothing is deleted, and payslips already generated are not rewritten.
+
+| Setting | Default | What it does |
+|---|---|---|
+| **Type 1: automatic next-day late-in allowance** | Off | Extra work after the shift end earns extra minutes for the next working morning. Automatic and never paid |
+| **Type 1 applies from** | Today, whenever Type 1 is switched on | The first day the allowance is used |
+| **Allowance table** | 1 h → 30 min · 1 h 30 → 30 min · 2 h → 60 min · 2 h 30 → 60 min | How much extra work earns how many minutes |
+| **Type 2: shift-based compensation** | Off | Staff who work more than the threshold past the shift end are listed for HR to assign |
+| **Type 2 starts after** | 150 minutes (2 h 30 min) | A day needs *more* than this past the shift end; exactly this much is still Type 1 |
+| **Give as Relaxation** | On | HR may give a Type 2 day as an alternative day off |
+| **Give as Payment** | Off | HR may give a Type 2 day as pay: shifts × one day's pay. This changes pay |
+| **Type 2 table** | before 9:00 PM 0.25 · before 12:00 AM (midnight) 0.50 · before 2:00 AM next day 0.75 · no limit 1.00 | The shifts suggested for the day's last punch-out |
+| **A. Company-announced late-in / early-out** | Off | HR may announce late-in / early-out days (Compensation Leave A) |
+| **B. Work on Sundays and company holidays** | Off | HR may raise Sunday / holiday work claims (Compensation Leave B). Who approves is set in Approval Workflow Control, not here |
+| **C. Birthday leave** | Off | Staff get a paid day on their birthday (Compensation Leave C) |
+| **Birthday leave applies from** | Today, whenever it is switched on | The first birthday that is given |
+
+- **The two tables are editable.** Each row has an **In use** switch (a row that is off stays in the table but is not used), a name, its amounts and a bin to remove it; **Add a rule** adds a row. In the Type 1 table you give the extra work (hours and minutes) and the allowance (0 to 240 minutes); rows are kept in order of extra work, and no two rows that are on may ask for the same amount. In the Type 2 table you write the last punch-out as a clock time (*9:00 PM*; after midnight *2:00 AM next day*) under **Last punch-out before**, so a punch-out exactly at a row's time belongs to the next row; the shifts are 0.25, 0.50, 0.75 or 1.00; and the last row that is on must have **No upper limit**, so every later punch-out still earns a shift. The page points out what is wrong before you save.
+- **Relaxation or Payment.** While Type 2 is on, at least one of them must be on. Both can be on (HR chooses each time). Payment changes pay: a payslip already generated keeps its amount until that month's payroll is generated again. Type 1 is never paid, and a Relaxation adds no OT pay: it only makes the chosen day a paid one.
+- **Dates: never retroactive.** Type 1 and birthday leave have an *applies from* date. Whenever you switch one of them on, it starts **today** (the **Use today** button, or pick a later date). Days before the date are never changed, even when their month is opened or generated again. A date in the past is allowed, but the page warns you: the days from then until today are judged with it when they are opened or generated again, and a month whose payroll is generated again will change. Payslips already generated are never rewritten by a save. Type 2 and B have no date (HR assigns by hand), and an announcement (A) acts only on its own date.
+- **Warnings.** An allowance row that asks for more extra work than where Type 2 starts can never apply; the page and the server say so, and the save still goes through.
+- **Who can change it.** The tab follows **Settings → Compensation** in Account Management. The rules apply to the whole company, so a login limited to one branch can read them but not save changes.
 
 ---
 
@@ -1107,6 +1279,39 @@ If any details need to be updated, the employee must request HR to change it.
 - Any HR announcements
 
 Notifications are shown with a timestamp. Read notifications appear dimmer than unread ones.
+
+---
+
+### 5.6 Compensation
+
+**Employee Web App and Mobile App; staff employees only.** Production employees do not get this page (the apps tell them it is for staff employees).
+
+**What it shows:** everything compensation-related for the signed-in staff employee: what the system **detected** and what HR **assigned**. The employee cannot assign or claim anything in the app; they ask HR. It has two tabs:
+
+- **My Compensation**
+  - **Compensation balance:** the shifts credited to the employee (mainly from Sunday / holiday work their Department Head approved), less the compensation days HR already gave. Only HR can use the balance.
+  - **Late-in allowance** for today and tomorrow, when one applies: *You may arrive until 10:15 without being marked late* (shift start + allowance + the shift's grace). It is automatic: there is nothing to claim.
+  - The employee's items, newest first, grouped as **Detected for you**, **Assigned by HR**, **Company announcements**, **Birthday leave** and **Compensation days taken**, each with a status (a Sunday / holiday work claim reads *Waiting for your Department Head*, then *Approved* or *Not approved*), with filters by kind. The list covers the last 90 days and the announcements coming up.
+  - If HR has switched the compensation features off, a note says so; the records stay readable.
+- **Ask Request for Compensation:** explains that the system detects extra hours and Sunday / holiday work and shows them, and that if extra work is missing from the list, or the employee wants to claim compensation, they contact HR with the date and the time they worked until. It cannot be claimed in the app. The Call / WhatsApp / Email card is the HR contact from **Settings → HR Contact**.
+
+**On the attendance calendar:** a day that used a compensation is drawn in its own colour with its own symbol (late-in allowance used, company late-in time, company early-out time, birthday leave, relaxation day), and a legend under the calendar lists them. Opening the day says what happened, in the system's own words. A birthday or relaxation day has no punches, so it shows as that compensation and not as *Absent*.
+
+**Notifications:** when a Department Head decides a Sunday / holiday work claim, the employee gets a notification (and a WhatsApp message where WhatsApp alerts are on). Opening it goes to the Compensation page.
+
+A Department Head decides these claims in the app's **Approvals** (see *Holiday / Sunday work: the Department Head's side* under 4.9).
+
+---
+
+### 5.7 HOD Assignment
+
+**Employee Web App and Mobile App; every employee.**
+
+**What it shows:** who the employee's Department Head is, how to reach them and what that head can approve.
+- A card with the head's **photo, name, designation, department, branch, phone** (tap to call, or copy it) and **email**.
+- **What your Department Head can approve:** one row for each kind of request (Leave, Permission, Casual Leave, Missing Punch, On-Duty, Attendance Correction, Resignation, Outpass, Holiday / Sunday work compensation), marked **Can approve** or **Cannot approve**. When it is *Cannot approve*, the reason is given (*Switched off by HR*, *HR decides this one*, *Not enabled for your Department Head*) together with the route a request takes. The list reads Approval Workflow Control and the head's switches in HOD Assignment, so it always shows what really applies. Production employees do not see Casual Leave or Holiday / Sunday work.
+- *For any question about approvals, contact HR*, with the HR contact card.
+- An employee with no Department Head sees *No Department Head assigned yet*; a Department Head sees that HR decides their own requests.
 
 ---
 
@@ -1420,6 +1625,9 @@ When an HR user's permission for a specific module is set to "View Only," they c
 | See which departments are understaffed | Recruitment Dashboard |
 | Give a team leader approval powers | User Management → Create User |
 | Change how late attendance is penalized | Settings → Late Detection |
+| Give staff compensation for extra hours or Sunday / holiday work | Compensation → OT Detection / Compensation Leave |
+| See who benefited from compensation this week or month | Compensation → History & Reports |
+| Change a compensation rule, or switch a compensation feature on or off | Settings → Compensation |
 | Set up a new fingerprint device | Settings → Devices |
 | Backup all data now | Settings → Backup → Run Backup Now |
 

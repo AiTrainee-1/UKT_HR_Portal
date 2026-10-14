@@ -154,6 +154,16 @@ KINDS: tuple[Kind, ...] = (
         ("pending",),
     ),
     Kind(
+        "holiday_work",
+        "Holiday / Sunday work",
+        "compensation",
+        "HolidayWorkClaim",
+        "link",
+        "/hr/compensation",
+        "Compensation",
+        ("pending",),
+    ),
+    Kind(
         "resignation",
         "Resignation",
         "recruitment.resignations",
@@ -426,6 +436,23 @@ def _correction(r):
     }
 
 
+def _holiday_work(r):
+    day = "Sunday" if r.work_date.weekday() == 6 else "Holiday"
+    return {
+        "label": "Holiday / Sunday work",
+        "summary": f"{r.work_date} · {float(r.shifts):g} shift",
+        "reason": r.reason,
+        "date": str(r.work_date),
+        "details": [
+            ("Work date", str(r.work_date)),
+            ("Day", day),
+            ("Shifts claimed", f"{float(r.shifts):.2f}"),
+            ("Raised by", r.requested_by or "HR"),
+        ],
+        "decision": (r.reviewed_by, "hod" if r.reviewed_by else None, r.reviewed_at, r.review_comment),
+    }
+
+
 def _resignation(r):
     details = [("Last working day", _iso(r.last_working_date) or "Not given")]
     if r.dept_head_id and r.dept_head:
@@ -471,6 +498,7 @@ BUILDERS: dict[str, Callable] = {
     "outpass": _outpass,
     "request": _request,
     "attendance_correction": _correction,
+    "holiday_work": _holiday_work,
     "resignation": _resignation,
     "advance": _advance,
 }

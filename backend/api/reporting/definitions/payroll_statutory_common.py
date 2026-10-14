@@ -297,7 +297,8 @@ def feature_off_result_notes(settings, *, need_detection: bool = False) -> list[
         )
     elif need_detection and not settings.ot_detection_enabled:
         notes.append(
-            "Overtime detection is switched off in Settings > Payroll. Records already detected while it was "
-            "on (and announced ones that were paid) are still listed; no new overtime is being detected."
+            "Overtime detection is switched off in Settings > Compensation (neither the next-day late-in allowance nor "
+            "the shift-based compensation is on). Records already detected while it was on (and announced ones that "
+            "were paid) are still listed; no new overtime is being detected."
         )
     return notes

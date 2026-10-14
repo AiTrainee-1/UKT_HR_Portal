@@ -33,6 +33,7 @@ AUDIT_MODULES = (
     ("attendance", "Attendance"),
     ("bonus", "Bonus"),
     ("compensation", "Compensation"),
+    ("compensation_settings", "Compensation settings"),
     ("payroll", "Payroll"),
     ("mobile_app_login", "Mobile app login"),
     ("mobile_app_version", "Mobile app version"),

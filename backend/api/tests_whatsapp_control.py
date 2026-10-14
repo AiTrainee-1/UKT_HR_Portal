@@ -387,6 +387,7 @@ class CentralControlTests(ControlBase):
             "approvalMissingPunchEnabled",
             "approvalOutpassEnabled",
             "approvalAttendanceCorrectionEnabled",
+            "approvalHolidayWorkEnabled",
             "approvalResignationEnabled",
             "approvalAdvanceEnabled",
             "approvalRequestEnabled",

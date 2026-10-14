@@ -187,6 +187,19 @@ class AttendanceDayRecord(models.Model):
     # punches (against leave_until_time as the effective shift end, when set)
     # -this flag never changes shifts_earned by itself.
     is_compensation_day = models.BooleanField(default=False, db_column="is_compensation_day")
+    # WHICH compensation shaped this day, for HR and the employee apps (display only: shifts_earned is what payroll
+    # reads). "" | "ot_allowance" (a next-day late-in allowance from OT absorbed a late arrival) | "window_late_in" |
+    # "window_early_out" (a company-announced window was used) | "birthday" | "relaxation" (an OT relaxation or a
+    # redeemed balance topped the day up). `compensation_minutes` = the allowance minutes used (ot_allowance),
+    # `compensation_note` = one plain sentence. db_default: see the permission columns above.
+    compensation_kind = models.CharField(max_length=24, default="", blank=True, db_default="", db_column="compensation_kind")
+    compensation_minutes = models.IntegerField(default=0, db_default=0, db_column="compensation_minutes")
+    compensation_note = models.TextField(default="", blank=True, db_default="", db_column="compensation_note")
+    # OT measurement: whole minutes the day's LAST punch was past the real shift end (0 = no OT, a day off, fewer
+    # than two punches, or no shift). Taken from the engine's own seconds-since-this-day's-midnight punch list, so a
+    # punch made after midnight (and reattributed to this day) is correctly after the shift end. A plain fact, not
+    # gated by any compensation switch: OT detection and the Type 1 allowance read it. db_default: see above.
+    ot_extra_minutes = models.IntegerField(default=0, db_default=0, db_column="ot_extra_minutes")
     # HR-set report annotation for the Report Log page's Daily Report (on-leave
     # employees: did they inform in advance?) -null/blank = never set, True =
     # Informed, False = Not Informed. Set only via PATCH /api/attendance/

@@ -2,7 +2,7 @@
 WhatsApp messages for approval decisions -one place for every approval workflow.
 
     leave / permission / casual leave / missing punch / outpass / attendance correction /
-    resignation / advance / other employee requests
+    holiday-work compensation / resignation / advance / other employee requests
 
 Each workflow has a small *builder* that turns its own record into the common shape the
 "Approval - Approved" / "Approval - Rejected" wording expects (what was asked for, when, why).
@@ -186,6 +186,21 @@ def _attendance_correction(r) -> Summary:
         details=_join(change, r.reason),
         reason=r.reason or "",
         requested_on=_stamp(r.created_at),
+    )
+
+
+@register("holiday_work", "/employee/compensation")
+def _holiday_work(r) -> Summary:
+    day = "Sunday" if r.work_date.weekday() == 6 else "Holiday"
+    return Summary(
+        r.employee,
+        "Holiday Work Compensation",
+        r.id,
+        date=_date(r.work_date),
+        details=_join(f"{day} work: {float(r.shifts):g} shift", r.reason),
+        reason=r.reason or "",
+        requested_on=_stamp(r.created_at),
+        next_step="The shifts are now in your compensation balance.",
     )
 
 

@@ -685,7 +685,10 @@ def staff_rule_groups(inp: StaffRuleInput, company: bool = True) -> list[dict]:
                 current=bool(ps.compensation_feature_enabled),
                 fmt=_on_off,
                 ref=SETTINGS["compensation_features"],
-                detail="When on, announced Pay-type overtime adds one day's pay per overtime day to the payroll",
+                detail=(
+                    "When on, assigned Pay-type overtime adds shifts x one day's pay to the payroll (an older announced "
+                    "record is one whole day)"
+                ),
                 applied=(True if dec(_got(bd, "earnings", "otAmount")) > 0 else None) if bd is not None else _UNSET,
             )
         )
@@ -870,6 +873,10 @@ def staff_settings_groups(base, ps) -> list[dict]:
             detail="The day last month's salary should be paid by; it only warns on the MD portal and changes no pay",
         ),
     ]
+    # read-only: a missing row is read as the defaults and never created by a GET
+    from .models import CompensationConfig
+
+    cfg = CompensationConfig.objects.filter(pk=1).first() or CompensationConfig()
     overtime = [
         _item(
             "compensation_features",
@@ -878,25 +885,46 @@ def staff_settings_groups(base, ps) -> list[dict]:
             current=bool(ps.compensation_feature_enabled),
             fmt=_on_off,
             ref=SETTINGS["compensation_features"],
-            detail="When on, announced Pay-type overtime adds one day's pay per overtime day, and Compensation Days excuse late marks",
+            detail=(
+                "The master switch of every OT and Compensation feature below. When on, assigned Pay-type overtime adds "
+                "shifts x one day's pay to the payslip"
+            ),
         ),
         _item(
-            "ot_detection",
-            "Find overtime automatically",
+            "ot_allowance",
+            "Next-day late-in allowance (Type 1)",
             "settings",
-            current=bool(ps.ot_detection_enabled),
+            current=bool(cfg.allowance_enabled),
             fmt=_on_off,
-            ref=SETTINGS["ot_detection"],
-            detail="Flags staff who work past their shift end so HR can review each day; a flag alone pays nothing",
+            ref=SETTINGS["ot_allowance"],
+            detail="Staff who work extra after the shift end may arrive later next morning without a Late mark; automatic, never paid",
         ),
         _item(
-            "ot_threshold",
-            "OT threshold",
+            "ot_shift",
+            "Shift-based OT compensation (Type 2)",
             "settings",
-            current=ps.ot_threshold_minutes,
+            current=bool(cfg.shift_enabled),
+            fmt=_on_off,
+            ref=SETTINGS["ot_shift"],
+            detail="Flags staff who work well past their shift end so HR can assign 0.25 to 1 shift as relaxation or pay; a flag alone pays nothing",
+        ),
+        _item(
+            "ot_shift_threshold",
+            "Type 2 starts after",
+            "settings",
+            current=cfg.shift_min_extra_minutes,
             fmt=_minutes,
-            ref=SETTINGS["ot_threshold"],
-            detail="Minutes after the shift end a last punch must be for the day to count as overtime",
+            ref=SETTINGS["ot_shift_threshold"],
+            detail="Minutes past the shift end a last punch must be for the day to need an HR decision (Type 1 covers less)",
+        ),
+        _item(
+            "ot_shift_pay",
+            "Type 2 as payment",
+            "settings",
+            current=bool(cfg.pay_enabled),
+            fmt=_on_off,
+            ref=SETTINGS["ot_shift_pay"],
+            detail="Whether HR may give Type 2 as money (shifts x one day's pay); relaxation is a separate switch",
         ),
     ]
     return _assemble(

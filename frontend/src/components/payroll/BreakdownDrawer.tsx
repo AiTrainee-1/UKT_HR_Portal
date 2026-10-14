@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { usePayrollBreakdown, type PayrollRunItem } from "@/lib/api-client";
 import { halfDayWorked, latePoolView } from "@/lib/late-detection";
+import { CompensationChip, compensationMark } from "@/components/attendance-compensation";
 import {
   IndianRupee,
   Lock,
@@ -550,7 +551,7 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                                   d.isHalfShift && halfDayRule
                                     ? halfDayWorked(d.firstIn, halfDayRule.firstHalfEnd, d.arrivalZone)
                                     : null;
-                                return d.isLate || d.isEarlyOut || d.isHalfShift ? (
+                                return d.isLate || d.isEarlyOut || d.isHalfShift || compensationMark(d) ? (
                                   <span className="flex flex-wrap gap-1">
                                     {d.isLate &&
                                       (d.withoutPermission ? (
@@ -573,6 +574,8 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                                         Half Day{half ? ` · ${half === "morning" ? "Morning" : "Evening"} half` : ""}
                                       </span>
                                     )}
+                                    {/* drawn only when the stored breakdown carries the marker (payroll does not store it today) */}
+                                    <CompensationChip day={d} size="sm" />
                                   </span>
                                 ) : (
                                   <span className="text-gray-300">—</span>

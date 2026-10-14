@@ -258,6 +258,17 @@ def worked_minutes(secs: list[int], shift, deduct_lunch: bool = True) -> tuple[i
     return total, basis
 
 
+# What the engine writes on a day it pays WITHOUT punches on purpose (AttendanceDayRecord.compensation_kind): paid
+# birthday leave, and a Compensation relaxation / balance redemption that topped an absent day up. Such a day is
+# stored present / half_shift with source "auto" and no punches, but it is no leftover presence entry.
+PAID_WITHOUT_PUNCHES = ("birthday", "relaxation")
+
+
+def paid_without_punches(rec) -> bool:
+    kind = getattr(rec, "compensation_kind", "") or ""
+    return any(k in kind for k in PAID_WITHOUT_PUNCHES)
+
+
 def punch_exceptions(secs: list[int], rec, *, is_today: bool, has_leave: bool, is_holiday: bool) -> list[str]:
     """Exception keys (EXC_*) for one working day. ``secs`` are the day's date-aware punch seconds."""
     out: list[str] = []
@@ -272,7 +283,13 @@ def punch_exceptions(secs: list[int], rec, *, is_today: bool, has_leave: bool, i
             out.append(EXC_SINGLE)
         elif len(taps) % 2 == 1:
             out.append(EXC_ODD)
-    if rec is not None and rec.status in ("present", "half_shift") and rec.source == "auto" and n == 0:
+    if (
+        rec is not None
+        and rec.status in ("present", "half_shift")
+        and rec.source == "auto"
+        and n == 0
+        and not paid_without_punches(rec)
+    ):
         out.append(EXC_NO_PUNCHES)
     if has_leave and n:
         out.append(EXC_ON_LEAVE)
@@ -593,7 +610,9 @@ def half_worked(rec, employee, settings) -> str | None:
 
 def late_minutes(rec, shift, employee, data: AttendanceData) -> int | None:
     """Minutes the first punch is after the (permission-shifted) shift start, for a day the engine flagged late.
-    The flag itself (grace, compensation day, half-day leave ...) is the engine's; minutes are not stored anywhere."""
+    The flag itself (grace, compensation day, half-day leave ...) is the engine's; minutes are not stored anywhere.
+    A Type 1 next-day allowance moved the start later by the minutes the record carries, so they are added; a company
+    late-in window moved it to an announced time the record does not keep, so such a day is not measured."""
     if rec is None or not rec.is_late or rec.first_punch is None:
         return None
     if employee.employment_type == "production":
@@ -601,7 +620,10 @@ def late_minutes(rec, shift, employee, data: AttendanceData) -> int | None:
     elif shift is None:
         return None
     else:
+        if "window_late_in" in (getattr(rec, "compensation_kind", "") or ""):
+            return None
         base = _t2s(shift.start_time) + (3600 if rec.morning_permission_applied else 0)
+        base += 60 * (getattr(rec, "compensation_minutes", 0) or 0)
     m = (_t2s_minute(rec.first_punch) - base) // 60
     return m if m > 0 else None
 

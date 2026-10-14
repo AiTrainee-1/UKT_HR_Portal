@@ -18,6 +18,7 @@ export type KindKey =
   | "outpass"
   | "request"
   | "attendance_correction"
+  | "holiday_work"
   | "resignation"
   | "advance";
 
@@ -117,10 +118,24 @@ export const EMPTY_STATS: HubStats = {
   oldestWaiting: null,
 };
 
+/**
+ * Where "Open in ..." goes for a kind whose server address is only the page: straight to the part of the page that decides
+ * it. Holiday / Sunday work is raised and approved in Compensation -> Compensation Leave -> Holiday work (the server sends
+ * the page, /hr/compensation); an address the server already narrowed is left alone.
+ */
+const OPEN_PATH_DEEP_LINKS: Partial<Record<KindKey, { page: string; to: string }>> = {
+  holiday_work: { page: "/hr/compensation", to: "/hr/compensation?tab=leave&sub=holiday-work" },
+};
+
+const withDeepLink = (kind: HubKind): HubKind => {
+  const link = OPEN_PATH_DEEP_LINKS[kind.key];
+  return link && kind.openPath === link.page ? { ...kind, openPath: link.to } : kind;
+};
+
 /** The response with every list present, whatever an older or partial backend left out. */
 export function normalizeHub(raw: Partial<HubResponse> | null | undefined): HubResponse {
   return {
-    kinds: raw?.kinds ?? [],
+    kinds: (raw?.kinds ?? []).map(withDeepLink),
     stats: { ...EMPTY_STATS, ...(raw?.stats ?? {}) },
     items: raw?.items ?? [],
     limit: raw?.limit ?? 0,

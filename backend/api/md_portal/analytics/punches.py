@@ -68,7 +68,7 @@ from ...models import (
     MissingPunchRequest,
     UnmatchedPunch,
 )
-from ...reporting.definitions.attendance_core_data import TAP_GAP_S, device_of
+from ...reporting.definitions.attendance_core_data import PAID_WITHOUT_PUNCHES, TAP_GAP_S, device_of
 from ..assistant.tools_base import integer_param, tool
 from ..common import MdParamError, Period, Scope, cached, change, envelope, pct, prov
 from . import attendance as attendance_analytics
@@ -620,8 +620,15 @@ def _coverage_core(scope: Scope, start: date, end: date, punch_days: dict[date, 
         for r in records.filter(_punch_exists()).values("date").annotate(n=Count("id")).order_by()
     }
     stale = records.filter(_punch_exists(), status="absent").count()
+    # a day the engine pays without punches ON PURPOSE (paid birthday leave, a compensation relaxation) is no leftover
+    paid_on_purpose = Q()
+    for kind in PAID_WITHOUT_PUNCHES:
+        paid_on_purpose |= Q(compensation_kind__contains=kind)
     no_punches = (
-        records.filter(status__in=("present", "half_shift"), source="auto").exclude(_punch_exists()).count()
+        records.filter(status__in=("present", "half_shift"), source="auto")
+        .exclude(_punch_exists())
+        .exclude(paid_on_purpose)
+        .count()
     )
     punch_total = sum(n for d, n in punch_days.items() if start <= d <= end)
     recorded = sum(with_record.values())

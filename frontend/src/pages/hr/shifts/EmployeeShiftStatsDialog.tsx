@@ -2,6 +2,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Button } from "@/components/ui/button";
 import { CircleLoader } from "@/components/ui/CircleLoader";
 import { DayFlagBadges } from "@/components/DayFlagBadges";
+import {
+  CompensationChip,
+  CompensationLegend,
+  compensationMark,
+  countMarks,
+  isPunchlessRelaxation,
+} from "@/components/attendance-compensation";
 import { lateDetectionFlags, latePoolView } from "@/lib/late-detection";
 import { useEmployeeShiftMonthlyStats, usePayrollSettings } from "@/lib/api-client/custom-hooks";
 import { AlertCircle, BarChart2, TrendingDown } from "lucide-react";
@@ -321,7 +328,13 @@ export default function EmployeeShiftStatsDialog({
                           // Strict mode's lunch-return lateness, when the day record itself did not already flag it.
                           const lateReturnOnly = log.lateReturn && !log.lateAfternoon;
                           const notes: string[] = [];
-                          if (log.isHalfShift && !flags.some((f) => f.kind === "halfDay")) notes.push("½ Shift");
+                          // a day made up by a relaxation has no punches: its chip and note say so instead of "½ Shift"
+                          if (
+                            log.isHalfShift &&
+                            !flags.some((f) => f.kind === "halfDay") &&
+                            !isPunchlessRelaxation(log)
+                          )
+                            notes.push("½ Shift");
                           if (lateReturnOnly) notes.push("Late Ret");
                           if (log.leaveType) notes.push(log.leaveType);
                           return (
@@ -336,9 +349,10 @@ export default function EmployeeShiftStatsDialog({
                                 {log.totalPunches || "—"}
                               </td>
                               <td className="px-3 py-1.5">
-                                {flags.length > 0 || notes.length > 0 ? (
+                                {flags.length > 0 || notes.length > 0 || compensationMark(log) ? (
                                   <div className="flex items-center gap-1 flex-wrap">
                                     <DayFlagBadges flags={flags} size="sm" />
+                                    <CompensationChip day={log} size="sm" withNote />
                                     {notes.length > 0 && (
                                       <span
                                         className={`font-semibold ${log.isHalfShift ? "text-amber-700" : "text-orange-600"}`}
@@ -358,6 +372,7 @@ export default function EmployeeShiftStatsDialog({
                   </table>
                 </div>
               </div>
+              <CompensationLegend counts={countMarks(data.dailyLogs)} className="mt-2" />
             </div>
           </div>
         )}

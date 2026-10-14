@@ -223,6 +223,11 @@ def apply_override_values(record: AttendanceDayRecord, values: dict, reviewer_na
     record.last_punch = _parse_time(values["lastPunch"]) if values.get("lastPunch") else None
     record.shifts_earned = Decimal(str(values["shiftsEarned"]))
     record.source = "manual"
+    # Manual overrides win: whatever compensation the auto row it replaces was marked with (a birthday, an allowance, a
+    # relaxation ...) no longer describes the day, and a stale marker would draw its chip on a day HR decided by hand.
+    record.compensation_kind = ""
+    record.compensation_minutes = 0
+    record.compensation_note = ""
     record.override_by = reviewer_name
     record.override_note = values.get("note")
     record.save()

@@ -1,4 +1,14 @@
-import { CalendarDays, ClipboardCheck, Clock, Fingerprint, LogOut, MapPin, Sun, type LucideIcon } from "lucide-react";
+import {
+  CalendarDays,
+  ClipboardCheck,
+  Clock,
+  Fingerprint,
+  Landmark,
+  LogOut,
+  MapPin,
+  Sun,
+  type LucideIcon,
+} from "lucide-react";
 import type { ApprovalSummaryItem } from "@/lib/api-client/custom-hooks";
 
 // What a Department Head (HOD) may decide. Each switch is a DepartmentManager.can_approve_* flag on the server; the
@@ -12,7 +22,8 @@ export type PermKey =
   | "canApproveAttendance"
   | "canApproveMissingPunch"
   | "canApproveOnDuty"
-  | "canApproveResignations";
+  | "canApproveResignations"
+  | "canApproveCompensation";
 
 export type PermissionValues = Record<PermKey, boolean>;
 
@@ -85,6 +96,15 @@ export const PERMISSIONS: PermissionDef[] = [
     workflows: ["resignation"],
     icon: LogOut,
   },
+  {
+    key: "canApproveCompensation",
+    title: "Compensation",
+    short: "Compensation",
+    description:
+      'Holiday / Sunday work compensation that HR raises ("Can approve compensation"). An approval adds the shifts to the employee\'s compensation balance.',
+    workflows: ["holiday_work"],
+    icon: Landmark,
+  },
 ];
 
 export const PERM_KEYS: PermKey[] = PERMISSIONS.map((p) => p.key);
@@ -92,7 +112,8 @@ export const PERM_KEYS: PermKey[] = PERMISSIONS.map((p) => p.key);
 export const allPermissions = (on: boolean): PermissionValues =>
   Object.fromEntries(PERM_KEYS.map((k) => [k, on])) as PermissionValues;
 
-/** The switches of an HOD as the server sent them. An older server does not send canApproveMissingPunch: it is on. */
+/** The switches of an HOD as the server sent them. An older server does not send canApproveMissingPunch or
+ *  canApproveCompensation: they are on (the server's own default for a switch that did not exist yet). */
 export function permissionValuesOf(manager: Partial<Record<PermKey, boolean>>): PermissionValues {
   return Object.fromEntries(PERM_KEYS.map((k) => [k, manager[k] !== false])) as PermissionValues;
 }
@@ -110,6 +131,14 @@ export type PipelineTone = "ok" | "warn" | "off";
 export type PipelineNote = { tone: PipelineTone; text: string };
 
 const hasHodStep = (item: ApprovalSummaryItem) => item.steps.some((s) => s.roles.includes("hod"));
+
+/** A request HR raises and only the Department Head decides (attendance edits, Holiday / Sunday work) reads as such;
+ *  every other pipeline is shown as its path. */
+const raisedByHrForHod = (item: ApprovalSummaryItem) =>
+  item.requestedBy === "HR" && item.steps.length === 1 && item.steps[0].roles.length === 1 && hasHodStep(item);
+
+const pathNote = (item: ApprovalSummaryItem) =>
+  raisedByHrForHod(item) ? `HR raises it, the Department Head approves (${item.path})` : item.path;
 
 /** What the approval pipelines mean for this switch: the path a request takes, a warning when an HOD has no step in it
  *  (the switch changes nothing), or that the approval is switched off. null while the pipelines are not loaded. */
@@ -131,7 +160,7 @@ export function pipelineNote(
       text: `The HOD has no step in this pipeline (${live[0].path}), so this switch changes nothing right now.`,
     };
   }
-  const paths = [...new Set(live.map((i) => i.path))];
-  const text = paths.length === 1 ? paths[0] : live.map((i) => `${i.label}: ${i.path}`).join(" · ");
+  const paths = [...new Set(live.map(pathNote))];
+  const text = paths.length === 1 ? paths[0] : live.map((i) => `${i.label}: ${pathNote(i)}`).join(" · ");
   return { tone: "ok", text };
 }

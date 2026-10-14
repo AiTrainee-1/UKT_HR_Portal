@@ -28,11 +28,6 @@ export type BonusForm = {
   bonusEligibilityCeiling: string;
 };
 
-export type OtForm = {
-  otDetectionEnabled: boolean;
-  otThresholdMinutes: string;
-};
-
 export type BandRow = { label: string; minSalary: string; maxSalary: string; pfRate: string; efRate: string };
 
 export type PfEfForm = {
@@ -40,7 +35,7 @@ export type PfEfForm = {
   prodPfEfRules: BandRow[];
 };
 
-export type PayrollForms = { rates: RatesForm; bonus: BonusForm; ot: OtForm; pfEf: PfEfForm };
+export type PayrollForms = { rates: RatesForm; bonus: BonusForm; pfEf: PfEfForm };
 
 const bandText = (value: unknown): string =>
   typeof value === "number" ? boxText(value) : typeof value === "string" ? value : "";
@@ -65,10 +60,6 @@ export function savedPayroll(s: PayrollSettingsItem | undefined): PayrollForms {
       bonusPercent: boxText(s?.bonusPercent ?? 8.33),
       bonusWageCeiling: boxText(s?.bonusWageCeiling ?? 7000),
       bonusEligibilityCeiling: boxText(s?.bonusEligibilityCeiling ?? 21000),
-    },
-    ot: {
-      otDetectionEnabled: s?.otDetectionEnabled ?? false,
-      otThresholdMinutes: boxText(s?.otThresholdMinutes ?? 60),
     },
     pfEf: {
       prodPfEfEnabled: s?.prodPfEfEnabled ?? false,
@@ -107,8 +98,6 @@ const BONUS_RULES: Record<keyof BonusForm, NumberRule> = {
   bonusEligibilityCeiling: RANGES.amount,
 };
 
-const OT_RULES: Partial<Record<keyof OtForm, NumberRule>> = { otThresholdMinutes: RANGES.otMinutes };
-
 /**
  * The problem with each changed number box. A value left as it was saved is never judged (the server accepts an
  * unchanged value too), so a section can always be saved again even if an older page stored something odd.
@@ -130,7 +119,6 @@ export function fieldErrors<T extends Record<string, unknown>>(
 
 export const ratesErrors = (form: RatesForm, saved: RatesForm) => fieldErrors(form, saved, RATE_RULES);
 export const bonusErrors = (form: BonusForm, saved: BonusForm) => fieldErrors(form, saved, BONUS_RULES);
-export const otErrors = (form: OtForm, saved: OtForm) => fieldErrors(form, saved, OT_RULES);
 
 /** A bonus rate the Act does not allow: shown as a warning, not refused (some establishments are not covered). */
 export function bonusPercentWarning(text: string): string | null {
@@ -196,18 +184,6 @@ export function bonusPayload(f: BonusForm): Partial<PayrollSettingsItem> {
     bonusPercent: num(f.bonusPercent),
     bonusWageCeiling: num(f.bonusWageCeiling),
     bonusEligibilityCeiling: num(f.bonusEligibilityCeiling),
-  };
-}
-
-/**
- * "Save OT / Compensation Settings". The company-wide Compensation Type no longer has a box (the Compensation page asks
- * Pay or Relaxation on every announcement), but it is sent back exactly as saved, as this button always did.
- */
-export function otPayload(f: OtForm, s: PayrollSettingsItem | undefined): Partial<PayrollSettingsItem> {
-  return {
-    otDetectionEnabled: f.otDetectionEnabled,
-    otThresholdMinutes: num(f.otThresholdMinutes),
-    otCompensationType: s?.otCompensationType ?? "pay",
   };
 }
 

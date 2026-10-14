@@ -91,6 +91,7 @@ test("every kind of request has its own sub-tab, with how many are waiting", asy
     "Outpass",
     "Other requests",
     "Attendance correction",
+    "Holiday / Sunday work",
     "Resignation",
     "Advance",
   ]) {

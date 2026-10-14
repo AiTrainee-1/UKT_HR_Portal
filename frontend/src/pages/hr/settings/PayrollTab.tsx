@@ -13,7 +13,7 @@ import {
 } from "@/lib/api-client/custom-hooks";
 import { PAYROLL_SUB_TAB_OF, type PayrollSubTab } from "./PayrollTab.meta";
 import { addressSetting, numberOr, RANGES, saveErrorText, useDraft, useSubTabFromAddress } from "./payroll/form";
-import { bonusPayload, otPayload, pfEfPayload, ratesPayload, savedPayroll } from "./payroll/sections";
+import { bonusPayload, pfEfPayload, ratesPayload, savedPayroll } from "./payroll/sections";
 import { RatesPanel } from "./payroll/RatesPanel";
 import { BonusPanel } from "./payroll/BonusPanel";
 import { OtPanel } from "./payroll/OtPanel";
@@ -27,11 +27,12 @@ const SUB_TABS: { value: PayrollSubTab; label: string; icon: ReactNode }[] = [
   { value: "prodPfEf", label: "Production PF/EF", icon: <Layers size={13} /> },
 ];
 
-type Saving = "rates" | "bonus" | "ot" | "pfEf";
+type Saving = "rates" | "bonus" | "pfEf";
 
 /**
  * Settings -> Payroll. Four sub-tabs, each a group with its own Save button that sends only that group's keys, so
- * saving one never saves or resets another group's unsaved edits. The OT & Compensation master switch saves itself.
+ * saving one never saves or resets another group's unsaved edits. The OT & Compensation sub-tab holds only the master
+ * switch of those features, which saves itself (their rules are on the Compensation tab).
  */
 export default function PayrollTab({ readOnly = false }: { readOnly?: boolean }) {
   const { toast } = useToast();
@@ -42,7 +43,6 @@ export default function PayrollTab({ readOnly = false }: { readOnly?: boolean })
   const saved = useMemo(() => savedPayroll(settings), [settings]);
   const rates = useDraft(saved.rates);
   const bonus = useDraft(saved.bonus);
-  const ot = useDraft(saved.ot);
   const pfEf = useDraft(saved.pfEf);
 
   const [subTab, setSubTab] = useState<PayrollSubTab>(() => PAYROLL_SUB_TAB_OF[addressSetting()] ?? "rates");
@@ -81,8 +81,8 @@ export default function PayrollTab({ readOnly = false }: { readOnly?: boolean })
       toast({
         title: enabled ? "OT & Compensation features ON" : "OT & Compensation features OFF",
         description: enabled
-          ? "OT detection, the Compensation-Leave exemption and OT pay on payslips generated from now on are active again."
-          : "OT detection, the Compensation-Leave exemption and OT pay on payslips generated from now on are switched off. The Compensation page stays available and existing records are kept.",
+          ? "The Compensation features that are switched on in Settings, Compensation act again, and OT pay on payslips generated from now on is added again."
+          : "OT detection, the next-day allowance, announced late-in / early-out days, birthday leave, Compensation Days and OT pay on payslips generated from now on are switched off. The Compensation page stays available and existing records are kept.",
       });
     } catch (err) {
       toast({ title: "Failed to update setting", description: saveErrorText(err), variant: "destructive" });
@@ -108,9 +108,12 @@ export default function PayrollTab({ readOnly = false }: { readOnly?: boolean })
       Number(saved.rates.prodEsiApplicableBelow) || 0,
     ),
   };
-  const unsavedElsewhere = SUB_TABS.filter(
-    (t) => t.value !== subTab && { rates, bonus, otCompensation: ot, prodPfEf: pfEf }[t.value].dirty,
-  ).map((t) => t.label);
+  const dirtyOf: Partial<Record<PayrollSubTab, boolean>> = {
+    rates: rates.dirty,
+    bonus: bonus.dirty,
+    prodPfEf: pfEf.dirty,
+  };
+  const unsavedElsewhere = SUB_TABS.filter((t) => t.value !== subTab && dirtyOf[t.value]).map((t) => t.label);
 
   return (
     <div className="space-y-4">
@@ -199,28 +202,11 @@ export default function PayrollTab({ readOnly = false }: { readOnly?: boolean })
           )}
           {subTab === "otCompensation" && (
             <OtPanel
-              draft={ot}
-              saved={saved.ot}
               featuresOn={featuresOn}
               onFeatures={(enabled) => void applyFeatures(enabled)}
               staffRates={staffRates}
               branchLogin={branchLogin}
-              readOnly={readOnly}
-              saving={saving === "ot"}
-              busy={saving !== null || featuresPending !== null}
-              onSave={() =>
-                runSave(
-                  "ot",
-                  otPayload(ot.form, settings),
-                  ot.discard,
-                  {
-                    title: "OT / Compensation settings saved",
-                    description:
-                      "OT detection uses them the next time Compensation -> OT Detection is opened for a month.",
-                  },
-                  "Failed to save OT / Compensation settings",
-                )
-              }
+              readOnly={readOnly || featuresPending !== null}
             />
           )}
           {subTab === "prodPfEf" && (

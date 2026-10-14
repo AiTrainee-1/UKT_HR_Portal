@@ -3,8 +3,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ApprovalProgress } from "@/lib/approval-workflow";
 import { DecisionDialog, DetailDialog } from "./dialogs";
-import { NO_FILTERS, type HubItem, type HubKind } from "./logic";
-import type { ActionHandlers } from "./parts";
+import { NO_FILTERS, type HubItem, type HubKind, type KindKey } from "./logic";
+import { KIND_VISUAL, type ActionHandlers } from "./parts";
 import RequestList from "./RequestList";
 import Toolbar from "./Toolbar";
 
@@ -211,6 +211,101 @@ describe("RequestList", () => {
     expect(el.querySelector("table")).toBeNull();
     expect(el.querySelectorAll('[data-testid="request-leave-1"]')).toHaveLength(1);
     expect(el.querySelector('[data-testid="requests-cards"]')).not.toBeNull();
+  });
+});
+
+describe("a Holiday / Sunday work claim in the hub", () => {
+  const holidayApproval = progress({
+    workflow: "holiday_work",
+    label: "Holiday / Sunday work compensation",
+    steps: [{ index: 0, roles: ["hod"], mandatory: true, state: "pending", label: "HOD" }],
+    waitingFor: ["hod"],
+    canAct: { hod: true, hr: false },
+    canReject: { hod: true, hr: false },
+  });
+  const claim = make({
+    key: "holiday_work-8",
+    kind: "holiday_work",
+    id: 8,
+    label: "Holiday / Sunday work",
+    summary: "2026-10-11 · 0.5 shift",
+    reason: "Dispatch rush",
+    date: "2026-10-11",
+    details: [
+      { label: "Work date", value: "2026-10-11" },
+      { label: "Day", value: "Sunday" },
+      { label: "Shifts claimed", value: "0.50" },
+      { label: "Raised by", value: "Meena" },
+    ],
+    queue: "hod",
+    approval: holidayApproval,
+  });
+  const holidayKind = kind("holiday_work", {
+    label: "Holiday / Sunday work",
+    mode: "link",
+    openPath: "/hr/compensation?tab=leave&sub=holiday-work",
+    openLabel: "Compensation",
+    pipeline: "HR → HOD",
+  });
+  const now = new Date("2026-10-12T08:00:00Z");
+
+  it("has its own icon and tint, like every other kind", () => {
+    const kinds: KindKey[] = [
+      "leave",
+      "permission",
+      "casual_leave",
+      "missing_punch",
+      "on_duty",
+      "on_duty_punch",
+      "outpass",
+      "request",
+      "attendance_correction",
+      "holiday_work",
+      "resignation",
+      "advance",
+    ];
+    expect(Object.keys(KIND_VISUAL).sort()).toEqual([...kinds].sort());
+    expect(new Set(kinds.map((k) => KIND_VISUAL[k].tile)).size).toBe(kinds.length);
+    expect(new Set(kinds.map((k) => KIND_VISUAL[k].icon)).size).toBe(kinds.length);
+  });
+
+  it("is a row that says what it is, who it waits for, and offers the way into the Compensation page", () => {
+    const h = handlers();
+    const el = mount(
+      createElement(RequestList, {
+        items: [claim],
+        kinds: { holiday_work: holidayKind } as Record<string, HubKind>,
+        now,
+        busyKey: null,
+        handlers: h,
+        onOpen: vi.fn(),
+      }),
+    );
+    const row = el.querySelector('[data-testid="request-holiday_work-8"]')!;
+    expect(row).not.toBeNull();
+    expect(row.textContent).toContain("Holiday / Sunday work");
+    expect(row.textContent).toContain("2026-10-11 · 0.5 shift");
+    expect(row.textContent).toContain("Waiting for HOD");
+    // HR neither approves nor rejects it: the HOD decides; HR can only follow it to the Compensation page
+    expect(names(row)).toEqual(["Open in Compensation"]);
+    expect(row.querySelector("svg")).not.toBeNull();
+    click(row.querySelector('[data-testid="open-holiday_work-8"]'));
+    expect(h.calls).toEqual(["open:holiday_work-8:/hr/compensation?tab=leave&sub=holiday-work"]);
+  });
+
+  it("shows its details in the dialog, and the same way in", () => {
+    const h = handlers();
+    mount(
+      createElement(DetailDialog, { item: claim, kind: holidayKind, now, busy: false, handlers: h, onClose: () => {} }),
+    );
+    const dialog = document.body.querySelector('[data-testid="request-detail"]')!;
+    for (const text of ["Work date", "Sunday", "Shifts claimed", "0.50", "Raised by", "Meena", "Dispatch rush"]) {
+      expect(dialog.textContent, text).toContain(text);
+    }
+    expect(dialog.querySelector('[data-testid="approval-trail"]')).not.toBeNull();
+    expect(names(dialog)).toEqual(expect.arrayContaining(["Open in Compensation"]));
+    expect(names(dialog)).not.toContain("Approve");
+    expect(names(dialog)).not.toContain("Reject");
   });
 });
 

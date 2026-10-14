@@ -58,6 +58,12 @@ something (yesterday, last month, the company average, a target) and always with
   (`reporting/definitions/attendance_analysis_*.py`) unless there is a stated reason not to, and say which in `provenance`.
   Approved leave and holidays are not absence; weekly offs are not scheduled days.
 * **Payroll money** comes from `SalarySlip` (the paid record), never from `Payroll.final_salary`.
+* **Overtime** (the hours on the Attendance Overtime card, `attendance_overtime`, and the cost on Payroll Analysis) follows
+  Settings → Compensation. *Hours* are informational and count the days that were detected, given automatically as the
+  next-day late-in allowance (Type 1: never paid) or announced by HR (Type 2, as Pay or Day off); rejected days are left out.
+  The card's mix of HR decisions is **Pay, Day off, Allowance, Not decided, Rejected** (`decisions.allowance`, absent on an
+  older server). *Money* is never hours × a rate: on the slips a Type 2 day given as Pay is **shifts (0.25 to 1) × one day's
+  pay**, not a whole day's pay, outside gross pay, PF and ESI; the allowance and a relaxation day add no pay.
 * **Attrition %** = leavers in the period ÷ average headcount × 100 (annualised only when labelled so).
   There is no headcount history table, so headcount at a past date is *reconstructed* (joiners and leavers) and the
   `provenance.caveats` must say so.
@@ -399,6 +405,10 @@ buttons, same API as the Super Admin has) with the MD's **Insights & AI** on top
   requests, oldest first, with who each waits for, and no buttons. Geo Attendance's on-duty approvals, and the rest of
   the pages, are unchanged. To give the decisions back: remove the key from `MD_VIEW_ONLY`, set it to `edit` in
   `MD_HR_GRANTS`, and drop it from `REQUEST_WORKFLOW_MODULES`.
+* **Holiday / Sunday work claims (2026-10-14).** HR raises them and the Department Head approves them on the Compensation page
+  (module `compensation`, which `MD_HR_GRANTS` does not include), so the MD's Requests page does not list that kind
+  (`tests_hr_requests.py`). The Requests Insights still count them with the other HR-raised requests (`analytics/requests.py`,
+  kind `holiday_work`).
 * The old analytics pages for Attendance, Employees, Outpass & Visitors and Tea Break **merged into** the pages they
   analyse (their content is now each page's Insights). `/md/visitors` and `/md/tea-break` redirect. Payroll, Reports,
   Recruitment and Activity Logs stay analytics pages.

@@ -8,6 +8,7 @@ Run via: python manage.py test api.tests_hr_requests -v 2
 """
 
 from datetime import date, time, timedelta
+from decimal import Decimal
 
 from django.test import TestCase
 from django.utils import timezone
@@ -24,6 +25,7 @@ from .models import (
     Employee,
     EmployeePermission,
     EmployeeRequest,
+    HolidayWorkClaim,
     HRUser,
     LeaveRequest,
     MissingPunchRequest,
@@ -44,6 +46,7 @@ ALL_KINDS = [
     "outpass",
     "request",
     "attendance_correction",
+    "holiday_work",
     "resignation",
     "advance",
 ]
@@ -132,6 +135,9 @@ class HubFixture(TestCase):
             previous_values={"status": "absent"},
             approval_trail=[],
         )
+        made["holiday_work"] = HolidayWorkClaim.objects.create(
+            employee=emp, work_date=date(2026, 10, 4), shifts=Decimal("0.50"), reason="dispatch rush", approval_trail=[]
+        )
         made["resignation"] = ResignationRequest.objects.create(
             employee=emp, reason="relocating", last_working_date=date(2026, 11, 30), approval_trail=[]
         )
@@ -164,7 +170,7 @@ class EveryKindTests(HubFixture):
         self.assertEqual(modes["leave"], "quick")
         self.assertEqual(modes["on_duty"], "quick")
         self.assertEqual(modes["request"], "notes")
-        for kind in ("on_duty_punch", "attendance_correction", "resignation", "advance"):
+        for kind in ("on_duty_punch", "attendance_correction", "holiday_work", "resignation", "advance"):
             self.assertEqual(modes[kind], "link", kind)
 
     def test_a_leave_row_reads_like_the_leave_page(self):
@@ -232,11 +238,12 @@ class PipelineTests(HubFixture):
         self.assertEqual(queues["leave"], "hr")
         self.assertEqual(queues["missing_punch"], "hod")
         self.assertEqual(queues["resignation"], "hod")
+        self.assertEqual(queues["holiday_work"], "hod")  # HR raised it, the Department Head decides
         self.assertEqual(queues["advance"], "hr")
         self.assertEqual(queues["request"], "hr")
         stats = body["stats"]
-        self.assertEqual(stats["waiting"], 11)
-        self.assertEqual(stats["waitingHr"] + stats["waitingHod"] + stats["waitingOther"], 11)
+        self.assertEqual(stats["waiting"], 12)
+        self.assertEqual(stats["waitingHr"] + stats["waitingHod"] + stats["waitingOther"], 12)
         self.assertGreaterEqual(stats["waitingHod"], 3)
 
     def test_a_changed_pipeline_moves_the_request_to_the_other_queue(self):
@@ -453,7 +460,9 @@ class AccessTests(HubFixture):
         md = HRUser.objects.create(username="rq_md", password_hash="x", is_md=True)
         body = self.body(md)
         self.assertEqual({k["access"] for k in body["kinds"]}, {"view"})
-        self.assertEqual({i["kind"] for i in body["items"]}, set(ALL_KINDS))
+        # every kind except the Holiday / Sunday work claims: they belong to the Compensation module (salary data), which
+        # is not one of the pages the Managing Director's portal reproduces
+        self.assertEqual({i["kind"] for i in body["items"]}, set(ALL_KINDS) - {"holiday_work"})
 
     def test_an_employee_token_is_refused(self):
         token = sign_token({"role": "employee", "employeeId": self.asha.id})

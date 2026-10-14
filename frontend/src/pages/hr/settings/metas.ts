@@ -3,6 +3,7 @@ import { COMPANY_SETTINGS } from "./CompanyTab.meta";
 import { HR_CONTACT_SETTINGS } from "./HrContactTab.meta";
 import { ATTENDANCE_SETTINGS } from "./AttendanceTab.meta";
 import { LATE_DETECTION_SETTINGS } from "./LateDetectionTab.meta";
+import { COMPENSATION_SETTINGS } from "./CompensationTab.meta";
 import { DEVICES_SETTINGS } from "./DevicesTab.meta";
 import { ID_CARD_SETTINGS } from "./IdCardTab.meta";
 import { DOCUMENTS_SETTINGS } from "./DocumentsTab.meta";
@@ -20,6 +21,7 @@ export const ALL_SETTINGS: SettingMeta[] = [
   ...HR_CONTACT_SETTINGS,
   ...ATTENDANCE_SETTINGS,
   ...LATE_DETECTION_SETTINGS,
+  ...COMPENSATION_SETTINGS,
   ...DEVICES_SETTINGS,
   ...ID_CARD_SETTINGS,
   ...DOCUMENTS_SETTINGS,

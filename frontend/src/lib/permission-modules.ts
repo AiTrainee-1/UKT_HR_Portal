@@ -80,6 +80,7 @@ export const MODULE_TREE: ModuleNode[] = [
       { key: "settings.whatsapp", label: "WhatsApp" },
       { key: "settings.backup", label: "Backup" },
       { key: "settings.themes", label: "Themes" },
+      { key: "settings.compensation", label: "Compensation" },
     ],
   },
 ];

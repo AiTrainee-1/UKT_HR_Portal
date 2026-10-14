@@ -1,5 +1,12 @@
 import { useMemo, useState } from "react";
 import { CalendarDays, CalendarRange, ListFilter, Table2, X } from "lucide-react";
+import {
+  CompensationChip,
+  CompensationLegend,
+  CompensationSymbol,
+  compensationMark,
+  countMarks,
+} from "@/components/attendance-compensation";
 import { Button } from "@/components/ui/button";
 import { dateLong, dayMonth, dateShort, weekdayShort } from "@/components/payroll/kit/format";
 import { ISSUE_META, SEVERITY_META, issueLabel } from "@/components/payroll/kit/issue-meta";
@@ -204,6 +211,9 @@ export function AttendanceCard({
             )}
           </div>
 
+          {/* Days the employee used a compensation (only when the details endpoint sends the marker) */}
+          <CompensationLegend counts={countMarks(days)} className="mb-3 print:hidden" />
+
           {view === "calendar" ? (
             <div data-testid="pd-calendar">
               <div className="overflow-x-auto">
@@ -313,8 +323,11 @@ function CalendarDay({
   const meta = DAY_KIND_META[kind];
   const flags = day.flags ?? [];
   const punches = punchText(day);
+  const compensation = compensationMark(day);
   const aria = [
     `${dateLong(cell.date)}: ${meta.label}`,
+    // the engine's note ends with a full stop and the parts are joined by one
+    compensation ? compensation.title.replace(/\.$/, "") : "",
     [day.firstIn ? `first in ${timeText(day.firstIn)}` : "", day.lastOut ? `last out ${timeText(day.lastOut)}` : ""]
       .filter(Boolean)
       .join(", "),
@@ -355,6 +368,7 @@ function CalendarDay({
         </span>
       )}
       <span className="mt-auto flex flex-wrap items-center gap-0.5 pt-1">
+        {compensation && <CompensationSymbol day={day} decorative className="mr-0.5" />}
         {flags.slice(0, 4).map((code, i) => (
           <span key={`${code}-${i}`} className={cn("h-1.5 w-1.5 rounded-full", flagDot(code))} />
         ))}
@@ -406,6 +420,11 @@ function DayPanel({
         </Button>
       </div>
       {day.note && <p className="mt-2 text-xs text-slate-600">{day.note}</p>}
+      {compensationMark(day) && (
+        <div className="mt-2">
+          <CompensationChip day={day} withNote />
+        </div>
+      )}
       <div className="mt-3 space-y-2">
         {issues.length === 0 ? (
           <p className="text-xs text-muted-foreground">Nothing was flagged on this day.</p>
@@ -453,7 +472,7 @@ function DayRow({ day, selected }: { day: PayrollDay; selected: boolean }) {
       <td className="px-3 py-2 font-mono text-xs tabular-nums">{timeText(day.lastOut)}</td>
       <td className="px-3 py-2 tabular-nums">{day.shifts === null ? "—" : trimNumber(day.shifts)}</td>
       <td className="px-3 py-2">
-        {flags.length === 0 ? (
+        {flags.length === 0 && !compensationMark(day) ? (
           <span className="text-slate-300">—</span>
         ) : (
           <span className="flex flex-wrap gap-1">
@@ -464,6 +483,7 @@ function DayRow({ day, selected }: { day: PayrollDay; selected: boolean }) {
                 severity={ISSUE_META[code as keyof typeof ISSUE_META]?.severity ?? "info"}
               />
             ))}
+            <CompensationChip day={day} size="sm" />
           </span>
         )}
       </td>

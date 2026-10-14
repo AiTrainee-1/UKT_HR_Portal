@@ -65,7 +65,6 @@ export const RANGES = {
   amount: { min: 0, max: 99_999_999.99, decimals: 2 },
   perShift: { min: 0, max: 999_999.99, decimals: 2 },
   payDay: { min: 1, max: 28, decimals: 0 },
-  otMinutes: { min: 1, max: 1440, decimals: 0 },
   customDays: { min: 1, max: 366, decimals: 0 },
   lateCount: { min: 0, max: 366, decimals: 0 },
   slabShifts: { min: 0, max: 366, decimals: 2 },

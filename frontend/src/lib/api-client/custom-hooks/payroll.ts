@@ -2,6 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UseQueryOptions } from "@tanstack/react-query";
 import { customFetch } from "../custom-fetch";
+import type { DayCompensationMarker } from "./attendance";
 import type { ProdCyclesSettings } from "./production-cycles";
 
 // ── Salary Slips ──────────────────────────────────────────────────────────────
@@ -73,7 +74,9 @@ export type SalarySlipItem = {
 
 // ── Payroll Breakdown (full traceability) ─────────────────────────────────────
 
-export type PayrollBreakdownDay = {
+// A day may also carry the compensation marker (compensationKind / Minutes / Note) once payroll stores it: the payroll
+// engine does not today, so the screens draw it only when it is there.
+export type PayrollBreakdownDay = DayCompensationMarker & {
   date: string;
   day: string;
   // staff-only fields

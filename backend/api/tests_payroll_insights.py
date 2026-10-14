@@ -57,7 +57,7 @@ from .models import (
     SalarySlip,
     ShiftTemplate,
 )
-from .payroll_insights import all_setting_refs, inr, natural_key, period_label, plain, plural
+from .payroll_insights import all_setting_refs, inr, natural_key, normalized_days, period_label, plain, plural
 from .payroll_insights_rules import describe_slabs
 from .payroll_views import _build_working_days, _generate_production_payroll, _generate_staff_payroll
 
@@ -296,8 +296,11 @@ class _TsContract:
     def __init__(self):
         self.types = {}
         self._read(_read_frontend(_TS_FILES / "payroll-insights.ts"))
-        # only the one type the contract borrows from another file (its other declarations are outside this subset)
+        # only the types the contract borrows from other files (their other declarations are outside this subset)
         self._read(_read_frontend(_TS_FILES / "production-cycles.ts"), only={"PayCycle"})
+        self._read(
+            _read_frontend(_TS_FILES / "attendance.ts"), only={"DayCompensationMarker", "AttendanceCompensationKind"}
+        )
 
     def _read(self, source: str, only=None):
         text = re.sub(r"/\*.*?\*/", "", source, flags=re.S)
@@ -1626,6 +1629,65 @@ class StaffDetailsTests(TestCase):
         _get(self, f"/api/payroll/{production.raja_payroll.id}/details", expect=404)
 
 
+class StaffDayMarkerTests(TestCase):
+    """The compensation marker of a day (OT allowance used, announced window, birthday leave, relaxation) is kept in the
+    payroll's breakdown and shown on the details page. It is information only: the pay follows the shifts earned."""
+
+    @classmethod
+    def setUpTestData(cls):
+        _configure(attendance_mode="simple", staff_payroll_rules_enabled=False, compensation_feature_enabled=True)
+        cls.emp = _staff("S900", first="Bela", join_date="2024-06-03")
+        cls.plain, cls.birthday, cls.allowance = WORKING[0], WORKING[3], WORKING[4]
+        for day in WORKING:
+            extra = {}
+            if day == cls.birthday:
+                extra = {
+                    "compensation_kind": "birthday",
+                    "compensation_note": "Birthday: paid compensation leave for the whole day",
+                }
+            elif day == cls.allowance:
+                extra = {
+                    "compensation_kind": "ot_allowance",
+                    "compensation_minutes": 30,
+                    "compensation_note": "Arrived 09:35 inside the 30 min allowance",
+                }
+            _day(cls.emp, day, first_punch=time(9, 0), last_punch=time(18, 0), arrival_zone="on_time", **extra)
+        cls.payroll = _generate_staff_payroll(cls.emp, MONTH, YEAR)["payroll"]
+
+    def test_the_stored_breakdown_keeps_the_marker_of_each_day(self):
+        slip = SalarySlip.objects.get(employee=self.emp, month=MONTH, year=YEAR)
+        days = {d["date"]: d for d in slip.breakdown_details["days"]}
+        birthday = days[self.birthday.isoformat()]
+        self.assertEqual((birthday["compensationKind"], birthday["compensationMinutes"]), ("birthday", 0))
+        self.assertIn("Birthday", birthday["compensationNote"])
+        allowance = days[self.allowance.isoformat()]
+        self.assertEqual((allowance["compensationKind"], allowance["compensationMinutes"]), ("ot_allowance", 30))
+        plain = days[self.plain.isoformat()]
+        self.assertEqual(
+            (plain["compensationKind"], plain["compensationMinutes"], plain["compensationNote"]), (None, 0, None)
+        )
+
+    def test_the_details_page_gets_the_marker_and_the_pay_does_not_change(self):
+        d = _get(self, f"/api/payroll/{self.payroll.id}/details")
+        days = {day["date"]: day for day in d["days"]}
+        self.assertEqual(days[self.birthday.isoformat()]["compensationKind"], "birthday")
+        self.assertEqual(days[self.allowance.isoformat()]["compensationMinutes"], 30)
+        self.assertIsNone(days[self.plain.isoformat()]["compensationKind"])
+        self.assertEqual(d["money"]["gross"], 24000.0)  # every day is a full shift, whatever its marker says
+
+    def test_a_payroll_generated_before_the_marker_existed_shows_none(self):
+        old_day = {"date": "2026-02-02", "day": "Monday", "status": "present", "firstIn": "09:00", "lastOut": "18:00"}
+        (day,) = normalized_days({"days": [old_day]}, [])
+        self.assertEqual(
+            (day["compensationKind"], day["compensationMinutes"], day["compensationNote"]), (None, 0, None)
+        )
+        junk = dict(old_day, compensationKind="", compensationMinutes="30", compensationNote="")
+        (day,) = normalized_days({"days": [junk]}, [])
+        self.assertEqual(
+            (day["compensationKind"], day["compensationMinutes"], day["compensationNote"]), (None, 0, None)
+        )
+
+
 class ProductionDetailsTests(TestCase):
     @classmethod
     def setUpTestData(cls):
@@ -2821,6 +2883,7 @@ _META_FILES = {
     "attendance": "AttendanceTab.meta.ts",
     "late_detection": "LateDetectionTab.meta.ts",
     "payroll": "PayrollTab.meta.ts",
+    "compensation": "CompensationTab.meta.ts",
     "production_payroll": "ProductionPayrollTab.meta.ts",
 }
 

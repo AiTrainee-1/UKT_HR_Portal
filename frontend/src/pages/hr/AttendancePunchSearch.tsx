@@ -7,6 +7,13 @@ import { PillTabs } from "@/components/ui/pill-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
+  CompensationChip,
+  CompensationLegend,
+  CompensationSymbol,
+  compensationMark,
+  countMarks,
+} from "@/components/attendance-compensation";
+import {
   useAttendanceSearch,
   useAttendanceSearchRange,
   usePayrollSettings,
@@ -218,7 +225,8 @@ function StatusBar({ summary }: { summary: Summary }) {
 
 function DayCell({ day, onPick }: { day: AttendanceSearchDay; onPick: (date: string) => void }) {
   const earlyOut = isEarlyOutDay(day);
-  const label = `${formatDisplayDate(day.date)} · ${statusMeta(day.status).label}${day.isLate ? " · late" : ""}${earlyOut ? " · early out" : ""}`;
+  const compensation = compensationMark(day);
+  const label = `${formatDisplayDate(day.date)} · ${statusMeta(day.status).label}${day.isLate ? " · late" : ""}${earlyOut ? " · early out" : ""}${compensation ? ` · ${compensation.title}` : ""}`;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -227,12 +235,17 @@ function DayCell({ day, onPick }: { day: AttendanceSearchDay; onPick: (date: str
           aria-label={label}
           onClick={() => onPick(day.date)}
           className={cn(
-            "flex h-7 w-7 items-center justify-center rounded-md text-[10px] font-bold tabular-nums transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-900",
+            "relative flex h-7 w-7 items-center justify-center rounded-md text-[10px] font-bold tabular-nums transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-900",
             statusMeta(day.status).cell,
             (day.isLate || earlyOut) && "ring-2 ring-orange-400 ring-offset-1",
           )}
         >
           {parseYMD(day.date).getDate()}
+          {compensation && (
+            <span className="pointer-events-none absolute -right-1.5 -top-1.5" aria-hidden="true">
+              <CompensationSymbol day={day} decorative />
+            </span>
+          )}
         </button>
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
@@ -312,6 +325,7 @@ function DayRow({
           {flags.map((f) => (
             <FlagBadge key={f.key} flag={f} />
           ))}
+          <CompensationChip day={day} />
         </div>
 
         {punches.length ? (
@@ -612,8 +626,10 @@ export default function AttendancePunchSearch() {
                     ))}
                   </div>
                   <p className="mt-2 text-[11px] text-gray-500">
-                    Select a day to jump to it. An orange outline marks a late arrival or an early out.
+                    Select a day to jump to it. An orange outline marks a late arrival or an early out; a small symbol
+                    marks a day the employee used a compensation.
                   </p>
+                  <CompensationLegend counts={countMarks(rangeData.days)} className="mt-2" />
                 </div>
               </div>
             )}

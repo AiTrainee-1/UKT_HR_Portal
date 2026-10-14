@@ -2,8 +2,10 @@
 Overtime and compensation reports.
 
 Overtime here is the payroll concept, not a punch calculation: staff days that HR has detected, announced (as
-paid overtime - ONE day's salary per day - or as a relaxation credit) or rejected. The source of truth is the stored
-``OvertimeRecord`` plus what the generated slip paid (``ot_amount`` and the breakdown's ``otDays`` / ``dailyRate``).
+paid overtime - ``shifts`` x the daily rate, a record from before the shift-based rules being ONE whole day - or as
+relaxation) or rejected, plus the automatic next-day late-in allowance (status ``auto``, Type 1) that is listed for
+information and never paid. The source of truth is the stored ``OvertimeRecord`` plus what the generated slip paid
+(``ot_amount`` and the breakdown's ``otShifts`` / ``otDays`` / ``dailyRate``).
 Nothing here runs overtime detection - that writes rows - so the reports show exactly what HR has on record.
 
 The Compensation feature switch (Settings > Payroll) gates every report in this module: while it is off nothing is
@@ -13,7 +15,7 @@ detected, announced or paid, so the reports return an empty result with an expla
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.db.models import Count, Exists, OuterRef, Q, Sum
 
@@ -58,19 +60,24 @@ from .payroll_statutory_common import (
 )
 
 _ZERO = Decimal("0")
+_ONE = Decimal("1")
+_CENT = Decimal("0.01")
 OT_MODULES = ("compensation", "payroll")
 _STAFF_SLIP = dict(period_start__isnull=True, week_number__isnull=True)
 
 _OT_PAY_NOTE = (
-    "Overtime is paid as ONE day's salary (the daily rate on that month's slip) per announced Pay-type day, added to net "
-    "pay outside gross salary, PF and ESI; minutes and hours are informational. Relaxation-type days earn an "
-    "alternative-day credit instead of pay."
+    "Overtime is paid per announced Pay-type record as its shifts (0.25 / 0.50 / 0.75 / 1) x the daily rate on that "
+    "month's slip - a record from before the shift-based rules is one whole day - added to net pay outside gross "
+    "salary, PF and ESI; minutes and hours are informational. Relaxation-type records give time off instead of pay, "
+    "and the next-day late-in allowance (status Automatic) is listed for information only: it is never paid."
 )
 _OT_ROWS_NOTE = (
-    "Only records on file are shown: overtime is detected when HR opens Compensation > Overtime while detection and "
-    "the Compensation feature are on. This report never runs detection. Overtime is detected for staff only "
-    "(production 'extra shifts' are already inside their gross pay)."
+    "Only records on file are shown: overtime is detected when HR opens Compensation > OT Detection while an OT "
+    "feature (Settings > Compensation) and the Compensation feature are on. This report never runs detection. "
+    "Overtime is detected for staff only (production 'extra shifts' are already inside their gross pay)."
 )
+# How the register names an OvertimeRecord.status (the stored value 'auto' is the Type 1 next-day allowance).
+_STATUS_LABEL = {"auto": "Automatic"}
 
 
 def _months(d1: date, d2: date) -> list[tuple[int, int]]:
@@ -119,6 +126,24 @@ def _hours(minutes) -> float:
     return round((minutes or 0) / 60, 2)
 
 
+def _shifts_of(value) -> Decimal:
+    """The shifts one Pay record pays: its own ``shifts`` (Type 2: 0.25 / 0.50 / 0.75 / 1), or ONE day when it has none
+    (a record from before the shift-based rules, which payroll has always paid as a whole day)."""
+    return Decimal(str(value)) if value is not None else _ONE
+
+
+def _slip_ot_shifts(earn: dict) -> Decimal:
+    """The shifts of OT pay a slip actually holds: the breakdown's ``otShifts`` (slips generated since the shift-based
+    rules), else ``otDays`` (older slips: one whole day per Pay record)."""
+    shifts = dec_or_none(earn.get("otShifts"))
+    return shifts if shifts is not None else dec(earn.get("otDays"))
+
+
+def _amount(rate: Decimal | None, shifts: Decimal) -> Decimal | None:
+    """shifts x the daily rate in paise, rounded half up the way payroll rounds; None while the rate is unknown."""
+    return None if rate is None else (rate * shifts).quantize(_CENT, rounding=ROUND_HALF_UP)
+
+
 # -- overtime register ----------------------------------------------------------------------------------------
 def _run_register(ctx) -> ReportResult:
     settings = read_settings()
@@ -143,13 +168,20 @@ def _run_register(ctx) -> ReportResult:
     months = _months(d1, d2)
     slips = _staff_slips(emp_ids, months)
     pay_counts: dict[tuple[int, int, int], int] = {}
+    pay_shifts: dict[tuple[int, int, int], Decimal] = {}  # the shifts those records pay (payroll's own sum)
     if emp_ids:
         first, last = month_bounds(*months[0])[0], month_bounds(*months[-1])[1]
-        pay_qs = OvertimeRecord.objects.filter(
-            employee_id__in=emp_ids, date__gte=first, date__lte=last, status="announced", compensation_type="pay"
-        ).values_list("employee_id", "date")
-        for emp_id, d in pay_qs:
-            pay_counts[(emp_id, d.year, d.month)] = pay_counts.get((emp_id, d.year, d.month), 0) + 1
+        pay_qs = (
+            OvertimeRecord.objects.filter(
+                employee_id__in=emp_ids, date__gte=first, date__lte=last, status="announced", compensation_type="pay"
+            )
+            .exclude(ot_type=OvertimeRecord.OT_TYPE_ALLOWANCE)  # payroll never pays the Type 1 allowance
+            .values_list("employee_id", "date", "shifts")
+        )
+        for emp_id, d, shifts in pay_qs:
+            pkey = (emp_id, d.year, d.month)
+            pay_counts[pkey] = pay_counts.get(pkey, 0) + 1
+            pay_shifts[pkey] = pay_shifts.get(pkey, _ZERO) + _shifts_of(shifts)
     credits = (
         {
             c.source_overtime_record_id: c
@@ -160,7 +192,7 @@ def _run_register(ctx) -> ReportResult:
     )
 
     rows: list[dict] = []
-    n = {"detected": 0, "announced": 0, "rejected": 0, "relax": 0}
+    n = {"detected": 0, "announced": 0, "rejected": 0, "auto": 0, "relax": 0}
     pay_groups: dict[tuple[int, int, int], list[int]] = {}  # (employee, year, month) -> [listed pay rows, missing days]
     hours_total = _ZERO
     payable_total = _ZERO
@@ -168,26 +200,43 @@ def _run_register(ctx) -> ReportResult:
         emp = r.employee
         key = (r.employee_id, r.date.year, r.date.month)
         slip = slips.get(key)
-        rate = dec_or_none(as_dict(slip.bd_earn).get("dailyRate")) if slip else None
+        earn = as_dict(slip.bd_earn) if slip else {}
+        rate = dec_or_none(earn.get("dailyRate")) if slip else None
         is_pay = r.status == "announced" and r.compensation_type == "pay"
         outcome = payable = None
         if is_pay:
-            paid_days = int(dec(as_dict(slip.bd_earn).get("otDays"))) if slip else 0
-            announced = pay_counts.get(key, 0)
-            outcome = "Paid in slip" if paid_days >= announced else ("Partly paid" if paid_days else "Awaiting payroll")
-            # A month's slip pays a COUNT of days, so the days still missing are counted once per employee-month
-            # (as the payment summary does) - not once for every listed row of a month that is only partly paid.
-            group = pay_groups.setdefault(key, [0, max(0, announced - paid_days)])
+            # What the slip holds is a SHIFTS total (a record pays shifts x the daily rate), so "paid" compares shifts.
+            paid_shifts = _slip_ot_shifts(earn)
+            announced_shifts = pay_shifts.get(key, _ZERO)
+            outcome = (
+                "Paid in slip"
+                if paid_shifts >= announced_shifts
+                else ("Partly paid" if paid_shifts else "Awaiting payroll")
+            )
+            # A month's slip also counts the RECORDS it paid (otDays), so the records still missing are counted once
+            # per employee-month (as the payment summary does) - not once for every listed row of a month that is
+            # only partly paid.
+            missing = max(0, pay_counts.get(key, 0) - int(dec(earn.get("otDays"))))
+            group = pay_groups.setdefault(key, [0, missing])
             group[0] += 1
-            payable = rate
-            payable_total += rate or _ZERO
+            payable = _amount(rate, _shifts_of(r.shifts))
+            payable_total += payable or _ZERO
         elif r.status == "announced" and r.compensation_type == "relaxation":
             n["relax"] += 1
             credit = credits.get(r.id)
-            outcome = (
-                "No credit" if credit is None else ("Credit used" if credit.status == "used" else "Credit available")
-            )
-        n[r.status] += 1
+            if r.ot_type == OvertimeRecord.OT_TYPE_SHIFT:
+                # Shift-based relaxation tops a day up (or goes to the balance) - it never makes a leave credit.
+                outcome = f"Relaxation on {r.claim_date.strftime('%d %b')}" if r.claim_date else "Added to balance"
+            else:
+                outcome = (
+                    "No credit"
+                    if credit is None
+                    else ("Credit used" if credit.status == "used" else "Credit available")
+                )
+        elif r.status == OvertimeRecord.STATUS_AUTO:
+            # The next-day late-in allowance (Type 1): information only - nobody decides it and it is never paid.
+            outcome = f"Allowance {r.allowance_minutes} min"
+        n[r.status] = n.get(r.status, 0) + 1
         hours_total += Decimal(str(_hours(r.ot_minutes)))
         rows.append(
             {
@@ -199,7 +248,7 @@ def _run_register(ctx) -> ReportResult:
                 "lastPunchOut": r.last_punch_out,
                 "otMinutes": r.ot_minutes,
                 "otHours": _hours(r.ot_minutes),
-                "status": r.status.title(),
+                "status": _STATUS_LABEL.get(r.status, r.status.title()),
                 "compensationType": r.compensation_type.title() if r.compensation_type else None,
                 "outcome": outcome,
                 "announcedBy": r.announced_by,
@@ -212,11 +261,14 @@ def _run_register(ctx) -> ReportResult:
     notes += [
         _OT_PAY_NOTE,
         _OT_ROWS_NOTE,
-        "Payable = the daily rate on the employee's generated slip for that month (a dash when no slip exists yet). "
-        "Outcome: 'Paid in slip' = the slip's overtime days cover every announced Pay day of that month; "
+        "Payable = the row's shifts x the daily rate on the employee's generated slip for that month (a dash when no "
+        "slip exists yet, and for rows that are never paid). "
+        "Outcome: 'Paid in slip' = the slip's overtime shifts cover every announced Pay shift of that month; "
         "'Awaiting payroll' = announced after (or without) payroll generation - regenerate payroll to include it; "
-        "'Partly paid' = the slip covers only some of the month's Pay days (the slip holds a count, not which days), "
-        "and 'Pay days awaiting payroll' counts only the days the slip is still missing.",
+        "'Partly paid' = the slip covers only some of the month's Pay shifts (the slip holds a total, not which "
+        "records), and 'Pay days awaiting payroll' counts only the records the slip is still missing. "
+        "An Automatic row is the next-day late-in allowance: its outcome is the minutes allowed on the next working "
+        "day's first punch.",
     ]
     summary = [
         {"label": "Records", "value": len(rows), "format": "integer"},
@@ -224,6 +276,7 @@ def _run_register(ctx) -> ReportResult:
         {"label": "Detected", "value": n["detected"], "format": "integer"},
         {"label": "Announced", "value": n["announced"], "format": "integer"},
         {"label": "Rejected", "value": n["rejected"], "format": "integer"},
+        {"label": "Automatic (allowance)", "value": n["auto"], "format": "integer"},
         {"label": "Pay days awaiting payroll", "value": pay_pending, "format": "integer"},
         {"label": "Payable (where a slip exists)", "value": money(payable_total), "format": "currency"},
         {"label": "Relaxation credits granted", "value": n["relax"], "format": "integer"},
@@ -236,7 +289,7 @@ register(
         id="overtime-register",
         title="Overtime Register",
         description="Day-wise overtime on record: shift end, last punch, minutes, HR decision (pay or relaxation) and "
-        "whether payroll has paid it.",
+        "whether payroll has paid it, plus the automatic next-day late-in allowance (never paid).",
         category="payroll",
         icon="Clock",
         tags=("overtime", "ot", "compensation", "announced", "relaxation", "payroll"),
@@ -251,7 +304,13 @@ register(
             select(
                 "status",
                 "Status",
-                [("all", "All"), ("detected", "Detected"), ("announced", "Announced"), ("rejected", "Rejected")],
+                [
+                    ("all", "All"),
+                    ("detected", "Detected"),
+                    ("announced", "Announced"),
+                    ("rejected", "Rejected"),
+                    ("auto", "Automatic"),
+                ],
                 default="all",
             ),
             select(
@@ -300,6 +359,9 @@ def _run_summary(ctx) -> ReportResult:
         .annotate(
             detected=Count("id", filter=Q(status="detected")),
             pay=Count("id", filter=Q(status="announced", compensation_type="pay")),
+            # what those Pay records are worth in SHIFTS: their own shifts, and ONE day for a record without any
+            pay_shifts_set=Sum("shifts", filter=Q(status="announced", compensation_type="pay", shifts__isnull=False)),
+            pay_legacy=Count("id", filter=Q(status="announced", compensation_type="pay", shifts__isnull=True)),
             relax=Count("id", filter=Q(status="announced", compensation_type="relaxation")),
             rejected=Count("id", filter=Q(status="rejected")),
             minutes=Sum("ot_minutes", filter=~Q(status="rejected")),
@@ -326,7 +388,15 @@ def _run_summary(ctx) -> ReportResult:
     tot = {"emps": 0, "hours": _ZERO, "pay": 0, "relax": 0, "paid": _ZERO, "pend_days": 0, "pend_amt": _ZERO}
     for emp_id in sorted(emps, key=lambda i: natural_key(emps[i].employee_code)):
         emp, a, s = emps[emp_id], by_emp.get(emp_id), slips.get(emp_id)
-        a = a or {"detected": 0, "pay": 0, "relax": 0, "rejected": 0, "minutes": 0}
+        a = a or {
+            "detected": 0,
+            "pay": 0,
+            "pay_shifts_set": None,
+            "pay_legacy": 0,
+            "relax": 0,
+            "rejected": 0,
+            "minutes": 0,
+        }
         slip_ot = dec(s.ot_amount) if s else None
         if ctype == "pay" and not (a["pay"] or (slip_ot or _ZERO) > 0):
             continue
@@ -336,8 +406,12 @@ def _run_summary(ctx) -> ReportResult:
         rate = dec_or_none(earn.get("dailyRate"))
         paid_days = int(dec(earn.get("otDays"))) if s else 0
         pending = max(0, a["pay"] - paid_days)
-        expected = rate * a["pay"] if rate is not None else None
-        pend_amt = rate * pending if rate is not None else None
+        # Money follows SHIFTS (a Pay record pays shifts x the daily rate), not the number of records: 4 records of
+        # 0.25 shift are worth one day, not four.
+        pay_shifts = dec(a["pay_shifts_set"]) + a["pay_legacy"]
+        pending_shifts = max(_ZERO, pay_shifts - (_slip_ot_shifts(earn) if s else _ZERO))
+        expected = _amount(rate, pay_shifts)
+        pend_amt = _amount(rate, pending_shifts)
         tot["emps"] += 1
         tot["hours"] += Decimal(str(_hours(a["minutes"])))
         tot["pay"] += a["pay"]
@@ -376,9 +450,12 @@ def _run_summary(ctx) -> ReportResult:
     notes += [
         _OT_PAY_NOTE,
         _OT_ROWS_NOTE,
-        "OT hours exclude rejected days. Expected pay = announced Pay days x the daily rate on the month's slip; "
-        "'slip OT' is what the generated slip actually paid. Pending = announced Pay days the slip does not yet "
-        "include (announced after payroll was generated) and are paid when payroll is regenerated. "
+        "OT hours exclude rejected days and include the automatic next-day allowance days (they earn a later arrival, "
+        "never pay). A 'Pay day' is one announced Pay record; it pays its shifts (0.25 / 0.50 / "
+        "0.75 / 1) of the daily rate, so Expected pay = the announced Pay shifts x the daily rate on the month's slip; "
+        "'slip OT' is what the generated slip actually paid. Pending = announced Pay records the slip does not yet "
+        "include (announced after payroll was generated); they are paid when payroll is regenerated, and the pending "
+        "amount is the shifts the slip is still missing x the daily rate. "
         "A dash for the rate means no slip has been generated for that employee this month.",
     ]
     summary = [
@@ -614,16 +691,28 @@ def _run_announcements(ctx) -> ReportResult:
         }
 
     rows: list[dict] = []
-    whole = early = 0
+    whole = early = late_in = early_out = 0
     for x in anns:
-        is_early = x.leave_until_time is not None
-        early += is_early
-        whole += not is_early
+        # What the announcement DOES follows its kind: a late-in / early-out window moves one edge of the day (its time
+        # is `allowed_time`), a legacy day exemption is a whole day or - with a time - an early release.
+        if x.kind == CompensationDayAnnouncement.KIND_LATE_IN:
+            release = "Late-in window"
+            late_in += 1
+        elif x.kind == CompensationDayAnnouncement.KIND_EARLY_OUT:
+            release = "Early-out window"
+            early_out += 1
+        elif x.leave_until_time is not None:
+            release = "Early release"
+            early += 1
+        else:
+            release = "Whole day"
+            whole += 1
         rows.append(
             {
                 "date": x.date.isoformat(),
                 "leaveUntilTime": x.leave_until_time,
-                "releaseType": "Early release" if is_early else "Whole day",
+                "releaseType": release,
+                "windowTime": x.allowed_time,
                 "branch": x.branch.name if x.branch_id else "All branches",
                 "department": x.department.name if x.department_id else "All departments",
                 "employeeCount": counts.get(x.id),
@@ -634,7 +723,9 @@ def _run_announcements(ctx) -> ReportResult:
         )
     notes += [
         "A compensation day only suspends late / permission detection for the people it covers (a whole day, or from the "
-        "'leave until' time for an early release); Full / Half day is still decided by the day's punches.",
+        "'leave until' time for an early release); Full / Half day is still decided by the day's punches. A late-in "
+        "window (staff may arrive until the 'Window time' with no grace of their own) or an early-out window (staff may "
+        "leave from it) moves only that edge of the day: it does not suspend detection for the rest of the day.",
         "Branch / department 'All' means the announcement is not limited on that axis. 'Employees named' counts the "
         "individually listed employees (only those in your branch when your access is branch-limited).",
     ]
@@ -642,6 +733,8 @@ def _run_announcements(ctx) -> ReportResult:
         {"label": "Announcements", "value": len(rows), "format": "integer"},
         {"label": "Whole-day", "value": whole, "format": "integer"},
         {"label": "Early release", "value": early, "format": "integer"},
+        {"label": "Late-in windows", "value": late_in, "format": "integer"},
+        {"label": "Early-out windows", "value": early_out, "format": "integer"},
         {"label": "Distinct dates", "value": len({r["date"] for r in rows}), "format": "integer"},
     ]
     return ReportResult(rows=rows, summary=summary, notes=notes)
@@ -651,10 +744,19 @@ register(
     ReportSpec(
         id="compensation-day-announcements",
         title="Compensation Day Announcements",
-        description="HR-declared festival or special compensation days with their scope and early-release time.",
+        description="HR-declared festival or special compensation days and company late-in / early-out windows, with "
+        "their scope and time.",
         category="payroll",
         icon="CalendarDays",
-        tags=("compensation day", "festival", "early release", "announcement", "holiday"),
+        tags=(
+            "compensation day",
+            "festival",
+            "early release",
+            "announcement",
+            "holiday",
+            "late-in window",
+            "early-out window",
+        ),
         modules=("compensation",),
         filters=(
             select(
@@ -676,6 +778,7 @@ register(
             ColumnSpec("date", "Date", DATE, 1.1),
             ColumnSpec("leaveUntilTime", "Leave until", TIME, 0.9),
             ColumnSpec("releaseType", "Type", BADGE, 1.1),
+            ColumnSpec("windowTime", "Window time", TIME, 0.9),
             ColumnSpec("branch", "Branch", TEXT, 1.3),
             ColumnSpec("department", "Department", TEXT, 1.4),
             ColumnSpec("employeeCount", "Employees named", INTEGER, 0.9),

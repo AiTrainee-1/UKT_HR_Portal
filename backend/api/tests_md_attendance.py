@@ -1064,11 +1064,19 @@ class OvertimeTests(World):
             {
                 "announcedPay": {"days": 1, "hours": 2.0},
                 "announcedRelaxation": {"days": 1, "hours": 3.0},
+                "allowance": {"days": 0, "hours": 0.0},
                 "detected": {"days": 1, "hours": 1.5},
                 "rejected": {"days": 1, "hours": 1.0},
             },
         )
         self.assertEqual(body["tracking"], {"featureEnabled": True, "detectionEnabled": True})
+
+    def test_the_automatic_allowance_is_its_own_bucket_and_still_counts_as_hours(self):
+        add_overtime(self.e1, d(12), 90, "auto")  # Type 1: arrive later next morning, no HR decision
+        body = self.overtime()
+        self.assertEqual(body["decisions"]["allowance"], {"days": 1, "hours": 1.5})
+        self.assertEqual(body["totalHours"], 8.0)  # 6.5 + 1.5: it is time worked whatever the status
+        self.assertEqual(body["decisions"]["detected"], {"days": 1, "hours": 1.5})  # the others are unchanged
 
     def test_by_department_and_the_people_with_the_most(self):
         body = self.overtime()

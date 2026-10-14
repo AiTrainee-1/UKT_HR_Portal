@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from django.db import transaction
 
 from . import approval_workflow as approval, whatsapp_approvals
+from .audit_utils import log_action
 from .auth import require_hr, require_auth, get_token_employee_id
 from .branch_scope import scope_to_branch
 from .hod_scope import coverage, department_conflicts, department_roster, effective_owner_map, managed_employee_ids
@@ -51,6 +52,7 @@ def _manager_json(m, include_assignments=False):
         "canApproveCasualLeave": m.can_approve_casual_leave,
         "canApproveOnDuty": m.can_approve_on_duty,
         "canApproveMissingPunch": m.can_approve_missing_punch,
+        "canApproveCompensation": m.can_approve_compensation,
         "isActive": m.is_active,
         "notes": m.notes,
         "createdAt": m.created_at.isoformat() if m.created_at else None,
@@ -178,6 +180,7 @@ def department_managers(request: Request) -> Response:
         can_approve_casual_leave=bool(data.get("canApproveCasualLeave", True)),
         can_approve_on_duty=bool(data.get("canApproveOnDuty", True)),
         can_approve_missing_punch=bool(data.get("canApproveMissingPunch", True)),
+        can_approve_compensation=bool(data.get("canApproveCompensation", True)),
         notes=data.get("notes"),
     )
     return Response(_manager_json(m, include_assignments=True), status=201)
@@ -221,6 +224,8 @@ def department_manager_detail(request: Request, pk: int) -> Response:
         m.can_approve_on_duty = bool(data["canApproveOnDuty"])
     if "canApproveMissingPunch" in data:
         m.can_approve_missing_punch = bool(data["canApproveMissingPunch"])
+    if "canApproveCompensation" in data:
+        m.can_approve_compensation = bool(data["canApproveCompensation"])
     if "isActive" in data:
         m.is_active = bool(data["isActive"])
     if "notes" in data:
@@ -625,7 +630,7 @@ def _hod_pending_counts(m, emp_filter) -> dict[str, int]:
     configured (approval_workflow.py): a request only counts while it is this role's turn (or every step before it can
     be skipped), so switching a pipeline from 'HOD then HR' to 'HR then HOD' moves the counts by itself. The per-person
     switches (can_approve_*) still apply on top, exactly as before."""
-    from .models import EmployeePermission, LeaveRequest, MissingPunchRequest, OutpassRequest
+    from .models import EmployeePermission, HolidayWorkClaim, LeaveRequest, MissingPunchRequest, OutpassRequest
 
     cfgs = approval.all_configs()
 
@@ -646,6 +651,10 @@ def _hod_pending_counts(m, emp_filter) -> dict[str, int]:
         "casual_leave": (
             mine("casual_leave", CasualLeaveRequest.objects.filter(emp_filter, status="pending"))
             if m.can_approve_casual_leave else 0
+        ),
+        "holiday_work": (
+            mine("holiday_work", HolidayWorkClaim.objects.filter(emp_filter, status="pending"))
+            if m.can_approve_compensation else 0
         ),
         "on_duty": (
             mine(
@@ -711,9 +720,10 @@ def manager_me(request: Request) -> Response:
     pending_casual = counts["casual_leave"]
     pending_on_duty = counts["on_duty"]
     pending_missing_punch = counts["missing_punch"]
+    pending_compensation = counts["holiday_work"]
     pending_count = (
         pending_leaves + pending_perms + pending_resignations
-        + pending_attendance + pending_casual + pending_on_duty + pending_missing_punch
+        + pending_attendance + pending_casual + pending_on_duty + pending_missing_punch + pending_compensation
     )
 
     return Response({
@@ -724,6 +734,7 @@ def manager_me(request: Request) -> Response:
         "canApproveCasualLeave": m.can_approve_casual_leave,
         "canApproveOnDuty": m.can_approve_on_duty,
         "canApproveMissingPunch": m.can_approve_missing_punch,
+        "canApproveCompensation": m.can_approve_compensation,
         "pendingApprovalsCount": pending_count,
         "pendingLeavesCount": pending_leaves,
         "pendingPermissionsCount": pending_perms,
@@ -732,6 +743,7 @@ def manager_me(request: Request) -> Response:
         "pendingCasualLeaveCount": pending_casual,
         "pendingOnDutyCount": pending_on_duty,
         "pendingMissingPunchCount": pending_missing_punch,
+        "pendingCompensationCount": pending_compensation,
         # The approval pipelines HR has configured, so the app can explain each request's path and hide a category whose
         # workflow is off or has no Department Head step (approval_workflow.py).
         "approvalWorkflows": approval.summary(),
@@ -847,6 +859,17 @@ def manager_pending_requests(request: Request) -> Response:
         attendance_qs = AttendanceOverrideRequest.objects.none()
     attendance_qs = attendance_qs.order_by("-created_at")
 
+    from .holiday_work_views import claims_json
+    from .models import HolidayWorkClaim
+    holiday_qs = HolidayWorkClaim.objects.select_related(
+        "employee__department", "employee__designation", "employee__branch"
+    ).prefetch_related("ledger_entries").filter(emp_filter)
+    if status_filter != "all" and m.can_approve_compensation:
+        holiday_qs = holiday_qs.filter(status=status_filter)
+    elif not m.can_approve_compensation:
+        holiday_qs = HolidayWorkClaim.objects.none()
+    holiday_qs = holiday_qs.order_by("-created_at")
+
     from .casual_leave_views import _cl_dict
     casual_qs = CasualLeaveRequest.objects.select_related(
         "employee__department", "employee__designation"
@@ -908,6 +931,7 @@ def manager_pending_requests(request: Request) -> Response:
             _override_request_dict(r, cfgs["attendance_correction"]) for r in mine("attendance_correction", attendance_qs)
         ],
         "casualLeaves": [_cl_dict(r, cfgs["casual_leave"]) for r in mine("casual_leave", casual_qs)],
+        "holidayWorkClaims": claims_json(mine("holiday_work", holiday_qs)),
         "onDutySessions": [_on_duty_session_dict(s, cfg=cfgs["on_duty"]) for s in mine("on_duty", on_duty_qs)],
         "missingPunchRequests": [
             _missing_punch_dict(r, cfgs["missing_punch"]) for r in mine("missing_punch", missing_punch_qs)
@@ -1338,3 +1362,84 @@ def manager_update_casual_leave_status(request: Request, pk: int) -> Response:
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
     return Response(_cl_dict(cl))
+
+
+@api_view(["PATCH"])
+@require_auth
+def manager_update_holiday_work_status(request: Request, pk: int) -> Response:
+    """
+    Department Head decision on a Holiday / Sunday work compensation claim that HR raised (approval workflow
+    `holiday_work`). Approval adds the claimed shifts to the employee's compensation balance, once; rejection keeps the
+    HOD's comment and changes nothing else. Needs the `can_approve_compensation` switch on the HOD's own profile. A claim
+    that is already decided is refused. Body: {"status": "approved" | "rejected", "comment"?}.
+    """
+    from .holiday_work_views import claims_json, decide_claim
+    from .models import HolidayWorkClaim
+
+    token_emp_id = get_token_employee_id(request)
+    if not token_emp_id:
+        return Response({"error": "Employee authentication required"}, status=403)
+
+    try:
+        m = DepartmentManager.objects.select_related("employee").prefetch_related(
+            "department_assignments", "employee_assignments"
+        ).get(employee_id=token_emp_id, is_active=True)
+    except DepartmentManager.DoesNotExist:
+        return Response({"error": "Not a department manager"}, status=403)
+
+    if not m.can_approve_compensation:
+        return Response({
+            "error": "Approve-compensation access is disabled for your account. Ask HR to enable it.",
+            "code": "APPROVE_COMPENSATION_DISABLED",
+        }, status=403)
+
+    dept_ids, direct_ids = _get_manager_employee_ids(m)
+    emp_filter = Q(employee_id__in=direct_ids)
+    if dept_ids:
+        emp_filter |= Q(employee__department_id__in=dept_ids)
+    # A head never decides their own request, even when their own department is
+    # one of the ones assigned to them.
+    emp_filter &= ~Q(employee_id=token_emp_id)
+
+    claim = HolidayWorkClaim.objects.filter(emp_filter).filter(pk=pk).first()
+    if claim is None:
+        if HolidayWorkClaim.objects.filter(pk=pk).exists():
+            return Response({"error": "This request is not in your approval scope"}, status=403)
+        return Response({"error": "Holiday-work claim not found"}, status=404)
+
+    status_val = request.data.get("status")
+    if status_val not in ["approved", "rejected"] and approval.is_pending("holiday_work", claim):
+        return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
+
+    reviewer_name = f"{m.employee.first_name} {m.employee.last_name}"
+    try:
+        claim, _outcome = decide_claim(
+            claim.pk, approval.HOD, status_val, actor=reviewer_name, comment=request.data.get("comment")
+        )
+    except approval.ApprovalError as exc:
+        return approval.refusal(exc)
+    claim = HolidayWorkClaim.objects.select_related(
+        "employee__department", "employee__designation", "employee__branch"
+    ).prefetch_related("ledger_entries").get(pk=claim.pk)
+    # The audit trail: who decided, and that an approval put shifts on the balance (the ledger credit is the money-like part).
+    credited = [e for e in claim.ledger_entries.all() if e.entry_type == "credit"]
+    log_action(
+        request,
+        "approve" if claim.status == HolidayWorkClaim.STATUS_APPROVED else "reject",
+        "compensation",
+        record_id=claim.id,
+        description=(
+            f"{reviewer_name} (Department Head) {claim.status} the holiday-work claim of {claim.employee.employee_code} for "
+            f"{claim.work_date}: {claim.shifts:.2f} shift"
+            + (f", added to the compensation balance (ledger entry {credited[0].id})" if credited else "")
+        ),
+        new_values={
+            "claimId": claim.id,
+            "employeeId": claim.employee_id,
+            "workDate": str(claim.work_date),
+            "shifts": float(claim.shifts),
+            "status": claim.status,
+            "ledgerEntryId": credited[0].id if credited else None,
+        },
+    )
+    return Response(claims_json([claim])[0])

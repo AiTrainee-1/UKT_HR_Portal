@@ -6,8 +6,6 @@ import {
   bonusPercentWarning,
   describeChanges,
   hasErrors,
-  otErrors,
-  otPayload,
   pfEfPayload,
   RATES_LABELS,
   ratesErrors,
@@ -59,7 +57,8 @@ describe("saved values", () => {
       payDay: "5",
     });
     expect(empty.bonus).toEqual({ bonusPercent: "8.33", bonusWageCeiling: "7000", bonusEligibilityCeiling: "21000" });
-    expect(empty.ot).toEqual({ otDetectionEnabled: false, otThresholdMinutes: "60" });
+    // the OT rules moved to the Compensation tab: nothing of them is left in the Payroll forms
+    expect(Object.keys(empty).sort()).toEqual(["bonus", "pfEf", "rates"]);
   });
 });
 
@@ -93,13 +92,15 @@ describe("each save sends only its own keys", () => {
     });
   });
 
-  it("Save OT / Compensation Settings: sends the saved Compensation Type back unchanged", () => {
-    expect(otPayload({ otDetectionEnabled: false, otThresholdMinutes: "90" }, SETTINGS)).toEqual({
-      otDetectionEnabled: false,
-      otThresholdMinutes: 90,
-      otCompensationType: "relaxation",
-    });
-    expect(otPayload(forms.ot, undefined).otCompensationType).toBe("pay");
+  it("no Payroll save sends the old OT keys any more (their rules are saved from the Compensation tab)", () => {
+    const sent = [
+      ...Object.keys(ratesPayload(forms.rates)),
+      ...Object.keys(bonusPayload(forms.bonus)),
+      ...Object.keys(pfEfPayload(forms.pfEf, forms.pfEf, SETTINGS)),
+    ];
+    for (const old of ["otDetectionEnabled", "otThresholdMinutes", "otCompensationType"]) {
+      expect(sent).not.toContain(old);
+    }
   });
 
   it("Save PF/EF Rules: an untouched table goes back exactly as stored, an edited one as numbers", () => {
@@ -144,11 +145,10 @@ describe("checks before sending", () => {
     expect(hasErrors(ratesErrors({ ...saved.rates, pfRate: "12.00" }, saved.rates))).toBe(false);
   });
 
-  it("never judges a value left as it was saved (here a stored OT threshold of 0)", () => {
-    expect(otErrors(saved.ot, saved.ot)).toEqual({});
-    expect(otErrors({ ...saved.ot, otThresholdMinutes: "0" }, { ...saved.ot, otThresholdMinutes: "60" })).toEqual({
-      otThresholdMinutes: "Must be from 1 to 1,440.",
-    });
+  it("never judges a value left as it was saved (here a stored pay day of 0), only one that was changed", () => {
+    const odd = { ...saved.rates, payDay: "0" };
+    expect(ratesErrors(odd, odd)).toEqual({});
+    expect(ratesErrors(odd, saved.rates)).toEqual({ payDay: "Must be from 1 to 28." });
   });
 
   it("warns, without refusing, about a bonus rate outside the Act's 8.33-20", () => {

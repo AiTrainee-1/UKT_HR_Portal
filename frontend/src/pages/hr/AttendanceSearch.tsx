@@ -17,6 +17,9 @@ import { useListEmployees } from "@/lib/api-client";
 import { halfDayWorked, isEarlyOutDay, lateDetectionFlags } from "@/lib/late-detection";
 import { DayFlagBadges } from "@/components/DayFlagBadges";
 import {
+  CompensationChip, CompensationLegend, countMarks, isPunchlessRelaxation,
+} from "@/components/attendance-compensation";
+import {
   Search, User, RotateCcw, PenLine, X, Clock, Send, ShieldCheck, Hourglass, ShieldX, History,
 } from "lucide-react";
 
@@ -324,6 +327,12 @@ export default function AttendanceSearchSection({
               it goes to the employee's Department Head for approval before it becomes final.
             </p>
 
+            {/* Days on which the employee used a compensation (OT allowance, announced window, birthday, relaxation) */}
+            <CompensationLegend
+              counts={countMarks(data.weeks.flatMap(w => w.days))}
+              className="rounded-lg border bg-white px-3 py-2"
+            />
+
             {/* Weekly tables */}
             {data.weeks.map(week => (
               <div key={week.week} className="rounded-xl border overflow-hidden">
@@ -351,7 +360,10 @@ export default function AttendanceSearchSection({
                         const allFlags = lateDetectionFlags(day, halfDayCutoffs);
                         const flags = allFlags.filter(f => f.kind !== "halfDay");
                         const halfFlag = allFlags.find(f => f.kind === "halfDay");
-                        const worked = day.isHalfShift ? halfDayWorked(day.firstPunch, halfDayCutoffs.firstHalfEnd, day.arrivalZone) : null;
+                        // A day made up by a relaxation has no punches: its Relaxation chip and note say what it is, so
+                        // the Half column does not claim a Morning / Evening half was worked.
+                        const topUpOnly = isPunchlessRelaxation(day);
+                        const worked = day.isHalfShift && !topUpOnly ? halfDayWorked(day.firstPunch, halfDayCutoffs.firstHalfEnd, day.arrivalZone) : null;
                         return (
                         <tr
                           key={day.date}
@@ -374,6 +386,7 @@ export default function AttendanceSearchSection({
                                   Comp Day
                                 </Badge>
                               )}
+                              <CompensationChip day={day} size="sm" withNote className="max-w-[16rem]" />
                             </div>
                           </td>
                           <td className="px-3 py-2 font-mono text-xs text-gray-700">{day.firstPunch ?? "—"}</td>
@@ -389,7 +402,7 @@ export default function AttendanceSearchSection({
                             )}
                           </td>
                           <td className="px-3 py-2 text-xs">
-                            {day.isHalfShift ? (
+                            {day.isHalfShift && !topUpOnly ? (
                               <span className="text-amber-700 font-semibold" title={halfFlag?.title}>
                                 ½
                                 {worked && (

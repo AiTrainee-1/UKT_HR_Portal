@@ -136,20 +136,25 @@ test("the Add Department User dialog has a clear permission picker, hides existi
   const dialog = page.getByTestId("create-user-dialog");
   await expect(dialog).toContainText("Add Department User");
 
-  // seven cards, Missing Punch included, all on to begin with, each saying how requests are routed
-  await expect(dialog.getByTestId("permission-count")).toContainText("7 of 7");
-  await expect(dialog.locator('[data-testid^="perm-can"]')).toHaveCount(7);
+  // eight cards, Missing Punch and Compensation included, all on to begin with, each saying how requests are routed
+  await expect(dialog.getByTestId("permission-count")).toContainText("8 of 8");
+  await expect(dialog.locator('[data-testid^="perm-can"]')).toHaveCount(8);
   await expect(dialog).toContainText("Missing punch");
+  await expect(dialog.getByTestId("perm-canApproveCompensation")).toContainText("Holiday / Sunday work");
   await expect(dialog.getByTestId("perm-note-canApproveLeaves")).toContainText("Employee → HOD or HR");
   await expect(dialog.getByTestId("perm-note-canApproveMissingPunch")).toContainText("Employee → HOD → HR");
+  // Holiday / Sunday work is raised by HR and decided by the Department Head
+  await expect(dialog.getByTestId("perm-note-canApproveCompensation")).toContainText(
+    "HR raises it, the Department Head approves",
+  );
 
   // switching all off warns; switching two back on counts them
   await dialog.getByRole("button", { name: "Disable all" }).click();
-  await expect(dialog.getByTestId("permission-count")).toContainText("0 of 7");
+  await expect(dialog.getByTestId("permission-count")).toContainText("0 of 8");
   await expect(dialog).toContainText("Every permission is off");
   await dialog.getByTestId("perm-canApproveLeaves").click();
   await dialog.getByTestId("perm-canApproveResignations").click();
-  await expect(dialog.getByTestId("permission-count")).toContainText("2 of 7");
+  await expect(dialog.getByTestId("permission-count")).toContainText("2 of 8");
   await expect(dialog.getByTestId("perm-canApproveLeaves")).toHaveAttribute("aria-checked", "true");
   await expect(dialog.getByTestId("perm-canApproveOnDuty")).toHaveAttribute("aria-checked", "false");
   await expect(dialog).not.toContainText("Every permission is off");
@@ -173,6 +178,7 @@ test("the Add Department User dialog has a clear permission picker, hides existi
     canApproveAttendance: false,
     canApproveMissingPunch: false,
     canApproveOnDuty: false,
+    canApproveCompensation: false,
   });
   await expect(page.getByTestId("departments-card")).toContainText("No departments assigned yet");
 
@@ -328,23 +334,35 @@ test("approval permissions save as they are switched, and say when the pipeline 
   const managerId = await makeHod(page, "RS-HOD");
   await page.goto(`/hr/user-management/${managerId}`);
   const card = page.getByTestId("permissions-card");
-  await expect(card.getByTestId("permission-count")).toContainText("7 of 7");
+  await expect(card.getByTestId("permission-count")).toContainText("8 of 8");
 
   const flag = async (key: string) =>
     ((await api(page, "GET", `/api/department-managers/${managerId}`)).body as any)[key] as boolean;
 
   await card.getByTestId("perm-canApproveMissingPunch").click();
-  await expect(card.getByTestId("permission-count")).toContainText("6 of 7");
+  await expect(card.getByTestId("permission-count")).toContainText("7 of 8");
   await expect(card.getByTestId("perm-canApproveMissingPunch")).toHaveAttribute("aria-checked", "false");
   await expect.poll(() => flag("canApproveMissingPunch")).toBe(false);
   expect(await flag("canApproveLeaves")).toBe(true);
 
+  // the Compensation switch (Holiday / Sunday work) saves on its own too, and defaults to on
+  expect(await flag("canApproveCompensation")).toBe(true);
+  await card.getByTestId("perm-canApproveCompensation").click();
+  await expect(card.getByTestId("permission-count")).toContainText("6 of 8");
+  await expect(card.getByTestId("perm-canApproveCompensation")).toHaveAttribute("aria-checked", "false");
+  await expect.poll(() => flag("canApproveCompensation")).toBe(false);
+  await card.getByTestId("perm-canApproveCompensation").click();
+  await expect(card.getByTestId("permission-count")).toContainText("7 of 8");
+  await expect.poll(() => flag("canApproveCompensation")).toBe(true);
+
   await card.getByRole("button", { name: "Disable all" }).click();
-  await expect(card.getByTestId("permission-count")).toContainText("0 of 7");
+  await expect(card.getByTestId("permission-count")).toContainText("0 of 8");
   await expect.poll(() => flag("canApproveLeaves")).toBe(false);
+  await expect.poll(() => flag("canApproveCompensation")).toBe(false);
   await card.getByRole("button", { name: "Enable all" }).click();
-  await expect(card.getByTestId("permission-count")).toContainText("7 of 7");
+  await expect(card.getByTestId("permission-count")).toContainText("8 of 8");
   await expect.poll(() => flag("canApproveMissingPunch")).toBe(true);
+  await expect.poll(() => flag("canApproveCompensation")).toBe(true);
 
   // the card reads the approval pipelines: HR-only leave means the HOD's switch changes nothing
   await api(page, "PUT", "/api/approval-workflows/leave", { steps: [{ roles: ["hr"], mandatory: true }] });
@@ -378,6 +396,7 @@ test("the HOD list shows what each user may approve, and enabling, disabling and
   const perms = page.getByTestId(`hod-perms-${managerId}`);
   await expect(perms).toContainText("Leave");
   await expect(perms).toContainText("Missing punch");
+  await expect(perms).toContainText("Compensation");
   await expect(perms).not.toContainText("Resignations");
   await expect(perms).toContainText("2 off");
 

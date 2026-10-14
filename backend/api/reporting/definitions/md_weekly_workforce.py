@@ -180,8 +180,9 @@ def _run(ctx) -> ReportResult:
             else None,
             f"Highest absenteeism: {worst[1]} ({worst[0]}%)." if worst else None,
             "Headcount is the number on the rolls at the end of the week; its change is joiners minus leavers.",
-            "Overtime hours are those HR has detected or announced; days HR rejected are left out. Overtime is paid "
-            "as one day's pay per announced day, not by the hour (the rupee cost is in the Monthly Payroll Summary).",
+            "Overtime hours are those detected (including the automatic next-day late-in allowance, which is never "
+            "paid) or announced by HR; days HR rejected are left out. Overtime is never paid by the hour: an announced "
+            "Pay record pays its shifts (0.25 to 1) of one day's pay (the rupee cost is in the Monthly Payroll Summary).",
             CAVEAT_COVERAGE,
             *summary_cur["notes"],
             CAVEAT_HEADCOUNT,

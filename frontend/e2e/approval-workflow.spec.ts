@@ -91,6 +91,7 @@ test("Approval Workflow Control is the second User Management tab and lists ever
     on_duty: "Employee → HOD → HR",
     on_duty_punch: "Employee → HR",
     attendance_correction: "HR → HOD",
+    holiday_work: "HR → HOD",
     outpass: "Employee → HOD or HR",
     request: "Employee → HR",
     resignation: "Employee → HOD → HR",
@@ -107,6 +108,11 @@ test("Approval Workflow Control is the second User Management tab and lists ever
   // the per-person switch on a Department Head's profile is a hint, not a warning about the pipeline
   await expect(page.getByTestId("wf-hint-leave")).toContainText("Can approve leaves");
   await expect(page.getByTestId("wf-warnings-leave")).toHaveCount(0);
+  // Holiday / Sunday work compensation: raised by HR, decided by the Department Head (whose profile switch is "Can approve
+  // compensation"), in the Leave & attendance group, with a fixed pipeline that HR can still switch off
+  await expect(card(page, "holiday_work")).toContainText("Holiday / Sunday work compensation");
+  await expect(page.getByTestId("wf-hint-holiday_work")).toContainText("Can approve compensation");
+  await expect(page.getByTestId("wf-fixed-holiday_work")).toBeVisible();
 
   // the apps read the same pipelines from one public endpoint
   const s = await summary(page);
@@ -255,13 +261,14 @@ test("switching a workflow OFF asks first, refuses new requests with a clear mes
 
 test("fixed pipelines cannot be edited or switched off, and the server refuses an invalid edit", async ({ page }) => {
   await openApprovals(page);
-  for (const key of ["on_duty_punch", "attendance_correction", "request", "advance"]) {
+  for (const key of ["on_duty_punch", "attendance_correction", "holiday_work", "request", "advance"]) {
     await expect(page.getByTestId(`wf-fixed-${key}`), key).toBeVisible();
     await expect(page.getByTestId(`wf-edit-${key}`), key).toHaveCount(0);
   }
   // On-Duty punch verification belongs to On-Duty: it has no switch of its own; the others can still be switched off
   await expect(page.getByTestId("wf-toggle-on_duty_punch")).toBeDisabled();
   await expect(page.getByTestId("wf-toggle-request")).toBeEnabled();
+  await expect(page.getByTestId("wf-toggle-holiday_work")).toBeEnabled();
   await expect(page.getByTestId("wf-edit-leave")).toBeVisible();
 
   const refuse = async (key: string, body: unknown, status = 400) =>
@@ -350,14 +357,16 @@ test("saving a change while requests are waiting says so first, and does not dec
   expect(leave.approval.waitingFor).toEqual(["hr"]);
 });
 
-test("HOD Assignment keeps its Create User dialog, now with the missing punch switch", async ({ page }) => {
+test("HOD Assignment keeps its Create User dialog, now with the missing punch and compensation switches", async ({
+  page,
+}) => {
   await loginAsHr(page);
   await page.goto("/hr/user-management");
   await createUser(page).click();
   // the dialog lists every permission as a card (hod-roster.spec.ts covers the picker itself)
   await expect(page.getByRole("dialog")).toContainText("Missing punch");
   await expect(page.getByRole("dialog")).toContainText("Leave");
-  await expect(page.getByRole("dialog").locator('[data-testid^="perm-can"]')).toHaveCount(7);
+  await expect(page.getByRole("dialog").locator('[data-testid^="perm-can"]')).toHaveCount(8);
 });
 
 test("a role sees only the tabs it has, and View only cannot change a pipeline", async ({ page }) => {

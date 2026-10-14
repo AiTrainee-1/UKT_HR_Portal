@@ -33,6 +33,7 @@ import {
 } from "@/lib/api-client/custom-hooks";
 import { lateDetectionFlags } from "@/lib/late-detection";
 import { DayFlagBadges } from "@/components/DayFlagBadges";
+import { CompensationChip, CompensationLegend, countMarks } from "@/components/attendance-compensation";
 import { useBiometricSync } from "@/contexts/BiometricSyncContext";
 import { TimePicker12h } from "@/components/ui/time-picker-12h";
 import { MarbleSwitch } from "@/components/ui/marble-switch";
@@ -212,7 +213,10 @@ function EmployeeTable({
                   <td className="px-4 py-3 text-gray-500 text-xs font-mono">{rec.employeeCode}</td>
                   <td className="px-4 py-3 text-gray-500 hidden md:table-cell">{rec.department ?? "—"}</td>
                   <td className="px-4 py-3">
-                    <Badge className={`text-xs border ${cfg.className}`}>{cfg.label}</Badge>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Badge className={`text-xs border ${cfg.className}`}>{cfg.label}</Badge>
+                      <CompensationChip day={rec} size="sm" />
+                    </div>
                   </td>
                   <td className="px-4 py-3 font-mono text-xs text-gray-700">
                     {rec.firstPunch ?? <span className="text-gray-300">—</span>}
@@ -1087,6 +1091,8 @@ export default function AttendancePage() {
               ? Math.round((empDetail.totalPresent / elapsedWorkable) * 100)
               : 0;
             const earlyOutDays = empDetail.records.filter(r => r.isEarlyOut).length;
+            // Days on which the employee used a compensation (OT allowance, announced window, birthday, relaxation).
+            const compensationCounts = countMarks(empDetail.records);
             return (
             <div className="flex flex-col gap-4 overflow-hidden">
               {/* ── Profile + month summary ── */}
@@ -1141,6 +1147,7 @@ export default function AttendancePage() {
                     <p className="text-lg font-black text-gray-400">{upcoming}</p>
                   </div>
                 </div>
+                <CompensationLegend counts={compensationCounts} />
               </div>
 
               {/* ── Day-by-day breakdown ── */}
@@ -1178,6 +1185,7 @@ export default function AttendancePage() {
                               {rec.isCompensationDay && (
                                 <Badge className="text-xs border bg-purple-50 text-purple-700 border-purple-200">Comp Day</Badge>
                               )}
+                              <CompensationChip day={rec} withNote className="max-w-[18rem]" />
                             </div>
                           </td>
                           <td className="py-2.5 px-3">

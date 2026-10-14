@@ -236,6 +236,8 @@ export function dayNotes(day: AttendanceSearchDay): { key: string; label: string
     { key: "cl", label: "Casual leave", text: day.casualLeave?.reason },
     { key: "leave", label: day.leave?.type || "Leave", text: day.leave?.reason },
     { key: "perm", label: "Permission", text: day.permission?.reason },
+    // what the compensation did on the day (the chip next to the status names the kind; this says what happened)
+    { key: "comp", label: "Compensation", text: day.compensationNote },
   ];
   return notes.flatMap((n) => (n.text?.trim() ? [{ key: n.key, label: n.label, text: n.text.trim() }] : []));
 }
@@ -254,6 +256,8 @@ export type Summary = {
   late: number;
   earlyOut: number;
   permission: number;
+  /** Days that carry a compensation marker (OT allowance, announced window, birthday, relaxation). */
+  compensation: number;
   issues: number;
 };
 
@@ -269,6 +273,7 @@ export function summarize(days: AttendanceSearchDay[]): Summary {
     late: count((d) => d.isLate),
     earlyOut: count(isEarlyOutDay),
     permission: count((d) => !!d.permission),
+    compensation: count((d) => !!d.compensationKind),
     issues: count(isIssueDay),
   };
 }

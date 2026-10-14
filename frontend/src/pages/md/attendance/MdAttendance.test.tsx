@@ -120,6 +120,7 @@ describe("MdAttendance: a normal day", () => {
     expect(byTestId("md-attendance-overtime-total")?.textContent).toBe("6.5 h");
     expect(byTestId("md-attendance-overtime")?.textContent).toContain("3.5% of scheduled hours");
     expect(byTestId("md-attendance-overtime-decisions")?.textContent).toContain("Pay: 1 day · 2.0 h");
+    expect(byTestId("md-attendance-overtime-decisions")?.textContent).toContain("Allowance: 1 day · 1.0 h");
     expect(byTestId("md-attendance-overtime-people")?.textContent).toContain("Asha Kumar");
     expect(byTestId("md-attendance-leave-total")?.textContent).toBe("3.5 days");
     expect(byTestId("md-attendance-leave")?.textContent).toContain("Sick Leave");

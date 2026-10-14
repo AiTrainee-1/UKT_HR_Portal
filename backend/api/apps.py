@@ -117,6 +117,7 @@ class ApiConfig(AppConfig):
             auto_sync,
             backup_scheduler,
             on_duty_day_end_scheduler,
+            overtime_scheduler,
             screening_cleanup_scheduler,
             whatsapp_alert_scheduler,
         )
@@ -153,3 +154,8 @@ class ApiConfig(AppConfig):
             whatsapp_alert_scheduler.start_scheduler_if_needed()
         except Exception as e:
             logger.warning("WhatsApp attendance alert scheduler bootstrap skipped: %s", e)
+
+        try:
+            overtime_scheduler.start_scheduler_if_needed()
+        except Exception as e:
+            logger.warning("OT detection scheduler bootstrap skipped: %s", e)
