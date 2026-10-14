@@ -5,8 +5,9 @@ import type { CyclePeriod, ProductionPeriods } from "@/lib/api-client/custom-hoo
 import { periodFromValue, periodOptionLabel, periodValue } from "./logic";
 
 /**
- * The pay period every tab of a cycle page is about: the next one due is offered first, recent ones can be opened, and
- * any older one by typing a date that falls inside it.
+ * The pay period every tab of a cycle page (but the Payslip one) is about: the next one due is offered first, recent ones
+ * can be opened, and any older one by typing a date that falls inside it. Read-only controls: the lock for a View Only
+ * role never needs to touch them.
  */
 export function PeriodPicker({
   periods,
@@ -25,28 +26,39 @@ export function PeriodPicker({
   const rows = periods?.periods ?? [];
   const roster = periods?.roster ?? 0;
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <CalendarClock size={14} className="text-amber-600" />
-      <span className="text-xs font-semibold text-gray-600">Pay period</span>
-      <Select
-        value={period ? periodValue(period) : ""}
-        onValueChange={(v) => {
-          const next = periodFromValue(v);
-          if (next) onChange(next);
-        }}
-        disabled={loading || rows.length === 0}
-      >
-        <SelectTrigger className="h-9 min-w-[19rem] max-w-full text-sm" data-testid="pcp-period">
-          <SelectValue placeholder={loading ? "Loading periods..." : "Choose a period"} />
-        </SelectTrigger>
-        <SelectContent>
-          {rows.map((row) => (
-            <SelectItem key={periodValue(row)} value={periodValue(row)}>
-              {periodOptionLabel(row, roster)}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+    <div
+      className="clay-card flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border border-slate-100 px-4 py-3"
+      data-testid="pcp-period-bar"
+    >
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <span className="rounded-xl bg-amber-50 p-2 text-amber-600">
+          <CalendarClock size={15} />
+        </span>
+        <span className="text-xs font-semibold text-gray-600">Pay period</span>
+        <Select
+          value={period ? periodValue(period) : ""}
+          onValueChange={(v) => {
+            const next = periodFromValue(v);
+            if (next) onChange(next);
+          }}
+          disabled={loading || rows.length === 0}
+        >
+          <SelectTrigger
+            className="h-9 min-w-[19rem] max-w-full text-sm"
+            aria-label="Pay period"
+            data-testid="pcp-period"
+          >
+            <SelectValue placeholder={loading ? "Loading periods..." : "Choose a period"} />
+          </SelectTrigger>
+          <SelectContent>
+            {rows.map((row) => (
+              <SelectItem key={periodValue(row)} value={periodValue(row)}>
+                {periodOptionLabel(row, roster)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
       <label className="flex items-center gap-1.5 text-xs text-gray-500">
         or the period holding
         <Input

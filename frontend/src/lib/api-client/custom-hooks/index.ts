@@ -16,6 +16,7 @@ export * from "./growth";
 export * from "./organization";
 export * from "./payroll";
 export * from "./production-cycles";
+export * from "./payroll-insights";
 export * from "./recruitment";
 export * from "./reports";
 export * from "./requests";

@@ -66,7 +66,7 @@ export default function Settings() {
   const level = tabLevel(tab.id);
   const isTabViewOnly = level === "view";
 
-  // The glass-and-clay look is for this page only (settings/settings-skin.css): the page root carries `.settings-skin`, and
+  // The plain, flat look is for this page only (settings/settings-skin.css): the page root carries `.settings-skin`, and
   // <html> carries `.settings-skin-on` while the page is open so the dialogs and menus it opens (they render in a portal)
   // get the same look. Leaving the page takes it off again.
   useEffect(() => {
@@ -97,8 +97,8 @@ export default function Settings() {
       <div className="settings-skin space-y-5" data-testid="settings-page">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div className="min-w-0 flex-1 basis-[26rem]">
-            <h2 className="text-2xl font-black text-gray-900">Settings</h2>
-            <p className="mt-0.5 text-sm text-muted-foreground">
+            <h2 className="text-2xl font-semibold tracking-tight text-slate-900">Settings</h2>
+            <p className="mt-1 text-sm text-slate-500">
               The defaults the whole system runs on. Every setting says what it is for and what changes when you change
               it.
             </p>
@@ -116,28 +116,31 @@ export default function Settings() {
             className="min-w-0 space-y-4"
             data-testid={`settings-panel-${tab.id}`}
           >
-            <header className="settings-hero flex items-start gap-3.5 rounded-3xl p-5 text-white">
-              <span className="mt-0.5 rounded-2xl bg-white/20 p-3 ring-1 ring-white/40 backdrop-blur">
+            <header className="settings-hero flex items-start gap-3 pb-4 text-slate-900">
+              <span className="mt-0.5 rounded-lg bg-slate-100 p-2.5 text-slate-600">
                 <TabIcon size={18} />
               </span>
               <div className="min-w-0 flex-1">
-                <h3 className="text-lg font-black leading-tight">{tab.label}</h3>
-                <p className="mt-0.5 text-[13px] leading-snug text-white/85">{tab.purpose}</p>
+                <h3 className="text-lg font-semibold leading-tight">{tab.label}</h3>
+                <p className="mt-1 text-[13px] leading-snug text-slate-500">{tab.purpose}</p>
                 {tab.usedBy.length > 0 && (
-                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                    <span className="text-[11px] font-bold uppercase tracking-wide text-white/60">Used by</span>
+                  <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] font-medium uppercase tracking-wide text-slate-400">Used by</span>
                     {tab.usedBy.map((u) =>
                       u.to ? (
                         <Link
                           key={u.label}
                           href={u.to}
-                          className="inline-flex items-center gap-0.5 rounded-full bg-white/15 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-white/25"
+                          className="settings-chip inline-flex items-center gap-0.5 px-2 py-0.5 text-[11px] font-medium text-slate-600 hover:text-[#006496]"
                         >
                           {u.label}
                           <ArrowUpRight size={10} />
                         </Link>
                       ) : (
-                        <span key={u.label} className="rounded-full bg-white/15 px-2 py-0.5 text-[11px] font-semibold">
+                        <span
+                          key={u.label}
+                          className="settings-chip px-2 py-0.5 text-[11px] font-medium text-slate-600"
+                        >
                           {u.label}
                         </span>
                       ),
@@ -152,8 +155,8 @@ export default function Settings() {
             <Suspense
               fallback={
                 <div className="space-y-3" data-testid="settings-loading">
-                  <Skeleton className="h-32 w-full rounded-2xl" />
-                  <Skeleton className="h-48 w-full rounded-2xl" />
+                  <Skeleton className="h-32 w-full rounded-xl" />
+                  <Skeleton className="h-48 w-full rounded-xl" />
                 </div>
               }
             >

@@ -67,6 +67,22 @@ describe("pageHasRefresh", () => {
     }
   });
 
+  it("skips the payroll details pages, staff and production, whatever follows the id", () => {
+    for (const path of [
+      "/hr/payroll/details/101",
+      "/hr/payroll/details/101?section=issues",
+      "/hr/payroll/details/101/",
+      "/hr/production-payroll/details/301",
+      "/hr/production-payroll/details/301?section=rules#top",
+      "/HR/Payroll/Details/101",
+    ]) {
+      expect(pageHasRefresh(path), path).toBe(false);
+    }
+    // the rule is about those pages only: a look-alike path still gets the button
+    expect(pageHasRefresh("/hr/payroll-details-archive")).toBe(true);
+    expect(pageHasRefresh("/hr/payroll/other")).toBe(true);
+  });
+
   it("skips pages that put their own Refresh button in the title row", () => {
     for (const path of [
       "/hr/requests",

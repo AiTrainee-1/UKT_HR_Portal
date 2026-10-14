@@ -6,9 +6,21 @@ import { HR_PASSWORD, HR_USERNAME, loginAsHr } from "./helpers";
 // pays only the people assigned to it, can pay one employee at a time and never overwrites payroll that exists.
 // Periods are fixed in February 2026 (every cycle starts Monday 2 Feb) so the dates never depend on today. Every
 // employee made here has a code starting PC- and is removed again, so other specs see the seed data only.
+//
+// The page keeps its state in the address (?tab=employees&period=2026-02-02_2026-02-08&view=issues ...), so a reload and
+// Back from a payroll's details page land on the same screen. The Payroll tab lists each payslip as a card (an <article>
+// named "Payroll of <employee>"), with a dashboard and four views (Records, Issues, Skipped, Rules) above it.
 
 const WEEK1 = { periodStart: "2026-02-02", periodEnd: "2026-02-08" };
 const FORTNIGHT1 = { periodStart: "2026-02-02", periodEnd: "2026-02-15" };
+const WEEK1_PARAM = `${WEEK1.periodStart}_${WEEK1.periodEnd}`;
+
+// A payroll entry is a card (an <article> named "Payroll of <employee>").
+const card = (page: Page, name: string) => page.getByRole("article", { name: `Payroll of ${name}` });
+
+/** A tab of a cycle page. The tab row draws each label twice (its animation), so the role is the reliable handle. */
+const pageTab = (page: Page, label: "Payroll" | "Employees" | "Salary" | "Payslip") =>
+  page.getByRole("tab", { name: new RegExp(`^${label}\\b`) });
 
 type Reply = { status: number; body: any };
 
@@ -148,6 +160,22 @@ test("the old Production Payroll address opens Weekly", async ({ page }) => {
   await expect(page.getByTestId("production-payroll-weekly")).toBeVisible();
 });
 
+test("each cycle page links to Production Employees and to the Settings of its own cycle", async ({ page }) => {
+  await loginAsHr(page);
+  await page.goto("/hr/production-payroll/biweekly");
+  const pageRoot = page.getByTestId("production-payroll-biweekly");
+  await expect(pageRoot.getByTestId("pcp-cycle-badge")).toHaveText("BiWeekly");
+  // the header's link (the page also links to it from its notices and its empty states)
+  await expect(pageRoot.getByRole("link", { name: /^Production Employees \(/ })).toHaveAttribute(
+    "href",
+    "/hr/employees/productionEmployee",
+  );
+  const settings = pageRoot.getByRole("link", { name: "BiWeekly settings" });
+  await expect(settings).toHaveAttribute("href", /\/hr\/settings\?tab=production_payroll#biweekly-first-period/);
+  await settings.click();
+  await expect(page).toHaveURL(/\/hr\/settings\?tab=production_payroll/);
+});
+
 test("Production Employees lists only production employees, and the new ones are unassigned", async ({ page }) => {
   await loginAsHr(page);
   await page.goto("/hr/employees/productionEmployee");
@@ -234,7 +262,7 @@ test("moving someone to another cycle asks first and can be undone", async ({ pa
 test("the Weekly page shows only the people on the Weekly cycle", async ({ page }) => {
   await loginAsHr(page);
   await page.goto("/hr/production-payroll/weekly");
-  await page.getByRole("tab", { name: /^Employees/ }).click();
+  await pageTab(page, "Employees").click();
   await openPeriodHolding(page, "2026-02-04", /2 Feb - 8 Feb 2026/);
 
   await expect(page.getByTestId("pcp-roster-row-PC-W1")).toBeVisible();
@@ -252,7 +280,7 @@ test("the Weekly page shows only the people on the Weekly cycle", async ({ page 
 test("one employee can be generated on their own, and only that one", async ({ page }) => {
   await loginAsHr(page);
   await page.goto("/hr/production-payroll/weekly");
-  await page.getByRole("tab", { name: /^Employees/ }).click();
+  await pageTab(page, "Employees").click();
   await openPeriodHolding(page, "2026-02-04", /2 Feb - 8 Feb 2026/);
 
   await page.getByTestId("pcp-generate-PC-W1").click();
@@ -281,31 +309,152 @@ test("Generate Payroll pays the rest of the cycle and leaves existing payroll al
   await expect
     .poll(async () => (await payrollRows(page, "weekly")).map((r) => r.employeeCode).sort())
     .toEqual(["PC-W1", "PC-W2"]);
-  await expect(page.getByTestId("pcp-rows")).toContainText("Bala Worker", { timeout: 30_000 });
-  await expect(page.getByTestId("pcp-rows")).toContainText("Asha Worker");
+  await expect(page.getByTestId("pcp-records")).toContainText("Bala Worker", { timeout: 30_000 });
+  await expect(page.getByTestId("pcp-records")).toContainText("Asha Worker");
+  // the period it was started for is kept in the address
+  await expect(page).toHaveURL(new RegExp(`period=${WEEK1_PARAM}`));
+  await expect(page.getByTestId("pcp-record-count")).toHaveText("2 Feb - 8 Feb 2026 · 2 records");
 
   // another cycle's page shows none of it
   expect(await payrollRows(page, "biweekly")).toEqual([]);
   expect((await payrollRows(page, "biweekly", FORTNIGHT1)).map((r) => r.employeeCode)).toEqual([]);
 });
 
-test("Skipped Employees explains who cannot be paid and writes nothing", async ({ page }) => {
+test("the dashboard of the period counts the payslips, the issues and the employee who was skipped", async ({
+  page,
+}) => {
+  await loginAsHr(page);
+  await page.goto(`/hr/production-payroll/weekly?period=${WEEK1_PARAM}`);
+  const dash = page.getByTestId("pcp-dash-root");
+  await expect(dash).toBeVisible({ timeout: 30_000 });
+  // two payslips of the three people on the cycle; Esha has no rate per shift, so she is the one skipped
+  await expect(page.getByTestId("pcp-dash-kpi-employees")).toContainText("2 of 3");
+  await expect(page.getByTestId("pcp-dash-kpi-skipped")).toContainText("1");
+  await expect(page.getByTestId("pcp-dash-kpi-skipped")).toContainText("of 3 checked");
+  await expect(page.getByTestId("pcp-dash-kpi-issues")).toBeVisible();
+  await expect(page.getByTestId("view-skipped-count")).toHaveText("1");
+  // each payslip is a card with its figures, the issues payroll found and the rules the employee is paid under
+  const asha = card(page, "Asha Worker");
+  await expect(asha).toBeVisible();
+  await expect(asha).toContainText("PC-W1");
+  await expect(asha).toContainText("Weekly");
+  await expect(card(page, "Bala Worker")).toBeVisible();
+  await expect(card(page, "Esha Worker")).toHaveCount(0);
+});
+
+test("a payroll's Details open on their own page, and Back returns to the same period and tab", async ({ page }) => {
+  test.setTimeout(120_000); // three trips to the details page and back
+  await loginAsHr(page);
+  await page.goto("/hr/production-payroll/weekly");
+  await openPeriodHolding(page, "2026-02-04", /2 Feb - 8 Feb 2026/);
+  const payrollList = new RegExp(`/hr/production-payroll/weekly\\?.*period=${WEEK1_PARAM}`);
+  await expect(page).toHaveURL(payrollList);
+
+  // from a card on the Payroll tab
+  await card(page, "Asha Worker")
+    .getByRole("button", { name: /^details/i })
+    .click();
+  await expect(page).toHaveURL(/\/hr\/production-payroll\/details\/\d+/);
+  await expect(page.getByTestId("payroll-details-page")).toHaveAttribute("data-kind", "production");
+  await expect(page.getByTestId("pd-employee-name")).toHaveText("Asha Worker");
+  await page.getByTestId("pd-back").click();
+  await expect(page).toHaveURL(payrollList);
+  await expect(pageTab(page, "Payroll")).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("pcp-period")).toContainText("2 Feb - 8 Feb 2026");
+  await expect(card(page, "Asha Worker")).toBeVisible();
+
+  // from a row of the Salary Statement
+  await pageTab(page, "Salary").click();
+  await page.getByRole("button", { name: "Details of Asha Worker" }).click();
+  await expect(page.getByTestId("pd-employee-name")).toHaveText("Asha Worker");
+  await page.getByTestId("pd-back").click();
+  await expect(page).toHaveURL(/tab=salary/);
+  await expect(pageTab(page, "Salary")).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("pcp-period")).toContainText("2 Feb - 8 Feb 2026");
+  await expect(page.getByTestId("statement-table")).toContainText("PC-W1");
+
+  // from the Employees tab
+  await pageTab(page, "Employees").click();
+  await page.getByTestId("pcp-roster-details-PC-W1").click();
+  await expect(page.getByTestId("pd-employee-name")).toHaveText("Asha Worker");
+  await page.getByTestId("pd-back").click();
+  await expect(page).toHaveURL(/tab=employees/);
+  await expect(page.getByTestId("pcp-roster-row-PC-W1")).toBeVisible();
+  await expect(page.getByTestId("pcp-period")).toContainText("2 Feb - 8 Feb 2026");
+});
+
+test("the tab and the pay period live in the address, so a reload lands on the same screen", async ({ page }) => {
+  await loginAsHr(page);
+  await page.goto("/hr/production-payroll/weekly");
+  await pageTab(page, "Employees").click();
+  await openPeriodHolding(page, "2026-02-04", /2 Feb - 8 Feb 2026/);
+  await expect(page).toHaveURL(/tab=employees/);
+  await expect(page).toHaveURL(new RegExp(`period=${WEEK1_PARAM}`));
+
+  await page.reload();
+  await expect(pageTab(page, "Employees")).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("pcp-period")).toContainText("2 Feb - 8 Feb 2026", { timeout: 30_000 });
+  await expect(page.getByTestId("pcp-roster-row-PC-W1")).toBeVisible();
+
+  // a link carries the same screen: another tab of the same period
+  await page.goto(`/hr/production-payroll/weekly?tab=salary&period=${WEEK1_PARAM}`);
+  await expect(pageTab(page, "Salary")).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("pcp-period")).toContainText("2 Feb - 8 Feb 2026", { timeout: 30_000 });
+  await expect(page.getByTestId("statement-title")).toContainText("From 02-02-2026 To 08-02-2026");
+});
+
+test("the Issues view lists what payroll found, each issue with the day it was detected", async ({ page }) => {
+  await loginAsHr(page);
+  await page.goto(`/hr/production-payroll/weekly?period=${WEEK1_PARAM}&view=issues`);
+  const panel = page.getByTestId("issues-panel");
+  await expect(panel).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("view-issues")).toHaveAttribute("aria-selected", "true");
+
+  // nobody punched in that week: payroll flags the empty days, and says which day each one was detected on
+  const dayIssue = panel.locator('[data-testid="issue-detected"][data-kind="day"]').first();
+  await expect(dayIssue).toContainText(/Detected on .*Feb 2026/, { timeout: 30_000 });
+  await expect(panel.locator('[data-testid^="issue-row-"][data-code="absent"]').first()).toBeVisible();
+  // an issue about the whole period has no single day, and says so
+  await expect(panel.locator('[data-testid="issue-detected"][data-kind="period"]').first()).toContainText(
+    "Whole period",
+  );
+  // the person who could not be generated is listed beside them, with why
+  await expect(panel).toContainText("Esha Worker");
+  await expect(panel).toContainText(/No Salary Per Shift/);
+
+  // a filter goes into the address, apart from the records' own filters
+  await panel.getByTestId("issues-kpi-critical").click();
+  await expect(page).toHaveURL(/isev=critical/);
+});
+
+test("Skipped Employees explains who cannot be paid, from the roster, and writes nothing", async ({ page }) => {
   await loginAsHr(page);
   await page.goto("/hr/production-payroll/weekly");
   await openPeriodHolding(page, "2026-02-04", /2 Feb - 8 Feb 2026/);
   await page.getByTestId("pcp-skipped-open").click();
-  const dialog = page.getByTestId("pcp-skipped-dialog");
-  await expect(dialog).toContainText("Esha Worker", { timeout: 60_000 });
-  await expect(dialog).toContainText(/No Salary Per Shift/);
-  await expect(dialog).toContainText(/2 already have payroll/);
-  await page.keyboard.press("Escape");
+  await expect(page).toHaveURL(/view=skipped/);
+  const panel = page.getByTestId("skipped-panel");
+  await expect(panel).toContainText("Esha Worker", { timeout: 30_000 });
+  await expect(panel).toContainText(/No Salary Per Shift/);
+  await expect(page.getByTestId("skipped-banner-title")).toHaveText(/1 of 3 employees was skipped/);
+  await expect(page.getByTestId("pcp-dash-kpi-skipped")).toContainText("1");
   expect(await payrollRows(page, "weekly")).toHaveLength(2);
+});
+
+test("the Rules view shows the rules of the cycle and the rules each employee is paid under", async ({ page }) => {
+  await loginAsHr(page);
+  await page.goto(`/hr/production-payroll/weekly?period=${WEEK1_PARAM}&view=rules`);
+  const panel = page.getByTestId("rules-panel");
+  await expect(panel).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("rules-settings")).toBeVisible();
+  await expect(page.getByTestId("rules-row-PC-W1")).toContainText("Asha Worker");
+  await expect(page.getByTestId("rules-row-PC-W2")).toContainText("Bala Worker");
 });
 
 test("a paid payslip is never recomputed, a pending one only when asked", async ({ page }) => {
   await loginAsHr(page);
   await page.goto("/hr/production-payroll/weekly");
-  await page.getByRole("tab", { name: /^Employees/ }).click();
+  await pageTab(page, "Employees").click();
   await openPeriodHolding(page, "2026-02-04", /2 Feb - 8 Feb 2026/);
 
   // pending: "Generate again" asks first
@@ -315,20 +464,17 @@ test("a paid payslip is never recomputed, a pending one only when asked", async 
   await expect(page.getByTestId("pcp-roster-state-PC-W2")).toHaveText(/generated - pending/i);
 
   // mark one paid on the Payroll tab
-  await page.getByRole("tab", { name: /^Payroll/ }).click();
-  const run = page
-    .getByTestId("pcp-rows")
-    .locator("div")
-    .filter({ hasText: "Bala Worker" })
-    .filter({ hasText: "Mark Paid" })
-    .last();
-  await run.getByRole("button", { name: /mark paid/i }).click();
+  await pageTab(page, "Payroll").click();
+  await card(page, "Bala Worker")
+    .getByRole("button", { name: /mark paid/i })
+    .click();
   await expect
     .poll(async () => (await payrollRows(page, "weekly")).find((r) => r.employeeCode === "PC-W2")?.status)
     .toBe("paid");
+  await expect(card(page, "Bala Worker")).toHaveAttribute("data-status", "paid");
 
   // paid: no "Generate again" any more, and the API refuses to recompute it
-  await page.getByRole("tab", { name: /^Employees/ }).click();
+  await pageTab(page, "Employees").click();
   await expect(page.getByTestId("pcp-roster-state-PC-W2")).toHaveText("Paid");
   await expect(page.getByTestId("pcp-regenerate-PC-W2")).toHaveCount(0);
   const employee = (await testEmployees(page)).find((e) => e.employeeCode === "PC-W2")!;
@@ -384,19 +530,70 @@ test("BiWeekly pays its own people for a two-week period, separately from Weekly
   await expect
     .poll(async () => (await payrollRows(page, "biweekly", FORTNIGHT1)).map((r) => r.employeeCode))
     .toEqual(["PC-B1"]);
-  await expect(page.getByTestId("pcp-rows")).toContainText("Chitra Worker", { timeout: 30_000 });
-  await expect(page.getByTestId("pcp-rows")).not.toContainText("Asha Worker");
+  await expect(page.getByTestId("pcp-records")).toContainText("Chitra Worker", { timeout: 30_000 });
+  await expect(page.getByTestId("pcp-records")).not.toContainText("Asha Worker");
 });
 
-test("Salary and Payslip show only the slips of the cycle", async ({ page }) => {
+test("the Payroll register and the bank file export the payslips on screen", async ({ page }) => {
+  await loginAsHr(page);
+  await page.goto(`/hr/production-payroll/weekly?period=${WEEK1_PARAM}`);
+  await expect(card(page, "Asha Worker")).toBeVisible({ timeout: 30_000 });
+
+  await page.getByTestId("pcp-export").click();
+  const register = page.waitForEvent("download");
+  await page.getByTestId("pcp-export-register-csv").click();
+  expect((await register).suggestedFilename()).toMatch(/^Production_Payroll_Weekly_.*_Register\.csv$/);
+  await page.keyboard.press("Escape"); // the menu stays open after an export
+
+  // the bank transfer file is a button of its own
+  const bank = page.waitForEvent("download");
+  await page.getByTestId("pcp-export-bank").click();
+  expect((await bank).suggestedFilename()).toMatch(/^Payroll_Production_Weekly_.*\.xlsx$/);
+});
+
+test("Salary is the period's Production Salary Statement, and Payslip shows only the slips of the cycle", async ({
+  page,
+}) => {
+  test.setTimeout(120_000); // the statement is exported to Excel in the browser
   await loginAsHr(page);
   await page.goto("/hr/production-payroll/weekly");
-  await page.getByRole("tab", { name: /^Salary/ }).click();
-  await expect(page.getByTestId("pcp-salary-tab")).toContainText("PC-W1");
-  await expect(page.getByTestId("pcp-salary-tab")).toContainText("PC-W2");
-  await expect(page.getByTestId("pcp-salary-tab")).not.toContainText("PC-B1");
+  await pageTab(page, "Salary").click();
+  await openPeriodHolding(page, "2026-02-04", /2 Feb - 8 Feb 2026/);
 
-  await page.getByRole("tab", { name: /^Payslip/ }).click();
+  // the printed statement's format, with the production columns (shifts, not the staff day columns)
+  await expect(page.getByTestId("statement-title")).toContainText(
+    "Production Salary Statement From 02-02-2026 To 08-02-2026",
+    { timeout: 30_000 },
+  );
+  const heads = page.getByTestId("statement-head-labels");
+  for (const label of ["ID NO", "Name", "Rate / shift", "Shifts", "E salary", "ESI / EF", "Total Deduction", "NET"]) {
+    await expect(heads).toContainText(label);
+  }
+  await expect(heads).not.toContainText("LOP");
+  await expect(heads).not.toContainText("Present");
+  const statement = page.getByTestId("pcp-salary-tab");
+  await expect(statement).toContainText("PC-W1");
+  await expect(statement).toContainText("PC-W2");
+  await expect(statement).not.toContainText("PC-B1");
+  await expect(page.getByTestId("statement-total")).toContainText("GRAND TOTAL");
+
+  // every row can be adjusted, and the statement exports (Excel, PDF, Print)
+  await expect(
+    page
+      .getByTestId("statement-panel")
+      .getByRole("button", { name: /^Edit the bonus/ })
+      .first(),
+  ).toBeVisible();
+  await page.getByTestId("statement-export").click();
+  for (const item of ["xlsx", "pdf", "print"]) {
+    await expect(page.getByTestId(`statement-export-${item}`)).toBeVisible();
+  }
+  const excel = page.waitForEvent("download", { timeout: 60_000 });
+  await page.getByTestId("statement-export-xlsx").click();
+  expect((await excel).suggestedFilename()).toMatch(/^Salary_Statement.*\.xlsx$/);
+  await page.keyboard.press("Escape"); // the menu stays open after an export
+
+  await pageTab(page, "Payslip").click();
   await page.getByLabel("Month").selectOption({ label: "February" });
   await page.getByLabel("Year").fill("2026");
   await expect(page.getByTestId("pcp-payslip-tab")).toContainText("Asha Worker");
@@ -404,7 +601,7 @@ test("Salary and Payslip show only the slips of the cycle", async ({ page }) => 
   await expect(page.getByTestId("pcp-payslip-tab")).not.toContainText("Chitra Worker");
 
   await page.goto("/hr/production-payroll/biweekly");
-  await page.getByRole("tab", { name: /^Payslip/ }).click();
+  await pageTab(page, "Payslip").click();
   await page.getByLabel("Month").selectOption({ label: "February" });
   await page.getByLabel("Year").fill("2026");
   await expect(page.getByTestId("pcp-payslip-tab")).toContainText("Chitra Worker");
@@ -414,14 +611,14 @@ test("Salary and Payslip show only the slips of the cycle", async ({ page }) => 
 test("a period that has not ended cannot be generated yet", async ({ page }) => {
   await loginAsHr(page);
   await page.goto("/hr/production-payroll/weekly");
-  await page.getByRole("tab", { name: /^Employees/ }).click();
+  await pageTab(page, "Employees").click();
   // a week far in the future, so the check never depends on today's date or time zone
   await openPeriodHolding(page, "2099-01-07", /5 Jan - 11 Jan 2099/);
   await expect(page.getByTestId("pcp-not-ended")).toBeVisible({ timeout: 15_000 });
   await expect(page.getByTestId("pcp-generate-PC-W1")).toBeDisabled();
 
   // the dialog says so and cannot be confirmed
-  await page.getByRole("tab", { name: /^Payroll/ }).click();
+  await pageTab(page, "Payroll").click();
   await page.getByTestId("pcp-generate-open").click();
   await expect(page.getByTestId("pcp-generate-dialog")).toContainText("has not ended yet");
   await expect(page.getByTestId("pcp-generate-confirm")).toBeDisabled();
@@ -528,8 +725,16 @@ test("a read-only login can look but not generate or assign", async ({ page }) =
     await page.getByTestId("button-submit").click();
     await expect(page).toHaveURL(/\/hr\//);
 
-    await page.goto("/hr/production-payroll/weekly");
+    await page.goto(`/hr/production-payroll/weekly?period=${WEEK1_PARAM}`);
+    await expect(card(page, "Asha Worker")).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId("pcp-generate-open")).toBeDisabled();
+    // looking is not locked: the views, the export menu and the details of a payroll ...
+    await expect(page.getByTestId("view-issues")).toBeEnabled();
+    await expect(page.getByTestId("pcp-export")).toBeEnabled();
+    await expect(card(page, "Asha Worker").getByRole("button", { name: /^details/i })).toBeEnabled();
+    // ... writing is: the bank transfer file and Mark Paid
+    await expect(page.getByTestId("pcp-export-bank")).toBeDisabled();
+    await expect(card(page, "Asha Worker").getByRole("button", { name: /mark paid/i })).toBeDisabled();
     await page.goto("/hr/employees/productionEmployee");
     await peTab(page, "Weekly").click();
     await expect(page.getByTestId("pe-row-assign-PC-W1")).toBeDisabled();

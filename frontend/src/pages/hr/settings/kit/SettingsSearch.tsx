@@ -63,7 +63,7 @@ export function SettingsSearch({
         role="combobox"
         aria-expanded={open && query.trim() !== ""}
         aria-controls="settings-search-results"
-        className="h-10 rounded-2xl pl-9 pr-9 text-sm"
+        className="h-10 rounded-lg pl-9 pr-9 text-sm"
       />
       {query && (
         <button
@@ -80,7 +80,7 @@ export function SettingsSearch({
         <div
           id="settings-search-results"
           role="listbox"
-          className="settings-glass absolute left-0 right-0 top-full z-30 mt-1.5 max-h-80 overflow-y-auto rounded-2xl p-1.5"
+          className="settings-glass absolute left-0 right-0 top-full z-30 mt-1.5 max-h-80 overflow-y-auto rounded-lg p-1.5 shadow-lg"
           data-testid="settings-search-results"
         >
           {results.length === 0 ? (
@@ -101,7 +101,7 @@ export function SettingsSearch({
                 data-testid={`settings-search-hit-${m.tab}-${m.id}`}
               >
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-[13px] font-bold text-gray-900">{m.title}</p>
+                  <p className="truncate text-[13px] font-semibold text-slate-900">{m.title}</p>
                   <p className="truncate text-[11px] text-gray-500">
                     {tabLabel.get(m.tab)} · {m.section}
                   </p>

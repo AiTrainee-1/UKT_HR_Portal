@@ -32,6 +32,8 @@ type NavItemData = {
   icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
   badge?: number;
   children?: NavChildItem[];
+  /** Pages that are not in `children` but belong to this group (a payroll's details page): they keep it open and active. */
+  alsoActiveFor?: string[];
 };
 
 type NavGroupData = {
@@ -41,7 +43,7 @@ type NavGroupData = {
 
 // ── Nav Data ───────────────────────────────────────────────────────────────
 
-const navGroups: NavGroupData[] = [
+export const navGroups: NavGroupData[] = [
   {
     items: [
       { path: '/hr/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -112,6 +114,8 @@ const navGroups: NavGroupData[] = [
           { path: '/hr/production-payroll/biweekly', label: 'BiWeekly' },
           { path: '/hr/production-payroll/monthly', label: 'Monthly' },
         ],
+        // a payroll's details page is none of the three, but it is still Production Payroll
+        alsoActiveFor: ['/hr/production-payroll/details'],
       },
       { path: '/hr/compensation', label: 'Compensation', icon: Landmark },
       { path: '/hr/settlement', label: 'Settlement', icon: Wallet },
@@ -321,6 +325,17 @@ function SearchModal({ onClose }: { onClose: () => void }) {
 
 // ── Single Nav Row ─────────────────────────────────────────────────────────
 
+/** True when a nav row is the page being viewed: a plain row by its own path, a group by any of its sub-pages (or the
+ *  extra pages in `alsoActiveFor`). A page under a path counts as that path (`/hr/payroll/details/7` is Staff Payroll). */
+export function navItemActive(
+  item: Pick<NavItemData, 'path' | 'children' | 'alsoActiveFor'>,
+  currentPath: string,
+): boolean {
+  const on = (path: string) => currentPath === path || currentPath.startsWith(path + '/');
+  if (item.children) return item.children.some((c) => on(c.path)) || !!item.alsoActiveFor?.some(on);
+  return on(item.path);
+}
+
 function NavItem({
   item,
   currentPath,
@@ -334,15 +349,9 @@ function NavItem({
 }) {
   const hasChildren = !!item.children;
 
-  const isActive =
-    !hasChildren &&
-    (currentPath === item.path || currentPath.startsWith(item.path + '/'));
+  const isActive = !hasChildren && navItemActive(item, currentPath);
 
-  const isParentActive =
-    hasChildren &&
-    item.children!.some(
-      (c) => currentPath === c.path || currentPath.startsWith(c.path + '/')
-    );
+  const isParentActive = hasChildren && navItemActive(item, currentPath);
 
   const [isOpen, setIsOpen] = useState(isParentActive);
 
@@ -486,9 +495,7 @@ function RailItem({
   const [open, setOpen] = useState(false);
   const children = item.children;
 
-  const isActive = children
-    ? children.some((c) => currentPath === c.path || currentPath.startsWith(c.path + '/'))
-    : currentPath === item.path || currentPath.startsWith(item.path + '/');
+  const isActive = navItemActive(item, currentPath);
 
   const badgeCount = (item.badge ?? 0) + (children?.reduce((n, c) => n + (c.badge ?? 0), 0) ?? 0);
 

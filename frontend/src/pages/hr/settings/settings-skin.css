@@ -1,146 +1,74 @@
-/* Settings page skin: glassmorphism for the big surfaces, claymorphism for the things you touch.
+/* Settings page skin: plain, flat and quiet.
+
+   White surfaces on the portal's background, thin grey borders, one blue for the things you press, no gradients, no
+   blur, no soft 3D shapes. (It replaces the glass-and-clay look the page had on 2026-10-13: the owner found it hard to
+   read and asked for a professional, minimalist page.)
 
    ONLY the Settings page. Every selector here starts with `.settings-skin` (a class on the page's own root) or with
    `html.settings-skin-on` (a class Settings.tsx puts on <html> while the page is open, for the dialogs, menus and
    drop-downs that render in a portal outside the page). Nothing here applies to any other page; settings-skin.test.ts
    fails when a rule is not scoped like that.
 
-   glass = frosted translucent panels over a soft aurora (cards, navigation, header, dialogs, menus)
-   clay  = soft 3D shapes: raised (buttons, tiles, active tab, switches) and sunken (inputs, example trays)
+   The class names the tabs already use (settings-glass, settings-clay, settings-tile ...) are kept on purpose, so no
+   tab had to change: here they simply mean "a white panel", "a selected option", "an icon square" ...
+   No @keyframes: motion comes from Tailwind's animate-* utilities. */
 
-   The look uses the HR portal's own blue (0, 100, 150). No @keyframes here: motion comes from Tailwind's animate-*
-   utilities, and everything that transitions stops for prefers-reduced-motion. */
-
-/* ── the page: an aurora behind everything, so the glass has something to blur ───────────────────────────────────── */
-
-.settings-skin {
-  position: relative;
-  isolation: isolate;
+.settings-skin,
+html.settings-skin-on {
+  --st-ink: #0f172a;
+  --st-muted: #64748b;
+  --st-line: #e2e8f0;
+  --st-field: #cbd5e1;
+  --st-wash: #f8fafc;
+  --st-accent: #006496;
+  --st-accent-strong: #004f78;
+  --st-accent-wash: #eff6fb;
+  --st-ring: rgba(0, 100, 150, 0.18);
 }
 
-.settings-skin::before {
-  content: "";
-  position: absolute;
-  /* the main area pads its content by 1rem (1.5rem on a wide screen): the aurora fills that too, and no more, so
-     it never makes the page scroll sideways */
-  inset: -1rem;
-  z-index: -1;
-  pointer-events: none;
-  background:
-    radial-gradient(36rem 24rem at 6% -2%, rgba(0, 150, 199, 0.38), transparent 64%),
-    radial-gradient(32rem 22rem at 98% 4%, rgba(124, 92, 255, 0.26), transparent 62%),
-    radial-gradient(38rem 26rem at 92% 74%, rgba(20, 184, 166, 0.24), transparent 64%),
-    radial-gradient(30rem 22rem at 2% 90%, rgba(244, 114, 182, 0.22), transparent 64%);
+/* the heaviest weight is too loud for a quiet page */
+.settings-skin .font-black {
+  font-weight: 700;
 }
 
-/* small raised chips ("Used by ...") and the lines of an example */
-.settings-skin .settings-chip {
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.5));
-  border: 1px solid rgba(255, 255, 255, 0.85);
-  box-shadow:
-    3px 3px 8px rgba(0, 100, 150, 0.1),
-    -2px -2px 6px rgba(255, 255, 255, 0.95);
-}
-.settings-skin .settings-line {
-  box-shadow:
-    3px 3px 8px rgba(0, 100, 150, 0.09),
-    -2px -2px 6px rgba(255, 255, 255, 0.95);
-}
-
-/* ── glass: panels ──────────────────────────────────────────────────────────────────────────────────────────────── */
-
-@media (min-width: 1024px) {
-  .settings-skin::before {
-    inset: -1.5rem;
-  }
-}
+/* ── panels: white, a thin border, no shadow ─────────────────────────────────────────────────────────────────────── */
 
 .settings-skin .settings-glass,
 .settings-skin [data-slot="card"],
 .settings-skin .clay-card,
 .settings-skin [data-slot="table-container"] {
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.76), rgba(255, 255, 255, 0.46));
-  -webkit-backdrop-filter: blur(18px) saturate(165%);
-  backdrop-filter: blur(18px) saturate(165%);
-  border: 1px solid rgba(255, 255, 255, 0.72);
-  box-shadow:
-    0 12px 36px rgba(0, 100, 150, 0.1),
-    0 2px 6px rgba(0, 100, 150, 0.05),
-    inset 0 1px 0 rgba(255, 255, 255, 0.9);
-  transition:
-    box-shadow 0.25s ease,
-    transform 0.2s ease;
+  background: #ffffff;
+  background-image: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border: 1px solid var(--st-line);
+  border-radius: 0.75rem;
+  box-shadow: none;
 }
 
-.settings-skin .settings-glass:hover,
-.settings-skin [data-slot="card"]:hover,
-.settings-skin .clay-card:hover {
-  box-shadow:
-    0 16px 44px rgba(0, 100, 150, 0.13),
-    0 2px 8px rgba(0, 100, 150, 0.06),
-    inset 0 1px 0 rgba(255, 255, 255, 0.95);
-}
-
-/* a glass panel inside a glass panel: lighter, so the stack does not turn milky */
+/* a panel inside a panel: a pale wash instead of a second white box */
 .settings-skin .settings-glass .settings-glass,
 .settings-skin [data-slot="card"] [data-slot="card"],
 .settings-skin .settings-glass [data-slot="card"] {
-  background: rgba(255, 255, 255, 0.5);
-  box-shadow:
-    0 4px 14px rgba(0, 100, 150, 0.07),
-    inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  background: var(--st-wash);
 }
 
-/* the blue header of a tab: tinted glass with a sheen */
+/* the header of a tab: no banner, just the title with a rule under it */
 .settings-skin .settings-hero {
-  position: relative;
-  overflow: hidden;
-  background: linear-gradient(135deg, rgba(0, 100, 150, 0.9), rgba(0, 150, 199, 0.72));
-  -webkit-backdrop-filter: blur(16px) saturate(160%);
-  backdrop-filter: blur(16px) saturate(160%);
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  box-shadow:
-    0 18px 44px rgba(0, 100, 150, 0.26),
-    inset 0 1px 0 rgba(255, 255, 255, 0.5),
-    inset 0 -10px 24px rgba(0, 60, 100, 0.18);
-}
-.settings-skin .settings-hero::before {
-  content: "";
-  position: absolute;
-  right: -3rem;
-  top: -4rem;
-  width: 14rem;
-  height: 14rem;
-  border-radius: 9999px;
-  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.04) 70%);
-  pointer-events: none;
-}
-.settings-skin .settings-hero::after {
-  content: "";
-  position: absolute;
-  left: 22%;
-  bottom: -5rem;
-  width: 11rem;
-  height: 11rem;
-  border-radius: 9999px;
-  background: radial-gradient(circle at 60% 40%, rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0.02) 70%);
-  pointer-events: none;
-}
-.settings-skin .settings-hero > * {
-  position: relative;
-  z-index: 1;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--st-line);
+  border-radius: 0;
+  box-shadow: none;
+  color: var(--st-ink);
 }
 
-/* the Save bar kept at the bottom of the screen: a raised glass dock */
+/* the Save bar kept at the bottom of the screen */
 .settings-skin .settings-dock {
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.86), rgba(240, 248, 253, 0.7));
-  -webkit-backdrop-filter: blur(20px) saturate(170%);
-  backdrop-filter: blur(20px) saturate(170%);
-  border: 1px solid rgba(255, 255, 255, 0.85);
-  box-shadow:
-    0 16px 40px rgba(0, 80, 130, 0.2),
-    0 2px 8px rgba(0, 80, 130, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  background: #ffffff;
+  border: 1px solid var(--st-line);
+  border-radius: 0.75rem;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);
 }
 .settings-skin .settings-dock [data-testid="save-bar"] {
   background: transparent;
@@ -148,59 +76,75 @@
   border-color: transparent;
 }
 
-/* ── clay: raised ───────────────────────────────────────────────────────────────────────────────────────────────── */
+/* ── small pieces ────────────────────────────────────────────────────────────────────────────────────────────────── */
 
-.settings-skin .settings-clay {
-  background: linear-gradient(145deg, #ffffff, #eaf3fa);
-  border: 1px solid rgba(255, 255, 255, 0.9);
-  box-shadow:
-    7px 7px 16px rgba(0, 100, 150, 0.13),
-    -5px -5px 13px rgba(255, 255, 255, 0.95),
-    inset 2px 2px 4px rgba(255, 255, 255, 0.95),
-    inset -2px -2px 5px rgba(0, 100, 150, 0.06);
+/* "Used by ..." chips */
+.settings-skin .settings-chip {
+  background: #ffffff;
+  border: 1px solid var(--st-line);
+  border-radius: 0.375rem;
+  box-shadow: none;
 }
 
-/* the round icon tile at the head of a section */
+/* one line of a worked example */
+.settings-skin .settings-line {
+  box-shadow: none;
+  border-radius: 0.5rem;
+}
+
+/* the icon square at the head of a section */
 .settings-skin .settings-tile {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #006496;
-  background: linear-gradient(145deg, #ffffff, #dcecf7);
-  border: 1px solid rgba(255, 255, 255, 0.9);
-  box-shadow:
-    6px 6px 13px rgba(0, 100, 150, 0.16),
-    -4px -4px 10px rgba(255, 255, 255, 0.95),
-    inset 2px 2px 4px rgba(255, 255, 255, 0.9),
-    inset -2px -2px 5px rgba(0, 100, 150, 0.08);
+  color: var(--st-accent);
+  background: var(--st-accent-wash);
+  border: 0;
+  border-radius: 0.5rem;
+  box-shadow: none;
 }
 
-/* ── clay: sunken (inputs and the example tray) ─────────────────────────────────────────────────────────────────── */
-
-.settings-skin .settings-clay-inset,
-.settings-skin input[data-slot="input"],
-.settings-skin textarea[data-slot="textarea"],
-.settings-skin [data-slot="select-trigger"] {
-  background: linear-gradient(145deg, rgba(0, 100, 150, 0.05), rgba(255, 255, 255, 0.5));
-  border: 1px solid rgba(255, 255, 255, 0.85);
-  box-shadow:
-    inset 4px 4px 9px rgba(0, 100, 150, 0.11),
-    inset -4px -4px 9px rgba(255, 255, 255, 0.95);
+/* a selected option (the attendance mode cards) and a plain button-like link */
+.settings-skin .settings-clay {
+  background: var(--st-accent-wash);
+  border: 1px solid #cfe2ee;
+  border-radius: 0.625rem;
+  box-shadow: none;
 }
 
+/* the example tray under a control */
+.settings-skin .settings-clay-inset {
+  background: var(--st-wash);
+  border: 1px solid var(--st-line);
+  border-radius: 0.625rem;
+  box-shadow: none;
+}
+
+.settings-skin .settings-divide {
+  border-color: var(--st-line);
+}
+
+/* ── fields: white, a thin grey border, a blue ring when focused ─────────────────────────────────────────────────── */
+
 .settings-skin input[data-slot="input"],
 .settings-skin textarea[data-slot="textarea"],
-.settings-skin [data-slot="select-trigger"] {
-  border-radius: 0.875rem;
+.settings-skin [data-slot="select-trigger"],
+.settings-skin select {
+  background-color: #ffffff;
+  background-image: none;
+  border: 1px solid var(--st-field);
+  border-radius: 0.5rem;
+  box-shadow: none;
   transition:
-    box-shadow 0.2s ease,
-    background 0.2s ease;
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .settings-skin input[data-slot="input"]:hover,
 .settings-skin textarea[data-slot="textarea"]:hover,
-.settings-skin [data-slot="select-trigger"]:hover {
-  background: linear-gradient(145deg, rgba(0, 100, 150, 0.04), rgba(255, 255, 255, 0.65));
+.settings-skin [data-slot="select-trigger"]:hover,
+.settings-skin select:hover {
+  border-color: #94a3b8;
 }
 
 .settings-skin input[data-slot="input"]:focus,
@@ -208,118 +152,87 @@
 .settings-skin textarea[data-slot="textarea"]:focus,
 .settings-skin textarea[data-slot="textarea"]:focus-visible,
 .settings-skin [data-slot="select-trigger"]:focus,
-.settings-skin [data-slot="select-trigger"][data-state="open"] {
-  background: linear-gradient(145deg, rgba(0, 100, 150, 0.03), rgba(255, 255, 255, 0.78));
-  box-shadow:
-    inset 4px 4px 9px rgba(0, 100, 150, 0.12),
-    inset -4px -4px 9px rgba(255, 255, 255, 0.95),
-    0 0 0 3px rgba(0, 150, 199, 0.22);
+.settings-skin [data-slot="select-trigger"][data-state="open"],
+.settings-skin select:focus,
+.settings-skin select:focus-visible {
+  border-color: var(--st-accent);
+  box-shadow: 0 0 0 3px var(--st-ring);
   outline: none;
 }
 
 .settings-skin input[data-slot="input"]:disabled,
 .settings-skin textarea[data-slot="textarea"]:disabled,
-.settings-skin [data-slot="select-trigger"]:disabled {
-  background: rgba(0, 100, 150, 0.05);
-  box-shadow: inset 2px 2px 5px rgba(0, 100, 150, 0.08);
+.settings-skin [data-slot="select-trigger"]:disabled,
+.settings-skin select:disabled {
+  background-color: var(--st-wash);
+  border-color: var(--st-line);
 }
 
-/* the plain <select> some tabs still use: the same sunken clay as the other fields, with its own arrow */
+/* the plain <select> some tabs still use: the same field, with a simple arrow of its own */
 .settings-skin select {
   appearance: none;
   -webkit-appearance: none;
-  background-color: rgba(255, 255, 255, 0.5);
-  background-image:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%23006496' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"),
-    linear-gradient(145deg, rgba(0, 100, 150, 0.05), rgba(255, 255, 255, 0.5));
-  background-repeat: no-repeat, no-repeat;
-  background-position:
-    right 0.85rem center,
-    0 0;
-  border: 1px solid rgba(255, 255, 255, 0.85);
-  border-radius: 0.875rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%2364748b' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.85rem center;
   padding-right: 2.25rem;
-  box-shadow:
-    inset 4px 4px 9px rgba(0, 100, 150, 0.11),
-    inset -4px -4px 9px rgba(255, 255, 255, 0.95);
-}
-.settings-skin select:focus,
-.settings-skin select:focus-visible {
-  outline: none;
-  box-shadow:
-    inset 4px 4px 9px rgba(0, 100, 150, 0.12),
-    inset -4px -4px 9px rgba(255, 255, 255, 0.95),
-    0 0 0 3px rgba(0, 150, 199, 0.22);
 }
 
-/* the example tray: sunken clay with glass lines lying in it */
-.settings-skin .settings-clay-inset {
-  border-radius: 1.125rem;
-}
+/* ── buttons: one solid blue for the main action, white with a border for the rest ──────────────────────────────── */
 
-/* ── buttons: glass-clay for the quiet ones, a glossy clay gradient for the main one ───────────────────────────── */
+.settings-skin [data-slot="button"][data-variant="default"] {
+  background: var(--st-accent);
+  border: 1px solid var(--st-accent);
+  color: #ffffff;
+  box-shadow: none;
+}
+.settings-skin [data-slot="button"][data-variant="default"]:hover:not(:disabled) {
+  background: var(--st-accent-strong);
+  border-color: var(--st-accent-strong);
+}
 
 .settings-skin [data-slot="button"][data-variant="outline"],
 .settings-skin [data-slot="button"][data-variant="secondary"] {
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.58));
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.85);
-  color: #1e4d6b;
-  box-shadow:
-    5px 5px 12px rgba(0, 100, 150, 0.12),
-    -3px -3px 9px rgba(255, 255, 255, 0.9),
-    inset 1px 1px 3px rgba(255, 255, 255, 0.9);
+  background: #ffffff;
+  border: 1px solid var(--st-field);
+  color: #334155;
+  box-shadow: none;
 }
-.settings-skin [data-slot="button"][data-variant="outline"]:hover,
-.settings-skin [data-slot="button"][data-variant="secondary"]:hover {
-  background: linear-gradient(145deg, #ffffff, rgba(255, 255, 255, 0.75));
-  color: #006496;
-}
-
-.settings-skin [data-slot="button"][data-variant="default"] {
-  background: linear-gradient(145deg, #0a86bd, #006496);
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  box-shadow:
-    7px 8px 18px rgba(0, 100, 150, 0.32),
-    -3px -3px 9px rgba(255, 255, 255, 0.75),
-    inset 2px 2px 5px rgba(255, 255, 255, 0.4),
-    inset -3px -4px 8px rgba(0, 50, 90, 0.28);
+.settings-skin [data-slot="button"][data-variant="outline"]:hover:not(:disabled),
+.settings-skin [data-slot="button"][data-variant="secondary"]:hover:not(:disabled) {
+  background: var(--st-wash);
+  color: var(--st-ink);
 }
 
 .settings-skin [data-slot="button"][data-variant="destructive"] {
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.85), rgba(254, 226, 226, 0.75));
-  border: 1px solid rgba(255, 255, 255, 0.85);
+  background: #ffffff;
+  border: 1px solid #fecaca;
   color: #b91c1c;
-  box-shadow:
-    5px 5px 12px rgba(185, 28, 28, 0.13),
-    -3px -3px 9px rgba(255, 255, 255, 0.9),
-    inset 1px 1px 3px rgba(255, 255, 255, 0.9);
+  box-shadow: none;
+}
+.settings-skin [data-slot="button"][data-variant="destructive"]:hover:not(:disabled) {
+  background: #fef2f2;
 }
 
-/* ── switches: a sunken track and a raised thumb ────────────────────────────────────────────────────────────────── */
+/* ── switches: a flat track, a white thumb ──────────────────────────────────────────────────────────────────────── */
 
 .settings-skin [data-slot="switch"] {
   height: 1.5rem;
   width: 2.75rem;
-  border: 1px solid rgba(255, 255, 255, 0.8);
-  box-shadow:
-    inset 3px 3px 7px rgba(0, 60, 100, 0.2),
-    inset -2px -2px 5px rgba(255, 255, 255, 0.6);
+  border: 0;
+  box-shadow: none;
 }
 .settings-skin [data-slot="switch"][data-state="unchecked"] {
-  background: linear-gradient(145deg, rgba(0, 100, 150, 0.12), rgba(255, 255, 255, 0.5));
+  background: var(--st-field);
 }
 .settings-skin [data-slot="switch"][data-state="checked"] {
-  background: linear-gradient(145deg, #0a86bd, #006496);
+  background: var(--st-accent);
 }
 .settings-skin [data-slot="switch-thumb"] {
   height: 1.25rem;
   width: 1.25rem;
-  background: linear-gradient(145deg, #ffffff, #e3eef6);
-  box-shadow:
-    3px 3px 7px rgba(0, 60, 100, 0.3),
-    -1px -1px 4px rgba(255, 255, 255, 0.9);
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.25);
 }
 .settings-skin [data-slot="switch-thumb"][data-state="checked"] {
   transform: translateX(1.2rem);
@@ -327,162 +240,123 @@
 
 /* the kit's own on/off switch (ToggleField) */
 .settings-skin .settings-switch {
-  border: 1px solid rgba(255, 255, 255, 0.8);
-  box-shadow:
-    inset 3px 3px 7px rgba(0, 60, 100, 0.2),
-    inset -2px -2px 5px rgba(255, 255, 255, 0.6);
+  border: 0;
+  box-shadow: none;
 }
 .settings-skin .settings-switch[aria-checked="true"] {
-  background: linear-gradient(145deg, #34d399, #059669);
+  background: var(--st-accent);
 }
 .settings-skin .settings-switch[aria-checked="false"] {
-  background: linear-gradient(145deg, rgba(0, 100, 150, 0.14), rgba(255, 255, 255, 0.55));
+  background: var(--st-field);
 }
 .settings-skin .settings-switch > span {
-  background: linear-gradient(145deg, #ffffff, #e3eef6);
-  box-shadow:
-    3px 3px 7px rgba(0, 60, 100, 0.3),
-    -1px -1px 4px rgba(255, 255, 255, 0.9);
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.25);
 }
 
-/* ── navigation: a glass rail, and a raised clay pill for the open tab ──────────────────────────────────────────── */
+/* ── navigation: a plain list, the open tab marked with a pale blue row ─────────────────────────────────────────── */
 
 .settings-skin .settings-rail {
-  border-radius: 1.5rem;
-  padding: 0.625rem;
+  border-radius: 0.75rem;
+  padding: 0.5rem;
 }
 
 .settings-skin .settings-nav-item {
-  color: #1e4d6b;
+  color: #475569;
+  border-radius: 0.5rem;
   transition:
-    background 0.2s ease,
-    box-shadow 0.2s ease,
-    color 0.2s ease;
+    background-color 0.15s ease,
+    color 0.15s ease;
 }
 .settings-skin .settings-nav-item:hover {
-  background: rgba(255, 255, 255, 0.7);
-  color: #006496;
+  background: var(--st-wash);
+  color: var(--st-ink);
 }
 .settings-skin .settings-nav-item[aria-selected="true"] {
-  color: #ffffff;
-  background: linear-gradient(145deg, #0a86bd, #006496);
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  box-shadow:
-    6px 7px 16px rgba(0, 100, 150, 0.3),
-    -2px -2px 8px rgba(255, 255, 255, 0.7),
-    inset 2px 2px 4px rgba(255, 255, 255, 0.35),
-    inset -3px -3px 7px rgba(0, 50, 90, 0.25);
+  color: var(--st-accent);
+  background: var(--st-accent-wash);
 }
 
-/* PillTabs inside a tab (Staff / Production ...): a glass track, a clay-blue open pill instead of black */
+/* PillTabs inside a tab (Staff / Production ...): a grey track and one solid blue pill for the open tab */
 .settings-skin [data-slot="pill-tabs"] {
   /* a row of tabs that is wider than a phone wraps onto a second line instead of making the page scroll sideways */
   flex-wrap: wrap;
   max-width: 100%;
-  border-radius: 1.25rem;
-  background: rgba(255, 255, 255, 0.5) !important;
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.8);
-  box-shadow:
-    inset 3px 3px 8px rgba(0, 100, 150, 0.09),
-    inset -3px -3px 8px rgba(255, 255, 255, 0.9);
+  border-radius: 0.625rem;
+  background: #f1f5f9 !important;
+  border: 0;
+  box-shadow: none;
 }
 .settings-skin [data-slot="pill-tab-fill"] {
-  background: linear-gradient(145deg, #0a86bd, #006496) !important;
+  background: var(--st-accent) !important;
+  box-shadow: none;
+}
+.settings-skin [data-slot="pill-tab"] {
+  color: #475569;
 }
 .settings-skin [data-slot="pill-tab"][aria-selected="true"] {
-  box-shadow:
-    4px 5px 11px rgba(0, 100, 150, 0.28),
-    -2px -2px 6px rgba(255, 255, 255, 0.7);
+  color: #ffffff;
+  box-shadow: none;
 }
 
 /* the old underline tabs some tabs still use inside a card */
 .settings-skin .clay-tabs-list {
-  border-bottom-color: rgba(0, 100, 150, 0.14) !important;
+  border-bottom-color: var(--st-line) !important;
 }
 
-/* ── tables inside a card ───────────────────────────────────────────────────────────────────────────────────────── */
+/* ── tables inside a card ────────────────────────────────────────────────────────────────────────────────────────── */
 
 .settings-skin [data-slot="table-head"] {
-  background: rgba(0, 100, 150, 0.06);
+  background: var(--st-wash);
 }
 .settings-skin [data-slot="table-row"]:hover {
-  background: rgba(255, 255, 255, 0.55);
-}
-
-/* ── on the page: dividers and tinted tiles ────────────────────────────────────────────────────────────────────── */
-
-.settings-skin .settings-divide {
-  border-color: rgba(0, 100, 150, 0.09);
-}
-
-/* plain white tiles a tab draws for itself become frosted */
-.settings-skin .bg-white:not([data-slot]):not(button):not(input):not(.settings-clay):not(.settings-tile) {
-  background-color: rgba(255, 255, 255, 0.58);
+  background: var(--st-wash);
 }
 
 /* ── portals: dialogs, drop-down lists, menus and pop-overs opened from the page ─────────────────────────────────── */
 
 html.settings-skin-on [data-slot="dialog-content"] {
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.86), rgba(228, 242, 250, 0.7));
-  border: 1px solid rgba(255, 255, 255, 0.85);
-  box-shadow:
-    0 28px 90px -18px rgba(0, 60, 110, 0.4),
-    0 2px 8px rgba(0, 60, 110, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  background: #ffffff;
+  background-image: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border: 1px solid var(--st-line);
+  border-radius: 0.75rem;
+  box-shadow: 0 20px 50px -12px rgba(15, 23, 42, 0.3);
 }
 
 html.settings-skin-on [data-slot="select-content"],
 html.settings-skin-on [data-slot="popover-panel"],
 html.settings-skin-on [data-slot="dropdown-content"] {
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.9), rgba(236, 246, 252, 0.78));
-  -webkit-backdrop-filter: blur(18px) saturate(165%);
-  backdrop-filter: blur(18px) saturate(165%);
-  border: 1px solid rgba(255, 255, 255, 0.85);
-  border-radius: 1rem;
-  box-shadow:
-    0 18px 48px rgba(0, 80, 130, 0.22),
-    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  background: #ffffff;
+  background-image: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border: 1px solid var(--st-line);
+  border-radius: 0.625rem;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
 }
 
 html.settings-skin-on [data-slot="select-content"] [role="option"][data-highlighted],
 html.settings-skin-on [data-slot="dropdown-content"] [data-highlighted] {
-  background: linear-gradient(145deg, rgba(0, 150, 199, 0.16), rgba(0, 100, 150, 0.1));
-  color: #004a6e;
+  background: #f1f5f9;
+  color: var(--st-ink);
 }
 
 html.settings-skin-on [data-slot="dialog-overlay"] {
-  background: radial-gradient(60rem 40rem at 30% 20%, rgba(0, 150, 199, 0.22), rgba(15, 40, 80, 0.38));
+  background: rgba(15, 23, 42, 0.45);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
-/* ── no backdrop-filter (old browsers): the same panels, more opaque so the text stays readable ─────────────────── */
-
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .settings-skin .settings-glass,
-  .settings-skin [data-slot="card"],
-  .settings-skin .clay-card,
-  .settings-skin [data-slot="table-container"],
-  .settings-skin .settings-dock {
-    background: rgba(255, 255, 255, 0.97);
-  }
-  html.settings-skin-on [data-slot="select-content"],
-  html.settings-skin-on [data-slot="popover-panel"],
-  html.settings-skin-on [data-slot="dropdown-content"] {
-    background: rgba(255, 255, 255, 0.98);
-  }
-}
-
-/* ── less motion ───────────────────────────────────────────────────────────────────────────────────────────────── */
+/* ── less motion ─────────────────────────────────────────────────────────────────────────────────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {
-  .settings-skin .settings-glass,
-  .settings-skin [data-slot="card"],
-  .settings-skin .clay-card,
   .settings-skin .settings-nav-item,
   .settings-skin input[data-slot="input"],
   .settings-skin textarea[data-slot="textarea"],
-  .settings-skin [data-slot="select-trigger"] {
+  .settings-skin [data-slot="select-trigger"],
+  .settings-skin select {
     transition: none;
   }
 }

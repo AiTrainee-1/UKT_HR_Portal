@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
-import { Eye, Play, RefreshCcw, Search, Users } from "lucide-react";
-import { Link } from "wouter";
+import { useCallback, useMemo, useState } from "react";
+import { Play, Search, SearchX, Users, X } from "lucide-react";
+import { Link, useLocation } from "wouter";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -11,138 +11,202 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ShieldLoader } from "@/components/ui/ShieldLoader";
 import PayrollGenerationPipeline from "@/components/PayrollGenerationPipeline";
-import { BreakdownDrawer } from "@/components/payroll/BreakdownDrawer";
+import { EmptyNote, SkeletonRows } from "@/components/payroll/kit/parts";
+import { openPayrollDetails } from "@/components/payroll/kit/url-state";
+import { buildIssueSummaries } from "@/components/payroll/panels/filters";
 import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
 import {
   PAY_CYCLE_INFO,
+  usePayrollIssues,
+  usePayrollRules,
   useProductionPeriodStatus,
   type CyclePeriod,
   type PayCycle,
   type PeriodEmployee,
-  type ProductionPeriods,
 } from "@/lib/api-client/custom-hooks";
-import { PeriodPicker } from "./PeriodPicker";
-import { ROSTER_STATE_LABEL, filterRoster, formatPeriod, rosterState, rupees, type RosterState } from "./logic";
+import { cn } from "@/lib/utils";
+import { NotEndedNote, PeriodError } from "./CycleNotices";
+import {
+  ROSTER_STATE_LABEL,
+  ROSTER_STATES,
+  filterRoster,
+  formatPeriod,
+  productionScope,
+  rosterStateCounts,
+  rosterStateFromUrl,
+  rosterState,
+  type RosterState,
+  type UrlSetter,
+} from "./logic";
+import { RosterRow, type RosterDataState } from "./RosterRow";
 
-const STATE_BADGE: Record<RosterState, string> = {
-  ready: "border-gray-200 bg-gray-100 text-gray-600",
-  pending: "border-amber-200 bg-amber-100 text-amber-800",
-  paid: "border-emerald-200 bg-emerald-100 text-emerald-800",
-  blocked: "border-red-200 bg-red-50 text-red-700",
-};
+const dataState = (q: { isLoading: boolean; data: unknown }): RosterDataState =>
+  q.isLoading ? "loading" : q.data ? "ready" : "unavailable";
 
 /**
- * Employees tab of a cycle page: the people assigned to the cycle, each with what they have for the chosen period, and
- * the way to generate (or generate again) ONE of them or a handful, instead of the whole roster.
+ * Employees tab of a cycle page: the people assigned to the cycle, each with what they have for the chosen period (their
+ * state, what payroll found, the rules they are paid under), and the way to generate (or generate again) ONE of them or a
+ * handful, instead of the whole roster. A generated payroll opens on its own details page.
  */
 export function EmployeesTab({
   cycle,
   period,
-  periods,
-  periodsLoading,
+  url,
+  setUrl,
   onPeriodChange,
-  onPickDate,
 }: {
   cycle: PayCycle;
-  period: CyclePeriod | null;
-  periods: ProductionPeriods | undefined;
-  periodsLoading: boolean;
+  period: CyclePeriod;
+  url: Record<string, string>;
+  setUrl: UrlSetter;
+  /** Called as a run starts, so the page keeps showing this period while it is generated. */
   onPeriodChange: (period: CyclePeriod) => void;
-  onPickDate: (date: string) => void;
 }) {
+  const [, navigate] = useLocation();
   const info = PAY_CYCLE_INFO[cycle];
   const { triggerGenerateProduction, isGenerating, showPipeline, progress, dismiss } = usePayrollGeneration();
   const status = useProductionPeriodStatus(cycle, period);
-  const [search, setSearch] = useState("");
-  const [state, setState] = useState<RosterState | "all">("all");
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const scope = useMemo(() => productionScope(cycle, period), [cycle, period]);
+  const issuesQuery = usePayrollIssues(scope);
+  const rulesQuery = usePayrollRules(scope);
+
+  const search = url.eq ?? "";
+  const stateFilter = rosterStateFromUrl(url.estate);
+  const [selected, setSelected] = useState<Set<number>>(() => new Set());
   const [again, setAgain] = useState<PeriodEmployee | null>(null);
-  const [breakdownId, setBreakdownId] = useState<number | null>(null);
 
   const employees = useMemo(() => status.data?.employees ?? [], [status.data]);
-  const shown = useMemo(() => filterRoster(employees, search, state), [employees, search, state]);
+  const counts = useMemo(() => rosterStateCounts(employees), [employees]);
+  const shown = useMemo(() => filterRoster(employees, search, stateFilter), [employees, search, stateFilter]);
   const readyIds = useMemo(() => shown.filter((e) => rosterState(e) === "ready").map((e) => e.employeeId), [shown]);
   const chosen = useMemo(() => readyIds.filter((id) => selected.has(id)), [readyIds, selected]);
-  const ended = status.data?.periodEnded ?? false;
-
-  const run = (ids: number[], regenerate = false) => {
-    if (!period || ids.length === 0) return;
-    onPeriodChange(period);
-    void triggerGenerateProduction({
-      cycle,
-      periodStart: period.periodStart,
-      periodEnd: period.periodEnd,
-      employeeIds: ids,
-      regenerate,
-    });
-    setSelected(new Set());
-  };
-
-  const toggle = (id: number) =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
   const allChosen = readyIds.length > 0 && chosen.length === readyIds.length;
+  const ended = status.data?.periodEnded ?? false;
+  const serverCounts = status.data?.counts;
+  const periodLabel = formatPeriod(period);
 
-  const counts = status.data?.counts;
+  const issueSummaries = useMemo(() => buildIssueSummaries(issuesQuery.data?.issues), [issuesQuery.data]);
+  const rulesByEmployee = useMemo(
+    () => new Map((rulesQuery.data?.employees ?? []).map((r) => [r.employeeId, r])),
+    [rulesQuery.data],
+  );
+  const issuesState = dataState(issuesQuery);
+  const rulesState = dataState(rulesQuery);
+
+  // Asks for exactly these employees of this cycle and period (a run never touches anybody else).
+  const run = useCallback(
+    (ids: number[], regenerate = false) => {
+      if (ids.length === 0) return;
+      onPeriodChange(period);
+      void triggerGenerateProduction({
+        cycle,
+        periodStart: period.periodStart,
+        periodEnd: period.periodEnd,
+        employeeIds: ids,
+        regenerate,
+      });
+      setSelected(new Set());
+    },
+    [cycle, period, onPeriodChange, triggerGenerateProduction],
+  );
+  const generateOne = useCallback((e: PeriodEmployee) => run([e.employeeId]), [run]);
+
+  const toggle = useCallback(
+    (id: number) =>
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      }),
+    [],
+  );
+  const openDetails = useCallback(
+    (payrollId: number, section?: string) => openPayrollDetails(navigate, "production", payrollId, section),
+    [navigate],
+  );
+
+  const filtering = search.trim() !== "" || stateFilter !== "all";
+  const clearFilters = () => setUrl({ eq: "", estate: "all" });
+  const filterChips: { value: RosterState | "all"; label: string }[] = [
+    { value: "all", label: "All" },
+    ...ROSTER_STATES.map((s) => ({ value: s, label: ROSTER_STATE_LABEL[s] })),
+  ];
 
   return (
     <div className="space-y-4" data-testid="pcp-employees-tab">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <PeriodPicker
-          periods={periods}
-          period={period}
-          onChange={onPeriodChange}
-          onPickDate={onPickDate}
-          loading={periodsLoading}
-        />
-        {counts && (
+      <div>
+        <p className="text-sm font-semibold text-gray-900">
+          {periodLabel} · the {info.label} roster
+        </p>
+        {serverCounts ? (
           <p className="text-xs text-muted-foreground" data-testid="pcp-roster-counts">
-            {employees.length} on the {info.label} cycle · {counts.generated + counts.paid} generated · {counts.ready}{" "}
-            ready
-            {counts.blocked > 0 ? ` · ${counts.blocked} cannot be generated` : ""}
+            {employees.length} on the {info.label} cycle · {serverCounts.generated + serverCounts.paid} generated ·{" "}
+            {serverCounts.ready} ready
+            {serverCounts.blocked > 0 ? ` · ${serverCounts.blocked} cannot be generated` : ""}
+          </p>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Each employee on the cycle, with what they have for the period
           </p>
         )}
       </div>
 
       <PayrollGenerationPipeline active={showPipeline} data={progress} onDismiss={dismiss} />
 
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative w-full sm:w-72">
-          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search by employee code or name…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="h-8 w-full pl-8 text-sm"
-            data-testid="pcp-roster-search"
-          />
+      <div className="clay-card space-y-3 rounded-2xl border border-slate-100 p-3" data-testid="pcp-roster-toolbar">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative min-w-[14rem] flex-1">
+            <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <Input
+              placeholder="Search by employee code or name"
+              aria-label="Search the roster by employee name or code"
+              value={search}
+              onChange={(e) => setUrl({ eq: e.target.value })}
+              className="h-10 pl-9"
+              disabled={!status.data}
+              data-testid="pcp-roster-search"
+            />
+          </div>
+          <div
+            className="flex flex-wrap items-center gap-1.5"
+            role="group"
+            aria-label="Filter by state"
+            data-testid="pcp-roster-filter"
+          >
+            {filterChips.map((chip) => {
+              const on = stateFilter === chip.value;
+              return (
+                <button
+                  key={chip.value}
+                  type="button"
+                  aria-pressed={on}
+                  disabled={!status.data}
+                  onClick={() => setUrl({ estate: chip.value })}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50",
+                    on
+                      ? "border-amber-300 bg-amber-50 text-amber-800 ring-1 ring-amber-200"
+                      : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50",
+                  )}
+                  data-testid={`pcp-roster-filter-${chip.value}`}
+                >
+                  {chip.label} <span className="tabular-nums opacity-60">{counts[chip.value]}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
-        <Select value={state} onValueChange={(v) => setState(v as RosterState | "all")}>
-          <SelectTrigger className="h-8 w-52 text-sm" data-testid="pcp-roster-state">
-            <SelectValue placeholder="Status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All employees</SelectItem>
-            <SelectItem value="ready">{ROSTER_STATE_LABEL.ready}</SelectItem>
-            <SelectItem value="pending">{ROSTER_STATE_LABEL.pending}</SelectItem>
-            <SelectItem value="paid">{ROSTER_STATE_LABEL.paid}</SelectItem>
-            <SelectItem value="blocked">{ROSTER_STATE_LABEL.blocked}</SelectItem>
-          </SelectContent>
-        </Select>
         {chosen.length > 0 && (
-          <div className="ml-auto flex items-center gap-2" data-testid="pcp-roster-bulk">
-            <span className="text-xs text-gray-600">{chosen.length} selected</span>
+          <div
+            className="flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3"
+            data-testid="pcp-roster-bulk"
+          >
+            <span className="text-xs font-semibold text-gray-700">{chosen.length} selected</span>
             <Button
               size="sm"
               className="h-8 gap-1.5 bg-amber-600 hover:bg-amber-700"
@@ -159,165 +223,77 @@ export function EmployeesTab({
         )}
       </div>
 
-      {period && status.data && !ended && (
-        <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800" data-testid="pcp-not-ended">
-          {formatPeriod(period)} has not ended yet: payroll for it can be generated from its last day.
-        </p>
-      )}
+      {status.data && !ended && <NotEndedNote period={period} />}
 
       {status.isError ? (
-        <div
-          className="rounded-xl border border-red-200 bg-red-50 px-4 py-6 text-center text-sm text-red-800"
-          role="alert"
-          data-testid="pcp-period-error"
-        >
-          {status.error instanceof Error ? status.error.message : "This period could not be loaded."} Pick another pay
-          period above.
-        </div>
+        <PeriodError error={status.error} onRetry={() => void status.refetch()} retrying={status.isFetching} />
       ) : status.isLoading ? (
-        <ShieldLoader />
-      ) : employees.length === 0 ? (
-        <div
-          className="rounded-xl border-2 border-dashed border-gray-200 py-16 text-center text-muted-foreground"
-          data-testid="pcp-roster-empty"
-        >
-          <Users size={32} className="mx-auto mb-3 text-gray-200" />
-          <p className="text-sm font-semibold text-gray-600">No employees are assigned to the {info.label} cycle yet</p>
-          <p className="mt-1 text-xs text-gray-400">Assign production employees to this cycle to pay them here.</p>
-          <Button asChild className="mt-4 gap-2 bg-amber-600 hover:bg-amber-700">
-            <Link href="/hr/employees/productionEmployee">Open Production Employees</Link>
-          </Button>
+        <div aria-busy="true" data-testid="pcp-roster-loading">
+          <SkeletonRows rows={6} />
         </div>
+      ) : employees.length === 0 ? (
+        <EmptyNote
+          icon={Users}
+          title={`No employees are assigned to the ${info.label} cycle yet`}
+          hint="Assign production employees to this cycle to pay them here."
+          testId="pcp-roster-empty"
+          action={
+            <Button asChild className="mt-2 gap-2 bg-amber-600 hover:bg-amber-700">
+              <Link href="/hr/employees/productionEmployee">Open Production Employees</Link>
+            </Button>
+          }
+        />
+      ) : shown.length === 0 ? (
+        <EmptyNote
+          icon={SearchX}
+          title="No employee matches the search or status"
+          hint="Change or clear the search and the state to see the rest of the roster."
+          testId="pcp-roster-no-match"
+          action={
+            filtering ? (
+              <Button variant="outline" className="mt-2 gap-1.5" onClick={clearFilters}>
+                <X size={13} /> Clear the filters
+              </Button>
+            ) : undefined
+          }
+        />
       ) : (
-        <div className="overflow-x-auto rounded-xl border">
-          <table className="w-full text-sm" data-testid="pcp-roster-table">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="w-8 px-3 py-2">
-                  <Checkbox
-                    aria-label="Select every employee that can be generated"
-                    checked={allChosen}
-                    disabled={readyIds.length === 0 || !ended}
-                    onCheckedChange={(v) => setSelected(v ? new Set(readyIds) : new Set())}
-                    data-testid="pcp-roster-select-all"
-                  />
-                </th>
-                <th className="px-3 py-2 text-left font-semibold text-gray-600">Employee</th>
-                <th className="px-3 py-2 text-left font-semibold text-gray-600">Rate / shift</th>
-                <th className="px-3 py-2 text-left font-semibold text-gray-600">Status</th>
-                {/* the figures are on the Payroll tab: a phone keeps the columns that fit beside the Generate button */}
-                <th className="hidden px-3 py-2 text-left font-semibold text-gray-600 md:table-cell">Shifts</th>
-                <th className="hidden px-3 py-2 text-left font-semibold text-gray-600 md:table-cell">Gross</th>
-                <th className="hidden px-3 py-2 text-left font-semibold text-gray-600 md:table-cell">Net</th>
-                <th className="px-3 py-2 text-right font-semibold text-gray-600">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {shown.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="py-10 text-center text-xs text-muted-foreground">
-                    No employee matches the search or status.
-                  </td>
-                </tr>
-              ) : (
-                shown.map((e) => {
-                  const st = rosterState(e);
-                  const p = e.payroll;
-                  return (
-                    <tr
-                      key={e.employeeId}
-                      className="hover:bg-gray-50/50"
-                      data-testid={`pcp-roster-row-${e.employeeCode}`}
-                    >
-                      <td className="px-3 py-2">
-                        {st === "ready" && (
-                          <Checkbox
-                            aria-label={`Select ${e.name}`}
-                            checked={selected.has(e.employeeId)}
-                            disabled={!ended}
-                            onCheckedChange={() => toggle(e.employeeId)}
-                            data-testid={`pcp-roster-select-${e.employeeCode}`}
-                          />
-                        )}
-                      </td>
-                      <td className="px-3 py-2">
-                        <p className="font-semibold text-gray-900">{e.name}</p>
-                        <p className="font-mono text-xs text-muted-foreground">
-                          {e.employeeCode}
-                          {e.departmentName ? ` · ${e.departmentName}` : ""}
-                        </p>
-                      </td>
-                      <td className="px-3 py-2 text-xs">
-                        {e.salaryPerShift != null && e.salaryPerShift > 0 ? (
-                          rupees(e.salaryPerShift)
-                        ) : (
-                          <span className="font-semibold text-amber-700">Not set</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2">
-                        <Badge
-                          className={`border text-xs ${STATE_BADGE[st]}`}
-                          data-testid={`pcp-roster-state-${e.employeeCode}`}
-                        >
-                          {ROSTER_STATE_LABEL[st]}
-                        </Badge>
-                        {st === "blocked" && (
-                          <p className="mt-1 max-w-[16rem] text-[11px] text-red-700">{e.blockedReason}</p>
-                        )}
-                      </td>
-                      <td className="hidden px-3 py-2 md:table-cell">{p ? p.presentDays : "—"}</td>
-                      <td className="hidden px-3 py-2 md:table-cell">{p ? rupees(p.grossSalary) : "—"}</td>
-                      <td className="hidden px-3 py-2 font-bold text-green-700 md:table-cell">
-                        {p ? rupees(p.finalSalary) : "—"}
-                      </td>
-                      <td className="px-3 py-2 text-right">
-                        <div className="inline-flex items-center gap-1">
-                          {st === "ready" && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-7 gap-1 text-xs"
-                              disabled={isGenerating || !ended}
-                              onClick={() => run([e.employeeId])}
-                              data-testid={`pcp-generate-${e.employeeCode}`}
-                            >
-                              <Play size={11} /> Generate
-                            </Button>
-                          )}
-                          {st === "pending" && (
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              className="h-7 w-7 text-amber-700"
-                              title={`Generate again for ${e.name}: recompute this payslip`}
-                              aria-label={`Generate again for ${e.name}`}
-                              disabled={isGenerating}
-                              onClick={() => setAgain(e)}
-                              data-testid={`pcp-regenerate-${e.employeeCode}`}
-                            >
-                              <RefreshCcw size={13} />
-                            </Button>
-                          )}
-                          {p && (
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              className="h-7 w-7"
-                              title="View the breakdown"
-                              aria-label={`View the breakdown for ${e.name}`}
-                              onClick={() => setBreakdownId(p.id)}
-                            >
-                              <Eye size={13} />
-                            </Button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+        <div className="clay-card overflow-hidden rounded-2xl border border-slate-100" data-testid="pcp-roster-list">
+          <div className="flex items-center gap-3 border-b border-slate-100 bg-slate-50/60 px-4 py-2.5">
+            <Checkbox
+              aria-label="Select every employee that can be generated"
+              checked={allChosen}
+              disabled={readyIds.length === 0 || !ended}
+              onCheckedChange={(v) => setSelected(v ? new Set(readyIds) : new Set())}
+              data-testid="pcp-roster-select-all"
+            />
+            <p className="text-xs text-muted-foreground" aria-live="polite" data-testid="pcp-roster-showing">
+              {filtering ? `Showing ${shown.length} of ${employees.length}` : `${employees.length} on the cycle`}
+              {readyIds.length > 0 ? ` · ${readyIds.length} can be generated` : ""}
+            </p>
+          </div>
+          <ul className="divide-y divide-slate-100">
+            {shown.map((e) => {
+              const payrollId = e.payroll?.id;
+              return (
+                <RosterRow
+                  key={e.employeeId}
+                  employee={e}
+                  selected={selected.has(e.employeeId)}
+                  ended={ended}
+                  busy={isGenerating}
+                  issues={payrollId !== undefined ? issueSummaries.get(payrollId) : undefined}
+                  issuesState={issuesState}
+                  rules={rulesByEmployee.get(e.employeeId)}
+                  rulesState={rulesState}
+                  onToggle={toggle}
+                  onGenerate={generateOne}
+                  onGenerateAgain={setAgain}
+                  onOpenDetails={openDetails}
+                />
+              );
+            })}
+          </ul>
         </div>
       )}
 
@@ -326,9 +302,9 @@ export function EmployeesTab({
           <AlertDialogHeader>
             <AlertDialogTitle>Generate again for {again?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This recomputes the payslip for {period ? formatPeriod(period) : "the period"} from the attendance as it
-              is now. Anything you adjusted on it (bonus or deductions) is replaced, and an advance instalment already
-              taken from it is not taken again. A payslip that is already paid is never recomputed.
+              This recomputes the payslip for {periodLabel} from the attendance as it is now. Anything you adjusted on
+              it (bonus or deductions) is replaced, and an advance instalment already taken from it is not taken again.
+              A payslip that is already paid is never recomputed.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -346,8 +322,6 @@ export function EmployeesTab({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      {breakdownId && <BreakdownDrawer payrollId={breakdownId} onClose={() => setBreakdownId(null)} />}
     </div>
   );
 }

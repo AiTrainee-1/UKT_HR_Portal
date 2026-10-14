@@ -169,6 +169,7 @@ Full engine for both employment types:
 - **Skipped Employees:** a dry-run preview (before generating) of exactly which employees would be skipped and why (no Salary Amount / no Salary Per Shift / zero working days in the period) -surfaced as a KPI card on both Staff and Production Payroll pages. Staff's check runs automatically on page load (~14s for ~120 employees); Production's is click-triggered instead, since its equivalent check is measurably slower (~84s for ~114 employees, since the production engine's per-employee work is heavier) and firing it automatically on every page visit would be a bad tradeoff.
 - Deductions: PF, ESI, advances, Late Attendance penalty, Without Permission penalty.
 - Full day-by-day breakdown drawer per payroll record.
+- **Payroll insights (read-only, October 2026):** the Staff and Production Payroll pages explain what payroll already stored without touching it: `GET /payroll/<id>/details` (one payroll on its own page: profile, money, how each earning and deduction was worked out, the rules it was generated under and whether they changed since, its issues, days, history, Previous / Next), `/payroll/issues` (every issue detected for a month or period, each with the day it was detected on and a specific detail), `/payroll/rules` (the Settings rules plus each employee's own shift, PF / ESI and pay cycle) and `/payroll/salary-statement` (the printed Salary Statement by department). Production has the same four under `/payroll/production/...`. All are `GET`, built from `Payroll` + `SalarySlip.breakdown_details` + the profile + the live settings (never recomputed; a missing settings row is read as defaults, not created), gated by the URL's own permission module (`payroll` / `production_payroll`) and branch-scoped. Code: `payroll_insights*.py` and `payroll_statement_views.py`; response contract: `frontend/src/lib/api-client/custom-hooks/payroll-insights.ts`; tests: `tests_payroll_insights.py`.
 - Salary Slip: PDF generation, single/bulk download/email/**WhatsApp** (Section 8), Excel export.
 - Settlement: advance/loan records with auto-generated repayment schedules, deducted from payroll automatically each cycle.
 
@@ -234,6 +235,8 @@ backend/
 │   ├── payroll_views.py                # Full payroll engine (staff + production) + Late/WP pools
 │   ├── production_payroll_views.py / production_period.py
 │   ├── payroll_progress.py             # In-memory bulk-generation progress tracker
+│   ├── payroll_insights.py / payroll_insights_rules.py   # Read-only explanations of stored payroll: issue detection, money lines, rules (applied vs current), Settings deep links, bulk loaders
+│   ├── payroll_insights_views.py / payroll_statement_views.py   # GET details / issues / rules and the printed Salary Statement (staff under /payroll, production under /payroll/production)
 │   ├── salary_slip_views.py / salary_slip_bulk_pdf.py / salary_slip_bulk_progress.py
 │   ├── whatsapp_service.py / whatsapp_views.py / whatsapp_bulk_progress.py / idcard_render.py
 │   ├── email_catalog.py / email_service.py / email_control_views.py   # Every email goes through email_service; Gmail Control page (gmail-integration.md)
@@ -335,8 +338,8 @@ All endpoints prefixed `/api/`. JWT in `Authorization: Bearer <token>`. This cov
 | Employees | `GET/POST /employees`, `GET/PUT/DELETE /employees/<id>`, `PATCH /employees/<id>/status` |
 | Attendance | `GET /attendance/summary`, `/daily`, `/monthly-trend`, `/employee/<id>`; `POST /attendance/manual`, `/attendance/sync-biometric`, `/biometric/punch` |
 | Leave & Holiday | `GET/POST /leave-types`, `/leave-requests`, `/permissions`, `/holidays`; `PATCH /leave-requests/<id>/status` |
-| Payroll | `GET/POST /payroll`, `GET /payroll/<id>/breakdown`, `POST /payroll/skip-check`, `GET/PUT /payroll-settings` |
-| Production Payroll | `GET /payroll/production?cycle=`, `POST /payroll/production/generate` (`cycle`, optional period / `employeeIds`), `GET /payroll/production/skip-check`, `/next-period`, `/periods`, `/period-status`, `/cycles` |
+| Payroll | `GET/POST /payroll`, `GET /payroll/<id>/breakdown`, `POST /payroll/skip-check`, `GET/PUT /payroll-settings`; read-only insights: `GET /payroll/<id>/details`, `/payroll/issues`, `/payroll/rules`, `/payroll/salary-statement` |
+| Production Payroll | `GET /payroll/production?cycle=`, `POST /payroll/production/generate` (`cycle`, optional period / `employeeIds`), `GET /payroll/production/skip-check`, `/next-period`, `/periods`, `/period-status`, `/cycles`; read-only insights: `GET /payroll/production/<id>/details`, `/payroll/production/issues`, `/payroll/production/rules`, `/payroll/production/salary-statement` |
 | Production Employees | `GET /employees/production`, `POST /employees/production/assign` |
 | Salary Slip | `GET/POST /salary-slips`, `/<id>/email`, `/<id>/whatsapp`, `/bulk-email`, `/bulk-whatsapp` |
 | WhatsApp | `GET /whatsapp/status`, `GET/PUT /whatsapp/templates` |

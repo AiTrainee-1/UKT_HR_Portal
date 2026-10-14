@@ -63,7 +63,13 @@ frontend/src/
 │   │   │                               #   SummaryCards, ServerPanel, DeviceCard, DiagnosisPanel (nine layers), UnknownSenders,
 │   │   │                               #   parts.tsx, logic.ts (pure, tested); data via custom-hooks/device-status.ts (polls 15 s)
 │   │   ├── LeaveHoliday.tsx / CasualLeave.tsx / Requests.tsx
-│   │   ├── StaffPayroll.tsx / ProductionPayroll.tsx / Settlement.tsx
+│   │   ├── StaffPayroll.tsx + staff-payroll/   # Payroll / Salary / Payslip tabs: thin shell (state in the address), PayrollTab, SalaryTab,
+│   │   │                               #   GenerateDialog, PeriodControls, SessionConfigPanel (legacy), logic.ts (URL defaults, scope, register columns)
+│   │   ├── production-payroll/         # One page per pay cycle (ProductionPayrollWeekly/Biweekly/Monthly -> ProductionCyclePage): same
+│   │   │                               #   shell + PayrollTab / EmployeesTab (roster) / SalaryTab / PayslipTab, GenerateDialog, PeriodPicker
+│   │   ├── payroll-details/            # One payroll on its own page (/hr/payroll/details/:id, /hr/production-payroll/details/:id): header with
+│   │   │                               #   Previous/Next, KPIs, Overview / Rules / Issues / Attendance / Pay / Employee / History, exports, print
+│   │   ├── Settlement.tsx
 │   │   ├── IdCards.tsx / Promotion.tsx / Increment.tsx / Bonus.tsx
 │   │   ├── Reports.tsx + report-center/   # Report Center: catalog, workspace, schema-driven filters, result table
 │   │   ├── recruitment/          # NewJoinees, Resignations, Interviews, ResumeScreening, Documents, ...
@@ -96,7 +102,15 @@ frontend/src/
 │   ├── md/                       # MD portal shell and kit: MdLayout/MdSidebar/md-nav.ts, kit/ (StatCard, SectionCard, TrendChart,
 │   │                             #   BarList, DonutChart, Heatmap, DataTable, InsightList, FilterBar...), assistant/ (the AI side panel:
 │   │                             #   Composer, MessageBubble, Explainer, voice/ input + speech output)
-│   ├── payroll/BreakdownDrawer.tsx  # Shared day-by-day payroll breakdown, staff + production
+│   ├── payroll/                  # The payroll UI, shared by Staff and Production Payroll and the details page:
+│   │   ├── kit/                  #   format.ts (₹, dates), issue-meta.ts (severity/type names + icons), parts.tsx (KpiTile, Chip, EmptyNote, loaders),
+│   │   │                         #   ExportMenu, export-table.ts (Excel/CSV), url-state.ts (useUrlParams, openPayrollDetails), statement-url.ts,
+│   │   │                         #   use-payroll-actions.ts (useMarkPaid, useRefreshPayroll), issue-summary.ts, ViewSwitch
+│   │   ├── panels/               #   dashboard, filters, records (cards + table), issues, skipped, rules, payslips: each takes a `scope`
+│   │   │                         #   (staff month | production cycle + period) and an `accent` (indigo | amber) and loads its own data
+│   │   ├── statement/            #   The Salary Statement (printed format): SalaryStatementPanel, scroll table + paper "Pages" view, Excel / PDF / Print
+│   │   ├── AdjustPayrollDialog.tsx / adjust-target.ts   # bonus + deductions of one payslip
+│   │   └── BreakdownDrawer.tsx   #   Old day-by-day breakdown drawer (no longer used by the payroll pages; kept for other callers)
 │   ├── SalarySlipBulkPipeline.tsx / WhatsAppBulkPipeline.tsx / PayrollGenerationPipeline.tsx
 │   │                             # Inline progress bars for long-running bulk operations
 │   └── Global*Banner.tsx         # Floating equivalents of the pipelines above, visible while
@@ -118,6 +132,16 @@ frontend/src/
         ├── custom-hooks.ts       # Hand-written hooks for endpoints off the OpenAPI spec
         └── index.ts              # Orval-generated hooks
 ```
+
+### The payroll pages (Staff + Production)
+Both payroll areas are built from the same kit and panels (`components/payroll/`), so a change to how an issue, a rule or the statement looks is made once. Rules worth knowing before touching them:
+
+- **Everything on screen is read-only explanation of stored payroll.** The dashboard, Issues, Skipped, Rules, Salary Statement and the details page read `/api/payroll/.../details|issues|rules|salary-statement` (see `backend.md`), which never recompute or write. Only Generate, Mark Paid and Adjust change data, and those use the existing endpoints.
+- **Page state lives in the address** (`?tab=&view=&month=&year=&period=&q=&dept=&status=&issue=&icode=...&sq=...`) through `useUrlParams`, written with `replace`, so a reload, a shared link and Back from a details page land on the same tab, period and filters. Open a details page with `openPayrollDetails(navigate, kind, id, section?)` (it sets the history state that makes Back return to the list); a pasted link falls back to `payrollListPath`.
+- **Staff Payroll's three tabs are three permission modules** (`payroll`, `salary`, `salary_slip`); the Production pages are the single `production_payroll` module. The details page and the insight endpoints follow the URL's module (`payroll` / `production_payroll`).
+- **View Only**: `lib/view-only-lock.ts` disables a `<button>` whose accessible name has a mutating verb. Give data-changing buttons such a name (e.g. `title="Update the status of ... to Paid"`) and wrap read-only exports in `data-view-safe` (`ExportMenu` already does).
+- **Loaders**: whole panel loading -> `PayrollLoader` / a sheet-shaped skeleton; figures -> `SkeletonKpis`; lists -> `SkeletonRows`; errors say so and offer Retry. Never a blank area while data is on its way.
+- Tests: logic in `*-logic.test.ts`, jsdom render tests next to each panel, and the Playwright specs `payroll.spec.ts`, `payroll-insights.spec.ts` and `production-cycles.spec.ts`.
 
 ### The MD portal front end
 `/md/*` is a second shell (`MdLayout`) for the one Managing Director account (`AuthContext.isMd`, from `/auth/me`; the route guard in `App.tsx` sends everyone else away). Pages are built from the kit in `components/md/kit/` and read `/api/md/*` through `useMdQuery`. Two rules worth knowing before touching a page: **layout answers to the page's width, not the screen's** (`MdLayout`'s `<main>` is a Tailwind v4 `@container`; use `@3xl:`/`@5xl:` variants, because the assistant panel can take 444 px of the page), and **every figure carries its provenance** ("How is this calculated?") and an Ask-AI question. The assistant panel (`AssistantHost`, mounted once in `App.tsx`) is text + voice (Web Speech API with a server-transcription fallback) and renders the server-built explanation. Full recipe and rules: `md-portal.md` sections 4 and 6.

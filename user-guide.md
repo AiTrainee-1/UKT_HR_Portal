@@ -539,6 +539,29 @@ For each pending punch verification:
 - Alternatively, slips can be **emailed** to employees (requires SMTP to be configured in Settings), or sent via **WhatsApp** if WhatsApp is configured (see `backend.md`).
 - Employees can also download their own slips from the Employee portal.
 
+#### The Payroll Page (What You See and Where)
+
+The page is about **one month** at a time. Use the arrows or the Month / Year boxes at the top right; the round arrow reloads every figure. The month, the tab, the view and every filter are kept in the page's address, so a reload, a shared link and the **Back** button from a payroll's Details page all return to exactly what you were looking at.
+
+**Payroll tab**
+- **Dashboard of the month:** employees paid out of the active staff, total gross, deductions, net payable, what is still pending release, the number of issues (critical / needs a look) and the employees skipped; below them how much of the net has been released, net payable by department and the issues by type (click a type to open it in the Issues view).
+- **Four views** under the dashboard: **Records**, **Issues**, **Skipped** and **Rules**, each with a live count.
+- **Records:** one card per employee with the net pay, days, what payroll flagged and the rules that apply to that person (shift, late rules, PF / ESI), a Cards / Table switch, and filters for name or code, department, payment status, issue type and severity ("only with issues"). **Details** opens the payroll on its own page; **Mark Paid** releases it.
+- **Issues:** every detection of the month: absent days, late arrivals, early leaving, half days, quarter-day cuts, missing punches, no shift assigned, late deduction, excess permission, advance recovery, overtime pay, manual adjustments and missing bank / PF / ESI details. Each shows the **date it was detected** ("Detected on Mon, 16 Feb 2026"; an issue about the whole month says "Whole period" and when payroll flagged it), the specific detail with the real numbers, what it cost (days and ₹), the rule behind it with a link to the Settings page where that rule is changed, and **Open details**. Filter by text, severity, type, department and detection dates; group by date, employee or type; **Export** what is shown (Excel or CSV). An absence is "Needs a look"; **Critical** is kept for what stops a person being paid (for example an employee skipped at generation).
+- **Skipped:** the employees payroll skipped (no salary amount, no working days ...), the reason and how to fix it (a link to the profile or settings). **Re-check** asks again; looking never writes anything.
+- **Rules:** the rules configured on the Settings page that payroll uses (attendance and late detection, half day and permissions, PF / ESI, how a day's pay is worked out ...), each with an **Edit in Settings** link, and **the rules assigned to each employee**.
+- The top row has **Skipped Employees**, **Export** (Excel / CSV of the register on screen), **Export bank file** (the bank-transfer sheet) and **Generate Payroll**. Generate Payroll shows the rules the run will use, warns when payroll already exists for the month (a record already marked Paid goes back to Pending when the month is generated again) and can check who would be skipped first.
+
+**The Details page.** Click **Details** on a card (or an employee's name in the Salary tab, or **Open details** on an issue) to open that payroll on a page of its own. **Back to Payroll** (or the browser's Back button) returns to the same month, view and filters. The page shows the figures (gross, deductions, net, and a gross-to-net bar), how the salary was worked out, the rules it was generated under and whether they changed since, every issue with its date, a calendar of the month day by day (what each day counted as, the first and last punch, what was flagged), the pay and deductions in detail (late deduction, advances, overtime, bonus), whether the employee's bank, IFSC, PF and ESI details are in place, and the earlier payrolls. **Previous / Next** move through the month's payrolls; **Mark as paid**, **Payslip** (view / download), **Export** (workbook, issues as Excel or CSV, Print) and **Settings** are in the header. Everything on the page is read from what payroll stored: nothing on it recalculates the pay.
+
+**Salary tab: the Salary Statement.** The month's salary in the format of the printed statement ("Salary Statement From 01-09-2026 To 30-09-2026"): grouped by department with a running serial number, a total per department and a grand total. Columns: SNO, ID NO, Name, Designation, Basic salary, Total, Present, CL, LOP, HD, Total Days, PTRL, Others Allow, E salary, T.Advance, Advance, ESI, PF, TDS, Others, Lop& PSAmt, Total Deduction, NET and Remarks. **Scroll** shows it as a table; **Pages** shows the paper preview ("Page 1 of n"). Search and the department / status filters narrow it, and **Export** gives **Excel**, **PDF** or **Print** of the rows shown (the totals are worked out again for them). Each row opens its Details (click the name), can have its bonus and deductions adjusted (pencil) and be marked paid (**Pay**).
+- How the columns are worked out: *Basic* is the first salary-split portion (Basic + DA + Retaining Allowance); *Total* is the monthly salary; *PTRL* is the Petrol allowance and *Others Allow* the rest of the second portion; *Present* is the days paid as worked (a half day counts 0.5) without Casual Leave, *CL* the approved Casual Leave days, *LOP* the working days minus Total Days; *E salary* is the salary earned for the days paid plus overtime and bonus; *T.Advance* is the advance balance before this month's recovery and *Advance* what was recovered this month; *Others* is the late deduction plus anything HR added; *NET* is the saved net payable. *Lop& PSAmt* (the pay lost to LOP) is for information and is not part of Total Deduction. **TDS is not tracked by the HRMS and is always 0**; the Notes printed under the statement say so.
+- The PDF uses a standard font: characters outside the Latin alphabet (for example Tamil) print as "?" and the rupee sign as "Rs".
+
+**Payslip tab.** The month's salary slips with search, department and "Not yet emailed" filters; **View PDF**, **Download PDF**, **Email** and **WhatsApp** per employee, **Bulk Send**, **Bulk WhatsApp** and **Bulk Download All** for the whole month, and **Export** of the register.
+
+**Who sees what.** The three tabs follow three permissions (Payroll, Salary, Salary Slip): a tab you may not see is hidden, and a View Only tab lets you browse, filter and export but not generate, adjust or mark paid.
+
 #### Legacy Sessions
 The payroll page also shows older sessions from before the current payroll system was implemented. These are historical records only.
 
@@ -610,6 +633,16 @@ On the page of a cycle (Weekly, BiWeekly or Monthly):
 5. Review each payslip's breakdown, **Mark Paid**, then use the **Salary** and **Payslip** tabs (all limited to this cycle).
 
 Generating is safe to repeat: employees who already have payroll for the period are left as they are, a paid payslip is never recomputed, and a period that overlaps days already paid for an employee is refused for them.
+
+#### What Each Cycle Page Shows
+
+Each cycle page (Weekly, BiWeekly, Monthly) is built like the Staff Payroll page, for **one pay period** at a time (chosen in the Pay period box, or by typing a date inside it). The tab, the period, the view and the filters are kept in the page's address, so a reload and Back from a Details page return to the same screen.
+- **Payroll tab:** the same dashboard and the same four views as Staff Payroll: **Records**, **Issues** (every detection of the period with the day it was detected: absent days, late arrivals, missing punches, half shifts, **No attendance** for a worker with no shift at all in the period, late deductions, advance recovery, missing bank / PF / ESI details), **Skipped** (the employees on the cycle who cannot be paid: no salary per shift, or dates that overlap payroll already paid, with the reason) and **Rules** (the cycle's period and late rules from Settings → Production Payroll, and the rules each worker is paid under). **Export** gives the payroll register (Excel / CSV) and **Export bank file** the bank sheet.
+- **Employees tab:** the cycle's roster for the period, each worker marked Not generated / Generated - pending / Paid / Cannot be generated, with their rules and issues, **Generate** for one worker (or **Generate again** for a pending payslip) and **Details** for a generated one.
+- **Salary tab: the Production Salary Statement** for the period, grouped by department, with the columns SNO, ID NO, Name, Designation, Rate / shift, Days worked, Absent, Late, Shifts, E salary, T.Advance, Advance, ESI / EF, PF, Others, Total Deduction, NET and Remarks (Scroll / Pages views, Excel / PDF / Print, adjust and Pay on each row). *E salary* is shifts earned × rate per shift plus HR bonus.
+- **Payslip tab:** the cycle's salary slips only.
+- **Details page:** the same page as for staff, with the production figures: shifts earned × rate per shift, the day-by-day shifts, the late deduction and its free days.
+
 
 ---
 

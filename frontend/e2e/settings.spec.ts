@@ -66,24 +66,26 @@ test("saves from different tabs persist and do not overwrite each other", async 
   await expect(field(page, "Company Name")).toHaveValue("E2E Textiles Pvt Ltd");
 });
 
-test("the glass-and-clay look is on the Settings page only", async ({ page }) => {
+test("the Settings page is plain and flat, and its skin stays on that page only", async ({ page }) => {
   await loginAsHr(page);
   await page.goto("/hr/settings");
   await expect(page.getByTestId("settings-page")).toBeVisible();
   const html = page.locator("html");
   await expect(html).toHaveClass(/settings-skin-on/);
 
-  // frosted glass on the section cards and the navigation rail, a sunken clay field, a raised clay open tab
+  // flat: white panels with a thin border (no blur, no shadow), a plain bordered field, a flat open tab
   const style = (selector: string, property: string) =>
     page
       .locator(selector)
       .first()
       .evaluate((el, p) => getComputedStyle(el).getPropertyValue(p), property);
-  expect(await style(".settings-glass", "backdrop-filter")).toContain("blur");
-  expect(await style('[data-slot="input"]', "box-shadow")).toContain("inset");
-  expect(await style('[role="tab"][aria-selected="true"]', "box-shadow")).not.toBe("none");
+  expect(await style(".settings-glass", "backdrop-filter")).toBe("none");
+  expect(await style(".settings-glass", "box-shadow")).toBe("none");
+  expect(await style(".settings-glass", "background-image")).toBe("none");
+  expect(await style('[data-slot="input"]', "box-shadow")).toBe("none");
+  expect(await style('[role="tab"][aria-selected="true"]', "box-shadow")).toBe("none");
 
-  // the dialogs the page opens are glass too (they render outside the page, so <html> carries the class)
+  // the dialogs the page opens are flat too (they render outside the page, so <html> carries the class)
   await openTab(page, "Themes");
   await page
     .getByRole("button", { name: /Customize/ })
@@ -91,17 +93,13 @@ test("the glass-and-clay look is on the Settings page only", async ({ page }) =>
     .click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
-  expect(await dialog.evaluate((el) => getComputedStyle(el).backdropFilter)).not.toBe("none");
+  expect(await dialog.evaluate((el) => getComputedStyle(el).backdropFilter)).toBe("none");
+  expect(await dialog.evaluate((el) => getComputedStyle(el).backgroundImage)).toBe("none");
   await page.keyboard.press("Escape");
 
-  // any other page: no class on <html>, and its cards are not glass
+  // any other page: no class on <html>, nothing of this skin
   await page.getByRole("link", { name: "Dashboard", exact: true }).first().click();
   await expect(page).toHaveURL(/\/hr\/dashboard/);
   await expect(html).not.toHaveClass(/settings-skin-on/);
   await expect(page.locator(".settings-skin")).toHaveCount(0);
-  const cardBackdrop = await page
-    .locator('[data-slot="card"], .clay-card')
-    .first()
-    .evaluate((el) => getComputedStyle(el).backdropFilter);
-  expect(cardBackdrop).toBe("none");
 });

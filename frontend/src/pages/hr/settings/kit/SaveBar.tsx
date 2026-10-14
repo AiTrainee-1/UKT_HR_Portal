@@ -34,8 +34,8 @@ export function SaveBar({
   return (
     <div
       className={cn(
-        "flex flex-wrap items-center gap-3 rounded-2xl px-3 py-2 transition-colors",
-        dirty ? "settings-glass !bg-amber-50/70 ring-1 ring-amber-200/80" : "bg-transparent",
+        "flex flex-wrap items-center gap-3 rounded-lg px-3 py-2 transition-colors",
+        dirty ? "settings-glass !border-amber-200 !bg-amber-50" : "bg-transparent",
         className,
       )}
       data-testid="save-bar"

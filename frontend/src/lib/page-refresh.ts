@@ -30,7 +30,10 @@ const PAGES_WITHOUT_REFRESH: (string | RegExp)[] = [
   "/hr/bonus",
   "/hr/id-cards",
   "/hr/payroll",
-  // Production Payroll is one page per pay cycle, and Production Employees sits under Employees
+  // One payroll's details page (staff; the production one is covered by the Production Payroll entry below): it has a
+  // Refresh of its own next to "last computed", and a refetch must not move the payroll under the reader's eyes.
+  /^\/hr\/payroll\/details(\/|$)/,
+  // Production Payroll is one page per pay cycle (and its details pages), and Production Employees sits under Employees
   /^\/hr\/production-payroll(\/|$)/,
   "/hr/employees/productionemployee",
   "/hr/compensation",

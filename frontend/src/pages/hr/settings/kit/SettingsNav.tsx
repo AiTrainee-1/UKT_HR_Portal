@@ -52,7 +52,7 @@ export function SettingsNav({
           return (
             <div key={group.id} role="presentation" className="flex shrink-0 items-center gap-1.5 lg:block">
               <p
-                className="mb-1 hidden px-2 text-[11px] font-bold uppercase tracking-wider text-gray-400 lg:block"
+                className="mb-1 hidden px-2 text-[11px] font-medium uppercase tracking-wider text-slate-400 lg:block"
                 title={group.hint}
               >
                 {group.label}
@@ -83,11 +83,11 @@ export function SettingsNav({
                         }
                       }}
                       className={cn(
-                        "settings-nav-item flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-2xl border border-transparent px-3 py-2 text-left text-[13px] font-semibold lg:w-full",
-                        !active && "bg-white/40 lg:bg-transparent",
+                        "settings-nav-item flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-lg border border-transparent px-3 py-2 text-left text-[13px] font-medium lg:w-full",
+                        !active && "bg-slate-50 lg:bg-transparent",
                       )}
                     >
-                      <Icon size={15} className={active ? "text-white" : "text-sky-700/60"} />
+                      <Icon size={15} className={active ? "text-[#006496]" : "text-slate-400"} />
                       <span>{t.label}</span>
                     </button>
                   );

@@ -6,27 +6,21 @@ import { loginAsHr } from "./helpers";
 //   Ravi Nair   - salary 30,000, present 12 of 24     -> paid 15,000
 //   Meena       - no salary configured                -> skipped
 
-// A payroll entry is a card, not a table row: the innermost element that holds
-// both the employee's name and the "Mark Paid" action.
-const card = (page: Page, name: string) =>
-  page.locator("div").filter({ hasText: name }).filter({ hasText: "Mark Paid" }).last();
+const FEB = "/hr/payroll?month=2&year=2026";
+
+// A payroll entry is a card (an <article> named "Payroll of <employee>").
+const card = (page: Page, name: string) => page.getByRole("article", { name: `Payroll of ${name}` });
 
 test("HR generates staff payroll for a month and the figures are right", async ({ page }) => {
   await loginAsHr(page);
-  await page.goto("/hr/payroll");
+  await page.goto(FEB);
 
-  await page
-    .getByRole("button", { name: /generate payroll/i })
-    .first()
-    .click();
-  const dialog = page.getByRole("dialog");
-  await dialog.locator("select").selectOption({ label: "February" });
-  await dialog.locator('input[type="number"]').fill("2026");
-  await dialog.getByRole("button", { name: /generate staff payroll/i }).click();
-
-  // The list opens on the current month; show February 2026.
-  await page.locator("select").first().selectOption({ label: "February" });
-  await page.locator('input[type="number"]').first().fill("2026");
+  await page.getByTestId("staff-generate-open").click();
+  const dialog = page.getByTestId("staff-generate-dialog");
+  // the dialog opens on the month the page is showing
+  await expect(dialog.getByTestId("staff-generate-month")).toHaveValue("2");
+  await expect(dialog.getByTestId("staff-generate-year")).toHaveValue("2026");
+  await dialog.getByTestId("staff-generate-confirm").click();
 
   const asha = card(page, "Asha Kumar");
   const ravi = card(page, "Ravi Nair");
@@ -36,18 +30,59 @@ test("HR generates staff payroll for a month and the figures are right", async (
   await expect(ravi).toContainText("12 / 24 days");
   await expect(ravi).toContainText("₹15,000");
   await expect(page.getByText("Meena Nosalary")).toHaveCount(0);
-  await expect(page.getByText("February 2026 · 2 records")).toBeVisible();
+  await expect(page.getByTestId("staff-record-count")).toHaveText("February 2026 · 2 records");
+});
+
+test("the dashboard of the month shows the totals, the skipped employee and the issues", async ({ page, request }) => {
+  await loginAsHr(page);
+  const token = await page.evaluate(() => localStorage.getItem("uk_textile_token"));
+  await request.post("/api/payroll/generate", {
+    headers: { Authorization: `Bearer ${token}` },
+    data: { month: 2, year: 2026 },
+  });
+
+  await page.goto(FEB);
+  const dash = page.getByTestId("staff-dash-root");
+  await expect(dash).toBeVisible();
+  // 24,000 + 15,000 net payable across the two paid-able payrolls
+  await expect(page.getByTestId("staff-dash-kpi-net")).toContainText("₹39,000");
+  await expect(page.getByTestId("staff-dash-kpi-employees")).toContainText("2");
+  // Meena has no salary: she is the one employee skipped at generation
+  await expect(page.getByTestId("staff-dash-kpi-skipped")).toContainText("1");
 });
 
 test("the skipped employee is listed with the reason", async ({ page }) => {
   await loginAsHr(page);
-  await page.goto("/hr/payroll");
-  await page.locator("select").first().selectOption({ label: "February" });
-  await page.locator('input[type="number"]').first().fill("2026");
+  await page.goto(FEB);
 
-  await page.getByRole("button", { name: /skipped employees/i }).click();
+  await page.getByTestId("staff-skipped-open").click();
+  await expect(page).toHaveURL(/view=skipped/);
   await expect(page.getByText("Meena Nosalary")).toBeVisible();
   await expect(page.getByText(/No Salary Amount/)).toBeVisible();
+});
+
+test("the filters narrow the payroll cards and live in the address", async ({ page, request }) => {
+  await loginAsHr(page);
+  const token = await page.evaluate(() => localStorage.getItem("uk_textile_token"));
+  await request.post("/api/payroll/generate", {
+    headers: { Authorization: `Bearer ${token}` },
+    data: { month: 2, year: 2026 },
+  });
+
+  await page.goto(FEB);
+  await expect(card(page, "Asha Kumar")).toBeVisible({ timeout: 30_000 });
+  await expect(card(page, "Ravi Nair")).toBeVisible();
+
+  await page.getByTestId("staff-pf-search").fill("Ravi");
+  await expect(card(page, "Asha Kumar")).toHaveCount(0);
+  await expect(card(page, "Ravi Nair")).toBeVisible();
+  await expect(page).toHaveURL(/q=Ravi/);
+
+  // a reload lands on the same filtered view
+  await page.reload();
+  await expect(page.getByTestId("staff-pf-search")).toHaveValue("Ravi");
+  await expect(card(page, "Asha Kumar")).toHaveCount(0);
+  await expect(card(page, "Ravi Nair")).toBeVisible();
 });
 
 test("the API agrees with the screen, and regenerating never duplicates", async ({ page, request }) => {

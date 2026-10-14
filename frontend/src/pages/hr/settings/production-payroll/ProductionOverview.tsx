@@ -10,7 +10,7 @@ import { cycleLateRules, savedProduction } from "./sections";
 
 function Step({ n, title, children }: { n: number; title: string; children: ReactNode }) {
   return (
-    <li className="flex gap-2.5 rounded-xl bg-white/70 p-3 ring-1 ring-slate-100">
+    <li className="flex gap-2.5 rounded-xl bg-white p-3 ring-1 ring-slate-100">
       <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-amber-100 text-xs font-black text-amber-800">
         {n}
       </span>
@@ -103,7 +103,7 @@ export function ProductionOverview({ settings }: { settings: PayrollSettingsItem
             key={c.cycle}
             className={cn(
               "rounded-xl px-3 py-2 text-[12px] leading-snug ring-1",
-              c.blocked ? "bg-red-50/80 text-red-900 ring-red-100" : "bg-white/70 text-gray-700 ring-slate-100",
+              c.blocked ? "bg-red-50 text-red-900 ring-red-100" : "bg-white text-gray-700 ring-slate-100",
             )}
             data-testid={`production-cycle-summary-${c.cycle}`}
           >

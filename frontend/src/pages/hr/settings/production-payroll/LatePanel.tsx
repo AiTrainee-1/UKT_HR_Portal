@@ -242,7 +242,7 @@ export function LatePanel({
           {rules.map((r) => (
             <li
               key={r.cycle}
-              className="space-y-1 rounded-xl bg-white/70 p-3 text-[12px] leading-snug text-gray-700 ring-1 ring-slate-100"
+              className="space-y-1 rounded-xl bg-white p-3 text-[12px] leading-snug text-gray-700 ring-1 ring-slate-100"
               data-testid={`production-late-cycle-${r.cycle}`}
             >
               <p className="text-[13px] font-bold text-gray-900">

@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
  */
 export function SaveDock({ children }: { children: ReactNode }) {
   return (
-    <div className="settings-dock sticky bottom-3 z-10 rounded-3xl p-1.5" data-testid="save-footer">
+    <div className="settings-dock sticky bottom-3 z-10 rounded-xl p-1.5" data-testid="save-footer">
       {children}
     </div>
   );

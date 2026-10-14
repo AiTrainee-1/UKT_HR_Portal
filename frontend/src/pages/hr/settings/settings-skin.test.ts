@@ -18,7 +18,7 @@ function selectors(text: string): string[] {
   );
 }
 
-describe("the glass-and-clay skin stays on the Settings page", () => {
+describe("the plain skin stays on the Settings page", () => {
   it("every selector starts with .settings-skin (inside the page) or html.settings-skin-on (portals opened from it)", () => {
     const stray = selectors(css).filter(
       (s) => !s.startsWith(".settings-skin") && !s.startsWith("html.settings-skin-on"),
@@ -37,11 +37,27 @@ describe("the glass-and-clay skin stays on the Settings page", () => {
     // taken off again when the page goes away
     expect(page).toContain('classList.remove("settings-skin-on")');
   });
+});
 
-  it("covers both halves of the look: frosted glass and soft clay", () => {
-    expect(css).toMatch(/backdrop-filter:\s*blur/);
-    expect(css).toMatch(/inset\s+-?\d+px\s+-?\d+px/); // clay: inner highlight and shadow
-    expect(css).toContain("@media (prefers-reduced-motion: reduce)");
-    expect(css).toContain("@supports not ((backdrop-filter: blur(1px))");
+describe("the look is flat and minimal (no glass, no clay)", () => {
+  const code = strip(css);
+
+  it("has no frosted glass: no blur, and a backdrop filter only to switch the portal's own off", () => {
+    expect(code).not.toMatch(/blur\(/);
+    expect(code).not.toMatch(/backdrop-filter:(?!\s*none)/);
+  });
+
+  it("has no clay: no gradients and no inner (inset) shadows", () => {
+    expect(code).not.toMatch(/gradient\(/);
+    expect(code).not.toMatch(/box-shadow:[^;]*\binset\b/);
+  });
+
+  it("has no aurora behind the page and no see-through white panels", () => {
+    expect(code).not.toMatch(/::before|::after/);
+    expect(code).not.toMatch(/rgba\(255,\s*255,\s*255,\s*0?\.\d+\)/);
+  });
+
+  it("keeps the shell plain too: no white-on-blue banner, no blurred pieces in Settings.tsx", () => {
+    expect(page).not.toMatch(/backdrop-blur|text-white|bg-white\/|rounded-3xl/);
   });
 });

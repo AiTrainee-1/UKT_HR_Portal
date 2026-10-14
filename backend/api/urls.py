@@ -184,6 +184,11 @@ from .production_payroll_views import (
     production_period_status, production_periods,
     production_skip_check, production_payroll_list,
 )
+from .payroll_insights_views import (
+    staff_payroll_details, staff_payroll_issues, staff_payroll_rules,
+    production_payroll_details, production_payroll_issues, production_payroll_rules,
+)
+from .payroll_statement_views import staff_salary_statement, production_salary_statement
 from .payroll_views import (
     session_configs, session_config_detail,
     attendance_logs, process_punch_sessions,
@@ -593,6 +598,16 @@ urlpatterns = [
     path("payroll/production/next-period", production_next_period),
     path("payroll/production/generate", production_generate_payroll),
     path("payroll/production/skip-check", production_skip_check),
+    # Payroll insights (read-only): details of one payroll, the issues payroll detected, the rules in force and the printed
+    # Salary Statement. Staff under payroll/ (module `payroll`), production under payroll/production/ (`production_payroll`).
+    path("payroll/issues", staff_payroll_issues),
+    path("payroll/rules", staff_payroll_rules),
+    path("payroll/salary-statement", staff_salary_statement),
+    path("payroll/production/issues", production_payroll_issues),
+    path("payroll/production/rules", production_payroll_rules),
+    path("payroll/production/salary-statement", production_salary_statement),
+    path("payroll/production/<int:pk>/details", production_payroll_details),
+    path("payroll/<int:pk>/details", staff_payroll_details),
     path("payroll/<int:pk>/breakdown", payroll_breakdown),
     path("payroll/<int:pk>", payroll_detail),
 
