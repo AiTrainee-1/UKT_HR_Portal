@@ -6,7 +6,7 @@
 //
 // Times are "HH:MM" (24-hour). A time after midnight is written as the clock time plus `outNextDay: true`.
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { customFetch } from "../custom-fetch";
+import { ApiError, customFetch } from "../custom-fetch";
 
 /** The kinds of group. `custom` is one HR added. */
 export type ProductionShiftGroupKind = "day" | "night" | "sunday" | "custom";
@@ -78,6 +78,11 @@ export type ProductionShiftRules = {
   /** Advice about what is saved (never blocks a save): plain sentences. */
   warnings?: string[];
   legacy?: ProductionShiftLegacy | null;
+  /**
+   * A fingerprint (16 characters) of everything a save can change. A save sends back the one its page loaded as
+   * `expectedVersion`, so a copy that went stale (somebody else saved meanwhile) is refused instead of overwriting them.
+   */
+  version?: string;
 };
 
 /**
@@ -86,8 +91,10 @@ export type ProductionShiftRules = {
  */
 export type ProductionShiftRulesInput = Omit<
   ProductionShiftRules,
-  "updatedAt" | "updatedBy" | "warnings" | "legacy" | "groups" | "breaks"
+  "updatedAt" | "updatedBy" | "warnings" | "legacy" | "version" | "groups" | "breaks"
 > & {
+  /** The `version` the page loaded: the server answers 400 {code: "stale_settings"} when it is no longer the saved one. */
+  expectedVersion?: string;
   groups: (Omit<ProductionShiftGroup, "id" | "rules"> & {
     id?: number;
     rules: (Omit<ProductionShiftRule, "id"> & { id?: number })[];
@@ -123,6 +130,12 @@ export const useProductionShiftRules = () =>
     queryKey: getProductionShiftRulesQueryKey(),
     queryFn: () => customFetch<ProductionShiftRules>(RULES_PATH),
   });
+
+/** True when the server refused a save because somebody else saved after this page was loaded (400 `stale_settings`). */
+export const isStaleSettingsError = (err: unknown): boolean => {
+  if (!(err instanceof ApiError) || err.status !== 400) return false;
+  return (err.data as { code?: unknown } | null)?.code === "stale_settings";
+};
 
 /** What a save gives back: the document as it now is, and the server's warnings about it. */
 export type ProductionShiftRulesSaveResult = { rules: ProductionShiftRules; warnings: string[] };

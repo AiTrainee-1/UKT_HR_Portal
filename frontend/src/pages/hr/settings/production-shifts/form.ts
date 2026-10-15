@@ -259,7 +259,7 @@ export function dateNote(from: string, today: string): DateNote {
 
 // ── what is wrong ──
 
-export type RuleErrors = Partial<Record<"label" | "time" | "order" | "value", string>>;
+export type RuleErrors = Partial<Record<"label" | "time" | "order" | "value" | "paid", string>>;
 export type GroupErrors = Partial<Record<"label" | "start" | "window" | "mainOut" | "overlap" | "table", string>>;
 export type BreakErrors = Partial<Record<"label" | "start" | "end" | "overlap", string>>;
 
@@ -269,6 +269,8 @@ export type Validation = {
   minCredit: string | null;
   fullDay: string | null;
   nightHours: string | null;
+  /** The rules are on but no group is: every day would fall back to the old calculation. */
+  noGroup: string | null;
   groups: { errors: GroupErrors; rules: RuleErrors[] }[];
   breaks: BreakErrors[];
   /** The first problem in reading order, as a sentence for the Save bar. */
@@ -281,6 +283,40 @@ const groupName = (g: GroupRow, i: number) => g.label.trim() || `Group ${i + 1}`
 /** Two groups can both be the answer for one day when their days overlap. */
 const sharesADay = (a: ProductionShiftAppliesOn, b: ProductionShiftAppliesOn) => a === "all" || b === "all" || a === b;
 
+/**
+ * The enabled breaks that can be read, as [start, end] minutes of a day (merged, so two that touch count once). Like the
+ * engine, each break also repeats the morning after the shift day began.
+ */
+function breakSpans(breaks: BreakRow[]): [number, number][] {
+  const spans = breaks.flatMap((b) => {
+    const start = toMinutes(b.startTime);
+    const end = toMinutes(b.endTime);
+    return b.enabled && start !== null && end !== null && end > start ? [[start, end] as [number, number]] : [];
+  });
+  spans.sort((a, b) => a[0] - b[0]);
+  const merged: [number, number][] = [];
+  for (const [start, end] of spans) {
+    const last = merged[merged.length - 1];
+    if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+    else merged.push([start, end]);
+  }
+  return merged;
+}
+
+/** Minutes worked from the start to `at` (both counted from the shift day's midnight) without the breaks: the engine's paid_seconds. */
+function paidMinutes(start: number, at: number, spans: [number, number][]): number {
+  if (at <= start) return 0;
+  let total = at - start;
+  for (const [from, to] of spans) {
+    for (const day of [0, 1]) {
+      const lo = Math.max(start, from + MINUTES_PER_DAY * day);
+      const hi = Math.min(at, to + MINUTES_PER_DAY * day);
+      if (hi > lo) total -= hi - lo;
+    }
+  }
+  return total;
+}
+
 /** The shifts of an earlier row that a later row must not go below. */
 const valueOf = (text: string): number | null => parseNumber(text, SHIFT_VALUE).value;
 
@@ -291,10 +327,12 @@ const valueOf = (text: string): number | null => parseNumber(text, SHIFT_VALUE).
 export function validateDraft(draft: ShiftRulesDraft): Validation {
   const effectiveFrom = isIsoDate(draft.effectiveFrom) ? null : "Pick the date the rules apply from.";
   const grace = parseNumber(draft.graceMinutes, GRACE).error;
-  const minCredit = parseNumber(draft.minCredit, MIN_CREDIT).error;
+  const minCreditBad = parseNumber(draft.minCredit, MIN_CREDIT).error;
+  let minCreditTooHigh: string | null = null;
   const fullDay = parseNumber(draft.fullDayValue, FULL_DAY).error;
   const nightHours = parseNumber(draft.nightSessionHours, NIGHT_HOURS).error;
 
+  const spans = breakSpans(draft.breaks);
   const groups = draft.groups.map((g, gi) => {
     const errors: GroupErrors = {};
     const rules: RuleErrors[] = g.rules.map(() => ({}));
@@ -306,10 +344,16 @@ export function validateDraft(draft: ShiftRulesDraft): Validation {
     const to = toMinutes(g.firstPunchTo);
     if (from === null || to === null) errors.window = "Enter both times of the first-punch window.";
     else if (from > to) errors.window = "The window must start before it ends.";
-    if (g.mainOutTime.trim() !== "" && toMinutes(g.mainOutTime) === null) errors.mainOut = "Enter the departure time.";
+    if (g.mainOutTime.trim() !== "") {
+      const main = absMinutes(g.mainOutTime, g.mainOutNextDay);
+      if (main === null) errors.mainOut = "Enter the departure time.";
+      else if (start !== null && main <= start) {
+        errors.mainOut = `The standard departure (${pointText(g.mainOutTime, g.mainOutNextDay)}) must be after the start time (${clock12(g.startTime)}).${g.mainOutNextDay ? "" : ' For a time after midnight tick "Next day".'}`;
+      }
+    }
 
     // the ladder
-    let previous: { index: number; at: number; value: number | null } | null = null;
+    let previous: { index: number; at: number; value: number | null; paid: number } | null = null;
     g.rules.forEach((row, ri) => {
       const e = rules[ri];
       if (row.label.trim().length > LABEL_MAX) e.label = `Keep the name to ${LABEL_MAX} characters.`;
@@ -330,7 +374,13 @@ export function validateDraft(draft: ShiftRulesDraft): Validation {
       if (previous !== null && previous.value !== null && value !== null && value < previous.value) {
         e.value = `Must be at least row ${previous.index + 1}'s ${previous.value.toFixed(2)}: leaving later never earns less.`;
       }
-      previous = { index: ri, at, value };
+      // two rows on the same paid time (a rule at the end of a break, or inside it, and one at its start) cannot be told apart
+      const paid = startAt === null ? -1 : paidMinutes(startAt, at, spans);
+      if (g.enabled && previous !== null && startAt !== null && paid === previous.paid && !e.time && !e.order) {
+        const prior = g.rules[previous.index];
+        e.paid = `Row ${previous.index + 1} (${pointText(prior.outTime, prior.outNextDay)}) and this row are on the same paid time, because the break between them is unpaid. Only one of the two can have a rule: remove one, or move it out of the break.`;
+      }
+      previous = { index: ri, at, value, paid };
     });
     if (g.enabled && !g.rules.some((r) => r.enabled)) {
       errors.table = `${groupName(g, gi)} is in use but none of its rows is switched on. Switch a row on, add one, or switch the group off.`;
@@ -384,6 +434,33 @@ export function validateDraft(draft: ShiftRulesDraft): Validation {
     }
   });
 
+  // the rules are on but no group is
+  const noGroup =
+    draft.enabled && !draft.groups.some((g) => g.enabled)
+      ? "The rules are switched on but no shift group is switched on: switch a group on, or switch the rules off."
+      : null;
+
+  // the minimum credit may not be more than the most any group in use can pay (the server refuses it)
+  if (!minCreditBad) {
+    const credit = parseNumber(draft.minCredit, MIN_CREDIT).value;
+    if (credit !== null && credit > 0) {
+      let lowest: { name: string; top: number } | null = null;
+      draft.groups.forEach((g, gi) => {
+        if (!g.enabled) return;
+        const values = g.rules.filter((r) => r.enabled).flatMap((r) => valueOf(r.shiftValue) ?? []);
+        if (values.length === 0) return;
+        const top = Math.max(...values);
+        if (lowest === null || top < lowest.top) lowest = { name: groupName(g, gi), top };
+      });
+      const worst = lowest as { name: string; top: number } | null;
+      if (worst !== null && credit > worst.top) {
+        minCreditTooHigh = `${credit.toFixed(2)} is more than the most ${worst.name} can pay (${worst.top.toFixed(2)}): lower it, or add a higher row.`;
+      }
+    }
+  }
+
+  const minCredit = minCreditBad ?? minCreditTooHigh;
+
   const rowText = (what: string, rows: RuleErrors[]) =>
     rows.flatMap((e, i) => Object.values(e).map((msg) => `${what}, row ${i + 1}: ${msg}`));
   const problems = [
@@ -403,6 +480,7 @@ export function validateDraft(draft: ShiftRulesDraft): Validation {
       ];
     }),
     ...breaks.flatMap((e, i) => Object.values(e).map((msg) => `Break ${i + 1}: ${msg}`)),
+    noGroup,
     minCredit && `Minimum shifts: ${minCredit}`,
     fullDay && `Full-day value: ${fullDay}`,
     nightHours && `Night session: ${nightHours}`,
@@ -414,6 +492,7 @@ export function validateDraft(draft: ShiftRulesDraft): Validation {
     minCredit,
     fullDay,
     nightHours,
+    noGroup,
     groups,
     breaks,
     first: problems[0] ?? null,
@@ -422,8 +501,9 @@ export function validateDraft(draft: ShiftRulesDraft): Validation {
 }
 
 /**
- * Things that are allowed but probably not meant (never block a save): a row whose leaving time is inside a break. A break
- * is never paid, so such a row earns what leaving when the break starts earns; the server says the same after a save.
+ * Advice about a row whose leaving time is inside a break (a save is allowed). A break is never paid, so such a row earns
+ * what leaving when the break starts earns; the server says the same after a save. It becomes a problem that blocks the
+ * save (validateDraft) once another row of the group is on that same paid time, for instance one at the break's start.
  */
 export function warningsFor(draft: ShiftRulesDraft): string[] {
   const windows = draft.breaks.flatMap((b) => {
@@ -457,6 +537,23 @@ export function warningsFor(draft: ShiftRulesDraft): string[] {
             : [];
         }),
   );
+}
+
+/** What an advice sentence is about, so the same advice in the server's words and ours is shown once. */
+const adviceTopic = (text: string): "break" | null =>
+  /is inside the break|falls inside the/.test(text) ? "break" : null;
+
+/**
+ * The advice worth showing next to the server's warnings: a sentence of ours is left out when the form still has that very
+ * advice as saved (`savedAdvice`) and the server's warnings already make the point (the same advice in different words).
+ * Advice that appeared with an edit since the last save is new, so it is always shown.
+ */
+export function newAdvice(advice: string[], savedAdvice: string[], serverWarnings: string[]): string[] {
+  const covered = new Set(serverWarnings.map(adviceTopic).filter((t) => t !== null));
+  return advice.filter((a) => {
+    const topic = adviceTopic(a);
+    return !(topic !== null && covered.has(topic) && savedAdvice.includes(a));
+  });
 }
 
 // ── the handwriting the owner has not confirmed ──
@@ -501,9 +598,13 @@ export function ladderCap(group: GroupRow): { time: string; nextDay: boolean; va
 
 // ── what is sent ──
 
-/** The save request. Call it only for a draft that passes validateDraft. */
-export function toInput(draft: ShiftRulesDraft): ProductionShiftRulesInput {
+/**
+ * The save request. Call it only for a draft that passes validateDraft. `expectedVersion` is the `version` the rules had
+ * when the draft was started from them: the server refuses the save if somebody else has saved since.
+ */
+export function toInput(draft: ShiftRulesDraft, expectedVersion?: string | null): ProductionShiftRulesInput {
   return {
+    ...(expectedVersion ? { expectedVersion } : {}),
     enabled: draft.enabled,
     effectiveFrom: draft.effectiveFrom,
     graceMinutes: num(draft.graceMinutes),

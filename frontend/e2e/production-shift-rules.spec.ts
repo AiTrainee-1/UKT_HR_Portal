@@ -279,7 +279,7 @@ test("an out-of-order ladder is stopped on screen; a row can be added to a ladde
     await sunday.getByTestId("rule-add").click();
     await expect(sunday.getByTestId("rule-row")).toHaveCount(2);
     await expect(sunday.getByLabel(/, row 2: leaves at$/)).toHaveValue("18:00");
-    await expect(sunday.getByLabel(/, row 2: shifts$/)).toHaveValue("1");
+    await expect(sunday.getByLabel(/, row 2: shifts$/)).toHaveValue("1.00");
     await saveButton(page).click();
     await page.getByTestId("confirm-production-shifts-confirm").click();
     await expect(page.getByText("Production shift rules saved").first()).toBeVisible();

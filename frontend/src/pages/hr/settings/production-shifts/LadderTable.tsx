@@ -125,10 +125,10 @@ export function LadderTable({
                     <Input
                       type="time"
                       aria-label={`${name}, row ${n}: leaves at`}
-                      className={cn("h-8", (e.time || e.order) && "border-red-400")}
+                      className={cn("h-8", (e.time || e.order || e.paid) && "border-red-400")}
                       value={row.outTime}
                       disabled={readOnly}
-                      aria-invalid={e.time || e.order ? true : undefined}
+                      aria-invalid={e.time || e.order || e.paid ? true : undefined}
                       onChange={(ev) => setRows(setRuleTime(rows, row.key, { outTime: ev.target.value }))}
                     />
                   </div>
@@ -175,11 +175,12 @@ export function LadderTable({
                     </Button>
                   </div>
                 </div>
-                {(e.label || e.time || e.order || e.value || isUnverifiedRow(group, row)) && (
+                {(e.label || e.time || e.order || e.paid || e.value || isUnverifiedRow(group, row)) && (
                   <div className="mt-1.5 space-y-1">
                     {e.label && <Problem>{e.label}</Problem>}
                     {e.time && <Problem testId="rule-time-error">{e.time}</Problem>}
                     {e.order && <Problem testId="rule-order-error">{e.order}</Problem>}
+                    {e.paid && <Problem testId="rule-paid-error">{e.paid}</Problem>}
                     {e.value && <Problem testId="rule-value-error">{e.value}</Problem>}
                     {isUnverifiedRow(group, row) && (
                       <p

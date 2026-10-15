@@ -69,7 +69,7 @@ export function RulesStrip({ enabled, from, today }: { enabled: boolean; from: s
       >
         <Power size={16} />
       </span>
-      <div className="min-w-0 flex-1 space-y-1">
+      <div className="min-w-0 flex-1 basis-48 space-y-1">
         <p className="text-sm font-semibold text-slate-900" data-testid="production-rules-status">
           {state === "off"
             ? "The production shift rules are OFF"
@@ -91,7 +91,7 @@ export function RulesStrip({ enabled, from, today }: { enabled: boolean; from: s
         </p>
       </div>
       <span
-        className="settings-chip self-center px-2.5 py-1 text-[11px] font-semibold text-slate-700"
+        className="settings-chip shrink-0 self-center px-2.5 py-1 text-[11px] font-semibold text-slate-700"
         data-testid="production-only"
         title="Staff employees are never affected by anything on this tab."
       >

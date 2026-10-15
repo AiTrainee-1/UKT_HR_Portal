@@ -8,6 +8,12 @@ What is pinned here
 * The night session (a punch the next morning closes a night that began the day before): night only, a day plus the
   dinner return plus 05:30, a forgotten out-punch NOT closed by the next morning's arrival, consecutive nights chaining.
 * A month computed by compute_month_records is identical to the same days computed one at a time.
+* Hardening of the night session: runs of 8..62 nights in a row, 12 three-shift days in a row, half nights and Sundays in
+  the middle (all equal to an unlimited look-back, fixed-point oracle written differently), the closing-punch guard
+  (odd count + the derived close-by time + the session hours in whole minutes), days before the effective date and
+  MANUAL days neither consuming nor being closed, one extra query only when the chain needs older punches, overlapping
+  breaks merged, the cap after the rounding, circular group choice, first-punch window in whole minutes, and every way
+  of asking (day, month, range, one-day range, roster prefetch) agreeing on random months.
 * Days before the effective date are EXACTLY the legacy calculation: a snapshot of the legacy output over ~900 punch
   patterns, taken from the code BEFORE it was changed (tests_production_legacy_snapshot.json), must still come out.
 * An independent, deliberately different implementation (minute by minute) agrees with the engine on hundreds of random
@@ -86,7 +92,7 @@ def _config(**overrides):
         rules_rounding_step=Decimal("0.01"),
         rules_rounding_mode="nearest",
         rules_full_day_value=Decimal("1.00"),
-        rules_night_session_hours=18,
+        rules_night_session_hours=24,  # the shipped default (it was 18: 08:30 open + a 05:30 close is 21 h)
     )
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -1052,8 +1058,8 @@ class SeedTests(TestCase):
                 config.rules_full_day_value,
                 config.rules_night_session_hours,
             ),
-            # 18 hours (it was 12): 13:30 open + a 03:00 close is 13.5 h, which must still be one night session
-            (True, 5, Decimal("0.00"), Decimal("0.01"), "nearest", Decimal("1.00"), 18),
+            # 24 hours (it was 12, then 18): 08:30 open + a 05:30 close is 21 h, which must still be one night session
+            (True, 5, Decimal("0.00"), Decimal("0.01"), "nearest", Decimal("1.00"), 24),
         )
 
     def test_the_seed_is_idempotent_and_never_moves_a_chosen_date(self):
@@ -1613,9 +1619,10 @@ class QueryCountTests(TestCase):
 
         roster(workers)
         small, large = reads(workers[:3]), reads(workers)
-        # config + 3 rule tables + the roster's punch window + the test's own read of today's punches
+        # config + ONE statement for the 3 rule tables (load_ruleset, one snapshot; was 3 statements) + the roster's
+        # punch window + the test's own read of today's punches
         self.assertEqual(small, large)
-        self.assertEqual(small, 6)
+        self.assertEqual(small, 4)
 
     def test_a_roster_day_with_the_prefetch_reads_no_punch_or_rule_table_per_employee(self):
         workers = [_worker(f"QC_Q{i}") for i in range(3)]
@@ -1898,7 +1905,7 @@ class ClosingGuardTests(SimpleTestCase):
             )
         )
         self.assertEqual(psr.build_ruleset(_config(), groups, rules, breaks).close_by_s, S("09:00"))
-        self.assertEqual(rs.night_session_hours, 18)
+        self.assertEqual(rs.night_session_hours, 24)
 
     def test_a_normal_morning_arrival_after_a_forgotten_return_punch_is_not_consumed(self):
         mon, tue = self._mon(["08:30", "12:45", "20:00"], ["07:55", "12:45", "13:30", "20:00"])
@@ -1922,14 +1929,14 @@ class ClosingGuardTests(SimpleTestCase):
 
     def test_a_forgotten_exit_closed_at_three_in_the_morning_pays_up_to_that_punch(self):
         mon, tue = self._mon(["08:30", "12:45", "13:30"], ["03:00"])
-        self.assertEqual(mon, [S("08:30"), S("12:45"), S("13:30"), S("03:00+")])  # 13.5 h < 18 h, 03:00 <= 07:00
+        self.assertEqual(mon, [S("08:30"), S("12:45"), S("13:30"), S("03:00+")])  # 13.5 h < 24 h, 03:00 <= 07:00
         self.assertEqual(tue, [])
         # 0.50 until lunch, then 13:30 -> 03:00: V(03:00) = 2.50 + 150/300 * 0.50 = 2.75; V(13:30) = 0.50
         self.assertEqual(psr.evaluate_day(ruleset(), MON, mon)["shifts_earned"], D("2.75"))
 
     def test_a_close_at_01_31_is_closed_now(self):
         mon, tue = self._mon(["08:30", "12:45", "13:30"], ["01:31"])
-        self.assertEqual(len(mon), 4)  # 12 h before it was closed too; now the limit is 18 h
+        self.assertEqual(len(mon), 4)  # 12 h before it was closed too; now the limit is 24 h
         self.assertEqual(tue, [])
         # V(01:31) = 2.50 + 61/300 * 0.50 = 2.6017 -> 0.50 + (2.6017 - 0.50)
         self.assertEqual(psr.evaluate_day(ruleset(), MON, mon)["shifts_earned"], D("2.60"))
@@ -1967,12 +1974,63 @@ class ClosingGuardTests(SimpleTestCase):
                 self.assertEqual(len(mon), 4 if closed else 3)
                 self.assertEqual(tue, [] if closed else [S(tue_first)])
 
-    def test_the_18_hour_default_edge(self):
-        # open 13:00: +18 h is exactly 07:00 (also the close-by time): 07:00:59 still closes, 07:01 does not
+    def test_a_saved_18_hour_limit_edge(self):
+        # the default moved to 24 h; an 18 h limit HR saved earlier keeps its meaning. Open 13:00: +18 h is exactly
+        # 07:00 (also the close-by time): 07:00:59 still closes, 07:01 does not
+        rs = ruleset(rules_night_session_hours=18)
         for tue_first, closed in [("06:59", True), ("07:00:59", True), ("07:01", False)]:
             with self.subTest(first=tue_first):
-                mon, tue = self._mon(["08:30", "12:45", "13:00"], [tue_first])
+                mon, tue = self._mon(["08:30", "12:45", "13:00"], [tue_first], rs)
                 self.assertEqual(len(mon), 4 if closed else 3)
+
+    def test_a_lone_morning_punch_is_closed_by_the_next_mornings_0530(self):
+        # 08:30 in, 05:30 out the next morning is 21 h: inside the 24 h default (it was refused at 18 h)
+        mon, tue = self._mon(["08:30"], ["05:30"])
+        self.assertEqual(mon, [S("08:30"), S("05:30+")])
+        self.assertEqual(tue, [])
+        self.assertEqual(psr.evaluate_day(ruleset(), MON, mon)["shifts_earned"], D("3.00"))
+        self.assertEqual(psr.evaluate_day(ruleset(), TUE, tue)["status"], "absent")
+
+    def test_a_close_at_0330_after_a_lone_morning_punch_pays_the_same_as_the_preview_figure(self):
+        mon, tue = self._mon(["08:30"], ["03:30"])
+        self.assertEqual(mon, [S("08:30"), S("03:30+")])
+        self.assertEqual(tue, [])
+        self.assertEqual(psr.evaluate_day(ruleset(), MON, mon)["shifts_earned"], D("2.80"))
+
+    def test_a_normal_arrival_after_a_lone_morning_punch_is_still_not_swallowed(self):
+        # the close-by guard (05:30 + 90 min = 07:00) keeps 07:55 / 08:25 out, whatever the hours limit is
+        for tue_first in ("07:55", "08:25"):
+            with self.subTest(first=tue_first):
+                mon, tue = self._mon(["08:30"], [tue_first, "12:45", "13:30", "20:00"])
+                self.assertEqual(mon, [S("08:30")])
+                self.assertEqual(tue, [S(tue_first), S("12:45"), S("13:30"), S("20:00")])
+
+    def test_the_default_24_hour_edge_is_in_whole_minutes(self):
+        # the default limit is 24 h. Open at 07:00: the next 07:00:59 is exactly 24 h once the seconds are dropped (and is
+        # on the close-by time), 07:01 is 24 h 01 min (and past the close-by time)
+        for tue_first, closed in [("06:59", True), ("07:00", True), ("07:00:59", True), ("07:01", False)]:
+            with self.subTest(first=tue_first):
+                mon, tue = self._mon(["07:00"], [tue_first])
+                self.assertEqual(len(mon), 2 if closed else 1)
+                self.assertEqual(tue, [] if closed else [S(tue_first)])
+
+    def test_the_default_24_hour_edge_without_the_clock_guard(self):
+        # no close-by time, so the hours limit alone decides: open 10:00, 24 h later is 10:00 the next day
+        by = {MON: [(S("10:00"), None)], TUE: [(S("10:00:59"), None)]}
+        self.assertEqual(len(psr.resolve_day(by, MON)), 2)  # exactly 24 h: the default hours
+        by[TUE] = [(S("10:01"), None)]
+        self.assertEqual(len(psr.resolve_day(by, MON)), 1)
+
+    def test_a_limit_saved_earlier_is_still_honoured(self):
+        # a value HR saved before the default moved (any 1..24) keeps its own meaning
+        for hours in (1, 10, 18, 24):
+            rs = ruleset(rules_night_session_hours=hours)
+            self.assertEqual(rs.night_session_hours, hours)
+        rs18 = ruleset(rules_night_session_hours=18)
+        mon, tue = self._mon(["08:30"], ["05:30"], rs18)  # 21 h > 18 h: the saved limit still refuses it
+        self.assertEqual((mon, tue), ([S("08:30")], [S("05:30")]))
+        mon, tue = self._mon(["13:00"], ["06:59"], rs18)  # 17 h 59 min <= 18 h: still closed
+        self.assertEqual(len(mon), 2)
 
     def test_the_gap_is_counted_in_whole_minutes_without_the_clock_guard(self):
         by = {MON: [(S("21:00"), None)], TUE: [(S("09:00:59"), None)]}
@@ -2197,7 +2255,7 @@ class MultiDayDifferentialTests(SimpleTestCase):
             effective = rng.choice(
                 [date(2025, 1, 1), date(2025, 1, 1), start + timedelta(days=rng.randint(1, days - 1))]
             )
-            rs = ruleset(rules_effective_from=effective, rules_night_session_hours=rng.choice([10, 12, 18, 18, 24]))
+            rs = ruleset(rules_effective_from=effective, rules_night_session_hours=rng.choice([10, 12, 18, 24, 24]))
             all_days = [start + timedelta(days=i) for i in range(-1, days + 1)]
             manual = {d for d in all_days if rng.random() < 0.06}
             expected = oracle_resolve(spec, rs, manual)
@@ -2230,6 +2288,57 @@ class MultiDayDifferentialTests(SimpleTestCase):
 
 
 # ── The database: every way of asking agrees ─────────────────────────────────
+
+
+class LoneMorningPunchThroughTheEngineTests(TestCase):
+    """A worker who punches only 08:30 on Tuesday and 05:30 on Wednesday earns 3.00 on Tuesday, every way of asking."""
+
+    def setUp(self):
+        _ensure_seed()
+        _set_rules(date(2026, 1, 1))
+        self.emp = _worker("LONE1")
+
+    def _snaps(self):
+        day = {d: _snap(compute_day_record(self.emp, d)) for d in (TUE, WED)}
+        AttendanceDayRecord.objects.filter(employee=self.emp, source="auto").delete()
+        month = {r.date: _snap(r) for r in compute_month_records(self.emp, 2026, 2) if r.date in (TUE, WED)}
+        AttendanceDayRecord.objects.filter(employee=self.emp, source="auto").delete()
+        rng = {r.date: _snap(r) for r in compute_range_records(self.emp, TUE, WED)}
+        return day, month, rng
+
+    def test_tuesday_is_three_shifts_wednesday_is_judged_on_its_own(self):
+        _punches(self.emp, TUE, "08:30")
+        _punches(self.emp, WED, "05:30")
+        day, month, rng = self._snaps()
+        self.assertEqual(month, day)
+        self.assertEqual(rng, day)
+        # _snap = (status, shifts, first, last, ...): Tuesday 08:30 -> 05:30 is 3.00, Wednesday has nothing left
+        self.assertEqual(day[TUE][:4], ("present", D("3.00"), time(8, 30), time(5, 30)))
+        self.assertEqual(day[WED][0], "absent")
+        self.assertEqual(day[WED][1], D("0.00"))
+
+    def test_the_engine_equals_the_preview_figure_for_a_close_at_0330(self):
+        _punches(self.emp, TUE, "08:30")
+        _punches(self.emp, WED, "03:30")
+        day, month, rng = self._snaps()
+        self.assertEqual(day[TUE][1], D("2.80"))
+        self.assertEqual((month, rng), (day, day))
+        self.assertEqual(day[WED][0], "absent")
+
+    def test_a_normal_arrival_after_a_lone_morning_punch_is_not_swallowed_and_0700_is(self):
+        for first, swallowed in [("07:55", False), ("08:25", False), ("07:01", False), ("07:00", True)]:
+            with self.subTest(first=first):
+                AttendanceLog.objects.filter(employee=self.emp).delete()
+                AttendanceDayRecord.objects.filter(employee=self.emp).delete()
+                _punches(self.emp, TUE, "08:30")
+                _punches(self.emp, WED, first, *(() if swallowed else ("12:45", "13:30", "20:00")))
+                tue, wed = compute_day_record(self.emp, TUE), compute_day_record(self.emp, WED)
+                if swallowed:
+                    self.assertEqual((wed.status, wed.shifts_earned), ("absent", D("0.00")))
+                    self.assertGreater(tue.shifts_earned, D("2.00"))
+                else:
+                    self.assertEqual(tue.shifts_earned, D("0.00"))  # one lone punch is not a paid day
+                    self.assertEqual(wed.shifts_earned, D("1.50"))  # Wednesday on its own four punches
 
 
 def _manual_record(emp, d, shifts="0.75"):
@@ -2418,3 +2527,75 @@ class ChainThroughTheEngineTests(TestCase):
             for d in sorted(spec)[::9]:
                 _manual_record(emp, d, "0.50")
             self._every_way(emp, start, start + timedelta(days=39))
+
+
+class LoaderOneSnapshotTests(TestCase):
+    """load_ruleset reads the groups, rules and breaks in ONE statement (one snapshot): a settings save that commits
+    between three separate reads can no longer produce a table that was never saved."""
+
+    def setUp(self):
+        _ensure_seed()
+        self.config = _set_rules()
+
+    def _orm_ruleset(self, config):
+        return psr.build_ruleset(
+            config,
+            list(ProductionShiftGroup.objects.order_by("order", "id")),
+            list(ProductionShiftRule.objects.order_by("order", "id")),
+            list(ProductionBreak.objects.order_by("order", "id")),
+        )
+
+    def test_the_three_tables_are_read_by_one_query(self):
+        config = ProductionShiftConfig.get()
+        with CaptureQueriesContext(connection) as ctx:
+            psr.load_ruleset(config)
+        self.assertEqual(len(ctx), 1, [q["sql"][:80] for q in ctx.captured_queries])
+        sql = ctx.captured_queries[0]["sql"]
+        for table in ("production_shift_groups", "production_shift_rules", "production_breaks"):
+            self.assertIn(table, sql)
+
+    def test_it_is_remembered_on_the_config_instance(self):
+        config = ProductionShiftConfig.get()
+        first = psr.load_ruleset(config)
+        with CaptureQueriesContext(connection) as ctx:
+            self.assertIs(psr.load_ruleset(config), first)
+        self.assertEqual(len(ctx), 0)
+
+    def test_the_result_is_the_one_the_orm_rows_build(self):
+        def same(label):
+            config = ProductionShiftConfig.get()
+            self.assertEqual(psr.load_ruleset(config), self._orm_ruleset(ProductionShiftConfig.get()), label)
+
+        same("seed")
+        ProductionShiftRule.objects.filter(group__kind="day", out_time=time(17, 45)).update(enabled=False)
+        ProductionBreak.objects.filter(label="Lunch").update(enabled=False)
+        same("disabled rule and break")
+        ProductionShiftGroup.objects.filter(kind="sunday").update(enabled=False)
+        same("disabled group")
+        group = ProductionShiftGroup.objects.get(kind="night")
+        ProductionShiftRule.objects.create(
+            group=group,
+            label="Very late",
+            out_time=time(6, 45),
+            out_next_day=True,
+            shift_value=Decimal("1.75"),
+            order=99,
+        )
+        ProductionShiftGroup.objects.filter(pk=group.pk).update(main_out_time=None, first_punch_to=time(23, 59, 30))
+        same("a new next-day rule, no standard departure, a first-punch window with seconds")
+        ProductionBreak.objects.all().delete()
+        same("no breaks")
+        ProductionShiftRule.objects.all().delete()
+        same("no rules at all")
+        ProductionShiftGroup.objects.all().delete()
+        same("an empty table")
+        self.assertEqual(psr.load_ruleset(ProductionShiftConfig.get()).groups, ())
+
+    def test_the_fallback_for_another_database_reads_the_same_rules(self):
+        config = ProductionShiftConfig.get()
+        with CaptureQueriesContext(connection) as ctx:
+            groups, rules, breaks = psr._read_tables_orm()
+        self.assertEqual(len(ctx), 3)
+        self.assertEqual(
+            psr.build_ruleset(config, groups, rules, breaks), psr.load_ruleset(ProductionShiftConfig.get())
+        )

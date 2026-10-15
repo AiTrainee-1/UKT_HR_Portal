@@ -12,7 +12,7 @@ document's `effectiveFrom`.
 Body (GET, and the PUT answer):
   {
     "enabled": true, "effectiveFrom": "2026-10-14", "graceMinutes": 5, "minCredit": 0.0, "roundingStep": 0.01,
-    "roundingMode": "nearest", "fullDayValue": 1.0, "nightSessionHours": 12,
+    "roundingMode": "nearest", "fullDayValue": 1.0, "nightSessionHours": 24,
     "groups": [{"id": 1, "label": "Day shift", "kind": "day", "appliesOn": "mon_sat", "startTime": "08:30",
                 "firstPunchFrom": "04:00", "firstPunchTo": "16:59", "mainOutTime": "20:00", "mainOutNextDay": false,
                 "enabled": true,
@@ -63,7 +63,13 @@ Rules of the PUT (each a plain-sentence 400 when broken):
 value no day of a group can reach (these three are also in the GET body: they are mistakes in what is saved), and - only
 in the answer of the save that changes the rules - a start date in the past, production payroll already generated for days
 these rules judge ("days from <date> are re-judged: regenerate payroll to apply"), and a group the save touched that has
-no rule after its standard departure (time worked later earns nothing more).
+no rule after its standard departure (time worked later earns nothing more). Two more of the save: moving the start LATER
+over days production payroll already covers (those days are judged by the old calculation again: "regenerate payroll to
+apply this, or leave it as is"), and switching the rules OFF when payroll exists for days they judged.
+
+Hostile input is always a 400 {"error": "<one sentence>"} (a 415 for a body that is not JSON, the same key): a NUL or a
+lone surrogate in a name, a body nested too deeply to read, malformed JSON. The preview reads only plain ASCII HH:MM
+(H:MM, HH:MM:SS) and at most two calendar days of punches.
 """
 
 import hashlib
@@ -71,13 +77,14 @@ import json
 import math
 import re
 from dataclasses import dataclass, field
-from datetime import date as date_type, time as time_type
+from datetime import date as date_type, time as time_type, timedelta
 from decimal import Decimal, InvalidOperation
 from itertools import combinations
 
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Max, Q
 from rest_framework.decorators import api_view
+from rest_framework.exceptions import ParseError, UnsupportedMediaType
 from rest_framework.request import Request
 from rest_framework.response import Response
 
@@ -122,8 +129,10 @@ CENT = Decimal("0.01")
 MAX_SHIFT_VALUE = Decimal("9.99")
 DAY_MIN = 1440
 
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+# ASCII only (and no "$" newline slack): \d alone also matches Arabic-Indic and full-width digits
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
+_TIME_RE = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d", re.ASCII)
+_PUNCH_RE = re.compile(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", re.ASCII)
 _MISSING = object()
 
 # the document's top-level settings -> the column of the config row they live in
@@ -424,7 +433,7 @@ def _bool(value, message: str) -> bool:
 
 def _time(value, where: str, what: str) -> str:
     """ "HH:MM" as given, or the sentence saying what was wrong (a missing value included)."""
-    if not isinstance(value, str) or not _TIME_RE.match(value.strip()):
+    if not isinstance(value, str) or not _TIME_RE.fullmatch(value.strip()):
         raise SettingsError(f"{where}: {what} must be a time written HH:MM (24-hour), for example 08:30.")
     return value.strip()
 
@@ -438,11 +447,21 @@ def _pick(item: dict, base: dict | None, key: str, default=_MISSING):
     return default
 
 
+def _storable(text: str) -> bool:
+    """Can the text be stored and sent back as JSON? A NUL character is refused by PostgreSQL and a lone surrogate
+    (JSON "\\ud800") cannot be encoded as UTF-8: both used to be a 500."""
+    return "\x00" not in text and not any("\ud800" <= ch <= "\udfff" for ch in text)
+
+
 def _label(value, where: str, what: str, required: bool) -> str:
     if value is _MISSING or value is None:
         value = ""
     if not isinstance(value, str):
         raise SettingsError(f"{where}: {what} must be text.")
+    if not _storable(value):
+        raise SettingsError(
+            f"{where}: {what} contains a character that cannot be saved; use ordinary letters and digits."
+        )
     value = value.strip()
     if required and not value:
         raise SettingsError(f"{where}: {what} is required.")
@@ -474,7 +493,7 @@ def _parse_scalars(data: dict, before: dict, today: date_type) -> dict:
         if raw in (None, ""):
             doc["effectiveFrom"] = None
         else:
-            if not isinstance(raw, str) or not _DATE_RE.match(raw):
+            if not isinstance(raw, str) or not _DATE_RE.fullmatch(raw):
                 raise SettingsError("Applies from must be a date written YYYY-MM-DD (for example 2026-10-14).")
             try:
                 parsed = date_type.fromisoformat(raw)
@@ -836,6 +855,7 @@ def _change_warnings(before: dict, after: dict, today: date_type) -> list[str]:
     """Warnings that only the save which CHANGES the rules can give (see the module docstring)."""
     out: list[str] = []
     after_date = after["effectiveFrom"]
+    before_date = before["effectiveFrom"]
     if after["enabled"] and after_date and date_type.fromisoformat(after_date) < today:
         if after_date != before["effectiveFrom"] or not before["enabled"]:
             out.append(
@@ -843,16 +863,51 @@ def _change_warnings(before: dict, after: dict, today: date_type) -> list[str]:
                 "judged by the new table whenever they are recalculated (a page opened, payroll generated again), so "
                 "figures already shown for them can change."
             )
-    if _judging(before) != _judging(after) and after_date and (before["enabled"] or after["enabled"]):
-        last = Payroll.objects.filter(salary_mode="shift", period_end__isnull=False).aggregate(last=Max("period_end"))
-        last_end = last["last"]
+    if before["enabled"] and not after["enabled"] and before_date:
+        # Switched off: every day from the old start on goes back to the old calculation (what was already paid keeps
+        # its figures until something recalculates it).
+        last_end = _last_production_payroll_end()
+        if last_end is not None and last_end >= date_type.fromisoformat(before_date):
+            out.append(
+                f"Production payroll up to {last_end.isoformat()} has already been generated for days these rules judged "
+                f"(from {before_date}): with the rules switched off these days will be judged by the old calculation "
+                "again whenever payroll is regenerated or they are recalculated, so regenerate payroll to apply this, "
+                "or leave it as is."
+            )
+    elif _judging(before) != _judging(after) and after_date and (before["enabled"] or after["enabled"]):
+        last_end = _last_production_payroll_end()
         if last_end is not None and last_end >= date_type.fromisoformat(after_date):
             out.append(
                 f"Production payroll up to {last_end.isoformat()} has already been generated: days from {after_date} are "
                 "re-judged by these rules when payroll is regenerated, so regenerate it to apply them (the payroll "
                 "saved so far keeps its old figures until then)."
             )
+    if before["enabled"] and after["enabled"] and before_date and after_date and after_date > before_date:
+        # Moved later: the days from the old start up to the day before the new one go back to the old calculation.
+        first_old, last_flipped = (
+            date_type.fromisoformat(before_date),
+            date_type.fromisoformat(after_date) - timedelta(days=1),
+        )
+        covered = (
+            Payroll.objects.filter(salary_mode="shift", period_end__gte=first_old)
+            .filter(Q(period_start__isnull=True) | Q(period_start__lte=last_flipped))
+            .exists()
+        )
+        if covered:
+            out.append(
+                f"The new rules used to start on {before_date} and now start on {after_date}, so the days "
+                f"{before_date} to {last_flipped.isoformat()} will be judged by the old calculation again, and "
+                "production payroll already covers some of them: regenerate payroll to apply this, or leave it as is "
+                "(the payroll saved so far keeps its figures until then)."
+            )
     return out
+
+
+def _last_production_payroll_end():
+    """The last day any generated production payroll reaches, or None."""
+    return Payroll.objects.filter(salary_mode="shift", period_end__isnull=False).aggregate(last=Max("period_end"))[
+        "last"
+    ]
 
 
 @transaction.atomic
@@ -906,6 +961,25 @@ def apply_rules(data: dict, today: date_type | None = None) -> SaveResult:
 # ── views ───────────────────────────────────────────────────────────────────
 
 
+TOO_DEEP = "The body is nested too deeply to read: send the settings as a plain JSON object."
+
+
+def _read_body(request: Request):
+    """(the JSON object, None), or (None, the 400 / 415 answer). Every refusal carries {"error": "<one sentence>"} like
+    the rest of this API (and, for a body DRF could not read, its own "detail" as well, for the clients that read that)."""
+    try:
+        data = request.data
+    except UnsupportedMediaType as exc:
+        return None, Response({"error": "The body must be sent as JSON.", "detail": str(exc.detail)}, status=415)
+    except ParseError as exc:
+        return None, Response({"error": "The body is not valid JSON.", "detail": str(exc.detail)}, status=400)
+    except RecursionError:
+        return None, Response({"error": TOO_DEEP}, status=400)
+    if not isinstance(data, dict):
+        return None, Response({"error": "The body must be a JSON object."}, status=400)
+    return data, None
+
+
 def _forbid_branch_logins(request: Request):
     if get_branch_scope(request) is not None:
         return Response({"error": COMPANY_WIDE_MESSAGE, "code": "company_wide_settings"}, status=403)
@@ -922,11 +996,13 @@ def production_shift_rules(request: Request) -> Response:
     refusal = _forbid_branch_logins(request)
     if refusal is not None:
         return refusal
-    data = request.data
-    if not isinstance(data, dict):
-        return Response({"error": "The body must be a JSON object."}, status=400)
+    data, refusal = _read_body(request)
+    if refusal is not None:
+        return refusal
     try:
         result = apply_rules(data)
+    except RecursionError:
+        return Response({"error": TOO_DEEP}, status=400)
     except SettingsError as exc:
         payload = {"error": str(exc)}
         if exc.code:
@@ -943,6 +1019,26 @@ def production_shift_rules(request: Request) -> Response:
             new_values=result.new_values,
         )
     return Response(rules_body(result.warnings))
+
+
+def _parse_punches(texts: list[str]) -> list[int]:
+    """The typed punches as seconds since the shift day's midnight (psr.parse_punch_list does the ordering: a time not
+    later than the one before is the next morning). Only plain ASCII HH:MM or H:MM (and HH:MM:SS) are times: a
+    superscript or Arabic-Indic digit, '8:3' or an am / pm suffix is a sentence, never a raw Python message. The punches
+    of ONE shift span at most two calendar days (the Settings page says the same)."""
+    clean = []
+    for text in texts:
+        m = _PUNCH_RE.fullmatch(text)
+        if m is None or int(m.group(1)) > 23 or int(m.group(2)) > 59 or int(m.group(3) or 0) > 59:
+            shown = f"'{text}'" if len(text) <= 20 and text.isprintable() else "A punch"
+            raise SettingsError(f"{shown} is not a time (HH:MM, for example 08:30).")
+        clean.append(text)
+    seconds = psr.parse_punch_list(clean)
+    if seconds and seconds[-1] >= 2 * psr.DAY_S:
+        raise SettingsError(
+            "The punches run past two days: enter the punches of one shift, written in the order they happened."
+        )
+    return seconds
 
 
 def _preview_legacy_reason(config, ruleset: psr.RuleSet, d: date_type, group_missing: bool) -> str:
@@ -967,9 +1063,9 @@ def production_shift_rules_preview(request: Request) -> Response:
     that is not later than the one before is the next morning: ["21:00", "05:30"] is a night). Pure: it reads the saved
     rules and never writes (a date before the rules start, or rules switched off, gives the OLD calculation, said so in
     `group` / `note`). The body's own rules are not read: a preview of an unsaved edit is not offered."""
-    data = request.data
-    if not isinstance(data, dict):
-        return Response({"error": "The body must be a JSON object."}, status=400)
+    data, refusal = _read_body(request)
+    if refusal is not None:
+        return refusal
     punches = data.get("punches")
     if not isinstance(punches, list) or not all(isinstance(p, str) for p in punches):
         return Response({"error": "'punches' must be a list of times written HH:MM."}, status=400)
@@ -979,15 +1075,15 @@ def production_shift_rules_preview(request: Request) -> Response:
     if raw_date in (None, ""):
         day = ist_today()
     else:
-        if not isinstance(raw_date, str) or not _DATE_RE.match(raw_date):
+        if not isinstance(raw_date, str) or not _DATE_RE.fullmatch(raw_date):
             return Response({"error": "'date' must be a date written YYYY-MM-DD."}, status=400)
         try:
             day = date_type.fromisoformat(raw_date)
         except ValueError:
             return Response({"error": "'date' must be a real date written YYYY-MM-DD."}, status=400)
     try:
-        seconds = psr.parse_punch_list(punches)
-    except ValueError as exc:
+        seconds = _parse_punches(punches)
+    except SettingsError as exc:
         return Response({"error": str(exc)}, status=400)
     if not seconds:
         return Response(

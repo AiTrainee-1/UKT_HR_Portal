@@ -4,10 +4,21 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { ApiError } from "@/lib/api-client/custom-fetch";
 import {
+  isStaleSettingsError,
   usePayrollSettings,
   useProductionShiftRules,
   useUpdateProductionShiftRules,
 } from "@/lib/api-client/custom-hooks";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { ConfirmSave } from "./attendance/ConfirmSave";
 import { TabContents } from "./attendance/TabContents";
 import { useDraft } from "./attendance/useDraft";
@@ -22,6 +33,7 @@ import {
   draftChanges,
   draftFrom,
   legacyText,
+  newAdvice,
   sameDraft,
   toInput,
   validateDraft,
@@ -50,9 +62,13 @@ function isBranchRefusal(err: unknown): boolean {
   return data?.code === "company_wide_settings" || data?.error === "company_wide_settings";
 }
 
+const STALE_TEXT =
+  "Someone else saved these settings while you were editing. Reload to see their changes; your edits are kept until you reload.";
+
 /** What went wrong with a save, in words an HR manager can act on. */
 function failureText(err: unknown): string {
   if (isBranchRefusal(err)) return BRANCH_TEXT;
+  if (isStaleSettingsError(err)) return STALE_TEXT;
   const fromServer = saveErrorText(err);
   if (fromServer) return fromServer;
   if (err instanceof ApiError && err.status === 403) {
@@ -95,7 +111,18 @@ export default function ProductionShiftsTab({ readOnly = false }: { readOnly?: b
   const advice = useMemo(() => (draft ? warningsFor(draft) : []), [draft]);
   const today = useMemo(() => todayIst(), []);
 
+  // the `version` the draft was started from: a save sends it back, so a copy somebody else has outdated is refused. It
+  // follows the server like the draft does (while nothing is edited) and stays put while there are edits.
+  const [baseVersion, setBaseVersion] = useState<string | undefined>(data?.version);
+  const [seenSaved, setSeenSaved] = useState(saved);
+  if (saved !== seenSaved) {
+    setSeenSaved(saved);
+    if (draft === null || seenSaved === null || sameDraft(draft, seenSaved)) setBaseVersion(data?.version);
+  }
+
   const [saving, setSaving] = useState(false);
+  const [stale, setStale] = useState(false);
+  const [confirmingReload, setConfirmingReload] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   // the server's warnings about the rules it has just saved (until the next save); before a save, the ones it sent with them
@@ -133,6 +160,8 @@ export default function ProductionShiftsTab({ readOnly = false }: { readOnly?: b
   const canSave = !locked && dirty && validation.ok;
   const changes = draftChanges(draft, saved);
   const warnings = savedWarnings ?? data.warnings ?? [];
+  // our advice, minus what the server's warnings already say in other words
+  const shownAdvice = newAdvice(advice, warningsFor(saved), warnings);
   const from = startWords(draft.effectiveFrom);
 
   const save = async () => {
@@ -140,9 +169,11 @@ export default function ProductionShiftsTab({ readOnly = false }: { readOnly?: b
     if (!canSave) return;
     setSaving(true);
     setSaveError(null);
+    setStale(false);
     try {
-      const { rules, warnings: after } = await update.mutateAsync(toInput(draft));
+      const { rules, warnings: after } = await update.mutateAsync(toInput(draft, baseVersion));
       setDraft(draftFrom(rules));
+      setBaseVersion(rules.version);
       setSavedWarnings(after);
       toast({
         title: "Production shift rules saved",
@@ -153,12 +184,25 @@ export default function ProductionShiftsTab({ readOnly = false }: { readOnly?: b
       });
     } catch (err) {
       const message = failureText(err);
+      if (isStaleSettingsError(err)) setStale(true);
       if (isBranchRefusal(err)) setRefusedAsBranch(true);
       setSaveError(message);
       toast({ title: "Failed to save the production shift rules", description: message, variant: "destructive" });
     } finally {
       setSaving(false);
     }
+  };
+
+  // read the rules again and start the form from them: whatever was typed is dropped
+  const reload = async () => {
+    setConfirmingReload(false);
+    const fresh = (await query.refetch()).data;
+    if (!fresh) return;
+    setDraft(draftFrom(fresh));
+    setBaseVersion(fresh.version);
+    setSavedWarnings(null);
+    setSaveError(null);
+    setStale(false);
   };
 
   const hint = readOnly
@@ -193,14 +237,14 @@ export default function ProductionShiftsTab({ readOnly = false }: { readOnly?: b
           </ul>
         </div>
       )}
-      {advice.length > 0 && (
+      {shownAdvice.length > 0 && (
         <div
           className="space-y-1 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] text-amber-900"
           data-testid="production-shifts-advice"
         >
-          <p className="font-semibold">Worth a look (this does not stop a save):</p>
+          <p className="font-semibold">Worth a look:</p>
           <ul className="list-disc space-y-0.5 pl-5">
-            {advice.map((w) => (
+            {shownAdvice.map((w) => (
               <li key={w}>{w}</li>
             ))}
           </ul>
@@ -221,6 +265,18 @@ export default function ProductionShiftsTab({ readOnly = false }: { readOnly?: b
             data-testid="production-shifts-save-error"
           >
             {saveError}
+            {stale && (
+              <div className="mt-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  data-testid="production-shifts-reload"
+                  onClick={() => (dirty ? setConfirmingReload(true) : void reload())}
+                >
+                  Reload the saved rules
+                </Button>
+              </div>
+            )}
           </div>
         )}
         <SaveBar
@@ -236,6 +292,24 @@ export default function ProductionShiftsTab({ readOnly = false }: { readOnly?: b
           hint={hint}
         />
       </SaveDock>
+
+      <AlertDialog open={confirmingReload} onOpenChange={setConfirmingReload}>
+        <AlertDialogContent data-testid="production-shifts-reload-confirm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reload and drop your edits?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Reloading shows the rules as they are saved now, including what the other person changed. Everything you
+              have changed here and not saved is lost.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep editing</AlertDialogCancel>
+            <AlertDialogAction data-testid="production-shifts-reload-confirm-yes" onClick={() => void reload()}>
+              Reload and drop my edits
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <ConfirmSave
         open={confirming}

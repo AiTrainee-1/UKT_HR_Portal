@@ -11,6 +11,7 @@ import {
   isUnverifiedRow,
   ladderCap,
   legacyText,
+  newAdvice,
   newGroup,
   sameDraft,
   setBreakStart,
@@ -371,8 +372,9 @@ describe("production shifts form: what is wrong before anything is sent", () => 
     const overlap = validateDraft(edited((d) => (d.breaks[1].startTime = "10:40")));
     expect(overlap.breaks[1].overlap).toContain("Overlaps Morning tea (10:30 AM to 10:45 AM)");
     expect(overlap.ok).toBe(false);
-    // touching is not overlapping, and a break that is off takes no part
-    expect(validateDraft(edited((d) => (d.breaks[1].startTime = "10:45"))).ok).toBe(true);
+    // touching is not overlapping (what the move does to the 12:45 row is the paid-time check's business, below), and a
+    // break that is off takes no part
+    expect(validateDraft(edited((d) => (d.breaks[1].startTime = "10:45"))).breaks[1].overlap).toBeUndefined();
     expect(
       validateDraft(
         edited((d) => {
@@ -671,5 +673,173 @@ describe("production shifts form: the examples under the boxes", () => {
     expect(roundShifts(0.62, 0.05, "down")).toBe(0.6);
     expect(roundShifts(0.999, 0.01, "nearest")).toBe(1);
     expect(roundShifts(1.2, 0, "nearest")).toBe(1.2);
+  });
+});
+
+describe("production shifts form: what the server refuses, found before the save", () => {
+  it("wants the standard departure to be after the group's start", () => {
+    const early = validateDraft(edited((d) => (d.groups[0].mainOutTime = "08:00")));
+    expect(early.groups[0].errors.mainOut).toBe(
+      'The standard departure (8:00 AM) must be after the start time (8:30 AM). For a time after midnight tick "Next day".',
+    );
+    expect(early.ok).toBe(false);
+    expect(early.first).toBe(`Day shift: ${early.groups[0].errors.mainOut}`);
+    // exactly at the start is not after it
+    expect(validateDraft(edited((d) => (d.groups[0].mainOutTime = "08:30"))).groups[0].errors.mainOut).toContain(
+      "must be after the start time",
+    );
+    // a night group written without "next day" is the usual slip
+    const night = validateDraft(edited((d) => (d.groups[1].mainOutNextDay = false)));
+    expect(night.groups[1].errors.mainOut).toContain("The standard departure (5:30 AM) must be after");
+    // the same time with the tick, and none at all, are fine
+    expect(validateDraft(seeded()).groups[1].errors.mainOut).toBeUndefined();
+    expect(validateDraft(edited((d) => (d.groups[0].mainOutTime = ""))).ok).toBe(true);
+    // the server checks a group that is switched off too
+    expect(
+      validateDraft(
+        edited((d) => {
+          d.groups[2].enabled = false;
+          d.groups[2].mainOutTime = "07:00";
+        }),
+      ).groups[2].errors.mainOut,
+    ).toContain("must be after the start time");
+  });
+
+  it("does not let the minimum credit be more than the most a group in use can pay", () => {
+    expect(validateDraft(edited((d) => (d.minCredit = "1"))).ok).toBe(true);
+    const high = validateDraft(edited((d) => (d.minCredit = "1.5")));
+    expect(high.minCredit).toBe(
+      "1.50 is more than the most Sunday shift can pay (1.00): lower it, or add a higher row.",
+    );
+    expect(high.ok).toBe(false);
+    expect(high.first).toBe(`Minimum shifts: ${high.minCredit}`);
+    // a group that is off does not count: the next lowest does
+    const off = validateDraft(
+      edited((d) => {
+        d.minCredit = "1.5";
+        d.groups[2].enabled = false;
+      }),
+    );
+    expect(off.ok).toBe(true);
+    expect(
+      validateDraft(
+        edited((d) => {
+          d.minCredit = "1.6";
+          d.groups[2].enabled = false;
+        }),
+      ).minCredit,
+    ).toContain("most Night shift can pay (1.50)");
+    // a box that cannot be read keeps its own sentence
+    expect(validateDraft(edited((d) => (d.minCredit = "abc"))).minCredit).not.toContain("is more than the most");
+  });
+
+  it("refuses two rows of a group on the same paid time: one at the end of a break, or inside it, and one at its start", () => {
+    // 1:30 PM is the end of Lunch (12:45 to 1:30): the same paid time as leaving at 12:45
+    const end = validateDraft(edited((d) => (d.groups[0].rules[2].outTime = "13:30")));
+    expect(end.groups[0].rules[2].paid).toBe(
+      "Row 2 (12:45 PM) and this row are on the same paid time, because the break between them is unpaid. Only one of the two can have a rule: remove one, or move it out of the break.",
+    );
+    expect(end.ok).toBe(false);
+    expect(end.first).toBe(`Day shift, row 3: ${end.groups[0].rules[2].paid}`);
+    // inside the break it is the same, and it is still advised about as a row inside a break
+    const inside = edited((d) => (d.groups[0].rules[2].outTime = "13:00"));
+    expect(validateDraft(inside).groups[0].rules[2].paid).toContain("Row 2 (12:45 PM) and this row");
+    expect(warningsFor(inside)).toHaveLength(1);
+    // a row alone inside a break is only advice (the server says the same)
+    expect(validateDraft(edited((d) => (d.groups[0].rules[1].outTime = "13:00"))).ok).toBe(true);
+    // a break that is off, a row that is off, and a group that is off make no collision
+    const lateRow = (d: ShiftRulesDraft) => (d.groups[0].rules[2].outTime = "13:30");
+    expect(
+      validateDraft(
+        edited((d) => {
+          lateRow(d);
+          d.breaks[1].enabled = false;
+        }),
+      ).ok,
+    ).toBe(true);
+    expect(
+      validateDraft(
+        edited((d) => {
+          lateRow(d);
+          d.groups[0].rules[2].enabled = false;
+        }),
+      ).ok,
+    ).toBe(true);
+    expect(
+      validateDraft(
+        edited((d) => {
+          lateRow(d);
+          d.groups[0].enabled = false;
+        }),
+      ).groups[0].rules[2].paid,
+    ).toBeUndefined();
+    // the seeded table (rows at the start of each break) is fine
+    expect(validateDraft(seeded()).ok).toBe(true);
+  });
+
+  it("counts the break that repeats the next morning when comparing paid time", () => {
+    // Night dinner (8 to 9 PM) repeats at 8 to 9 AM the next day: 8:00 AM and 9:00 AM next day are one paid time
+    const same = validateDraft(
+      edited((d) => {
+        const night = d.groups[1];
+        night.rules = [
+          { ...night.rules[0], outTime: "08:00", outNextDay: true, shiftValue: "1.00" },
+          { ...night.rules[1], outTime: "09:00", outNextDay: true, shiftValue: "1.50" },
+        ];
+        d.breaks[4].startTime = "08:00";
+        d.breaks[4].endTime = "09:00";
+      }),
+    );
+    expect(same.groups[1].rules[1].paid).toContain("same paid time");
+  });
+
+  it("says plainly that the rules are on while no group is", () => {
+    const none = validateDraft(
+      edited((d) => {
+        for (const g of d.groups) g.enabled = false;
+      }),
+    );
+    expect(none.noGroup).toBe(
+      "The rules are switched on but no shift group is switched on: switch a group on, or switch the rules off.",
+    );
+    expect(none.ok).toBe(false);
+    expect(none.first).toBe(none.noGroup);
+    expect(validateDraft(edited((d) => (d.groups = []))).noGroup).not.toBeNull();
+    // switched off, the rules need no group; and one group on is enough
+    expect(
+      validateDraft(
+        edited((d) => {
+          d.enabled = false;
+          for (const g of d.groups) g.enabled = false;
+        }),
+      ).noGroup,
+    ).toBeNull();
+    expect(validateDraft(seeded()).noGroup).toBeNull();
+  });
+});
+
+describe("production shifts form: the version a save is based on, and the advice the server repeats", () => {
+  it("sends the version the rules were loaded with as expectedVersion, and nothing when there is none", () => {
+    expect(toInput(seeded(), "9f2c41d07a3b5e68").expectedVersion).toBe("9f2c41d07a3b5e68");
+    expect("expectedVersion" in toInput(seeded())).toBe(false);
+    expect("expectedVersion" in toInput(seeded(), null)).toBe(false);
+    expect("expectedVersion" in toInput(seeded(), "")).toBe(false);
+  });
+
+  const mine =
+    "Day shift: leaving at 1:00 PM is inside the break Lunch (12:45 PM to 1:30 PM). A break is never paid, so that row earns what leaving when the break starts earns.";
+  const theirs =
+    "Day shift: the 13:00 rule falls inside the Lunch (12:45-13:30), which is unpaid, so it counts as 12:45.";
+  const other = "No enabled shift group applies on Sunday, so those days are still judged by the old calculation.";
+
+  it("shows our advice once: left out when it is already saved and the server says the same", () => {
+    expect(newAdvice([mine], [mine], [theirs])).toEqual([]);
+    // the server said nothing about it: ours stays
+    expect(newAdvice([mine], [mine], [])).toEqual([mine]);
+    expect(newAdvice([mine], [mine], [other])).toEqual([mine]);
+    // advice that came with an edit since the save is new, so it is shown
+    const fresh =
+      "Day shift: leaving at 3:35 PM is inside the break Afternoon tea (3:30 PM to 3:45 PM). A break is never paid, so that row earns what leaving when the break starts earns.";
+    expect(newAdvice([mine, fresh], [mine], [theirs])).toEqual([fresh]);
   });
 });

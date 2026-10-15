@@ -134,6 +134,7 @@ export function GroupsSection({ draft, patch, readOnly, validation }: SectionPro
           </div>
         )}
 
+        {validation.noGroup && <Problem testId="groups-none-on-error">{validation.noGroup}</Problem>}
         {draft.groups.length === 0 ? (
           <p
             className="rounded-lg border border-dashed p-4 text-center text-xs text-gray-500"

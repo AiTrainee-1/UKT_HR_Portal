@@ -37,7 +37,7 @@ day as +86400 and removed from the next day) when ALL of these hold:
   * that punch's clock time is at or before the CLOSE-BY time: the latest next-day out time among every enabled group's
     ladder rows and standard departure, plus 90 minutes (RuleSet.close_by_s; 05:30 + 90 min = 07:00 with the owner's
     tables). A normal morning arrival after a forgotten out-punch therefore never closes the day before;
-  * it is within `night_session_hours` (default 18) of the open "in" punch, in whole minutes (seconds are dropped, so
+  * it is within `night_session_hours` (default 24) of the open "in" punch, in whole minutes (seconds are dropped, so
     09:00:59 after a 21:00:00 punch is exactly 12 h);
   * both days are judged by the new rules (on/after the effective date) and neither is a MANUAL override day: a day the
     new rules do not judge neither consumes nor is closed, and a manual record stays untouched.
@@ -83,7 +83,9 @@ NIGHT_LOOKBACK_DAYS = 7
 MAX_CHAIN_DAYS = 62
 
 #: The default `night_session_hours`: the longest gap between the open "in" punch and the next day's first punch.
-DEFAULT_SESSION_HOURS = 18
+#: 24, the top of the allowed range: a day worker who punches only 08:30 and 05:30 the next morning (21 h, the owner's
+#: 3.00 row) must still be closed. The close-by time (about 07:00) is what keeps an ordinary arrival from being taken.
+DEFAULT_SESSION_HOURS = 24
 
 #: Minutes added to the latest next-day out time of the rules to get the CLOSE-BY time (RuleSet.close_by_s).
 CLOSE_BY_MARGIN_MIN = 90
@@ -740,19 +742,90 @@ def config_applies(config, d: date_type) -> bool:
     return bool(getattr(config, "rules_enabled", True) and eff is not None and d >= eff)
 
 
+def _read_tables_orm():
+    """The enabled groups, rules and breaks as three ORM queries (the fallback for a database that is not PostgreSQL;
+    three statements, so a save committing between them could be seen half way: see load_ruleset)."""
+    from .models import ProductionBreak, ProductionShiftGroup, ProductionShiftRule
+
+    groups = list(ProductionShiftGroup.objects.filter(enabled=True).order_by("order", "id"))
+    rules = list(ProductionShiftRule.objects.filter(enabled=True, group__enabled=True).order_by("order", "id"))
+    breaks = list(ProductionBreak.objects.filter(enabled=True).order_by("order", "id"))
+    return groups, rules, breaks
+
+
+def _read_tables_sql():
+    """The same three lists read by ONE PostgreSQL statement: the sub-selects of a single statement share one snapshot
+    (READ COMMITTED takes its snapshot per statement), so the answer is always one saved state of the three tables.
+    Rows come back as light namespaces with the attributes build_ruleset reads."""
+    import json
+    from types import SimpleNamespace
+
+    from django.db import connection
+
+    from .models import ProductionBreak, ProductionShiftGroup, ProductionShiftRule
+
+    q = connection.ops.quote_name
+    groups_t, rules_t, breaks_t = (
+        q(m._meta.db_table) for m in (ProductionShiftGroup, ProductionShiftRule, ProductionBreak)
+    )
+    sql = f"""
+        SELECT
+          (SELECT COALESCE(json_agg(row_to_json(g) ORDER BY g."order", g.id), '[]'::json)
+             FROM (SELECT id, label, kind, applies_on, start_time, first_punch_from, first_punch_to, main_out_time,
+                          main_out_next_day, enabled, "order"
+                     FROM {groups_t} WHERE enabled) g)::text,
+          (SELECT COALESCE(json_agg(row_to_json(r) ORDER BY r."order", r.id), '[]'::json)
+             FROM (SELECT r.id, r.group_id, r.label, r.out_time, r.out_next_day, r.shift_value, r.enabled, r."order"
+                     FROM {rules_t} r JOIN {groups_t} g ON g.id = r.group_id
+                    WHERE r.enabled AND g.enabled) r)::text,
+          (SELECT COALESCE(json_agg(row_to_json(b) ORDER BY b."order", b.id), '[]'::json)
+             FROM (SELECT id, label, start_time, end_time, enabled, "order"
+                     FROM {breaks_t} WHERE enabled) b)::text
+    """  # noqa: S608 (table names come from the model Meta, not from input)
+    with connection.cursor() as cursor:
+        cursor.execute(sql)
+        groups_json, rules_json, breaks_json = cursor.fetchone()
+
+    def rows(text, times=(), decimals=()):
+        out = []
+        for raw in json.loads(text, parse_float=Decimal):
+            for name in times:
+                if raw.get(name) is not None:
+                    raw[name] = time_type.fromisoformat(raw[name])
+            for name in decimals:
+                raw[name] = Decimal(raw[name])
+            out.append(SimpleNamespace(**raw))
+        return out
+
+    groups = rows(groups_json, times=("start_time", "first_punch_from", "first_punch_to", "main_out_time"))
+    rules = rows(rules_json, times=("out_time",), decimals=("shift_value",))
+    breaks = rows(breaks_json, times=("start_time", "end_time"))
+    return groups, rules, breaks
+
+
 def load_ruleset(config=None) -> RuleSet:
-    """The saved rules as a RuleSet: three queries (groups, rules, breaks) on top of the config row. Remembered on the
-    config instance, so a loop that shares one config object (a roster day) loads them once."""
-    from .models import ProductionBreak, ProductionShiftConfig, ProductionShiftGroup, ProductionShiftRule
+    """The saved rules as a RuleSet, on top of the config row the caller holds. Remembered on the config instance, so a
+    loop that shares one config object (a roster day) loads them once.
+
+    One consistent read (review finding F2). The groups, the rules and the breaks used to be three READ COMMITTED
+    queries, so a Settings save committing between two of them could hand back a table nobody ever saved (new rules of a
+    group the first query still saw as it was, say). Now, on PostgreSQL, ONE statement reads the three tables: the
+    sub-selects of one statement share one snapshot, so the answer is always exactly one saved state. That also costs
+    1 query instead of 3 (measured: 3 -> 1 per load, nothing added). The alternative of re-reading a version stamp after
+    the three queries would have cost an extra query per load and the same per-statement snapshots; REPEATABLE READ is
+    not available inside a caller's transaction (the tests, a payroll run). Another database vendor falls back to the
+    three ORM queries (_read_tables_orm). The config row's own columns (grace, rounding ...) are the caller's instance,
+    read when the caller loaded it: this function does not re-read them."""
+    from django.db import connection
+
+    from .models import ProductionShiftConfig
 
     if config is None:
         config = ProductionShiftConfig.get()
     cached = getattr(config, "_production_ruleset", None)
     if cached is not None:
         return cached
-    groups = list(ProductionShiftGroup.objects.filter(enabled=True).order_by("order", "id"))
-    rules = list(ProductionShiftRule.objects.filter(enabled=True, group__enabled=True).order_by("order", "id"))
-    breaks = list(ProductionBreak.objects.filter(enabled=True).order_by("order", "id"))
+    groups, rules, breaks = _read_tables_sql() if connection.vendor == "postgresql" else _read_tables_orm()
     ruleset = build_ruleset(config, groups, rules, breaks)
     config._production_ruleset = ruleset
     return ruleset

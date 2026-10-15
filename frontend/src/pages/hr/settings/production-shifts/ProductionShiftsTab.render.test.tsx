@@ -1,4 +1,5 @@
 import { act } from "react";
+import { focusManager } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderMdPage, type RenderedPage } from "@/pages/md/testing/renderMdPage";
 import type {
@@ -34,6 +35,10 @@ function makeServer(initial: ProductionShiftRules) {
     down: false,
     previewFails: null as { status: number; error: string } | null,
     nextId: 100,
+    /** How many saves have gone through: the version a document that has one answers with is "v<saves>". */
+    saves: 0,
+    /** How many times the rules have been read. */
+    reads: 0,
     /** The warnings the next save answers with. */
     warnings: NO_WARNINGS,
     /** Answer a save with just {ok: true} (no body). */
@@ -55,8 +60,18 @@ function makeServer(initial: ProductionShiftRules) {
       server.puts.push(body);
       if (server.refuse) return server.refuse;
       const now = server.current;
-      const { groups, breaks, ...rest } = body;
+      const { groups, breaks, expectedVersion, ...rest } = body;
+      if (expectedVersion !== undefined && expectedVersion !== now.version) {
+        return {
+          status: 400,
+          body: {
+            error: "These settings were saved by someone else after this page was loaded.",
+            code: "stale_settings",
+          },
+        };
+      }
       Object.assign(now, rest);
+      if (now.version) now.version = `v${++server.saves}`;
       now.groups = groups.map((g) => ({
         ...g,
         id: g.id ?? server.nextId++,
@@ -66,6 +81,7 @@ function makeServer(initial: ProductionShiftRules) {
       now.updatedBy = "Test HR";
       return server.bare ? { ok: true } : { ...now, warnings: server.warnings };
     }
+    server.reads += 1;
     return server.current;
   };
   const previewHandler = (_params: URLSearchParams, init?: RequestInit) => {
@@ -1026,5 +1042,158 @@ describe("Settings -> Production Shifts: view-only, branch login, loading and th
       expect(block.querySelector('[data-testid="setting-affects"]'), meta.id).not.toBeNull();
       expect(meta.purpose.length, meta.id).toBeGreaterThan(60);
     }
+  });
+});
+
+describe("Settings -> Production Shifts: a copy that went stale, checks found before the save, and repeated advice", () => {
+  const VERSIONED = { ...SEEDED, version: "v0" };
+
+  it("sends the version it loaded as expectedVersion, and the one the save answered with the next time", async () => {
+    await open(VERSIONED);
+    await page!.type("#production-rules-grace", "3");
+    await saveAndConfirm();
+    expect(server.puts[0].expectedVersion).toBe("v0");
+    await page!.type("#production-rules-grace", "4");
+    await saveAndConfirm();
+    expect(server.puts[1].expectedVersion).toBe("v1");
+    expect(q('[data-testid="production-shifts-save-error"]')).toBeNull();
+  });
+
+  it("sends no expectedVersion when the server sent no version", async () => {
+    await open();
+    await page!.type("#production-rules-grace", "3");
+    await saveAndConfirm();
+    expect("expectedVersion" in server.puts[0]).toBe(false);
+  });
+
+  it("says when somebody else saved first, keeps the edits, and reloads only after asking", async () => {
+    await open(VERSIONED);
+    await page!.type("#production-rules-grace", "3");
+    // another HR user saves meanwhile
+    server.current.version = "v-other";
+    server.current.graceMinutes = 9;
+    await saveAndConfirm();
+    expect(text('[data-testid="production-shifts-save-error"]')).toContain(
+      "Someone else saved these settings while you were editing. Reload to see their changes; your edits are kept until you reload.",
+    );
+    expect(server.puts).toHaveLength(1);
+    expect(value("#production-rules-grace")).toBe("3");
+    expect(saveBar().dataset.dirty).toBe("true");
+
+    // there are unsaved edits, so Reload asks first; "Keep editing" changes nothing
+    await page!.click('[data-testid="production-shifts-reload"]');
+    expect(q('[data-testid="production-shifts-reload-confirm"]')).not.toBeNull();
+    await press("Keep editing");
+    expect(value("#production-rules-grace")).toBe("3");
+    expect(q('[data-testid="production-shifts-save-error"]')).not.toBeNull();
+
+    // confirming reads the rules again: their change is on screen, mine is gone, and the message with it
+    await page!.click('[data-testid="production-shifts-reload"]');
+    await page!.click('[data-testid="production-shifts-reload-confirm-yes"]');
+    expect(value("#production-rules-grace")).toBe("9");
+    expect(saveBar().dataset.dirty).toBe("false");
+    expect(q('[data-testid="production-shifts-save-error"]')).toBeNull();
+
+    // and the next save is based on their version
+    await page!.type("#production-rules-grace", "5");
+    await saveAndConfirm();
+    expect(server.puts[1].expectedVersion).toBe("v-other");
+    expect(q('[data-testid="production-shifts-save-error"]')).toBeNull();
+  });
+
+  it("keeps the version the edits were started from when the rules are read again in the background", async () => {
+    await open(VERSIONED);
+    await page!.type("#production-rules-grace", "3");
+    server.current.version = "v-other";
+    server.current.graceMinutes = 9;
+    // a background read (the window gets focus again) must not make the stale copy look current
+    await act(async () => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+    focusManager.setFocused(undefined);
+    await page!.settle();
+    expect(server.reads).toBeGreaterThan(1);
+    expect(value("#production-rules-grace")).toBe("3");
+    await saveAndConfirm();
+    expect(server.puts[0].expectedVersion).toBe("v0");
+    expect(text('[data-testid="production-shifts-save-error"]')).toContain("Someone else saved");
+  });
+
+  it("fills the date with today when the rules are switched on with no date, and leaves a date that is there", async () => {
+    await open({ ...SEEDED, enabled: false, effectiveFrom: null });
+    expect(value("#production-rules-from")).toBe("");
+    await page!.click("#production-rules-switch");
+    expect(q("#production-rules-switch")?.getAttribute("aria-checked")).toBe("true");
+    expect(value("#production-rules-from")).toBe("2026-10-14");
+    expect(q('[data-testid="rules-from-error"]')).toBeNull();
+    // a date HR chose stays when the switch goes off and on again
+    await page!.type("#production-rules-from", "2026-11-02");
+    await page!.click("#production-rules-switch");
+    await page!.click("#production-rules-switch");
+    expect(value("#production-rules-from")).toBe("2026-11-02");
+  });
+
+  it("says a standard departure before the start cannot be saved, on the box", async () => {
+    await open();
+    await page!.type(aria("Day shift: standard departure"), "08:00");
+    expect(text('[data-testid="production-shifts-tab"]')).toContain(
+      "The standard departure (8:00 AM) must be after the start time (8:30 AM).",
+    );
+    expect(saveButton().disabled).toBe(true);
+    expect(saveBar().textContent).toContain("Fix this first: Day shift: The standard departure (8:00 AM)");
+  });
+
+  it("says a minimum credit above what a group can pay cannot be saved, on the box", async () => {
+    await open();
+    await page!.type("#production-min-credit", "2");
+    expect(text('[data-testid="production-shifts-tab"]')).toContain(
+      "2.00 is more than the most Sunday shift can pay (1.00): lower it, or add a higher row.",
+    );
+    expect(saveButton().disabled).toBe(true);
+  });
+
+  it("blocks two rows on the same paid time, on the row, and calls it an error and not advice", async () => {
+    await open();
+    // 1:30 PM is the end of Lunch: the same paid time as 12:45 PM
+    await page!.type(aria("Day shift, row 3: leaves at"), "13:30");
+    expect(text('[data-testid="rule-paid-error"]')).toContain(
+      "Row 2 (12:45 PM) and this row are on the same paid time",
+    );
+    expect(saveButton().disabled).toBe(true);
+    expect(saveBar().textContent).toContain("Fix this first: Day shift, row 3: Row 2 (12:45 PM) and this row");
+    expect(q('[data-testid="production-shifts-advice"]')?.textContent ?? "").not.toContain("does not stop a save");
+    await page!.type(aria("Day shift, row 3: leaves at"), "15:30");
+    expect(q('[data-testid="rule-paid-error"]')).toBeNull();
+    expect(saveBar().dataset.dirty).toBe("false");
+  });
+
+  it("says the rules are on with no group, and blocks the save", async () => {
+    await open();
+    for (const g of qa('[data-testid="group-card"]')) {
+      const name = g.querySelector<HTMLInputElement>('input[aria-label$=": name"]')!.value;
+      await page!.click(`button[role="switch"][aria-label="${name}: in use"]`);
+    }
+    expect(text('[data-testid="groups-none-on-error"]')).toContain("no shift group is switched on");
+    expect(saveButton().disabled).toBe(true);
+  });
+
+  it("shows advice about a row inside a break once after a save, not again in the server's words", async () => {
+    const inside = structuredClone(SEEDED);
+    inside.groups[0].rules[1].outTime = "13:00";
+    inside.warnings = [
+      "Day shift: the 13:00 rule falls inside the Lunch (12:45-13:30), which is unpaid, so it counts as 12:45.",
+    ];
+    await open({ ...inside, version: "v0" });
+    expect(text('[data-testid="production-shifts-warnings"]')).toContain("falls inside the Lunch");
+    expect(q('[data-testid="production-shifts-advice"]')).toBeNull();
+    // an unrelated edit does not bring our version of it back
+    await page!.type("#production-rules-grace", "3");
+    expect(q('[data-testid="production-shifts-advice"]')).toBeNull();
+    // a new problem made by an edit is still ours to tell
+    await page!.type(aria("Day shift, row 3: leaves at"), "15:35");
+    const advice = text('[data-testid="production-shifts-advice"]');
+    expect(advice).toContain("3:35 PM is inside the break Afternoon tea");
+    expect(advice).not.toContain("1:00 PM");
   });
 });

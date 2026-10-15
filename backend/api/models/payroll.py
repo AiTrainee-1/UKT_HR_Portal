@@ -1354,9 +1354,9 @@ class ProductionShiftConfig(models.Model):
         max_digits=4, decimal_places=2, default=Decimal("1.00"), db_default=Decimal("1.00"), db_column="rules_full_day_value",
     )
     # Most hours between an open "in" punch and the next calendar day's first punch for that punch to close the session
-    # (default 18: 13:30 open + a 03:00 close is 13.5 h). The punch must ALSO be at or before the derived close-by time
+    # (default 24, the most allowed: 08:30 open + a 05:30 close is 21 h). The punch must ALSO be at or before the derived close-by time
     # (latest next-day out time of the rules + 90 minutes), see production_shift_rules.RuleSet.close_by_s.
-    rules_night_session_hours = models.IntegerField(default=18, db_default=18, db_column="rules_night_session_hours")
+    rules_night_session_hours = models.IntegerField(default=24, db_default=24, db_column="rules_night_session_hours")
 
     class Meta:
         db_table = "production_shift_config"

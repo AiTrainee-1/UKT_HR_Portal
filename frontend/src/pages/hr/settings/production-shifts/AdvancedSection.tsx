@@ -186,11 +186,11 @@ export function AdvancedSection({ draft, patch, readOnly, validation }: SectionP
       <SettingBlock
         {...block("night-session")}
         labelFor="production-night-hours"
-        defaultText="12 hours"
+        defaultText="24 hours"
         affects={[
           {
             where: "Production Attendance",
-            what: "a night worker's punch the next morning is counted with the day the shift began, when it is within this many hours",
+            what: "a night worker's punch the next morning is counted with the day the shift began, when the day was left open (an odd number of punches), the punch is early enough (about 90 minutes after the latest morning leaving time) and it is within this many hours of the last punch",
             to: "/hr/attendance/production",
           },
           {

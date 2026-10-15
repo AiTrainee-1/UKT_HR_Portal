@@ -57,7 +57,7 @@ export function WhenSection({ draft, patch, readOnly, validation, today, legacy 
         <ToggleField
           id="production-rules-switch"
           checked={draft.enabled}
-          onChange={(v) => patch({ enabled: v })}
+          onChange={(v) => patch({ enabled: v, ...(v && from.trim() === "" ? { effectiveFrom: today } : {}) })}
           onLabel="The production rules are on"
           offLabel="The production rules are off"
           disabled={readOnly}

@@ -303,3 +303,10 @@ api/overtime_scheduler.py
 api/tests_comp_fix_e.py
 api/tests_comp_fix_o.py
 api/tests_comp_fix_r.py
+api/production_shift_rules.py
+api/tests_production_shift_rules.py
+api/production_shift_rules_views.py
+api/tests_production_shift_rules_api.py
+api/tests_production_consumers.py
+api/reporting/definitions/production_judge.py
+api/tests_reporting_production_shift.py

@@ -118,7 +118,7 @@ class Base(TestCase):
             rules_rounding_step=Decimal("0.01"),
             rules_rounding_mode="nearest",
             rules_full_day_value=Decimal("1.00"),
-            rules_night_session_hours=12,
+            rules_night_session_hours=24,  # the shipped default (the migration seeds 24)
         )
         self.headers = admin_headers()
         patcher = mock.patch("api.production_shift_rules_views.ist_today", return_value=TODAY)
@@ -213,7 +213,7 @@ class ReadTests(Base):
             (b["enabled"], b["effectiveFrom"], b["graceMinutes"], b["minCredit"], b["roundingStep"]),
             (True, "2026-10-14", 5, 0.0, 0.01),
         )
-        self.assertEqual((b["roundingMode"], b["fullDayValue"], b["nightSessionHours"]), ("nearest", 1.0, 12))
+        self.assertEqual((b["roundingMode"], b["fullDayValue"], b["nightSessionHours"]), ("nearest", 1.0, 24))
         self.assertEqual(set(b["groups"][0]), {
             "id", "label", "kind", "appliesOn", "startTime", "firstPunchFrom", "firstPunchTo", "mainOutTime",
             "mainOutNextDay", "enabled", "rules",
@@ -1008,7 +1008,7 @@ class ConcurrencyTests(Base):
         self.assertEqual(r.status_code, 200, r.content)
         self.assertEqual({k: v for k, v in r.json().items() if k not in READ_ONLY_KEYS}, self.doc())
         config = ProductionShiftConfig.objects.get(pk=1)
-        self.assertEqual((config.rules_grace_minutes, config.rules_night_session_hours), (5, 12))
+        self.assertEqual((config.rules_grace_minutes, config.rules_night_session_hours), (5, 24))
 
     def test_a_row_that_somebody_else_deleted_is_refused_with_reload_advice(self):
         doc = self.doc()
@@ -1541,6 +1541,33 @@ class PreviewTests(Base):
         full = self.calc(["08:30", "12:45", "13:30", "20:00", "21:00", "05:30"])
         self.assertEqual((full["group"], full["shifts"]), ("Day shift", 3.0))
 
+    def test_the_preview_and_the_engine_agree_on_a_lone_morning_punch_closed_the_next_morning(self):
+        from .attendance_final import compute_day_record
+        from .models import AttendanceLog
+
+        emp = Employee.objects.create(
+            employee_code="PVE1",
+            first_name="PVE1",
+            last_name="Worker",
+            employment_type="production",
+            status="active",
+            salary_per_shift=Decimal("500.00"),
+        )
+        thursday, friday = date(2026, 10, 15), date(2026, 10, 16)
+        for closing, expected in [("05:30", Decimal("3.00")), ("03:30", Decimal("2.80"))]:
+            with self.subTest(closing=closing):
+                AttendanceLog.objects.filter(employee=emp).delete()
+                for d, hhmm in [(thursday, "08:30"), (friday, closing)]:
+                    h, m = hhmm.split(":")
+                    AttendanceLog.objects.create(
+                        employee=emp, date=d, punch_time=time(int(h), int(m)), punch_type="IN", source="manual"
+                    )
+                preview = self.calc(["08:30", closing])["shifts"]
+                engine = compute_day_record(emp, thursday).shifts_earned
+                self.assertEqual(Decimal(str(preview)), expected)
+                self.assertEqual(engine, expected)
+                self.assertEqual(compute_day_record(emp, friday).status, "absent")  # Friday has nothing left of its own
+
     def test_sunday_uses_the_sunday_group(self):
         a = self.calc(["08:30", "17:00"], SUNDAY)
         self.assertEqual((a["group"], a["shifts"]), ("Sunday shift", 1.0))
@@ -1640,3 +1667,215 @@ class PreviewTests(Base):
     def test_the_answer_is_json_numbers(self):
         raw = self.preview({"punches": ["08:30", "20:00"], "date": THURSDAY}).content.decode()
         self.assertIsInstance(json.loads(raw)["shifts"], float)
+
+
+# ═══ hostile input: always a 400 with {"error": "<one sentence>"}, never a 500 ═════════════════════════════════════
+
+
+class HostileInputTests(Base):
+    def raw(self, method, url, text, content_type="application/json"):
+        return getattr(self.client, method)(url, text, content_type=content_type, **self.headers)
+
+    def assertPlain400(self, response, label=""):
+        self.assertEqual(response.status_code, 400, (label, response.content[:300]))
+        error = response.json().get("error")
+        self.assertIsInstance(error, str, label)
+        self.assertTrue(error.strip(), label)
+        for python_noise in (
+            "Traceback",
+            "invalid literal",
+            "NUL",
+            "surrogate",
+            "codec",
+            "RecursionError",
+            "JSON parse",
+        ):
+            self.assertNotIn(python_noise, error, label)
+        return error
+
+    def test_a_nul_or_a_lone_surrogate_in_a_label_is_refused_not_a_500(self):
+        before = snapshot()
+        for bad in ("a\x00b", "\x00", "a\ud800b", "\udfff"):
+            for where in ("group", "rule", "break"):
+                doc = self.doc()
+                if where == "group":
+                    self.day(doc)["label"] = bad
+                elif where == "rule":
+                    self.day(doc)["rules"][0]["label"] = bad
+                else:
+                    doc["breaks"][0]["label"] = bad
+                r = self.raw("put", URL, json.dumps(doc))
+                error = self.assertPlain400(r, (where, bad))
+                self.assertIn("name", error)
+        self.assertEqual(snapshot(), before)
+
+    def test_ordinary_unicode_in_a_label_is_still_saved(self):
+        doc = self.doc()
+        self.day(doc)["label"] = "Day shift – காலை \U0001f31e"
+        self.assertEqual(self.put(doc).status_code, 200)
+
+    def test_deeply_nested_json_is_a_400_on_save_and_on_preview(self):
+        before = snapshot()
+        for shape in ("[" * 200000, '{"a":' * 100000, '{"groups": ' + "[" * 100000):
+            for method, url in (("put", URL), ("post", PREVIEW)):
+                with self.subTest(shape=shape[:12], url=url):
+                    self.assertPlain400(self.raw(method, url, shape), (method, shape[:12]))
+        self.assertEqual(snapshot(), before)
+
+    def test_malformed_json_and_a_wrong_media_type_carry_the_error_key_too(self):
+        for method, url in (("put", URL), ("post", PREVIEW)):
+            for text in ("{bad", '{"a": 1,}', "\x00"):
+                with self.subTest(url=url, text=text):
+                    r = self.raw(method, url, text)
+                    self.assertPlain400(r, text)
+                    self.assertIn("detail", r.json())  # the old key stays for the clients that read it
+            r = self.raw(method, url, "enabled=true", content_type="text/plain")
+            self.assertEqual(r.status_code, 415, r.content)
+            self.assertIsInstance(r.json()["error"], str)
+            self.assertTrue(r.json()["error"])
+            self.assertIn("detail", r.json())
+            r = self.raw(method, url, "enabled=true", content_type="application/x-www-form-urlencoded")
+            self.assertEqual(r.status_code, 415, r.content)
+            self.assertIn("error", r.json())
+
+    def test_a_malformed_body_from_a_branch_login_is_still_the_company_wide_403(self):
+        branch = Branch.objects.create(name="B1")
+        who = role_headers({"settings.attendance": {"view": True, "edit": True}}, branch=branch)
+        r = self.client.put(URL, "{bad", content_type="application/json", **who)
+        self.assertEqual(r.status_code, 403)
+
+    def test_odd_punch_text_is_a_plain_sentence(self):
+        cases = [
+            "²:30", "٠٨:٣٠", "8:3", "08:3", "8:30:5", "8:30 am", "8.30 pm", "8", "", " ",
+            "08:30\n:00", "08:30\x00", "\ud800", "١٢:٤٥", "1e1:00", "+8:30", "08 :30", "-1:30",
+            "０８:３０", "08:30\n",
+        ]  # fmt: skip
+        for text in cases:
+            with self.subTest(text=text):
+                r = self.raw("post", PREVIEW, json.dumps({"punches": ["08:30", text]}))
+                error = self.assertPlain400(r, text)
+                self.assertIn("is not a time", error)
+
+    def test_the_forms_the_page_sends_are_still_read(self):
+        for punches in (["08:30", "20:00"], ["8:30", "20:00"], ["08:30:00", "20:00:00"], ["21:00", "05:30"]):
+            with self.subTest(punches=punches):
+                self.assertEqual(self.preview({"punches": punches, "date": THURSDAY}).status_code, 200)
+
+    def test_a_punch_list_longer_than_two_calendar_days_is_refused(self):
+        for punches in (["08:30"] * 3, ["21:00", "05:30", "04:00"], ["08:30", "12:45", "08:00", "07:00", "06:00"]):
+            with self.subTest(punches=punches):
+                error = self.assertPlain400(self.raw("post", PREVIEW, json.dumps({"punches": punches})), punches)
+                self.assertIn("two days", error)
+        for punches in (
+            ["08:30"] * 2,
+            ["21:00", "05:30", "21:00"],
+            ["08:30", "12:45", "13:30", "20:00", "21:00", "05:30"],
+        ):
+            with self.subTest(punches=punches):
+                self.assertEqual(self.preview({"punches": punches, "date": THURSDAY}).status_code, 200)
+
+    def test_the_other_hostile_strings_do_not_crash_either(self):
+        for body in (
+            {"punches": ["08:30"], "date": "\ud800"},
+            {"punches": ["08:30"], "date": "2026-10-1٥"},
+            {"punches": ["08:30"], "date": "2026-10-15\n"},
+        ):
+            with self.subTest(body=body):
+                self.assertPlain400(self.raw("post", PREVIEW, json.dumps(body)))
+        for body in (
+            {"effectiveFrom": "2026-10-1٥"},
+            {"effectiveFrom": "\ud800"},
+            {"effectiveFrom": "2026-10-15\n"},
+            {"groups": [{"id": 1, "startTime": "0٨:30"}]},
+            {"groups": [{"id": 1, "kind": "\ud800"}]},
+            {"groups": [{"id": 1, "kind": "a\x00"}]},
+            {"expectedVersion": "\ud800"},
+            {"roundingMode": "\ud800"},
+        ):
+            with self.subTest(body=body):
+                r = self.raw("put", URL, json.dumps(body))
+                if r.status_code != 200:
+                    self.assertPlain400(r, body)
+
+
+# ═══ warnings that only a save which moves or switches off the rules can give ═══════════════════════════════════
+
+
+class MovedRulesWarningTests(Base):
+    def warnings(self, body):
+        r = self.put(body)
+        self.assertEqual(r.status_code, 200, r.content)
+        return r.json()["warnings"]
+
+    def test_moving_the_start_later_over_days_payroll_already_covers_says_so(self):
+        make_payroll(date(2026, 10, 1), date(2026, 10, 15))
+        warnings = self.warnings({"effectiveFrom": "2026-10-18"})
+        text = " ".join(w for w in warnings if "old calculation again" in w)
+        self.assertTrue(text, warnings)
+        for part in ("2026-10-14", "2026-10-18", "2026-10-17", "regenerate", "leave it as is"):
+            self.assertIn(part, text)
+        self.assertEqual(
+            ProductionShiftConfig.objects.get(pk=1).rules_effective_from, date(2026, 10, 18)
+        )  # advice only
+        self.assertEqual(self.get().json()["warnings"], [])  # advice of the save, not of the table
+
+    def test_it_is_one_sentence(self):
+        make_payroll(date(2026, 10, 1), date(2026, 10, 15))
+        (text,) = [w for w in self.warnings({"effectiveFrom": "2026-10-18"}) if "old calculation again" in w]
+        self.assertEqual(text.count(". "), 0, text)
+        self.assertTrue(text.endswith("."), text)
+
+    def test_no_payroll_over_those_days_no_warning(self):
+        make_payroll(date(2026, 9, 1), date(2026, 10, 13))  # ends the day before the old start
+        self.assertFalse([w for w in self.warnings({"effectiveFrom": "2026-10-18"}) if "old calculation" in w])
+
+    def test_payroll_only_after_the_new_start_is_not_flipped(self):
+        make_payroll(
+            date(2026, 10, 18), date(2026, 10, 24)
+        )  # starts on the new start: its days stay judged by the rules
+        self.assertFalse([w for w in self.warnings({"effectiveFrom": "2026-10-18"}) if "old calculation again" in w])
+
+    def test_moving_the_start_earlier_or_keeping_it_never_says_it(self):
+        make_payroll(date(2026, 10, 1), date(2026, 10, 15))
+        for text in ("2026-10-10", "2026-10-10"):
+            self.assertFalse([w for w in self.warnings({"effectiveFrom": text}) if "old calculation again" in w], text)
+
+    def test_moving_the_start_while_the_rules_are_off_says_nothing(self):
+        make_payroll(date(2026, 10, 1), date(2026, 10, 15))
+        self.put({"enabled": False})
+        self.assertFalse([w for w in self.warnings({"effectiveFrom": "2026-10-18"}) if "old calculation again" in w])
+
+    def test_switching_the_rules_off_when_payroll_exists_for_days_they_judged_says_so(self):
+        make_payroll(date(2026, 10, 1), date(2026, 10, 15))
+        warnings = self.warnings({"enabled": False})
+        text = " ".join(w for w in warnings if "old calculation again" in w)
+        self.assertTrue(text, warnings)
+        for part in ("2026-10-14", "2026-10-15", "switched off", "regenerate", "leave"):
+            self.assertIn(part, text)
+        self.assertFalse(
+            [w for w in warnings if "regenerate it to apply them" in w], warnings
+        )  # not the 'apply' advice
+
+    def test_switching_off_with_no_payroll_over_their_days_says_nothing(self):
+        self.assertFalse([w for w in self.warnings({"enabled": False}) if "old calculation" in w])
+        self.put({"enabled": True})
+        make_payroll(date(2026, 9, 1), date(2026, 10, 13), code="WARN3")  # before the start
+        self.assertFalse([w for w in self.warnings({"enabled": False}) if "old calculation" in w])
+
+    def test_switching_off_rules_that_start_in_the_future_says_nothing(self):
+        self.put({"effectiveFrom": "2026-10-25"})
+        make_payroll(date(2026, 10, 1), date(2026, 10, 15), code="WARN4")
+        self.assertFalse([w for w in self.warnings({"enabled": False}) if "old calculation" in w])
+
+    def test_switching_off_and_moving_at_once_uses_the_old_start(self):
+        make_payroll(date(2026, 10, 1), date(2026, 10, 15))
+        warnings = self.warnings({"enabled": False, "effectiveFrom": "2026-10-25"})
+        self.assertTrue([w for w in warnings if "old calculation again" in w and "2026-10-14" in w], warnings)
+
+    def test_the_existing_wording_is_kept_where_it_is_right(self):
+        make_payroll(date(2026, 10, 1), date(2026, 10, 15))
+        text = " ".join(self.warnings({"graceMinutes": 7}))
+        self.assertIn("Production payroll up to 2026-10-15 has already been generated", text)
+        self.assertIn("regenerate it to apply them", text)
+        text = " ".join(self.warnings({"effectiveFrom": "2026-10-01"}))
+        self.assertIn("2026-10-01, which is in the past", text)

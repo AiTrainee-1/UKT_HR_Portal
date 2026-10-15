@@ -161,7 +161,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='productionshiftconfig',
             name='rules_night_session_hours',
-            field=models.IntegerField(db_column='rules_night_session_hours', db_default=18, default=18),
+            field=models.IntegerField(db_column='rules_night_session_hours', db_default=24, default=24),
         ),
         migrations.AddField(
             model_name='productionshiftconfig',

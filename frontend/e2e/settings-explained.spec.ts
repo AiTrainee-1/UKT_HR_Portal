@@ -11,6 +11,7 @@ const TABS: [id: string, label: string][] = [
   ["hr_contact", "HR Contact"],
   ["themes", "Themes"],
   ["attendance", "Attendance"],
+  ["production_shifts", "Production Shifts"],
   ["late_detection", "Late Detection"],
   ["compensation", "Compensation"],
   ["devices", "Devices"],

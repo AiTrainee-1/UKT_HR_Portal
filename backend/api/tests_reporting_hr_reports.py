@@ -283,7 +283,9 @@ class CatalogAndAccessTests(_World):
             if who is self.employees_user:  # may see the attendance-gated punches report, never the salary one
                 self.assertEqual([c["count"] for c in hr_group], [2], who.username)
                 self.assertEqual(
-                    sorted(r["id"] for r in catalog["reports"] if r["category"] == "hr"), sorted([PID, SID]), who.username
+                    sorted(r["id"] for r in catalog["reports"] if r["category"] == "hr"),
+                    sorted([PID, SID]),
+                    who.username,
                 )
             else:
                 self.assertEqual(hr_group, [], who.username)
