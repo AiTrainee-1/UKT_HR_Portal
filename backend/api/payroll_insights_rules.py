@@ -1314,7 +1314,7 @@ def production_rule_groups(inp: ProductionRuleInput, company: bool = True) -> li
                 "How a production day earns pay",
                 "settings",
                 current=None,
-                text="0.25, 0.5, 1 or 1.5 shifts a day from the production punch times",
+                text="From the production shift table in Settings → Production shifts (0.25 up to 3 shifts a day); earlier days: 0.25, 0.5, 1 or 1.5",
                 ref=SETTINGS["prod_shifts_earned"],
                 detail="Each day's punches are matched against the production shift segments kept in Manage Shifts",
             )
@@ -1487,7 +1487,7 @@ def production_settings_groups(ps, cycle: str) -> list[dict]:
             current=None,
             text="Shifts earned x the worker's salary per shift",
             ref=SETTINGS["prod_shifts_earned"],
-            detail="A day earns 0.25, 0.5, 1 or 1.5 shifts from the production punch times kept in Manage Shifts",
+            detail="A day earns shifts from the shift table in Settings → Production shifts (days before its start date: the older production punch times)",
         ),
     ]
     return _assemble(

@@ -30,15 +30,21 @@ from ..registry import register
 from ..runner import KIND_TOTAL
 from ..types import INTEGER, NUMBER, PERCENT, TEXT, ColumnSpec, ReportResult, ReportSpec
 from .attendance_core_data import (
+    KIND_BIRTHDAY,
     WEEKDAYS,
     AttendanceData,
+    allowance_minutes,
+    compensation_kind,
     detection_notes,
     drop_dormant,
     emp_days_guard,
+    is_relaxation_day,
     label_for,
     leave_type_text,
     scope_filters,
     scoped_employees,
+    window_early_out_applied,
+    window_late_in_applied,
 )
 from .attendance_core_muster_export import PALETTE, build_muster_pdf, build_muster_xlsx
 
@@ -48,6 +54,7 @@ LEGEND = [
     ("P", "Present"),
     ("½M", "Half day - morning worked"),
     ("½E", "Half day - evening worked"),
+    ("½", "Half day - no half worked (production shift credit, or a relaxation)"),
     ("A", "Absent"),
     ("L", "On leave"),
     ("H", "Holiday / weekly off"),
@@ -85,6 +92,10 @@ def cell_code(data: AttendanceData, emp, d: dt.date, *, leave_codes: bool, weekl
     if s == "half_shift":
         if emp.employment_type == "production":
             return "½"
+        if is_relaxation_day(rec) and rec.first_punch is None:
+            # a half day made up by an OT relaxation has no punches: neither half was worked, so it is a plain half
+            # (as on the Report Log sheet) rather than "evening worked", which is only the fallback for a manual row
+            return "½"
         # which half was worked is the day record's own verdict (attendance_final.half_period: a first punch inside
         # the shift's first-half limit is the morning); a manual row with no first punch reads as the evening
         return "½M" if half_period(rec, data.settings) == "morning" else "½E"
@@ -99,6 +110,40 @@ def cell_code(data: AttendanceData, emp, d: dt.date, *, leave_codes: bool, weekl
     if weekly_off and data.kind(emp, d, rec) == "weekly_off":
         return "WO"
     return "A"
+
+
+def _count_markers(marked: dict[str, int], rec) -> None:
+    """Tally the compensation markers one stored day carries (a day can carry several: the stored kind is only the most
+    important one)."""
+    if KIND_BIRTHDAY in compensation_kind(rec):
+        marked["birthday"] += 1
+    if is_relaxation_day(rec):
+        marked["relaxation"] += 1
+    if allowance_minutes(rec):
+        marked["allowance"] += 1
+    if window_late_in_applied(rec) or window_early_out_applied(rec):
+        marked["window"] += 1
+
+
+def _marker_note(marked: dict[str, int]) -> str | None:
+    if not marked:
+        return None
+    parts = []
+    for key, text in (
+        ("birthday", "{n} birthday leave"),
+        ("relaxation", "{n} relaxation"),
+        ("allowance", "{n} OT allowance"),
+        ("window", "{n} announced late-in / early-out"),
+    ):
+        if marked.get(key):
+            parts.append(text.format(n=marked[key]))
+    return (
+        "Days that used a compensation: "
+        + ", ".join(parts)
+        + ". They are counted exactly as the engine stored them: a birthday-leave or relaxation day is a paid Present "
+        "(or half) day in P / ½ / Eff. / Shifts and in the Strength row, with no punches needed; the Daily Attendance "
+        "Register names the marker of each day."
+    )
 
 
 def _run_muster(ctx) -> ReportResult:
@@ -139,6 +184,7 @@ def _run_muster(ctx) -> ReportResult:
     rows: list[dict] = []
     strength: dict[str, int] = defaultdict(int)
     missing = 0
+    marked: dict[str, int] = defaultdict(int)  # the compensation markers of the days shown (see the notes)
     for i, emp in enumerate(employees, start=1):
         row = {
             "sno": i,
@@ -164,6 +210,7 @@ def _run_muster(ctx) -> ReportResult:
             recs.append(rec)
             if rec.status in ("present", "half_shift"):
                 strength[day_key(d)] += 1
+            _count_markers(marked, rec)
             if code == "WO":
                 wo += 1
                 if rec.status == "holiday":
@@ -211,7 +258,13 @@ def _run_muster(ctx) -> ReportResult:
             "type CL, is shown with an L in front, e.g. LCL)."
         )
     if any(e.employment_type == "production" for e in employees):
-        notes.append("Production rows: ½ means 0.75 shift or less, and the Shifts column is their real measure.")
+        notes.append(
+            "Production rows: ½ means less than a full shift (0.75 or less before the shift-table rules start, below their "
+            "full-day value, 1.00 by default, from then on), and the Shifts column is their real measure."
+        )
+    marker_note = _marker_note(marked)
+    if marker_note:
+        notes.append(marker_note)
     notes += detection_notes(data.settings, early=False)
     if missing:
         notes.append(

@@ -243,7 +243,7 @@ class CatalogAndAccessTests(_World):
         body = self.client.get("/api/reports/catalog", **hdr(self.admin)).json()
         group = next(c for c in body["categories"] if c["id"] == "hr")
         self.assertEqual(group["label"], "HR Reports")
-        self.assertEqual(group["count"], 2)  # Employee Confo Details and Production Daily Punches
+        self.assertEqual(group["count"], 3)  # Employee Confo Details, Production Daily Punches, Production Shift Rules
         ids = [c["id"] for c in body["categories"]]
         self.assertEqual(ids.index("hr"), ids.index("employees") + 1)  # sits beside Employees
         report = next(r for r in body["reports"] if r["id"] == RID)
@@ -281,8 +281,10 @@ class CatalogAndAccessTests(_World):
             self.assertNotIn(RID, [r["id"] for r in catalog["reports"]], who.username)
             hr_group = [c for c in catalog["categories"] if c["id"] == "hr"]
             if who is self.employees_user:  # may see the attendance-gated punches report, never the salary one
-                self.assertEqual([c["count"] for c in hr_group], [1], who.username)
-                self.assertEqual([r["id"] for r in catalog["reports"] if r["category"] == "hr"], [PID], who.username)
+                self.assertEqual([c["count"] for c in hr_group], [2], who.username)
+                self.assertEqual(
+                    sorted(r["id"] for r in catalog["reports"] if r["category"] == "hr"), sorted([PID, SID]), who.username
+                )
             else:
                 self.assertEqual(hr_group, [], who.username)
             r = self.client.get(f"/api/reports/run/{RID}", **hdr(who))
@@ -646,6 +648,7 @@ class CostAndSafetyTests(_World):
 # ═════════════════════════════════════════════════════════════════════════════
 
 PID = "production-daily-punches"
+SID = "production-shift-rules"
 PUNCH_LABELS = [
     "Employee Name",
     "Employee Code",
@@ -653,10 +656,29 @@ PUNCH_LABELS = [
     "Department",
     "Date",
     "Day",
+    "Shift",
     "Total Punch Count",
+    "Shifts Earned",
+    "Late",
+    "Early",
     "All Punches (exact times)",
+    "Rule applied",
 ]
-PUNCH_KEYS = ["employeeName", "employeeCode", "designation", "department", "date", "day", "punchCount", "punches"]
+PUNCH_KEYS = [
+    "employeeName",
+    "employeeCode",
+    "designation",
+    "department",
+    "date",
+    "day",
+    "shift",
+    "punchCount",
+    "shiftsEarned",
+    "late",
+    "early",
+    "punches",
+    "ruleApplied",
+]
 D29 = date(2026, 9, 29)  # Tuesday = today
 D28 = date(2026, 9, 28)  # Monday
 D27 = date(2026, 9, 27)  # Sunday, nobody punched
@@ -791,8 +813,11 @@ class PunchDayTests(_PunchWorld):
         body = self.get(dateFrom="2026-09-29", dateTo="2026-09-29")
         rows = {r["employeeCode"]: r for r in body["rows"]}
         self.assertEqual(list(rows), ["P1", "P2", "P3", "P10"])  # natural code order; P4 never punched
+        p1 = dict(rows["P1"])
+        rule_text = p1.pop("ruleApplied")
+        self.assertIn("Previous calculation", rule_text)  # a September day is before the rules start
         self.assertEqual(
-            rows["P1"],
+            p1,
             {
                 "employeeName": "Priya Sharma",
                 "employeeCode": "P1",
@@ -800,8 +825,12 @@ class PunchDayTests(_PunchWorld):
                 "department": "STITCHING",
                 "date": "2026-09-29",
                 "day": "Tue",
+                "shift": "Legacy rules",
                 "punches": "07:58:12, 12:01:05, 13:00:40, 17:02:59",  # in the order they were made, not entered
                 "punchCount": 4,
+                "shiftsEarned": 0.5,  # what the legacy segments give for this day (pinned)
+                "late": None,
+                "early": "Early",
             },
         )
         self.assertEqual(
@@ -936,9 +965,13 @@ class PunchExportAndSafetyTests(_PunchWorld):
         body_rows = [
             [c.value for c in row] for row in sheet.iter_rows(min_row=HEADER_ROW + 1) if row[1].value and row[0].value
         ]
-        punches = [r_["punches"] for r_ in self.data(screen)]
-        for text in punches:
-            self.assertIn(text, [row[7] for row in body_rows])
+        punch_col = PUNCH_KEYS.index("punches")
+        for r_ in self.data(screen):
+            self.assertIn(r_["punches"], [row[punch_col] for row in body_rows])
+        shifts_col = PUNCH_KEYS.index("shiftsEarned")
+        self.assertEqual(
+            sorted(r_["shiftsEarned"] for r_ in self.data(screen)), sorted(float(row[shifts_col]) for row in body_rows)
+        )
 
     def test_pdf_renders(self):
         r = self.export("pdf", dateFrom="2026-09-28", dateTo="2026-09-29")

@@ -1,6 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Factory, Info, Plus, RefreshCw, TriangleAlert } from "lucide-react";
-import ProductionShiftConfigCard from "@/components/ProductionShiftConfigCard";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -25,6 +24,7 @@ import {
 } from "@/lib/api-client/custom-hooks";
 import { useQueryClient } from "@tanstack/react-query";
 import { TypeChips } from "./AssignmentsTab";
+import ProductionRulesSummary from "./ProductionRulesSummary";
 import ShiftCard from "./ShiftCard";
 import { pluralize, type TypeFilter } from "./shift-logic";
 
@@ -136,9 +136,9 @@ export default function ShiftsTab({
       {(type === "production" || (type === "all" && counts.production > 0)) && (
         <div className="space-y-3">
           <Note tone="blue">
-            <b>Production shift: the same for every production employee.</b> They share one shift, its punch times and
-            its shift-value segments, whatever their gender. New production employees are assigned automatically when
-            they are added.{" "}
+            <b>Production shift: the same for every production employee.</b> They share one shift, whatever their
+            gender, and the shifts they earn each day come from the production shift rules in Settings. New production
+            employees are assigned automatically when they are added.{" "}
             <button
               type="button"
               onClick={() => void syncProduction()}
@@ -163,7 +163,7 @@ export default function ShiftsTab({
         </Note>
       )}
 
-      {type === "production" && <ProductionShiftConfigCard />}
+      {type === "production" && <ProductionRulesSummary />}
 
       {loading ? (
         <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">

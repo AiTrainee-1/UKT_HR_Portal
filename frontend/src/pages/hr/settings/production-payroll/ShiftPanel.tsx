@@ -107,22 +107,22 @@ export function ShiftPanel({
         }
       >
         <ManagedElsewhere
-          title="Punch times and segments: Manage Shifts - Production"
-          to="/hr/shifts"
-          linkLabel="Open Manage Shifts"
+          title="The shift rules: Settings - Production Shifts"
+          to="/hr/settings?tab=production_shifts"
+          linkLabel="Open Production Shifts"
           testId="production-shifts-elsewhere"
         >
-          The production punch times, the grace and the pay segments are edited with the production shift in Manage
-          Shifts. What they mean, with a live example, is on Settings - Attendance - Production workers.
+          The default timings, the ladders of shifts earned, the unpaid breaks and the grace are edited on the
+          Production Shifts tab, with a box to try a day. A day from its start date is worked out there.
         </ManagedElsewhere>
         <ManagedElsewhere
-          title="What the segments mean"
+          title="The old calculation, before the rules start"
           to="/hr/settings?tab=attendance#production-attendance"
           linkLabel="Open Attendance settings"
           testId="production-attendance-elsewhere"
         >
-          The Attendance tab shows the saved punch times and segments read-only, with two example days priced at{" "}
-          {formatPaise(PER_SHIFT * 100)} a shift.
+          Days before the Production Shifts rules start keep the old punch times and segments. The Attendance tab shows
+          them read-only, with two example days priced at {formatPaise(PER_SHIFT * 100)} a shift.
         </ManagedElsewhere>
       </SettingBlock>
 
@@ -185,11 +185,11 @@ export function ShiftPanel({
         affects={[
           {
             where: "Production Payroll - every cycle",
-            what: "while late deductions are on, each day's first (and in Strict mode last) punch is compared with the assigned shift's start, end and grace, to the second.",
+            what: "while late deductions are on, each day's first (and in Strict mode last) punch is compared with the start, end and grace of the day's group on the Production Shifts tab (for days before its rules start: of the assigned shift), to the second.",
             to: CYCLE_INFO.weekly.path,
           },
         ]}
-        note="Read-only here: edit them in Manage Shifts. Shifts earned and pay do not use these times; they use the production punch times and segments above."
+        note="Read-only here: edit them in Manage Shifts. Shifts earned and pay do not use these times; they come from the Production Shifts tab."
       >
         <div className="space-y-3">
           {shiftsLoading ? (

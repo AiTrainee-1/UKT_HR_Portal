@@ -2,7 +2,7 @@ from django.http import JsonResponse
 
 from .auth import get_bearer_token
 from .jwt_utils import verify_token
-from .permission_registry import effective_permissions, resolve_module, resolve_permission
+from .permission_registry import READ_ONLY_POST_PATHS, effective_permissions, resolve_module, resolve_permission
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 # auth/* must always be reachable to log in or check identity; healthz for
@@ -138,7 +138,9 @@ class HrPermissionMiddleware:
 
         if level == "edit":
             return None
-        if level == "view" and request.method in SAFE_METHODS:
+        # (a POST that only reads, e.g. the Production shifts "Try it" calculator, is a view, not a change)
+        only_reads = request.method in SAFE_METHODS or (request.method == "POST" and rel_path in READ_ONLY_POST_PATHS)
+        if level == "view" and only_reads:
             return None
 
         message = "You do not have access to this section."

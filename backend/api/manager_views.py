@@ -721,10 +721,9 @@ def manager_me(request: Request) -> Response:
     pending_on_duty = counts["on_duty"]
     pending_missing_punch = counts["missing_punch"]
     pending_compensation = counts["holiday_work"]
-    pending_count = (
-        pending_leaves + pending_perms + pending_resignations
-        + pending_attendance + pending_casual + pending_on_duty + pending_missing_punch + pending_compensation
-    )
+    # The same sum /manager/pending-requests sends as `totalPending`: every kind `_hod_pending_counts` counts, the gate
+    # outpass requests included (a head with only an outpass waiting used to read 0 here and 1 on the Approvals page).
+    pending_count = sum(counts.values())
 
     return Response({
         "isManager": True,
@@ -744,6 +743,8 @@ def manager_me(request: Request) -> Response:
         "pendingOnDutyCount": pending_on_duty,
         "pendingMissingPunchCount": pending_missing_punch,
         "pendingCompensationCount": pending_compensation,
+        # Gate outpass requests waiting for this head (inside pendingApprovalsCount; the apps list an Outpass tab).
+        "pendingOutpassCount": counts.get("outpass", 0),
         # The approval pipelines HR has configured, so the app can explain each request's path and hide a category whose
         # workflow is off or has no Department Head step (approval_workflow.py).
         "approvalWorkflows": approval.summary(),

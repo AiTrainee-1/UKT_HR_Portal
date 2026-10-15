@@ -140,12 +140,19 @@ def overridden_employees(m: DepartmentManager) -> dict[int, int]:
     return coverage(m)[1]
 
 
-def managers_to_notify(emp, permission_flag: str) -> list[DepartmentManager]:
+def managers_to_notify(emp, permission_flag: str, *, exclude_self: bool = False) -> list[DepartmentManager]:
     """The active HOD to notify about a request from `emp`: their ONE HOD, and only if that HOD is
     allowed to act on this kind of request (`permission_flag` is a DepartmentManager can_approve_*
-    field). An empty list means HR decides."""
+    field). An empty list means HR decides.
+
+    A head who holds their own department is their own effective HOD. `exclude_self=True` leaves them
+    out for a request nobody but a Department Head can decide (a head never decides their own), so the
+    notification is not sent to the person who cannot act on it. It is off by default: the other kinds
+    of request keep the answer they always had."""
     m = effective_manager(emp)
     if m is None or not m.is_active or not getattr(m, permission_flag, False):
+        return []
+    if exclude_self and m.employee_id == emp.id:
         return []
     return [m]
 

@@ -88,6 +88,9 @@ from .payroll import (
     CompensationLedger,
     ProductionShiftConfig,
     ProductionShiftSegment,
+    ProductionShiftGroup,
+    ProductionShiftRule,
+    ProductionBreak,
 )
 from .accounts import (
     Role,

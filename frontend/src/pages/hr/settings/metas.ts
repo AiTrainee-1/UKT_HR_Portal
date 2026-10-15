@@ -2,6 +2,7 @@ import type { SettingMeta } from "./kit/catalog";
 import { COMPANY_SETTINGS } from "./CompanyTab.meta";
 import { HR_CONTACT_SETTINGS } from "./HrContactTab.meta";
 import { ATTENDANCE_SETTINGS } from "./AttendanceTab.meta";
+import { PRODUCTION_SHIFT_SETTINGS } from "./ProductionShiftsTab.meta";
 import { LATE_DETECTION_SETTINGS } from "./LateDetectionTab.meta";
 import { COMPENSATION_SETTINGS } from "./CompensationTab.meta";
 import { DEVICES_SETTINGS } from "./DevicesTab.meta";
@@ -20,6 +21,7 @@ export const ALL_SETTINGS: SettingMeta[] = [
   ...COMPANY_SETTINGS,
   ...HR_CONTACT_SETTINGS,
   ...ATTENDANCE_SETTINGS,
+  ...PRODUCTION_SHIFT_SETTINGS,
   ...LATE_DETECTION_SETTINGS,
   ...COMPENSATION_SETTINGS,
   ...DEVICES_SETTINGS,

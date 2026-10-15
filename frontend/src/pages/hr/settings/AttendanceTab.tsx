@@ -41,7 +41,7 @@ const CONTENTS = [
 /**
  * Settings -> Attendance: how a staff day's punches become Full Day / Half Day / Absent and which arrivals and departures
  * are marked. Everything for staff is one form saved by "Save Attendance Settings" (after a confirm: the rules re-judge
- * past days); production attendance is only explained here, it is edited with the production shift in Manage Shift.
+ * past days); production attendance is only explained here, it is edited on the Production Shifts tab.
  */
 export default function AttendanceTab({ readOnly = false }: { readOnly?: boolean }) {
   const { toast } = useToast();

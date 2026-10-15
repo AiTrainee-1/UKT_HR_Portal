@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from datetime import date, time, timedelta
 from decimal import Decimal
 
+from api import production_shift_rules as psr
 from api.models import (
     Attendance,
     AttendanceDayRecord,
@@ -292,19 +293,31 @@ class Simulator:
         rng = self.rng
         cfg = self.config
         grace = cfg.grace_minutes or 10
+        arrive_at, depart_at = cfg.punch1_time, cfg.punch4_time
+        rules = psr.rules_for_day(cfg, day)
+        if rules is not None:
+            # From the shift table's effective date the day is judged by it: the arrival jitter must fit ITS grace and
+            # the long day ends at the main departure of the day group that applies (08:30 -> 20:00; Sunday 17:00).
+            wanted = ("sunday", "all") if day.weekday() == 6 else ("mon_sat", "all")
+            group = next((g for g in rules.groups if g.applies_on in wanted and g.kind != "night"), None)
+            if group is not None:
+                grace = rules.grace_minutes
+                arrive_at = psr.s_to_time(group.start_s)
+                if group.main_out_s is not None and group.main_out_s < 86400:
+                    depart_at = psr.s_to_time(group.main_out_s)
         if chance(rng, self.late_odds(p, day)):
             minutes = grace + 1 + min(rng.expovariate(1 / 15), 60)
         else:
             minutes = clipped_normal(
                 rng, -4, 5, -35, grace - 1.01
             )  # the engine compares to the second: 59 s of jitter must still fit
-        arrival = self._jitter(cfg.punch1_time, minutes)
+        arrival = self._jitter(arrive_at, minutes)
         base = PRODUCTION_OVERTIME.get(p.dept, PRODUCTION_OVERTIME_DEFAULT)
         stays = min(0.92, base * 1.7) if p.shift_key == "extended" else base * 0.25
         if "sunday_worker" in p.flags and day.weekday() == 6:
             stays = 0.5
         if chance(rng, stays):
-            leave = self._jitter(cfg.punch4_time, clipped_normal(rng, 3, 6, -9, 25))
+            leave = self._jitter(depart_at, clipped_normal(rng, 3, 6, -9, 25))
         elif chance(rng, LEFT_EARLY):
             leave = s2t(rng.randint(15 * 3600, 17 * 3600 + 900))
         else:
@@ -331,7 +344,7 @@ class Simulator:
 
     def verdict(self, p: Person, day: date, times: list[time]) -> Day:
         if p.kind == "production":
-            return production_verdict(self.config, self.segments, times)
+            return production_verdict(self.config, self.segments, times, day)
         perms = self.leave.permission_days.get(p.idx, {}).get(day, [])
         return staff_verdict(self.settings, self.shifts[(p.unit, p.shift_key)], times, perms)
 

@@ -14,9 +14,10 @@ day and no half-day leave. Approved permissions that are within the monthly cap 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import time
+from datetime import date, time
 from decimal import Decimal
 
+from api import production_shift_rules as psr
 from api.arrival_rules import ZONE_EXCUSED, ZONE_LATE, ZONE_QUARTER, ZONE_SECOND_HALF, explain, limits_for, zone_of
 from api.attendance_final import _compute_production, _effective_shift_for_day, _half_day_status, _late_basis_notes
 from api.attendance_final import _reason_without
@@ -187,9 +188,18 @@ def staff_verdict(settings, shift, times: list[time], permissions: list[str]) ->
 # ─── production: the 1.5-shift day ────────────────────────────────────────────────────────────────────────────
 
 
-def production_verdict(config, segments: list, times: list[time]) -> Day:
-    """The verdict for a production day with punches: shifts earned from the segments the worked spans cover."""
-    computed = _compute_production(None, None, times, None, config, segments)
+def production_verdict(config, segments: list, times: list[time], day: date | None = None) -> Day:
+    """The verdict for a production day with punches: from the shift table (Settings -> Production shifts) when `day`
+    is on/after its effective date, else the shifts earned from the segments the worked spans cover (the legacy
+    calculation). The same two branches ``attendance_final.compute_day_record`` takes, so a seeded day is the day the
+    application would compute again."""
+    computed = None
+    if day is not None:
+        ruleset = psr.rules_for_day(config, day)
+        if ruleset is not None:
+            computed = psr.evaluate_day(ruleset, day, times)
+    if computed is None:
+        computed = _compute_production(None, None, times, None, config, segments)
     return Day(
         status=computed["status"],
         shifts=Decimal(computed["shifts_earned"]).quantize(Decimal("0.01")),

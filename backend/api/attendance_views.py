@@ -14,6 +14,7 @@ from .auth import require_hr, require_auth, get_token_employee_id
 from .user_settings import settings_for
 from .branch_scope import get_branch_scope, scope_to_branch
 from .geo_attendance_views import source_label
+from . import production_shift_rules as psr
 from .arrival_rules import ZONE_LATE, limits_for as arrival_limits_for, zone_of as arrival_zone_of
 from .attendance_final import compensation_marker_json, permission_flags_json
 from .clock import ist_today
@@ -27,6 +28,105 @@ logger = logging.getLogger(__name__)
 
 # API key the AiFace-Mars device must send in the X-Device-Key header.
 # Set BIOMETRIC_API_KEY in your .env file -never hardcode this value.
+
+
+# ── Production shift days (production_shift_rules.py) ────────────────────────
+#
+# From the date the shift-table rules take over, a PRODUCTION employee's day is the shift DAY, not the calendar date: a
+# night worker's closing punch made at 05:30 the next morning belongs to the day the night began on (the engine does the
+# same in compute_day_record). The pages below that list a day's punches straight from AttendanceLog therefore resolve
+# the session with the engine's own pure resolver, so what they show is what the day record (and payroll) was judged on.
+# Nothing here writes. An earlier date, a switched-off table and every staff member keep the raw punches of the date.
+
+
+class _LogWindow:
+    """{date: [AttendanceLog]} as production_shift_rules wants it: {date: [(seconds since that date's midnight, log)]},
+    built lazily per date."""
+
+    def __init__(self, logs_by_date):
+        self._logs = logs_by_date
+        self._cache: dict = {}
+
+    def get(self, day, default=None):
+        if day not in self._cache:
+            self._cache[day] = [(psr.time_to_s(log.punch_time), log) for log in self._logs.get(day, ())]
+        return self._cache[day]
+
+
+def _resolve_shift_day(logs_by_date: dict, d: date_type, ruleset, manual) -> list:
+    """[(seconds since d's midnight, AttendanceLog), ...] of production shift day `d`, night sessions resolved by the
+    engine's own resolver with its guards (days the rules do not judge and manual override days neither consume nor
+    are closed). `logs_by_date` must hold the punches back to the first night-session sync point."""
+    return psr.resolve_day(_LogWindow(logs_by_date), d, **psr.session_kwargs(ruleset, manual))
+
+
+def _production_shift_days(emp, d_from: date_type, d_to: date_type):
+    """(ruleset, {date: resolved punches}) for one production employee: every date of [d_from, d_to] that the new rules
+    judge and HR has not overridden. (None, {}) for a staff member or when no date of the range is in force; two punch /
+    override queries and the rule tables, whatever the number of days."""
+    if emp.employment_type != "production":
+        return None, {}
+    ruleset = psr.rules_for_day(ProductionShiftConfig.get(), d_to)
+    if ruleset is None:
+        return None, {}
+    lo = d_from - timedelta(days=psr.MAX_CHAIN_DAYS)
+    hi = d_to + timedelta(days=1)
+    logs_by_date: dict = {}
+    for log in AttendanceLog.objects.filter(employee=emp, date__gte=lo, date__lte=hi).order_by("punch_time"):
+        logs_by_date.setdefault(log.date, []).append(log)
+    manual = set(
+        AttendanceDayRecord.objects.filter(employee=emp, source="manual", date__gte=lo, date__lte=hi).values_list(
+            "date", flat=True
+        )
+    )
+    out = {}
+    day = d_from
+    while day <= d_to:
+        if day not in manual and ruleset.applies(day):
+            out[day] = _resolve_shift_day(logs_by_date, day, ruleset, manual)
+        day += timedelta(days=1)
+    return ruleset, out
+
+
+def _production_roster_days(employee_ids, d: date_type, prod_config=None):
+    """(ruleset, {employee id: resolved punches of shift day d}) for the production employees of a roster, from the
+    engine's roster prefetch (production_prefetch_for_day: one punch query, one override query, and one more only for
+    employees on a very long run of nights). (None, {}) while the rules do not judge `d`. An employee HR overrode by
+    hand on `d` has no entry (the caller keeps the raw punches)."""
+    from .attendance_final import production_prefetch_for, production_prefetch_for_day
+
+    ids = list(employee_ids)
+    if not ids:
+        return None, {}
+    pf = production_prefetch_for_day(ids, d, prod_config)
+    ruleset = pf["prod_ruleset"]
+    if ruleset is None:
+        return None, {}
+    out = {}
+    for eid in ids:
+        mine = production_prefetch_for(pf, eid)
+        if d in mine["prod_manual_dates"]:
+            continue
+        out[eid] = _resolve_shift_day(mine["prod_logs_by_date"], d, ruleset, mine["prod_manual_dates"])
+    return ruleset, out
+
+
+def _shift_day_punch_dicts(resolved: list, d: date_type, seconds: bool = False) -> list:
+    """The punches of a resolved shift day as the pages list them: IN/OUT by position, and `nextDay: true` on a closing
+    punch that was made on the following calendar date (a night worker's 05:30)."""
+    fmt = "%H:%M:%S" if seconds else "%H:%M"
+    out = []
+    for i, (_secs, log) in enumerate(resolved):
+        item = {
+            "time": log.punch_time.strftime(fmt),
+            "type": "IN" if i % 2 == 0 else "OUT",
+            "source": log.source,
+            "sourceLabel": source_label(log.source),
+        }
+        if log.date > d:
+            item["nextDay"] = True
+        out.append(item)
+    return out
 
 
 def _today() -> date_type:
@@ -108,9 +208,31 @@ def _late_count(d: date_type, allowed_ids: set[int] | None = None) -> int:
         if log.employee_id not in first_punch:
             first_punch[log.employee_id] = log.punch_time
 
+    # Production, once the shift-table rules judge this date: late is the day's resolved first punch against the shift
+    # group it falls in (+ the rules' grace), exactly the day record's verdict - not the assigned shift template, and a
+    # closing punch of last night's session is not an arrival at all.
+    prod_ids = (
+        set(
+            Employee.objects.filter(id__in=list(first_punch), employment_type="production").values_list(
+                "id", flat=True
+            )
+        )
+        if first_punch
+        else set()
+    )
+    prod_ruleset, prod_days = _production_roster_days(prod_ids, d) if prod_ids else (None, {})
+
     late_ids = []
     for emp_id, pt in first_punch.items():
         if allowed_ids is not None and emp_id not in allowed_ids:
+            continue
+        if prod_ruleset is not None and emp_id in prod_ids:
+            if emp_id not in prod_days:
+                late_ids.append(emp_id)  # HR overrode the day by hand: its record decides below
+                continue
+            resolved = prod_days[emp_id]
+            if resolved and psr.judge_day(prod_ruleset, d, resolved[0][0], None).is_late:
+                late_ids.append(emp_id)
             continue
         asgn = (
             EmployeeShiftAssignment.objects
@@ -239,7 +361,9 @@ def attendance_company_summary(request: Request) -> Response:
     compute_day_record with no prefetch at all across a ~230-employee roster
     measured at ~57s per request; this keeps it to a small, fixed number of
     bulk queries regardless of roster size."""
-    from .attendance_final import compensation_prefetch_for_day, compute_day_record
+    from .attendance_final import (
+        compensation_prefetch_for_day, compute_day_record, production_prefetch_for, production_prefetch_for_day,
+    )
     from .models import AttendanceDayRecord, EmployeeShiftAssignment
 
     d = _today()
@@ -291,6 +415,11 @@ def attendance_company_summary(request: Request) -> Response:
 
     # The OT / Compensation switches, rules, announcements and relaxation for the day: once for the whole roster.
     comp_prefetch = compensation_prefetch_for_day(ps, d, emp_ids)
+    # Production night sessions (shift-table rules): the whole roster's look-back punches in ONE query instead of one per
+    # production employee; nothing beyond the config row is read while the rules do not judge today.
+    prod_pf = production_prefetch_for_day(
+        [e.id for e in employees if e.employment_type == "production"], d, prod_config,
+    )
 
     present = half_shift = absent = on_leave = late = 0
     total_shifts_earned = Decimal("0")
@@ -304,6 +433,7 @@ def attendance_company_summary(request: Request) -> Response:
             "night_logs_by_date": emp_logs_by_date,
             "approved_permissions_by_date": permissions_by_emp.get(emp.id, {}),
             **comp_prefetch,
+            **(production_prefetch_for(prod_pf, emp.id) if is_production else {}),
         }
         rec = compute_day_record(
             emp, d,
@@ -474,6 +604,23 @@ def _daily_compensation_records(ps, d: date_type, employees, logs_by_emp, leave_
     return records
 
 
+def _shift_day_fields(shift_day: dict | None, resolved_logs: list, d: date_type) -> dict:
+    """Extra keys of a production employee's row once the shift-table rules judge the day (nothing for anybody else):
+    the shifts / late / early the day record carries, the rule applied, and whether the closing punch is on the next
+    calendar date."""
+    if shift_day is None:
+        return {}
+    out = {
+        "shiftsEarned": float(shift_day.get("shifts_earned") or 0),
+        "isLate": bool(shift_day.get("is_late")),
+        "isEarlyOut": bool(shift_day.get("early_leave")),
+        "ruleGroup": shift_day.get("rule_group"),
+        "ruleNote": shift_day.get("rule_note"),
+        "lastPunchNextDay": bool(len(resolved_logs) > 1 and resolved_logs[-1].date > d),
+    }
+    return out
+
+
 @api_view(["GET"])
 @require_hr
 def attendance_daily(request: Request) -> Response:
@@ -504,10 +651,22 @@ def attendance_daily(request: Request) -> Response:
     # A paid birthday leave / a relaxation HR assigned counts the day whatever the punches say (see the helper).
     comp_recs = _daily_compensation_records(settings_for(request), d, employees, logs_by_emp, leave_emp_ids)
 
+    # Production, once the shift-table rules judge this date: the day is the SHIFT day (a night worker's 05:30 closing
+    # punch is shown on the day the night began, and is no arrival on the day it was made), and the row carries the
+    # shifts / late / early the day record and payroll use. One extra punch query for the whole roster.
+    prod_ruleset, prod_days = _production_roster_days(
+        [e.id for e in employees if e.employment_type == "production"], d,
+    )
+
     results = []
     for emp in employees:
         emp_logs = logs_by_emp.get(emp.id, [])
         manual = manual_by_emp.get(emp.id)
+        shift_day = None
+        if prod_ruleset is not None and emp.id in prod_days:
+            resolved = prod_days[emp.id]
+            emp_logs = [log for _secs, log in resolved]
+            shift_day = psr.evaluate_day(prod_ruleset, d, [secs for secs, _log in resolved]) if resolved else None
 
         if emp_logs:
             from .attendance_final import _resolve_primary_source
@@ -556,6 +715,7 @@ def attendance_daily(request: Request) -> Response:
             "sourceLabel": source_label(source) if source else None,
             "totalPunches": len(emp_logs),
             **compensation_marker_json(comp_rec),
+            **_shift_day_fields(shift_day, emp_logs, d),
         })
 
     return Response(results)
@@ -660,6 +820,11 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
             "source": log.source,
             "sourceLabel": source_label(log.source),
         })
+    # Production, once the shift-table rules judge a date: its punches are the SHIFT day's (the night's closing punch sits
+    # on the day the night began, marked nextDay) and the closing punch is not listed again on the date it was made.
+    _prod_rules, prod_days = _production_shift_days(emp, date_type(year, month, 1), date_type(year, month, days_in_month))
+    for shift_date, resolved in prod_days.items():
+        by_date[str(shift_date)] = _shift_day_punch_dicts(resolved, shift_date)
 
     # Manual attendance records -display only (notes/hours worked)
     prefix = f"{year}-{str(month).zfill(2)}"
@@ -723,7 +888,7 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
             "present":      status in ("present", "half_shift"),
             "firstPunch":   first_in,
             "lastPunch":    last_out,
-            "totalPunches": rec.total_punches if rec else len(punches),
+            "totalPunches": len(punches) if cur_date in prod_days else (rec.total_punches if rec else len(punches)),
             "punches":      punches,
             "leaveType":    leave_dates.get(date_str),
             "hoursWorked":  str(manual.hours_worked) if manual and manual.hours_worked else None,
@@ -1780,6 +1945,11 @@ def attendance_search(request: Request) -> Response:
             }
             for i, log in enumerate(logs)
         ]
+        # Production, once the shift-table rules judge the date: the SHIFT day's punches (a night's closing punch made
+        # the next morning is listed here, marked nextDay, and not again on the date it was made).
+        _prod_rules, prod_days = _production_shift_days(emp, d, d)
+        if d in prod_days:
+            punches = _shift_day_punch_dicts(prod_days[d], d, seconds=True)
         while len(punches) < 4:
             punches.append(None)
 
@@ -1792,7 +1962,7 @@ def attendance_search(request: Request) -> Response:
             "designation": emp.designation.title if emp.designation_id and emp.designation else None,
             "shift": _assigned_shift_json(shift),
             "punches": punches,
-            "totalPunches": len(logs),
+            "totalPunches": len([p for p in punches if p]),
         })
 
     return Response({"date": str(d), "query": query, "count": len(results), "results": results})
@@ -1875,9 +2045,14 @@ def attendance_search_range(request: Request) -> Response:
         )
     }
 
+    # Production, once the shift-table rules judge a date: the SHIFT day's punches (see attendance_search).
+    _prod_rules, prod_days = _production_shift_days(emp, date_from, date_to)
+
     days = []
     for rec in records:
         day_logs = logs_by_date.get(rec.date, [])
+        if rec.date in prod_days:
+            day_logs = [log for _secs, log in prod_days[rec.date]]
         # See attendance_search()'s identical comment above -IN/OUT is
         # derived from time-sorted position, not the raw stored punch_type,
         # so a stale label from the cross-source ordering bug can't surface.
@@ -1889,6 +2064,7 @@ def attendance_search_range(request: Request) -> Response:
                 "type": "IN" if i % 2 == 0 else "OUT",
                 "source": log.source,
                 "sourceLabel": source_label(log.source),
+                **({"nextDay": True} if log.date > rec.date else {}),
             }
             for i, log in enumerate(day_logs)
         ]
@@ -1911,7 +2087,7 @@ def attendance_search_range(request: Request) -> Response:
             "permissionAfternoon": bool(rec.permission_afternoon),
             "isCompensationDay": bool(rec.is_compensation_day),
         "isHalfDayLeave": bool(rec.is_half_day_leave),
-            "totalPunches": rec.total_punches,
+            "totalPunches": len(day_logs) if rec.date in prod_days else rec.total_punches,
             "punches": punches,
             "casualLeave": {"status": cl.status, "reason": cl.reason} if cl else None,
             "leave": {"status": leave.status, "type": leave.type, "reason": leave.reason} if leave else None,
@@ -2176,6 +2352,10 @@ def employee_shift_monthly_stats(request: Request) -> Response:
             "source": log.source,
             "sourceLabel": source_label(log.source),
         })
+    # Production shift days (see attendance_employee_history): the night's closing punch is on the day it belongs to.
+    _prod_rules, prod_days = _production_shift_days(emp, date_type(y, m, 1), date_type(y, m, days_in_month))
+    for shift_date, resolved in prod_days.items():
+        punches_by_date[str(shift_date)] = _shift_day_punch_dicts(resolved, shift_date)
 
     # ── Manual attendance records -display only (notes/hours worked) ───────
     prefix = f"{y}-{str(m).zfill(2)}"
@@ -2240,7 +2420,7 @@ def employee_shift_monthly_stats(request: Request) -> Response:
             "status": status,
             "firstPunch": first_in,
             "lastPunch": last_out,
-            "totalPunches": rec.total_punches if rec else len(punches),
+            "totalPunches": len(punches) if cur in prod_days else (rec.total_punches if rec else len(punches)),
             "source": (punches[0]["source"] if punches else ("manual" if manual else None)),
             "sourceLabel": (rec.primary_source if rec and rec.primary_source else None) or (source_label(punches[0]["source"]) if punches else None),
             "leaveType": leave_date_map.get(date_str),

@@ -169,6 +169,7 @@ from .compensation_views import (
     compensation_summary,
 )
 from .compensation_settings_views import compensation_config, compensation_settings
+from .production_shift_rules_views import production_shift_rules, production_shift_rules_preview
 # Compensation overhaul (claims, announced windows, birthdays, reports, employee apps): see the block of routes below.
 from .compensation_birthday_views import compensation_birthdays
 from .compensation_reports_views import compensation_reports
@@ -593,6 +594,10 @@ urlpatterns = [
 
     # ── Production Shift Workflow ────────────────────────────────────────────
     path("production-shift-config", production_shift_config_view),
+    # Settings -> Production shifts (permission module `settings.attendance`): the shift table, breaks and grace that judge
+    # production days from the effective date on. The preview is a POST that only reads (see READ_ONLY_POST_PATHS).
+    path("production-shift-rules", production_shift_rules),
+    path("production-shift-rules/preview", production_shift_rules_preview),
     path("production-shift-segments", production_shift_segments),
     path("production-shift-segments/<int:pk>", production_shift_segment_detail),
 

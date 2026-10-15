@@ -60,6 +60,7 @@ from .attendance_analysis_common import (
     span_net_seconds,
     subtotals_within_limit,
 )
+from .attendance_core_data import KIND_BIRTHDAY, compensation_kind, is_relaxation_day
 
 MODULES = ("attendance",)
 
@@ -365,6 +366,17 @@ def _worked_seconds(secs: list[int], shift, deduct_lunch: bool):
     return span, ("Span" if n == 2 else "Odd punches")
 
 
+def _paid_basis(rec) -> str | None:
+    """The words for a day the engine pays from the stored shift credit, not from the punches (paid birthday leave, which is
+    a whole paid day, or a day an OT relaxation / redeemed balance topped up by what HR granted), else None. No schedule
+    applies to such a day: nothing was owed, or HR covered what was missing."""
+    if KIND_BIRTHDAY in compensation_kind(rec):
+        return "Birthday leave (paid)"
+    if is_relaxation_day(rec):
+        return "Relaxation (paid)"
+    return None
+
+
 def _hours_run(ctx):
     d_from, d_to = ctx.date_from, ctx.date_to
     view = ctx.params.get("view") or "summary"
@@ -381,6 +393,7 @@ def _hours_run(ctx):
 
     every_day = []
     unknown: dict[int, int] = defaultdict(int)
+    paid_days = 0  # birthday-leave / relaxation days: paid by the engine, not measured against the schedule
     recs = day_records(ctx, d_from, d_to, status__in=("present", "half_shift"), employee__employment_type="staff")
     for rec in recs.order_by("employee_id", "date"):
         emp = people_by_id.get(rec.employee_id)
@@ -391,11 +404,17 @@ def _hours_run(ctx):
             rec, logs.get((emp.id, rec.date), []), logs.get((emp.id, rec.date + timedelta(days=1)), [])
         )
         worked, basis = _worked_seconds(secs, shift, deduct)
-        sched = scheduled_seconds(shift)
+        paid = _paid_basis(rec)
+        sched = None if paid else scheduled_seconds(shift)
         if sched is not None:
             sched = sched * min(1.0, float(rec.shifts_earned or 0) or 1.0)
+        if paid:
+            paid_days += 1
         if worked is None:
-            unknown[emp.id] += 1
+            if paid:
+                basis = paid  # paid without any work: nothing is missing, so it is not an unknown day
+            else:
+                unknown[emp.id] += 1
         short = excess = None
         if worked is not None and sched is not None:
             short, excess = max(0.0, sched - worked), max(0.0, worked - sched)
@@ -504,6 +523,13 @@ def _hours_run(ctx):
         )
     if any(t[2] is None for t in daily):
         notes.append("Days without a shift assignment have no scheduled hours, so no shortfall or excess.")
+    if paid_days:
+        notes.append(
+            f"{paid_days} day(s) are paid birthday leave or relaxation days: a birthday is paid in full, and a relaxation "
+            "tops the day up by what HR granted (an OT relaxation or redeemed balance), so the stored shift credit, not "
+            "the punches, decides what is paid. They have no scheduled hours (no shortfall or excess), and one without "
+            "punches is not counted as unknown."
+        )
     if sub_note:
         notes.append(sub_note)
     notes.extend(coverage_notes(ctx, people_by_id, d_from, d_to))
@@ -838,7 +864,7 @@ def _strength_run(ctx):
         "branch); they are already included in Present / Half day, so it is not added to the strength.",
         "Production employees work Sundays as a normal day, so a Sunday without punches counts as absent for them; staff "
         "Sundays are weekly off.",
-        "Shift credit is the stored shift value (staff 0 / 0.5 / 1; production up to 1.5), so staff and production credits are not "
+        "Shift credit is the stored shift value (staff 0 / 0.5 / 1; production up to 1.5 before the shift-table rules, up to 3.00 by default after), so staff and production credits are not "
         "directly comparable.",
     ]
     if ctx.date_to > ctx.today:

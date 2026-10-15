@@ -8,12 +8,30 @@ from datetime import date, time
 from decimal import Decimal
 from unittest import mock
 
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
+
 from . import tests_compensation_engine as base
-from .models import AuditLog, Branch, CompensationConfig, CompensationRule, HRUser, PayrollSettings, Role
+from .models import (
+    AuditLog,
+    Branch,
+    CompensationConfig,
+    CompensationRule,
+    HRUser,
+    PayrollSettings,
+    Role,
+    ShiftTemplate,
+)
 
 URL = "/api/compensation/settings"
 CONFIG = "/api/compensation/config"
 TODAY = date(2026, 10, 14)
+
+# the last sentence of the Type 2 ladder warning: the check is advice from the shift templates, never a guarantee
+ADVICE = (
+    " This is advice only (the settings are saved): the check reads the active staff shift templates, not each "
+    "employee's own shift times."
+)
 
 
 def login(permissions: dict, branch=None, name="Perm Test") -> dict:
@@ -453,6 +471,294 @@ class WriteTests(SettingsBase):
         log = AuditLog.objects.filter(module="compensation_settings", action="update").first()
         self.assertIsNotNone(log)
         self.assertIn("windows_enabled", log.record_description)
+
+
+class LadderReachWarningTests(SettingsBase):
+    """The Type 2 ladder is keyed on the day's LAST punch, but the attendance engine attaches a punch stamped on the NEXT
+    calendar date to the working day only up to a cut-off (the shift end plus the Forgotten Last-Out Grace, never closer to
+    tomorrow's shift start than the pre-shift buffer); every punch on the shift's own date counts. A ladder row that starts
+    at or beyond that cut-off can never be earned, and the save says so (advice: it still saves).
+
+    Fixture: shift 08:30-17:30, grace 9 h, buffer 2 h -> a Monday exit counts up to 02:30 on Tuesday (1590 minutes after
+    Monday's midnight), so the default ladder (its last row starts at 02:00) is fine.
+    """
+
+    CODE = "LR1"
+
+    def setUp(self):
+        super().setUp()
+        ps = PayrollSettings.get()
+        self.assertEqual(
+            (ps.last_punch_post_shift_grace_hours, ps.first_punch_pre_shift_buffer_hours),
+            (Decimal("9.0"), Decimal("2.0")),
+        )
+
+    def engine(self, grace=None, buffer=None):
+        ps = PayrollSettings.get()
+        if grace is not None:
+            ps.last_punch_post_shift_grace_hours = Decimal(str(grace))
+        if buffer is not None:
+            ps.first_punch_pre_shift_buffer_hours = Decimal(str(buffer))
+        ps.save()
+
+    @staticmethod
+    def ladder(*untils):
+        """A ladder payload: one row per limit named ("Row 1" ...) and a last row, "Later", with no limit."""
+        steps = [0.25, 0.5, 0.75, 1]
+        rows = [
+            {"label": f"Row {i}", "untilMinutes": until, "shifts": steps[min(i - 1, 3)]}
+            for i, until in enumerate(untils, start=1)
+        ]
+        return rows + [{"label": "Later", "untilMinutes": None, "shifts": 1}]
+
+    def save_type2(self, *untils, **shift):
+        """Switch Type 2 on (with this ladder when limits are named, else the table as it is) and return the warnings."""
+        body = {"shift": {"enabled": True, **shift}}
+        if untils:
+            body["shiftRules"] = self.ladder(*untils)
+        r = self.put(body)
+        self.assertEqual(r.status_code, 200, r.content)
+        return r.json()["warnings"]
+
+    def test_the_default_ladder_on_the_default_shift_has_nothing_to_warn_about(self):
+        self.assertEqual(self.save_type2(), [])
+        self.assertNotIn("warnings", self.body())  # the GET body keeps its exact shape
+
+    def test_the_engine_counts_up_to_the_time_the_warning_quotes(self):
+        def extra(next_date_punch):
+            self.punch(base.MON, time(8, 30), time(13, 0), time(14, 0), next_date_times=[next_date_punch])
+            return self.rec(base.MON).ot_extra_minutes
+
+        # 17:30 + 9 h = 02:30: that exit is still Monday's (25 h 30 - 17:30), one minute later it is Tuesday's first punch
+        self.assertEqual((extra(time(2, 30)), extra(time(2, 31))), (540, 0))
+        # 17:30 + 6 h = 23:30 never reaches Tuesday: nothing stamped Tuesday is Monday's, everything stamped Monday is
+        self.engine(grace=6)
+        self.worked(base.MON, time(23, 45))
+        self.assertEqual(self.rec(base.MON).ot_extra_minutes, 375)
+        self.assertEqual(extra(time(0, 30)), 0)
+        # tomorrow's 08:30 start less an 8 h buffer = 00:30 caps the 9 h grace
+        self.engine(grace=9, buffer=8)
+        self.assertEqual((extra(time(0, 30)), extra(time(0, 31))), (420, 0))
+
+    def test_a_row_that_starts_after_the_latest_counted_punch_warns_and_the_save_still_happens(self):
+        r = self.put({"shift": {"enabled": True}, "shiftRules": self.ladder(1260, 1440, 1620)})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(
+            r.json()["warnings"],
+            [
+                "The 'Later' shift row can only be earned by a punch at 3:00 AM (next day) or later, but the latest punch the "
+                "system counts for the 5:30 PM shift is 2:30 AM (next day): a later punch counts as the next "
+                "morning's first punch (the cut-off comes from Forgotten Last-Out Grace in Settings > Attendance), so "
+                "this row cannot be earned." + ADVICE
+            ],
+        )
+        self.assertTrue(CompensationConfig.get().shift_enabled)
+        self.assertEqual([x["untilMinutes"] for x in r.json()["shiftRules"]], [1260, 1440, 1620, None])
+
+    def test_the_boundary_is_the_minute_the_engine_stops_counting(self):
+        self.assertEqual(
+            self.save_type2(1260, 1440, 1589), []
+        )  # the last row begins at 02:29: a punch at 02:29 earns it
+        # the row starts at 02:30, the last moment the engine counts (a punch AT the cut-off still counts): it is not
+        # called unearnable, it is said to need a punch at exactly that time
+        (warning,) = self.save_type2(1260, 1440, 1590)
+        self.assertIn("so only a punch at exactly 2:30 AM (next day) can earn this row.", warning)
+        self.assertNotIn("cannot be earned", warning)
+        self.assertNotIn("never", warning)
+        (warning,) = self.save_type2(1260, 1440, 1591)
+        self.assertIn("can only be earned by a punch at 2:31 AM (next day) or later", warning)
+        self.assertIn("so this row cannot be earned.", warning)
+        self.assertNotIn("exactly", warning)
+
+    def test_the_boundary_row_with_rows_after_it_says_those_cannot_be_earned(self):
+        # Row 3 (from 02:30, until 04:20) is the boundary row; "Later" after it starts even later
+        (warning,) = self.save_type2(1260, 1590, 1700)
+        self.assertIn("The 'Row 3' shift row can only be earned by a punch at 2:30 AM (next day) or later", warning)
+        self.assertIn(
+            "so only a punch at exactly 2:30 AM (next day) can earn this row, and the rows after it cannot be earned.",
+            warning,
+        )
+
+    def test_a_grace_that_ends_before_midnight_leaves_only_the_shifts_own_day(self):
+        self.engine(grace=6)  # 17:30 + 6 h = 23:30: no Tuesday punch is Monday's, every Monday punch (to 23:59) is
+        self.assertEqual(
+            self.save_type2(),
+            [
+                "The '12:00 AM up to 2:00 AM' shift row can only be earned by a punch at 12:00 AM (next day) or later, but "
+                "the latest punch the system counts for the 5:30 PM shift is 11:59 PM: a later punch counts as the "
+                "next morning's first punch (the cut-off comes from Forgotten Last-Out Grace in Settings > "
+                "Attendance), so this row and the rows after it cannot be earned." + ADVICE
+            ],
+        )
+
+    def test_a_grace_of_zero_switches_the_reattribution_off_so_nothing_after_midnight_counts(self):
+        self.engine(grace=0)
+        warnings = self.save_type2()
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("'12:00 AM up to 2:00 AM'", warnings[0])
+        self.assertIn("is 11:59 PM", warnings[0])
+        self.assertIn("Forgotten Last-Out Grace", warnings[0])
+        self.assertNotIn("Early-Arrival", warnings[0])
+
+    def test_the_buffer_before_tomorrows_shift_start_shortens_the_reach(self):
+        self.engine(buffer=8)  # 08:30 less 8 h = 00:30 (1470) instead of 02:30: the default 2:00 AM row is out of reach
+        warnings = self.save_type2()
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("'2:00 AM and later'", warnings[0])
+        self.assertIn("is 12:30 AM (next day)", warnings[0])
+        self.assertIn("so this row cannot be earned", warnings[0])  # the last row: nothing after it
+        # the buffer cap is what binds here: raising the grace changes nothing, so the grace must not be blamed
+        self.assertIn(
+            "(the cut-off comes from Next-Day Early-Arrival Protection in Settings > Attendance, which reserves the "
+            "hours before tomorrow's shift start for tomorrow's own first punch)",
+            warnings[0],
+        )
+        self.assertNotIn("Forgotten Last-Out Grace", warnings[0])
+
+    def test_when_the_grace_and_the_buffer_cap_agree_both_settings_are_named(self):
+        # 17:30 + 9 h and 08:30 - 6 h are both 02:30 tomorrow: neither setting alone moves the cut-off
+        self.engine(grace=9, buffer=6)
+        (warning,) = self.save_type2(1260, 1440, 1590)
+        self.assertIn("is 2:30 AM (next day)", warning)
+        self.assertIn(
+            "comes from both Forgotten Last-Out Grace and Next-Day Early-Arrival Protection in Settings", warning
+        )
+        # a grace that ends before midnight AND a buffer cap that does too: nothing after midnight counts, both bind
+        self.engine(grace=6, buffer=18)
+        (warning,) = self.save_type2()
+        self.assertIn("is 11:59 PM", warning)
+        self.assertIn(
+            "comes from both Forgotten Last-Out Grace and Next-Day Early-Arrival Protection in Settings", warning
+        )
+
+    def test_the_binding_limit_is_the_one_the_engine_applies_for_each_reach(self):
+        # a long grace is shortened by the buffer cap (grace 9 h would reach 02:30, the cap stops at 00:30)
+        self.engine(grace=9, buffer=8)
+        self.assertIn(
+            "comes from Next-Day Early-Arrival Protection in Settings > Attendance, which", self.save_type2()[0]
+        )
+        # and a short grace is the limit when the cap is further away than the grace
+        self.engine(grace=9, buffer=2)
+        self.assertEqual(self.save_type2(), [])
+        self.engine(grace=6, buffer=2)
+        (warning,) = self.save_type2()
+        self.assertIn("comes from Forgotten Last-Out Grace in Settings", warning)
+
+    def test_the_warning_says_it_is_advice_from_the_shift_templates(self):
+        warnings = self.save_type2(1260, 1440, 1620)
+        self.assertTrue(warnings[0].endswith(ADVICE), warnings[0])
+        self.assertIn("active staff shift templates", warnings[0])
+        self.assertIn("not each employee's own shift times", warnings[0])
+
+    def test_only_enabled_rows_are_the_ladder(self):
+        rows = [
+            {"label": "A", "untilMinutes": 1260, "shifts": 0.25},
+            {"label": "B", "untilMinutes": 1440, "shifts": 0.5},
+            {"label": "C", "untilMinutes": 1620, "shifts": 0.75, "enabled": False},
+            {"label": "D", "untilMinutes": None, "shifts": 1},
+        ]
+        r = self.put({"shift": {"enabled": True}, "shiftRules": rows})
+        self.assertEqual(r.json()["warnings"], [])  # with C off, D begins at 12:00 AM: reachable
+        rows[2]["enabled"] = True
+        warnings = self.put({"shiftRules": rows}).json()["warnings"]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("The 'D' shift row", warnings[0])
+
+    def test_a_later_ending_shift_can_earn_a_row_the_first_shift_cannot(self):
+        base.make_shift(name="Late", start_time=time(11, 0), end_time=time(20, 0))  # 20:00 + 9 h = 05:00
+        self.assertEqual(self.save_type2(1260, 1440, 1620), [])
+        warnings = self.save_type2(1260, 1440, 1800)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("'Later' shift row can only be earned by a punch at 6:00 AM (next day) or later", warnings[0])
+        self.assertIn("any staff shift (the furthest is the 8:00 PM shift) is 5:00 AM (next day)", warnings[0])
+
+    def test_a_threshold_so_high_that_even_the_first_row_is_out_of_reach(self):
+        warnings = self.save_type2(minExtraMinutes=1000)  # more than 16 h 40 past 17:30: after 10:10 AM tomorrow
+        self.assertEqual(
+            warnings,
+            [
+                "Type 2 only starts at 10:11 AM (next day), because it needs more than 16 hours 40 minutes of extra "
+                "work after the shift end, so the 'Up to 9:00 PM' shift row (up to 9:00 PM) is never reached. The "
+                "latest punch the system counts for the 5:30 PM shift is 2:30 AM (next day): a later punch counts as "
+                "the next morning's first punch (the cut-off comes from Forgotten Last-Out Grace in Settings > "
+                "Attendance), so this row and the rows after it cannot be earned." + ADVICE
+            ],
+        )
+        # a row never "begins" after its own limit
+        self.assertNotIn("begins", warnings[0])
+        self.assertNotIn("can only be earned by a punch at", warnings[0])
+
+    def test_a_threshold_that_starts_type_2_exactly_at_the_last_counted_minute(self):
+        # 17:30 + 539 minutes + 1 = 02:30 tomorrow: the cut-off itself, so only a punch at exactly that time can earn it
+        (warning,) = self.save_type2(minExtraMinutes=539)
+        self.assertIn(
+            "Type 2 only starts at 2:30 AM (next day), because it needs more than 8 hours 59 minutes", warning
+        )
+        self.assertIn("so only a punch at exactly 2:30 AM (next day) can earn Type 2 on it.", warning)
+        self.assertNotIn("cannot be earned", warning)
+        self.assertEqual(self.save_type2(minExtraMinutes=538), [])  # one minute earlier: a punch at 02:29 earns the row
+
+    def test_a_threshold_that_lands_inside_a_row_beyond_the_reach_names_where_the_row_can_be_earned(self):
+        # the first row runs up to 09:20 tomorrow, but 17:30 + 600 minutes + 1 puts the first earnable minute at 03:31
+        (warning,) = self.save_type2(2000, minExtraMinutes=600)
+        self.assertIn("The 'Row 1' shift row can only be earned by a punch at 3:31 AM (next day) or later", warning)
+        self.assertIn("so this row and the rows after it cannot be earned.", warning)
+        self.assertNotIn("never reached", warning)
+        self.assertNotIn("begins", warning)
+
+    def test_production_and_inactive_shifts_are_not_staff_shifts_in_use(self):
+        base.make_shift(name="Prod", shift_type="production", start_time=time(8, 30), end_time=time(23, 0))
+        base.make_shift(name="Old", start_time=time(10, 0), end_time=time(22, 0), is_active=False)
+        warnings = self.save_type2(1260, 1440, 1620)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("for the 5:30 PM shift is 2:30 AM", warnings[0])
+
+    def test_no_staff_shift_at_all_means_nothing_to_compare_with(self):
+        ShiftTemplate.objects.all().delete()
+        self.assertEqual(self.save_type2(1260, 1440, 1620), [])
+        # a lone overnight template is no help either: the engine attaches no next-date punch to it
+        base.make_shift(name="Night", start_time=time(21, 0), end_time=time(6, 0))
+        self.assertEqual(self.save_type2(1260, 1440, 1620), [])
+
+    def test_nothing_is_said_while_shift_compensation_is_off(self):
+        r = self.put({"shiftRules": self.ladder(1260, 1440, 1620)})
+        self.assertEqual((r.status_code, r.json()["warnings"]), (200, []))
+        self.assertFalse(CompensationConfig.get().shift_enabled)
+        # switching it on judges the table as saved, although this save does not send it
+        warnings = self.put({"shift": {"enabled": True}}).json()["warnings"]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("The 'Later' shift row", warnings[0])
+        self.assertEqual(self.put({"shift": {"enabled": False}}).json()["warnings"], [])
+
+    def test_it_sits_beside_the_other_warnings_without_replacing_them(self):
+        self.engine(grace=6)
+        r = self.put({"allowance": {"enabled": True}, "shift": {"enabled": True, "minExtraMinutes": 120}})
+        warnings = r.json()["warnings"]
+        self.assertEqual(len(warnings), 2)
+        self.assertIn("allowance can never apply", warnings[0])
+        self.assertIn("shift row can only be earned by a punch at", warnings[1])
+
+    def test_the_check_costs_the_same_however_many_shifts_and_rules_there_are(self):
+        self.save_type2(1260, 1440, 1620)
+
+        def cost():
+            with CaptureQueriesContext(connection) as ctx:
+                self.assertEqual(self.put({"holidayWork": {"enabled": True}}).status_code, 200)
+            return len(ctx), sum('"shift_templates"' in q["sql"] for q in ctx.captured_queries)
+
+        self.put({"holidayWork": {"enabled": True}})  # a first save of a change costs a little more than a repeat
+        one_shift = cost()
+        for n in range(6):
+            base.make_shift(name=f"Extra {n}", start_time=time(7 + n, 0), end_time=time(16 + n, 0))
+        self.assertEqual(cost(), one_shift)
+        self.assertEqual(one_shift[1], 1)  # one query for every shift
+        self.save_type2(*range(1000, 1700, 100))  # a ladder of eight rows instead of four
+        self.assertEqual(cost(), one_shift)
+        # and none at all while Type 2 is off
+        self.put({"shift": {"enabled": False}})
+        with CaptureQueriesContext(connection) as ctx:
+            self.put({"holidayWork": {"enabled": False}})
+        self.assertFalse(any('"shift_templates"' in q["sql"] for q in ctx.captured_queries))
 
 
 class PermissionTests(SettingsBase):

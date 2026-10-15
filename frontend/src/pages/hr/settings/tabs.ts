@@ -15,6 +15,7 @@ import {
   Mail,
   MessageCircle,
   Palette,
+  Timer,
 } from "lucide-react";
 import type { SettingsTabDef } from "./kit/catalog";
 
@@ -68,12 +69,26 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
     group: "time",
     icon: Clock,
     purpose:
-      "How a staff day's punches become Full Day, Half Day or Absent, and when a staff member is marked Late or Early Out. Production attendance is set with the production shift in Manage Shift.",
+      "How a staff day's punches become Full Day, Half Day or Absent, and when a staff member is marked Late or Early Out. Production attendance has its own tab, Production Shifts.",
     usedBy: [
       { label: "Staff Attendance", to: "/hr/attendance/staff" },
       { label: "Report Log", to: "/hr/attendance/report-log" },
       { label: "Staff Payroll", to: "/hr/payroll" },
       { label: "Employee apps" },
+    ],
+  },
+  {
+    id: "production_shifts",
+    label: "Production Shifts",
+    group: "time",
+    icon: Timer,
+    purpose:
+      "Production only: how a production worker's punches become shifts earned. The factory's own timings (Day from 8:30 AM, Night from 9:00 PM, Sunday), what each leaving time earns, the unpaid breaks and a 5-minute grace, all editable. Shifts earned times the salary per shift is the pay. Staff are never affected.",
+    usedBy: [
+      { label: "Production Attendance", to: "/hr/attendance/production" },
+      { label: "Production Payroll", to: "/hr/production-payroll" },
+      { label: "Manage Shifts", to: "/hr/shifts" },
+      { label: "HR Reports", to: "/hr/reports" },
     ],
   },
   {
@@ -137,7 +152,7 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
     group: "pay",
     icon: Factory,
     purpose:
-      "How often production workers are paid (the pay period) and what late arrivals cost them. Shifts earned come from Manage Shifts; PF and ESI from the Payroll tab.",
+      "How often production workers are paid (the pay period) and what late arrivals cost them. Shifts earned come from the Production Shifts tab; PF and ESI from the Payroll tab.",
     usedBy: [
       { label: "Production Payroll", to: "/hr/production-payroll" },
       { label: "Manage Shifts", to: "/hr/shifts" },
@@ -210,6 +225,7 @@ const loaders: Record<string, () => Promise<{ default: SettingsTabComponent }>> 
   hr_contact: () => import("./HrContactTab"),
   themes: () => import("./ThemesTab"),
   attendance: () => import("./AttendanceTab"),
+  production_shifts: () => import("./ProductionShiftsTab"),
   late_detection: () => import("./LateDetectionTab"),
   compensation: () => import("./CompensationTab"),
   devices: () => import("./DevicesTab"),

@@ -27,7 +27,7 @@ from rest_framework.response import Response
 from .auth import require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
 from .clock import ist_today
-from .models import Employee, Payroll
+from .models import Employee, Payroll, ProductionShiftConfig
 from .payroll_views import (
     PayrollSkip,
     _DryRunAbort,
@@ -425,10 +425,11 @@ def production_skip_check(request: Request) -> Response:
     employees, outside = _select(request, cycle, ids)
     to_run, already, skipped = _plan(employees, start, end, regenerate)
     skipped = outside + skipped
+    prod_config = ProductionShiftConfig.get()  # one config object for the whole loop: the shift rules load once
     for emp in to_run:
         try:
             with transaction.atomic():
-                _generate_production_payroll(emp, start, end, pay_cycle=cycle)
+                _generate_production_payroll(emp, start, end, pay_cycle=cycle, prod_config=prod_config)
                 raise _DryRunAbort()
         except _DryRunAbort:
             continue
@@ -485,11 +486,12 @@ def production_generate_payroll(request: Request) -> Response:
 
     generated, skipped = [], list(outside) + blocked
     payroll_progress.start(len(to_run))
+    prod_config = ProductionShiftConfig.get()  # one config object for the whole loop: the shift rules load once
     for emp in to_run:
         emp_name = _name(emp)
         before = len(generated)
         try:
-            result = _generate_production_payroll(emp, start, end, pay_cycle=cycle)
+            result = _generate_production_payroll(emp, start, end, pay_cycle=cycle, prod_config=prod_config)
             generated.append(_payroll_json(result["payroll"], emp_name))
         except PayrollSkip as exc:
             skipped.append(

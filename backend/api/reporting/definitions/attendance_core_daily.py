@@ -197,7 +197,8 @@ def _run_daily(ctx) -> ReportResult:
     notes = [
         "Status is the attendance engine's stored verdict for the day (the record payroll reads). Present = both "
         "halves attended; Half Day = one half; heads present (strength) = Present + Half Day. Casual-leave and "
-        "compensation-off days are paid presents. Production half-day means 0.75 shift or less.",
+        "compensation-off days are paid presents. A production half-day is a day under the full-day shift value (1.00 "
+        "by default) from the date the shift-table rules start, 0.75 shift or less before it.",
         f"Present or half-day heads: {split['staff']} staff, {split['production']} production.",
         "Late / early-out minutes and worked hours are derived from the raw punches and the assigned shift "
         "(see the Time Card notes); Informed is HR's note on absent / on-leave days.",

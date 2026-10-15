@@ -208,6 +208,33 @@ class RaiseClaimTests(HolidayWorkBase):
         self.assertIn("HW1", log.record_description)
         self.assertEqual(log.new_values["reason"], "Dispatch rush")
 
+    def test_a_head_is_not_told_about_their_own_claim(self):
+        r = self.post({"employeeId": self.boss.id, "workDate": "2026-10-11", "shifts": 1, "reason": "x"})
+        self.assertEqual(r.status_code, 201, r.content)
+        # HR still hears that nobody can decide it
+        self.assertIn("never decides their own claim", r.json()["warnings"][0])
+        # the head cannot decide it (PATCH is a 403): a "waiting for your approval" notice would open an empty list
+        self.assertFalse(Notification.objects.filter(employee=self.boss).exists())
+        self.assertFalse(Notification.objects.filter(type="holiday_work").exists())  # and nobody is told in their place
+        # an ordinary claim still reaches the head
+        self.raise_claim(self.asha)
+        self.assertEqual(Notification.objects.filter(employee=self.boss, type="holiday_work").count(), 1)
+
+    def test_a_head_under_another_head_has_that_other_head_told(self):
+        other = _employee("HWO", self.u2, self.sewing)
+        other_manager = DepartmentManager.objects.create(employee=other)
+        ManagerEmployeeAssignment.objects.create(manager=other_manager, employee=self.boss)
+        self.raise_claim(self.boss)
+        (note,) = Notification.objects.filter(type="holiday_work")
+        self.assertEqual(note.employee_id, other.id)
+        self.assertIn("HWB Hw's holiday-work compensation claim", note.message)
+
+    def test_a_head_without_the_compensation_switch_is_not_told(self):
+        self.manager.can_approve_compensation = False
+        self.manager.save()
+        self.raise_claim(self.asha)
+        self.assertFalse(Notification.objects.filter(type="holiday_work").exists())
+
     def test_a_declared_holiday_counts_like_a_sunday(self):
         r = self.post({"employeeId": self.asha.id, "workDate": "2026-10-02", "shifts": 1, "reason": "Festival shift"})
         self.assertEqual(r.status_code, 201, r.content)

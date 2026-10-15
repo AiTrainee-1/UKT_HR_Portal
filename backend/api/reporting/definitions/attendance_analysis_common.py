@@ -9,7 +9,9 @@ Rules every report built on it follows (see reporting/README.md):
   Days nobody has opened yet have no row; ``coverage_notes`` tells the reader how many.
 * Minutes are not stored anywhere (only booleans), so lateness / earliness is re-derived from the
   stored first / last punch and the shift in force that day, with the engine's own rules (minute
-  granularity for arrivals, permission shift of 60 minutes, grace).
+  granularity for arrivals, permission shift of 60 minutes, grace). The day's compensation marker is honoured:
+  a next-day OT allowance moves the start later (``morning_lateness(start_shift_minutes=...)``), and a day a
+  company-announced late-in / early-out time decided is not measured (see attendance_core_data).
 * Settings are read once per run from the universal ``PayrollSettings`` row (the one payroll uses).
 """
 
@@ -420,6 +422,7 @@ def morning_lateness(
     grace_minutes: int,
     permission_applied: bool,
     exact_seconds: bool = False,
+    start_shift_minutes: int = 0,
 ):
     """(effective start seconds, deadline seconds, minutes past effective start, minutes past deadline) or
     None when it cannot be worked out or the punch is not actually late under this start time (the shift
@@ -427,12 +430,14 @@ def morning_lateness(
 
     Staff rule, same as ``shift_engine.morning_late_in``: the arrival is compared at minute granularity to
     start + grace, and an in-cap Morning Late-In permission moves the start by 60 minutes.
+    ``start_shift_minutes`` is a Type 1 next-day allowance the arrival used: the engine moved the start later by those
+    minutes (its grace still applies on top), so the day is measured from the moved start.
     ``exact_seconds=True`` is the production rule (``attendance_final._compute_production`` compares the
     punch to the second and never applies permissions); minutes are then rounded up so a day the engine
     flagged never shows "0 minutes past the deadline"."""
     if first_punch is None or start is None:
         return None
-    eff = _t2s(start) + (PERMISSION_SHIFT_SECONDS if permission_applied else 0)
+    eff = _t2s(start) + (PERMISSION_SHIFT_SECONDS if permission_applied else 0) + 60 * (start_shift_minutes or 0)
     deadline = eff + (grace_minutes or 0) * 60
     fp = _t2s(first_punch) if exact_seconds else _t2s_minute(first_punch)
     if fp <= deadline:

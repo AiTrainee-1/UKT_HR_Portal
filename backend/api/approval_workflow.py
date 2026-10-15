@@ -106,6 +106,13 @@ class WorkflowDef:
         "New requests cannot be submitted while it is off; requests already waiting can still be decided."
     )
 
+    @property
+    def hod_only(self) -> bool:
+        """A fixed pipeline whose only possible approver is the Department Head (HR raises the request, the head always
+        decides it). A head never decides their own request, so nobody at all can decide such a request when the person
+        it is about IS the head."""
+        return not self.editable and self.allowed_roles == (HOD,)
+
 
 DEFINITIONS: tuple[WorkflowDef, ...] = (
     WorkflowDef(
@@ -803,14 +810,18 @@ def resync_pending(key: str) -> int:
 def notify_hod_of_request(key: str, emp, what: str) -> None:
     """Tell the employee's ONE Department Head (if they may act on this kind of request) that a request has reached
     their step. Used when a decision passes a request to the Department Head, and at submission when the pipeline
-    starts with the Department Head alone."""
+    starts with the Department Head alone.
+
+    A request that only a Department Head can decide (`WorkflowDef.hod_only`, e.g. a holiday-work claim) is never announced
+    to the head it is about: they cannot decide it, so the notification would send them to an empty approvals list. The
+    other kinds keep telling whoever the employee's Department Head is, exactly as before."""
     defn = definition(key)
     if not defn.hod_flag:
         return
     from .hod_scope import managers_to_notify
 
     notification = apps.get_model("api", "Notification")
-    for m in managers_to_notify(emp, defn.hod_flag):
+    for m in managers_to_notify(emp, defn.hod_flag, exclude_self=defn.hod_only):
         notification.objects.create(
             employee=m.employee,
             type=key,

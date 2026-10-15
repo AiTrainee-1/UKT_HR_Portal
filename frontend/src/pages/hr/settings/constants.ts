@@ -17,6 +17,8 @@ export const SETTINGS_TAB_MODULE: Record<string, string> = {
   company: "settings.company",
   hr_contact: "settings.hr_contact",
   attendance: "settings.attendance",
+  // the production shift rules are edited with the same permission as the rest of Attendance (their API checks it too)
+  production_shifts: "settings.attendance",
   late_detection: "settings.late_detection",
   compensation: "settings.compensation",
   devices: "settings.devices",

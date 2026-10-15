@@ -30,6 +30,7 @@ from typing import Any, Callable, Iterable
 
 from django.db.models import Count, Min, Q
 
+from ... import production_shift_rules as psr
 from ...clock import ist_now, ist_today
 from ...models import (
     AttendanceDayRecord,
@@ -350,6 +351,15 @@ class Frame:
                         continue
                     emp = self.people[eid]
                     if emp.employment_type == "production":
+                        # From the date the shift-table rules take over, the verdict (and the minutes) are the rules':
+                        # the group the first punch falls in, its start and the rules' grace. A day not measurable
+                        # under them (the table changed since the day was computed) gets no entry, never a guess.
+                        ruleset = psr.rules_for_day(pcfg, d)
+                        judged = psr.judge_day(ruleset, d, first_punch, None) if ruleset and first_punch else None
+                        if judged is not None and judged.group is not None:
+                            if judged.is_late:
+                                out[(eid, d)] = judged.late_minutes
+                            continue
                         start, grace, exact = pcfg.punch1_time, pcfg.grace_minutes or 10, True
                     else:
                         if "window_late_in" in (comp_kind or ""):
@@ -704,7 +714,7 @@ def _prov_half_days(rows: int | None) -> dict:
         dataset=_DAY_RECORDS,
         definition=(
             "Days a person earned only half a day: a punch in one half only (often a single punch), a very late "
-            "arrival, an early exit or half-day leave. For production, a day worth at most half of the full shift credit."
+            "arrival, an early exit or half-day leave. For production, a day worth less than the full-day value in Settings → Production shifts (earlier days: at most half of the full shift credit)."
         ),
         formula="count of half-day verdicts",
         rows=rows,

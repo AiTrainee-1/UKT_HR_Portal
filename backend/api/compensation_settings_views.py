@@ -27,7 +27,8 @@ PUT takes the same body without masterEnabled / updatedBy / updatedAt. Every top
 group is left alone); inside a group only the keys sent change. The two rule arrays REPLACE the whole set: an item
 with an `id` updates that rule, an item without one is created, and the rules whose id is missing from the array are
 deleted. The order of the array is the order of the table (sortOrder is re-numbered from it). The PUT is all-or-nothing:
-any problem is a 400 {"error": "<one plain sentence>"} and nothing is saved. The answer is the new body plus `warnings`.
+any problem is a 400 {"error": "<one plain sentence>"} and nothing is saved. The answer is the new body plus `warnings`
+(advice, never a refusal: a save that carries warnings has still been saved). The GET body has no `warnings`.
 
 Rules of the PUT (each a plain-sentence 400 when broken):
   * allowance minutes 0..240, `minExtraMinutes` >= 1 and not repeated among the enabled allowance rules;
@@ -39,10 +40,19 @@ Rules of the PUT (each a plain-sentence 400 when broken):
   * `effectiveFrom` (a date or null) for allowance and birthday. SWITCHING A FEATURE ON (off -> on) with no date named
     sets it to TODAY (IST) - it never reaches back into days already judged. Naming an earlier date is allowed (the owner
     decides; the screen warns) and is the only way to get one.
+
+`warnings` (strings; the save has happened): an allowance row that can never apply, a feature switched off or on again that
+changes days already judged, and - only while shift-based compensation is on - ONE entry when a Type 2 ladder row cannot be
+earned because the attendance engine does not attach the punch it waits for to that working day (see
+_unearnable_shift_row_warning). That entry names the Settings -> Attendance setting that really holds the engine's cut-off
+(Forgotten Last-Out Grace, Next-Day Early-Arrival Protection, or both) and is ADVICE ONLY: it reads the active staff shift
+templates, not each employee's own times, so the absence of this warning is not a guarantee that every row is reachable.
 """
 
 import math
+from dataclasses import dataclass
 from datetime import date as date_type
+from types import SimpleNamespace
 
 from django.db import transaction
 from rest_framework.decorators import api_view
@@ -54,7 +64,8 @@ from .audit_utils import log_action
 from .auth import get_hr_display_name, require_hr
 from .branch_scope import get_branch_scope
 from .clock import FACTORY_TZ, ist_today
-from .models import CompensationConfig, CompensationRule, PayrollSettings
+from .models import CompensationConfig, CompensationRule, PayrollSettings, ShiftTemplate
+from .shift_engine import _cross_midnight_claim_cutoff
 
 COMPANY_WIDE_MESSAGE = (
     "Compensation rules apply to the whole company, so a branch login can read them but not change them. "
@@ -326,6 +337,174 @@ def _apply_dated_feature(
         setattr(config, from_attr, None)
 
 
+# The two Settings -> Attendance settings that fix the cut-off, named as the Attendance tab labels them
+# (frontend/src/pages/hr/settings/attendance/MidnightSection.tsx).
+GRACE_SETTING = "Forgotten Last-Out Grace"
+BUFFER_SETTING = "Next-Day Early-Arrival Protection"
+
+# A grace this long never limits anything: asking the engine for a cut-off with it leaves the buffer cap alone.
+_UNLIMITED_GRACE_HOURS = 10_000
+
+
+@dataclass(frozen=True)
+class _ShiftReach:
+    """How far after midnight a punch still counts for ONE staff shift, in minutes after the OT day's midnight."""
+
+    first_not_counted: int  # the first minute NOT counted: a row that starts here or later cannot be earned
+    latest: int  # the latest minute counted (one before first_not_counted when no next-date punch is, else equal to it)
+    end_minutes: int  # the shift end
+    timed: bool  # a real cut-off after midnight (a punch at exactly `latest` still counts), not the midnight wall
+    limits: tuple[str, ...]  # the settings holding the cut-off where it is: GRACE_SETTING, BUFFER_SETTING or both
+
+
+def _cutoff_rank(cutoff: int | None) -> int:
+    """None (no next-date punch is counted at all) is lower than every real cut-off."""
+    return -1 if cutoff is None else cutoff
+
+
+def _limiting_settings(shift, engine_settings, cutoff: int | None) -> tuple[str, ...]:
+    """Which of the two Settings -> Attendance limits holds the cut-off of this shift where it is. Each limit is asked of
+    the engine's own function on its own (the grace with no next shift to cap it, the buffer cap with a grace that never
+    ends); the one whose answer equals the real cut-off binds, and both do when they agree."""
+    grace_alone = _cross_midnight_claim_cutoff(shift, None, engine_settings)
+    cap_alone = _cross_midnight_claim_cutoff(
+        shift,
+        shift,
+        SimpleNamespace(
+            last_punch_post_shift_grace_hours=_UNLIMITED_GRACE_HOURS,
+            first_punch_pre_shift_buffer_hours=engine_settings.first_punch_pre_shift_buffer_hours,
+        ),
+    )
+    actual = _cutoff_rank(cutoff)
+    limits = tuple(
+        name
+        for name, alone in ((GRACE_SETTING, grace_alone), (BUFFER_SETTING, cap_alone))
+        if _cutoff_rank(alone) == actual
+    )
+    return limits or (GRACE_SETTING, BUFFER_SETTING)
+
+
+def _unearnable_shift_row_warning(config) -> str | None:
+    """ONE warning (a few sentences in one string) when a row of the Type 2 ladder cannot be earned because the punch it
+    waits for is not one the attendance engine attaches to the OT day, else None. The ladder is keyed on the day's LAST
+    punch, in minutes after that day's midnight; the engine counts every punch stamped on the shift's own calendar date,
+    but a punch stamped on the NEXT date only up to a cut-off (shift_engine._cross_midnight_claim_cutoff: the shift end
+    plus Settings -> Attendance -> Forgotten Last-Out Grace, never closer to tomorrow's shift start than Next-Day
+    Early-Arrival Protection). Anything later is tomorrow's first punch. The cut-off, and which of the two settings holds
+    it where it is, are asked of that very function, so this can never drift from the engine; the warning names the
+    setting that really binds (or both).
+
+    A row is unearnable for a shift when the first minute it can be earned in (the previous enabled row's limit, and never
+    before the extra work passes the Type 2 threshold) is not counted for it; the ladder is company-wide, so a row is only
+    reported when that holds for EVERY active staff shift. The first such row is named (the rows after it are unearnable
+    too). A row whose own limit lies before the first minute the threshold lets Type 2 start is said to be never reached,
+    not to "begin" after it ends. A row that starts exactly at the last counted minute is said to be earned only by a
+    punch at exactly that time (the engine counts a punch up to and including the cut-off second).
+
+    ADVICE ONLY, and no warning is not a guarantee: the active staff shift TEMPLATES are what is read (one query for any
+    number of shifts, none = no warning). A per-employee custom start / end on an assignment is not; rotating shifts are
+    not; an inactive template is ignored although employees may still be assigned to it (the engine does not look at
+    is_active) and an active template nobody uses can silence the warning; the engine's own condition that the day has no
+    punch at or after its shift end is not modelled; and an overnight template (it ends at or before it starts) is
+    skipped, because the engine attaches no next-date punch to it at all. The warning says so in its last sentence."""
+    shifts = list(
+        ShiftTemplate.objects.filter(shift_type=ShiftTemplate.SHIFT_TYPE_STAFF, is_active=True)
+        .values_list("start_time", "end_time")
+        .distinct()
+    )
+    reaches: list[_ShiftReach] = []
+    engine_settings = None
+    for start, end in shifts:
+        if start is None or end is None or end <= start:
+            continue
+        if engine_settings is None:
+            engine_settings = PayrollSettings.get()
+        shift = SimpleNamespace(start_time=start, end_time=end)
+        cutoff = _cross_midnight_claim_cutoff(shift, shift, engine_settings)  # None: no next-date punch is counted
+        limits = _limiting_settings(shift, engine_settings, cutoff)
+        end_minutes = rules.clock_to_minutes(end)
+        if cutoff is None:
+            reach = _ShiftReach(rules.MINUTES_PER_DAY, rules.MINUTES_PER_DAY - 1, end_minutes, False, limits)
+        else:
+            last = rules.MINUTES_PER_DAY + cutoff // 60
+            reach = _ShiftReach(last, last, end_minutes, True, limits)
+        reaches.append(reach)
+    if not reaches:
+        return None
+
+    ladder = sorted(
+        CompensationRule.objects.filter(kind=CompensationRule.KIND_SHIFT, enabled=True),
+        key=lambda r: (r.until_minutes is None, r.until_minutes if r.until_minutes is not None else 0),
+    )
+    threshold = config.shift_min_extra_minutes
+    previous = None  # the limit of the row before: where this row starts
+    for position, row in enumerate(ladder):
+        starts = [(reach, max(previous or 0, reach.end_minutes + threshold + 1)) for reach in reaches]
+        if any(first < reach.first_not_counted for reach, first in starts):
+            previous = row.until_minutes
+            continue
+        # the shift that reaches furthest is the fairest one to quote
+        reach, first = max(starts, key=lambda s: (s[0].first_not_counted, s[0].end_minutes))
+        return _ladder_warning_text(
+            row, first, reach, len(reaches), threshold, more_rows_follow=position < len(ladder) - 1
+        )
+    return None
+
+
+def _ladder_warning_text(
+    row, first: int, reach: _ShiftReach, shift_count: int, threshold: int, *, more_rows_follow: bool
+) -> str:
+    """The warning for the first ladder row that cannot be earned (see _unearnable_shift_row_warning). `first` is the first
+    minute that row can be earned in (>= reach.first_not_counted), `reach` the shift quoted, `shift_count` how many
+    distinct staff shifts there are."""
+    clock = rules.describe_clock
+    latest = clock(reach.latest)
+    which = (
+        f"the {clock(reach.end_minutes)} shift"
+        if shift_count == 1
+        else f"any staff shift (the furthest is the {clock(reach.end_minutes)} shift)"
+    )
+    held_by = ("both " if len(reach.limits) > 1 else "") + " and ".join(reach.limits)
+    explained = (
+        ", which reserves the hours before tomorrow's shift start for tomorrow's own first punch"
+        if reach.limits == (BUFFER_SETTING,)
+        else ""
+    )
+    cause = (
+        f"a later punch counts as the next morning's first punch (the cut-off comes from {held_by} in "
+        f"Settings > Attendance{explained})"
+    )
+    only_at_cutoff = reach.timed and first == reach.latest  # the engine counts a punch up to and including the cut-off
+    this = "this row and the rows after it" if more_rows_follow else "this row"
+    if row.until_minutes is not None and first >= row.until_minutes:
+        # the extra-work threshold, not the ladder, pushes the first earnable minute past this row's own limit
+        opening = (
+            f"Type 2 only starts at {clock(first)}, because it needs more than {rules.describe_duration(threshold)} of "
+            f"extra work after the shift end, so the '{row.label}' shift row (up to {clock(row.until_minutes)}) is "
+            f"never reached. The latest punch the system counts for {which} is {latest}: {cause}, "
+        )
+        ending = (
+            f"so only a punch at exactly {latest} can earn Type 2 on it."
+            if only_at_cutoff
+            else f"so {this} cannot be earned."
+        )
+    else:
+        opening = (
+            f"The '{row.label}' shift row can only be earned by a punch at {clock(first)} or later, but the latest "
+            f"punch the system counts for {which} is {latest}: {cause}, "
+        )
+        if only_at_cutoff:
+            ending = f"so only a punch at exactly {latest} can earn this row" + (
+                ", and the rows after it cannot be earned." if more_rows_follow else "."
+            )
+        else:
+            ending = f"so {this} cannot be earned."
+    return (
+        f"{opening}{ending} This is advice only (the settings are saved): the check reads the active staff shift "
+        "templates, not each employee's own shift times."
+    )
+
+
 def _mirror_legacy_ot_settings(config) -> None:
     """Keep PayrollSettings.ot_detection_enabled / ot_threshold_minutes (the settings from before this tab existed) true to
     what this tab says. The engine no longer reads them, but the Report Center's overtime columns and the MD portal's
@@ -464,6 +643,11 @@ def apply_settings(data: dict, actor: str):
                     f"The '{rule.label}' allowance can never apply: shift-based compensation already starts at "
                     f"{rules.describe_duration(threshold)} of extra work."
                 )
+    # advice only: the ladder as saved may wait for a punch the engine never attaches to the day
+    if config.shift_enabled:
+        warning = _unearnable_shift_row_warning(config)
+        if warning:
+            warnings.append(warning)
     after = {f.name: getattr(config, f.name) for f in config._meta.fields}
     skip = ("updated_at", "updated_by")
     old_values = {k: str(before.get(k)) for k, v in after.items() if before.get(k) != v and k not in skip}

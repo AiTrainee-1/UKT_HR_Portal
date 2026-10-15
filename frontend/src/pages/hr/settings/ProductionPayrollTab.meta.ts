@@ -96,7 +96,7 @@ const BLOCKS: ProductionSettingMeta[] = [
     section: S.late,
     title: "Deduct pay for late production workers",
     purpose:
-      "The on/off switch for production late deductions on every pay cycle. When on, each worker's punches are checked against the production shift they are assigned in Manage Shifts, and late days beyond their cycle's free allowance cost shifts of pay.",
+      "The on/off switch for production late deductions on every pay cycle. When on, each worker's punches are checked against the start and the grace of their day's group on the Production Shifts tab (days before that tab's rules start use the production shift assigned in Manage Shifts), and late days beyond their cycle's free allowance cost shifts of pay.",
     keywords: ["late detection", "production", "enable", "deduction", "late", "switch"],
   },
   {
@@ -114,8 +114,16 @@ const BLOCKS: ProductionSettingMeta[] = [
     section: S.shift,
     title: "How a production day earns pay",
     purpose:
-      "Each day's punches are matched against the production punch times and shift segments kept with the production shift in Manage Shifts: the day earns the segments its punches cover (0.25, 0.5, 1 or 1.5 shifts), and pay is the shifts earned times the worker's own Salary Per Shift. Nothing on this tab changes that.",
-    keywords: ["shifts earned", "segments", "punch times", "salary per shift", "manage shifts", "attendance"],
+      "Each day's punches are worked out by the production shift rules on the Production Shifts tab: the group the day belongs to, the shifts its leaving time earns on that group's ladder, with the unpaid breaks left out. Pay is the shifts earned times the worker's own Salary Per Shift. Days before the rules' start date keep the old calculation (the old punch times and segments). Nothing on this tab changes that.",
+    keywords: [
+      "shifts earned",
+      "production shifts",
+      "ladder",
+      "segments",
+      "punch times",
+      "salary per shift",
+      "attendance",
+    ],
   },
   {
     id: "prod-pf-esi-where",
@@ -132,7 +140,7 @@ const BLOCKS: ProductionSettingMeta[] = [
     section: S.shift,
     title: "Assigned production shift rules",
     purpose:
-      "Read-only: the production shifts kept in Manage Shifts. Production late detection compares each worker's punches with the start, end and grace of the shift they are assigned on that day; a worker with no assigned shift is never late.",
+      "Read-only: the production shifts kept in Manage Shifts. Before the Production Shifts rules start, production late detection compares each worker's punches with the start, end and grace of the shift they are assigned on that day, and a worker with no assigned shift is never late. From their start date the day's group on the Production Shifts tab (its start, its departure and the grace there) is used instead.",
     keywords: ["assigned shift", "grace", "shift template", "manage shift", "late"],
   },
 ];

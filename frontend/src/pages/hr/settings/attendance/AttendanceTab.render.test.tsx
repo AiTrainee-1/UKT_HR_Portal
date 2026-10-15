@@ -267,10 +267,12 @@ describe("Settings -> Attendance", () => {
     expect(protection()).toContain("the grace above is 0");
   });
 
-  it("explains production and links to Manage Shift instead of repeating its editor", async () => {
+  it("explains production and links to the Production Shifts tab instead of repeating its editor", async () => {
     await open();
     expect(buttonNamed("Save Punch Times")).toBeUndefined();
-    expect(byTestId("production-managed-elsewhere")?.querySelector("a")?.getAttribute("href")).toBe("/hr/shifts");
+    expect(byTestId("production-managed-elsewhere")?.querySelector("a")?.getAttribute("href")).toBe(
+      "/hr/settings?tab=production_shifts",
+    );
     const text = page!.text();
     expect(text).toContain("Evening");
     expect(text).toContain("1.00 shift = ₹600"); // 08:35, 12:50, 13:35, 17:35

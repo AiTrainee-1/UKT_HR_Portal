@@ -22,6 +22,7 @@ from django.db.models import Count
 from api.attendance_final import half_period, late_pool_summary
 from api.models import EmployeePermission, LeaveRequest
 from api.payroll_views import _d2, late_shift_deduction
+from api.shift_engine import _t2s
 
 from ..common import EMP_COLS_SHORT, emp_cells
 from ..filters import boolean, date_range, period, select, text
@@ -57,6 +58,13 @@ from .attendance_analysis_common import (
     secs_hm,
     subtotals_within_limit,
 )
+from .attendance_core_data import (
+    allowance_minutes,
+    is_relaxation_day,
+    window_early_out_applied,
+    window_late_in_applied,
+)
+from .production_judge import ProductionJudge
 
 MODULES = ("attendance",)
 
@@ -118,9 +126,27 @@ def _production_grace(pcfg) -> int:
     return pcfg.grace_minutes or 10
 
 
+def _prod_judged(pcfg, rec):
+    """The shift-table verdict (group, start, main out, grace) of a stored production day the rules judged, else None:
+    a day before the effective date was judged by the legacy punch-1 / punch-4 times and the 10-minute grace."""
+    return ProductionJudge(pcfg).judgement(rec)
+
+
+def _prod_early(judged):
+    """(effective end seconds, deadline seconds, minutes before the end) of a production day the shift table judged early,
+    or None when it was not."""
+    if not judged.early_leave or judged.main_out_time is None or judged.early_minutes <= 0:
+        return None
+    end = judged.main_out_time.hour * 3600 + judged.main_out_time.minute * 60
+    return end, end - judged.grace_minutes * 60, judged.early_minutes
+
+
 def _morning_basis(emp, rec, roster: Roster, pcfg):
     """(shift name, start time, grace) the day was judged against."""
     if emp.employment_type == "production":
+        judged = _prod_judged(pcfg, rec)
+        if judged is not None:
+            return f"Production: {judged.group.label}", judged.start_time, judged.grace_minutes
         return "Production (fixed times)", pcfg.punch1_time, _production_grace(pcfg)
     shift = roster.shift_on(emp.id, rec.date)
     if shift is None:
@@ -130,11 +156,41 @@ def _morning_basis(emp, rec, roster: Roster, pcfg):
 
 def _evening_basis(emp, rec, roster: Roster, pcfg):
     if emp.employment_type == "production":
+        judged = _prod_judged(pcfg, rec)
+        if judged is not None and judged.main_out_time is not None:
+            return f"Production: {judged.group.label}", judged.main_out_time, judged.grace_minutes
         return "Production (fixed times)", pcfg.punch4_time, _production_grace(pcfg)
     shift = roster.shift_on(emp.id, rec.date)
     if shift is None:
         return None, None, 0
     return shift.name, shift.end_time, shift.grace_period_minutes
+
+
+def _window_late(emp, rec) -> bool:
+    """Did a company-announced late-in time decide this staff day's arrival (so its start and grace are not the shift's)?"""
+    return emp.employment_type != "production" and window_late_in_applied(rec)
+
+
+def _window_early(emp, rec) -> bool:
+    return emp.employment_type != "production" and window_early_out_applied(rec)
+
+
+def _lateness(emp, rec, start, grace, pcfg=None):
+    """morning_lateness of a stored late day, measured from the start the engine really judged it against: a Type 1
+    next-day allowance moved the start later by the minutes the day record carries; a company-announced late-in replaced
+    the start and grace by a time the record does not keep, so that day is not measured at all (None: unknown, never a
+    guess). Production has neither. A production day the shift table judged is compared to the minute against its group's
+    start + the rules' grace (as the engine does); an older day to the second against the legacy punch-1 time."""
+    if emp.employment_type == "production":
+        in_force = pcfg is not None and _prod_judged(pcfg, rec) is not None
+        return morning_lateness(
+            rec.first_punch, start, grace, rec.morning_permission_applied, exact_seconds=not in_force
+        )
+    if window_late_in_applied(rec):
+        return None
+    return morning_lateness(
+        rec.first_punch, start, grace, rec.morning_permission_applied, start_shift_minutes=allowance_minutes(rec)
+    )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -185,18 +241,15 @@ def _late_detail_run(ctx):
     records = [r for r in qs if r.employee_id in people_by_id]
 
     built = []
+    windowed = moved = 0  # rows judged against an announced late-in time / against a start the allowance moved
     for rec in records:
         emp = people_by_id[rec.employee_id]
         shift_name, start, grace = _morning_basis(emp, rec, roster, pcfg)
         if shift_text and shift_text not in (shift_name or "").lower():
             continue
-        late = morning_lateness(
-            rec.first_punch,
-            start,
-            grace,
-            rec.morning_permission_applied,
-            exact_seconds=emp.employment_type == "production",
-        )
+        window = _window_late(emp, rec)
+        allowance = 0 if emp.employment_type == "production" else allowance_minutes(rec)
+        late = _lateness(emp, rec, start, grace, pcfg)
         late_min = late[2] if late else None
         if min_late and (late_min is None or late_min < min_late):
             continue
@@ -205,13 +258,21 @@ def _late_detail_run(ctx):
             continue
         if pool_filter == "not_counted" and pool == "Counted":
             continue
+        windowed += window
+        moved += bool(allowance)
+        if window:  # the announced time is the start and there is no grace: nothing of the shift's applies
+            shown_start = None
+        elif late:
+            shown_start = secs_hm(late[0])
+        else:
+            shown_start = secs_hm(_t2s(start) + 60 * allowance) if start else None
         row = {
             **emp_cells(emp),
             "date": rec.date.isoformat(),
             "day": day_abbr(rec.date),
             "shift": shift_name or "No shift assigned",
-            "shiftStart": secs_hm(late[0]) if late else (hm(start) if start else None),
-            "graceMinutes": grace if start is not None else None,
+            "shiftStart": shown_start,
+            "graceMinutes": None if window else (grace if start is not None else None),
             "deadline": secs_hm(late[1]) if late else None,
             "firstPunch": hm(rec.first_punch),
             "lateMinutes": late_min,
@@ -242,16 +303,30 @@ def _late_detail_run(ctx):
     notes = [
         "Each row is one day flagged Late-In by Attendance. The day record stores only the flag, so the minutes are "
         "re-derived from the stored first punch and the shift in force that day (arrivals compared to the minute; "
-        "an approved in-cap Morning Late-In permission moves the start by 60 minutes; grace is added on top).",
-        "Late by = first punch minus effective start. Past deadline = first punch minus (effective start + grace).",
+        "an approved in-cap Morning Late-In permission moves the start by 60 minutes; grace is added on top). A "
+        "production day on or after the date the shift-table rules start is measured from its group's start time "
+        "(Day / Night / Sunday) with the rules' own grace; an earlier production day from the legacy arrival time.",
+        "Late by = first punch minus effective start. Past deadline = first punch minus (effective start + grace). The "
+        "effective start is the one the engine used, so a next-day OT late-in allowance moves it later.",
         "Night Late (strict-mode lunch return) is informational, never priced, and is not listed here.",
     ]
     if not settings.morning_late_in_enabled:
         notes.append(
             "Morning Late-In detection is currently switched off in Attendance settings; rows shown were flagged while it was on."
         )
-    blank = sum(1 for r in rows if r.get("_kind") is None and r.get("lateMinutes") is None)
-    if blank:
+    if moved:
+        notes.append(
+            f"{moved} row(s) used a next-day OT late-in allowance: the engine moved their start later by those minutes, so "
+            "Eff. start, Deadline and the minutes are measured from the moved start (the allowance is not late time)."
+        )
+    if windowed:
+        notes.append(
+            f"{windowed} row(s) are days with a company-announced late-in time: the engine judged them against that announced "
+            "time with no grace, which the day record does not keep, so their start, deadline and minutes are left blank "
+            "(the flag is kept, the minutes are not guessed)."
+        )
+    blank = sum(1 for r in rows if r.get("_kind") is None and r.get("lateMinutes") is None) - windowed
+    if blank > 0:
         notes.append(
             f"{blank} row(s) show no minutes: the shift could not be found for that day or was edited after the day was "
             "computed (the flag is kept, the minutes are not guessed)."
@@ -309,6 +384,7 @@ class _EmpMonth:
         "night",
         "halves",
         "shift_name",
+        "unmeasured",
     )
 
 
@@ -349,15 +425,18 @@ def _month_pools(ctx, year: int, month: int):
         em.halves = sum(1 for r in recs if r.status == "half_shift")
         minutes = []
         worst = None
+        em.unmeasured = 0  # flagged days whose start the day record does not keep (an announced late-in)
         for r in recs:
             if not r.is_late:
                 continue
             _name, start, grace = _morning_basis(emp, r, roster, pcfg)
-            late = morning_lateness(r.first_punch, start, grace, r.morning_permission_applied, exact_seconds=is_prod)
+            late = _lateness(emp, r, start, grace, pcfg)
             if late:
                 minutes.append(late[2])
                 if worst is None or late[2] > worst[0]:  # the earliest date wins a tie (records are in date order)
                     worst = (late[2], r.date)
+            elif _window_late(emp, r):
+                em.unmeasured += 1
         em.minutes = minutes
         em.worst_day = worst[1] if worst else None
         if is_prod:
@@ -482,8 +561,15 @@ def _counts_run(ctx):
         "Late days flagged is the raw number of flagged days (Sundays and other non-working days included), so it can "
         "exceed Late-In (pool). Production employees are not part of the staff pool (their rules are separate); pool "
         "columns show a dash for them.",
-        "Late minutes are re-derived from first punch and shift (see Late Coming Detail).",
+        "Late minutes are re-derived from first punch and shift (see Late Coming Detail); a next-day OT late-in allowance "
+        "moves the start later by its minutes.",
     ]
+    unmeasured = sum(em.unmeasured for em in kept)
+    if unmeasured:
+        notes.append(
+            f"{unmeasured} flagged day(s) were judged against a company-announced late-in time the day record does not keep: "
+            "they count in Late days flagged and in the pool, but their minutes are left out (never guessed)."
+        )
     if show_night:
         notes.append(
             "Night late (strict-mode lunch return) is informational only: it is never priced and never demotes a day."
@@ -690,10 +776,20 @@ def _early_out_run(ctx):
     records = [r for r in qs.order_by("date", "id")[: ctx.row_limit] if r.employee_id in people_by_id]
 
     built = []
+    windowed = 0
     for rec in records:
         emp = people_by_id[rec.employee_id]
         shift_name, end, grace = _evening_basis(emp, rec, roster, pcfg)
-        early = evening_earliness(rec.last_punch, end, grace, rec.evening_permission_applied)
+        window = _window_early(emp, rec)
+        # an announced early-out replaced the shift's end and grace by a time the day record does not keep: not measured
+        judged = _prod_judged(pcfg, rec) if emp.employment_type == "production" else None
+        if judged is not None:
+            # the shift table judged the day: measured against its group's main out, which for a night group is the
+            # NEXT morning (a clock comparison alone would read a 23:00 exit as after a 05:30 end)
+            early = _prod_early(judged)
+        else:
+            early = None if window else evening_earliness(rec.last_punch, end, grace, rec.evening_permission_applied)
+        windowed += window
         built.append(
             (
                 emp_sort_key(emp),
@@ -703,7 +799,7 @@ def _early_out_run(ctx):
                     "date": rec.date.isoformat(),
                     "day": day_abbr(rec.date),
                     "shift": shift_name or "No shift assigned",
-                    "shiftEnd": secs_hm(early[0]) if early else (hm(end) if end else None),
+                    "shiftEnd": secs_hm(early[0]) if early else (None if window else (hm(end) if end else None)),
                     "deadline": secs_hm(early[1]) if early else None,
                     "lastPunch": hm(rec.last_punch),
                     "earlyMinutes": early[2] if early else None,
@@ -730,8 +826,16 @@ def _early_out_run(ctx):
         "Each row is a day flagged Evening Early-Out: the last punch (needs at least two punches) is before the shift end "
         "minus grace. Minutes are re-derived from the stored last punch and the shift in force that day; an approved "
         "in-cap Evening Early-Out permission moves the end 60 minutes earlier.",
-        "A cross-midnight exit is never an early-out, and a compensation-day release or an afternoon half-day leave clears the flag.",
+        "A cross-midnight exit is never an early-out, and a compensation-day release or an afternoon half-day leave clears the flag. "
+        "A production day the shift-table rules judged (from their start date) is measured against its group's standard out "
+        "(a night group's is the next morning) less the rules' grace; an earlier production day against the legacy departure time.",
     ]
+    if windowed:
+        notes.append(
+            f"{windowed} row(s) are days with a company-announced early-out time: the engine judged them against that "
+            "announced time with no grace, which the day record does not keep, so their end, deadline and minutes are left "
+            "blank (the flag is kept, the minutes are not guessed)."
+        )
     if not settings.evening_early_out_enabled:
         notes.append(
             "Early-Out detection is switched off in Attendance settings (it is off by default), so no new days are flagged; "
@@ -778,6 +882,7 @@ HALF_CAUSE = (
     ("arrived_late", "Arrived late"),
     ("half_day_leave", "Half-day leave"),
     ("hr_override", "HR override"),
+    ("relaxation", "Compensation relaxation"),
     ("production_short_day", "Short production day"),
     ("other", "Other"),
 )
@@ -812,6 +917,7 @@ _HALF_SUMMARY_COLS = (
     ColumnSpec("arrivedLate", "Arrived late", INTEGER, 0.9, total="sum"),
     ColumnSpec("halfDayLeave", "Half-day leave", INTEGER, 0.9, total="sum"),
     ColumnSpec("hrOverride", "HR override", INTEGER, 0.8, total="sum"),
+    ColumnSpec("relaxation", "Relaxation", INTEGER, 0.9, total="sum"),
     ColumnSpec("shiftsLost", "Shifts lost", NUMBER, 0.8, total="sum"),
 )
 
@@ -821,6 +927,8 @@ def _half_cause(rec, emp, worked: str | None) -> str:
         return "production_short_day"
     if rec.source == "manual":
         return "hr_override"
+    if is_relaxation_day(rec):
+        return "relaxation"  # made up by an OT relaxation / redeemed balance: no punches at all, not a missing one
     if rec.is_half_day_leave:
         return "half_day_leave"
     if rec.last_punch is None:
@@ -875,6 +983,8 @@ def _half_run(ctx):
             note_parts.append(rec.override_note)
         if rec.is_compensation_day:
             note_parts.append("Compensation day (evening cut-off replaced by the release time)")
+        if rec.compensation_note:
+            note_parts.append(rec.compensation_note)
         shifts = float(rec.shifts_earned or 0)
         built.append(
             (
@@ -953,6 +1063,7 @@ def _half_run(ctx):
                     "arrivedLate": c["arrived_late"],
                     "halfDayLeave": c["half_day_leave"],
                     "hrOverride": c["hr_override"],
+                    "relaxation": c["relaxation"],
                     "shiftsLost": round(lost[eid], 2),
                 }
             )
@@ -970,6 +1081,7 @@ def _half_run(ctx):
                 "arrivedLate",
                 "halfDayLeave",
                 "hrOverride",
+                "relaxation",
                 "shiftsLost",
             ],
         )
@@ -987,11 +1099,13 @@ def _half_run(ctx):
         f"second-half start ({settings.half_day_second_half_start_time:%H:%M}) counts as the evening half; both = full day, "
         "one = half day, neither = absent. The first-half limit follows each shift; the second-half start is a company-wide setting.",
         "Half worked comes from the day record's arrival zone (older or manual records: from the first punch). Cause is derived "
-        "from the stored day: HR override (manual record), half-day "
+        "from the stored day: HR override (manual record), compensation relaxation (an OT relaxation or redeemed balance paid "
+        "the day without any punch), half-day "
         "leave, single punch (a lone punch is a half day by rule and is usually a missing punch), left early (morning only) or "
         "arrived late (evening only).",
-        "For production employees a half day means the shift credit is at most half of the day's maximum; the morning / "
-        "evening split and shifts lost do not apply to them.",
+        "For production employees a half day is a day whose shift credit is under the full-day value: at most half of the "
+        "day's maximum before the shift-table rules start, below the rules' full-day value (1.00 by default) from then on; "
+        "the morning / evening split and shifts lost do not apply to them.",
     ]
     if sub_note:
         notes.append(sub_note)

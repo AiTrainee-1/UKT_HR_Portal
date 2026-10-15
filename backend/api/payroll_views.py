@@ -54,6 +54,7 @@ from .models import (
     EmployeeShiftAssignment,
     Holiday,
     Payroll,
+    ProductionShiftConfig,
     SalarySlip,
     SessionConfig,
     WorkSession,
@@ -236,27 +237,71 @@ def late_shift_deduction(
     return deduction
 
 
-def _production_late_days(emp: Employee, records, ps) -> tuple[int, dict]:
+def _production_late_days(emp: Employee, records, ps, prod_config=None) -> tuple[int, dict]:
     """
     Per-day late check for Production Late Detection (Settings → Payroll →
-    Production) -entirely independent of AttendanceDayRecord.is_late, which
-    reflects the global ProductionShiftConfig singleton and drives
-    shifts_earned/pay (left completely untouched here). This instead keys
-    off the employee's Manage-Shift-assigned Production ShiftTemplate, per
-    explicit user instruction ("shift calculation and late detection should
-    be based on the Production shift rules configured there").
+    Production).
+
+    Days on/after the date the shift-table rules take over
+    (ProductionShiftConfig.rules_effective_from, Settings → Production shifts)
+    use the day record's own verdict: late = the resolved first punch is after
+    the shift group's start + the rules' grace (AttendanceDayRecord.is_late,
+    from production_shift_rules), and, in strict mode, early = the record's
+    early_leave flag. So the payroll deduction and every screen and report can
+    never disagree about a day. `prod_config` lets a payroll loop share one
+    config object (and so one load of the rule tables) between employees.
+
+    Every EARLIER day keeps the original check, entirely independent of
+    AttendanceDayRecord.is_late (which reflects the global
+    ProductionShiftConfig singleton and drives shifts_earned/pay, left
+    completely untouched here). That check keys off the employee's
+    Manage-Shift-assigned Production ShiftTemplate, per explicit user
+    instruction ("shift calculation and late detection should be based on the
+    Production shift rules configured there").
 
     Returns (late_count, {date: reason}). A day with no first_punch
-    (absent) or no assigned shift for that date is skipped entirely -no
-    reference to check against, so no penalty is ever applied blindly.
+    (absent) or (before the effective date) no assigned shift for that date is
+    skipped entirely -no reference to check against, so no penalty is ever
+    applied blindly.
     """
+    from . import production_shift_rules as psr
     from .shift_engine import _get_shift_for_date, _t2s, _s2t
 
+    config = prod_config
     late_count = 0
     reasons: dict = {}
     for rec in records:
         if not rec.first_punch:
             continue
+        if config is None:
+            config = ProductionShiftConfig.get()
+        ruleset = psr.rules_for_day(config, rec.date)
+        if ruleset is not None:
+            judged = psr.judge_day(ruleset, rec.date, rec.first_punch, rec.last_punch)
+            if judged.group is not None:
+                # The day record's own verdict, with the rule that produced it.
+                parts = []
+                if rec.is_late:
+                    parts.append(
+                        f"First punch {rec.first_punch.strftime('%H:%M')} after {judged.group.label} "
+                        f"start {judged.start_time.strftime('%H:%M')} + {judged.grace_minutes} "
+                        f"min grace ({psr.hhmm(psr.time_to_s(judged.start_time) + judged.grace_minutes * 60)})"
+                    )
+                late = bool(rec.is_late)
+                if ps.prod_attendance_mode == "strict" and rec.last_punch and rec.early_leave:
+                    late = True
+                    out_s = psr.time_to_s(judged.main_out_time) if judged.main_out_time else 0
+                    parts.append(
+                        f"Last punch {rec.last_punch.strftime('%H:%M')} before {judged.group.label} "
+                        f"end {judged.main_out_time.strftime('%H:%M')} - {judged.grace_minutes} "
+                        f"min grace ({psr.hhmm(out_s - judged.grace_minutes * 60)})"
+                        if judged.main_out_time
+                        else f"Last punch {rec.last_punch.strftime('%H:%M')} before the shift end"
+                    )
+                if late:
+                    late_count += 1
+                    reasons[rec.date] = " / ".join(parts) if parts else "Marked late by the production shift rules"
+                continue
         shift = _get_shift_for_date(emp, rec.date)
         if shift is None:
             continue
@@ -764,7 +809,7 @@ def _session_completed(first_in: time, last_out: time | None, min_checkout: time
 
 
 def _generate_production_payroll(
-    emp: Employee, period_start: date, period_end: date, settings=None, pay_cycle: str | None = None
+    emp: Employee, period_start: date, period_end: date, settings=None, pay_cycle: str | None = None, prod_config=None
 ) -> dict:
     """
     Shift-based payroll for production employees -completely separate from
@@ -781,6 +826,15 @@ def _generate_production_payroll(
     and the BiWeekly x2 apply, exactly as before the cycles existed.
     Callers are responsible for confirming period_end has already elapsed
     before calling this.
+
+    The days come from compute_range_records, i.e. from the shift-table rules
+    (production_shift_rules.py: groups, ladder, breaks, grace, night
+    sessions) for every day on/after ProductionShiftConfig.rules_effective_from
+    and from the legacy calculation for every earlier day, so a period that
+    spans the date mixes the two correctly and pay stays exactly
+    sum(shifts_earned) x salary_per_shift. `prod_config` (optional) is a
+    ProductionShiftConfig a generating loop shares between employees so the
+    rule tables are read once for the loop by the late detection below.
     """
     if not emp.salary_per_shift or emp.salary_per_shift <= 0:
         raise PayrollSkip("No Salary Per Shift set on this employee's profile")
@@ -809,6 +863,9 @@ def _generate_production_payroll(
             "day": DAY_NAMES[rec.date.weekday()],
             "firstPunch": rec.first_punch.strftime("%H:%M") if rec.first_punch else None,
             "lastPunch": rec.last_punch.strftime("%H:%M") if rec.last_punch else None,
+            # A night worker's closing punch is the next morning's clock time (05:30 after a 21:00 arrival): true when
+            # the last punch is on the calendar date AFTER the shift day. Always false on a legacy day.
+            "lastPunchNextDay": bool(rec.first_punch and rec.last_punch and rec.last_punch < rec.first_punch),
             "shiftsEarned": float(shifts),
             "status": rec.status,
             # Overwritten below (with lateReason) when Production Late
@@ -826,7 +883,7 @@ def _generate_production_payroll(
     late_penalty = Decimal("0")
     late_summary = None
     if ps.prod_late_detection_enabled:
-        late_count, late_reasons = _production_late_days(emp, records, ps)
+        late_count, late_reasons = _production_late_days(emp, records, ps, prod_config)
         allowance, slabs = cycle_late_rules(ps, pay_cycle)
         billable_late = max(0, late_count - (allowance or 0))
         deduction_shifts = late_shift_deduction(billable_late, ps, slabs_field="prod_late_deduction_slabs", slabs=slabs)

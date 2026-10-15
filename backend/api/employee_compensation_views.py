@@ -15,18 +15,71 @@ listed (`isStaff: false`). The Department Head card is for everybody, production
       balanceShifts,                      the compensation balance in shifts (HOD-approved holiday-work credits and legacy
                                           credits, less what HR redeemed)
       items: [...],                       newest first, see ITEM below
-      todayAllowance, tomorrowAllowance,  the next-day late-in allowance that applies today / on the next working day, or null
-      askHr: {title, text, points, contact}  the "Ask Request for Compensation" tab: contact is Settings -> HR Contact }
+      todayAllowance, tomorrowAllowance,  the next-day late-in allowance that applies today / on the next working day, or
+                                          null: see ALLOWANCE below
+      askHr: {title, text, points, contact}  the "Ask Request for Compensation" tab, see ASK HR below (null for production)
+      message }                           null for staff; for a production employee the sentence saying why nothing is listed
 
-  ITEM: { key, kind, group, date, title, detail, status, statusLabel, shifts, minutes, minutesUsed, used, legacy? }
+  ITEM: { key, kind, group, date, title, detail, status, statusLabel, shifts, minutes, minutesUsed, used,
+          workDate?, time?, legacy? }
     kind  ot_allowance | ot_shift (detected, HR has not assigned it) | ot_shift_relaxation | ot_shift_pay | holiday_work |
           redemption | window_late_in | window_early_out | birthday
     group detected (the system found it) | assigned (HR gave it) | company (announced for everybody) | birthday | balance
+    date  the day the item is about: the OT day, the claim date HR granted (assigned OT with one), the day worked (a
+          holiday-work claim), the day HR used the balance (a redemption), the window's day, the birthday
+    workDate  'YYYY-MM-DD', ONLY on ot_shift_relaxation, ot_shift_pay and holiday_work: the day the work was done (for the
+          assigned OT kinds `date` may be the later day HR granted the relaxation / pay for, so the two can differ)
+    time  'HH:MM', ONLY on window_late_in / window_early_out: the announced arrive-by / leave-from time
+    legacy  ONLY on ot_shift_relaxation / ot_shift_pay: true for a record from before the OT overhaul (it counts one shift)
+    shifts  null where no shift amount applies. A paid birthday never touches the balance, so it carries none; a late-in
+          allowance and a window carry none either
+    status  detected | assigned | applied | scheduled | not_applied | used | not_used | available | pending | pending_hod |
+          approved | rejected | taken | upcoming | today | not_applicable. statusLabel is the sentence to print.
+          ot_allowance: used (a day carries its marker) | not_used (a worked day in its window did not need it, or the window
+          has passed) | available (nothing has used it yet and its window is still open). holiday_work: pending_hod while it
+          waits for the Department Head, approved, rejected; when NOBODY can decide a waiting claim (the employee has no
+          Department Head, is the head themselves, or their head may not approve compensation) the status stays pending_hod
+          (both apps tone it as "needs attention") but statusLabel and detail say so and point to HR.
+    redemption  the detail is always built from the formatted date ("HR used 0.25 shift of your compensation balance for
+          Monday 12 Oct 2026."): HR's own ledger note (which holds an internal credit id and a raw ISO date) is never shown.
+
+  ALLOWANCE (todayAllowance / tomorrowAllowance): { date, minutes, workDate, onTimeUntil, note }
+    date         the day the allowance applies on. tomorrowAllowance is the NEXT WORKING DAY of the employee's shift, not
+                 always the next calendar day (a Friday's OT with a Saturday-off shift gives the Monday)
+    minutes      the minutes the employee may arrive later
+    workDate     the OT day that earned it
+    onTimeUntil  'HH:MM', the latest arrival that is still on time that day (shift start + the allowance + the shift's own
+                 grace); null when the employee has no shift assigned
+    note         the sentence to print
+
+  ASK HR: askHr.contact is Settings -> HR Contact: { label, phone, phoneDial, whatsapp, whatsappNumber, email, hours,
+    hasContact, usesHrFallback }. `label` falls back to "HR Department", `phoneDial` is what a tel: link should dial,
+    `whatsappNumber` the international digits a wa.me link needs, `hasContact` is false until HR entered any way to reach
+    them, `usesHrFallback` is always false here (it is true only for the support block of /api/support-contact).
 
   What is shown: the employee's own OT records, holiday-work claims and balance redemptions of the last HISTORY_DAYS days;
   the announced windows that cover them (from WINDOW_PAST_DAYS ago, and every upcoming one) while the Windows switch is on;
   and their birthday leave (this year's, and next year's once this year's has passed) while the Birthday switch is on.
   A feature switched off hides its own virtual items (windows, birthday) but never the records that already exist.
+
+  dayKind: the HR/manager claim lists (holidayWorkClaims) say dayKind 'sunday' | 'holiday' (a declared holiday on a Sunday is
+  'holiday'); the attendance day records (/attendance/employee/<id>, employee-shift-stats dailyLogs) say 'holiday' |
+  'weekly_off' | null. A Sunday is 'sunday' on a claim and 'weekly_off' on an attendance day: never share one mapping.
+
+/api/employee/hod
+    { assigned, name, phone, photoUrl, designation, department, branch, email, approvals, hrContact, contactNote, message,
+      employeeId?, employeeCode?, isSelf? }
+    assigned     false (with `message`, empty `approvals`) when the employee has no active Department Head
+    isSelf       ONLY present, and true, when the employee is a Department Head whose own department is their head. They get
+                 no head card; the message says that a head never approves their own requests, that who decides them
+                 depends on the approval path HR set for each kind, and that a request only a Department Head can decide
+                 (holiday-work compensation) needs another head
+    employeeId, employeeCode  ONLY when assigned: the head's own employee id / code
+    photoUrl     whatever is stored on the head's profile: a URL, a /media path or an embedded data: image (can be large)
+    approvals    [{ key, label, canApprove, reason, requestedBy, path }] in APPROVAL_ORDER. `reason` explains a false
+                 `canApprove`. holiday_work with the compensation / holiday-work switch OFF is canApprove TRUE with a reason
+                 saying that no new claims are raised but waiting ones can still be decided: the manager endpoints never
+                 look at that switch for a claim that already exists. (The apps print `reason` only for a false canApprove.)
 """
 
 from __future__ import annotations
@@ -116,6 +169,17 @@ APPROVAL_ORDER = (
     "holiday_work",
 )
 STAFF_ONLY_APPROVALS = ("casual_leave", "holiday_work")
+
+HOLIDAY_WORK_OFF_REASON = (
+    "Holiday / Sunday work compensation is switched off, so HR cannot raise new claims. "
+    "Claims that are already waiting can still be decided."
+)
+SELF_HEAD_MESSAGE = (
+    "You are a Department Head yourself, so you never approve your own requests. Who decides them depends on the "
+    "approval path HR set for each kind of request: ask HR if one of yours is waiting. A request that only a Department "
+    "Head can decide (such as Holiday / Sunday work compensation) needs another Department Head, so ask HR to assign "
+    "you one."
+)
 
 
 def _hhmm(value) -> str | None:
@@ -238,10 +302,12 @@ def _ot_items(emp, today: date, cfg: CompensationConfig, master: bool, assignmen
             used = next((m for m in markers if r.date < m.date <= window_end), None)
             if used is not None:
                 status = "used"
-            elif any(r.date < d <= window_end for d in worked):
+            elif window_end < today or any(r.date < d <= window_end for d in worked):
+                # a worked day in the window did not need it, or the window has closed with no worked day at all
                 status = "not_used"
             else:
-                status = "pending"
+                # automatic and still open: nothing to claim, and not an approval the employee is waiting on
+                status = "available"
             detail = (
                 f"You worked until {worked_until} ({extra_minutes} minutes past your shift end). You can arrive up to "
                 f"{r.allowance_minutes} minutes later on your next working day without being marked late. This is "
@@ -355,19 +421,55 @@ def _ot_items(emp, today: date, cfg: CompensationConfig, master: bool, assignmen
     return items, today_allowance, tomorrow_allowance
 
 
+STUCK_CLAIM_LABEL = "No Department Head can decide this yet: contact HR"
+
+
+def _stuck_claim_detail(emp) -> str | None:
+    """The sentence for a claim that is waiting but that NOBODY can decide right now, or None when the employee's
+    Department Head can. The same three cases as holiday_work_views._stuck_warnings (the warning HR gets when raising the
+    claim): no active head, the employee is their own head (a head never decides their own claim, and holiday work is a
+    Department-Head-only workflow, so HR cannot either), or a head whose profile may not approve compensation. The
+    Settings switches are NOT a case: a claim that is already waiting can still be decided while they are off."""
+    head = effective_manager(emp)
+    if head is None:
+        return (
+            "HR raised this claim, but you have no Department Head assigned, so nobody can decide it yet. "
+            "Please contact HR."
+        )
+    if head.employee_id == emp.id:
+        return (
+            "HR raised this claim, but you are a Department Head yourself and a head never decides their own claim, "
+            "so nobody can decide it yet. Please contact HR to have another Department Head assigned to you."
+        )
+    if not head.can_approve_compensation:
+        return (
+            f"HR raised this claim, but your Department Head {full_name(head.employee)} is not allowed to approve "
+            "compensation yet, so nobody can decide it. Please contact HR."
+        )
+    return None
+
+
 def _claim_items(emp, today: date, holidays: dict):
     since = today - timedelta(days=HISTORY_DAYS)
+    claims = list(HolidayWorkClaim.objects.filter(employee=emp, work_date__gte=since).order_by("-work_date", "-id"))
+    # looked up once, and only when something is waiting
+    stuck = _stuck_claim_detail(emp) if any(c.status == HolidayWorkClaim.STATUS_PENDING for c in claims) else None
     items = []
-    for c in HolidayWorkClaim.objects.filter(employee=emp, work_date__gte=since).order_by("-work_date", "-id"):
+    for c in claims:
         kind = day_kind(c.work_date, holidays) or ("sunday" if c.work_date.weekday() == 6 else "holiday")
         what = "Sunday" if kind == "sunday" else "Holiday"
         status = {"pending": "pending_hod"}.get(c.status, c.status)
+        extra = {}
         if c.status == HolidayWorkClaim.STATUS_APPROVED:
             detail = f"Approved by {c.reviewed_by or 'your Department Head'}: {shifts_text(c.shifts)} shift was added to your compensation balance."
         elif c.status == HolidayWorkClaim.STATUS_REJECTED:
             detail = f"Not approved by {c.reviewed_by or 'your Department Head'}." + (
                 f" {_stop(c.review_comment)}" if c.review_comment else ""
             )
+        elif stuck:
+            # the status word stays pending_hod (both apps tone it as "needs attention"): only the words change
+            detail = stuck
+            extra["statusLabel"] = STUCK_CLAIM_LABEL
         else:
             detail = "HR raised this claim. It is waiting for your Department Head to approve it."
         if c.reason:
@@ -383,9 +485,19 @@ def _claim_items(emp, today: date, holidays: dict):
                 status,
                 shifts=float(c.shifts),
                 workDate=_iso(c.work_date),
+                **extra,
             )
         )
     return items
+
+
+def _redemption_detail(e: CompensationLedger) -> str:
+    """What the employee reads about a day HR took from the balance. Built from the formatted date, never from HR's
+    ledger note: that holds 'Redeemed on 2026-10-12' (a raw ISO date) or 'Alternative Day credit 12 used' (an internal id)."""
+    when = date_text(e.date)
+    if e.source == "legacy_credit":
+        return f"HR used your earlier Alternative Day credit ({shifts_text(e.shifts)} shift) for {when}."
+    return f"HR used {shifts_text(e.shifts)} shift of your compensation balance for {when}."
 
 
 def _redemption_items(emp, today: date):
@@ -397,7 +509,7 @@ def _redemption_items(emp, today: date):
             "balance",
             e.date,
             f"Compensation day taken: {shifts_text(e.shifts)} shift",
-            e.note or f"HR used {shifts_text(e.shifts)} shift of your compensation balance for {date_text(e.date)}.",
+            _redemption_detail(e),
             "taken",
             shifts=float(e.shifts),
         )
@@ -510,7 +622,8 @@ def _birthday_items(
                 "Birthday leave (paid)",
                 detail,
                 status,
-                shifts=1.0 if applied else None,
+                # no shifts: a paid birthday never touches the compensation balance, so a "1 shift" chip would read as
+                # a credit that was never added
             )
         )
     return items
@@ -637,7 +750,9 @@ def _approvals_json(manager: DepartmentManager, emp) -> list[dict]:
         elif defn.hod_flag and not getattr(manager, defn.hod_flag, False):
             can, why = False, "Not enabled for your Department Head."
         elif key == "holiday_work" and not holiday_work_on:
-            can, why = False, "Holiday / Sunday work compensation is switched off."
+            # The switch only stops HR raising NEW claims. The manager endpoints (pending list, count, decision) never look
+            # at it, so the head can still decide a claim that is already waiting: saying "cannot" would be untrue.
+            can, why = True, HOLIDAY_WORK_OFF_REASON
         else:
             can, why = True, ""
         out.append(
@@ -682,9 +797,7 @@ def employee_hod(request: Request) -> Response:
             }
         )
     if found.employee_id == emp.id:
-        return Response(
-            {**base, "isSelf": True, "message": "You are a Department Head yourself, so HR decides your own requests."}
-        )
+        return Response({**base, "isSelf": True, "message": SELF_HEAD_MESSAGE})
     manager = DepartmentManager.objects.select_related(
         "employee__department", "employee__designation", "employee__branch"
     ).get(pk=found.pk)

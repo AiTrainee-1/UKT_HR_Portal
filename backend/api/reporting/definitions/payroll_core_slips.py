@@ -691,7 +691,7 @@ def _production_run(ctx) -> ReportResult:
     ]
     all_notes = [
         "Slips are listed by the date their pay period ends. An employee has one slip per pay period; wages = shifts x "
-        "rate per shift. Shifts come from the slip's stored day-by-day breakdown (a production day earns up to 1.50).",
+        "rate per shift. Shifts come from the slip's stored day-by-day breakdown (a production day earns up to the highest rule of the shift table: 1.50 before its start date, 3.00 by default after).",
         "Extra shifts = the part of a day's shift value above 1.00 (the production 'extra' shift). It is production's "
         "analogue of overtime and is ALREADY inside total shifts and gross wages - it is not paid separately.",
         "PF / ESI: the payroll engine picks the salary-range rule (or flat rate) from the period's gross x 2 as the "

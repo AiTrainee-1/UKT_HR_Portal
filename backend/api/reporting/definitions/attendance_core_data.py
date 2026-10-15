@@ -12,6 +12,10 @@ Design rules every attendance_core report follows (see also reporting/README.md)
   engine's own helpers (``resolve_day_punch_logs`` for cross-midnight exits, ``_get_shift_for_date``,
   ``_t2s_minute`` ...). IN / OUT is always positional (even index = IN); the stored ``punch_type``
   is unreliable.
+* The day's compensation marker (``compensation_kind`` / ``_minutes`` / ``_note``) says what shaped the verdict: a next-day
+  OT allowance moved the start later (late minutes are measured from the moved start), a company-announced late-in /
+  early-out time replaced the shift's own (the record does not keep it, so those minutes are unknown, never guessed), and
+  birthday / relaxation days are paid present (or half) days. The readers are at ``paid_without_punches`` below.
 * A stored verdict is only as fresh as the last time somebody opened the day in Attendance. When punches changed, or a
   leave was approved, after it was stored, the day keeps its stored status but carries an "Out of date" flag
   (build_day) -- and the absentee list treats a leave approved after the fact as leave, not absence.
@@ -27,6 +31,7 @@ from typing import NamedTuple
 from django.db.models import F, Q
 
 from api.attendance_final import half_period
+from api import production_shift_rules as psr
 from api.models import (
     AttendanceDayRecord,
     AttendanceLog,
@@ -37,7 +42,6 @@ from api.models import (
     Holiday,
     LeaveRequest,
     PayrollSettings,
-    ProductionShiftConfig,
     ResignationRequest,
 )
 from api.shift_engine import (
@@ -50,6 +54,14 @@ from api.shift_engine import (
 
 from ..filters import ReportParamError, scope, select, text
 from ..formatting import parse_date
+from .production_judge import (
+    ProductionJudge,
+    employees_needing_history,
+    history_floor,
+    manual_days,
+    read_config,
+    shift_day_punches,
+)
 
 # A guard for the 30 s worker timeout: employees x days the loaders will materialise in one request.
 MAX_EMPLOYEE_DAYS = 60_000
@@ -134,7 +146,7 @@ def staff_type_filter(default: str = "staff"):
         [("staff", "Staff"), ("production", "Production"), ("all", "All employees")],
         default=default,
         placeholder="Staff",
-        help="Production employees are judged on shift credit (0.25 steps), staff on the two-half rule.",
+        help="Production employees are judged on shift credit (the shift table), staff on the two-half rule.",
     )
 
 
@@ -269,6 +281,73 @@ def paid_without_punches(rec) -> bool:
     return any(k in kind for k in PAID_WITHOUT_PUNCHES)
 
 
+# The day's compensation marker (AttendanceDayRecord.compensation_kind / _minutes / _note, written by the attendance engine).
+# ``compensation_kind`` holds only the MOST important marker of the day (birthday > relaxation > announced late-in >
+# announced early-out > OT allowance), so a lesser one can sit behind it: the allowance minutes are stored on their own,
+# and the sentences the engine writes for a company-announced window are in the marker note / the late reason. These
+# readers look at all of them, so a window is never missed because a relaxation outranks it.
+KIND_WINDOW_LATE_IN = "window_late_in"
+KIND_WINDOW_EARLY_OUT = "window_early_out"
+KIND_BIRTHDAY = "birthday"
+KIND_RELAXATION = "relaxation"
+_WINDOW_LATE_IN_TEXT = "company-announced late-in"
+_WINDOW_EARLY_OUT_TEXT = "company-announced early-out"
+
+
+def compensation_kind(rec) -> str:
+    return (getattr(rec, "compensation_kind", "") or "") if rec is not None else ""
+
+
+def _marker_text(rec) -> str:
+    return f"{getattr(rec, 'compensation_note', '') or ''} {getattr(rec, 'late_reason', '') or ''}".lower()
+
+
+def allowance_minutes(rec) -> int:
+    """Minutes of Type 1 next-day allowance the arrival used (they moved the day's start later), 0 when none."""
+    return max(0, int(getattr(rec, "compensation_minutes", 0) or 0)) if rec is not None else 0
+
+
+def window_late_in_applied(rec) -> bool:
+    """Did a company-announced late-in time (not the shift start) decide this day's arrival? Its start and grace are
+    the announced time, which the day record does not keep, so minutes late cannot be worked out from the shift."""
+    if rec is None:
+        return False
+    return KIND_WINDOW_LATE_IN in compensation_kind(rec) or _WINDOW_LATE_IN_TEXT in _marker_text(rec)
+
+
+def window_early_out_applied(rec) -> bool:
+    """Did a company-announced early-out time (not the shift end) decide this day's departure?"""
+    if rec is None:
+        return False
+    return KIND_WINDOW_EARLY_OUT in compensation_kind(rec) or _WINDOW_EARLY_OUT_TEXT in _marker_text(rec)
+
+
+def is_relaxation_day(rec) -> bool:
+    """A day an OT relaxation / redeemed balance topped up (some of it, or all of it, is paid without any work)."""
+    return rec is not None and (
+        KIND_RELAXATION in compensation_kind(rec) or "compensation relaxation" in _marker_text(rec)
+    )
+
+
+def compensation_flags(rec) -> list[str]:
+    """The marker as words for a register's flags: what compensation shaped the day (same words as the Attendance screens)."""
+    if rec is None:
+        return []
+    kind = compensation_kind(rec)
+    out: list[str] = []
+    if KIND_BIRTHDAY in kind:
+        out.append("Birthday leave")
+    if is_relaxation_day(rec):
+        out.append("Relaxation (compensation day)")
+    if window_late_in_applied(rec):
+        out.append("Announced late-in" + (" (late minutes not measured)" if rec.is_late else ""))
+    if window_early_out_applied(rec):
+        out.append("Announced early-out" + (" (early minutes not measured)" if rec.early_leave else ""))
+    if allowance_minutes(rec):
+        out.append(f"OT allowance used ({allowance_minutes(rec)} min)")
+    return out
+
+
 def punch_exceptions(secs: list[int], rec, *, is_today: bool, has_leave: bool, is_holiday: bool) -> list[str]:
     """Exception keys (EXC_*) for one working day. ``secs`` are the day's date-aware punch seconds."""
     out: list[str] = []
@@ -338,6 +417,9 @@ class AttendanceData:
         self._sat: dict[tuple[int, int, int], bool] = {}
         self._day_punches: dict[tuple[int, dt.date], list[DayPunch]] = {}
         self._prod_config = None
+        self._prod_judge = None
+        self._prod_manual: dict[int, dict] | None = None
+        self._prod_refs: dict[int, dict] = {}
         self._rec_emps: set[int] = set()
         self._punch_ids: set[int] = set()  # employees whose raw punches are loaded (all of them, or a few)
         self.service_masking = service
@@ -396,19 +478,50 @@ class AttendanceData:
         if not todo:
             return
         raw: dict[int, dict[dt.date, list[Punch]]] = defaultdict(lambda: defaultdict(list))
-        for eid, d, t, src in (
-            AttendanceLog.objects.filter(
-                employee_id__in=todo,
-                date__gte=self.date_from - dt.timedelta(days=1),
+        window = Q(date__gte=self.date_from - dt.timedelta(days=1), date__lte=self.date_to + dt.timedelta(days=1))
+        # A production night session is resolved from the days before it (production_shift_rules.resolve_day), so the
+        # production employees of a range the shift table judges are read over its longer look-back.
+        wide = {e.id for e in self.employees if e.employment_type == "production" and e.id in todo}
+        if wide and self.prod_judge().in_force(self.date_to):
+            window = Q(employee_id__in=todo - wide) & window | Q(
+                employee_id__in=wide,
+                date__gte=self.date_from - dt.timedelta(days=psr.NIGHT_LOOKBACK_DAYS),
                 date__lte=self.date_to + dt.timedelta(days=1),
             )
+        else:
+            window = Q(employee_id__in=todo) & window
+        for eid, d, t, src in (
+            AttendanceLog.objects.filter(window)
             .order_by("employee_id", "date", "punch_time", "id")
             .values_list("employee_id", "date", "punch_time", "source")
         ):
             raw[eid][d].append(Punch(eid, d, t, src or ""))
+        if wide and self.prod_judge().in_force(self.date_to):
+            self._extend_night_history(raw, wide)
         for eid, by_date in raw.items():
             self.logs[eid] = dict(by_date)
         self._punch_ids |= todo
+
+    def _extend_night_history(self, raw, wide: set) -> None:
+        """A production worker on a long unbroken run of nights needs the punches further back than the default window to
+        line the nights up (production_shift_rules.needs_history): ONE more query for all of them, as the engine does."""
+        floor = self.date_from - dt.timedelta(days=psr.NIGHT_LOOKBACK_DAYS)
+        refs = {
+            eid: {k: [(_t2s(p.punch_time), (k, i)) for i, p in enumerate(v)] for k, v in by_date.items()}
+            for eid, by_date in raw.items()
+            if eid in wide
+        }
+        manual = {eid: self.prod_manual_dates(eid) for eid in refs}
+        ruleset = self.prod_judge().ruleset_for(self.date_to)
+        needy = employees_needing_history(refs, self.date_from, floor, ruleset, manual)
+        if not needy:
+            return
+        for eid, d, t, src in (
+            AttendanceLog.objects.filter(employee_id__in=needy, date__gte=history_floor(self.date_from), date__lt=floor)
+            .order_by("employee_id", "date", "punch_time", "id")
+            .values_list("employee_id", "date", "punch_time", "source")
+        ):
+            raw[eid][d].append(Punch(eid, d, t, src or ""))
 
     def punches_loaded(self, emp_id: int) -> bool:
         return emp_id in self._punch_ids
@@ -482,9 +595,10 @@ class AttendanceData:
         return self._sat[key]
 
     def prod_config(self):
-        """The production punch-1 / punch-4 reference times (ProductionShiftConfig), read once."""
+        """The production punch-1 / punch-4 reference times (ProductionShiftConfig), read once. They judge only the days
+        BEFORE the shift-table rules start (``prod_judge``); read without creating the row (a report never writes)."""
         if self._prod_config is None:
-            cfg = ProductionShiftConfig.get()
+            cfg = read_config()
             # a freshly created singleton keeps its TimeField defaults as text until reloaded
             for name in ("punch1_time", "punch4_time"):
                 v = getattr(cfg, name)
@@ -492,6 +606,20 @@ class AttendanceData:
                     setattr(cfg, name, dt.datetime.strptime(v[:5], "%H:%M").time())
             self._prod_config = cfg
         return self._prod_config
+
+    def prod_judge(self) -> ProductionJudge:
+        """The shift-table rules (production_shift_rules) as one run sees them: they judge a production day on/after the
+        effective date (group start, main out and grace); earlier days keep the legacy times above."""
+        if self._prod_judge is None:
+            self._prod_judge = ProductionJudge(self.prod_config())
+        return self._prod_judge
+
+    def prod_manual_dates(self, emp_id: int) -> set:
+        """Dates HR entered by hand for this production employee (outside every night session), read once for the run."""
+        if self._prod_manual is None:
+            ids = [e.id for e in self.employees if e.employment_type == "production"]
+            self._prod_manual = manual_days(ids, history_floor(self.date_from), self.date_to + dt.timedelta(days=1))
+        return set(self._prod_manual.get(emp_id, {}))
 
     def in_service(self, emp, d: dt.date) -> bool:
         """False before the joining date and after the approved last working day (the engine ignores both)."""
@@ -529,6 +657,22 @@ class AttendanceData:
             return got
         by_date = self.logs.get(emp.id, {})
         own = by_date.get(d, [])
+        ruleset = self.prod_judge().ruleset_for(d) if emp.employment_type == "production" else None
+        if ruleset is not None and self.punches_loaded(emp.id):
+            # The shift table is in force: a night worker's closing punch belongs to the day the shift began (the engine's
+            # own resolution, double taps dropped): the punches are the shift day's, the closing one dated next morning.
+            refs = self._prod_refs.get(emp.id)
+            if refs is None:
+                refs = self._prod_refs[emp.id] = {
+                    k: [(_t2s(p.punch_time), (k, i)) for i, p in enumerate(v)] for k, v in by_date.items()
+                }
+            out = []
+            for secs, (k, i) in shift_day_punches(ruleset, d, refs, self.prod_manual_dates(emp.id)):
+                p = by_date[k][i]
+                out.append(DayPunch(secs, p.punch_time, p.date, p.source))
+            out.sort(key=lambda p: (p.secs, p.at))
+            self._day_punches[key] = out
+            return out
         resolved = resolve_day_punch_logs(
             emp, d, own, self.settings, assignments=self.assignments.get(emp.id, []), logs_by_date=by_date
         )
@@ -612,34 +756,44 @@ def late_minutes(rec, shift, employee, data: AttendanceData) -> int | None:
     """Minutes the first punch is after the (permission-shifted) shift start, for a day the engine flagged late.
     The flag itself (grace, compensation day, half-day leave ...) is the engine's; minutes are not stored anywhere.
     A Type 1 next-day allowance moved the start later by the minutes the record carries, so they are added; a company
-    late-in window moved it to an announced time the record does not keep, so such a day is not measured."""
+    late-in window moved it to an announced time the record does not keep, so such a day is not measured (None: unknown,
+    never a guess). A day the engine did not flag late is never late here, whatever its punches look like."""
     if rec is None or not rec.is_late or rec.first_punch is None:
         return None
     if employee.employment_type == "production":
+        judged = data.prod_judge().judgement(rec)
+        if judged is not None:  # the shift table judged the day: minutes past the group's start, as the engine measured
+            return judged.late_minutes if judged.is_late and judged.late_minutes > 0 else None
         base = _t2s(data.prod_config().punch1_time)
     elif shift is None:
         return None
     else:
-        if "window_late_in" in (getattr(rec, "compensation_kind", "") or ""):
+        if window_late_in_applied(rec):
             return None
         base = _t2s(shift.start_time) + (3600 if rec.morning_permission_applied else 0)
-        base += 60 * (getattr(rec, "compensation_minutes", 0) or 0)
+        base += 60 * allowance_minutes(rec)
     m = (_t2s_minute(rec.first_punch) - base) // 60
     return m if m > 0 else None
 
 
 def early_minutes(rec, shift, employee, data: AttendanceData, last_secs: int | None) -> int | None:
-    """Minutes the last punch is before the (permission-shifted) shift end, for a day flagged early-out."""
+    """Minutes the last punch is before the (permission-shifted) shift end, for a day flagged early-out. A day a company
+    early-out window decided was judged against the announced time (the record does not keep it): not measured."""
     if rec is None or not rec.early_leave:
         return None
     last = last_secs if last_secs is not None else (_t2s(rec.last_punch) if rec.last_punch else None)
     if last is None:
         return None
     if employee.employment_type == "production":
+        judged = data.prod_judge().judgement(rec)
+        if judged is not None:  # minutes before the group's main out (a night group's is the next morning)
+            return judged.early_minutes if judged.early_leave and judged.early_minutes > 0 else None
         end = _t2s(data.prod_config().punch4_time)
     elif shift is None:
         return None
     else:
+        if window_early_out_applied(rec):
+            return None
         end = _t2s(shift.end_time) - (3600 if rec.evening_permission_applied else 0)
     m = (end - last) // 60
     return m if m > 0 else None
@@ -748,6 +902,7 @@ def build_day(data: AttendanceData, emp, d: dt.date, *, deduct_lunch: bool = Tru
             flags.append("Permission")
         if rec.is_compensation_day:
             flags.append("Compensation day")
+        flags.extend(compensation_flags(rec))
         if rec.is_half_day_leave:
             flags.append("Half-day leave")
         if rec.source == "manual" and day.label in (L_PRESENT, L_HALF, L_ABSENT, L_LEAVE, L_HOLIDAY):

@@ -34,6 +34,7 @@ AUDIT_MODULES = (
     ("bonus", "Bonus"),
     ("compensation", "Compensation"),
     ("compensation_settings", "Compensation settings"),
+    ("production_shift_rules", "Production shift rules"),
     ("payroll", "Payroll"),
     ("mobile_app_login", "Mobile app login"),
     ("mobile_app_version", "Mobile app version"),

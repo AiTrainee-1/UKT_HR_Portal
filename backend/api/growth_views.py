@@ -175,6 +175,15 @@ def _resolve_override_fields(record: AttendanceDayRecord, emp: Employee, data: d
 
     if status == "present":
         max_shifts = Decimal("1.50") if emp.employment_type == "production" else Decimal("1.00")
+        if emp.employment_type == "production":
+            # From the date the shift-table rules take over a production day can be worth up to the table's top value
+            # (3 shifts by default): keep what the engine computed instead of cutting it to the old 1.5-shift day.
+            from . import production_shift_rules as psr
+            from .models import ProductionShiftConfig
+
+            ruleset = psr.rules_for_day(ProductionShiftConfig.get(), record.date)
+            if ruleset is not None:
+                max_shifts = max(point.value for group in ruleset.groups for point in group.points)
         shifts = min(Decimal(str(record.shifts_earned or 0)) or Decimal("1.00"), max_shifts)
         if shifts < Decimal("1.00"):
             shifts = Decimal("1.00")

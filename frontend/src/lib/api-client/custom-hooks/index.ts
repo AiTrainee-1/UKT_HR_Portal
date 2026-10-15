@@ -17,6 +17,7 @@ export * from "./growth";
 export * from "./organization";
 export * from "./payroll";
 export * from "./production-cycles";
+export * from "./production-shift-rules";
 export * from "./payroll-insights";
 export * from "./recruitment";
 export * from "./reports";

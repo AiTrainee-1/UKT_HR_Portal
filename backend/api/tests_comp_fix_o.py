@@ -697,7 +697,8 @@ class EmployeeRefreshTests(ec.EmployeeBase):
         self.assertFalse(OvertimeRecord.objects.exists())
         body = self.comp()
         item = self.items(body, "ot_allowance")[0]
-        self.assertEqual((item["date"], item["minutes"], item["status"]), ("2026-10-13", 30, "pending"))
+        # an automatic allowance that nothing has used yet and whose window is open reads "Available", not "Waiting"
+        self.assertEqual((item["date"], item["minutes"], item["status"]), ("2026-10-13", 30, "available"))
         self.assertEqual((body["todayAllowance"]["date"], body["todayAllowance"]["minutes"]), ("2026-10-14", 30))
         self.assertEqual(OvertimeRecord.objects.filter(employee=self.ravi).count(), 0)  # nobody else's rows
 

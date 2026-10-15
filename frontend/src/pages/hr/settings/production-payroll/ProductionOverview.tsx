@@ -70,8 +70,9 @@ export function ProductionOverview({ settings }: { settings: PayrollSettingsItem
     >
       <ol className="mt-3 grid gap-2 md:grid-cols-2">
         <Step n={1} title="Shifts earned each day">
-          Each day's punches are matched against the production punch times and shift segments: that decides how many
-          shifts (0.25, 0.5, 1, 1.5 ...) the day earns. <TextLink to="/hr/shifts">Manage Shifts - Production</TextLink>
+          Each day's punches are worked out by the production shift rules (groups, ladders and breaks): that decides how
+          many shifts (0.25, 0.5, 1, 1.5 ...) the day earns.{" "}
+          <TextLink to="/hr/settings?tab=production_shifts">Settings - Production Shifts</TextLink>
         </Step>
         <Step n={2} title="Pay = shifts earned x the worker's own rate">
           Each employee's Salary Per Shift (on the employee). New production employees start from the suggestion on the{" "}

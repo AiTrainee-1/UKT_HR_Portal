@@ -427,11 +427,13 @@ describe("Settings -> Production Payroll", () => {
     expect(page!.text()).not.toContain("Not saved yet");
   });
 
-  it("the Attendance & Shift sub-tab sets nothing: it points to Manage Shifts, Attendance and the Payroll tab, and scales a month by the cycle", async () => {
+  it("the Attendance & Shift sub-tab sets nothing: it points to Production Shifts, Attendance and the Payroll tab, and scales a month by the cycle", async () => {
     await open();
     await openSubTab("Attendance & Shift");
     expect(page!.text()).toContain("Shifts earned, pay and PF / ESI");
-    expect(q('[data-testid="production-shifts-elsewhere"] a')?.getAttribute("href")).toBe("/hr/shifts");
+    expect(q('[data-testid="production-shifts-elsewhere"] a')?.getAttribute("href")).toBe(
+      "/hr/settings?tab=production_shifts",
+    );
     expect(q('[data-testid="production-attendance-elsewhere"] a')?.getAttribute("href")).toBe(
       "/hr/settings?tab=attendance#production-attendance",
     );

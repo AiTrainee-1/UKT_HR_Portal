@@ -121,10 +121,10 @@ export const ATTENDANCE_SETTINGS: SettingMeta[] = [
     id: "production-attendance",
     tab: "attendance",
     section: PRODUCTION,
-    title: "Production punch times and pay segments",
+    title: "Old production punch times and pay segments",
     purpose:
-      "Each segment is a stretch of the day worth part of a shift. A worker earns a segment when they arrive by its start plus the grace and leave no earlier than its end minus the grace; pay is the shifts earned times the worker's salary per shift.",
-    keywords: ["production", "segments", "punch 1", "punch 4", "shift value", "grace", "manage shift"],
+      "Before the production shift rules start, a production day earns the segments its punches cover: a segment is earned when the worker arrives by its start plus the grace and leaves no earlier than its end minus the grace. This is the old calculation, kept read-only for those days; from the rules' start date the Production Shifts tab decides.",
+    keywords: ["production", "segments", "punch 1", "punch 4", "shift value", "grace", "old calculation", "read-only"],
   },
   {
     id: "production-late",
@@ -132,7 +132,7 @@ export const ATTENDANCE_SETTINGS: SettingMeta[] = [
     section: PRODUCTION,
     title: "Production late deductions",
     purpose:
-      "What a late production arrival costs is set on Settings - Production Payroll (Late Detection). It is judged from the production shift's own start and grace in Manage Shift, not from Punch 1 above, and it has its own free allowance and slabs.",
+      "What a late production arrival costs is set on Settings - Production Payroll (Late Detection), with its own free allowance and slabs. From the start date of the production shift rules a day is judged late from its group's start and the grace on the Production Shifts tab; before it, from the old production shift in Manage Shift, not from Punch 1 above.",
     keywords: ["production", "late", "deduction", "production payroll"],
   },
 ];

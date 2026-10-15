@@ -634,11 +634,13 @@ def _production_run(ctx):
         },
     ]
     notes = [
-        "Shift credit is the stored value of each production day (0.25 steps up to the maximum of the active shift segments). A dash "
+        "Shift credit is the stored value of each production day: the shift table's value from its start date (up to the highest "
+        "rule of the day's group, 3.00 by default), the active shift segments' value (up to their maximum) before it. A dash "
         "means a holiday or a day with no stored record; 0 means absent. Production employees have no leave and work Sundays as a "
         "normal day.",
-        "Extra shifts = credit above 1.00 on a day (an inference: the segments carry no overtime flag). Late days come from the "
-        "production shift reference times in Settings (first punch after arrival + grace); production payroll's own late deduction, when "
+        "Extra shifts = credit above 1.00 on a day (an inference: the segments carry no overtime flag). Late days are the flag "
+        "stored on each day: the first punch after the group's start + grace from the shift-table start date, after the legacy "
+        "arrival time + grace before it; production payroll's own late deduction, when "
         "switched on, uses the assigned shift template instead. Gross = total shifts x rate per shift, exactly as production payroll "
         "computes it before deductions.",
     ]
@@ -668,7 +670,7 @@ register(
     ReportSpec(
         id="production-shift-register",
         title="Production Shift Register",
-        description="Production employees' daily shift credit (0.25 steps to 1.50), extra shifts, late days and gross for a period.",
+        description="Production employees' daily shift credit, extra shifts, late days and gross for a period.",
         category="attendance",
         icon="Building2",
         tags=("production", "shift credit", "shifts", "piece", "extra shift", "weekly wages"),

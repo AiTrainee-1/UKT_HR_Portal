@@ -48,6 +48,12 @@ production:     1.5-shift day (works in both modes):
                 windows configurable in PayrollSettings. Entirely separate
                 from the staff rules above -no Half-Day/Late Detection/
                 Permission concept applies to production.
+
+                That is the LEGACY calculation (_compute_production). Days on/after
+                ProductionShiftConfig.rules_effective_from are judged by the shift
+                table in Settings -> Production shifts instead (production_shift_
+                rules.py: groups, ladder, breaks, grace, night sessions); every earlier
+                day keeps the legacy result so nothing already paid is re-judged.
 """
 
 import calendar
@@ -63,6 +69,7 @@ from .arrival_rules import (
     ZONE_EXCUSED, ZONE_LATE, ZONE_ON_TIME, ZONE_QUARTER, ZONE_SECOND_HALF,
     explain as explain_arrival, hhmm as arrival_hhmm, limits_for as arrival_limits_for, zone_of as arrival_zone_of,
 )
+from . import production_shift_rules as psr
 from .clock import ist_today
 from .models import (
     AttendanceDayRecord, AttendanceLog, Attendance, CompensationDayAnnouncement, Holiday,
@@ -859,6 +866,202 @@ def _compute_production(emp, d, punch_times, settings, config=None, segments=Non
     }
 
 
+# ── Production: the shift-table rules (production_shift_rules.py) ───────────
+
+_UNSET = object()
+
+
+def _production_rules_in_force(d: date_type, prod_config, prefetch):
+    """The RuleSet when the shift-table rules judge production day `d`, else None (the legacy calculation).
+
+    A bulk caller (compute_month_records / compute_range_records / production_prefetch_for_day) decides once for its
+    whole range and hands the answer down as prefetch["prod_ruleset"]; anybody else is judged from the config row, and
+    the ruleset is loaded (three queries, remembered on the config object) only when the date really is in force."""
+    ruleset = prefetch.get("prod_ruleset", _UNSET)
+    if ruleset is _UNSET:
+        config = prod_config if prod_config is not None else ProductionShiftConfig.get()
+        return psr.rules_for_day(config, d)
+    return ruleset if ruleset is not None and ruleset.applies(d) else None
+
+
+class _PunchWindow:
+    """{date: [(seconds since that date's midnight, AttendanceLog)]} for production_shift_rules, built lazily from
+    {date: [AttendanceLog]}; the shift day being resolved may be replaced by the logs the caller already holds."""
+
+    def __init__(self, window, day=None, own_logs=None):
+        self._window = window
+        self._day = day
+        self._own = own_logs
+        self._cache: dict = {}
+
+    def get(self, k, default=None):
+        if k not in self._cache:
+            logs = self._own if k == self._day and self._own is not None else self._window.get(k, ())
+            self._cache[k] = [(_t2s(log.punch_time), log) for log in logs]
+        return self._cache[k]
+
+
+def _production_manual_dates(employee_ids, lo: date_type, hi: date_type) -> dict:
+    """{employee id: {dates of MANUAL override records}} over lo..hi: those days neither consume nor are closed by the
+    night-session chain. One query for any number of employees."""
+    out: dict = {}
+    for emp_id, day in AttendanceDayRecord.objects.filter(
+        employee_id__in=list(employee_ids), source="manual", date__gte=lo, date__lte=hi,
+    ).values_list("employee_id", "date"):
+        out.setdefault(emp_id, set()).add(day)
+    return out
+
+
+def _production_extend_history(windows: dict, first_day: date_type, floor: date_type, ruleset, manual_by_emp: dict) -> set:
+    """Make every employee's punch window of `windows` ({employee id: {date: [AttendanceLog]}}, holding the punches from
+    `floor` on) deep enough to resolve `first_day`: employees whose night-session walk has not met a sync point inside
+    it get the punches back to first_day - MAX_CHAIN_DAYS from ONE query (all of them together). Returns the ids that
+    were extended; nothing is read when nobody needs it."""
+    needy = [
+        emp_id
+        for emp_id, window in windows.items()
+        if psr.needs_history(
+            _PunchWindow(window), first_day, floor, **psr.session_kwargs(ruleset, manual_by_emp.get(emp_id))
+        )
+    ]
+    if not needy:
+        return set()
+    new_lo = first_day - timedelta(days=psr.MAX_CHAIN_DAYS)
+    for log in AttendanceLog.objects.filter(
+        employee_id__in=needy, date__gte=new_lo, date__lt=floor,
+    ).order_by("punch_time"):
+        windows[log.employee_id].setdefault(log.date, []).append(log)
+    return set(needy)
+
+
+def _production_session_logs(emp, d: date_type, own_logs, ruleset, prefetch) -> list:
+    """The AttendanceLog objects of shift day `d` with night sessions resolved (production_shift_rules.resolve_day): a
+    closing punch of the PREVIOUS night is dropped, and the next morning's closing punch of THIS night is added (it
+    keeps its own date, so _chronological reads it as +24h). Needs the employee's punches from NIGHT_LOOKBACK_DAYS
+    before `d` to the day after (one query, or prefetch["prod_logs_by_date"] / ["prod_logs_span"] from a bulk caller),
+    one more query only when the chain runs back past that window without a sync point, and the dates of the
+    employee's manual override days (prefetch["prod_manual_dates"], else one query)."""
+    lo = d - timedelta(days=psr.NIGHT_LOOKBACK_DAYS)
+    hi = d + timedelta(days=1)
+    window = prefetch.get("prod_logs_by_date")
+    span = prefetch.get("prod_logs_span")
+    if window is None or span is None or span[0] > lo or span[1] < hi:
+        window = {}
+        for log in AttendanceLog.objects.filter(employee=emp, date__gte=lo, date__lte=hi).order_by("punch_time"):
+            window.setdefault(log.date, []).append(log)
+        floor = lo
+    else:
+        floor = span[0]
+    manual = prefetch.get("prod_manual_dates")
+    if manual is None:
+        manual = _production_manual_dates([emp.pk], d - timedelta(days=psr.MAX_CHAIN_DAYS), hi).get(emp.pk, set())
+    kwargs = psr.session_kwargs(ruleset, manual)
+    by_date = _PunchWindow(window, d, own_logs)
+    if psr.needs_history(by_date, d, floor, **kwargs):
+        window = {k: list(v) for k, v in window.items()}  # the bulk caller's shared window is not touched
+        _production_extend_history({emp.pk: window}, d, floor, ruleset, {emp.pk: manual})
+        by_date = _PunchWindow(window, d, own_logs)
+    return [log for _secs, log in psr.resolve_day(by_date, d, **kwargs)]
+
+
+def _production_range_rules(prod_config, last_day: date_type):
+    """The RuleSet for a whole range ending at `last_day`, or None when no day of it is judged by the new rules."""
+    return psr.rules_for_day(prod_config, last_day)
+
+
+def production_prefetch_for_day(employee_ids, d: date_type, prod_config=None) -> dict:
+    """The production prefetch of a ROSTER day (many employees, one date). Hand `production_prefetch_for(pf, emp.id)`
+    to every production employee's compute_day_record(prefetch=...): the night-session look-back of the whole roster
+    is then a fixed number of queries (the punches, the manual override days, and one more for the employees whose
+    night chain runs back past the default window) instead of some per employee. Nothing is loaded (and nothing
+    queried beyond the config row) while the new rules do not judge `d`."""
+    config = prod_config if prod_config is not None else ProductionShiftConfig.get()
+    ruleset = psr.rules_for_day(config, d)
+    pf = {"prod_ruleset": ruleset, "_by_employee": {}, "_manual": {}, "_floor": {}}
+    if ruleset is None:
+        return pf
+    ids = list(employee_ids)
+    lo = d - timedelta(days=psr.NIGHT_LOOKBACK_DAYS)
+    hi = d + timedelta(days=1)
+    pf["prod_logs_span"] = (lo, hi)
+    by_employee: dict = pf["_by_employee"]
+    for log in AttendanceLog.objects.filter(
+        employee_id__in=ids, date__gte=lo, date__lte=hi,
+    ).order_by("punch_time"):
+        by_employee.setdefault(log.employee_id, {}).setdefault(log.date, []).append(log)
+    pf["_manual"] = _production_manual_dates(ids, d - timedelta(days=psr.MAX_CHAIN_DAYS), hi)
+    extended = _production_extend_history(by_employee, d, lo, ruleset, pf["_manual"])
+    new_lo = d - timedelta(days=psr.MAX_CHAIN_DAYS)
+    pf["_floor"] = {emp_id: new_lo for emp_id in extended}
+    return pf
+
+
+def production_prefetch_for(pf: dict, employee_id: int) -> dict:
+    """One employee's slice of production_prefetch_for_day(), ready to merge into compute_day_record's `prefetch`."""
+    out = {"prod_ruleset": pf["prod_ruleset"]}
+    if pf["prod_ruleset"] is not None:
+        out["prod_logs_by_date"] = pf["_by_employee"].get(employee_id, {})
+        lo, hi = pf["prod_logs_span"]
+        out["prod_logs_span"] = (pf["_floor"].get(employee_id, lo), hi)
+        out["prod_manual_dates"] = pf["_manual"].get(employee_id, set())
+    return out
+
+
+def _existing_records_and_manual_days(emp, first_day: date_type, last_day: date_type, with_manual: bool):
+    """(the employee's day records of first_day..last_day by date, the dates of their MANUAL records) in ONE query. With
+    `with_manual` the query also returns the manual records of the MAX_CHAIN_DAYS before first_day and of the day after
+    last_day, which the night-session chain needs (they neither consume nor are closed); otherwise the second value is
+    None and the query is the plain one."""
+    cond = Q(date__gte=first_day, date__lte=last_day)
+    if with_manual:
+        cond |= Q(
+            source="manual",
+            date__gte=first_day - timedelta(days=psr.MAX_CHAIN_DAYS),
+            date__lte=last_day + timedelta(days=1),
+        )
+    rows = list(AttendanceDayRecord.objects.filter(cond, employee=emp))
+    records = {r.date: r for r in rows if first_day <= r.date <= last_day}
+    manual = {r.date for r in rows if r.source == "manual"} if with_manual else None
+    return records, manual
+
+
+def _production_bulk_prefetch(prefetch, emp, first_day, last_day, lookback, logs_by_date, ruleset, manual_dates):
+    """Fill the production keys of a month / range prefetch: the punch window (`logs_by_date` already holds
+    first_day - lookback .. last_day + 1), the manual days and, with ONE more query and only when the first day's night
+    chain has no sync point inside the window, the punches back to first_day - MAX_CHAIN_DAYS."""
+    floor = first_day - timedelta(days=lookback)
+    if _production_extend_history({emp.pk: logs_by_date}, first_day, floor, ruleset, {emp.pk: manual_dates}):
+        floor = first_day - timedelta(days=psr.MAX_CHAIN_DAYS)
+    prefetch["prod_logs_by_date"] = logs_by_date
+    prefetch["prod_logs_span"] = (floor, last_day + timedelta(days=1))
+    prefetch["prod_manual_dates"] = manual_dates
+
+
+def production_day_result(d: date_type, by_date, config=None, segments=None, ruleset=None, manual=None) -> dict:
+    """The production result of day `d` from the employee's RAW punches, never writing anything (for reports and
+    previews): `by_date` is {calendar date: [time | seconds, ...]} covering d - NIGHT_LOOKBACK_DAYS .. d + 1 (d -
+    MAX_CHAIN_DAYS for a night chain that long: a shorter window treats its first day as a fresh start). `manual` =
+    dates of the employee's manual override days (they neither consume nor are closed).
+
+    Days on/after the effective date come from the shift table (with `rule_group` / `rule_note`); earlier days (or no
+    usable table) from the legacy calculation on the day's own punches, the same function payroll runs. `config`,
+    `segments` and `ruleset` may be passed to avoid loading them per call."""
+    if config is None:
+        config = ProductionShiftConfig.get()
+    if ruleset is None:
+        ruleset = psr.rules_for_day(config, d)
+    elif not ruleset.applies(d):
+        ruleset = None
+    if ruleset is not None:
+        result = psr.evaluate_with_session(ruleset, d, by_date, manual)
+        if result is not None:
+            return result
+    own = sorted(
+        (t if not isinstance(t, int) else psr.s_to_time(t)) for t in by_date.get(d, [])
+    )
+    return _compute_production(None, d, own, None, config, segments)
+
+
 # ── Main entry: compute (or keep) the final record for one day ─────────────
 
 def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
@@ -936,6 +1139,19 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
     if resolved_logs is not punch_logs:
         punch_logs = resolved_logs
         day_pairs = _chronological(punch_logs)
+
+    # Production, on/after the date the shift-table rules take over: the night session is resolved the same way (a
+    # closing punch made the next morning belongs to the shift DAY the night began on). A day with no punches of its own
+    # has nothing to resolve; an earlier day keeps its raw punches (legacy). `punch_times` stays the raw list.
+    is_production = emp.employment_type == "production"
+    prod_rules = None
+    if is_production and punch_logs:
+        if prod_config is None and "prod_ruleset" not in prefetch:
+            prod_config = ProductionShiftConfig.get()  # read the settings row once for the rules AND the legacy fallback
+        prod_rules = _production_rules_in_force(d, prod_config, prefetch)
+        if prod_rules is not None:
+            punch_logs = _production_session_logs(emp, d, punch_logs, prod_rules, prefetch)
+            day_pairs = _chronological(punch_logs)
     day_secs = [s for s, _t in day_pairs]
     day_times = [t for _s, t in day_pairs]
 
@@ -968,8 +1184,6 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         "compensation_kind": "", "compensation_minutes": 0, "compensation_note": "",
         "ot_extra_minutes": 0,
     }
-
-    is_production = emp.employment_type == "production"
 
     # Every approved EmployeePermission of this day -each with its canonical
     # type and whether it is still within PayrollSettings.permission_monthly_
@@ -1033,7 +1247,19 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         if not day_times and has_manual:
             computed = {"status": "present", "shifts_earned": Decimal("1.00")}
         elif is_production:
-            computed = _compute_production(emp, d, day_times, settings, prod_config, prod_segments)
+            computed = None
+            if prod_rules is not None:
+                computed = psr.evaluate_day(prod_rules, d, day_secs)
+                if computed is not None:
+                    # rule_group / rule_note are for reports; they are not columns of the record
+                    computed.pop("rule_group", None)
+                    computed.pop("rule_note", None)
+            if computed is None:
+                # before the effective date (or no group fits this weekday): the legacy calculation, on the day's own
+                # raw punches
+                computed = _compute_production(
+                    emp, d, punch_times if prod_rules is not None else day_times, settings, prod_config, prod_segments,
+                )
         else:
             from .models import EmployeePermission
 
@@ -1384,6 +1610,13 @@ def compute_month_records(emp, year: int, month: int, settings=None, comp_prefet
         comp_ctx = comp.build_context(settings, month_start, month_end, employee_ids=[emp.pk], lookback_employee=emp)
     lookback = comp_rules.LOOKBACK_DAYS if comp_ctx.allowance_on else 1
 
+    # Production: the shift-table rules judge the month's days from the effective date on (None = every day legacy).
+    # They resolve night sessions, which needs the punches of the days before the month too.
+    prod_config = ProductionShiftConfig.get() if emp.employment_type == "production" else None
+    prod_rules = _production_range_rules(prod_config, month_end) if prod_config is not None else None
+    if prod_rules is not None:
+        lookback = max(lookback, psr.NIGHT_LOOKBACK_DAYS)
+
     # One day before AND after the month too -cross-midnight punch
     # reattribution (resolve_day_punch_logs) for the LAST day of the month
     # needs the following day's early punches to check, and for symmetry the
@@ -1399,7 +1632,6 @@ def compute_month_records(emp, year: int, month: int, settings=None, comp_prefet
     holiday_dates = _holiday_dates_for_month(year, month)
     half_day_leave_dates = _half_day_leave_dates_for_month(emp, year, month)
 
-    prod_config = ProductionShiftConfig.get() if emp.employment_type == "production" else None
     prod_segments = (
         list(ProductionShiftSegment.objects.filter(is_active=True))
         if emp.employment_type == "production" else None
@@ -1412,11 +1644,9 @@ def compute_month_records(emp, year: int, month: int, settings=None, comp_prefet
         .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=month_start - timedelta(days=lookback)))
         .select_related("shift")
     )
-    existing_day_records = {
-        r.date: r for r in AttendanceDayRecord.objects.filter(
-            employee=emp, date__gte=month_start, date__lte=month_end,
-        )
-    }
+    existing_day_records, prod_manual_dates = _existing_records_and_manual_days(
+        emp, month_start, month_end, with_manual=prod_rules is not None,
+    )
     manual_attendance_dates = {
         date_type.fromisoformat(str(dt)[:10])
         for dt in Attendance.objects.filter(
@@ -1450,6 +1680,10 @@ def compute_month_records(emp, year: int, month: int, settings=None, comp_prefet
         ),
         "compensation_ctx": comp_ctx,
     }
+    if prod_config is not None:
+        prefetch["prod_ruleset"] = prod_rules
+        if prod_rules is not None:
+            _production_bulk_prefetch(prefetch, emp, month_start, month_end, lookback, logs_by_date, prod_rules, prod_manual_dates)
 
     records = []
     for day in range(1, days_in_month + 1):
@@ -1504,6 +1738,11 @@ def compute_range_records(emp, date_from: date_type, date_to: date_type, setting
     else:
         comp_ctx = comp.build_context(settings, date_from, date_to, employee_ids=[emp.pk], lookback_employee=emp)
     lookback = comp_rules.LOOKBACK_DAYS if comp_ctx.allowance_on else 1
+    # Production: see compute_month_records (shift-table rules + the night-session look-back).
+    prod_config = ProductionShiftConfig.get() if emp.employment_type == "production" else None
+    prod_rules = _production_range_rules(prod_config, date_to) if prod_config is not None else None
+    if prod_rules is not None:
+        lookback = max(lookback, psr.NIGHT_LOOKBACK_DAYS)
     # One day of padding on each side -cross-midnight punch reattribution
     # (resolve_day_punch_logs) for the last day needs the following day's
     # early punches to check.
@@ -1529,7 +1768,6 @@ def compute_range_records(emp, date_from: date_type, date_to: date_type, setting
         holiday_dates |= _holiday_dates_for_month(y, m)
         half_day_leave_dates.update(_half_day_leave_dates_for_month(emp, y, m))
 
-    prod_config = ProductionShiftConfig.get() if emp.employment_type == "production" else None
     prod_segments = (
         list(ProductionShiftSegment.objects.filter(is_active=True))
         if emp.employment_type == "production" else None
@@ -1542,11 +1780,9 @@ def compute_range_records(emp, date_from: date_type, date_to: date_type, setting
         .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=date_from - timedelta(days=lookback)))
         .select_related("shift")
     )
-    existing_day_records = {
-        r.date: r for r in AttendanceDayRecord.objects.filter(
-            employee=emp, date__gte=date_from, date__lte=date_to,
-        )
-    }
+    existing_day_records, prod_manual_dates = _existing_records_and_manual_days(
+        emp, date_from, date_to, with_manual=prod_rules is not None,
+    )
     manual_attendance_dates = {
         date_type.fromisoformat(str(dt)[:10])
         for dt in Attendance.objects.filter(
@@ -1590,6 +1826,10 @@ def compute_range_records(emp, date_from: date_type, date_to: date_type, setting
         ),
         "compensation_ctx": comp_ctx,
     }
+    if prod_config is not None:
+        prefetch["prod_ruleset"] = prod_rules
+        if prod_rules is not None:
+            _production_bulk_prefetch(prefetch, emp, date_from, date_to, lookback, logs_by_date, prod_rules, prod_manual_dates)
 
     records = []
     d = date_from

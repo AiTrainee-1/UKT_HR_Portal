@@ -4,6 +4,7 @@ from datetime import time
 from decimal import Decimal
 from django.db import models
 
+from ..clock import ist_today
 from ..production_cycles import CYCLE_CHOICES
 from .core import Department, Designation, Employee
 
@@ -1328,12 +1329,48 @@ class ProductionShiftConfig(models.Model):
     grace_minutes = models.IntegerField(default=10, db_column="grace_minutes")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
+    # -- Production shift rules (2026-10-14) ---------------------------------
+    # The punch1..4 times, grace_minutes (10) and ProductionShiftSegment above are the LEGACY calculation. They are
+    # never changed: every day BEFORE rules_effective_from keeps being judged by them (nothing already paid is
+    # re-judged), and the legacy endpoints stay. Days on/after rules_effective_from are judged by the groups / ladder
+    # rules / breaks below (production_shift_rules.py). Every column has a database default so a release that is still
+    # running during a rolling deploy can keep inserting rows.
+    rules_enabled = models.BooleanField(default=True, db_default=True, db_column="rules_enabled")
+    # The first day the new rules judge. Set to the day the migration ran (IST), or the day a fresh row was created.
+    # NULL (a row nobody scheduled) means "not in force": the legacy calculation.
+    rules_effective_from = models.DateField(null=True, blank=True, db_column="rules_effective_from")
+    rules_grace_minutes = models.IntegerField(default=5, db_default=5, db_column="rules_grace_minutes")
+    # Minimum shifts credited to a worker with at least one complete in/out pair (0 = none).
+    rules_min_credit = models.DecimalField(
+        max_digits=4, decimal_places=2, default=Decimal("0.00"), db_default=Decimal("0.00"), db_column="rules_min_credit",
+    )
+    # A day's total is rounded to a multiple of this step (0.01, 0.05 or 0.25), 'nearest' or 'down'.
+    rules_rounding_step = models.DecimalField(
+        max_digits=4, decimal_places=2, default=Decimal("0.01"), db_default=Decimal("0.01"), db_column="rules_rounding_step",
+    )
+    rules_rounding_mode = models.TextField(default="nearest", db_default="nearest", db_column="rules_rounding_mode")
+    # A day below this is a Half Shift (status half_shift), at or above it Present.
+    rules_full_day_value = models.DecimalField(
+        max_digits=4, decimal_places=2, default=Decimal("1.00"), db_default=Decimal("1.00"), db_column="rules_full_day_value",
+    )
+    # Most hours between an open "in" punch and the next calendar day's first punch for that punch to close the session
+    # (default 18: 13:30 open + a 03:00 close is 13.5 h). The punch must ALSO be at or before the derived close-by time
+    # (latest next-day out time of the rules + 90 minutes), see production_shift_rules.RuleSet.close_by_s.
+    rules_night_session_hours = models.IntegerField(default=18, db_default=18, db_column="rules_night_session_hours")
+
     class Meta:
         db_table = "production_shift_config"
 
+    def save(self, *args, **kwargs):
+        # A row created any other way than the migration (ProductionShiftConfig.get(), objects.create, get_or_create)
+        # starts its rules today, never in the past: a past effective date would re-judge days already paid.
+        if self._state.adding and self.rules_effective_from is None:
+            self.rules_effective_from = ist_today()
+        super().save(*args, **kwargs)
+
     @classmethod
     def get(cls) -> "ProductionShiftConfig":
-        obj, _ = cls.objects.get_or_create(pk=1)
+        obj, _ = cls.objects.get_or_create(pk=1, defaults={"rules_effective_from": ist_today()})
         return obj
 
 
@@ -1353,4 +1390,74 @@ class ProductionShiftSegment(models.Model):
 
     class Meta:
         db_table = "production_shift_segments"
+        ordering = ["order", "id"]
+
+
+class ProductionShiftGroup(models.Model):
+    """
+    One kind of production day (Day, Night, Sunday, or one HR adds): where it starts, which first punches it takes, and
+    its ladder of ProductionShiftRule points. See production_shift_rules.py for how a day is picked and calculated.
+    """
+    KIND_CHOICES = [("day", "Day"), ("night", "Night"), ("sunday", "Sunday"), ("custom", "Custom")]
+    APPLIES_ON_CHOICES = [("mon_sat", "Monday to Saturday"), ("sunday", "Sunday"), ("all", "Every day")]
+
+    label = models.TextField()
+    kind = models.TextField(choices=KIND_CHOICES, default="custom")
+    applies_on = models.TextField(choices=APPLIES_ON_CHOICES, default="mon_sat", db_column="applies_on")
+    # The reference in-time of the shift (08:30 for the day shift, 21:00 for the night shift).
+    start_time = models.TimeField(db_column="start_time")
+    # A day whose first punch (its clock time) falls in [first_punch_from, first_punch_to] uses this group.
+    first_punch_from = models.TimeField(db_column="first_punch_from")
+    first_punch_to = models.TimeField(db_column="first_punch_to")
+    # The standard departure: used only for the early-leave flag (a night shift's 05:30 is the next day).
+    main_out_time = models.TimeField(null=True, blank=True, db_column="main_out_time")
+    main_out_next_day = models.BooleanField(default=False, db_column="main_out_next_day")
+    enabled = models.BooleanField(default=True)
+    order = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "production_shift_groups"
+        ordering = ["order", "id"]
+
+
+class ProductionShiftRule(models.Model):
+    """
+    One ladder point of a group: "a worker who leaves at out_time (the next day when out_next_day) earned shift_value".
+    Between two points the value grows in proportion to PAID time (breaks excluded), so each band has its own rate.
+    One out time may appear once per group among the enabled rows (checked by the API).
+    """
+    group = models.ForeignKey(
+        ProductionShiftGroup, on_delete=models.CASCADE, db_column="group_id", related_name="rules",
+    )
+    label = models.TextField(blank=True, default="")
+    out_time = models.TimeField(db_column="out_time")
+    out_next_day = models.BooleanField(default=False, db_column="out_next_day")
+    shift_value = models.DecimalField(max_digits=4, decimal_places=2, db_column="shift_value")
+    enabled = models.BooleanField(default=True)
+    order = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "production_shift_rules"
+        ordering = ["order", "id"]
+
+
+class ProductionBreak(models.Model):
+    """
+    An UNPAID break window (tea, lunch, dinner): same-day, start < end, the same for every group every day. Nobody has
+    to punch for it; the calculation simply never pays the minutes inside it.
+    """
+    label = models.TextField(blank=True, default="")
+    start_time = models.TimeField(db_column="start_time")
+    end_time = models.TimeField(db_column="end_time")
+    enabled = models.BooleanField(default=True)
+    order = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "production_breaks"
         ordering = ["order", "id"]

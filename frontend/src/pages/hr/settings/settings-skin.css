@@ -234,8 +234,11 @@ html.settings-skin-on {
   background: #ffffff;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.25);
 }
+/* Tailwind 4 moves the thumb with the `translate` property (translate-x-4 = 1rem), so a `transform` here is ADDED to it and
+   pushed the thumb 1.2rem too far, out of the track. Replace that property instead. */
 .settings-skin [data-slot="switch-thumb"][data-state="checked"] {
-  transform: translateX(1.2rem);
+  transform: none;
+  translate: 1.2rem 0;
 }
 
 /* the kit's own on/off switch (ToggleField) */

@@ -322,6 +322,9 @@ URL_MODULE_MAP: dict[str, str] = {
     # same as before.
     "biometric-devices": "settings.devices",
     "production-shift-config": "settings.attendance",
+    # Settings -> Production shifts (the shift table that judges production days from its effective date on). Its
+    # "preview" is a POST that only reads: see READ_ONLY_POST_PATHS below.
+    "production-shift-rules": "settings.attendance",
     "production-shift-segments": "settings.attendance",
     "document-settings": "settings.documents",
     "backup": "settings.backup",
@@ -330,6 +333,11 @@ URL_MODULE_MAP: dict[str, str] = {
     # above, not a settings.* key -it's the same permission that already
     # governs the ID Cards feature page, not a separate Settings concern.
 }
+
+
+# POST endpoints that only READ (their input is too structured for a query string) and write nothing: a role that may
+# only VIEW the module can call them, like a GET. Paths relative to /api/, exact. Everything else a POST does is a change.
+READ_ONLY_POST_PATHS: frozenset[str] = frozenset({"production-shift-rules/preview"})
 
 
 def resolve_module(path: str) -> str | None:

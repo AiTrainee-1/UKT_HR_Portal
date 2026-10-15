@@ -228,6 +228,12 @@ CORPUS = [
     ("update", "settings", "Universal settings updated", "settings-universal"),
     ("update", "settings", "Personal settings updated (3 field(s) overridden)", "settings-personal"),
     ("update", "settings", "Changed portal theme to 'ocean'", None),
+    (
+        "update",
+        "production_shift_rules",
+        "Changed production shift rules: grace minutes, shift groups and rules",
+        "production-shift-rules",
+    ),
     ("create", "mobile_app_version", "Published mobile app version 3.2", "app-version"),
     ("update", "mobile_app_version", "Updated mobile app version 3.2", "app-version"),
     ("delete", "mobile_app_version", "Deleted mobile app version 3.1", "record-deleted"),

@@ -22,9 +22,11 @@ from .models import (
     AttendanceLog,
     AttendanceOverrideRequest,
     AuditLog,
+    CasualLeaveRequest,
     DepartmentManager,
     Employee,
     EmployeePermission,
+    HolidayWorkClaim,
     HRUser,
     LeaveBalance,
     LeaveRequest,
@@ -35,6 +37,7 @@ from .models import (
     OnDutySession,
     OutpassRecord,
     OutpassRequest,
+    ResignationRequest,
     Role,
 )
 
@@ -1027,6 +1030,139 @@ class HodOwnRequestsTests(Base):
     def test_the_decision_endpoint_still_refuses_it(self):
         r = self.as_hod("patch", f"/api/manager/leave-requests/{self.own.id}/status", {"status": "approved"})
         self.assertEqual(r.status_code, 403)
+
+
+class HodOnlyNotificationTests(Base):
+    """A request nobody but a Department Head can decide (a holiday-work claim) is never announced to the head it is about:
+    they cannot decide it, so the notice would open an empty approvals list. Every other kind is left exactly as it was."""
+
+    def setUp(self):
+        super().setUp()
+        # the head is covered by their own assignment too (the department case): their own effective head is themselves
+        ManagerEmployeeAssignment.objects.get_or_create(manager=self.manager, employee=self.boss)
+
+    def told(self, key=None):
+        qs = Notification.objects.filter(employee=self.boss)
+        return qs.filter(type=key).count() if key else qs.count()
+
+    def test_only_the_fixed_department_head_workflows_are_head_only(self):
+        self.assertEqual({d.key for d in approval.DEFINITIONS if d.hod_only}, {"attendance_correction", "holiday_work"})
+        for d in approval.DEFINITIONS:
+            self.assertEqual(d.hod_only, (not d.editable and d.allowed_roles == (HOD,)), d.key)
+
+    def test_the_lookup_leaves_the_head_out_of_their_own_request_only_when_asked(self):
+        from .hod_scope import managers_to_notify
+
+        flag = "can_approve_compensation"
+        self.assertEqual([m.id for m in managers_to_notify(self.boss, flag)], [self.manager.id])  # as always
+        self.assertEqual(managers_to_notify(self.boss, flag, exclude_self=True), [])
+        # an ordinary employee's head is returned both ways
+        self.assertEqual([m.id for m in managers_to_notify(self.emp, flag)], [self.manager.id])
+        self.assertEqual([m.id for m in managers_to_notify(self.emp, flag, exclude_self=True)], [self.manager.id])
+
+    def test_a_head_is_not_told_about_their_own_head_only_request(self):
+        approval.notify_hod_of_request("holiday_work", self.boss, "holiday-work compensation claim")
+        approval.notify_new_request("holiday_work", self.boss, "holiday-work compensation claim")  # the submission path
+        self.assertEqual(Notification.objects.count(), 0)
+
+    def test_the_head_is_still_told_about_everybody_elses(self):
+        approval.notify_hod_of_request("holiday_work", self.emp, "holiday-work compensation claim")
+        (note,) = Notification.objects.all()
+        self.assertEqual((note.employee_id, note.type), (self.boss.id, "holiday_work"))
+        self.assertIn("Asha Kumar's holiday-work compensation claim", note.message)
+
+    def test_every_other_kind_notifies_the_employees_head_exactly_as_before(self):
+        # Deliberately unchanged by the holiday-work fix (it is limited to head-only workflows): pinned so that changing it
+        # later is a decision and not a side effect.
+        for key in ("leave", "permission", "casual_leave", "outpass"):
+            approval.notify_hod_of_request(key, self.boss, "request")
+            self.assertEqual(self.told(key), 1, key)
+        approval.notify_hod_of_request("leave", self.emp, "leave request")
+        self.assertEqual(self.told("leave"), 2)
+
+
+class ManagerPendingCountsAgreeTests(Base):
+    """GET /manager/me `pendingApprovalsCount` is the badge, GET /manager/pending-requests `totalPending` the Approvals
+    page header: they must be one number."""
+
+    LISTS = (
+        "leaveRequests",
+        "permissions",
+        "resignations",
+        "attendanceRequests",
+        "casualLeaves",
+        "holidayWorkClaims",
+        "onDutySessions",
+        "missingPunchRequests",
+        "outpassRequests",
+    )
+
+    def one_of_every_kind(self, emp=None):
+        emp = emp or self.emp
+        LeaveRequest.objects.create(
+            employee=emp, type="casual", start_date="2026-09-06", end_date="2026-09-06", approval_trail=[]
+        )
+        EmployeePermission.objects.create(
+            employee=emp,
+            date=date(2026, 9, 10),
+            permission_time=time(9, 30),
+            reason="x",
+            type="morning_late_in",
+            approval_trail=[],
+        )
+        ResignationRequest.objects.create(employee=emp, reason="x", approval_trail=[])
+        AttendanceOverrideRequest.objects.create(employee=emp, date=date(2026, 9, 1), reason="x", approval_trail=[])
+        CasualLeaveRequest.objects.create(employee=emp, date=date(2026, 9, 20), reason="x", approval_trail=[])
+        HolidayWorkClaim.objects.create(
+            employee=emp, work_date=date(2026, 9, 13), shifts=Decimal("0.50"), approval_trail=[]
+        )
+        OnDutySession.objects.create(employee=emp, destination="ABC", status="pending_hod", approval_trail=[])
+        MissingPunchRequest.objects.create(
+            employee=emp,
+            date=date(2026, 9, 1),
+            punch_time=time(9, 0),
+            punch_type="IN",
+            reason="x",
+            status="pending_hod",
+            approval_trail=[],
+        )
+        OutpassRequest.objects.create(employee=emp, destination="Bank", reason="x", approval_trail=[])
+
+    def numbers(self):
+        me = self.as_hod("get", "/api/manager/me").json()
+        listed = self.as_hod("get", "/api/manager/pending-requests").json()
+        return me, listed
+
+    def test_one_pending_request_of_every_kind_is_counted_the_same_in_both(self):
+        self.one_of_every_kind()
+        me, listed = self.numbers()
+        self.assertEqual([len(listed[k]) for k in self.LISTS], [1] * 9)  # every kind really is waiting for this head
+        self.assertEqual(listed["totalPending"], 9)
+        self.assertEqual(me["pendingApprovalsCount"], 9)
+        self.assertEqual(me["pendingApprovalsCount"], listed["totalPending"])
+        self.assertEqual(me["pendingOutpassCount"], 1)  # the Outpass tab's own count, for the apps' badge
+
+    def test_a_head_with_only_an_outpass_waiting_sees_it_in_the_badge(self):
+        OutpassRequest.objects.create(employee=self.emp, destination="Bank", reason="x", approval_trail=[])
+        me, listed = self.numbers()
+        self.assertEqual((len(listed["outpassRequests"]), listed["totalPending"]), (1, 1))
+        self.assertEqual((me["pendingApprovalsCount"], me["pendingOutpassCount"]), (1, 1))
+
+    def test_they_keep_agreeing_whatever_the_head_may_decide(self):
+        self.one_of_every_kind()
+        for flag in ("can_approve_permissions", "can_approve_on_duty", "can_approve_compensation"):
+            setattr(self.manager, flag, False)
+            self.manager.save()
+            me, listed = self.numbers()
+            self.assertEqual(me["pendingApprovalsCount"], listed["totalPending"], flag)
+        # outpass (the permissions switch), on-duty and holiday work are out of the head's reach now
+        self.assertEqual(listed["totalPending"], 6)
+
+    def test_the_heads_own_requests_are_in_neither(self):
+        ManagerEmployeeAssignment.objects.get_or_create(manager=self.manager, employee=self.boss)
+        self.one_of_every_kind(self.boss)
+        me, listed = self.numbers()
+        self.assertEqual((me["pendingApprovalsCount"], listed["totalPending"]), (0, 0))
 
 
 class WorkflowOffMessageTests(SimpleTestCase):

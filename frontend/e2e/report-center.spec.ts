@@ -101,7 +101,7 @@ test("HR Reports holds Employee Confo Details: the requested columns, an employe
   await loginAsHr(page);
   await page.goto("/hr/reports");
   await expect(page.getByRole("heading", { name: "HR Reports", exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: /HR Reports\s*2/ })).toBeVisible(); // the chip row
+  await expect(page.getByRole("link", { name: /HR Reports\s*3/ })).toBeVisible(); // the chip row
   await page.getByRole("link", { name: /Employee Confo Details/ }).click();
   await expect(page).toHaveURL(/report=employee-confo-details/);
 
@@ -305,12 +305,21 @@ test("Production Daily Punches: a date shows every punch to the second, a week i
       "Department",
       "Date",
       "Day",
+      "Shift",
       "Total Punch Count",
+      "Shifts Earned",
+      "Late",
+      "Early",
       "All Punches (exact times)",
+      "Rule applied",
     ]);
     const alpha = page.getByRole("row", { name: /Alpha Puncher/ });
     await expect(alpha).toContainText("08:00:00, 12:00:00, 13:00:00, 17:30:00");
     await expect(alpha).toContainText("Mon");
+    // March 2026 is before the date the shift-table rules start, so the day keeps the previous calculation
+    await expect(alpha).toContainText("Legacy rules");
+    await expect(alpha).toContainText("Previous calculation");
+    await expect(page.getByText("Total shifts earned")).toBeVisible();
     await expect(page.getByRole("row", { name: /Beta Puncher/ })).toContainText("08:05:00");
     await expect(page.getByRole("row", { name: /\(PP-1\) total/ })).toHaveCount(0); // one line per employee: no total lines
 
@@ -343,4 +352,33 @@ test("Production Daily Punches: a date shows every punch to the second, a week i
   } finally {
     await clean();
   }
+});
+
+test("Production Shift Rules lists the saved shift table with its settings and both downloads", async ({ page }) => {
+  await loginAsHr(page);
+  await page.goto("/hr/reports?report=production-shift-rules&run=1");
+  await expect(page.locator("thead th")).toHaveText([
+    "Type",
+    "Group",
+    "Applies on",
+    "Starts",
+    "Out time",
+    "Shift value",
+    "Detail",
+  ]);
+  // the owner's table: the day shift earns 1.00 at 17:45 and 2.00 at 22:30; the night ladder ends next morning
+  await expect(page.getByRole("row", { name: /Day shift.*17:45/ })).toContainText("1.00");
+  await expect(page.getByRole("row", { name: /Day shift.*22:30/ })).toContainText("2.00");
+  await expect(page.getByRole("row", { name: /Night shift.*05:30 \(next day\)/ })).toContainText("1.50");
+  await expect(page.getByRole("row", { name: /Sunday shift.*17:00/ })).toContainText("1.00");
+  await expect(page.getByRole("row", { name: /Lunch/ })).toContainText("45 min");
+  const cards = page.getByTestId("report-summary");
+  await expect(cards.getByText("Grace (min)")).toBeVisible();
+  await expect(cards.getByText("Applies from")).toBeVisible();
+  await expect(page.getByText(/Days before the start date keep the previous calculation/)).toBeVisible();
+
+  const [xlsx] = await Promise.all([page.waitForEvent("download"), page.getByTestId("report-download-xlsx").click()]);
+  expect(xlsx.suggestedFilename()).toMatch(/^production_shift_rules_.*\.xlsx$/);
+  const [pdf] = await Promise.all([page.waitForEvent("download"), page.getByTestId("report-download-pdf").click()]);
+  expect(pdf.suggestedFilename()).toMatch(/^production_shift_rules_.*\.pdf$/);
 });

@@ -13,8 +13,9 @@ const EXAMPLES = [
 ];
 
 /**
- * Production attendance is not set on this tab: the punch times and pay segments are edited with the production shift
- * in Manage Shift (the very editor this tab used to repeat). What is left here is what they mean, read-only.
+ * Production attendance is not set on this tab. From the start date of the production shift rules a production day is
+ * worked out by the Production Shifts tab (groups, ladders, breaks, grace). What is left here is the OLD calculation, which
+ * every earlier day keeps: its punch times and pay segments, read-only and no longer edited anywhere.
  */
 export function ProductionSection() {
   const { data: config, isLoading, isError } = useProductionShiftConfig();
@@ -27,7 +28,7 @@ export function ProductionSection() {
       id="attendance-production"
       icon={Factory}
       title="Production workers"
-      purpose="Nothing above applies to production workers: a production day earns the shift-value segments its punches cover, whatever mode is chosen. (Production Payroll has a Strict / Simple setting of its own, used only by its late check.)"
+      purpose="Nothing above applies to production workers: a production day earns the shifts worked out by the production shift rules on the Production Shifts tab, whatever mode is chosen. (Production Payroll has a Strict / Simple setting of its own, used only by its late check.)"
       usedBy={[
         { label: "Production Attendance", to: "/hr/attendance/production" },
         { label: "Production Payroll", to: "/hr/production-payroll" },
@@ -36,8 +37,8 @@ export function ProductionSection() {
     >
       <SettingBlock
         id="production-attendance"
-        title="Production punch times and pay segments"
-        purpose="Each segment is a stretch of the day worth part of a shift. A worker earns a segment when they arrive by its start plus the grace and leave no earlier than its end minus the grace; pay is the shifts earned times the worker's salary per shift."
+        title="Old production punch times and pay segments"
+        purpose="Before the production shift rules start, a production day earns the segments its punches cover: a segment is earned when the worker arrives by its start plus the grace and leaves no earlier than its end minus the grace. This is the old calculation, kept read-only for those days; from the rules' start date the Production Shifts tab decides."
         affects={[
           {
             where: "Production Attendance",
@@ -50,17 +51,17 @@ export function ProductionSection() {
             to: "/hr/production-payroll",
           },
         ]}
-        note="Punch 2 and Punch 3 are stored but nothing reads them. Punch 1 and Punch 4 only raise Late and Early Out flags (no pay effect). The grace decides which segments are earned; 0 behaves as 10. A change re-judges past days when they are next opened; production payroll already generated stays until it is generated again."
+        note="Punch 2 and Punch 3 are stored but nothing reads them. Punch 1 and Punch 4 only raise Late and Early Out flags (no pay effect). The grace decides which segments are earned; 0 behaves as 10. These values are no longer edited anywhere, so what was paid with them never changes."
         preview={
           <PreviewCard
-            title="The saved setup and two example days"
-            scenario={`Read-only: what is saved now, worked out for a worker paid ${rupees(PER_SHIFT)} per shift.`}
+            title="The old setup and two example days"
+            scenario={`Read-only: the old calculation, worked out for a worker paid ${rupees(PER_SHIFT)} per shift.`}
           >
             {isLoading ? (
               <p className="text-[12px] text-gray-500">Loading the production setup…</p>
             ) : isError || !config ? (
               <p className="text-[12px] text-gray-500">
-                The production setup could not be loaded here: open Manage Shift.
+                The old production setup could not be loaded here. It is read-only and no longer edited anywhere.
               </p>
             ) : (
               <>
@@ -135,20 +136,21 @@ export function ProductionSection() {
         }
       >
         <ManagedElsewhere
-          title="Edited in Manage Shift"
-          to="/hr/shifts"
-          linkLabel="Open Manage Shift"
+          title="Edited on the Production Shifts tab"
+          to="/hr/settings?tab=production_shifts"
+          linkLabel="Open Production Shifts"
           testId="production-managed-elsewhere"
         >
-          Open Manage Shift and pick Production on the Shifts tab: the punch times, the grace and the segments are
-          edited there (the same editor this tab used to show). Saving there needs edit access to Settings - Attendance.
+          The default timings (Day, Night and Sunday), the ladders of shifts earned, the unpaid breaks and the 5-minute
+          grace are edited there, and a day from the start date is worked out with them. The numbers above are only the
+          old calculation, used for the days before it.
         </ManagedElsewhere>
       </SettingBlock>
 
       <SettingBlock
         id="production-late"
         title="Production late deductions"
-        purpose="What a late production arrival costs is set on Settings - Production Payroll (Late Detection). It is judged from the production shift's own start and grace in Manage Shift, not from Punch 1 above, and it has its own free allowance and slabs."
+        purpose="What a late production arrival costs is set on Settings - Production Payroll (Late Detection), with its own free allowance and slabs. From the start date of the production shift rules a day is judged late from its group's start and the grace on the Production Shifts tab; before it, from the old production shift in Manage Shift, not from Punch 1 above."
         affects={[
           {
             where: "Production Payroll",

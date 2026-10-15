@@ -403,9 +403,9 @@ export function RatesPanel({
             linkLabel="Open Production Payroll settings"
             testId="production-pay-elsewhere"
           >
-            The shifts a production day earns come from the punch times and segments of the production shift in Manage
-            Shifts, and pay is shifts earned x each worker's own Salary Per Shift. The Production Payroll tab shows the
-            whole chain, the pay period and the late deductions.
+            The shifts a production day earns come from the production shift rules on the Production Shifts tab, and pay
+            is shifts earned x each worker's own Salary Per Shift. The Production Payroll tab shows the whole chain, the
+            pay period and the late deductions.
           </ManagedElsewhere>
         </div>
 

@@ -42,6 +42,7 @@ from .models import (
 TODAY = date(2026, 10, 14)  # a Wednesday
 COMP = "/api/employee/compensation"
 HOD = "/api/employee/hod"
+STUCK = "No Department Head can decide this yet: contact HR"
 
 
 def _bearer(payload: dict) -> dict:
@@ -115,6 +116,13 @@ class EmployeeBase(TestCase):
 
     def items(self, body, kind=None):
         return [i for i in body["items"] if kind is None or i["kind"] == kind]
+
+    def head_for(self, department, code="ECH", **flags) -> DepartmentManager:
+        """A Department Head (a staff employee of the department) who holds the whole department."""
+        boss = _employee(code, self.ho, department)
+        manager = DepartmentManager.objects.create(employee=boss, **flags)
+        ManagerDepartmentAssignment.objects.create(manager=manager, department=department)
+        return manager
 
 
 # ═════════════════════════════ /api/employee/compensation ═════════════════════════════
@@ -423,6 +431,7 @@ class ItemTests(EmployeeBase):
         self.assertEqual((relax["shifts"], relax["legacy"]), (1.0, True))
 
     def test_holiday_work_claims_with_their_status(self):
+        self.head_for(self.cutting)  # a head who can decide: the claim is simply waiting for them
         HolidayWorkClaim.objects.create(
             employee=self.asha,
             work_date=date(2026, 10, 11),
@@ -473,6 +482,156 @@ class ItemTests(EmployeeBase):
             employee=self.asha, work_date=date(2026, 10, 2), shifts=Decimal("1.00"), approval_trail=[]
         )
         self.assertEqual(self.items(self.comp(), "holiday_work")[0]["title"], "Holiday work: 1.00 shift")
+
+    def claim_item(self, emp=None):
+        return self.items(self.comp(emp), "holiday_work")[0]
+
+    def test_a_claim_with_no_department_head_does_not_say_it_waits_for_one(self):
+        HolidayWorkClaim.objects.create(
+            employee=self.asha,
+            work_date=date(2026, 10, 11),
+            shifts=Decimal("0.50"),
+            reason="Dispatch",
+            approval_trail=[],
+        )  # nobody holds the Cutting department here
+        item = self.claim_item()
+        # the status word stays (both apps tone pending_hod as "needs attention"): only the words are honest
+        self.assertEqual(item["status"], "pending_hod")
+        self.assertEqual(item["statusLabel"], "No Department Head can decide this yet: contact HR")
+        self.assertIn("you have no Department Head assigned", item["detail"])
+        self.assertIn("contact HR", item["detail"])
+        self.assertNotIn("waiting for your Department Head", item["detail"])
+        self.assertTrue(item["detail"].endswith("Reason: Dispatch."))
+
+    def test_a_head_who_may_not_approve_compensation_cannot_decide_the_claim_either(self):
+        head = self.head_for(self.cutting, can_approve_compensation=False)
+        HolidayWorkClaim.objects.create(
+            employee=self.asha, work_date=date(2026, 10, 11), shifts=Decimal("0.50"), approval_trail=[]
+        )
+        item = self.claim_item()
+        self.assertEqual((item["status"], item["statusLabel"]), ("pending_hod", STUCK))
+        self.assertIn("your Department Head ECH Ec is not allowed to approve compensation", item["detail"])
+        self.assertNotIn("waiting for your Department Head", item["detail"])
+        # switched on again, the claim is simply waiting for a head who can decide it
+        head.can_approve_compensation = True
+        head.save()
+        item = self.claim_item()
+        self.assertEqual(item["statusLabel"], "Waiting for your Department Head")
+        self.assertIn("waiting for your Department Head to approve it", item["detail"])
+
+    def test_a_department_heads_own_claim_cannot_be_decided_by_anybody(self):
+        head = self.head_for(self.cutting)  # holds Cutting, and sits in it: the head of their own department
+        HolidayWorkClaim.objects.create(
+            employee=head.employee, work_date=date(2026, 10, 11), shifts=Decimal("1.00"), approval_trail=[]
+        )
+        item = self.claim_item(head.employee)
+        self.assertEqual((item["status"], item["statusLabel"]), ("pending_hod", STUCK))
+        self.assertIn("you are a Department Head yourself", item["detail"])
+        self.assertIn("another Department Head", item["detail"])
+        self.assertNotIn("waiting for your Department Head", item["detail"])
+
+    def test_the_settings_switches_do_not_make_a_waiting_claim_undecidable(self):
+        self.head_for(self.cutting)
+        HolidayWorkClaim.objects.create(
+            employee=self.asha, work_date=date(2026, 10, 11), shifts=Decimal("0.50"), approval_trail=[]
+        )
+        CompensationConfig.objects.filter(pk=1).update(holiday_work_enabled=False)
+        # the head still can (manager_update_holiday_work_status never looks at the switch): the wording stays plain
+        self.assertEqual(self.claim_item()["statusLabel"], "Waiting for your Department Head")
+
+    def test_a_decided_claim_keeps_its_own_wording_whoever_the_head_is(self):
+        HolidayWorkClaim.objects.create(
+            employee=self.asha,
+            work_date=date(2026, 10, 4),
+            shifts=Decimal("1.00"),
+            status="approved",
+            reviewed_by="Boss",
+            approval_trail=[],
+        )
+        HolidayWorkClaim.objects.create(
+            employee=self.asha,
+            work_date=date(2026, 9, 27),
+            shifts=Decimal("0.25"),
+            status="rejected",
+            reviewed_by="Boss",
+            approval_trail=[],
+        )
+        items = self.items(self.comp(), "holiday_work")  # no head at all now
+        self.assertEqual(
+            [(i["status"], i["statusLabel"]) for i in items], [("approved", "Approved"), ("rejected", "Not approved")]
+        )
+        self.assertIn("Approved by Boss", items[0]["detail"])
+
+    def test_an_allowance_nobody_used_is_available_while_its_window_is_open_and_not_used_after(self):
+        def allowance(day):
+            return OvertimeRecord.objects.create(
+                employee=self.asha,
+                date=day,
+                shift_end_time=time(17, 30),
+                last_punch_out=time(19, 0),
+                ot_minutes=90,
+                status="auto",
+                ot_type="allowance",
+                allowance_minutes=30,
+            )
+
+        allowance(TODAY)  # its window runs 10 days
+        allowance(date(2026, 10, 9))  # a later OT day (today) ends its window: today, so it is still open
+        allowance(date(2026, 10, 1))  # ended on the 9th; nobody punched in between, so there is no worked day either
+        allowance(date(2026, 9, 20))  # ended on the 30th of September with nothing used
+        items = {i["date"]: i for i in self.items(self.comp(), "ot_allowance")}
+        self.assertEqual(
+            {d: (i["status"], i["statusLabel"], i["used"]) for d, i in items.items()},
+            {
+                "2026-10-14": ("available", "Available", False),
+                "2026-10-09": ("available", "Available", False),
+                "2026-10-01": ("not_used", "Not used", False),
+                "2026-09-20": ("not_used", "Not used", False),
+            },
+        )
+        self.assertIn("nothing to claim", items["2026-10-14"]["detail"])
+        # an allowance that a day carries the marker of stays used
+        AttendanceDayRecord.objects.create(
+            employee=self.asha,
+            date=date(2026, 10, 10),
+            status="present",
+            compensation_kind="ot_allowance",
+            compensation_minutes=12,
+        )
+        self.assertEqual(
+            {i["date"]: i["status"] for i in self.items(self.comp(), "ot_allowance")}["2026-10-09"], "used"
+        )
+
+    def test_a_redemption_is_told_in_words_and_never_with_hrs_internal_note(self):
+        CompensationLedger.objects.create(
+            employee=self.asha,
+            entry_type="debit",
+            shifts=Decimal("0.25"),
+            date=date(2026, 10, 12),
+            source="redemption",
+            note="Redeemed on 2026-10-12",  # what HR's redeem endpoint really writes
+        )
+        legacy = CompensationLeaveCredit.objects.create(employee=self.asha, status="used", used_date=date(2026, 10, 7))
+        CompensationLedger.objects.create(
+            employee=self.asha,
+            entry_type="debit",
+            shifts=Decimal("1.00"),
+            date=date(2026, 10, 7),
+            source="legacy_credit",
+            note=f"Alternative Day credit {legacy.id} used",
+        )
+        items = {i["date"]: i for i in self.items(self.comp(), "redemption")}
+        self.assertEqual(
+            items["2026-10-12"]["detail"], "HR used 0.25 shift of your compensation balance for Monday 12 Oct 2026."
+        )
+        self.assertEqual(
+            items["2026-10-07"]["detail"],
+            "HR used your earlier Alternative Day credit (1.00 shift) for Wednesday 7 Oct 2026.",
+        )
+        for item in items.values():
+            self.assertNotIn("2026-10", item["detail"])  # no raw ISO date
+            self.assertNotIn("Redeemed on", item["detail"])
+        self.assertNotIn(f"credit {legacy.id} used", items["2026-10-07"]["detail"])  # no internal credit id
 
     def test_redemptions_and_old_history_are_bounded(self):
         CompensationLedger.objects.create(
@@ -591,7 +750,8 @@ class ItemTests(EmployeeBase):
         self.assertEqual(
             [(i["date"], i["status"]) for i in items], [("2027-03-10", "upcoming"), ("2026-03-10", "applied")]
         )
-        self.assertEqual(items[1]["shifts"], 1.0)
+        # a paid birthday never touches the balance: no shift amount, so no "1 shift" chip in the apps
+        self.assertEqual([i["shifts"] for i in items], [None, None])
         AttendanceDayRecord.objects.filter(employee=self.asha).delete()
         self.assertEqual(self.items(self.comp(), "birthday")[1]["status"], "not_applied")
 
@@ -916,16 +1076,54 @@ class HodCardTests(HodBase):
         approval.save_config("holiday_work", enabled=False, actor="t")
         self.assertEqual(self.approvals(self.hod())["holiday_work"]["reason"], "Switched off by HR.")
 
-    def test_holiday_work_is_not_available_while_compensation_is_off(self):
+    def test_holiday_work_can_still_be_decided_while_the_compensation_switches_are_off(self):
+        # The switches only stop HR raising NEW claims; a claim already waiting is still decided by the head (the manager
+        # endpoints never look at them), so the card must not say "cannot approve".
         CompensationConfig.objects.filter(pk=1).update(holiday_work_enabled=False)
         item = self.approvals(self.hod())["holiday_work"]
-        self.assertEqual(item["canApprove"], False)
+        self.assertEqual(item["canApprove"], True)
         self.assertIn("switched off", item["reason"])
+        self.assertIn("HR cannot raise new claims", item["reason"])
+        self.assertIn("already waiting can still be decided", item["reason"])
         CompensationConfig.objects.filter(pk=1).update(holiday_work_enabled=True)
         settings = PayrollSettings.get()
         settings.compensation_feature_enabled = False
         settings.save()
-        self.assertFalse(self.approvals(self.hod())["holiday_work"]["canApprove"])
+        item = self.approvals(self.hod())["holiday_work"]
+        self.assertEqual((item["canApprove"], item["reason"] is not None), (True, True))
+        # back on: no reason is needed
+        settings.compensation_feature_enabled = True
+        settings.save()
+        item = self.approvals(self.hod())["holiday_work"]
+        self.assertEqual((item["canApprove"], item["reason"]), (True, None))
+
+    def test_the_card_agrees_with_what_the_head_can_really_do_while_the_switch_is_off(self):
+        # the same claim, decided through the head's own endpoint, with the switch off: 200 and a credit
+        claim = HolidayWorkClaim.objects.create(
+            employee=self.asha, work_date=date(2026, 10, 11), shifts=Decimal("0.50"), approval_trail=[]
+        )
+        CompensationConfig.objects.filter(pk=1).update(holiday_work_enabled=False)
+        self.assertTrue(self.approvals(self.hod())["holiday_work"]["canApprove"])
+        r = self.client.patch(
+            f"/api/manager/holiday-work/{claim.id}/status",
+            {"status": "approved"},
+            content_type="application/json",
+            **_as(self.boss),
+        )
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(CompensationLedger.objects.filter(claim=claim).count(), 1)
+
+    def test_the_other_reasons_still_win_over_the_switch(self):
+        CompensationConfig.objects.filter(pk=1).update(holiday_work_enabled=False)
+        self.manager.can_approve_compensation = False
+        self.manager.save()
+        item = self.approvals(self.hod())["holiday_work"]
+        self.assertEqual((item["canApprove"], item["reason"]), (False, "Not enabled for your Department Head."))
+        self.manager.can_approve_compensation = True
+        self.manager.save()
+        approval.save_config("holiday_work", enabled=False, actor="t")
+        item = self.approvals(self.hod())["holiday_work"]
+        self.assertEqual((item["canApprove"], item["reason"]), (False, "Switched off by HR."))
 
     def test_a_production_employee_has_a_head_too_without_the_staff_only_approvals(self):
         body = self.hod(self.prod)
@@ -970,6 +1168,12 @@ class HodAssignmentTests(HodBase):
         body = self.hod(self.boss)
         self.assertEqual((body["assigned"], body.get("isSelf")), (False, True))
         self.assertIn("Department Head yourself", body["message"])
+        # a head's holiday-work claim is a Department-Head-only workflow: HR cannot decide it, so the page must not say so
+        self.assertNotIn("HR decides your own requests", body["message"])
+        self.assertIn("only a Department Head can decide", body["message"])
+        self.assertIn("another Department Head", body["message"])
+        self.assertIn("ask HR", body["message"])
+        self.assertEqual(body["approvals"], [])
         # unless somebody else has them individually
         other = _employee("ECO", self.ho, self.cutting)
         ManagerEmployeeAssignment.objects.create(
