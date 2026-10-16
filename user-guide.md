@@ -732,6 +732,8 @@ Production attendance is broken into **named shift segments**:
 
 Each segment is worth a specific pay proportion. If a production worker only attends one segment, they are paid only for that segment — not a full day.
 
+> From the start date of the production shift rules (Settings → Production Shifts) a production day earns the shifts of the rules' own table (up to 3.00 a day with the default table) instead of these segments; earlier days keep the segments.
+
 #### Pay Cycles: Weekly, BiWeekly, Monthly
 
 Production payroll is not paid by calendar month. Every production employee is paid on **one of three pay cycles**, and each cycle has its own page under **Production Payroll** in the sidebar:
@@ -1004,6 +1006,8 @@ A live **What employees will see** preview shows your entries before you save. T
 **Sub-tab: Production**
 Separate window times for each shift segment (First Half, Second Half, Extra time). Changes here determine how production attendance is counted in payroll.
 
+> **Production attendance has its own tab now.** From the start date of the production shift rules a production day is worked out by **Settings → Production Shifts** (groups, ladders, breaks and grace), not by the segment windows above, which stay read-only for earlier days.
+
 ---
 
 #### Late Detection Policy
@@ -1043,6 +1047,117 @@ The tab is **one form with one Save button** (**Save Compensation Settings**; it
 - **Dates: never retroactive.** Type 1 and birthday leave have an *applies from* date. Whenever you switch one of them on, it starts **today** (the **Use today** button, or pick a later date). Days before the date are never changed, even when their month is opened or generated again. A date in the past is allowed, but the page warns you: the days from then until today are judged with it when they are opened or generated again, and a month whose payroll is generated again will change. Payslips already generated are never rewritten by a save. Type 2 and B have no date (HR assigns by hand), and an announcement (A) acts only on its own date.
 - **Warnings.** An allowance row that asks for more extra work than where Type 2 starts can never apply; the page and the server say so, and the save still goes through. A Type 2 row that waits for a punch the system does not attach to the working day (it counts punches on the shift's own date, and after midnight only up to *Forgotten Last-Out Grace* and *Next-Day Early-Arrival Protection* in Settings → Attendance) is flagged too. This advice is read from the active staff shift templates, not each employee's own times, so no warning is not a guarantee that every row can be earned.
 - **Who can change it.** The tab follows **Settings → Compensation** in Account Management. The rules apply to the whole company, so a login limited to one branch can read them but not save changes.
+
+---
+
+#### Production Shifts
+
+**What it's for:** how a **production** worker's punches become **shifts earned** for the day. Production pay is *shifts earned x salary per shift*, so everything on this tab changes pay. **Staff are never affected.** The factory's own timings are already filled in (Day from 8:30 AM, Night from 9:00 PM, Sunday, the tea, lunch and dinner breaks and a 5-minute grace) and every part can be edited.
+
+The tab is **one form with one Save button** (**Save Production Shift Rules**). It asks you to confirm first and lists what will change. Every block explains itself, and the search box at the top of Settings finds each setting.
+
+**How a day is worked out (in plain words)**
+1. The system looks at the **first punch** of the day and picks a **group**: Day, Night or Sunday.
+2. Each group has a short list of rows: *"a worker who leaves at this time earned this many shifts."*
+3. A worker who leaves **between two rows** earns a share of the difference between them, worked out by the minute. Each stretch between two rows has its own rate.
+4. **Breaks are never paid** and **nobody needs to punch for a break**. The minutes inside a break earn nothing and cost nothing.
+5. A worker who leaves **after the last row** earns the last row's shifts and no more.
+6. A worker who punches in and out several times is paid for each in-out pair, never for the gaps between pairs (outside a break).
+7. If the number of punches is odd, the **last punch is ignored**. One punch alone earns 0 shifts (the day shows as Half Shift, present but unpaid). Two taps less than 5 minutes apart count as one.
+8. A day that earns less than the **full-day value** (1.00 shift) is a **Half Shift** day on the attendance pages; at or above it the worker is **Present**.
+
+**Grace (default 5 minutes).**
+- A first punch up to 5 minutes after the start (8:35 AM for the Day shift) is **on time** and loses nothing. At 8:36 AM the worker is **Late** and loses the shifts of the minutes missed, at the rate of that stretch.
+- A punch **less than** 5 minutes before a row's time counts as that time: leaving at 5:42 PM earns what 5:45 PM earns (1.00). Leaving at 5:40 PM, a full 5 minutes early, is worked out by the minute instead.
+- A worker who leaves earlier than the group's **standard departure** minus the grace (before 7:55 PM for the Day shift) is flagged **Early**.
+
+**The default tables**
+
+*Day shift:* Monday to Saturday, a day whose first punch is between 4:00 AM and 4:59 PM. Starts 8:30 AM. Standard departure 8:00 PM.
+
+| A worker who leaves at | Earns |
+|---|---|
+| 10:30 AM (morning tea) | 0.25 |
+| 12:45 PM (lunch) | 0.50 |
+| 3:30 PM (afternoon tea) | 0.75 |
+| 5:45 PM (one full shift) | 1.00 |
+| 8:00 PM (1 shift + 0.5 OT) | 1.50 |
+| 10:30 PM (1 shift + 1 OT) | 2.00 |
+| 12:30 AM, next day (1 shift + 1.5 OT) | 2.50 |
+| 5:30 AM, next day (1 shift + 2 OT) | 3.00 |
+
+*Night shift:* every day, a day whose first punch is between 5:00 PM and 11:59 PM. Starts 9:00 PM. Standard departure 5:30 AM the next morning.
+
+| A worker who leaves at | Earns |
+|---|---|
+| 12:00 AM (midnight), next day | 0.50 |
+| 5:30 AM, next day | 1.50 |
+
+*Sunday shift:* Sundays only, first punch between 4:00 AM and 4:59 PM. Starts 8:30 AM. Standard departure 5:00 PM.
+
+| A worker who leaves at | Earns |
+|---|---|
+| 5:00 PM | 1.00 |
+
+*Unpaid breaks* (the same for every group, every day):
+
+| Break | From | To |
+|---|---|---|
+| Morning tea | 10:30 AM | 10:45 AM |
+| Lunch | 12:45 PM | 1:30 PM |
+| Afternoon tea | 3:30 PM | 3:45 PM |
+| Evening tea | 5:45 PM | 6:00 PM |
+| Night dinner | 8:00 PM | 9:00 PM |
+
+**Examples (Day shift):** punches 8:30 AM, 12:45 PM, 1:30 PM, 8:00 PM earn **1.50**. The same day with the last punch at 10:30 PM earns **2.00**. Leaving at 7:00 PM earns **1.25**, halfway between the 5:45 PM row (1.00) and the 8:00 PM row (1.50), because the 15 minutes of evening tea are not counted. A full night (9:00 PM in, 5:30 AM out) earns **1.50**. A day of 8:30 AM to 8:00 PM followed by a full night (punches 8:30 AM, 12:45 PM, 1:30 PM, 8:00 PM, 9:00 PM, 5:30 AM) earns **3.00**.
+
+**1. When the rules apply**
+
+| Setting | Default | What it does |
+|---|---|---|
+| **Use the production shift rules** | On | The master switch. Off: every production day uses the old calculation |
+| **Production rules apply from** | The day the rules were first set up | The first day the new rules are used. Every day before it keeps the old calculation |
+| **Grace (minutes)** | 5 (0 to 30) | The tolerance described above |
+
+**"Applies from" and the days before it.** The new rules judge only the days **from this date on**. Every earlier day keeps the **old calculation** exactly as it was (the old punch times, the 10-minute grace and the old segments), so a period that was already paid is never judged again. Those old values are shown read-only on this tab and are no longer edited anywhere.
+
+> **Be careful with the date and the switch.** Moving **Applies from** earlier, moving it later, or switching the rules off makes the system **judge those days again** the next time they are opened or recalculated. A payslip that is already generated is **never rewritten**; to apply the change to a period, **regenerate that period's production payroll**. The page warns you when the date is in the past, when payroll already covers days the change touches, and when you switch off while payroll exists. Switching the rules on with no date starts them **today**.
+
+**2. Shift groups and what each leaving time earns**
+
+Each group is a card with: **In use**, **Used on** (Monday to Saturday, Sunday or every day), **Start time**, **First punch from / to** (the window that decides whether a day belongs to the group), **Standard departure** (only used for the Early flag) and the table of rows. If the first punch fits no group window, the group with the nearest start time is used (a 2:00 AM first punch goes to Night).
+- **Add a row** adds a leaving time (with **Next morning** ticked for a time after midnight) and its shifts. A row has an **In use** switch and a bin to remove it. Times must go up from top to bottom and shifts can only stay the same or go up; two rows cannot share a time or sit on the same paid minute (12:45 PM and 1:30 PM are either side of the same lunch, so only one can have a row).
+- **Add a group** adds a new kind of day (for example a different shift). Two groups that can apply on the same days cannot take the same first punches. A group that is in use needs at least one row in use.
+- A row that falls **inside a break** counts as the start of that break, and the page says so.
+
+**3. Breaks that are never paid.** **Add a break** gives a name, a start and an end (the same day; a break cannot cross midnight). Breaks that are in use cannot overlap. They apply to every group on every day.
+
+**4. Advanced settings**
+
+| Setting | Default | What it does |
+|---|---|---|
+| **Minimum shifts** | 0 (none) | A worker with at least one complete in-out pair earns at least this much for the day |
+| **Rounding step and how** | 0.01, to the nearest | The day's shifts are rounded to 0.01, 0.05 or 0.25, to the nearest step or always down. The result is never more than the group's top row |
+| **Full-day value** | 1.00 | A day below this is a Half Shift day, at or above it Present. It changes the label only; pay is shifts x salary per shift |
+| **Night session length** | 24 hours | How long after an open "in" punch the next morning's punch can still close that night (see below) |
+
+**5. Check the rules on a day (Try a day).** Type the punches in the order they happened (a time not later than the one before it is the next morning), pick a date and read the answer: the group used, the shifts earned, Present or Half Shift, Late, Early and one sentence saying why. Five buttons fill in the owner's own examples (a regular day, works until 10:30 PM, day and full night, night only, Sunday). **Nothing is saved by trying.** It uses the **saved** rules, so save your changes first. The date matters: a date before **Applies from** is answered with the old calculation, and the answer says so.
+
+**Two rows to check with the owner.** The Day row *12:30 AM next day = 2.50* and the Night row *12:00 AM next day = 0.50* follow the owner's handwritten table exactly as written, but the handwriting could mean 12:30 PM and 12:00 PM (noon). The page shows a blue **Check these 2 rows with HR** note on them. Ask the owner and change the time if it should be different (the note goes away once a row is changed). Also, **Sunday has no row after 5:00 PM**, so a Sunday worker who stays later is still paid 1.00 until you add a row for later Sunday work (the page shows a note under the Sunday ladder).
+
+**What changes on the reports (Reports → HR Reports)**
+- **Production Daily Punches** lists punches by **shift day** and has the columns **Shift** (the group, or "Legacy rules" before the date), **Shifts Earned**, **Late**, **Early** and **Rule applied** (one sentence on why the day came out that way). The figures come from the same calculation as payroll and are never saved by the report. A day HR entered by hand shows the value HR entered.
+- **Production Shift Rules** prints the saved table (every group's rows, the breaks, the grace and the start date) so it can be shown or exported.
+- Production attendance and payroll use the same calculation. **Manage Shifts → Production** no longer edits punch times: it shows a short read-only summary of these rules with an **Edit in Settings** link.
+
+**Things HR should know**
+- **A night worker's 5:30 AM punch counts with the day the shift began.** Attendance pages, reports and payroll show it on the evening before (marked as next day) and do not count it again on the next date. It closes the night only when the evening's punches have an unmatched "in", the punch is at or before about 7:00 AM (the latest next-day leaving time in the tables plus 90 minutes), it is within **Night session length** of the "in", and neither day was entered by hand. A normal 8:30 AM arrival after a forgotten out-punch is **never** taken as a closing punch.
+- **A night day can change when the next morning's punch arrives.** Until the closing punch is received the evening shows only the part that is complete; it is worked out again when the punch comes in.
+- **Payroll generated for a period that ends today can miss that night's closing punch** (it is made tomorrow). Generate the period after the next morning's punches are in, or regenerate it.
+- **Production late deductions use the new rules too.** For days from **Applies from** on, a day is Late when the first punch is after the group's start plus the grace (8:35 AM for Day with the 5-minute grace), and with Strict production attendance (Settings → Production Payroll) leaving before the standard departure minus the grace also counts. Days before the date keep the old check (the production shift assigned in Manage Shifts). The deduction amounts are still set in Settings → Production Payroll.
+- A day HR corrected by hand in Monthly attendance can be worth up to the table's top value (3.00 with the default table), not only 1.50.
+
+**Who can change it.** The tab follows the **Attendance** permission of Settings in Account Management. A view-only role can read the tab and use Try a day but cannot save. The rules apply to the whole company, so a login limited to one branch can read and try them but not save. If two people edit at once, the second save is refused with "someone else saved": press **Reload the saved rules** and make the change again.
 
 ---
 

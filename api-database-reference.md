@@ -106,6 +106,7 @@ One engine decides who may approve every kind of request; HR configures it in **
 ## Attendance — Daily & Employee History
 
 - **GET /api/attendance/daily** — `@require_hr`. Bulk-fetches the day's punch logs, manual attendance rows, and approved-leave employee ids in 3 queries, then returns one row per active employee (optionally filtered by `employmentType`, branch-scoped) with status (present/manual/on_leave/absent), first/last punch, punch source and source label.
+- **Production rows of `GET /api/attendance/daily`** (additive, October 2026): once the production shift rules judge the date, a production employee's row also carries `shiftsEarned`, `isLate`, `isEarlyOut`, `ruleGroup`, `ruleNote` and `lastPunchNextDay`; see "Production shift rules" below.
 - **GET /api/attendance/employee/{pk}** — `@require_auth`, with an inline self-scope check: an employee token may only view its own id (`token_emp_id != pk` → 403). Returns one employee's full month (day-by-day) via `compute_month_records`/`month_summary_from_records` — the same day engine used by payroll and the HR portal — including status, isLate, isHalfShift, punches, leave type, hours worked, and a month summary block.
 - **GET /api/attendance/employee-shift-stats** — `@require_auth`; if the caller has no employee token it additionally requires `is_hr(request)` (403 otherwise) and reads `employee_id` from the query string, whereas an employee token always gets its own stats regardless of any passed id. Returns a detailed monthly shift/attendance stats payload (present/absent/leave/half-shift/full-shift day counts, late-morning vs late-return splits, per-day punch logs, and a live permission/late-deduction preview mirroring the payroll formula) for one employee, used by both the mobile "My Shift" page and HR's Manage Shift panel.
 
@@ -216,6 +217,32 @@ A Site Connector is a program at a factory that reaches devices the server canno
 - **GET, PUT /api/production-shift-config** — `@require_hr`. GET returns the singleton punch1-4 target times + grace-minutes config plus all shift segments; PUT updates the punch times/grace minutes.
 - **GET, POST /api/production-shift-segments** — `@require_hr`. GET lists all shift segments (label/start/end/shiftValue/order/active); POST creates one (requires label, start/end time, and shiftValue).
 - **PUT, DELETE /api/production-shift-segments/\<pk\>** — `@require_hr`. Updates or deletes one shift segment.
+
+## Production shift rules (production_shift_rules_views.py, production_shift_rules.py)
+
+Production employees only (staff are never touched). These endpoints edit the table that turns a production day's punches into `shifts_earned`: shift groups (Day / Night / Sunday or any HR adds), each group's ladder of "leave at this time, earn this many shifts", the unpaid breaks, the grace and a few advanced numbers. The calculation itself is the pure module `api/production_shift_rules.py` (see `backend.md`, "Production shift rules (October 2026)"). All three routes are `@require_hr` and use permission module `settings.attendance` (`permission_registry.py`: view for GET, edit for PUT; `production-shift-rules/preview` is in `READ_ONLY_POST_PATHS`, so a view-only role may POST it). The legacy `/api/production-shift-config` and `/api/production-shift-segments` endpoints above are unchanged and still describe the calculation of every day BEFORE `effectiveFrom`.
+
+- **GET /api/production-shift-rules** — the whole document; never writes (a database with no settings row shows the defaults and no start date, i.e. "legacy"). Body:
+  ```json
+  { "enabled": true, "effectiveFrom": "2026-10-14", "graceMinutes": 5, "minCredit": 0, "roundingStep": 0.01,
+    "roundingMode": "nearest", "fullDayValue": 1, "nightSessionHours": 24,
+    "groups": [ { "id": 1, "label": "Day shift", "kind": "day", "appliesOn": "mon_sat", "startTime": "08:30",
+                  "firstPunchFrom": "04:00", "firstPunchTo": "16:59", "mainOutTime": "20:00", "mainOutNextDay": false,
+                  "enabled": true,
+                  "rules": [ { "id": 1, "label": "Leaves at morning tea", "outTime": "10:30", "outNextDay": false,
+                               "shiftValue": 0.25, "enabled": true } ] } ],
+    "breaks": [ { "id": 1, "label": "Morning tea", "startTime": "10:30", "endTime": "10:45", "enabled": true } ],
+    "updatedAt": "2026-10-14T10:00:00+05:30", "updatedBy": "Asha", "warnings": [],
+    "legacy": { "punch1Time": "08:30", "punch2Time": "12:45", "punch3Time": "13:30", "punch4Time": "20:00", "graceMinutes": 10 },
+    "version": "9f2c41d07a3b5e68" }
+  ```
+  Times are `"HH:MM"` (24 hour); a time after midnight is the clock time plus `outNextDay` / `mainOutNextDay` (`mainOutTime` may be null). `kind` is `day|night|sunday|custom`, `appliesOn` is `mon_sat|sunday|all`, `roundingStep` is `0.01|0.05|0.25`, `roundingMode` is `nearest|down`. `updatedAt` / `updatedBy` come from the last `update` audit row of module `production_shift_rules` (null before the first save). `legacy` is a read-only echo of the old calculation's punch times and 10-minute grace. `version` is a 16-character fingerprint of everything the PUT can change.
+- **PUT /api/production-shift-rules** — saves the document; the answer is the new body (ids of new rows included) with the save's `warnings`. Every top-level key is optional (an omitted one is left alone). `groups` and `breaks`, when sent, REPLACE the whole table: an item with an `id` updates that row, an item without one is created, a stored row whose id is missing from the array is deleted (a deleted group takes its rules with it), and the array order becomes `order`. Inside an item an omitted key keeps the stored value (a group sent without `rules` keeps its rules); a rule can never move to another group. `updatedAt`, `updatedBy`, `warnings`, `legacy` and `version` are ignored when sent back, so the GET body can be PUT as it is (a stale copy simply restores that table). All-or-nothing: any problem is HTTP 400 `{"error": "<one plain sentence>"}` and nothing is saved (415 `{"error"}` for a body that is not JSON). A branch login can GET but gets 403 `{"error": ..., "code": "company_wide_settings"}` on PUT (the rules are company-wide). `expectedVersion` (the `version` the page loaded) that is not what is saved now gives 400 `{"error": ..., "code": "stale_settings"}`; a body without it skips that check. The settings row is read `SELECT ... FOR UPDATE` for the whole save, so two simultaneous saves run one after the other. A save that changes nothing writes nothing and no audit row. A real change writes one `AuditLog` row (module `production_shift_rules`, action `update`, description "Changed production shift rules: ...", old/new values of the parts that changed); the module is in the Audit Logs module list and the MD activity feed rule `production-shift-rules` (area Settings, severity high).
+- **Validation (each a plain-sentence 400).** `enabled` is true/false. `effectiveFrom` is a real date `YYYY-MM-DD` (2000..2100), or null while `enabled` is false; switching the rules on with no date named starts them TODAY (IST), so they never reach back over days already judged (an explicit null/empty date while on is refused). `graceMinutes` 0..30; `nightSessionHours` 1..24; `minCredit` 0..9.99 (two decimals) and not above the most any enabled group can pay; `roundingStep` 0.01/0.05/0.25; `roundingMode` nearest/down; `fullDayValue` more than 0 and at most 9.99. A group needs a name, a valid `kind` / `appliesOn`, HH:MM `startTime`, `firstPunchFrom`, `firstPunchTo` (window not ending before it starts), a `mainOutTime` (optional) after `startTime`; enabled groups that can apply on the same days must not have overlapping first-punch windows; an enabled group needs at least one enabled rule; the rules cannot be switched on with no enabled group. The enabled rules of an enabled group: out time after the group's start, strictly increasing in array order (a next-day time is after a same-day one), `shiftValue` more than 0, at most 9.99, at most two decimals and never going down, and no two rules on the same PAID time (12:45 and 13:30 are either side of the same lunch, so only one can have a rule). A break: `startTime` before `endTime` on the same day, enabled breaks must not overlap. Ceilings: 12 groups, 60 rules per group, 30 breaks, 100-character labels; a NUL or lone surrogate in a name, a body nested too deeply and malformed JSON are 400s, never a 500.
+- **Warnings (advice; the save has happened).** In the GET body too (mistakes in what is saved): a ladder point inside a break (it counts as the break's start), a weekday no enabled group covers (those days fall back to the old calculation), a full-day value no day of a group can reach. Only in the answer of a save that changes the rules: a start date in the past ("days from <date> are judged by the new table whenever they are recalculated"), production payroll already generated for days these rules judge ("regenerate payroll to apply"), moving the start date LATER over days production payroll already covers (those days are judged by the old calculation again), switching the rules OFF when payroll exists for days they judged, and a group the save touched that has no rule after its standard departure.
+- **POST /api/production-shift-rules/preview** — what a made-up day earns with the SAVED rules (unsaved edits are never read); reads, never writes. Body `{"punches": ["08:30", "12:45", "13:30", "20:00"], "date": "2026-10-15"}`: up to 24 plain ASCII `HH:MM` (`H:MM`, `HH:MM:SS`) times in the order they happened (a time not later than the one before it is the next morning, so `["21:00", "05:30"]` is a night; at most two calendar days), `date` optional (default today IST). Answer `{"group": "Day shift", "shifts": 1.5, "status": "present", "isLate": false, "earlyLeave": false, "note": "<one sentence, e.g. Day shift: left 17:50, ...>", "calculation": "rules"}`. `calculation` is `rules`, `legacy` (the date is before `effectiveFrom`, the rules are off, or no group covers that weekday: `group` is "Old calculation" and the note says why) or `none` (no punches: shifts 0, status `absent`). A bad time or date is 400 `{"error"}`.
+- **Additive keys on the attendance endpoints** (only for a production employee whose day the new rules judge; nothing changes for staff or for days before `effectiveFrom`). `GET /api/attendance/daily` rows gain `shiftsEarned` (number), `isLate`, `isEarlyOut`, `ruleGroup` (the group's label), `ruleNote` (one sentence) and `lastPunchNextDay` (true when the day's last punch is the next morning's); they are computed by the same pure function as payroll (one extra punch query for the whole roster, nothing stored), and `firstPunch` / `lastPunch` / `totalPunches` are the SHIFT day's, so a night worker's 05:30 punch is shown on the day the night began. The punch lists of `GET /api/attendance/employee/{pk}` (month history), `/api/attendance/search`, `/api/attendance/search/range` and `/api/attendance/employee-shift-stats` carry `nextDay: true` on a closing punch made on the following calendar date, and that punch is not listed again on the date it was made.
+- **Reports.** HR Reports → Production Daily Punches (id `production-daily-punches`, module `attendance`) adds the columns Shift, Shifts Earned, Late, Early and Rule applied and lists punches by shift day; HR Reports → Production Shift Rules (id `production-shift-rules`) prints the saved table (see `api/reporting/definitions/hr_reports.py`, `production_judge.py`).
 
 ## Geo-Punch & On-Duty Attendance (geo_attendance_views.py)
 
@@ -1142,6 +1169,7 @@ The single authoritative, final attendance verdict for one employee on one day �
 - `status` — TextField, `choices=STATUS_CHOICES` (present/absent/half_shift/on_leave/holiday)
 - `is_late`, `is_half_shift`, `early_leave`, `late_in_without_permission`, `early_out_without_permission` — BooleanField
 - `shifts_earned` — DecimalField(3,2) (0.50 per half; staff max 1.00, production max 1.50)
+- `shifts_earned` note: from the production shift rules' start date (`ProductionShiftConfig.rules_effective_from`) a production day is worth up to its group's top ladder value (3.00 with the default Day table), not 1.50; production `first_punch` / `last_punch` are the resolved shift day's (a night's closing punch is the next morning's clock time)
 - `first_punch`, `last_punch` — TimeField, nullable
 - `source` — TextField, default `"auto"` (auto | manual — manual is authoritative)
 - `primary_source` — TextField, nullable, display-only (Biometric/On-Duty/Geo Punch/HR Entry)
@@ -1208,6 +1236,11 @@ Singleton holding the reference punch times (arrival, lunch out, lunch return, d
 - `punch1_time`…`punch4_time` — TimeField (defaults 08:30/12:45/13:30/20:00)
 - `grace_minutes` — IntegerField, default 10
 - `updated_at` — DateTimeField
+- `rules_enabled` — BooleanField, default true: the master switch of the production shift rules (October 2026)
+- `rules_effective_from` — DateField, nullable: the first day the new rules judge (the migration sets the IST day it ran; a fresh row created later starts today; NULL = legacy only). Every earlier day keeps the calculation of `punch1_time`…`punch4_time`, `grace_minutes` (10) and `ProductionShiftSegment`, byte for byte
+- `rules_grace_minutes` — IntegerField, default 5 (0..30); `rules_min_credit` — DecimalField(4,2), default 0.00; `rules_rounding_step` — DecimalField(4,2), default 0.01 (0.01/0.05/0.25); `rules_rounding_mode` — TextField, default `nearest` (or `down`); `rules_full_day_value` — DecimalField(4,2), default 1.00 (a day below it is `half_shift`)
+- `rules_night_session_hours` — IntegerField, default 24 (1..24): the longest gap between an open "in" punch and the next day's first punch for that punch to close the night session
+- All eight columns were added by an additive migration (`0121_production_shift_rules`) with Python and database defaults; no `AttendanceDayRecord`, payroll or salary-slip row is touched
 
 ### ProductionShiftSegment
 **Table name:** `production_shift_segments`
@@ -1219,6 +1252,39 @@ An ordered, editable list of shift-value segments (time window → fractional sh
 - `shift_value` — DecimalField(4,2)
 - `order`, `is_active` — IntegerField / BooleanField
 - ordering `["order", "id"]`
+
+### ProductionShiftGroup
+**Table name:** `production_shift_groups` (migration `0121_production_shift_rules`)
+
+One kind of production day: where it starts, which first punches it takes, and its ladder of `ProductionShiftRule` rows.
+
+**Key fields:**
+- `label` — TextField; `kind` — TextField (day/night/sunday/custom, default custom); `applies_on` — TextField (mon_sat/sunday/all, default mon_sat)
+- `start_time` — TimeField, the reference in-time (08:30 Day, 21:00 Night)
+- `first_punch_from`, `first_punch_to` — TimeField: a day whose FIRST punch (clock time) falls in this window uses the group
+- `main_out_time` — TimeField, nullable, with `main_out_next_day` BooleanField: the standard departure, used only for the early-leave flag
+- `enabled` — BooleanField (default true), `order` — IntegerField, `created_at`, `updated_at`
+- ordering `["order", "id"]`. Seed: Day shift (day, mon_sat, 08:30, first punch 04:00-16:59:59, main out 20:00), Night shift (night, all, 21:00, first punch 17:00-23:59:59, main out 05:30 next day), Sunday shift (sunday, sunday, 08:30, first punch 04:00-16:59:59, main out 17:00)
+
+### ProductionShiftRule
+**Table name:** `production_shift_rules`
+
+One ladder point of a group: "a worker who leaves at `out_time` earned `shift_value`". Between two points the value grows in proportion to PAID time (breaks excluded). One out time appears once per group among the enabled rows (checked by the API, not by a database constraint).
+
+**Key fields:**
+- `group` — ForeignKey → `ProductionShiftGroup`, `on_delete=CASCADE`, related_name `rules`, column `group_id`
+- `label` — TextField, blank allowed; `out_time` — TimeField; `out_next_day` — BooleanField (the next morning)
+- `shift_value` — DecimalField(4,2); `enabled`, `order`, `created_at`, `updated_at`
+- ordering `["order", "id"]`. Seed (11 rows): Day 10:30 0.25, 12:45 0.50, 15:30 0.75, 17:45 1.00, 20:00 1.50, 22:30 2.00, 00:30 next day 2.50, 05:30 next day 3.00; Night 00:00 next day 0.50, 05:30 next day 1.50; Sunday 17:00 1.00
+
+### ProductionBreak
+**Table name:** `production_breaks`
+
+An UNPAID same-day window (tea, lunch, dinner), the same for every group on every day; nobody has to punch for it.
+
+**Key fields:**
+- `label` — TextField, blank allowed; `start_time`, `end_time` — TimeField (start before end); `enabled`, `order`, `created_at`, `updated_at`
+- ordering `["order", "id"]`. Seed (5 rows): Morning tea 10:30-10:45, Lunch 12:45-13:30, Afternoon tea 15:30-15:45, Evening tea 17:45-18:00, Night dinner 20:00-21:00
 
 ## Geo Attendance & On-Duty
 

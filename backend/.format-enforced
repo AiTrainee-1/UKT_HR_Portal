@@ -310,3 +310,5 @@ api/tests_production_shift_rules_api.py
 api/tests_production_consumers.py
 api/reporting/definitions/production_judge.py
 api/tests_reporting_production_shift.py
+api/gate_qr.py
+api/tests_gate_qr.py

@@ -14,7 +14,7 @@ happen to share the word "gate" -see GateDevice's docstring in models.py.
 from __future__ import annotations
 
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import bcrypt
 from django.utils import timezone
@@ -23,7 +23,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 
-from . import whatsapp_notifications
+from . import gate_qr, whatsapp_notifications
 from .auth import get_hr_display_name, require_gate_device, require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
 from .clock import FACTORY_TZ
@@ -216,6 +216,17 @@ def _resolve_exit_scan(gate: GateDevice, req: OutpassRequest) -> tuple[dict, int
     return {"result": "success", "scanType": "exit", "message": message, **_gate_scan_employee_payload(req)}, 200
 
 
+def _same_instant(claim: str | None, current) -> bool:
+    """True when the code's generatedAt claim is the very moment the live return QR was generated (a text compare of
+    the old token's ISO string, now a compare of instants so the short code and the old token both work)."""
+    if not claim or current is None:
+        return False
+    try:
+        return datetime.fromisoformat(claim) == current
+    except (TypeError, ValueError):
+        return False
+
+
 def _resolve_return_scan(gate: GateDevice, req: OutpassRequest, generated_at_claim: str | None) -> tuple[dict, int]:
     now = timezone.now()
 
@@ -241,8 +252,7 @@ def _resolve_return_scan(gate: GateDevice, req: OutpassRequest, generated_at_cla
     # employee has since re-clicked "Generate Return QR", a newer token now
     # exists and this one, though still cryptographically valid and unexpired
     # on its own terms, is stale and must be rejected.
-    current = req.return_qr_generated_at.isoformat() if req.return_qr_generated_at else None
-    if not current or generated_at_claim != current:
+    if not _same_instant(generated_at_claim, req.return_qr_generated_at):
         message = "This return QR is no longer valid -a newer one was generated for this Outpass."
         OutpassGateScan.objects.create(
             gate=gate, outpass_request=req, employee=req.employee, scan_type=OutpassGateScan.SCAN_TYPE_ENTRY,
@@ -283,12 +293,18 @@ def resolve_gate_scan(gate: GateDevice, qr_token: str) -> tuple[dict, int]:
         return {"result": "invalid_qr", "message": "qrToken is required"}, 400
 
     try:
-        payload = verify_token(qr_token)
+        # The short signed code (gate_qr.py) is what the apps show now; the old long JWT still works so a pass that was
+        # already open on a phone before the change is not refused.
+        payload = gate_qr.parse(qr_token) if gate_qr.looks_like_code(qr_token) else verify_token(qr_token)
         role = payload.get("role")
         if role not in ("outpass_pass", "outpass_return", "tea_break"):
             raise ValueError("wrong token role")
     except Exception:
-        message = "This QR code is not recognized."
+        message = (
+            "This QR code was read incompletely by the scanner. Please scan it again."
+            if gate_qr.looks_like_cut_jwt(qr_token)
+            else "This QR code is not recognized."
+        )
         OutpassGateScan.objects.create(gate=gate, result=OutpassGateScan.RESULT_INVALID_QR, message=message)
         return {"result": "invalid_qr", "message": message}, 400
 

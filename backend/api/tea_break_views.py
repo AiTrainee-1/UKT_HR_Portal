@@ -22,9 +22,9 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from . import gate_qr
 from .auth import get_token_employee_id, require_auth, require_hr
 from .branch_scope import scope_to_branch
-from .jwt_utils import sign_token
 from .models import Employee, GateDevice, TeaBreakLog, TeaBreakRule
 from .outpass_visitor_views import _paginate_params, _range_bounds, _range_start
 
@@ -108,8 +108,9 @@ def tea_break_qr_token(request: Request) -> Response:
         return Response({"error": "Employee login required"}, status=403)
     # Long-lived and NOT single-use/invalidated-on-regenerate like the
     # Outpass return QR -this one just identifies the employee, and is meant
-    # to be scanned indefinitely across many separate tea breaks.
-    token = sign_token({"role": "tea_break", "employeeId": emp_id}, expires_in=timedelta(days=3650))
+    # to be scanned indefinitely across many separate tea breaks. A short signed
+    # code (gate_qr.py), not the old ~170-character JWT that some scanners cut.
+    token = gate_qr.tea_code(emp_id)
     return Response({"qrToken": token})
 
 

@@ -246,10 +246,10 @@ class TeaBreakEmployeeEndpointsTests(TestCase):
         return self.factory.get(path, HTTP_AUTHORIZATION=f"Bearer {token}")
 
     def test_qr_token_encodes_this_employee_and_tea_break_role(self):
-        from .jwt_utils import verify_token
+        from . import gate_qr
 
         response = tea_break_qr_token(self._emp_request("/api/tea-break/qr-token"))
-        payload = verify_token(response.data["qrToken"])
+        payload = gate_qr.parse(response.data["qrToken"])  # a short signed code now, not a long JWT
         self.assertEqual(payload["role"], "tea_break")
         self.assertEqual(payload["employeeId"], self.emp.id)
 

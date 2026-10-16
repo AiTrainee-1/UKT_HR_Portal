@@ -23,7 +23,7 @@ from rest_framework.response import Response
 from . import approval_workflow as approval, whatsapp_approvals
 from .auth import get_hr_display_name, get_token_employee_id, require_auth, require_hr
 from .branch_scope import scope_to_branch
-from .jwt_utils import sign_token
+from . import gate_qr
 from .models import Employee, Notification, OutpassRequest
 from .outpass_visitor_views import _create_outpass_record_for
 from .view_common import paginate
@@ -63,7 +63,7 @@ def _outpass_request_json(req: OutpassRequest, with_employee: bool = False, cfg:
     # rather than relying on the gate to reject it.
     qr_token = None
     if scan_status == "pending_exit":
-        qr_token = sign_token({"role": "outpass_pass", "requestId": req.id}, expires_in=expires_at - now)
+        qr_token = gate_qr.pass_code(req.id, expires_at - now)
 
     # The return QR is never auto-computed the way the exit one is -it only
     # exists once the employee explicitly taps "Generate Return QR"
@@ -76,10 +76,7 @@ def _outpass_request_json(req: OutpassRequest, with_employee: bool = False, cfg:
     if req.return_qr_generated_at:
         return_qr_expires_at = req.return_qr_generated_at + timedelta(minutes=RETURN_QR_VALID_MINUTES)
     if scan_status == "pending_return":
-        return_qr_token = sign_token(
-            {"role": "outpass_return", "requestId": req.id, "generatedAt": req.return_qr_generated_at.isoformat()},
-            expires_in=return_qr_expires_at - now,
-        )
+        return_qr_token = gate_qr.return_code(req.id, req.return_qr_generated_at, return_qr_expires_at - now)
 
     data = {
         "id": req.id,
