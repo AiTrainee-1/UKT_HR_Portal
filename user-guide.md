@@ -21,6 +21,7 @@
    - [4.9 User Management (Department Approvers)](#49-user-management-department-approvers)
    - [4.10 Settings](#410-settings)
    - [4.11 Managing Director (MD) Portal & AI Assistant](#411-managing-director-md-portal--ai-assistant)
+   - [4.12 SMS Control (Codes by SMS)](#412-sms-control-codes-by-sms)
 5. [Employee Self-Service Module](#5-employee-self-service-module)
    - [5.1 Employee Dashboard](#51-employee-dashboard)
    - [5.2 Leave Management](#52-leave-management)
@@ -29,6 +30,7 @@
    - [5.5 Notifications](#55-notifications)
    - [5.6 Compensation](#56-compensation)
    - [5.7 HOD Assignment](#57-hod-assignment)
+   - [5.8 Signing In With a Code](#58-signing-in-with-a-code)
 6. [End-to-End Workflow Diagrams](#6-end-to-end-workflow-diagrams)
    - [6.1 Monthly Payroll Workflow](#61-monthly-payroll-workflow)
    - [6.2 Attendance Sync Workflow](#62-attendance-sync-workflow)
@@ -1238,6 +1240,56 @@ Shows the WhatsApp Cloud API connection status (configured entirely via server `
 
 ---
 
+#### Endpoint Sharing (Super Admin only)
+
+**What it is.** Endpoint Sharing lets your other computer programs read some of the HR data, safely. For example, your intranet can show the list of departments, or a dashboard can read today's attendance. Each shared "endpoint" is one web address. The program that calls it gets only the fields you choose. It can only read. It can never change anything.
+
+**Who can see it.** Only the Super Admin. The tab does not appear for anyone else, not even an HR user with every permission, and the server refuses everyone else as well.
+
+**Where to find it.** Settings → **Endpoint Sharing** (in the group "Messages & data"). It has three parts: **Endpoints**, **Integration guide** and **Activity**.
+
+**Nothing is shared by default.** A new endpoint shares nothing until you choose its fields **and** create a key.
+
+**How to create an endpoint**
+1. Open Settings → Endpoint Sharing → **Endpoints** and press **New endpoint**.
+2. **Basics.** Give it a name (for you), choose its address (small letters, digits and hyphens, for example `departments-for-intranet`) and add a description. The address can never be changed later, because other programs will have it written into their code.
+3. **Data.** Choose the dataset: Employees, Departments, Branches, Designations, Attendance (daily verdicts), Attendance (raw punches), Leave requests, Holidays or Payroll summary.
+4. **Choose the fields.** Tick only what the other program really needs. Fields are grouped by how sensitive they are:
+   - **Basic:** names, departments, dates, attendance marks.
+   - **Personal:** phone, email, gender, date of birth, address, leave reasons.
+   - **Financial:** salary and payroll amounts.
+   When you save a new Personal or Financial field, the system asks you to confirm, and the change is recorded in Activity Logs.
+5. **Locked filters (optional).** Fix a rule the other program can never change, for example "only active employees".
+6. **Live preview.** It shows the first rows exactly as the other program will receive them. Check it before you save.
+7. Press **Save**.
+
+**Allow the websites that may call it.** In the **Access** section, add each website as `https://app.example.com` (no path, no star). You only need this when a web page in a visitor's browser will call the endpoint. If a program on your own server calls it, leave **Calls from your own servers** on and add nothing.
+
+**Create a key.** In **Access → API keys**, give the key a label (the name of the program that will use it) and, if you like, an expiry date. The whole key is shown **once**. Copy it at once and give it to the developer. You cannot see it again; if it is lost, make a new one. Make one key for each program. An endpoint can have up to 10 live keys.
+
+**Revoke a key.** Press **Revoke** next to it. The key stops working immediately, and this cannot be undone. Make a new key if the program still needs access.
+
+**Switch an endpoint off, or delete it.** Switch off with the Enabled switch in Basics: the address then answers "not found" at once. Deleting removes the endpoint with its keys. The activity history is kept.
+
+**Read the activity log.** The **Activity** part lists every call: when, the result, which key, which website and which address it came from. It is kept for 90 days. What the results mean:
+- **200** answered.
+- **401** the key was refused (wrong, revoked or expired).
+- **403** the website is not on the allowed list.
+- **404** the address does not exist, or the endpoint is switched off.
+- **429** too many calls in a minute (the limit is 60 a minute for each key unless you change it).
+- **400** the other program sent a wrong parameter.
+Many 401 or 403 results you do not recognise mean someone is trying to get in. Revoke the key and check.
+
+**Never shared, whatever you tick.** Passwords, login tokens and one-time codes; Aadhaar and PAN numbers; bank details; PF, ESI and UAN numbers; photographs; biometric and device ids; HR accounts, roles and sessions; and anything that is not on the list of fields.
+
+**The honest security notes**
+- **A key is like a password.** Anyone who has it can read that endpoint's data. Keep it on a server, in a secret setting. Never put it in a web page, a mobile app, an email or a chat.
+- **The list of allowed websites protects browsers only. It is not a password.** A program that is not a browser can pretend to be any website. The key is what protects the data.
+- Share the fewest fields you can. Prefer calls from your own servers. Set an expiry date on keys. Revoke keys you no longer use.
+- **Integration guide.** A developer can read how to call an endpoint (address, key, parameters, answers, errors and example code in six languages) in the **Integration guide** part, and in each endpoint's **Guide** section.
+
+---
+
 #### Backup & Restore
 
 **Manual Backup:** Click **Run Backup Now** to immediately create a full backup of all database data and uploaded files. The backup is saved as a `.zip` file on the server.
@@ -1293,6 +1345,53 @@ On every page: the period and unit/department filters at the top; **Needs your a
 - **Limits.** The free Gemini plan allows only a handful of questions a minute and a few hundred a day; when it runs out the panel says when it resets. Voice needs the portal opened over HTTPS (or on the server itself).
 
 **Setting it up (Super Admin).** Put the Gemini key in `backend/.env` as `GEMINI_API_KEY` and restart the backend (the key is never typed into the portal). Account Management → **MD profile** shows the assistant's settings (model, privacy mode, limits, today's usage) and **Test connection**. On Google's free plan, what is sent may be used by Google to improve its products, so enable billing on the Google project before relying on it with real company data.
+
+---
+
+### 4.12 SMS Control (Codes by SMS)
+
+**What it's for:** Employees get a one-time code (a 6-digit number) when they sign in with a code, when they forgot their password and when they set their first password. SMS Control lets HR choose whether those codes arrive by **WhatsApp** (the default) or by **SMS**, and shows whether it is working. Salary slips, alerts and approvals stay on WhatsApp either way.
+
+**Why SMS:** the WhatsApp number that sent the codes was restricted by WhatsApp twice, and an employee without a code cannot sign in. SMS works on every phone, with no internet, and costs a few paise for each message.
+
+**Where to find it:** sidebar → Administration → **SMS Control**. An HR user needs the **SMS Control** permission: View to look, Edit to change. A branch login can look at its own branch's messages but cannot change settings or send a test.
+
+**The five tabs**
+- **Overview.** Shows which channel the codes use, whether the SMS service is set up, whether this server may send, how many messages went today and this hour against the limits, and a list of what to do next.
+- **Settings.** **Channel** (WhatsApp or SMS), **Limits** (how long a code works, how often it can be asked for, the company limits) and **Switches** (sign in with a code, forgot password by code, first-time password by code). Each setting explains what it does.
+- **Messages.** Every SMS the system sent or held back, newest first: when, who, the last four digits of the number, what for, and the result. A failed or blocked message says why. A code is never shown.
+- **Test.** Sends one real SMS to a number you type, so you can see that it works.
+- **Setup.** The short list of what must be done once for SMS to work.
+
+**Before you can use SMS (done once).** An account with the SMS company (2Factor) with some credit, and the approved message template (name `UKT_HRMS_OTP`, sender `UKTHRM`). The developer then puts the 2Factor API key on the server. The full step-by-step guide is in `twofactor-sms-otp-integration.md`. The system will not let you choose SMS until the server has the 2Factor details.
+
+**Switching to SMS, step by step**
+1. Open **Overview**. It should say **2Factor set up: Yes** and **This machine sends: Allowed**.
+2. Open **Test**, type **your own number** and send one message. It should arrive within a minute and read exactly like the approved text.
+3. Open **Settings → Channel**, choose **SMS**, press **Save channel** and confirm.
+4. Watch **Messages** for the first day.
+5. Keep **password sign-in** switched on (WhatsApp Control → Feature Controls). It is the fallback.
+
+**The limits that protect you** (you can change them in Settings → Limits):
+- A code works for 5 minutes, and only once.
+- An employee waits 60 seconds before asking again, and can ask for 5 codes an hour.
+- A code is cancelled after 5 wrong tries.
+- One phone number receives at most 5 SMS an hour.
+- The company sends at most 300 SMS an hour and 1,500 a day.
+- After 3 failed sends in 10 minutes, SMS pauses for 10 minutes by itself.
+When a limit stops a code, **Messages** shows it as **Blocked** with the reason, and the employee is told to use their password.
+
+**What it costs.** Each SMS is paid to 2Factor (check the current price in your 2Factor account). A message that fails after 2Factor accepted it may still be charged, and so is every test. For about 250 employees, using codes only for first-time passwords and password resets costs a few hundred rupees a year. Signing in with a code every day costs far more, so it is better to leave daily sign-in on passwords.
+
+**If something goes wrong.** Employees can always sign in with their password. Open **Messages** and read the reason on the failed row. The usual causes are no credit left (top up in the 2Factor panel), a wrong API key or template name on the server, or a message text that does not match the approved one. Ask the developer to check the setup. To go back, choose **WhatsApp** in Settings → Channel and save.
+
+**New app versions.** The mobile app needs a **new APK build**, and the Employee Web App needs its own **Vercel deploy**, before their screens say "SMS". Older versions keep working but still say "WhatsApp" while the code arrives by SMS.
+
+#### What NOT to do in SMS Control
+- Do not share the 2Factor API key with anyone, and never type it into the portal (it is not asked for there).
+- Do not change the message wording on your own: it must match the text approved with the telecom operators exactly.
+- Do not switch off password sign-in until you have seen SMS work for every kind of employee.
+- Do not raise the company limits far above what you need: they protect your credit.
 
 ---
 
@@ -1427,6 +1526,27 @@ A Department Head decides these claims in the app's **Approvals** (see *Holiday 
 - **What your Department Head can approve:** one row for each kind of request (Leave, Permission, Casual Leave, Missing Punch, On-Duty, Attendance Correction, Resignation, Outpass, Holiday / Sunday work compensation), marked **Can approve** or **Cannot approve**. When it is *Cannot approve*, the reason is given (*Switched off by HR*, *HR decides this one*, *Not enabled for your Department Head*) together with the route a request takes. The list reads Approval Workflow Control and the head's switches in HOD Assignment, so it always shows what really applies. Production employees do not see Casual Leave or Holiday / Sunday work.
 - *For any question about approvals, contact HR*, with the HR contact card.
 - An employee with no Department Head sees *No Department Head assigned yet*; a Department Head sees that HR decides their own requests.
+
+---
+
+### 5.8 Signing In With a Code
+
+**Employee Web App and Mobile App; every employee.**
+
+Employees can sign in, reset a forgotten password or set a first password with a one-time code. HR chooses whether the code comes by **SMS** or on **WhatsApp** (see 4.12), and the screens say which.
+
+**How it works**
+1. Type your **Employee Code**. You never type a phone number: the code goes to the mobile number HR has registered for you, and the screen shows only its last four digits.
+2. Press **Send code**. The 6-digit code arrives in a few seconds.
+3. Type the code. It works **once** and only for a few minutes (the screen tells you how long).
+4. For a forgotten or first password, you then choose a new password of at least 8 characters.
+
+**Good to know**
+- Wait about a minute before asking for another code. The screen counts down.
+- Only the newest code works.
+- After a few wrong tries the code is cancelled. Ask for a new one.
+- If you see *No mobile number is registered*, or the number is wrong, ask HR to correct it on your employee record.
+- If codes are not available (for example SMS is paused), the screen says so. Your password still works.
 
 ---
 

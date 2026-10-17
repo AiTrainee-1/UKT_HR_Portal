@@ -67,6 +67,7 @@ MODULE_TREE: list[dict] = [
     {"key": "login_devices", "label": "Login Devices"},
     {"key": "mobile_app_login", "label": "Mobile App Login"},
     {"key": "whatsapp_control", "label": "WhatsApp Control"},
+    {"key": "sms_control", "label": "SMS Control"},
     {"key": "gmail_control", "label": "Gmail Control"},
     {"key": "chat", "label": "Chat"},
     {"key": "notifications", "label": "Notifications"},
@@ -306,6 +307,9 @@ URL_MODULE_MAP: dict[str, str] = {
     "mobile-app/versions": "mobile_app_login",
 
     "whatsapp-control": "whatsapp_control",
+
+    # SMS Control (one-time codes by SMS through 2Factor): view for the GETs, edit for the PUT and the test POST.
+    "sms-control": "sms_control",
 
     "gmail-control": "gmail_control",
 

@@ -18,10 +18,9 @@ from datetime import datetime, timedelta
 
 import bcrypt
 from django.utils import timezone
-from rest_framework.decorators import api_view, throttle_classes
+from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
-from rest_framework.throttling import ScopedRateThrottle
 
 from . import gate_qr, whatsapp_notifications
 from .auth import get_hr_display_name, require_gate_device, require_hr
@@ -30,6 +29,7 @@ from .clock import FACTORY_TZ
 from .jwt_utils import sign_token, verify_token
 from .models import Branch, GateDevice, OutpassGateScan, OutpassRequest
 from .outpass_visitor_views import _paginate_params
+from .throttles import throttle
 
 
 def _today_start():
@@ -155,9 +155,8 @@ def gate_login_info(request: Request, login_token: str) -> Response:
 
 
 @api_view(["POST"])
-@throttle_classes([ScopedRateThrottle])
+@throttle("login")
 def gate_login(request: Request) -> Response:
-    request.throttle_scope = "login"
     username = (request.data.get("username") or "").strip()
     password = request.data.get("password") or ""
 

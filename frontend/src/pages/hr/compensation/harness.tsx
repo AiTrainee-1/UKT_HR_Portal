@@ -381,6 +381,14 @@ export async function waitFor(check: () => boolean, what: string, timeoutMs = 40
 }
 
 /** A tab of the page (the tab row draws each label twice, so the role is the handle). */
+/** The labels (with their counts) of a strip of nested subtabs, `<testId>` being the strip's wrapper (`leave-holiday-nested`). */
+export const nestedLabels = (testId: string): string[] =>
+  [...document.body.querySelectorAll(`[data-testid="${testId}-strip"] [role="tab"]`)].map((t) => text(t));
+
+/** One tab of a strip of nested subtabs, by its value. */
+export const nestedTab = (testId: string, value: string): HTMLElement =>
+  document.body.querySelector<HTMLElement>(`[data-testid="${testId}-${value}"]`)!;
+
 export const tab = (name: string): HTMLElement =>
   [...document.body.querySelectorAll<HTMLElement>('[role="tab"]')].find((t) => text(t).startsWith(name))!;
 

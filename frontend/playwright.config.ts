@@ -11,6 +11,7 @@ const API_PORT = 8180;
 const WEB_PORT = 5180;
 const FAKE_PORT = 8190;
 const FAKE_GEMINI_PORT = 8191;
+const FAKE_TWOFACTOR_PORT = 8192;
 // Fake biometric terminals (backend/fake_zk_device.py): three devices on consecutive TCP ports that speak the ZK protocol,
 // and an HTTP control port the Device Control spec uses to reset them and to read back what the portal wrote to them.
 const FAKE_DEVICE_BASE_PORT = 14371;
@@ -25,6 +26,9 @@ const backendEnv = {
   // database, and random tests get a 503 "database unavailable". Close each connection when its request ends.
   DB_CONN_MAX_AGE: "0",
   DEBUG: "true",
+  // The per-IP throttles (api/throttles.py) are flood guards sized for a factory behind one NAT address; this stack signs
+  // in hundreds of times from 127.0.0.1, so every rate is lifted to 100000/min. Never set it on a real server.
+  THROTTLE_RELAXED: "true",
   JWT_SECRET: "e2e-only-jwt-secret-at-least-32-bytes-long",
   DJANGO_SECRET_KEY: "e2e-only-django-secret",
   ALLOWED_HOSTS: "localhost,127.0.0.1",
@@ -37,6 +41,15 @@ const backendEnv = {
   WACLIENT_API_URL: `http://127.0.0.1:${FAKE_PORT}/send`,
   WHATSAPP_SEND_DELAY_SECONDS: "0",
   WHATSAPP_MIN_SEND_GAP_SECONDS: "0",
+  // SMS goes to a local fake of 2Factor (e2e/fake-twofactor.mjs), never to 2Factor: dummy credentials override whatever real
+  // ones backend/.env holds (none of them looks like a placeholder, or the server would treat SMS as not set up), and the API
+  // address can't leave the machine. A dev-mode backend (DEBUG) refuses to send SMS unless told otherwise; here it sends only
+  // to the local fake.
+  TWOFACTOR_API_KEY: "e2e-twofactor-key-not-a-real-key",
+  TWOFACTOR_TEMPLATE_NAME: "E2E_TF_OTP",
+  TWOFACTOR_SENDER_ID: "E2ETFX",
+  TWOFACTOR_API_BASE: `http://127.0.0.1:${FAKE_TWOFACTOR_PORT}/API/V1`,
+  SMS_ALLOW_SENDING: "true",
   // Same for email: a dev-mode backend refuses to send unless told otherwise. Nothing can leave the machine, because
   // the only SMTP account the tests save points at 127.0.0.1:9 (gmail-control.spec.ts); until then SMTP isn't set up.
   EMAIL_ALLOW_SENDING: "true",
@@ -78,6 +91,13 @@ export default defineConfig({
       reuseExistingServer: reuse,
       timeout: 30_000,
       env: { FAKE_WACLIENT_PORT: String(FAKE_PORT) },
+    },
+    {
+      command: "node e2e/fake-twofactor.mjs",
+      url: `http://127.0.0.1:${FAKE_TWOFACTOR_PORT}/health`,
+      reuseExistingServer: reuse,
+      timeout: 30_000,
+      env: { FAKE_TWOFACTOR_PORT: String(FAKE_TWOFACTOR_PORT) },
     },
     {
       command: "node e2e/fake-gemini.mjs",

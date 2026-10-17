@@ -9,11 +9,15 @@ import {
   installBrowserStubs,
   installWorld,
   mountPage,
+  nestedLabels,
+  nestedTab,
   must,
   params,
   pickOption,
+  press,
   q,
   settle,
+  tab,
   text,
   typeInto,
   unmountPage,
@@ -51,7 +55,14 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const OT = "/hr/compensation?tab=ot";
+const OT_PAGE = "/hr/compensation/ot-detection";
+const OT = `${OT_PAGE}/type-1/allowance`;
+const OT1_HOW = `${OT_PAGE}/type-1/how`;
+const OT2 = `${OT_PAGE}/type-2/waiting`;
+const OT2_ASSIGNED = `${OT_PAGE}/type-2/assigned`;
+const OT2_HOW = `${OT_PAGE}/type-2/how`;
+const OT_EARLIER = `${OT_PAGE}/earlier`;
+const OT2_PATH = OT2;
 const ASSIGN = "/api/compensation/ot/assign";
 const REJECT = "/api/compensation/ot/reject";
 
@@ -60,6 +71,11 @@ async function openOt(url = OT) {
   await waitFor(() => !!q("ot-kpis"), "the OT tiles");
 }
 
+const tabLabels = () =>
+  [...document.body.querySelectorAll('[data-testid="ot-subtabs"] [role="tab"]')].map((t) =>
+    text(t.querySelector(".ptab-label")),
+  );
+
 const ids = (testId: string) =>
   [...document.body.querySelectorAll(`[data-testid^="${testId}"]`)].map((e) =>
     e.getAttribute("data-testid")!.slice(testId.length),
@@ -67,9 +83,15 @@ const ids = (testId: string) =>
 const button = (id: string) => must(id) as HTMLButtonElement;
 const input = (id: string) => must(id) as HTMLInputElement;
 
+/** Opens another nested subtab of Type 2 from the strip and waits for its card. */
+async function openNested(testId: string, value: string, ready: string) {
+  click(nestedTab(testId, value));
+  await waitFor(() => !!q(ready), `the ${value} subtab`);
+}
+
 /** Ticks the two candidates and opens the dialog. */
 async function openAssign() {
-  await openOt();
+  await openOt(OT2);
   click(must("ot2-select-E13-2026-10-05"));
   click(must("ot2-select-E11-2026-10-09"));
   click(must("ot2-assign"));
@@ -96,7 +118,7 @@ describe("the tiles", () => {
     await waitFor(() => !!q("ot-tab"), "the tab");
     expect(q("skeleton-kpis")).not.toBeNull();
     expect(q("ot-kpis")).toBeNull();
-    expect(text(q("ot-type2-loading"))).toContain("Loading");
+    expect(text(q("ot-type1-loading"))).toContain("Loading");
     release();
     await waitFor(() => !!q("ot-kpis"), "the tiles");
     expect(q("skeleton-kpis")).toBeNull();
@@ -165,11 +187,23 @@ describe("Type 1: the automatic next-day late-in allowance", () => {
     const buttons = [...card.querySelectorAll("button")].map(text);
     expect(buttons.filter((b) => /assign|reject|announce/i.test(b))).toEqual([]);
     expect(text(card)).toContain("Automatic and unpaid");
-    expect(text(card)).toContain("marks it as Compensation instead");
+    // what the allowance does is on the other nested subtab, not on this one
+    expect(q("rules-type1")).toBeNull();
+    expect(q("ot-type1-how")).toBeNull();
+  });
+
+  it("explains what it does under How it is worked out, apart from the list", async () => {
+    await openOt(OT1_HOW);
+    expect(text(q("ot-type1-how"))).toContain("marks it as Compensation instead");
+    expect(text(q("ot-type1-how"))).toContain("Whether to use it is the employee's choice");
+    expect(q("ot-type1")).toBeNull();
+    expect(q("ot-type1-table")).toBeNull();
+    // the rules are already open there: nothing to click to read them
+    expect((q("rules-type1") as HTMLDetailsElement).open).toBe(true);
   });
 
   it("explains the rules in use, read from Settings", async () => {
-    await openOt();
+    await openOt(OT1_HOW);
     await waitFor(() => text(q("rules-type1")).includes("Worked 1 hour"), "the rules");
     const rules = text(q("rules-type1"));
     expect(rules).toContain(
@@ -181,10 +215,13 @@ describe("Type 1: the automatic next-day late-in allowance", () => {
 
   it("does not claim there are no rules when the rules cannot be read", async () => {
     world.failing.set("/api/compensation/config", { status: 500 });
-    await openOt();
+    await openOt(OT1_HOW);
     await waitFor(() => !!q("rules-type1-error"), "the message");
     expect(text(q("rules-type1-error"))).toContain("The rules could not be loaded");
     expect(text(q("rules-type1"))).not.toContain("No Type 1 rule is switched on");
+    click(tab("Type 2"));
+    await openNested("ot-type2-nested", "how", "rules-type2");
+    await waitFor(() => !!q("rules-type2-error"), "the Type 2 message");
     expect(text(q("rules-type2-error"))).toContain("The rules could not be loaded");
   });
 
@@ -198,7 +235,7 @@ describe("Type 1: the automatic next-day late-in allowance", () => {
 
 describe("Type 2: shift-based compensation", () => {
   it("lists the candidates with the suggested shifts, and a punch after midnight as the next day", async () => {
-    await openOt();
+    await openOt(OT2);
     expect(ids("ot-type2-row-")).toEqual(["E13-2026-10-05", "E11-2026-10-09"]);
     const chitra = text(must("ot-type2-row-E13-2026-10-05"));
     expect(chitra).toContain("Chitra Devi");
@@ -211,8 +248,10 @@ describe("Type 2: shift-based compensation", () => {
     expect(asha).toContain("0.75 shifts");
   });
 
-  it("lists what was assigned or rejected, with how it was given", async () => {
-    await openOt();
+  it("lists what was assigned or rejected, with how it was given, apart from the candidates", async () => {
+    await openOt(OT2_ASSIGNED);
+    expect(q("ot-type2-table")).toBeNull();
+    expect(q("ot2-assign")).toBeNull();
     expect(ids("ot-type2-history-row-")).toEqual(["E14-2026-10-02", "E12-2026-10-03"]);
     const assigned = text(must("ot-type2-history-row-E14-2026-10-02"));
     expect(assigned).toContain("Dev Anand");
@@ -225,7 +264,7 @@ describe("Type 2: shift-based compensation", () => {
   });
 
   it("filters the history by status", async () => {
-    await openOt();
+    await openOt(OT2_ASSIGNED);
     pickOption(must("ot2-history-status"), "Rejected");
     expect(ids("ot-type2-history-row-")).toEqual(["E12-2026-10-03"]);
     expect(params().otstatus).toBe("rejected");
@@ -237,7 +276,10 @@ describe("Type 2: shift-based compensation", () => {
   });
 
   it("explains how the suggested shifts are worked out, from the rules in Settings", async () => {
-    await openOt();
+    await openOt(OT2_HOW);
+    expect(q("ot-type2-table")).toBeNull();
+    expect(q("ot-type2-history-table")).toBeNull();
+    expect((q("rules-type2") as HTMLDetailsElement).open).toBe(true);
     await waitFor(() => text(q("rules-type2")).includes("Last punch-out up to"), "the rules");
     const rules = text(q("rules-type2"));
     expect(rules).toContain("more than 2 hours 30 minutes past the shift end");
@@ -247,7 +289,7 @@ describe("Type 2: shift-based compensation", () => {
   });
 
   it("has nothing to assign until a row is ticked, and counts the ticked rows", async () => {
-    await openOt();
+    await openOt(OT2);
     expect(button("ot2-assign").disabled).toBe(true);
     expect(button("ot2-reject").disabled).toBe(true);
     expect(text(q("ot2-selected"))).toBe("0 selected");
@@ -349,12 +391,15 @@ describe("the Assign dialog", () => {
       ],
     });
     await waitFor(() => !q("assign-dialog"), "the dialog to close");
-    await waitFor(() => !!q("ot-type2-history-row-E13-2026-10-05"), "the rows in the history");
-    expect(q("ot-type2-row-E13-2026-10-05")).toBeNull();
-    expect(text(q("ot-type2-history-row-E11-2026-10-09"))).toContain("Relaxation on 12 Oct 2026");
+    await waitFor(() => !q("ot-type2-row-E13-2026-10-05"), "the rows to leave the waiting list");
     expect(text(q("ot-kpi-waiting-value"))).toBe("0");
     expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Assigned 2 records" }));
     expect(text(q("ot2-selected"))).toBe("0 selected");
+    // the tabs follow: nothing waiting any more, four in the history
+    expect(nestedLabels("ot-type2-nested")[0]).toBe("Waiting for HR (0)");
+    expect(nestedLabels("ot-type2-nested")[1]).toBe("Assigned and rejected (4)");
+    await openNested("ot-type2-nested", "assigned", "ot-type2-history-table");
+    expect(text(q("ot-type2-history-row-E11-2026-10-09"))).toContain("Relaxation on 12 Oct 2026");
   });
 
   it("offers only the modes switched on in Settings", async () => {
@@ -432,7 +477,7 @@ describe("the Assign dialog", () => {
 
 describe("Reject", () => {
   it("asks first, then rejects the ticked rows and moves them to the history", async () => {
-    await openOt();
+    await openOt(OT2);
     click(must("ot2-select-E13-2026-10-05"));
     click(must("ot2-reject"));
     await waitFor(() => !!q("reject-dialog"), "the confirmation");
@@ -442,13 +487,14 @@ describe("Reject", () => {
     click(must("reject-confirm"));
     await waitFor(() => bodiesOf(world, "POST", REJECT).length === 1, "the request");
     expect(bodiesOf(world, "POST", REJECT)[0]).toEqual({ records: [{ employeeId: 13, date: "2026-10-05" }] });
-    await waitFor(() => !!q("ot-type2-history-row-E13-2026-10-05"), "the row in the history");
-    expect(text(q("ot-type2-history-row-E13-2026-10-05"))).toContain("Rejected");
+    await waitFor(() => !q("ot-type2-row-E13-2026-10-05"), "the row to leave the waiting list");
     expect(text(q("ot-kpi-rejected-value"))).toBe("2");
+    await openNested("ot-type2-nested", "assigned", "ot-type2-history-table");
+    expect(text(q("ot-type2-history-row-E13-2026-10-05"))).toContain("Rejected");
   });
 
   it("changes nothing when the question is answered No", async () => {
-    await openOt();
+    await openOt(OT2);
     click(must("ot2-select-E13-2026-10-05"));
     click(must("ot2-reject"));
     await waitFor(() => !!q("reject-dialog"), "the confirmation");
@@ -460,18 +506,26 @@ describe("Reject", () => {
 });
 
 describe("the filters", () => {
-  it("search all the lists by name, code or department, and keep the search in the address", async () => {
+  it("search every list by name, code or department, and keep the search in the address and across the subtabs", async () => {
     await openOt();
     typeInto(input("ot-search"), "asha");
     expect(params().otq).toBe("asha");
     expect(ids("ot-type1-row-")).toEqual(["E11-2026-10-06"]);
-    expect(ids("ot-type2-row-")).toEqual(["E11-2026-10-09"]);
-    expect(q("ot-type2-history-table")).toBeNull();
     // the tiles still count the whole month
     expect(text(q("ot-kpi-earned-value"))).toBe("2");
+    // the search goes with a switch to Type 2, and the tiles stay on top
+    click(tab("Type 2"));
+    expect(window.location.pathname).toBe(OT2_PATH);
+    expect(params().otq).toBe("asha");
+    expect(input("ot-search").value).toBe("asha");
+    expect(q("ot-kpis")).not.toBeNull();
+    expect(ids("ot-type2-row-")).toEqual(["E11-2026-10-09"]);
+    expect(q("ot-type2-history-table")).toBeNull();
+    // the tabs count the whole month, whatever the search hides
+    expect(nestedLabels("ot-type2-nested")[0]).toBe("Waiting for HR (2)");
     click(must("ot-reset"));
     expect(params().otq).toBeUndefined();
-    expect(ids("ot-type1-row-")).toHaveLength(2);
+    expect(ids("ot-type2-row-")).toHaveLength(2);
   });
 
   it("narrow to one department", async () => {
@@ -479,13 +533,15 @@ describe("the filters", () => {
     pickOption(must("ot-dept"), "Cutting");
     expect(params().otdept).toBe("Cutting");
     expect(ids("ot-type1-row-")).toEqual(["E12-2026-10-07"]);
+    click(tab("Type 2"));
     expect(q("ot-type2-table")).toBeNull();
     expect(text(q("ot-type2-empty"))).toContain("No candidate matches these filters");
+    await openNested("ot-type2-nested", "assigned", "ot-type2-history-table");
     expect(ids("ot-type2-history-row-")).toEqual(["E14-2026-10-02", "E12-2026-10-03"]);
   });
 
   it("restores the filters from the address", async () => {
-    await openOt(`${OT}&otq=chitra`);
+    await openOt(`${OT2}?otq=chitra`);
     expect(input("ot-search").value).toBe("chitra");
     expect(ids("ot-type2-row-")).toEqual(["E13-2026-10-05"]);
   });
@@ -496,7 +552,9 @@ describe("the filters", () => {
     expect(params().month).toBe("9");
     await waitFor(() => world.requests().some((r) => r.includes("month=9&year=2026")), "the request");
     await waitFor(() => !!q("ot-type1-empty"), "the empty state");
+    click(tab("Type 2"));
     expect(text(q("ot-type2-empty"))).toContain("Nothing is waiting for HR");
+    expect(params().month).toBe("9");
     expect(text(q("ot-kpi-earned-value"))).toBe("0");
   });
 });
@@ -509,14 +567,16 @@ describe("what is switched off in Settings", () => {
     expect(text(notice)).toContain("Type 1 (next-day late-in allowance) is switched off");
     expect(notice.querySelector("a")!.getAttribute("href")).toBe("/hr/settings?tab=compensation#allowance-enabled");
     expect(ids("ot-type1-row-")).toHaveLength(2);
-    // assigning Type 2 is not affected
+    // assigning Type 2 is not affected, and the Type 1 notice stays with Type 1
+    click(tab("Type 2"));
+    expect(q("ot-type1-off")).toBeNull();
     click(must("ot2-select-E13-2026-10-05"));
     expect(button("ot2-assign").disabled).toBe(false);
   });
 
   it("says Type 2 is off and pauses assigning and rejecting, with the reason on the buttons", async () => {
     world.otConfig.shiftEnabled = false;
-    await openOt();
+    await openOt(OT2);
     expect(text(q("ot-type2-off"))).toContain("Type 2 (shift-based compensation) is switched off");
     expect(must("ot-type2-off").querySelector("a")!.getAttribute("href")).toBe(
       "/hr/settings?tab=compensation#shift-enabled",
@@ -528,15 +588,17 @@ describe("what is switched off in Settings", () => {
         /Type 2 \(shift-based compensation\) is switched off in Settings → Compensation/,
       );
     }
-    // everything stays readable
+    // everything stays readable, and the notice stays above the nested subtabs
     expect(ids("ot-type2-row-")).toHaveLength(2);
+    await openNested("ot-type2-nested", "assigned", "ot-type2-history-table");
     expect(ids("ot-type2-history-row-")).toHaveLength(2);
+    expect(q("ot-type2-off")).not.toBeNull();
   });
 
   it("says neither Relaxation nor Payment is on", async () => {
     world.otConfig.relaxationEnabled = false;
     world.otConfig.payEnabled = false;
-    await openOt();
+    await openOt(OT2);
     expect(text(q("ot-modes-off"))).toContain("Neither Relaxation nor Payment is switched on");
     click(must("ot2-select-E13-2026-10-05"));
     expect(button("ot2-assign").disabled).toBe(true);
@@ -546,23 +608,29 @@ describe("what is switched off in Settings", () => {
   it("pauses every change when the master switch is off, and says so on the buttons", async () => {
     world.settings.compensationFeatureEnabled = false;
     world.otConfig.masterEnabled = false;
-    await openOt();
+    await openOt(OT2);
     // the master switch has its own notice at the top of the page, so the tab adds none of its own
     expect(q("ot-type1-off")).toBeNull();
     expect(q("ot-type2-off")).toBeNull();
     await waitFor(() => !!q("compensation-features-off"), "the master notice");
     click(must("ot2-select-E13-2026-10-05"));
-    for (const id of ["ot2-assign", "ot2-reject", "ot-legacy-pay", "ot-legacy-relaxation", "ot-legacy-reject"]) {
+    for (const id of ["ot2-assign", "ot2-reject"]) {
       expect(button(id).disabled).toBe(true);
       expect(button(id).title).toMatch(/switched off in Settings/);
     }
     expect(ids("ot-type2-row-")).toHaveLength(2);
+    // the earlier records are paused the same way
+    click(tab("Earlier records"));
+    for (const id of ["ot-legacy-pay", "ot-legacy-relaxation", "ot-legacy-reject"]) {
+      expect(button(id).disabled).toBe(true);
+      expect(button(id).title).toMatch(/switched off in Settings/);
+    }
   });
 });
 
 describe("earlier records, with their old meaning", () => {
   it("lists them with what they gave", async () => {
-    await openOt();
+    await openOt(OT_EARLIER);
     expect(ids("ot-legacy-row-")).toEqual(["E15-2026-10-01", "E15-2026-10-08"]);
     const announced = text(must("ot-legacy-row-E15-2026-10-01"));
     expect(announced).toContain("Announced");
@@ -571,7 +639,7 @@ describe("earlier records, with their old meaning", () => {
   });
 
   it("lets a record still waiting be announced under the old meaning, or rejected", async () => {
-    await openOt();
+    await openOt(OT_EARLIER);
     const row = must("ot-legacy-row-E15-2026-10-08");
     click(row.querySelector('button[role="checkbox"]'));
     click(must("ot-legacy-pay"));
@@ -582,10 +650,134 @@ describe("earlier records, with their old meaning", () => {
     });
   });
 
-  it("is not shown when there are none", async () => {
+  it("is not shown when there are none: no subtab for it, and its address says so", async () => {
     world.ot = world.ot.filter((r) => r.otType !== "legacy");
-    await openOt();
+    await openOt(OT);
+    expect(tabLabels()).toEqual(["Type 1 · Late-in allowance", "Type 2 · Shift compensation"]);
+    unmountPage();
+    await openOt(OT_EARLIER);
     expect(q("ot-legacy")).toBeNull();
+    expect(text(q("ot-earlier-empty"))).toContain("No earlier records");
+  });
+});
+
+describe("the subtabs", () => {
+  it("are Type 1, Type 2 and Earlier records (shown because there are some), each with its own address", async () => {
+    await openOt(OT);
+    expect(tabLabels()).toEqual(["Type 1 · Late-in allowance", "Type 2 · Shift compensation", "Earlier records"]);
+    expect(tab("Type 1").getAttribute("aria-selected")).toBe("true");
+    expect(q("ot-type1")).not.toBeNull();
+    expect(q("ot-type2")).toBeNull();
+    expect(q("ot-legacy")).toBeNull();
+    click(tab("Type 2"));
+    expect(window.location.pathname).toBe(OT2_PATH);
+    expect(tab("Type 2").getAttribute("aria-selected")).toBe("true");
+    expect(q("ot-type1")).toBeNull();
+    expect(q("ot-type2")).not.toBeNull();
+    click(tab("Earlier records"));
+    expect(window.location.pathname).toBe(OT_EARLIER);
+    expect(q("ot-legacy")).not.toBeNull();
+    expect(q("ot-type2")).toBeNull();
+  });
+
+  it("keep the tiles and the filter bar on top of each, and the month and the filters across a switch", async () => {
+    await openOt(`${OT}?month=9&year=2026&otdept=Cutting`);
+    click(tab("Type 2"));
+    expect(q("ot-kpis")).not.toBeNull();
+    expect(q("ot-month")).not.toBeNull();
+    expect(params()).toEqual({ month: "9", year: "2026", otdept: "Cutting" });
+    click(tab("Type 1"));
+    expect(params()).toEqual({ month: "9", year: "2026", otdept: "Cutting" });
+  });
+
+  it("keep the explainer with their type, under How it is worked out", async () => {
+    await openOt(OT1_HOW);
+    expect(q("rules-type1")).not.toBeNull();
+    expect(q("rules-type2")).toBeNull();
+    click(tab("Type 2"));
+    expect(q("rules-type2")).toBeNull();
+    await openNested("ot-type2-nested", "how", "rules-type2");
+    expect(window.location.pathname).toBe(OT2_HOW);
+    expect(q("rules-type1")).toBeNull();
+  });
+
+  it("have a nested strip each under Type 1 and Type 2, with counts, and none under Earlier records", async () => {
+    await openOt(OT);
+    expect(nestedLabels("ot-type1-nested")).toEqual(["Late-in allowance (2)", "How it is worked out"]);
+    expect(q("ot-type2-nested")).toBeNull();
+    click(tab("Type 2"));
+    expect(nestedLabels("ot-type2-nested")).toEqual([
+      "Waiting for HR (2)",
+      "Assigned and rejected (2)",
+      "How the suggested shifts are worked out",
+    ]);
+    expect(q("ot-type1-nested")).toBeNull();
+    click(tab("Earlier records"));
+    expect(q("ot-type1-nested")).toBeNull();
+    expect(q("ot-type2-nested")).toBeNull();
+    expect(document.body.querySelector('[role="tabpanel"]')).toBeNull();
+  });
+
+  it("show only the section of the open nested subtab, switch by the address, and keep the filters and the data", async () => {
+    await openOt(`${OT2}?month=10&year=2026&otdept=Cutting`);
+    expect(nestedTab("ot-type2-nested", "waiting").getAttribute("aria-selected")).toBe("true");
+    expect(q("ot-type2")).not.toBeNull();
+    expect(q("ot-type2-assigned")).toBeNull();
+    expect(q("ot-type2-how")).toBeNull();
+    await openNested("ot-type2-nested", "assigned", "ot-type2-assigned");
+    expect(window.location.pathname).toBe(OT2_ASSIGNED);
+    expect(params()).toEqual({ month: "10", year: "2026", otdept: "Cutting" });
+    expect(q("ot-type2")).toBeNull();
+    expect(q("ot-type2-how")).toBeNull();
+    await openNested("ot-type2-nested", "how", "ot-type2-how");
+    expect(window.location.pathname).toBe(OT2_HOW);
+    expect(q("ot-type2-assigned")).toBeNull();
+    // the month was asked for once: a switch between the sections costs no request
+    expect(world.requests().filter((r) => r.startsWith("/api/compensation/ot?"))).toHaveLength(1);
+  });
+
+  it("keep what is ticked while HR looks at the other sections", async () => {
+    await openOt(OT2);
+    click(must("ot2-select-E13-2026-10-05"));
+    await openNested("ot-type2-nested", "how", "ot-type2-how");
+    await openNested("ot-type2-nested", "waiting", "ot-type2-table");
+    expect(text(q("ot2-selected"))).toBe("1 selected");
+  });
+
+  it("move with the arrow keys, Home and End, and open the tab they land on", async () => {
+    await openOt(OT2);
+    const strip = must("ot-type2-nested-strip").querySelector('[role="tablist"]')!;
+    const tabs = [...strip.querySelectorAll<HTMLElement>('[role="tab"]')];
+    expect(tabs.map((t) => t.tabIndex)).toEqual([0, -1, -1]);
+    tabs[0].focus();
+    press(tabs[0], "ArrowRight");
+    await waitFor(() => !!q("ot-type2-assigned"), "the assigned subtab");
+    expect(document.activeElement).toBe(tabs[1]);
+    expect(window.location.pathname).toBe(OT2_ASSIGNED);
+    expect(tabs[1].getAttribute("aria-selected")).toBe("true");
+    expect(tabs.map((t) => t.tabIndex)).toEqual([-1, 0, -1]);
+    press(tabs[1], "End");
+    await waitFor(() => !!q("ot-type2-how"), "the how subtab");
+    expect(document.activeElement).toBe(tabs[2]);
+    press(tabs[2], "ArrowRight"); // wraps to the first
+    await waitFor(() => !!q("ot-type2-table"), "the waiting subtab");
+    expect(document.activeElement).toBe(tabs[0]);
+    press(tabs[0], "ArrowLeft"); // wraps to the last
+    await waitFor(() => !!q("ot-type2-how"), "the how subtab again");
+    press(tabs[2], "Home");
+    await waitFor(() => !!q("ot-type2-table"), "the waiting subtab again");
+    expect(window.location.pathname).toBe(OT2);
+  });
+
+  it("are a tablist with a tabpanel that the chosen tab labels", async () => {
+    await openOt(OT2);
+    const list = must("ot-type2-nested-strip").querySelector('[role="tablist"]')!;
+    expect(list.getAttribute("aria-label")).toBe("Sections of Type 2");
+    const panel = must("ot-type2-nested-panel");
+    expect(panel.getAttribute("role")).toBe("tabpanel");
+    const chosen = list.querySelector('[role="tab"][aria-selected="true"]')!;
+    expect(panel.getAttribute("aria-labelledby")).toBe(chosen.id);
+    expect(chosen.getAttribute("aria-controls")).toBe(panel.id);
   });
 });
 
@@ -602,18 +794,28 @@ describe("loading, errors and the view-only lock", () => {
     expect(q("ot-error")).toBeNull();
   });
 
+  it("locks the changing buttons of the earlier records for a View Only role", async () => {
+    await openOt(OT_EARLIER);
+    lockMutatingControls(document.body);
+    await settle();
+    expect(button("ot-legacy-pay").disabled).toBe(true);
+    expect(button("ot-legacy-reject").disabled).toBe(true);
+  });
+
   it("locks every changing button for a View Only role, and leaves the filters and the lists alone", async () => {
-    await openOt();
+    await openOt(OT2);
     click(must("ot2-select-E13-2026-10-05"));
     lockMutatingControls(document.body);
     await settle();
     expect(button("ot2-assign").disabled).toBe(true);
     expect(button("ot2-reject").disabled).toBe(true);
-    expect(button("ot-legacy-pay").disabled).toBe(true);
     // browsing stays open
     expect(input("ot-search").disabled).toBe(false);
     expect((must("ot-month") as HTMLButtonElement).disabled).toBe(false);
-    expect((must("ot2-history-status") as HTMLButtonElement).disabled).toBe(false);
     expect((document.body.querySelector('button[role="checkbox"]') as HTMLButtonElement).disabled).toBe(false);
+    await openNested("ot-type2-nested", "assigned", "ot-type2-assigned");
+    lockMutatingControls(document.body);
+    await settle();
+    expect((must("ot2-history-status") as HTMLButtonElement).disabled).toBe(false);
   });
 });

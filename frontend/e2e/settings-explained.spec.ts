@@ -22,6 +22,9 @@ const TABS: [id: string, label: string][] = [
   ["idcard", "ID Card"],
   ["smtp", "SMTP / Email"],
   ["whatsapp", "WhatsApp"],
+  // Endpoint Sharing is for the super admin only: the e2e admin is one, so it is in this list (and hidden for everybody else,
+  // see endpoint-sharing.spec.ts)
+  ["endpoint_sharing", "Endpoint Sharing"],
   ["backup", "Backup"],
 ];
 

@@ -1,18 +1,14 @@
 import { ApiError } from "@/lib/api-client/custom-fetch";
 import type { ShiftsValue } from "@/lib/api-client/custom-hooks";
 
-// Pure helpers shared by the four tabs of the Compensation page: what lives in the address, the amounts of shift
+// Pure helpers shared by the pages of Compensation: what lives in the address, the amounts of shift
 // compensation HR can give, dates (kept as plain ISO days and split by hand, never run through `new Date("2026-10-13")`,
 // which is UTC midnight and so the day before in some zones), and what a failed request says.
 
 // ── The address ───────────────────────────────────────────────────────────────
+// (The page paths themselves, /hr/compensation/ot-detection/type-1 and the rest, are in ./routes.)
 
-export const COMPENSATION_TABS = ["ctc", "ot", "leave", "history"] as const;
-export type CompensationTab = (typeof COMPENSATION_TABS)[number];
-export const isCompensationTab = (value: string): value is CompensationTab =>
-  (COMPENSATION_TABS as readonly string[]).includes(value);
-
-/** The three parts of Compensation Leave, as `?tab=leave&sub=...` writes them (the Requests hub links to `holiday-work`). */
+/** The three parts of Compensation Leave, as the old `?tab=leave&sub=...` addresses wrote them (the Requests hub linked to `holiday-work`). */
 export const LEAVE_PARTS = ["windows", "holiday-work", "birthdays"] as const;
 export type LeavePart = (typeof LEAVE_PARTS)[number];
 export const isLeavePart = (value: string): value is LeavePart => (LEAVE_PARTS as readonly string[]).includes(value);
@@ -27,19 +23,19 @@ const PART_ALIASES: Record<string, LeavePart> = {
   birthday: "birthdays",
 };
 
-/** The part an address asks for: one of the three, a known other spelling, else the first (A). */
+/** The part an old address asks for: one of the three, a known other spelling, else the first (A). */
 export function leavePartOf(value: string): LeavePart {
   if (isLeavePart(value)) return value;
   return PART_ALIASES[value.trim().toLowerCase()] ?? "windows";
 }
 
 /**
- * Everything the page keeps in the address (`?tab=leave&sub=holiday-work&hstatus=pending`): it survives a reload, a shared
- * link and Back. A value equal to its default (or blank) is left out, so a fresh page keeps a clean URL. Each tab keeps its
- * own keys, so switching tabs never mixes their filters. Blank month / year / date mean "the current one".
+ * Everything the pages keep in the query string (`/hr/compensation/compensation-leave/holiday-work?hstatus=pending`): it
+ * survives a reload, a shared link and Back. A value equal to its default (or blank) is left out, so a fresh page keeps a
+ * clean URL. Each page keeps its own keys, so switching pages never mixes their filters. Blank month / year / date mean
+ * "the current one". The page and its subtab are the path, not a key.
  */
 export const COMPENSATION_URL_DEFAULTS = {
-  tab: "ctc",
   // OT Detection
   month: "",
   year: "",
@@ -47,14 +43,13 @@ export const COMPENSATION_URL_DEFAULTS = {
   otdept: "",
   otstatus: "all",
   // Compensation Leave
-  sub: "windows",
   hmonth: "",
   hyear: "",
   hstatus: "all",
   hdate: "",
   bperiod: "today",
   bdate: "",
-  // History & Reports
+  // History and Reports
   period: "today",
   date: "",
   type: "all",

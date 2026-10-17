@@ -7,7 +7,11 @@ from .permission_registry import READ_ONLY_POST_PATHS, effective_permissions, re
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 # auth/* must always be reachable to log in or check identity; healthz for
 # uptime probes. Everything else under /api/ is a candidate for gating.
-EXEMPT_PREFIXES = ("auth/",)
+# shared/* is the Endpoint Sharing public call (shared_endpoint_views.py): it
+# authenticates with its own API key, never an HR token, so an HR token sent
+# there by mistake is not looked at (it would otherwise be checked against the
+# database, and a disabled account would answer 401 account_disabled).
+EXEMPT_PREFIXES = ("auth/", "shared/")
 EXEMPT_PATHS = ("healthz",)
 
 # Read-only aggregate/config data pulled by many pages regardless of the

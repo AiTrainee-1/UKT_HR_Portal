@@ -32,3 +32,8 @@ export const SETTINGS_TAB_MODULE: Record<string, string> = {
   backup: "settings.backup",
   themes: "settings.themes",
 };
+
+// Tabs that are not a role permission at all: only the super admin sees them (the Settings page hides them from every other
+// login, the search and the address alike, and their API refuses everybody else). They have no entry in SETTINGS_TAB_MODULE
+// and no module in Account Management.
+export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set(["endpoint_sharing"]);

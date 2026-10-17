@@ -97,6 +97,7 @@ const LoginDevices = lazy(() => import("@/pages/hr/LoginDevices"));
 const MobileAppLogin = lazy(() => import("@/pages/hr/MobileAppLogin"));
 const WhatsAppControl = lazy(() => import("@/pages/hr/WhatsAppControl"));
 const GmailControl = lazy(() => import("@/pages/hr/GmailControl"));
+const SmsControl = lazy(() => import("@/pages/hr/SmsControl"));
 const Settings = lazy(() => import("@/pages/hr/Settings"));
 const Promotion = lazy(() => import("@/pages/hr/Promotion"));
 const Increment = lazy(() => import("@/pages/hr/Increment"));
@@ -313,13 +314,13 @@ function Router() {
         <Route path="/hr/attendance/report-log">
           {() => <ProtectedRoute component={AttendanceReportLog} allowedRoles={["hr"]} />}
         </Route>
-        <Route path="/hr/outpass-visitors/outpass">
+        <Route path="/hr/outpass-visitors/outpass/*?">
           {() => <ProtectedRoute component={OutpassVisitors} allowedRoles={["hr"]} />}
         </Route>
-        <Route path="/hr/outpass-visitors/visitors">
+        <Route path="/hr/outpass-visitors/visitors/*?">
           {() => <ProtectedRoute component={OutpassVisitors} allowedRoles={["hr"]} />}
         </Route>
-        <Route path="/hr/outpass-visitors/tea-break">
+        <Route path="/hr/outpass-visitors/tea-break/*?">
           {() => <ProtectedRoute component={OutpassVisitors} allowedRoles={["hr"]} />}
         </Route>
         <Route path="/hr/outpass-visitors">
@@ -406,7 +407,12 @@ function Router() {
         </Route>
         <Route path="/hr/production-payroll">{() => <Redirect to="/hr/production-payroll/weekly" replace />}</Route>
         <Route path="/hr/salary">{() => <Redirect to="/hr/payroll" />}</Route>
-        <Route path="/hr/compensation">{() => <ProtectedRoute component={Compensation} allowedRoles={["hr"]} />}</Route>
+        {/* Compensation is five pages (CTC Breakdown, OT Detection, Compensation Leave, History, Reports) under one prefix:
+          the whole prefix is gated by the one `compensation` module, and the component routes between the pages and
+          redirects the old /hr/compensation?tab=... addresses to their new paths. */}
+        <Route path="/hr/compensation/*?">
+          {() => <ProtectedRoute component={Compensation} allowedRoles={["hr"]} />}
+        </Route>
         <Route path="/hr/settlement">{() => <ProtectedRoute component={Settlement} allowedRoles={["hr"]} />}</Route>
         <Route path="/hr/reports">{() => <ProtectedRoute component={Reports} allowedRoles={["hr"]} />}</Route>
         <Route path="/hr/user-management">
@@ -447,6 +453,11 @@ function Router() {
         </Route>
         <Route path="/hr/gmail-control">
           {() => <ProtectedRoute component={GmailControl} allowedRoles={["hr"]} />}
+        </Route>
+        {/* SMS Control: one page with its tabs in the path (/hr/sms-control/settings/limits); the whole prefix is gated by the
+          one `sms_control` module, and the component redirects the bare and unknown paths to Overview. */}
+        <Route path="/hr/sms-control/*?">
+          {() => <ProtectedRoute component={SmsControl} allowedRoles={["hr"]} />}
         </Route>
         <Route path="/hr/settings">{() => <ProtectedRoute component={Settings} allowedRoles={["hr"]} />}</Route>
         <Route path="/hr/salary-slip">{() => <Redirect to="/hr/payroll" />}</Route>

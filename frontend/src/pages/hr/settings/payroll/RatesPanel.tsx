@@ -34,6 +34,7 @@ import {
 } from "./sections";
 import { ProductionPfOrder } from "./ProductionPfOrder";
 import { ConfirmChanges, InfoBox, NumberInput, SelectInput, StickySave, TextLink } from "./ui";
+import { pagePath } from "@/pages/hr/compensation/routes";
 
 const block = (id: string) => ({ id, ...payrollText(id) });
 
@@ -143,7 +144,7 @@ export function RatesPanel({
         purpose="What is deducted from staff (monthly salary) payslips for Provident Fund and ESI. Read when staff payroll is generated: payslips already generated keep their amounts until their month is generated again."
         usedBy={[
           { label: "Staff Payroll", to: "/hr/payroll" },
-          { label: "Compensation (CTC)", to: "/hr/compensation" },
+          { label: "Compensation (CTC)", to: pagePath("ctc") },
           { label: "Report Center", to: "/hr/reports" },
         ]}
       >
@@ -161,7 +162,7 @@ export function RatesPanel({
             {
               where: "Compensation - CTC Breakdown",
               what: "ignores the switch: its Employer PF and ESI always follow the rates below.",
-              to: "/hr/compensation",
+              to: pagePath("ctc"),
             },
           ]}
           note="Off by default: a new installation pays staff with no PF or ESI until it is switched on. Payslips already generated keep their amounts; generating a month again re-prices it with the settings of that moment."
@@ -205,7 +206,7 @@ export function RatesPanel({
             {
               where: "Compensation - CTC Breakdown",
               what: "shows Employer PF = this rate x the employee's first salary portion.",
-              to: "/hr/compensation",
+              to: pagePath("ctc"),
             },
             {
               where: "Report Center employer cost and the MD portal",
@@ -259,7 +260,7 @@ export function RatesPanel({
             {
               where: "Compensation - CTC Breakdown",
               what: "uses the same rate for its Employer ESI line (Report Center and the MD portal assume 3.25% instead).",
-              to: "/hr/compensation",
+              to: pagePath("ctc"),
             },
           ]}
           preview={
@@ -324,7 +325,7 @@ export function RatesPanel({
             {
               where: "Compensation - CTC Breakdown",
               what: "shows Employer ESI only at or below it.",
-              to: "/hr/compensation",
+              to: pagePath("ctc"),
             },
           ]}
           note="Raising it starts ESI for staff who had none, from the next payroll generated."
@@ -383,7 +384,7 @@ export function RatesPanel({
         purpose="The simple way to take PF and ESI from production (per-shift) workers: one rate each for everyone. Salary bands on the Production PF/EF sub-tab can replace them for some or all workers."
         usedBy={[
           { label: "Production Payroll", to: "/hr/production-payroll" },
-          { label: "Compensation (CTC)", to: "/hr/compensation" },
+          { label: "Compensation (CTC)", to: pagePath("ctc") },
         ]}
       >
         <InfoBox className="my-2">
@@ -423,7 +424,7 @@ export function RatesPanel({
             {
               where: "Compensation - CTC Breakdown",
               what: "ignores the switch: Employer PF and ESI for production employees follow the rates below.",
-              to: "/hr/compensation",
+              to: pagePath("ctc"),
             },
           ]}
           note={
@@ -469,7 +470,7 @@ export function RatesPanel({
             {
               where: "Compensation - CTC Breakdown",
               what: "Employer PF for production employees = this rate x their first salary portion.",
-              to: "/hr/compensation",
+              to: pagePath("ctc"),
             },
           ]}
           preview={
@@ -513,7 +514,7 @@ export function RatesPanel({
             {
               where: "Compensation - CTC Breakdown",
               what: "Employer ESI for production employees.",
-              to: "/hr/compensation",
+              to: pagePath("ctc"),
             },
           ]}
           preview={
@@ -566,7 +567,7 @@ export function RatesPanel({
             {
               where: "Compensation - CTC Breakdown",
               what: "shows Employer ESI for production employees only at or below it.",
-              to: "/hr/compensation",
+              to: pagePath("ctc"),
             },
           ]}
           note="The estimate follows the pay cycle, so a worker is tested against the ceiling on what they earn in a month whichever cycle they are on: a Weekly payslip is multiplied by 4, a BiWeekly one by 2 and a Monthly (four-week) one by 1."

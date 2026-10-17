@@ -36,7 +36,8 @@ const PAGES_WITHOUT_REFRESH: (string | RegExp)[] = [
   // Production Payroll is one page per pay cycle (and its details pages), and Production Employees sits under Employees
   /^\/hr\/production-payroll(\/|$)/,
   "/hr/employees/productionemployee",
-  "/hr/compensation",
+  // Compensation is five pages (CTC Breakdown, OT Detection, Compensation Leave, History, Reports) with subtabs in the path
+  /^\/hr\/compensation(\/|$)/,
   "/hr/settlement",
   "/hr/account-management",
   "/hr/user-management",
@@ -50,6 +51,8 @@ const PAGES_WITHOUT_REFRESH: (string | RegExp)[] = [
   "/hr/mobile-app-login",
   "/hr/whatsapp-control",
   "/hr/gmail-control",
+  // SMS Control (tabs and nested tabs in the path): its title row has the Refresh button
+  /^\/hr\/sms-control(\/|$)/,
   "/hr/recruitment/dashboard",
   "/hr/recruitment/new-joinees",
   "/hr/recruitment/resignations",
@@ -57,10 +60,8 @@ const PAGES_WITHOUT_REFRESH: (string | RegExp)[] = [
   "/hr/casual-leave",
   "/hr/leave",
   "/hr/shifts",
-  "/hr/outpass-visitors",
-  "/hr/outpass-visitors/outpass",
-  "/hr/outpass-visitors/visitors",
-  "/hr/outpass-visitors/tea-break",
+  // Outpass, Visitors and Tea Break (Outpass and Tea Break with tabs and nested tabs in the path)
+  /^\/hr\/outpass-visitors(\/|$)/,
   "/hr/geo-attendance",
   "/hr/missing-punch",
 ];

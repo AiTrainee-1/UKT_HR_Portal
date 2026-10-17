@@ -63,6 +63,9 @@ from .whatsapp_control_views import (
     whatsapp_employees, whatsapp_messages, whatsapp_overview,
 )
 from .support_contact_views import support_contact
+from .sms_control_views import sms_messages, sms_overview, sms_settings, sms_test
+from .shared_endpoint_views import shared_endpoint
+from . import shared_endpoint_admin_views as shared_admin
 from .email_control_views import (
     email_control_settings, email_control_template_preview, email_control_template_update,
     email_control_templates, email_control_test,
@@ -574,8 +577,28 @@ urlpatterns = [
     path("whatsapp-control/templates/<str:document_type>/preview", whatsapp_control_template_preview),
     path("whatsapp-control/templates/<str:document_type>", whatsapp_control_template_update),
 
+    # SMS Control page (HR portal): one-time codes by SMS through 2Factor
+    path("sms-control/overview", sms_overview),
+    path("sms-control/settings", sms_settings),
+    path("sms-control/messages", sms_messages),
+    path("sms-control/test", sms_test),
+
     # ── HR / software-support contacts for the employee apps (public, read-only) ──
     path("support-contact", support_contact),
+
+    # ── Endpoint Sharing (Settings -> Endpoint Sharing) ──────────────────────────
+    # The public call: API-key authenticated, no HR login, its own CORS (see shared_endpoint_views.py).
+    path("shared/<str:slug>", shared_endpoint),
+    # Management: super administrator only (shared_endpoint_admin_views.py).
+    path("shared-endpoints/catalog", shared_admin.catalog),
+    path("shared-endpoints/activity", shared_admin.activity),
+    path("shared-endpoints", shared_admin.endpoints),
+    path("shared-endpoints/<int:pk>", shared_admin.endpoint_detail),
+    path("shared-endpoints/<int:pk>/keys", shared_admin.endpoint_keys),
+    path("shared-endpoints/<int:pk>/keys/<int:kid>", shared_admin.endpoint_key_detail),
+    path("shared-endpoints/<int:pk>/preview", shared_admin.endpoint_preview),
+    path("shared-endpoints/<int:pk>/activity", shared_admin.endpoint_activity),
+    path("shared-endpoints/<int:pk>/guide", shared_admin.endpoint_guide),
 
     # ── Gmail Control page (HR portal) ───────────────────────────────────────
     path("gmail-control/overview", email_overview),

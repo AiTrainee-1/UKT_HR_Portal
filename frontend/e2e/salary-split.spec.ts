@@ -189,7 +189,7 @@ test("the employee page shows the split beside the salary", async ({ page }) => 
 
 test("the Compensation page's CTC Breakdown shows the split: recorded, automatic, and none", async ({ page }) => {
   await loginAsHr(page);
-  await page.goto("/hr/compensation");
+  await page.goto("/hr/compensation/ctc-breakdown");
   await expect(page.getByTestId("ctc-row-E2E001")).toBeVisible();
 
   // two-level header: the two portions, then the eight components; the old HRA / Allowances columns are gone
@@ -292,7 +292,8 @@ test("Settings -> Payroll explains the salary split and has no Basic % / HRA % b
   await page.getByRole("tab", { name: "Payroll", exact: true }).click();
   // The empty "Compensation" sub-tab is gone; its note now sits under Payroll Rules -> Staff PF and ESI.
   await expect(page.getByRole("tab", { name: "Payroll Rules", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("tab", { name: "Compensation", exact: true })).toHaveCount(0);
+  // Settings has its own top-level "Compensation" tab now (the OT / Compensation rules): exactly that one, none under Payroll.
+  await expect(page.getByRole("tab", { name: "Compensation", exact: true })).toHaveCount(1);
   const note = page.getByTestId("compensation-split-note");
   await expect(note).toContainText("First portion (50%)");
   await expect(note).toContainText("Second portion (50%)");

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import { CalendarCheck, ClipboardCheck, Loader2, SearchX, Sun, UserCheck } from "lucide-react";
 import { ApprovalTrail } from "@/components/ApprovalTrail";
 import { EmptyNote, KpiTile, SectionCard, SkeletonKpis, SkeletonRows } from "@/components/payroll/kit/parts";
@@ -22,6 +22,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import {
+  useCompensationCredits,
   useHolidayWorkClaims,
   useHolidayWorkEligible,
   useRaiseHolidayWork,
@@ -30,6 +31,9 @@ import {
   type ShiftsValue,
 } from "@/lib/api-client/custom-hooks";
 import { VIEW_SAFE_ATTR } from "@/lib/view-only-lock";
+import { NestedTabs } from "@/components/ui/nested-tabs";
+import { LEAVE_NESTED, subPath } from "../routes";
+import { BalancePart, LegacyCredits } from "./BalancePart";
 import {
   MONTH_NAMES,
   countOf,
@@ -75,19 +79,36 @@ import {
 
 type SetUrl = (patch: Partial<CompensationUrl>) => void;
 
+const PAUSED_MASTER = "Paused: the OT / Compensation features are switched off in Settings → Payroll";
+
+/** The claim being filled in: kept above the nested subtabs so it survives a look at the Claims or the balance. */
+function useRaiseDraft() {
+  const [selection, setSelection] = useState<ClaimSelection>({});
+  const [reason, setReason] = useState("");
+  const [bulk, setBulk] = useState<ShiftsValue | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  return { selection, setSelection, reason, setReason, bulk, setBulk, warnings, setWarnings };
+}
+type RaiseDraft = ReturnType<typeof useRaiseDraft>;
+
 /**
  * Compensation Leave B: work on Sundays and company holidays. ONLY HR raises it; it counts only after the Department Head
  * approves it in Approvals, and then the shifts go to the employee's compensation balance. The page raises (pick a date,
  * tick who worked, choose shifts, give a reason) and follows each claim: waiting for the HOD, approved or rejected.
+ * One nested subtab per section: Raise a claim, Claims, Compensation balance, Earlier Alternative-Day credits. The claims
+ * query and the half-filled claim live here, so a switch is instant and a form that was being filled is still filled.
  */
 export function HolidayWorkPart({
   featuresOff,
   url,
   setUrl,
+  nested,
 }: {
   featuresOff: boolean;
   url: CompensationUrl;
   setUrl: SetUrl;
+  /** The nested subtab: `raise`, `claims`, `balance` or `credits`. */
+  nested: string;
 }) {
   const today = useMemo(() => todayIst(), []);
   const { month, year } = monthYearFromUrl(url.hmonth, url.hyear, today);
@@ -98,6 +119,8 @@ export function HolidayWorkPart({
     status: url.hstatus === "all" ? undefined : url.hstatus,
     ...(wholeYear ? { anyMonth: true } : { month, year }),
   });
+  const credits = useCompensationCredits();
+  const draft = useRaiseDraft();
   const enabled = claims.data?.enabled;
   const master = enabled?.master ?? !featuresOff;
   const canRaise = !featuresOff && (enabled?.canRaise ?? false);
@@ -132,26 +155,56 @@ export function HolidayWorkPart({
         </Notice>
       )}
 
-      <Notice accent="blue" testId="holiday-how">
-        <p>
-          <strong>How it works:</strong> only HR raises a claim here. The Department Head approves it in{" "}
-          <strong>Approvals</strong>; HR cannot approve it. Once approved, the shifts are added to the employee&apos;s
-          compensation balance below, and HR redeems them as a day off. A rejected claim credits nothing.
-        </p>
-      </Notice>
-
-      <RaiseClaim canRaise={canRaise} pausedReason={pausedReason} today={today} url={url} setUrl={setUrl} />
-      <ClaimList
-        query={claims}
-        canWithdraw={!featuresOff && !!enabled?.holidayWork}
-        pausedReason={pausedReason}
-        url={url}
-        setUrl={setUrl}
-        month={month}
-        wholeYear={wholeYear}
-        year={year}
-        today={today}
-      />
+      <NestedTabs
+        base={subPath("leave", "holiday-work")}
+        value={nested}
+        testId="holiday-nested"
+        label="Sections of Sunday and holiday work"
+        items={[
+          { value: "raise", label: LEAVE_NESTED["holiday-work"][0].label },
+          { value: "claims", label: LEAVE_NESTED["holiday-work"][1].label, count: claims.data?.results.length },
+          { value: "balance", label: LEAVE_NESTED["holiday-work"][2].label },
+          { value: "credits", label: LEAVE_NESTED["holiday-work"][3].label, count: credits.data?.results.length },
+        ]}
+      >
+        {nested === "raise" && (
+          <>
+            <Notice accent="blue" testId="holiday-how">
+              <p>
+                <strong>How it works:</strong> only HR raises a claim here. The Department Head approves it in{" "}
+                <strong>Approvals</strong>; HR cannot approve it. Once approved, the shifts are added to the
+                employee&apos;s compensation balance (see Compensation balance), and HR redeems them as a day off. A
+                rejected claim credits nothing.
+              </p>
+            </Notice>
+            <RaiseClaim
+              canRaise={canRaise}
+              pausedReason={pausedReason}
+              today={today}
+              url={url}
+              setUrl={setUrl}
+              draft={draft}
+            />
+          </>
+        )}
+        {nested === "claims" && (
+          <ClaimList
+            query={claims}
+            canWithdraw={!featuresOff && !!enabled?.holidayWork}
+            pausedReason={pausedReason}
+            url={url}
+            setUrl={setUrl}
+            month={month}
+            wholeYear={wholeYear}
+            year={year}
+            today={today}
+            warnings={draft.warnings}
+            onDismissWarnings={() => draft.setWarnings([])}
+          />
+        )}
+        {nested === "balance" && <BalancePart paused={featuresOff} pausedReason={PAUSED_MASTER} />}
+        {nested === "credits" && <LegacyCredits />}
+      </NestedTabs>
     </div>
   );
 }
@@ -164,23 +217,24 @@ function RaiseClaim({
   today,
   url,
   setUrl,
+  draft,
 }: {
   canRaise: boolean;
   pausedReason: string;
   today: string;
   url: CompensationUrl;
   setUrl: SetUrl;
+  draft: RaiseDraft;
 }) {
   const { toast } = useToast();
+  const [, navigate] = useLocation();
+  const search = useSearch();
   const raise = useRaiseHolidayWork();
   const date = url.hdate;
   const eligible = useHolidayWorkEligible(date);
-  const [selection, setSelection] = useState<ClaimSelection>({});
-  const [reason, setReason] = useState("");
-  const [bulk, setBulk] = useState<ShiftsValue | null>(null);
+  const { selection, setSelection, reason, setReason, bulk, setBulk, setWarnings } = draft;
   const [error, setError] = useState<string | null>(null);
   const [problems, setProblems] = useState<Record<number, string>>({});
-  const [warnings, setWarnings] = useState<string[]>([]);
   const [touched, setTouched] = useState(false);
 
   const data = eligible.data;
@@ -217,7 +271,7 @@ function RaiseClaim({
   };
 
   const once = useSingleFlight();
-  // the claims were raised while this part was open; if HR moved on to another tab meanwhile, the address is left alone
+  // the claims were raised while this section was open; if HR moved on to another tab meanwhile, the address is left alone
   const here = useRef(true);
   useEffect(() => {
     here.current = true;
@@ -235,17 +289,23 @@ function RaiseClaim({
         const res = await raise.mutateAsync(claimPayload(date, selection, reason));
         toast({
           title: `Raised ${countOf(res.created, "claim")} for the Department Head`,
-          description: "They appear under Claims below and in the Department Head's Approvals.",
+          description: "They appear under Claims and in the Department Head's Approvals.",
         });
         setWarnings(res.warnings);
         setSelection({});
         setReason("");
         setTouched(false);
-        // The list below files a claim under the month of the WORK, so follow the new claims there: a Sunday of last month
-        // would otherwise be raised and then not be on screen.
+        // Claims files a claim under the month of the WORK, so open it on the month of the new claims (every status): a
+        // Sunday of last month would otherwise be raised and then not be on screen.
         const worked = parseIso(date);
-        if (worked && here.current)
-          setUrl({ hmonth: String(worked.month), hyear: String(worked.year), hstatus: "all" });
+        if (worked && here.current) {
+          const params = new URLSearchParams(search);
+          params.set("hmonth", String(worked.month));
+          params.set("hyear", String(worked.year));
+          params.delete("hstatus");
+          const qs = params.toString();
+          navigate(`${subPath("leave", "holiday-work", "", "claims")}${qs ? `?${qs}` : ""}`);
+        }
       } catch (err) {
         setError(errorMessage(err, "The claims could not be raised. Check the connection and try again."));
         setProblems(Object.fromEntries(problemsOf(err).map((p) => [p.employeeId, p.error])));
@@ -289,17 +349,6 @@ function RaiseClaim({
             </Button>
           </div>
         </div>
-
-        {warnings.length > 0 && (
-          <Notice accent="amber" testId="claim-warnings">
-            <p className="font-semibold">Raised, but nobody can decide these yet:</p>
-            <ul className="list-disc space-y-0.5 pl-5">
-              {warnings.map((w) => (
-                <li key={w}>{w}</li>
-              ))}
-            </ul>
-          </Notice>
-        )}
 
         {date === "" ? (
           <EmptyNote
@@ -486,7 +535,11 @@ function ClaimList({
   wholeYear,
   year,
   today,
+  warnings,
+  onDismissWarnings,
 }: {
+  warnings: string[];
+  onDismissWarnings: () => void;
   query: ReturnType<typeof useHolidayWorkClaims>;
   canWithdraw: boolean;
   pausedReason: string;
@@ -533,6 +586,24 @@ function ClaimList({
       bodyClassName="space-y-4 px-0 pb-0"
     >
       <div className="space-y-3 px-5">
+        {warnings.length > 0 && (
+          <Notice accent="amber" testId="claim-warnings">
+            <p className="font-semibold">Raised, but nobody can decide these yet:</p>
+            <ul className="list-disc space-y-0.5 pl-5">
+              {warnings.map((w) => (
+                <li key={w}>{w}</li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              className="font-semibold underline"
+              onClick={onDismissWarnings}
+              data-testid="claim-warnings-dismiss"
+            >
+              Dismiss
+            </button>
+          </Notice>
+        )}
         {query.isLoading ? (
           <SkeletonKpis count={3} className="md:grid-cols-3 xl:grid-cols-3" />
         ) : summary ? (
@@ -626,7 +697,7 @@ function ClaimList({
           <EmptyNote
             icon={ClipboardCheck}
             title={wholeYear ? "No claim with this status" : "No claim for this month and status"}
-            hint="Claims are filed under the date of the work. Change the month or the status, or raise one above."
+            hint="Claims are filed under the date of the work. Change the month or the status, or raise one in the Raise a claim tab."
             testId="claims-empty"
           />
         </div>

@@ -14,6 +14,7 @@ import {
 import { ManagedElsewhere, PreviewCard, PreviewLine, SettingBlock, SettingsSection } from "../kit/SettingBlock";
 import { PAYROLL_SECTIONS, payrollText } from "../PayrollTab.meta";
 import { formatPaise, staffPay } from "./preview";
+import { pagePath } from "@/pages/hr/compensation/routes";
 
 const block = (id: string) => ({ id, ...payrollText(id) });
 
@@ -49,7 +50,7 @@ export function OtPanel({
         title={PAYROLL_SECTIONS.features}
         purpose="The Compensation page is mandatory: it always stays in the sidebar, and its records and reports can always be read. This switch only pauses or resumes what the features do in the background."
         usedBy={[
-          { label: "Compensation", to: "/hr/compensation" },
+          { label: "Compensation", to: pagePath("ot") },
           { label: "Staff Payroll", to: "/hr/payroll" },
           { label: "Staff Attendance", to: "/hr/attendance/staff" },
         ]}
@@ -62,7 +63,7 @@ export function OtPanel({
             {
               where: "Compensation - OT Detection",
               what: "no new overtime is found and no next-day allowance is given while it is off.",
-              to: "/hr/compensation",
+              to: pagePath("ot"),
             },
             {
               where: "Staff Payroll",
@@ -77,7 +78,7 @@ export function OtPanel({
             {
               where: "Compensation",
               what: "assigning OT, announcing, Sunday and holiday-work claims and redeeming the balance are refused; reading and reports still work.",
-              to: "/hr/compensation",
+              to: pagePath("ot"),
             },
             { where: "Overtime and attendance reports", what: 'print a "switched off" note.', to: "/hr/reports" },
           ]}

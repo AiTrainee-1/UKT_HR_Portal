@@ -116,7 +116,8 @@ for (const { path, id, frame } of PAGES) {
   test(`${path} opens in the MD portal and none of its API calls is refused`, async ({ page }) => {
     const problems = watch(page);
     await open(page, path);
-    await expect(page).toHaveURL(new RegExp(`${path.replace(/\//g, "\\/")}$`));
+    // (Outpass and Tea Break open on their first tab: the page's address, then its tabs)
+    await expect(page).toHaveURL(new RegExp(`${path.replace(/\//g, "\\/")}(\\/[a-z-]+)*$`));
     // the MD shell, not the HR one
     await expect(page.getByTestId("md-identity").first()).toBeVisible();
     if (frame) {
@@ -245,7 +246,7 @@ test("the old analytics addresses go to the pages that now hold them", async ({ 
   await goto(page, "/md/visitors");
   await expect(page).toHaveURL(/\/md\/outpass-visitors\/visitors$/);
   await goto(page, "/md/tea-break");
-  await expect(page).toHaveURL(/\/md\/outpass-visitors\/tea-break$/);
+  await expect(page).toHaveURL(/\/md\/outpass-visitors\/tea-break(\/records)?$/);
   await goto(page, "/md/attendance");
   await expect(page).toHaveURL(/\/md\/attendance\/staff$/);
 });

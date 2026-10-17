@@ -9,14 +9,14 @@ from .jwt_utils import sign_token, verify_token
 from .models import Employee, HRUser, HrLoginAttempt, LoginSession
 from .serializers import employee_full_name
 from .session_utils import parse_user_agent
+from .throttles import throttle
 from .view_common import _error
 from datetime import timedelta
 from django.db.models import Q
 from django.utils import timezone
-from rest_framework.decorators import api_view, throttle_classes
+from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
-from rest_framework.throttling import ScopedRateThrottle
 
 
 # --- Health ---
@@ -55,11 +55,19 @@ def _hr_username_locked_out(username: str) -> bool:
 
 
 @api_view(["POST"])
-@throttle_classes([ScopedRateThrottle])
+@throttle("login")
 def hr_login(request: Request) -> Response:
-    request.throttle_scope = "login"
-    username = (request.data.get("username") or "").strip()
-    password = request.data.get("password") or ""
+    from .otp_service import is_plain_text
+
+    data = request.data
+    if not isinstance(data, dict):
+        return _error("Validation error")
+    # hostile input (a list, a number, a NUL byte) is an ordinary failed sign-in, not a 500
+    raw_username, raw_password = data.get("username") or "", data.get("password") or ""
+    if not is_plain_text(raw_username) or not is_plain_text(raw_password):
+        return _error("Invalid credentials", 401)
+    username = raw_username.strip()
+    password = raw_password
 
     if _hr_username_locked_out(username):
         log_action(request, "login_blocked", "auth", description=f"Locked-out login attempt for: {username}")
@@ -111,18 +119,22 @@ def hr_login(request: Request) -> Response:
 
 
 @api_view(["POST"])
-@throttle_classes([ScopedRateThrottle])
+@throttle("employee_login")
 def employee_login(request: Request) -> Response:
-    request.throttle_scope = "employee_login"
-    from .models import WhatsAppSettings
-    from .whatsapp_service import is_configured as whatsapp_configured
+    from .otp_service import password_login_block_message
 
-    wa = WhatsAppSettings.get()
-    if not wa.password_login_enabled and wa.otp_login_enabled and whatsapp_configured():
-        return _error("Password sign-in is turned off. Please sign in with a WhatsApp code.", 403)
-    identifier = request.data.get("identifier")
-    password = request.data.get("password")
-    if not identifier or not password:
+    # HR switched password sign-in off while the code sign-in (WhatsApp or SMS) really works.
+    blocked = password_login_block_message()
+    if blocked:
+        return _error(blocked, 403)
+    from .otp_service import is_plain_text
+
+    data = request.data
+    if not isinstance(data, dict):
+        return _error("Validation error")
+    identifier = data.get("identifier")
+    password = data.get("password")
+    if not identifier or not password or not is_plain_text(identifier) or not is_plain_text(password):
         return _error("Validation error")
     employee = Employee.objects.filter(
         Q(phone=identifier) | Q(email=identifier) | Q(employee_code=identifier)
@@ -154,12 +166,16 @@ def logout(request: Request) -> Response:
 
 
 @api_view(["POST"])
-@throttle_classes([ScopedRateThrottle])
+@throttle("employee_login")
 def set_password(request: Request) -> Response:
-    request.throttle_scope = "employee_login"
-    identifier = request.data.get("identifier")
-    password = request.data.get("password")
-    if not identifier or not password or len(password) < 8:
+    from .otp_service import is_plain_text
+
+    data = request.data
+    if not isinstance(data, dict):
+        return _error("Validation error")
+    identifier = data.get("identifier")
+    password = data.get("password")
+    if not is_plain_text(identifier) or not is_plain_text(password) or not identifier or len(password) < 8:
         return _error("Validation error")
     employee = Employee.objects.filter(
         Q(phone=identifier) | Q(email=identifier) | Q(employee_code=identifier)
@@ -179,17 +195,14 @@ def set_password(request: Request) -> Response:
     if not own_session:
         if employee.password_hash:
             return _error("Sign in to change your password.", 403)
-        # First-time setup by someone not signed in: they must confirm the WhatsApp
-        # code sent to their registered number first (otp_views.otp_activate). Only
-        # when that can't work (switched off / WhatsApp not configured) does the old
+        # First-time setup by someone not signed in: they must confirm the code
+        # sent to their registered number first (otp_views.otp_activate). Only
+        # when that can't work (switched off / the active channel not configured) does the old
         # open setup remain, so no new employee is locked out.
-        from .otp_service import activation_required
+        from .otp_service import activation_message, activation_required
 
         if activation_required():
-            return _error(
-                "Please confirm the code we send to your registered WhatsApp number to set your password.",
-                403,
-            )
+            return _error(activation_message(), 403)
     employee.password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=10)).decode()
     employee.password_updated_at = timezone.now()
     employee.save(update_fields=["password_hash", "password_updated_at", "updated_at"])

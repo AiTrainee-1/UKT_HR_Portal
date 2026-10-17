@@ -15,6 +15,8 @@ Modules (each only imports from ones listed before it):
   mail         Email (Gmail / SMTP) send log, feature switches and wording.
   gate         Outpass, gate scanners, visitors, reception and tea break.
   md_assistant The MD portal's AI assistant: settings, conversations, daily usage.
+  shared_endpoints Endpoint Sharing: the API endpoints, origins, keys and access log of data shared with other applications.
+  sms          SMS one-time codes through 2Factor: the settings row and the send log.
 """
 
 from .core import (
@@ -153,4 +155,14 @@ from .md_assistant import (
     MdAssistantUsage,
     MdConversation,
     MdMessage,
+)
+from .shared_endpoints import (
+    SharedEndpoint,
+    SharedEndpointAccessLog,
+    SharedEndpointKey,
+    SharedEndpointOrigin,
+)
+from .sms import (
+    SmsMessageLog,
+    SmsSettings,
 )

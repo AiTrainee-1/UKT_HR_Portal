@@ -20,7 +20,7 @@ import { RedeemDialog, type RedeemTarget } from "./RedeemDialog";
 /**
  * The compensation balance: every staff member with shifts to take (credited when the Department Head approves a Sunday /
  * holiday work claim, or from an earlier Alternative-Day credit), what is behind each balance, and Redeem, which turns part
- * of it into a day off on a date. Below it, the earlier Alternative-Day credits (each counts as one shift).
+ * of it into a day off on a date. (The earlier Alternative-Day credits, each one shift of it, are their own nested subtab.)
  */
 export function BalancePart({ paused, pausedReason }: { paused: boolean; pausedReason: string }) {
   const query = useCompensationBalances();
@@ -180,8 +180,6 @@ export function BalancePart({ paused, pausedReason }: { paused: boolean; pausedR
         )}
       </SectionCard>
 
-      <LegacyCredits />
-
       <RedeemDialog target={redeeming} onOpenChange={(open) => !open && setRedeeming(null)} />
       <LedgerDialog row={viewing} onClose={() => setViewing(null)} />
     </div>
@@ -259,7 +257,7 @@ function LedgerDialog({ row, onClose }: { row: BalanceRow | null; onClose: () =>
 }
 
 /** The Alternative-Day credits from before the overhaul: still visible, each one shift in the balance while available. */
-function LegacyCredits() {
+export function LegacyCredits() {
   const query = useCompensationCredits();
   const rows = query.data?.results ?? [];
   const paged = usePaged(rows, `credits|${rows.length}`, 10);
@@ -268,7 +266,7 @@ function LegacyCredits() {
       testId="credits-card"
       icon={Archive}
       title="Earlier Alternative-Day credits"
-      description="From overtime announced before the new rules. Each available credit counts as one shift in the balance above."
+      description="From overtime announced before the new rules. Each available credit counts as one shift in the Compensation balance."
       bodyClassName="space-y-3 px-0 pb-0"
     >
       {query.isLoading ? (

@@ -7,6 +7,7 @@ import { SidebarToggle } from '@/components/ui/sidebar-toggle';
 import { useAuth, canView, canViewRoute } from '@/contexts/AuthContext';
 import { moduleForPath } from '@/lib/permission-modules';
 import { hrCanAct } from '@/lib/approval-workflow';
+import { COMPENSATION_BASE, COMPENSATION_PAGES, pagePath } from '@/pages/hr/compensation/routes';
 import { useListLeaveRequests, useListPermissions, useListResignations, useListAdvances, useListNotifications } from '@/lib/api-client';
 import { usePayrollSettings, useOnDutySessionsHR, useOnDutyPunchVerificationsHR, useListOutpassRequests } from '@/lib/api-client/custom-hooks';
 import {
@@ -15,7 +16,7 @@ import {
   ChevronRight, Search, X, Command, UserCheck, UserMinus,
   CalendarCheck, Bell, Award, TrendingUp, Gift, CreditCard,
   CalendarHeart, MessageCircle, UserCog, FolderOpen, MonitorSmartphone,
-  Smartphone, Landmark, DoorOpen, Mail, Crown, Fingerprint,
+  Smartphone, Landmark, DoorOpen, Mail, Crown, Fingerprint, MessageSquareText,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -24,6 +25,9 @@ type NavChildItem = {
   path: string;
   label: string;
   badge?: number;
+  /** The page has subtabs in its path (`/hr/compensation/ot-detection/type-1`): they all keep this child lit. Without it a
+   *  child is lit only on its own exact path, since some children are a path prefix of a sibling (Employees). */
+  matchSubpaths?: boolean;
 };
 
 type NavItemData = {
@@ -79,9 +83,10 @@ export const navGroups: NavGroupData[] = [
         label: 'Outpass / Visitors',
         icon: DoorOpen,
         children: [
-          { path: '/hr/outpass-visitors/outpass', label: 'Outpass' },
+          // Outpass and Tea Break have tabs in their path (/outpass/overview/passes): they keep their row lit
+          { path: '/hr/outpass-visitors/outpass', label: 'Outpass', matchSubpaths: true },
           { path: '/hr/outpass-visitors/visitors', label: 'Visitors' },
-          { path: '/hr/outpass-visitors/tea-break', label: 'Tea Break' },
+          { path: '/hr/outpass-visitors/tea-break', label: 'Tea Break', matchSubpaths: true },
         ],
       },
     ],
@@ -117,7 +122,17 @@ export const navGroups: NavGroupData[] = [
         // a payroll's details page is none of the three, but it is still Production Payroll
         alsoActiveFor: ['/hr/production-payroll/details'],
       },
-      { path: '/hr/compensation', label: 'Compensation', icon: Landmark },
+      {
+        path: COMPENSATION_BASE,
+        label: 'Compensation',
+        icon: Landmark,
+        // one page per area, with its subtabs in the path (the bare /hr/compensation redirects to the first page)
+        children: COMPENSATION_PAGES.map((page) => ({
+          path: pagePath(page.key),
+          label: page.label,
+          matchSubpaths: true,
+        })),
+      },
       { path: '/hr/settlement', label: 'Settlement', icon: Wallet },
       { path: '/hr/reports', label: 'Reports', icon: BarChart3 },
     ],
@@ -155,6 +170,7 @@ export const navGroups: NavGroupData[] = [
       { path: '/hr/login-devices', label: 'Login Devices', icon: MonitorSmartphone },
       { path: '/hr/mobile-app-login', label: 'Mobile App Login', icon: Smartphone },
       { path: '/hr/whatsapp-control', label: 'WhatsApp Control', icon: MessageCircle },
+      { path: '/hr/sms-control', label: 'SMS Control', icon: MessageSquareText },
       { path: '/hr/gmail-control', label: 'Gmail Control', icon: Mail },
       {
         path: '/hr/Biometric-Connectors',
@@ -336,6 +352,11 @@ export function navItemActive(
   return on(item.path);
 }
 
+/** True when a child row is the page being viewed: its own path, or (for a page with subtabs) a path under it. */
+export function navChildActive(child: NavChildItem, currentPath: string): boolean {
+  return currentPath === child.path || (!!child.matchSubpaths && currentPath.startsWith(child.path + '/'));
+}
+
 function NavItem({
   item,
   currentPath,
@@ -437,7 +458,7 @@ function NavItem({
               }}
             />
             {item.children!.map((child) => {
-              const childActive = currentPath === child.path;
+              const childActive = navChildActive(child, currentPath);
               return (
                 <Link key={child.path} href={child.path} onClick={onClose}>
                   <div
@@ -561,7 +582,7 @@ function RailItem({
         </p>
         <div className="flex flex-col gap-0.5">
           {children.map((child) => {
-            const childActive = currentPath === child.path;
+            const childActive = navChildActive(child, currentPath);
             return (
               <Link
                 key={child.path}

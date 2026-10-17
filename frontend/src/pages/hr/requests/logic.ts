@@ -7,6 +7,7 @@
 import { hrCanAct, hrCanReject, waitingText, type ApprovalProgress } from "@/lib/approval-workflow";
 import { permissionOutcome, permissionTypeKey } from "@/lib/late-detection";
 import type { Tone } from "@/lib/statusTones";
+import { leavePath } from "@/pages/hr/compensation/routes";
 
 export type KindKey =
   | "leave"
@@ -120,11 +121,11 @@ export const EMPTY_STATS: HubStats = {
 
 /**
  * Where "Open in ..." goes for a kind whose server address is only the page: straight to the part of the page that decides
- * it. Holiday / Sunday work is raised and approved in Compensation -> Compensation Leave -> Holiday work (the server sends
- * the page, /hr/compensation); an address the server already narrowed is left alone.
+ * it. Holiday / Sunday work is raised and approved in Compensation -> Compensation Leave -> Sunday & holiday work -> Claims (the server
+ * sends the page, /hr/compensation); an address the server already narrowed is left alone.
  */
 const OPEN_PATH_DEEP_LINKS: Partial<Record<KindKey, { page: string; to: string }>> = {
-  holiday_work: { page: "/hr/compensation", to: "/hr/compensation?tab=leave&sub=holiday-work" },
+  holiday_work: { page: "/hr/compensation", to: leavePath("holiday-work", "claims") },
 };
 
 const withDeepLink = (kind: HubKind): HubKind => {

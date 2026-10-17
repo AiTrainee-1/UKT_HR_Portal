@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { allModuleKeys } from "@/lib/permission-modules";
-import { SETTINGS_TAB_MODULE } from "./constants";
+import { SETTINGS_TAB_MODULE, SUPER_ADMIN_ONLY_TABS } from "./constants";
 import { SETTINGS_GROUPS, searchSettings } from "./kit/catalog";
 import { ALL_SETTINGS } from "./metas";
 import { SETTINGS_TABS, SETTINGS_TAB_COMPONENTS } from "./tabs";
@@ -17,14 +17,21 @@ describe("the Settings tab registry", () => {
     for (const tab of SETTINGS_TABS) {
       expect(groups.has(tab.group), `${tab.id} group`).toBe(true);
       expect(tab.purpose.length, `${tab.id} purpose`).toBeGreaterThan(30);
+      expect(SETTINGS_TAB_COMPONENTS[tab.id], `${tab.id} component`).toBeDefined();
+      if (SUPER_ADMIN_ONLY_TABS.has(tab.id)) {
+        // a super-admin-only tab is not a role permission: no permission key, no Account Management module
+        expect(SETTINGS_TAB_MODULE[tab.id], `${tab.id} has no permission key`).toBeUndefined();
+        continue;
+      }
       expect(SETTINGS_TAB_MODULE[tab.id], `${tab.id} permission key`).toBeTruthy();
       expect(
         modules.has(SETTINGS_TAB_MODULE[tab.id]),
         `${tab.id} -> ${SETTINGS_TAB_MODULE[tab.id]} is a known module`,
       ).toBe(true);
-      expect(SETTINGS_TAB_COMPONENTS[tab.id], `${tab.id} component`).toBeDefined();
     }
-    expect(Object.keys(SETTINGS_TAB_MODULE).sort()).toEqual([...ids].sort());
+    const withPermission = ids.filter((id) => !SUPER_ADMIN_ONLY_TABS.has(id));
+    expect(Object.keys(SETTINGS_TAB_MODULE).sort()).toEqual([...withPermission].sort());
+    for (const id of SUPER_ADMIN_ONLY_TABS) expect(ids, `${id} is a real tab`).toContain(id);
   });
 
   it("has search entries only for tabs that exist, with ids that are unique within their tab", () => {
@@ -45,7 +52,7 @@ describe("the Settings tab registry", () => {
     expect(tab?.group).toBe("time");
     expect(SETTINGS_TAB_MODULE.compensation).toBe("settings.compensation");
     expect(tab?.usedBy.map((u) => u.to).filter(Boolean)).toEqual([
-      "/hr/compensation",
+      "/hr/compensation/ot-detection",
       "/hr/attendance/staff",
       "/hr/payroll",
     ]);
@@ -98,6 +105,30 @@ describe("the Settings tab registry", () => {
     expect(find("rounding step")).toContain("rounding");
     expect(find("production grace")).toContain("rules-grace");
     expect(find("applies from")).toContain("rules-effective-from");
+  });
+
+  it("registers Endpoint Sharing as a super-admin-only tab in Messages and data, searchable, with no permission module", () => {
+    const tab = SETTINGS_TABS.find((t) => t.id === "endpoint_sharing");
+    expect(tab?.label).toBe("Endpoint Sharing");
+    expect(tab?.group).toBe("system");
+    expect(SUPER_ADMIN_ONLY_TABS.has("endpoint_sharing")).toBe(true);
+    expect(SETTINGS_TAB_MODULE.endpoint_sharing).toBeUndefined();
+    expect([...allModuleKeys()].some((key) => key.includes("endpoint"))).toBe(false);
+    // it sits with the other integrations, between WhatsApp and Backup
+    const order = SETTINGS_TABS.filter((t) => t.group === "system").map((t) => t.id);
+    expect(order).toEqual(["smtp", "whatsapp", "endpoint_sharing", "backup"]);
+    // the settings the search can reach exist on the tab even when no endpoint is open
+    const ids = ALL_SETTINGS.filter((m) => m.tab === "endpoint_sharing").map((m) => m.id);
+    expect(ids).toEqual(
+      expect.arrayContaining(["endpoints-list", "guide-cors", "guide-keys", "guide-security", "activity-log"]),
+    );
+    const find = (query: string) =>
+      searchSettings(ALL_SETTINGS, SETTINGS_TABS, query)
+        .filter((m) => m.tab === "endpoint_sharing")
+        .map((m) => m.id);
+    expect(find("allowed origins")).toContain("guide-cors");
+    expect(find("api key")).toEqual(expect.arrayContaining(["guide-auth", "guide-keys"]));
+    expect(find("curl")).toContain("guide-examples");
   });
 
   it("keeps the old production wording out of the tabs that now point to Production Shifts", () => {

@@ -4,6 +4,7 @@ import { SettingBlock, SettingsSection } from "../kit/SettingBlock";
 import { ToggleField } from "../kit/Field";
 import { COMPENSATION_SECTIONS, compensationText } from "../CompensationTab.meta";
 import { FromDate, masterOffNote, notes, type SectionProps } from "./ui";
+import { leavePath } from "@/pages/hr/compensation/routes";
 
 const block = (id: string) => ({ id, ...compensationText(id) });
 
@@ -16,7 +17,7 @@ export function WindowsSection({ draft, patch, readOnly, masterOn }: SectionProp
       title={COMPENSATION_SECTIONS.windows}
       purpose="For a day the company announces (a festival, an event, bad weather): HR gives the date, whether it is a late-in or an early-out, the time and a reason. Staff only."
       usedBy={[
-        { label: "Compensation", to: "/hr/compensation" },
+        { label: "Compensation", to: leavePath("announcements") },
         { label: "Staff Attendance", to: "/hr/attendance/staff" },
         { label: "Employee apps" },
       ]}
@@ -30,7 +31,7 @@ export function WindowsSection({ draft, patch, readOnly, masterOn }: SectionProp
           {
             where: "Compensation - Compensation Leave",
             what: "the announcement form (date, Late-in or Early-out, time, reason) is offered only while this is on",
-            to: "/hr/compensation",
+            to: leavePath("announcements"),
           },
           {
             where: "Staff Attendance",
@@ -67,7 +68,11 @@ export function HolidayWorkSection({ draft, patch, readOnly, masterOn }: Section
       icon={CalendarClock}
       title={COMPENSATION_SECTIONS.holidayWork}
       purpose="HR grants 0.25, 0.50, 0.75 or 1 shift of alternative-day compensation, by the shifts the employee worked on a Sunday or a company holiday. Staff only."
-      usedBy={[{ label: "Compensation", to: "/hr/compensation" }, { label: "Approvals" }, { label: "Employee apps" }]}
+      usedBy={[
+        { label: "Compensation", to: leavePath("holiday-work") },
+        { label: "Approvals" },
+        { label: "Employee apps" },
+      ]}
       testId="compensation-leave-b"
     >
       <SettingBlock
@@ -78,7 +83,7 @@ export function HolidayWorkSection({ draft, patch, readOnly, masterOn }: Section
           {
             where: "Compensation - Compensation Leave",
             what: "HR can assign shifts for a Sunday or company-holiday work day only while this is on",
-            to: "/hr/compensation",
+            to: leavePath("holiday-work"),
           },
           {
             where: "Approvals",
@@ -126,7 +131,7 @@ export function BirthdaySection({ draft, patch, readOnly, masterOn, validation, 
       title={COMPENSATION_SECTIONS.birthday}
       purpose="A paid day on the employee's birthday, worked out from the date of birth on the employee record. Nothing for the employee or HR to claim. Staff only; HR sees who benefits on the Compensation page."
       usedBy={[
-        { label: "Compensation", to: "/hr/compensation" },
+        { label: "Compensation", to: leavePath("birthdays") },
         { label: "Staff Attendance", to: "/hr/attendance/staff" },
         { label: "Staff Payroll", to: "/hr/payroll" },
         { label: "Employee apps" },
@@ -147,7 +152,7 @@ export function BirthdaySection({ draft, patch, readOnly, masterOn, validation, 
           {
             where: "Compensation - Compensation Leave",
             what: "shows which employees benefit",
-            to: "/hr/compensation",
+            to: leavePath("birthdays"),
           },
           { where: "Employee apps", what: "the calendar shows the birthday leave" },
         ]}

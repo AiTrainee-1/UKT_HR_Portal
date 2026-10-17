@@ -9,6 +9,7 @@ import { InfoBox } from "../payroll/ui";
 import { CYCLE_INFO, CYCLES } from "./cycles";
 import { cyclePay } from "./preview";
 import { PER_SHIFT } from "./SlabEditor";
+import { pagePath } from "@/pages/hr/compensation/routes";
 
 const block = (id: string) => ({ id, ...productionText(id) });
 
@@ -137,7 +138,7 @@ export function ShiftPanel({
           {
             where: "Compensation - CTC Breakdown",
             what: "Employer PF and ESI for production employees follow the flat rates, whatever the switches say.",
-            to: "/hr/compensation",
+            to: pagePath("ctc"),
           },
         ]}
         note="The ESI ceiling and the salary bands are written for monthly pay, so they are tested on an estimated monthly pay: the period's gross x 4 on Weekly, x 2 on BiWeekly and x 1 on Monthly (a production month is four weeks)."

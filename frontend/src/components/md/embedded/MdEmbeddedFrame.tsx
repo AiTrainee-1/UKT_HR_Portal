@@ -3,14 +3,13 @@ import { createPortal } from "react-dom";
 import { useLocation } from "wouter";
 import { Eye } from "lucide-react";
 import { useAuth, isRouteViewOnly } from "@/contexts/AuthContext";
-import { hrToMd } from "@/lib/md/embed";
 import { usePublishAssistantContext } from "@/lib/md/assistant-store";
 import { moduleForPath } from "@/lib/permission-modules";
 import { lockIconOnlyDeletes, lockMutatingControls } from "@/lib/view-only-lock";
 import { LiveChip, ModeTabs, UpdatedRefresh, type FrameTab } from "../kit/MdHeaderParts";
 import MdPageHeader from "../kit/MdPageHeader";
 import { SkeletonBlock } from "../kit/states";
-import { mdPageForPath } from "../md-nav";
+import { pageAt } from "./pageAt";
 import { insightsFor } from "./registry";
 import { useTitleMark } from "./titleMark";
 import { useHeaderAdoption } from "./useHeaderAdoption";
@@ -29,9 +28,6 @@ const GRID_HEADER_PAGES: ReadonlySet<string> = new Set([
   "requests",
 ]);
 
-/** MD pages that are not copies of an HR page: the dashboard is the MD's own (pages/md/home). */
-const OWN_PAGES: ReadonlySet<string> = new Set(["dashboard"]);
-
 const STORAGE_PREFIX = "md.frame.tab:";
 
 function readTab(pageId: string): FrameTab {
@@ -48,17 +44,6 @@ function rememberTab(pageId: string, tab: FrameTab) {
   } catch {
     /* private mode: the choice just is not remembered */
   }
-}
-
-/** The page whose own address this is. A deeper address (an employee's record, a form) is not the page itself and gets no
- *  Insights: the MD copy of it is the HR page alone. */
-function pageAt(internalPath: string) {
-  const clean = internalPath.split(/[?#]/)[0].replace(/\/+$/, "").toLowerCase();
-  const asMd = hrToMd(clean);
-  const page = mdPageForPath(asMd);
-  if (!page || page.path.toLowerCase() !== asMd) return undefined;
-  // pages that are the MD's own design, not a copy of an HR page, have no Operations/Insights frame
-  return OWN_PAGES.has(page.id) ? undefined : page;
 }
 
 /**

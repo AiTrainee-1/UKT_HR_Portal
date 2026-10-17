@@ -53,6 +53,7 @@ export const ADMIN_ONLY_HR_PAGES: Readonly<Record<string, string>> = {
   "/hr/mobile-app-login": "Mobile App Login",
   "/hr/whatsapp-control": "WhatsApp Control",
   "/hr/gmail-control": "Gmail Control",
+  "/hr/sms-control": "SMS Control",
   "/hr/compensation": "Compensation",
   "/hr/promotion": "Promotion",
   "/hr/increment": "Increment",

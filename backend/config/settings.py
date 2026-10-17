@@ -241,6 +241,11 @@ CORS_ALLOWED_ORIGINS = [
     if o.strip()
 ]
 CORS_ALLOW_CREDENTIALS = True
+# Everything except the Endpoint Sharing public call (/api/shared/<slug>): that route answers its own CORS from the
+# endpoint's own allow-list (never "*", never credentials), so django-cors-headers must neither add its headers to it nor
+# answer its preflight. "/api/shared-endpoints..." (the management API) does not start with "/api/shared/" and keeps the
+# normal CORS behaviour.
+CORS_URLS_REGEX = r"^/(?!api/shared/).*$"
 # Lets the browser clients see that a capped list was cut short (view_common.paginate), and read the
 # server-chosen filename of a downloaded report/export (Vercel and Railway are different origins).
 CORS_EXPOSE_HEADERS = ["X-Truncated", "Content-Disposition"]
@@ -250,24 +255,37 @@ REST_FRAMEWORK = {
     "DEFAULT_PARSER_CLASSES": ["rest_framework.parsers.JSONParser"],
     "UNAUTHENTICATED_USER": None,
     "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.ScopedRateThrottle"],
+    # How many reverse proxies sit in front of Django (Railway: one; see api/throttles.py). DRF then takes the LAST hop of
+    # X-Forwarded-For as the client address: the first hop is whatever the caller wrote, so rotating it cannot dodge a
+    # throttle. 0 = no proxy in front: REMOTE_ADDR.
+    "NUM_PROXIES": int(os.environ.get("NUM_PROXIES", "1")),
+    # A throttled call answers {"error", "retryAfterSeconds"} like the per-employee 429s (api/throttles.py).
+    "EXCEPTION_HANDLER": "api.throttles.exception_handler",
+    # Per-IP FLOOD GUARDS, applied with @throttle("<scope>") (api/throttles.py). A whole shop floor (~250 employees) sits
+    # behind ONE NAT address at shift start, so these are generous: the real cost / abuse guards are the per-employee,
+    # per-phone and global caps (otp_service.py, sms_service.py) and the per-username lockout of the HR login.
     "DEFAULT_THROTTLE_RATES": {
-        # Per-IP safety net on top of the per-username lockout in views.py —
-        # slows down credential-stuffing even if it's spread across usernames.
-        "login": "10/min",
-        # Employee sign-in / set-password. Looser than "login" because a whole
-        # shop floor can sit behind one NAT'd IP at shift start.
-        "employee_login": "120/min",
-        # WhatsApp OTP: asking for a code sends a message, so keep that tighter than
-        # verifying one. Per-employee limits live in otp_service.py.
-        "otp_request": "20/min",
-        "otp_verify": "60/min",
+        # HR / gate-kiosk / reception sign-in (one shared bucket per address), on top of the per-username lockout in
+        # auth_views.py: slows credential stuffing spread across usernames.
+        "login": "30/min",
+        # Employee sign-in / set-password: a shift's worth of employees from one address.
+        "employee_login": "300/min",
+        # Asking for a one-time code sends an SMS / WhatsApp message (cost): the per-employee cooldown, the per-number
+        # cap and the global SMS caps are the real limits; this only stops a flood.
+        "otp_request": "300/min",
+        "otp_verify": "600/min",
         # Outpass/Visitor gate forms (outpass_visitor_views.py) -anonymous,
         # unauthenticated writes, one of which (visitor "new") accepts an
         # Aadhaar number, so worth rate-limiting per IP even though nothing
         # here is a login.
-        "gate_submit": "20/min",
+        "gate_submit": "120/min",
     },
 }
+
+# The isolated e2e stack (frontend/playwright.config.ts backendEnv) signs in hundreds of times from one address: it sets
+# THROTTLE_RELAXED=true. Never set it on a real server.
+if os.environ.get("THROTTLE_RELAXED", "").strip().lower() in ("1", "true", "yes"):
+    REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = dict.fromkeys(REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"], "100000/min")
 
 # No hardcoded fallback outside DEBUG: a guessable signing key means anyone
 # can mint a valid HR token. In DEBUG (local dev/tests) a throwaway key keeps
@@ -324,6 +342,30 @@ _allow_email = os.environ.get("EMAIL_ALLOW_SENDING", "").strip().lower()
 EMAIL_ALLOW_SENDING = (_allow_email in ("1", "true", "yes")) if _allow_email else None
 if len(sys.argv) > 1 and sys.argv[1] == "test":
     EMAIL_ALLOW_SENDING = False
+
+# SMS one-time codes (api/twofactor_client.py, api/sms_service.py): 2Factor.in carries the codes (login, forgot password,
+# account activation) when HR picks the SMS channel on the SMS Control page. The API key and the template name are
+# .env-only, same rule as WACLIENT_* above: never stored in the database, never returned by any endpoint, never in a log.
+# NOTE: 2Factor's API puts the API key in the URL path, so the client redacts it everywhere (see twofactor_client.py).
+TWOFACTOR_API_KEY = os.environ.get("TWOFACTOR_API_KEY", "").strip()
+# The approved DLT template's NAME (2Factor panel -> SMS -> Templates). 2Factor replaces XXXX in its text with our code.
+TWOFACTOR_TEMPLATE_NAME = os.environ.get("TWOFACTOR_TEMPLATE_NAME", "").strip()
+# The DLT sender header (6 letters): informational, 2Factor takes the sender from the template.
+TWOFACTOR_SENDER_ID = os.environ.get("TWOFACTOR_SENDER_ID", "").strip()
+# https only; plain http is accepted for a localhost address only (a fake 2Factor server of a test).
+TWOFACTOR_API_BASE = (os.environ.get("TWOFACTOR_API_BASE", "").strip() or "https://2factor.in/API/V1").rstrip("/")
+# Numbers must belong to this country (blank = WHATSAPP_DEFAULT_COUNTRY_CODE): phone cleaning is shared with WhatsApp.
+SMS_COUNTRY_CODE = os.environ.get("SMS_COUNTRY_CODE", "").strip() or WHATSAPP_DEFAULT_COUNTRY_CODE or "91"
+# Whether this machine may send SMS at all: the same rule as WHATSAPP_ALLOW_SENDING (blank = automatic: yes on a real
+# server, never on a development machine; true / false forces it).
+_allow_sms = os.environ.get("SMS_ALLOW_SENDING", "").strip().lower()
+SMS_ALLOW_SENDING = (_allow_sms in ("1", "true", "yes")) if _allow_sms else None
+# `manage.py test` must never send a real SMS: a developer's .env may hold the live key. Blank credentials make every
+# send "not configured" (the tests that need the send path set them and mock the HTTP call explicitly).
+if len(sys.argv) > 1 and sys.argv[1] == "test":
+    TWOFACTOR_API_KEY = ""
+    TWOFACTOR_TEMPLATE_NAME = ""
+    SMS_ALLOW_SENDING = False
 # Limits on the AUTOMATIC attendance alerts. A crowd who share a punch time (a hundred people on the same
 # shift) is reminded over the reminder window (15 minutes by default) instead of in one burst: each minute's
 # run sends at most PER_RUN, the rest are picked up by the following runs while still inside their window.

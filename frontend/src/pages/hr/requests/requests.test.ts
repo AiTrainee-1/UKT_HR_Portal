@@ -632,22 +632,22 @@ describe("Holiday / Sunday work: HR raises it, the Department Head decides it", 
     }),
   });
 
-  it("opens the Holiday work sub-tab of the Compensation page, not just the page", () => {
+  it("opens the Claims section of Sunday & holiday work, not just the Compensation page", () => {
     const hub = normalizeHub({ kinds: [holiday, kind({ key: "attendance_correction", openPath: "/hr/attendance" })] });
-    expect(hub.kinds[0].openPath).toBe("/hr/compensation?tab=leave&sub=holiday-work");
+    expect(hub.kinds[0].openPath).toBe("/hr/compensation/compensation-leave/holiday-work/claims");
     expect(hub.kinds[0].openLabel).toBe("Compensation");
     // nothing else is rewritten
     expect(hub.kinds[1].openPath).toBe("/hr/attendance");
   });
 
   it("leaves an address the server already narrowed, and a kind with no address, alone", () => {
-    const narrowed = kind({ ...holiday, openPath: "/hr/compensation?tab=leave&sub=holiday-work" });
+    const narrowed = kind({ ...holiday, openPath: "/hr/compensation/compensation-leave/holiday-work" });
     const none = kind({ ...holiday, openPath: null });
-    const other = kind({ ...holiday, openPath: "/hr/compensation?tab=history" });
+    const other = kind({ ...holiday, openPath: "/hr/compensation/history" });
     expect(normalizeHub({ kinds: [narrowed, none, other] }).kinds.map((k) => k.openPath)).toEqual([
-      "/hr/compensation?tab=leave&sub=holiday-work",
+      "/hr/compensation/compensation-leave/holiday-work",
       null,
-      "/hr/compensation?tab=history",
+      "/hr/compensation/history",
     ]);
   });
 

@@ -35,6 +35,8 @@ AUDIT_MODULES = (
     ("compensation", "Compensation"),
     ("compensation_settings", "Compensation settings"),
     ("production_shift_rules", "Production shift rules"),
+    ("shared_endpoints", "Endpoint sharing"),
+    ("sms_control", "SMS control"),
     ("payroll", "Payroll"),
     ("mobile_app_login", "Mobile app login"),
     ("mobile_app_version", "Mobile app version"),
@@ -57,6 +59,9 @@ AUDIT_ACTIONS = (
     ("announce", "Announce"),
     ("redeem", "Redeem"),
     ("lock", "Lock"),
+    ("key_create", "API key created"),
+    ("key_revoke", "API key revoked"),
+    ("test", "Test"),
 )
 _FAILED = ("login_failed", "login_blocked")
 

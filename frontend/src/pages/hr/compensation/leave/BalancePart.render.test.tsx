@@ -72,7 +72,7 @@ afterEach(() => {
 const REDEEM = "/api/compensation/balance/redeem";
 
 async function openBalance() {
-  mountPage("/hr/compensation?tab=leave&sub=holiday-work");
+  mountPage("/hr/compensation/compensation-leave/holiday-work/balance");
   await waitFor(() => !!q("balance-table"), "the balances");
 }
 
@@ -82,6 +82,11 @@ const rowIds = () =>
   [...(q("balance-table")?.querySelectorAll("tbody tr") ?? [])].map((r) => r.getAttribute("data-testid"));
 
 describe("the balances", () => {
+  it("are their own nested subtab: the claim form, the claims and the earlier credits are not on it", async () => {
+    await openBalance();
+    for (const other of ["claim-form", "claim-list", "credits-card"]) expect(q(other), other).toBeNull();
+  });
+
   it("list the staff with shifts to take, and total them", async () => {
     await openBalance();
     expect(rowIds()).toEqual(["balance-row-E21", "balance-row-E24", "balance-row-E26"]);
@@ -109,7 +114,7 @@ describe("the balances", () => {
 
   it("show the shape of the list while it loads, and an error with a Retry", async () => {
     const release = world.hold("/api/compensation/balance");
-    mountPage("/hr/compensation?tab=leave&sub=holiday-work");
+    mountPage("/hr/compensation/compensation-leave/holiday-work/balance");
     await waitFor(() => !!q("balance-card"), "the card");
     expect(q("skeleton-kpis")).not.toBeNull();
     release();
@@ -117,7 +122,7 @@ describe("the balances", () => {
     unmountPage();
 
     world.failing.set("/api/compensation/balance", { status: 500 });
-    mountPage("/hr/compensation?tab=leave&sub=holiday-work");
+    mountPage("/hr/compensation/compensation-leave/holiday-work/balance");
     await waitFor(() => !!q("balance-error"), "the error");
     expect(text(q("balance-error"))).toContain("Could not load the balances");
     world.failing.clear();
@@ -127,7 +132,7 @@ describe("the balances", () => {
 
   it("explain that nobody has one yet", async () => {
     world.balances = [];
-    mountPage("/hr/compensation?tab=leave&sub=holiday-work");
+    mountPage("/hr/compensation/compensation-leave/holiday-work/balance");
     await waitFor(() => !!q("balance-empty"), "the empty state");
     expect(text(q("balance-empty"))).toContain("Nobody has a balance yet");
   });
@@ -327,18 +332,20 @@ describe("what pauses Redeem", () => {
 
 describe("the earlier Alternative-Day credits", () => {
   it("stay visible, with each one's state", async () => {
-    await openBalance();
+    mountPage("/hr/compensation/compensation-leave/holiday-work/credits");
     await waitFor(() => !!q("credits-table"), "the credits");
+    // the credits are their own nested subtab: the balance table is not on it
+    expect(q("balance-card")).toBeNull();
     expect(text(q("credit-row-4"))).toContain("Fara Khan");
     expect(text(q("credit-row-4"))).toContain("12 Sep 2026");
     expect(text(q("credit-row-4"))).toContain("Available: 1 shift");
     expect(text(q("credit-row-5"))).toContain("Used on 30 Sep 2026");
-    expect(text(q("credits-card"))).toContain("Each available credit counts as one shift in the balance above");
+    expect(text(q("credits-card"))).toContain("Each available credit counts as one shift in the Compensation balance");
   });
 
   it("say so when there are none", async () => {
     world.credits = [];
-    await openBalance();
+    mountPage("/hr/compensation/compensation-leave/holiday-work/credits");
     await waitFor(() => !!q("credits-empty"), "the empty state");
   });
 });

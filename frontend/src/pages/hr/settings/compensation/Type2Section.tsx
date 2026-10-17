@@ -10,6 +10,7 @@ import { LadderTable } from "./LadderTable";
 import { THRESHOLD } from "./form";
 import { formatDuration } from "./time";
 import { masterOffNote, notes, Problem, type SectionProps } from "./ui";
+import { otPath } from "@/pages/hr/compensation/routes";
 
 const block = (id: string) => ({ id, ...compensationText(id) });
 
@@ -25,7 +26,7 @@ export function Type2Section(props: SectionProps) {
       title={COMPENSATION_SECTIONS.type2}
       purpose="For staff who work more than the threshold past their shift end (2 hours 30 by default). Not automatic: the days are listed on Compensation, OT Detection, with the shifts the table below suggests, and HR assigns them as Relaxation (an alternative day) or as Payment, for a date of the same month. Staff only."
       usedBy={[
-        { label: "Compensation", to: "/hr/compensation" },
+        { label: "Compensation", to: otPath("type-2") },
         { label: "Staff Payroll", to: "/hr/payroll" },
         { label: "Staff Attendance", to: "/hr/attendance/staff" },
       ]}
@@ -39,7 +40,7 @@ export function Type2Section(props: SectionProps) {
           {
             where: "Compensation - OT Detection",
             what: "lists each day that qualifies with its suggested shifts, for HR to assign or reject",
-            to: "/hr/compensation",
+            to: otPath("type-2"),
           },
           {
             where: "Staff Payroll",
@@ -76,7 +77,7 @@ export function Type2Section(props: SectionProps) {
           {
             where: "Compensation - OT Detection",
             what: "a day is listed when the last punch-out is more than this many minutes after the employee's own shift end",
-            to: "/hr/compensation",
+            to: otPath("type-2"),
           },
           {
             where: "Type 1 allowance",
@@ -115,7 +116,7 @@ export function Type2Section(props: SectionProps) {
           {
             where: "Compensation - OT Detection",
             what: "HR can choose Relaxation for a day only while this is on",
-            to: "/hr/compensation",
+            to: otPath("type-2"),
           },
           {
             where: "Staff Attendance",
@@ -149,7 +150,7 @@ export function Type2Section(props: SectionProps) {
           {
             where: "Compensation - OT Detection",
             what: "HR can choose Payment for a day only while this is on",
-            to: "/hr/compensation",
+            to: otPath("type-2"),
           },
           {
             where: "Staff Payroll",
@@ -182,7 +183,7 @@ export function Type2Section(props: SectionProps) {
           {
             where: "Compensation - OT Detection",
             what: "each listed day's suggested shifts come from this table; HR may choose another of the four amounts when assigning",
-            to: "/hr/compensation",
+            to: otPath("type-2", "how"),
           },
         ]}
         note="The time is the day's last punch-out, counted from the start of the day the shift began: a punch-out after midnight is written with 'next day'. The last rule that is on has no upper limit, so every later punch-out earns a shift."

@@ -10,6 +10,8 @@ import {
   installWorld,
   mountPage,
   must,
+  nestedLabels,
+  nestedTab,
   pickOption,
   q,
   settle,
@@ -20,8 +22,9 @@ import {
   type World,
 } from "../harness";
 
-// Compensation Leave A in jsdom: announcing a late-in or an early-out for a date, the list of announcements with who announced
-// each and how many staff it covers, deleting a future one, and the notices for what is switched off.
+// Compensation Leave A in jsdom: announcing a late-in or an early-out for a date (the Announce nested subtab), the list of
+// announcements with who announced each and how many staff it covers (the Announcements nested subtab), deleting a future
+// one, and the notices for what is switched off.
 
 const h = vi.hoisted(() => ({
   fetch: vi.fn(),
@@ -56,9 +59,29 @@ afterEach(() => {
 
 const WINDOWS = "/api/compensation/windows";
 
+const ANNOUNCE = "/hr/compensation/compensation-leave/announcements/announce";
+const LIST = "/hr/compensation/compensation-leave/announcements/list";
+
+/** The Announce nested subtab: the form and what an announcement does. */
+async function openForm() {
+  mountPage(ANNOUNCE);
+  // (the strip counts the announcements once they have come, which is when the form knows whether it may announce)
+  await waitFor(
+    () => !!q("windows-form") && /\(\d+\)/.test(nestedLabels("windows-nested")[1] ?? ""),
+    "the announce form",
+  );
+}
+
+/** The Announcements nested subtab: the lists. */
 async function openWindows() {
-  mountPage("/hr/compensation?tab=leave");
+  mountPage(LIST);
   await waitFor(() => !!q("windows-upcoming"), "the announcements");
+}
+
+/** Opens the other nested subtab from the strip. */
+async function switchTo(value: "announce" | "list", ready: string) {
+  click(nestedTab("windows-nested", value));
+  await waitFor(() => !!q(ready), `the ${value} subtab`);
 }
 
 const input = (id: string) => must(id) as HTMLInputElement;
@@ -67,15 +90,34 @@ const rowIds = (id: string) => [...must(id).querySelectorAll("tbody tr")].map((r
 
 describe("Compensation Leave opens on A", () => {
   it("has the three parts as tabs, A first", async () => {
-    await openWindows();
+    await openForm();
     const parts = [...document.body.querySelectorAll('[role="tab"]')].map(text);
     expect(parts.some((t) => t.startsWith("A. Announce late-in / early-out"))).toBe(true);
-    expect(parts.some((t) => t.startsWith("B. Work on Sundays and company holidays"))).toBe(true);
+    expect(parts.some((t) => t.startsWith("B. Sunday & holiday work"))).toBe(true);
     expect(parts.some((t) => t.startsWith("C. Birthdays"))).toBe(true);
   });
 
+  it("shows one section at a time: Announce (the form and what it does) and Announcements (the lists, with their count)", async () => {
+    await openForm();
+    expect(nestedLabels("windows-nested")).toEqual(["Announce", "Announcements (3)"]);
+    expect(nestedTab("windows-nested", "announce").getAttribute("aria-selected")).toBe("true");
+    expect(q("windows-form")).not.toBeNull();
+    expect(q("windows-explain")).not.toBeNull();
+    // the list is not on this subtab, so it is not drawn (nor asked for twice: one request serves the count and the list)
+    expect(q("windows-list")).toBeNull();
+    await switchTo("list", "windows-upcoming");
+    expect(window.location.pathname).toBe(LIST);
+    expect(nestedTab("windows-nested", "list").getAttribute("aria-selected")).toBe("true");
+    expect(q("windows-form")).toBeNull();
+    expect(q("windows-explain")).toBeNull();
+    expect(world.requests().filter((r) => r.startsWith(WINDOWS))).toHaveLength(1);
+    await switchTo("announce", "windows-form");
+    expect(window.location.pathname).toBe(ANNOUNCE);
+    expect(world.requests().filter((r) => r.startsWith(WINDOWS))).toHaveLength(1);
+  });
+
   it("explains what an announcement does", async () => {
-    await openWindows();
+    await openForm();
     const explain = text(q("windows-explain"));
     expect(explain).toContain("everyone covered may arrive up to the time");
     expect(explain).toContain("The shift's start and its grace do not apply");
@@ -133,14 +175,14 @@ describe("the list of announcements", () => {
 
   it("is an invitation to announce when there is none yet", async () => {
     world.windows = [];
-    mountPage("/hr/compensation?tab=leave");
+    mountPage(LIST);
     await waitFor(() => !!q("windows-empty"), "the empty state");
     expect(text(q("windows-empty"))).toContain("No announcement yet");
   });
 
   it("shows rows' shape while loading, and an error with a Retry", async () => {
     const release = world.hold(WINDOWS);
-    mountPage("/hr/compensation?tab=leave");
+    mountPage(LIST);
     await waitFor(() => !!q("windows-list"), "the list");
     expect(q("skeleton-rows")).not.toBeNull();
     release();
@@ -148,7 +190,7 @@ describe("the list of announcements", () => {
     unmountPage();
 
     world.failing.set(WINDOWS, { status: 500 });
-    mountPage("/hr/compensation?tab=leave");
+    mountPage(LIST);
     await waitFor(() => !!q("windows-error"), "the error");
     expect(text(q("windows-error"))).toContain("Could not load the announcements");
     world.failing.clear();
@@ -159,7 +201,7 @@ describe("the list of announcements", () => {
 
 describe("announcing", () => {
   it("starts today, as a late-in, with the date limited to today and 180 days ahead", async () => {
-    await openWindows();
+    await openForm();
     expect(input("window-date").value).toBe("2026-10-14");
     expect(input("window-date").min).toBe("2026-10-14");
     expect(input("window-date").max).toBe("2027-04-12");
@@ -170,7 +212,7 @@ describe("announcing", () => {
   });
 
   it("says what is missing instead of sending an incomplete announcement", async () => {
-    await openWindows();
+    await openForm();
     click(must("window-submit"));
     await settle();
     const form = text(q("windows-form"));
@@ -182,7 +224,7 @@ describe("announcing", () => {
   });
 
   it("explains what it will do as the form is filled, and sends it", async () => {
-    await openWindows();
+    await openForm();
     typeInto(input("window-date"), "2026-10-20");
     typeInto(input("window-time"), "10:30");
     typeInto(must("window-reason") as unknown as HTMLInputElement, "Heavy rain");
@@ -198,17 +240,21 @@ describe("announcing", () => {
       branchId: null,
       departmentId: null,
     });
-    // the new announcement is in the list, and the form is ready for the next one
-    await waitFor(() => !!q("window-row-950"), "the new row");
-    expect(text(q("window-row-950"))).toContain("Arrive up to 10:30 AM");
-    expect(input("window-time").value).toBe("");
+    // the form is ready for the next one (it stays on Announce: HR often adds a late-in and an early-out in a row) ...
+    await waitFor(() => input("window-time").value === "", "the form to be cleared");
     expect((must("window-reason") as unknown as HTMLTextAreaElement).value).toBe("");
     expect(input("window-date").value).toBe("2026-10-20");
+    expect(window.location.pathname).toBe(ANNOUNCE);
     expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Announcement added" }));
+    // ... and the new announcement is in the list, whose tab now counts it
+    await waitFor(() => nestedLabels("windows-nested")[1] === "Announcements (4)", "the count to follow");
+    await switchTo("list", "windows-upcoming");
+    await waitFor(() => !!q("window-row-950"), "the new row");
+    expect(text(q("window-row-950"))).toContain("Arrive up to 10:30 AM");
   });
 
   it("announces an early-out with its own time label", async () => {
-    await openWindows();
+    await openForm();
     click(must("window-kind-early_out"));
     expect(must("window-kind-early_out").getAttribute("aria-checked")).toBe("true");
     expect(text(q("windows-form"))).toContain("Earliest leaving time");
@@ -221,7 +267,7 @@ describe("announcing", () => {
   });
 
   it("can be limited to a department, and a branch", async () => {
-    await openWindows();
+    await openForm();
     pickOption(must("window-dept"), "Cutting");
     pickOption(must("window-branch"), "Unit 2");
     typeInto(input("window-time"), "10:30");
@@ -234,7 +280,7 @@ describe("announcing", () => {
 
   it("does not offer a branch to a login that sees one branch only", async () => {
     h.user.current = { branchId: 2 };
-    await openWindows();
+    await openForm();
     expect(q("window-branch")).toBeNull();
     expect(q("window-dept")).not.toBeNull();
     expect(world.requests().some((r) => r.startsWith("/api/branches"))).toBe(false);
@@ -247,14 +293,14 @@ describe("announcing", () => {
           "A late-in window is already announced for 20 Oct 2026 (10:30, by Meena) and it covers 214 of the same people.",
       }),
     );
-    await openWindows();
+    await openForm();
     typeInto(input("window-date"), "2026-10-20");
     typeInto(input("window-time"), "11:00");
     typeInto(must("window-reason") as unknown as HTMLInputElement, "Again");
     click(must("window-submit"));
     await waitFor(() => !!q("window-error"), "the refusal");
     expect(text(q("window-error"))).toContain("already announced for 20 Oct 2026");
-    expect(q("window-row-950")).toBeNull();
+    expect(nestedLabels("windows-nested")[1]).toBe("Announcements (3)");
     // what was typed is still there to correct
     expect(input("window-time").value).toBe("11:00");
   });
@@ -305,31 +351,38 @@ describe("deleting", () => {
 describe("what is switched off", () => {
   it("says late-in / early-out is off in Settings, pauses announcing and deleting, and keeps the list readable", async () => {
     world.windowsEnabled = false;
-    await openWindows();
+    await openForm();
     const notice = must("windows-off");
     expect(text(notice)).toContain("Company-announced late-in / early-out is switched off");
     expect(notice.querySelector("a")!.getAttribute("href")).toBe("/hr/settings?tab=compensation#windows-enabled");
     expect(button("window-submit").disabled).toBe(true);
     expect(button("window-submit").title).toMatch(/switched off in Settings → Compensation/);
+    // the notice stays above the nested subtabs, so it is there on the list too
+    await switchTo("list", "windows-upcoming");
+    expect(q("windows-off")).not.toBeNull();
     expect(button("window-delete-901").disabled).toBe(true);
     expect(text(q("windows-upcoming"))).toContain("Heavy rain");
   });
 
   it("pauses it while the master switch is off, with that reason on the buttons", async () => {
     world.settings.compensationFeatureEnabled = false;
-    await openWindows();
+    await openForm();
     await waitFor(() => button("window-submit").disabled, "the pause");
     expect(button("window-submit").title).toMatch(/switched off in Settings → Payroll/);
+    await switchTo("list", "windows-upcoming");
     expect(button("window-delete-901").title).toMatch(/Settings → Payroll/);
     // the master switch has its own notice at the top of the page: this part adds none
     expect(q("windows-off")).toBeNull();
   });
 
   it("locks Add announcement and Delete for a View Only role", async () => {
-    await openWindows();
+    await openForm();
     lockMutatingControls(document.body);
     await settle();
     expect(button("window-submit").disabled).toBe(true);
+    await switchTo("list", "windows-upcoming");
+    lockMutatingControls(document.body);
+    await settle();
     expect(button("window-delete-901").disabled).toBe(true);
   });
 });

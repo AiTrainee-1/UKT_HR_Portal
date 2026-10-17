@@ -104,7 +104,16 @@ function RowsTable({
  * One type of compensation in the report: who benefits from it (one sentence), the tiles of its summary, and the table of
  * the beneficiaries. A type that is switched off in Settings says so (what it already gave stays listed).
  */
-export function ReportSectionCard({ section, masterOn }: { section: ReportSection; masterOn: boolean }) {
+export function ReportSectionCard({
+  section,
+  masterOn,
+  withRedemptions = true,
+}: {
+  section: ReportSection;
+  masterOn: boolean;
+  /** Show the balance redeemed as days off under the work (Holiday / Sunday work). Off when it has a nested subtab of its own. */
+  withRedemptions?: boolean;
+}) {
   const meta = TYPE_META[section.type];
   const columns = TYPE_COLUMNS[section.type]();
   const tiles = summaryTiles(section.type, section.summary);
@@ -167,7 +176,7 @@ export function ReportSectionCard({ section, masterOn }: { section: ReportSectio
         />
       )}
 
-      {section.type === "holiday_work" && redemptions.length > 0 && (
+      {withRedemptions && section.type === "holiday_work" && redemptions.length > 0 && (
         <div className="space-y-2 border-t border-slate-100 pt-4">
           <h4 className="px-5 text-sm font-bold text-gray-900">
             Balance redeemed as days off{" "}
@@ -180,6 +189,43 @@ export function ReportSectionCard({ section, masterOn }: { section: ReportSectio
             rowTestId="report-redemption"
           />
         </div>
+      )}
+    </SectionCard>
+  );
+}
+
+/** The balance that was redeemed as days off in the period (Holiday / Sunday work, its own nested subtab). */
+export function RedemptionsCard({ section }: { section: ReportSection }) {
+  const redemptions = section.redemptions ?? [];
+  return (
+    <SectionCard
+      testId="report-redemptions"
+      icon={Users}
+      title="Balance redeemed as days off"
+      description="Compensation balance that HR turned into a day off in this period, and for whom."
+      actions={
+        <span className="text-xs font-semibold text-slate-600">
+          {redemptions.length} {redemptions.length === 1 ? "redemption" : "redemptions"}
+        </span>
+      }
+      bodyClassName="space-y-4 px-0 pb-0"
+    >
+      {redemptions.length === 0 ? (
+        <div className="px-5 pb-5">
+          <EmptyNote
+            icon={Users}
+            title="No balance was redeemed in this period"
+            hint="Change the period or the filters to see others."
+            testId="report-redemptions-empty"
+          />
+        </div>
+      ) : (
+        <RowsTable
+          rows={redemptions}
+          columns={REDEMPTION_COLUMNS()}
+          testId="report-table-redemptions"
+          rowTestId="report-redemption"
+        />
       )}
     </SectionCard>
   );

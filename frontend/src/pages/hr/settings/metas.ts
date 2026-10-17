@@ -15,6 +15,7 @@ import { SMTP_SETTINGS } from "./SmtpTab.meta";
 import { WHATSAPP_SETTINGS } from "./WhatsAppTab.meta";
 import { BACKUP_SETTINGS } from "./BackupTab.meta";
 import { THEMES_SETTINGS } from "./ThemesTab.meta";
+import { ENDPOINT_SHARING_SETTINGS } from "./EndpointSharingTab.meta";
 
 /** All settings of all tabs, for the search box. */
 export const ALL_SETTINGS: SettingMeta[] = [
@@ -34,4 +35,5 @@ export const ALL_SETTINGS: SettingMeta[] = [
   ...WHATSAPP_SETTINGS,
   ...BACKUP_SETTINGS,
   ...THEMES_SETTINGS,
+  ...ENDPOINT_SHARING_SETTINGS,
 ];

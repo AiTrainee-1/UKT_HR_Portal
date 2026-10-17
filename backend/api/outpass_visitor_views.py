@@ -27,15 +27,15 @@ from __future__ import annotations
 from datetime import timedelta
 
 from django.utils import timezone
-from rest_framework.decorators import api_view, throttle_classes
+from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
-from rest_framework.throttling import ScopedRateThrottle
 
 from .auth import require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
 from .clock import FACTORY_TZ
 from .models import Branch, Employee, GateQRCode, OutpassRecord, Visitor, VisitorVisit
+from .throttles import throttle
 from .user_settings import settings_for_employee
 
 
@@ -109,10 +109,6 @@ def _create_outpass_record_for(employee: Employee, destination: str, source: str
 
 
 _QR_NOT_FOUND = Response({"error": "This QR code is not recognized."}, status=404)
-
-
-def _throttled(request: Request) -> None:
-    request.throttle_scope = "gate_submit"
 
 
 def _digits_only(raw: str | None) -> str:
@@ -283,9 +279,8 @@ def outpass_gate_info(request: Request, token: str) -> Response:
 
 
 @api_view(["POST"])
-@throttle_classes([ScopedRateThrottle])
+@throttle("gate_submit")
 def outpass_gate_submit(request: Request, token: str) -> Response:
-    _throttled(request)
     qr = _gate_qr_or_none(token, GateQRCode.KIND_OUTPASS)
     if not qr:
         return _QR_NOT_FOUND
@@ -390,9 +385,8 @@ def visitor_gate_info(request: Request, token: str) -> Response:
 
 
 @api_view(["POST"])
-@throttle_classes([ScopedRateThrottle])
+@throttle("gate_submit")
 def visitor_check_phone(request: Request, token: str) -> Response:
-    _throttled(request)
     qr = _gate_qr_or_none(token, GateQRCode.KIND_VISITOR)
     if not qr:
         return _QR_NOT_FOUND
@@ -408,7 +402,7 @@ def visitor_check_phone(request: Request, token: str) -> Response:
 
 
 @api_view(["POST"])
-@throttle_classes([ScopedRateThrottle])
+@throttle("gate_submit")
 def visitor_check_employee_phone(request: Request, token: str) -> Response:
     """"Are you meeting a specific employee?" -> Yes step: the visitor (or
     receptionist filling in on their behalf) enters the employee's name and
@@ -418,7 +412,6 @@ def visitor_check_employee_phone(request: Request, token: str) -> Response:
     an arrival notification goes out. Never blocks check-in: if nothing
     matches, the caller falls back to the plain free-text whomToMeet field,
     exactly like before this feature existed."""
-    _throttled(request)
     qr = _gate_qr_or_none(token, GateQRCode.KIND_VISITOR)
     if not qr:
         return _QR_NOT_FOUND
@@ -434,9 +427,8 @@ def visitor_check_employee_phone(request: Request, token: str) -> Response:
 
 
 @api_view(["POST"])
-@throttle_classes([ScopedRateThrottle])
+@throttle("gate_submit")
 def visitor_gate_new(request: Request, token: str) -> Response:
-    _throttled(request)
     qr = _gate_qr_or_none(token, GateQRCode.KIND_VISITOR)
     if not qr:
         return _QR_NOT_FOUND
@@ -471,9 +463,8 @@ def visitor_gate_new(request: Request, token: str) -> Response:
 
 
 @api_view(["POST"])
-@throttle_classes([ScopedRateThrottle])
+@throttle("gate_submit")
 def visitor_gate_repeat(request: Request, token: str) -> Response:
-    _throttled(request)
     qr = _gate_qr_or_none(token, GateQRCode.KIND_VISITOR)
     if not qr:
         return _QR_NOT_FOUND

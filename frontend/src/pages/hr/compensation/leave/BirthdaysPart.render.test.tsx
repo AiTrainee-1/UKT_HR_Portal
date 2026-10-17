@@ -6,6 +6,8 @@ import {
   installBrowserStubs,
   installWorld,
   mountPage,
+  nestedLabels,
+  nestedTab,
   must,
   params,
   q,
@@ -46,7 +48,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const BIRTHDAYS = "/hr/compensation?tab=leave&sub=birthdays";
+const BIRTHDAYS = "/hr/compensation/compensation-leave/birthdays/list";
+const HOW = "/hr/compensation/compensation-leave/birthdays/how";
 
 async function openBirthdays(url = BIRTHDAYS) {
   mountPage(url);
@@ -80,8 +83,17 @@ describe("today", () => {
     expect(text(q("birthday-kpi-applied-value"))).toBe("1");
   });
 
-  it("says it is automatic, what it does, and never shows a birth year", async () => {
+  it("says it is automatic, what it does, and never shows a birth year (How it works is its own nested subtab)", async () => {
     await openBirthdays();
+    expect(nestedLabels("birthday-nested")).toEqual(["Who has a birthday (1)", "How it works"]);
+    expect(q("birthday-how")).toBeNull();
+    click(nestedTab("birthday-nested", "how"));
+    await waitFor(() => !!q("birthday-how"), "How it works");
+    expect(window.location.pathname).toBe(HOW);
+    // the list and its figures are not on this subtab
+    expect(q("birthday-table")).toBeNull();
+    expect(q("birthday-kpis")).toBeNull();
+    expect(q("birthday-period")).toBeNull();
     const how = text(q("birthday-how"));
     expect(how).toContain("Automatic: HR does nothing.");
     expect(how).toContain("whether they attend, stay absent, work half a day, arrive late or leave early");
@@ -98,7 +110,8 @@ describe("the period", () => {
   it("shows the week, with who does not benefit and why, and who was not marked yet", async () => {
     await openBirthdays();
     click(tab("Week"));
-    expect(params()).toMatchObject({ tab: "leave", sub: "birthdays", bperiod: "week" });
+    expect(params()).toMatchObject({ bperiod: "week" });
+    expect(window.location.pathname).toBe(BIRTHDAYS);
     await waitFor(() => rowIds().length === 3, "the week");
     expect(birthdayRequests().at(-1)).toBe("/api/compensation/birthdays?period=week&date=2026-10-14");
     expect(text(q("birthday-kpi-count"))).toContain("12 Oct - 18 Oct 2026");
@@ -129,7 +142,7 @@ describe("the period", () => {
   });
 
   it("steps to the next and the previous period, and back to today", async () => {
-    await openBirthdays(`${BIRTHDAYS}&bperiod=week`);
+    await openBirthdays(`${BIRTHDAYS}?bperiod=week`);
     click(must("birthday-period-next"));
     expect(params().bdate).toBe("2026-10-21");
     await waitFor(
@@ -145,7 +158,7 @@ describe("the period", () => {
   });
 
   it("follows a date typed in, and restores period and date from the address", async () => {
-    await openBirthdays(`${BIRTHDAYS}&bperiod=week&bdate=2026-10-07`);
+    await openBirthdays(`${BIRTHDAYS}?bperiod=week&bdate=2026-10-07`);
     expect(birthdayRequests()).toEqual(["/api/compensation/birthdays?period=week&date=2026-10-07"]);
     expect((must("birthday-period-date") as HTMLInputElement).value).toBe("2026-10-07");
     typeInto(must("birthday-period-date") as HTMLInputElement, "2026-11-02");
@@ -167,6 +180,8 @@ describe("the period", () => {
     expect(text(q("birthday-empty"))).toContain("No birthday today");
     expect(q("birthday-table")).toBeNull();
     // without an effective-from date the note does not mention one
+    click(nestedTab("birthday-nested", "how"));
+    await waitFor(() => !!q("birthday-how"), "How it works");
     expect(text(q("birthday-how"))).not.toContain("It applies from");
   });
 });

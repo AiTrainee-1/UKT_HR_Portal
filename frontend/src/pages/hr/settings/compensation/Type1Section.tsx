@@ -6,6 +6,7 @@ import { AllowanceTable } from "./AllowanceTable";
 import { Type1Example } from "./Examples";
 import { warningsFor } from "./form";
 import { FromDate, masterOffNote, notes, type SectionProps } from "./ui";
+import { historyPath, otPath } from "@/pages/hr/compensation/routes";
 
 const block = (id: string) => ({ id, ...compensationText(id) });
 
@@ -21,7 +22,7 @@ export function Type1Section(props: SectionProps) {
       purpose="Automatic and never paid. Staff who work extra hours after their shift end get an allowance for their first punch the next working day: if they arrive late inside it, it is not marked Late, it is marked Compensation instead. Nothing to claim and nothing for HR to assign. Staff only."
       usedBy={[
         { label: "Staff Attendance", to: "/hr/attendance/staff" },
-        { label: "Compensation", to: "/hr/compensation" },
+        { label: "Compensation", to: otPath("type-1") },
         { label: "Employee apps" },
       ]}
       testId="compensation-type1"
@@ -42,9 +43,9 @@ export function Type1Section(props: SectionProps) {
             to: "/hr/payroll",
           },
           {
-            where: "Compensation - History & Reports",
+            where: "Compensation - History",
             what: "lists who got the allowance and who used it",
-            to: "/hr/compensation",
+            to: historyPath("ot-allowance"),
           },
           {
             where: "Employee apps",
@@ -110,7 +111,7 @@ export function Type1Section(props: SectionProps) {
           {
             where: "Compensation - OT Detection",
             what: "lists each day with the allowance it earned",
-            to: "/hr/compensation",
+            to: otPath("type-1"),
           },
         ]}
         note={notes(

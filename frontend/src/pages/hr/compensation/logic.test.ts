@@ -14,7 +14,6 @@ import {
   errorMessage,
   errorStatus,
   fmtShifts,
-  isCompensationTab,
   isIsoDate,
   isLeavePart,
   leavePartOf,
@@ -38,27 +37,26 @@ import {
 const apiError = (status: number, body: unknown = null) =>
   new ApiError(new Response(null, { status, statusText: String(status) }), body, { method: "GET", url: "/x" });
 
-// The pure helpers shared by the four tabs: the address, shifts, dates and what a failed request says.
+// The pure helpers shared by the pages of Compensation: the address, shifts, dates and what a failed request says.
 
 describe("the address", () => {
   it("keeps every key of the page with an empty or default value, so a fresh page has a clean address", () => {
-    expect(COMPENSATION_URL_DEFAULTS.tab).toBe("ctc");
-    expect(COMPENSATION_URL_DEFAULTS.sub).toBe("windows");
+    // the page and its subtab are the path, no longer keys of the query string
+    expect("tab" in COMPENSATION_URL_DEFAULTS).toBe(false);
+    expect("sub" in COMPENSATION_URL_DEFAULTS).toBe(false);
     expect(COMPENSATION_URL_DEFAULTS.period).toBe("today");
     expect(COMPENSATION_URL_DEFAULTS.bperiod).toBe("today");
     expect(COMPENSATION_URL_DEFAULTS.month).toBe("");
     expect(Object.values(COMPENSATION_URL_DEFAULTS).every((v) => typeof v === "string")).toBe(true);
   });
 
-  it("knows the four tabs and the three parts of Compensation Leave", () => {
-    for (const tab of ["ctc", "ot", "leave", "history"]) expect(isCompensationTab(tab)).toBe(true);
-    expect(isCompensationTab("reports")).toBe(false);
+  it("knows the three parts of Compensation Leave an old address names", () => {
     for (const part of ["windows", "holiday-work", "birthdays"]) expect(isLeavePart(part)).toBe(true);
     expect(isLeavePart("balance")).toBe(false);
     expect(isLeavePart("holiday")).toBe(false);
   });
 
-  it("reads the part an address asks for, with the link of the Requests hub, other spellings and a fallback", () => {
+  it("reads the part an old address asks for, with the link of the Requests hub, other spellings and a fallback", () => {
     expect(leavePartOf("holiday-work")).toBe("holiday-work");
     expect(leavePartOf("birthdays")).toBe("birthdays");
     expect(leavePartOf("holiday")).toBe("holiday-work");

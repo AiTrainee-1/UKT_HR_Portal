@@ -5,6 +5,7 @@ from datetime import timedelta
 from unittest import mock
 
 import bcrypt
+from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
@@ -29,6 +30,8 @@ def _fail():
 @override_settings(**CONFIG)
 class OtpBase(TestCase):
     def setUp(self):
+        cache.clear()  # the per-IP throttles count in the cache: no test may inherit another's requests
+        self.addCleanup(cache.clear)
         self.emp = Employee.objects.create(
             employee_code="E100", first_name="Asha", last_name="Kumar", phone="82200 15110", status="active"
         )
@@ -56,7 +59,11 @@ class OtpBase(TestCase):
 class LoginOptionsTests(OtpBase):
     def test_reports_what_is_switched_on(self):
         body = self.client.get("/api/auth/login-options").json()
-        self.assertEqual(body, {"otpLogin": True, "otpReset": True, "otpActivate": True, "passwordLogin": True})
+        # otpChannel is additive (SMS channel): the four original keys are unchanged, WhatsApp is the default channel
+        self.assertEqual(
+            body,
+            {"otpLogin": True, "otpReset": True, "otpActivate": True, "passwordLogin": True, "otpChannel": "whatsapp"},
+        )
 
     def test_otp_is_not_advertised_when_whatsapp_is_not_configured(self):
         with override_settings(WACLIENT_INSTANCE_ID="", WACLIENT_ACCESS_TOKEN=""):
@@ -139,6 +146,35 @@ class RequestOtpTests(OtpBase):
         # ...so they can try again straight away
         self.assertEqual(self.request_code()[0].status_code, 200)
         self.assertEqual(WhatsAppMessageLog.objects.filter(status="failed").count(), 1)
+
+    def test_a_failed_send_leaves_the_previous_valid_code_alone(self):
+        """The old code used to be consumed BEFORE the send, so a failed send killed a valid code. Now the new row is
+        created first, the old codes are consumed only after the send succeeded, and a failure deletes the new row."""
+        _, old = self.request_code()
+        self.age_last_otp(61)
+        r, _ = self.request_code(ok=False)
+        self.assertEqual(r.status_code, 502)
+        self.assertEqual(EmployeeOtp.objects.count(), 1)
+        self.assertIsNone(EmployeeOtp.objects.get().consumed_at)
+        self.assertEqual(self.post("otp/login", {"employeeCode": "E100", "otp": old}).status_code, 200)
+
+    def test_the_previous_code_is_consumed_only_after_the_send_succeeded(self):
+        _, first = self.request_code()
+        self.age_last_otp(61)
+        seen = {}
+
+        def during_send(*args, **kwargs):
+            seen["unconsumed"] = EmployeeOtp.objects.filter(consumed_at__isnull=True).count()
+            return _ok()
+
+        with mock.patch("api.whatsapp_service.requests.post", side_effect=during_send) as post:
+            r = self.post("otp/request", {"employeeCode": "E100"})
+        self.assertEqual(r.status_code, 200)
+        second = re.search(r"\b(\d{6})\b", post.call_args.kwargs["json"]["message"]).group(1)
+        self.assertEqual(seen["unconsumed"], 2)  # in flight: the old code is untouched
+        self.assertEqual(EmployeeOtp.objects.filter(consumed_at__isnull=True).count(), 1)
+        self.assertEqual(self.post("otp/login", {"employeeCode": "E100", "otp": first}).status_code, 400)
+        self.assertEqual(self.post("otp/login", {"employeeCode": "E100", "otp": second}).status_code, 200)
 
     def test_resend_cooldown(self):
         self.assertEqual(self.request_code()[0].status_code, 200)
@@ -458,3 +494,95 @@ class DirectSetPasswordWithActivationTests(OtpBase):
         )
         token = sign_token({"role": "employee", "employeeId": other.id, "name": "C"})
         self.assertEqual(self.set_password(HTTP_AUTHORIZATION=f"Bearer {token}").status_code, 403)
+
+
+class HostileInputTests(OtpBase):
+    """Input nobody legitimate sends must be a clean 400 (never a 500) and must never use up a real code."""
+
+    OTP_PATHS = ("otp/request", "otp/login", "otp/reset-password", "otp/activate")
+
+    def test_a_code_that_is_not_text_is_a_400_and_costs_nobody_an_attempt(self):
+        self.request_code()
+        bodies = (
+            ("otp/login", {}),
+            ("otp/reset-password", {"password": "long-enough-1"}),
+            ("otp/activate", {"password": "long-enough-1"}),
+        )
+        for path, extra in bodies:
+            for otp in (123456, 12.5, True, False, [1, 2, 3, 4, 5, 6], ["123456"], {"code": "123456"}, [], {}):
+                with self.subTest(path=path, otp=otp):
+                    r = self.post(path, {"employeeCode": "E100", "otp": otp, **extra})
+                    self.assertEqual(r.status_code, 400)
+                    self.assertEqual(set(r.json()), {"error"})
+        self.assertEqual(EmployeeOtp.objects.get().attempts, 0)
+
+    def test_a_nul_byte_in_the_employee_code_is_a_400_everywhere(self):
+        for key in ("employeeCode", "identifier"):
+            for path in self.OTP_PATHS:
+                with self.subTest(path=path, key=key):
+                    body = {key: "E100\x00", "otp": "123456", "password": "long-enough-1", "purpose": "login"}
+                    self.assertEqual(self.post(path, body).status_code, 400)
+        for path in ("employee-login", "set-password"):
+            with self.subTest(path=path):
+                body = {"identifier": "E100\x00", "password": "long-enough-1"}
+                self.assertEqual(self.post(path, body).status_code, 400)
+        r = self.post("hr-login", {"username": "admin\x00", "password": "x"})
+        self.assertEqual(r.status_code, 401)
+
+    def test_a_password_that_is_not_text_is_refused_before_the_code_is_used(self):
+        for path, purpose in (("otp/reset-password", "reset"), ("otp/activate", "activate")):
+            with self.subTest(path=path):
+                EmployeeOtp.objects.all().delete()  # (no resend cooldown between the two rounds)
+                Employee.objects.filter(pk=self.emp.pk).update(password_hash="")  # (the first round set one)
+                _, code = self.request_code(purpose=purpose)
+                hostile = (
+                    ["long-enough-1"],
+                    list("12345678"),
+                    {"password": "long-enough-1"},
+                    12345678,
+                    True,
+                    "long-enough\x00-1",
+                )
+                for password in hostile:
+                    r = self.post(path, {"employeeCode": "E100", "otp": code, "password": password})
+                    self.assertEqual(r.status_code, 400, password)
+                    self.assertEqual(set(r.json()), {"error"})
+                row = EmployeeOtp.objects.get()
+                self.assertEqual((row.attempts, row.consumed_at), (0, None))  # the code was not touched
+                good = self.post(path, {"employeeCode": "E100", "otp": code, "password": "long-enough-1"})
+                self.assertEqual(good.status_code, 200)
+
+    def test_a_short_or_missing_password_never_uses_the_code_up_either(self):
+        _, code = self.request_code(purpose="reset")
+        for password in ("", "short", None, "1234567"):
+            r = self.post("otp/reset-password", {"employeeCode": "E100", "otp": code, "password": password})
+            self.assertEqual(r.status_code, 400, password)
+        self.assertEqual(EmployeeOtp.objects.get().attempts, 0)
+
+    def test_a_body_that_is_not_a_json_object_is_a_400_not_a_500(self):
+        for path in (*self.OTP_PATHS, "employee-login", "set-password", "hr-login"):
+            for raw in ("[]", "[1, 2]", '"text"', "123", "null", "true"):
+                with self.subTest(path=path, raw=raw):
+                    r = self.client.post(f"/api/auth/{path}", raw, content_type="application/json")
+                    self.assertEqual(r.status_code, 400)
+                    self.assertIn("error", r.json())
+
+    def test_values_of_the_wrong_type_in_the_sign_in_forms_are_400s(self):
+        for body in (
+            {"identifier": ["E100"], "password": "long-enough-1"},
+            {"identifier": "E100", "password": ["long-enough-1"]},
+            {"identifier": 100, "password": "long-enough-1"},
+            {"identifier": {"a": 1}, "password": "long-enough-1"},
+            {"identifier": "E100", "password": 12345678},
+        ):
+            for path in ("employee-login", "set-password"):
+                with self.subTest(path=path, body=body):
+                    self.assertEqual(self.post(path, body).status_code, 400)
+        for body in ({"username": ["a"], "password": "x"}, {"username": "a", "password": ["x"]}, {"username": 5}):
+            with self.subTest(body=body):
+                self.assertEqual(self.post("hr-login", body).status_code, 401)
+
+    def test_ordinary_requests_are_unchanged(self):
+        self.assertEqual(self.post("employee-login", {"identifier": "E100"}).status_code, 400)  # no password
+        self.assertEqual(self.post("employee-login", {}).status_code, 400)
+        self.assertEqual(self.post("hr-login", {}).status_code, 401)

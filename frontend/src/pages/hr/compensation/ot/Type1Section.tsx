@@ -17,6 +17,7 @@ const USE_TITLE = {
 /**
  * Type 1: the automatic next-day late-in allowance. Read-only on purpose: nobody assigns or claims it. A row says who worked
  * past the shift end, for how long, the allowance the next working morning may use, and whether the employee used it.
+ * (How it is worked out is the other nested subtab: <Type1How>.)
  */
 export function Type1Section({
   rows,
@@ -38,19 +39,10 @@ export function Type1Section({
       testId="ot-type1"
       icon={Moon}
       title="Type 1 · Next-day late-in allowance"
-      description="Automatic and unpaid. Staff who work past their shift end may arrive later the next working morning, by the allowance below. There is nothing to assign or claim."
+      description="Automatic and unpaid. Staff who work past their shift end may arrive later the next working morning, by the allowance in each row. There is nothing to assign or claim."
       actions={<StatusChip tone="neutral">Automatic · read-only</StatusChip>}
       bodyClassName="space-y-3 px-0 pb-0"
     >
-      <div className="space-y-3 px-5">
-        <p className="text-xs leading-relaxed text-gray-600">
-          If the employee arrives late <strong>within</strong> the allowance, the morning is not detected as Late:
-          attendance marks it as <strong>Compensation</strong> instead. Arriving on time leaves the allowance unused and
-          nothing is marked. Whether to use it is the employee&apos;s choice.
-        </p>
-        <AllowanceRules />
-      </div>
-
       {loading ? (
         <div className="px-5 pb-5 text-sm text-muted-foreground" data-testid="ot-type1-loading">
           Loading the month&apos;s records…
@@ -116,6 +108,26 @@ export function Type1Section({
           <Pager paged={paged} />
         </>
       )}
+    </SectionCard>
+  );
+}
+
+/** Type 1, how it is worked out: what the allowance does and the rules the page is using now (read from Settings). */
+export function Type1How() {
+  return (
+    <SectionCard
+      testId="ot-type1-how"
+      icon={Moon}
+      title="How the late-in allowance is worked out"
+      description="Read-only: the rules are set in Settings → Compensation."
+      bodyClassName="space-y-3"
+    >
+      <p className="text-xs leading-relaxed text-gray-600">
+        If the employee arrives late <strong>within</strong> the allowance, the morning is not detected as Late:
+        attendance marks it as <strong>Compensation</strong> instead. Arriving on time leaves the allowance unused and
+        nothing is marked. Whether to use it is the employee&apos;s choice.
+      </p>
+      <AllowanceRules defaultOpen />
     </SectionCard>
   );
 }

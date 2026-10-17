@@ -29,6 +29,8 @@ import {
 } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import { addDays, dateLong, errorMessage, todayIst } from "../logic";
+import { NestedTabs } from "@/components/ui/nested-tabs";
+import { LEAVE_NESTED, subPath } from "../routes";
 import {
   CELL,
   ErrorNotice,
@@ -74,9 +76,19 @@ const KIND_INFO = {
 /**
  * Compensation Leave A: HR announces, for a date, that ALL staff may arrive up to a time (Late-in) or leave from a time
  * (Early-out), for example in heavy rain. On that date only, the shift's own start / end and grace do not apply for the
- * announced edge, and Late-in / Early-out detection does not run for it.
+ * announced edge, and Late-in / Early-out detection does not run for it. Two nested subtabs: Announce, and the list of
+ * Announcements (with their count). The form and the list share one query, so switching between them is instant.
  */
-export function WindowsPart({ featuresOff, isBranchScoped }: { featuresOff: boolean; isBranchScoped: boolean }) {
+export function WindowsPart({
+  featuresOff,
+  isBranchScoped,
+  nested,
+}: {
+  featuresOff: boolean;
+  isBranchScoped: boolean;
+  /** The nested subtab: `announce` (the form and what it does) or `list` (the announcements made). */
+  nested: string;
+}) {
   const { toast } = useToast();
   const today = useMemo(() => todayIst(), []);
   const query = useCompensationWindows({ kind: "all" });
@@ -164,244 +176,264 @@ export function WindowsPart({ featuresOff, isBranchScoped }: { featuresOff: bool
         </SwitchOffNotice>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-5">
-        <SectionCard
-          testId="windows-form"
-          className="lg:col-span-3"
-          icon={CalendarPlus}
-          title="Announce late-in / early-out"
-          description="For all staff on one date, for example heavy rain or a transport strike. Production employees are never covered."
-        >
-          <form
-            className="space-y-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void submit();
-            }}
-            noValidate
-          >
-            <div role="radiogroup" aria-label="What is announced" className="grid gap-2 sm:grid-cols-2">
-              {(Object.keys(KIND_INFO) as (keyof typeof KIND_INFO)[]).map((kind) => {
-                const k = KIND_INFO[kind];
-                const Icon = k.icon;
-                const on = form.kind === kind;
-                return (
-                  <button
-                    key={kind}
-                    type="button"
-                    role="radio"
-                    aria-checked={on}
-                    onClick={() => patch({ kind })}
-                    data-testid={`window-kind-${kind}`}
-                    className={cn(
-                      "flex items-start gap-3 rounded-xl border p-3 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-                      on ? "border-indigo-500 bg-indigo-50" : "border-slate-200 bg-white hover:bg-slate-50",
-                    )}
-                  >
-                    <span className="mt-0.5 rounded-lg bg-white p-2 text-indigo-700 ring-1 ring-slate-200">
-                      <Icon size={16} />
-                    </span>
-                    <span className="min-w-0">
-                      <span className="block text-sm font-bold text-gray-900">
-                        {k.title}
-                        {on && <span className="ml-2 text-[11px] font-semibold text-indigo-700">Chosen</span>}
-                      </span>
-                      <span className="block text-xs text-muted-foreground">{k.text}</span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field
-                label="Date"
-                htmlFor="window-date"
-                problem={problems.date}
-                hint={`Today or later, up to ${WINDOW_MAX_DAYS_AHEAD} days ahead.`}
-              >
-                <Input
-                  id="window-date"
-                  type="date"
-                  value={form.date}
-                  min={serverToday}
-                  max={addDays(serverToday, WINDOW_MAX_DAYS_AHEAD)}
-                  onChange={(e) => patch({ date: e.target.value })}
-                  aria-invalid={problems.date ? true : undefined}
-                  data-testid="window-date"
-                />
-              </Field>
-              <Field label={info.timeLabel} htmlFor="window-time" problem={problems.time}>
-                <Input
-                  id="window-time"
-                  type="time"
-                  value={form.time}
-                  onChange={(e) => patch({ time: e.target.value })}
-                  aria-invalid={problems.time ? true : undefined}
-                  data-testid="window-time"
-                />
-              </Field>
-            </div>
-
-            <Field
-              label="Reason"
-              htmlFor="window-reason"
-              problem={problems.reason}
-              hint={`${form.reason.trim().length} / ${WINDOW_REASON_MAX}. Staff see it with the announcement.`}
-            >
-              <Textarea
-                id="window-reason"
-                rows={2}
-                maxLength={WINDOW_REASON_MAX + 50}
-                value={form.reason}
-                onChange={(e) => patch({ reason: e.target.value })}
-                placeholder="e.g. Heavy rain: buses are not running"
-                aria-invalid={problems.reason ? true : undefined}
-                data-testid="window-reason"
-              />
-            </Field>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field
-                label="Department (optional)"
-                htmlFor="window-dept"
-                hint="Leave on Any department for every department."
-              >
-                <Select
-                  value={form.departmentId || ANY}
-                  onValueChange={(v) => patch({ departmentId: v === ANY ? "" : v })}
-                >
-                  <SelectTrigger id="window-dept" data-testid="window-dept">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={ANY}>Any department</SelectItem>
-                    {departments?.map((d) => (
-                      <SelectItem key={d.id} value={String(d.id)}>
-                        {d.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-              {!isBranchScoped && (
-                <Field
-                  label="Branch (optional)"
-                  htmlFor="window-branch"
-                  hint="Leave on Any branch for the whole company."
-                >
-                  <Select value={form.branchId || ANY} onValueChange={(v) => patch({ branchId: v === ANY ? "" : v })}>
-                    <SelectTrigger id="window-branch" data-testid="window-branch">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={ANY}>Any branch</SelectItem>
-                      {branches?.map((b) => (
-                        <SelectItem key={b.id} value={String(b.id)}>
-                          {b.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-              )}
-            </div>
-
-            {sentence && (
-              <Notice accent="slate" testId="window-summary">
-                <p>{sentence}</p>
-              </Notice>
-            )}
-            {error && <ErrorNotice testId="window-error">{error}</ErrorNotice>}
-
-            <Button
-              type="submit"
-              disabled={!canAnnounce || create.isPending}
-              title={canAnnounce ? undefined : pausedReason}
-              data-testid="window-submit"
-            >
-              {create.isPending && <Loader2 size={14} className="mr-2 animate-spin" />}
-              Add announcement
-            </Button>
-          </form>
-        </SectionCard>
-
-        <SectionCard
-          testId="windows-explain"
-          className="lg:col-span-2"
-          icon={Clock}
-          title="What an announcement does"
-          description="On the announced date only."
-        >
-          <ul className="list-disc space-y-1.5 pl-5 text-xs leading-relaxed text-gray-600">
-            <li>
-              <strong>Late-in:</strong> everyone covered may arrive up to the time. The shift&apos;s start and its grace
-              do not apply, so arriving by the time is not Late. After it, the usual Late rules count from that time.
-            </li>
-            <li>
-              <strong>Early-out:</strong> everyone covered may leave from the time. The shift&apos;s end and its grace
-              do not apply, so leaving at or after the time is not an Early Out.
-            </li>
-            <li>
-              Attendance marks the days of the staff who used it as Compensation, and History &amp; Reports lists who
-              used it.
-            </li>
-            <li>
-              One late-in and one early-out per person per date. A future date can be deleted; today&apos;s has already
-              acted.
-            </li>
-            <li>It is a company announcement, not a leave: a day nobody attended is still absent.</li>
-          </ul>
-        </SectionCard>
-      </div>
-
-      <SectionCard
-        testId="windows-list"
-        icon={Users}
-        title="Announcements"
-        description="Who announced each one and how many staff it covers. Only a future date can be deleted."
+      <NestedTabs
+        base={subPath("leave", "announcements")}
+        value={nested}
+        testId="windows-nested"
+        label="Sections of Announce late-in / early-out"
+        items={[
+          { value: "announce", label: LEAVE_NESTED.announcements[0].label },
+          { value: "list", label: LEAVE_NESTED.announcements[1].label, count: query.data?.results.length },
+        ]}
       >
-        {query.isLoading ? (
-          <SkeletonRows rows={3} />
-        ) : query.isError && !query.data ? (
-          <LoadError
-            what="the announcements"
-            detail={errorDetail(query.error)}
-            onRetry={() => void query.refetch()}
-            retrying={query.isFetching}
-            testId="windows-error"
-          />
-        ) : (query.data?.results.length ?? 0) === 0 ? (
-          <EmptyNote
-            icon={CalendarPlus}
-            title="No announcement yet"
-            hint="Announce a late-in or early-out above when something unusual happens."
-            testId="windows-empty"
-          />
-        ) : (
-          <div className="space-y-5">
-            <WindowTable
-              title="Today and upcoming"
-              rows={lists.upcoming}
-              onDelete={setDeleting}
-              paused={!canAnnounce}
-              pausedReason={pausedReason}
-              testId="windows-upcoming"
-            />
-            <WindowTable
-              title="Earlier"
-              rows={lists.earlier}
-              onDelete={setDeleting}
-              paused={!canAnnounce}
-              pausedReason={pausedReason}
-              testId="windows-earlier"
-            />
-            {query.data?.truncated && (
-              <p className="text-xs text-muted-foreground">Only the newest {query.data.results.length} are shown.</p>
-            )}
+        {nested === "announce" && (
+          <div className="grid gap-4 lg:grid-cols-5">
+            <SectionCard
+              testId="windows-form"
+              className="lg:col-span-3"
+              icon={CalendarPlus}
+              title="Announce late-in / early-out"
+              description="For all staff on one date, for example heavy rain or a transport strike. Production employees are never covered."
+            >
+              <form
+                className="space-y-4"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void submit();
+                }}
+                noValidate
+              >
+                <div role="radiogroup" aria-label="What is announced" className="grid gap-2 sm:grid-cols-2">
+                  {(Object.keys(KIND_INFO) as (keyof typeof KIND_INFO)[]).map((kind) => {
+                    const k = KIND_INFO[kind];
+                    const Icon = k.icon;
+                    const on = form.kind === kind;
+                    return (
+                      <button
+                        key={kind}
+                        type="button"
+                        role="radio"
+                        aria-checked={on}
+                        onClick={() => patch({ kind })}
+                        data-testid={`window-kind-${kind}`}
+                        className={cn(
+                          "flex items-start gap-3 rounded-xl border p-3 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                          on ? "border-indigo-500 bg-indigo-50" : "border-slate-200 bg-white hover:bg-slate-50",
+                        )}
+                      >
+                        <span className="mt-0.5 rounded-lg bg-white p-2 text-indigo-700 ring-1 ring-slate-200">
+                          <Icon size={16} />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block text-sm font-bold text-gray-900">
+                            {k.title}
+                            {on && <span className="ml-2 text-[11px] font-semibold text-indigo-700">Chosen</span>}
+                          </span>
+                          <span className="block text-xs text-muted-foreground">{k.text}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field
+                    label="Date"
+                    htmlFor="window-date"
+                    problem={problems.date}
+                    hint={`Today or later, up to ${WINDOW_MAX_DAYS_AHEAD} days ahead.`}
+                  >
+                    <Input
+                      id="window-date"
+                      type="date"
+                      value={form.date}
+                      min={serverToday}
+                      max={addDays(serverToday, WINDOW_MAX_DAYS_AHEAD)}
+                      onChange={(e) => patch({ date: e.target.value })}
+                      aria-invalid={problems.date ? true : undefined}
+                      data-testid="window-date"
+                    />
+                  </Field>
+                  <Field label={info.timeLabel} htmlFor="window-time" problem={problems.time}>
+                    <Input
+                      id="window-time"
+                      type="time"
+                      value={form.time}
+                      onChange={(e) => patch({ time: e.target.value })}
+                      aria-invalid={problems.time ? true : undefined}
+                      data-testid="window-time"
+                    />
+                  </Field>
+                </div>
+
+                <Field
+                  label="Reason"
+                  htmlFor="window-reason"
+                  problem={problems.reason}
+                  hint={`${form.reason.trim().length} / ${WINDOW_REASON_MAX}. Staff see it with the announcement.`}
+                >
+                  <Textarea
+                    id="window-reason"
+                    rows={2}
+                    maxLength={WINDOW_REASON_MAX + 50}
+                    value={form.reason}
+                    onChange={(e) => patch({ reason: e.target.value })}
+                    placeholder="e.g. Heavy rain: buses are not running"
+                    aria-invalid={problems.reason ? true : undefined}
+                    data-testid="window-reason"
+                  />
+                </Field>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field
+                    label="Department (optional)"
+                    htmlFor="window-dept"
+                    hint="Leave on Any department for every department."
+                  >
+                    <Select
+                      value={form.departmentId || ANY}
+                      onValueChange={(v) => patch({ departmentId: v === ANY ? "" : v })}
+                    >
+                      <SelectTrigger id="window-dept" data-testid="window-dept">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={ANY}>Any department</SelectItem>
+                        {departments?.map((d) => (
+                          <SelectItem key={d.id} value={String(d.id)}>
+                            {d.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  {!isBranchScoped && (
+                    <Field
+                      label="Branch (optional)"
+                      htmlFor="window-branch"
+                      hint="Leave on Any branch for the whole company."
+                    >
+                      <Select
+                        value={form.branchId || ANY}
+                        onValueChange={(v) => patch({ branchId: v === ANY ? "" : v })}
+                      >
+                        <SelectTrigger id="window-branch" data-testid="window-branch">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={ANY}>Any branch</SelectItem>
+                          {branches?.map((b) => (
+                            <SelectItem key={b.id} value={String(b.id)}>
+                              {b.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                  )}
+                </div>
+
+                {sentence && (
+                  <Notice accent="slate" testId="window-summary">
+                    <p>{sentence}</p>
+                  </Notice>
+                )}
+                {error && <ErrorNotice testId="window-error">{error}</ErrorNotice>}
+
+                <Button
+                  type="submit"
+                  disabled={!canAnnounce || create.isPending}
+                  title={canAnnounce ? undefined : pausedReason}
+                  data-testid="window-submit"
+                >
+                  {create.isPending && <Loader2 size={14} className="mr-2 animate-spin" />}
+                  Add announcement
+                </Button>
+              </form>
+            </SectionCard>
+
+            <SectionCard
+              testId="windows-explain"
+              className="lg:col-span-2"
+              icon={Clock}
+              title="What an announcement does"
+              description="On the announced date only."
+            >
+              <ul className="list-disc space-y-1.5 pl-5 text-xs leading-relaxed text-gray-600">
+                <li>
+                  <strong>Late-in:</strong> everyone covered may arrive up to the time. The shift&apos;s start and its
+                  grace do not apply, so arriving by the time is not Late. After it, the usual Late rules count from
+                  that time.
+                </li>
+                <li>
+                  <strong>Early-out:</strong> everyone covered may leave from the time. The shift&apos;s end and its
+                  grace do not apply, so leaving at or after the time is not an Early Out.
+                </li>
+                <li>
+                  Attendance marks the days of the staff who used it as Compensation, and History lists who used it.
+                </li>
+                <li>
+                  One late-in and one early-out per person per date. A future date can be deleted; today&apos;s has
+                  already acted.
+                </li>
+                <li>It is a company announcement, not a leave: a day nobody attended is still absent.</li>
+              </ul>
+            </SectionCard>
           </div>
         )}
-      </SectionCard>
+
+        {nested === "list" && (
+          <SectionCard
+            testId="windows-list"
+            icon={Users}
+            title="Announcements"
+            description="Who announced each one and how many staff it covers. Only a future date can be deleted."
+          >
+            {query.isLoading ? (
+              <SkeletonRows rows={3} />
+            ) : query.isError && !query.data ? (
+              <LoadError
+                what="the announcements"
+                detail={errorDetail(query.error)}
+                onRetry={() => void query.refetch()}
+                retrying={query.isFetching}
+                testId="windows-error"
+              />
+            ) : (query.data?.results.length ?? 0) === 0 ? (
+              <EmptyNote
+                icon={CalendarPlus}
+                title="No announcement yet"
+                hint="Announce a late-in or early-out in the Announce tab when something unusual happens."
+                testId="windows-empty"
+              />
+            ) : (
+              <div className="space-y-5">
+                <WindowTable
+                  title="Today and upcoming"
+                  rows={lists.upcoming}
+                  onDelete={setDeleting}
+                  paused={!canAnnounce}
+                  pausedReason={pausedReason}
+                  testId="windows-upcoming"
+                />
+                <WindowTable
+                  title="Earlier"
+                  rows={lists.earlier}
+                  onDelete={setDeleting}
+                  paused={!canAnnounce}
+                  pausedReason={pausedReason}
+                  testId="windows-earlier"
+                />
+                {query.data?.truncated && (
+                  <p className="text-xs text-muted-foreground">
+                    Only the newest {query.data.results.length} are shown.
+                  </p>
+                )}
+              </div>
+            )}
+          </SectionCard>
+        )}
+      </NestedTabs>
 
       <AlertDialog open={deleting !== null} onOpenChange={(open) => !open && !remove.isPending && setDeleting(null)}>
         <AlertDialogContent data-testid="window-delete-dialog">

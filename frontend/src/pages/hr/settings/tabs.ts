@@ -15,6 +15,7 @@ import {
   Mail,
   MessageCircle,
   Palette,
+  Share2,
   Timer,
 } from "lucide-react";
 import type { SettingsTabDef } from "./kit/catalog";
@@ -113,7 +114,7 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
     purpose:
       "Staff only: the rules and switches for OT Detection (the automatic next-day late-in allowance and shift-based compensation, given as Relaxation or Payment) and for Compensation Leave (announced late-in / early-out, work on Sundays and holidays, birthday). Each feature has its own switch; the master switch is on Payroll.",
     usedBy: [
-      { label: "Compensation", to: "/hr/compensation" },
+      { label: "Compensation", to: "/hr/compensation/ot-detection" },
       { label: "Staff Attendance", to: "/hr/attendance/staff" },
       { label: "Staff Payroll", to: "/hr/payroll" },
       { label: "Employee apps" },
@@ -143,7 +144,7 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
       { label: "Staff Payroll", to: "/hr/payroll" },
       { label: "Production Payroll", to: "/hr/production-payroll" },
       { label: "Bonus", to: "/hr/bonus" },
-      { label: "Compensation", to: "/hr/compensation" },
+      { label: "Compensation", to: "/hr/compensation/ctc-breakdown" },
     ],
   },
   {
@@ -210,6 +211,15 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
     usedBy: [{ label: "WhatsApp Control", to: "/hr/whatsapp-control" }],
   },
   {
+    id: "endpoint_sharing",
+    label: "Endpoint Sharing",
+    group: "system",
+    icon: Share2,
+    purpose:
+      "Super admin only: share chosen HR data with your other applications through read-only web addresses. You pick the data and the exact fields, the websites that may call each address and the API keys, and you read the guide a developer needs.",
+    usedBy: [{ label: "Your other applications" }],
+  },
+  {
     id: "backup",
     label: "Backup",
     group: "system",
@@ -236,6 +246,7 @@ const loaders: Record<string, () => Promise<{ default: SettingsTabComponent }>> 
   idcard: () => import("./IdCardTab"),
   smtp: () => import("./SmtpTab"),
   whatsapp: () => import("./WhatsAppTab"),
+  endpoint_sharing: () => import("./EndpointSharingTab"),
   backup: () => import("./BackupTab"),
 };
 

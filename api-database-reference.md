@@ -544,6 +544,54 @@ Staff only (production is never affected). Everything is gated, in this order, b
 - **GET `/api/whatsapp/templates`** — Lists one row per document type (`WhatsAppMessageTemplate` if configured, else a default empty placeholder row) so the Settings UI always renders a full fixed set of rows. **Auth: `@require_hr`.**
 - **PUT `/api/whatsapp/templates/\<str:document_type\>`** — Creates/updates the Meta template name, language code, variable note, and enabled flag for one document type's WhatsApp message template. **Auth: `@require_hr`.**
 
+## One-time codes: sign in, forgot password, first-time password (otp_views.py, otp_service.py)
+
+Public endpoints for the Employee Web App and the mobile app (no login; throttled per client IP: `otp_request` 300/min, `otp_verify` 600/min, `NUM_PROXIES` says who the client is). The code goes by **WhatsApp or SMS (2Factor)**, whichever HR chose on SMS Control (`SmsSettings.otp_channel`, default `whatsapp`). The SMS side is set up as described in `twofactor-sms-otp-integration.md`. A throttled call answers 429 `{ error, retryAfterSeconds }` with a `Retry-After` header; a non-text code or password, a NUL byte or a non-object body is a clean 400.
+
+- **GET `/api/auth/login-options`** — `{ otpLogin, otpReset, otpActivate, passwordLogin, otpChannel }`. A code method is `true` only when its switch is on and the active channel is configured and allowed to send; `passwordLogin` is `true` whenever code sign-in cannot work. `otpChannel` (`"sms"` | `"whatsapp"`) is additive.
+- **POST `/api/auth/otp/request`** — `{ employeeCode, purpose: "login" | "reset" | "activate" }` (the mobile app sends `identifier`). Makes a 6-digit code (only a salted HMAC is stored), sends it to the employee's registered number and returns `{ message, maskedPhone, expiresInSeconds, resendAfterSeconds, channel }` (`channel` is additive). 400 no valid mobile number, 403 purpose switched off or account inactive, 404 not registered, 409 already has a password (activate), 429 resend wait / hourly allowance (with `retryAfterSeconds`) / per-number cap / per-IP throttle, 502 the send failed (the code is discarded), 503 SMS not available or temporarily unavailable.
+- **POST `/api/auth/otp/login`** `{ employeeCode, otp }` returns `{ token, role, employeeId, name }`; **POST `/api/auth/otp/reset-password`** and **POST `/api/auth/otp/activate`** `{ employeeCode, otp, password }` (password at least 8 characters) return `{ message }`. A code works once, expires (default 5 minutes), is bound to its purpose and allows a limited number of wrong tries; every verify failure is the same "incorrect or expired" sentence.
+
+## SMS Control (sms_control_views.py, sms_service.py, twofactor_client.py)
+
+All `@require_hr`, module `sms_control` (GET needs view, PUT / POST need edit). A branch login reads its own branch's rows and gets 403 `company_wide_settings` on a change or a test. The 2Factor API key is never accepted, stored in the database, returned or logged: it lives in the server environment only.
+
+- **GET `/api/sms-control/overview`** — `{ provider: "twofactor", channel, configured, sendingAllowed, sendingNote, env: { authKey, senderId, templateName, apiBase }, balance, today: { sent, failed, blocked }, last7Days: [{ date, sent, failed }], lastSentAt, limits: { hourlyCap, dailyCap, hourUsed, dayUsed }, circuit: { paused, until } }`. `env.authKey` says only whether the key is set (a boolean, never the key); `senderId` / `templateName` are plain strings (empty when unset or still a placeholder); `balance` is a note ("look at the balance in the 2Factor panel": 2Factor documents no balance call).
+- **GET, PUT `/api/sms-control/settings`** — `{ otpChannel, otpLoginEnabled, otpResetEnabled, otpActivateEnabled, otpExpiryMinutes (1-15), resendCooldownSeconds (30-600), maxRequestsPerHour (1-20), maxAttemptsPerCode (3-10), maxPerPhonePerHour (1-20), hourlyCap (1-10000), dailyCap (1-10000), version, updatedAt, updatedBy, warnings }`. PUT is all-or-nothing (any problem is a 400 `{ error }` and nothing is saved; an hourly cap above the daily one is a 400), takes any subset of the keys, honours `expectedVersion` (400 code `stale_settings`), and **refuses `otpChannel: "sms"` (400, "SMS cannot be selected until 2Factor is configured on the server: missing: ...") until 2Factor is configured on the server**. Audited (module `sms_control`, action `update`).
+- **GET `/api/sms-control/messages`** — newest first. Filters `status` (`sent` | `failed` | `blocked`), `purpose` (`login` | `reset` | `activate` | `test`), `search`, `dateFrom`, `dateTo` (YYYY-MM-DD), `page`, `pageSize` (at most 200). `{ items: [{ id, at, employeeId, employeeName, employeeCode, maskedPhone, purpose, status, error, providerMessageId, ip }], total, page, pageSize, statusCounts }`. Never a code or a full number.
+- **POST `/api/sms-control/test`** — `{ phone }`: sends one real SMS through the real template with the dummy code `123456`. `200 { ok, message }` for everything about the send itself (accepted, refused by 2Factor, not configured, a limit), 400 for a bad number, 429 after 3 tests an hour per HR user. Audited (action `test`, masked number only).
+
+## Endpoint Sharing (shared_endpoint_views.py, shared_endpoint_admin_views.py, shared_datasets.py)
+
+Settings → Endpoint Sharing: the **super administrator** publishes chosen HR data to other applications as read-only addresses. The rules and the security model are in `backend.md` Section 4.16.
+
+**Public call (no HR login, no auth decorator by design; `shared/` is exempt from the permission middleware and `/api/shared/` from the global CORS)**
+
+- **GET `/api/shared/<slug>`** (and the browser preflight **OPTIONS**) — read-only JSON. Auth: `Authorization: Bearer <key>` or `X-API-Key: <key>` (never the query string); a key belongs to exactly one endpoint. Checks in order: endpoint exists and is enabled (404 `not_found`), `Origin` (403 `origin_not_allowed` / `origin_required`), key (401 `invalid_key`), per-key rate limit (429 `rate_limited` + `Retry-After`), parameters (400 `invalid_parameter`, with `parameter`). Query: the dataset's declared filters (an unknown or repeated name is a 400), `page`, `pageSize`. 200: `{ data: [ {selected fields only} ], meta: { endpoint, dataset, fields, page, pageSize, total, hasMore, generatedAt } }` with `Cache-Control: no-store`. An allowed origin gets `Access-Control-Allow-Origin: <that origin>` on every response (never `*`, never credentials). Other methods: 405.
+
+**Management (`require_company_super_admin`: an active super administrator not tied to a branch; everyone else 403, no token 401; audited, module `shared_endpoints`)**
+
+- **GET `/api/shared-endpoints/catalog`** — the datasets with their fields (`key`, `label`, `type`, `sensitivity`, `description`) and filters, the plain-text list of what can never be shared, the sensitivity levels and the limits.
+- **GET, POST `/api/shared-endpoints`** — list (`{ endpoints, limits }`, each with live keys, calls in the last 24 h, last call, `sensitiveFields`) and create (`slug`, `dataset`, `name`, `description`, `fields`, `lockedFilters`, `origins`, `allowNoOrigin`, `pageSizeDefault`, `pageSizeMax`, `rateLimitPerMinute`, `enabled`; 201). Selecting a personal or financial field needs `acknowledgeSensitive: true` (else 400 code `sensitive_confirmation_required`).
+- **GET, PUT, DELETE `/api/shared-endpoints/<id>`** — one endpoint; `PUT` replaces its settings all-or-nothing (the slug and dataset can never change; `expectedVersion` stale guard, 400 code `stale_settings`; a save that changes nothing writes nothing); `DELETE` removes it with its keys and origins (the access log is kept).
+- **GET, POST `/api/shared-endpoints/<id>/keys`** and **DELETE `/api/shared-endpoints/<id>/keys/<kid>`** — list keys (never a key or hash), create one (`{ label, expiresAt? }`, 201: the plaintext key is returned **once**, at most 10 live keys), revoke (immediate; repeating it is a no-op).
+- **POST `/api/shared-endpoints/<id>/preview`** — `{ limit ≤ 5, filters? }`: the first rows exactly as the public call would shape them; no key, no log row.
+- **GET `/api/shared-endpoints/<id>/activity`** and **GET `/api/shared-endpoints/activity`** — the access log (`page`, `pageSize` ≤ 200, `status` = `ok` | `error` | an HTTP code; the second form takes `endpointId`).
+- **GET `/api/shared-endpoints/<id>/guide`** — the generated integration guide data for that endpoint (address, headers, parameters, response schema, error table, example code in six languages).
+
+**Datasets** (a field is shared only if it is in the endpoint's saved list **and** in this catalog; sensitivity in brackets):
+
+| Dataset | Fields | Filters |
+|---|---|---|
+| `employees` | employeeCode, firstName, lastName, fullName, status, employmentType, department, designation, branch, joinDate (basic); phone, email, gender, dateOfBirth, address (personal); salaryAmount, salaryPerShift, salaryType (financial) | status (`active` default, `inactive`, `all`), employmentType, departmentId, branchId, employeeCode, visibleToExternal |
+| `departments`, `branches`, `designations` | id, name, branch / id, name, code / id, title, department, level (all basic) | none |
+| `attendance-days` | employeeCode, employeeName, date, status, firstPunch, lastPunch, shiftsEarned, isLate, earlyLeave, isHalfShift, compensationKind (basic) | **dateFrom and dateTo required (at most 31 days)**, employeeCode, departmentId, branchId, employmentType |
+| `attendance-punches` | employeeCode, date, time, source (basic; the source is a kind, never a device id) | **dateFrom and dateTo required (at most 7 days)**, employeeCode, departmentId |
+| `leave-requests` | employeeCode, employeeName (basic); leaveType, startDate, endDate, days, status, reason (personal) | dateFrom, dateTo (at most 366 days), status, employeeCode |
+| `holidays` | date, name, type (basic) | year |
+| `payroll-summary` | employeeCode, employeeName, month, year, periodStart, periodEnd (basic); paidDays, grossPay, totalDeductions, netPay (financial) | **month (YYYY-MM) required**, employmentType |
+
+Never shareable: password hashes, tokens, OTPs, device secrets and API keys; Aadhaar, PAN and any government ID; bank names, account numbers and IFSC; PF / ESI / UAN numbers; photographs; biometric and device ids; HR user accounts, roles and sessions; any column not in the catalog. Money is rupees as a number with two decimals, dates `YYYY-MM-DD`, times `HH:MM:SS`, date-times ISO 8601 with the +05:30 offset.
 ## Themes (theme_views.py)
 
 - **GET /api/theme-settings** — `@require_auth`. Returns the org's active theme name plus any custom CSS-variable color overrides; open to any signed-in user so the theme applies immediately on load.
@@ -1651,6 +1699,55 @@ Per-document-type configuration of which pre-approved Meta WhatsApp Business tem
 - `is_enabled` — BooleanField, default False
 - `updated_at` — DateTimeField
 
+## SMS OTP Channel (api/models/sms.py; migration 0123)
+
+Codes can go by SMS (2Factor) instead of WhatsApp; HR chooses on SMS Control. Setup and behaviour: `twofactor-sms-otp-integration.md`. The code table `employee_otp` (`EmployeeOtp`, shared by both channels) keeps only a salted HMAC of each code with its purpose, expiry, attempts counter, requesting IP and the number it was sent to.
+
+### SmsSettings
+**Table name:** `sms_settings` — singleton (pk=1, `SmsSettings.get()`). While `otp_channel` is `whatsapp` the three switches below do nothing and WhatsApp behaves exactly as before.
+
+**Key fields:**
+- `otp_channel` — CharField, `whatsapp` (default) | `sms`
+- `otp_login_enabled`, `otp_reset_enabled`, `otp_activate_enabled` — BooleanField, default True (they apply while the channel is SMS)
+- `otp_expiry_minutes` (5, range 1–15), `resend_cooldown_seconds` (60, 30–600), `max_requests_per_hour` (5, 1–20, per employee), `max_attempts_per_code` (5, 3–10), `max_per_phone_per_hour` (5, 1–20, per mobile number across employee records) — PositiveSmallIntegerField
+- `hourly_cap` (default 300), `daily_cap` (default 1500) — PositiveIntegerField, 1–10000, the hourly cap never above the daily one
+- `updated_at` (null until somebody saves), `updated_by` — ForeignKey → `HRUser`, `on_delete=SET_NULL`
+
+### SmsMessageLog
+**Table name:** `sms_message_log`
+
+One row per SMS attempt, written as `sent` before the call and corrected to `failed` afterwards, or `blocked` when a cap or the circuit breaker stopped it. It never holds the code, the message text, the auth key or a full phone number.
+
+**Key fields:**
+- `employee` — ForeignKey → `Employee`, `on_delete=SET_NULL`, related_name `sms_messages` (null for a test); `sent_by` — ForeignKey → `HRUser`, `SET_NULL` (who sent a test)
+- `phone_masked` (`••••••3210`), `phone_hash` (keyed HMAC-SHA256 of the normalised number, so the per-number cap can count without storing the number)
+- `purpose` — `login` | `reset` | `activate` | `test`; `provider` (`twofactor`); `status` — `sent` | `failed` | `blocked`
+- `provider_message_id` (2Factor's session id), `error` (one plain sentence, at most 300 characters), `error_code` (`ip`, `auth`, `template`, `balance`, `number`, `timeout`, `hourly_cap`, `daily_cap`, `phone_cap`, `paused` ...), `requested_ip`, `created_at`
+- Indexes on `(status, created_at)`, `(phone_hash, created_at)` and `(created_at)`; ordering `["-created_at", "-id"]`
+
+## Endpoint Sharing (api/models/shared_endpoints.py; migration 0122)
+
+Four new tables behind Settings → Endpoint Sharing (super administrator only). What an endpoint may serve is the code catalog in `shared_datasets.py`; these tables hold the owner's choices. See `backend.md` Section 4.16.
+
+### SharedEndpoint
+**Table name:** `shared_endpoints`
+
+**Key fields:**
+- `slug` — unique, 3–60 lower-case letters, digits and hyphens, immutable (it is the public address `/api/shared/<slug>`); `name`, `description`
+- `dataset` — key in the catalog (immutable); `fields` — JSON list of field keys, the only fields ever returned (the order is the response order)
+- `locked_filters` — JSON object of filters a caller can never override
+- `allow_no_origin` — BooleanField, default True (accept calls with no `Origin` header, such as servers); `enabled` — BooleanField, default True (a new endpoint serves nothing until it has a key)
+- `page_size_default` (50), `page_size_max` (200, never above the dataset's), `rate_limit_per_minute` (60, 1–6000) — PositiveIntegerField
+- `created_by`, `created_at`, `updated_at`
+
+### SharedEndpointOrigin
+**Table name:** `shared_endpoint_origins` — `endpoint` ForeignKey (CASCADE), `origin` (lower-case `scheme://host[:port]`, http only for localhost); unique `(endpoint, origin)`; at most 20 per endpoint.
+
+### SharedEndpointKey
+**Table name:** `shared_endpoint_keys` — `endpoint` ForeignKey (CASCADE), `label`, `prefix` (the 8 characters after `uks_`; not secret), `key_hash` (unique SHA-256 of the full key; **the key itself is never stored**), `created_by`, `created_at`, `expires_at`, `revoked_at`, `last_used_at`, `last_used_ip`; at most 10 live keys per endpoint.
+
+### SharedEndpointAccessLog
+**Table name:** `shared_endpoint_access_logs` — `endpoint` ForeignKey (`SET_NULL`, so deleting an endpoint keeps its history), `endpoint_slug`, `key` ForeignKey (`SET_NULL`), `at`, `status` (HTTP code), `rows`, `origin`, `ip`, `duration_ms`, `error` (a short code such as `invalid_key`, `origin_not_allowed`, `rate_limited`). Kept 90 days. Indexes on `(endpoint, at)`, `(key, at)` and `(at)`.
 ## Email (Gmail Control)
 
 Every email the HRMS sends goes through `email_service.send_email()` and is logged. Full write-up, setup and switch defaults: `gmail-integration.md`. The Gmail account itself stays in `PayrollSettings.smtp_*` (Settings → SMTP).

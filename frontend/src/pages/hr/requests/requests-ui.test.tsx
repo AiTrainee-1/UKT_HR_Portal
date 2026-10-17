@@ -243,7 +243,7 @@ describe("a Holiday / Sunday work claim in the hub", () => {
   const holidayKind = kind("holiday_work", {
     label: "Holiday / Sunday work",
     mode: "link",
-    openPath: "/hr/compensation?tab=leave&sub=holiday-work",
+    openPath: "/hr/compensation/compensation-leave/holiday-work/claims",
     openLabel: "Compensation",
     pipeline: "HR → HOD",
   });
@@ -290,7 +290,7 @@ describe("a Holiday / Sunday work claim in the hub", () => {
     expect(names(row)).toEqual(["Open in Compensation"]);
     expect(row.querySelector("svg")).not.toBeNull();
     click(row.querySelector('[data-testid="open-holiday_work-8"]'));
-    expect(h.calls).toEqual(["open:holiday_work-8:/hr/compensation?tab=leave&sub=holiday-work"]);
+    expect(h.calls).toEqual(["open:holiday_work-8:/hr/compensation/compensation-leave/holiday-work/claims"]);
   });
 
   it("shows its details in the dialog, and the same way in", () => {

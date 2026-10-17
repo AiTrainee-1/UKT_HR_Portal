@@ -13,6 +13,7 @@ import type { StaffAccess, StaffDraft, StaffErrors } from "./form";
 import { PERMISSION_MINUTES, judgeStaffDay, statusLabel, type StaffDay } from "./preview";
 import { SettingLink } from "./SettingLink";
 import { UnitInput } from "./UnitInput";
+import { leavePath } from "@/pages/hr/compensation/routes";
 
 const COMPANY_WIDE_NOTE = "Company-wide rule - set by an administrator";
 const NOT_REPORTED_NOTE = "Not reported by the server, so it cannot be changed here";
@@ -382,7 +383,7 @@ export function DaySection({ draft, patch, errors, access, loaded, shift, arriva
             {
               where: "Compensation",
               what: "a company-announced early-out time (or a Compensation Day's release time) replaces it for that one day",
-              to: "/hr/compensation",
+              to: leavePath("announcements"),
             },
             { where: "Employee apps", what: "the My Shift screen shows this time" },
           ]}

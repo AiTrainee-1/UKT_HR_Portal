@@ -10,6 +10,8 @@ import {
   installWorld,
   mountPage,
   must,
+  nestedLabels,
+  nestedTab,
   params,
   pickOption,
   q,
@@ -52,17 +54,32 @@ afterEach(() => {
 });
 
 const CLAIMS = "/api/compensation/holiday-work";
-const HOLIDAY = "/hr/compensation?tab=leave&sub=holiday-work";
+const HOLIDAY = "/hr/compensation/compensation-leave/holiday-work";
+const RAISE = `${HOLIDAY}/raise`;
+const CLAIMS_PATH = `${HOLIDAY}/claims`;
 
-async function openHoliday(url = HOLIDAY) {
+/** The Claims nested subtab: the stat cards, the filters and the list. */
+async function openHoliday(url = CLAIMS_PATH) {
   mountPage(url);
   await waitFor(() => !!q("claims-table"), "the claims");
 }
 
-/** Opens the page with Sunday 11 October chosen and waits for the people who worked. */
+/** The Raise a claim nested subtab (the claims are asked for above the tabs: the form knows whether it may raise once they are in). */
+async function openRaise(url = RAISE) {
+  mountPage(url);
+  await waitFor(() => !!q("claim-form") && /\(\d+\)/.test(nestedLabels("holiday-nested")[1] ?? ""), "the claim form");
+}
+
+/** Opens Raise with Sunday 11 October chosen and waits for the people who worked. */
 async function openSunday() {
-  await openHoliday(`${HOLIDAY}&hdate=2026-10-11`);
+  await openRaise(`${RAISE}?hdate=2026-10-11`);
   await waitFor(() => !!q("claim-table"), "the people who worked");
+}
+
+/** Opens another nested subtab from the strip. */
+async function switchTo(value: string, ready: string) {
+  click(nestedTab("holiday-nested", value));
+  await waitFor(() => !!q(ready), `the ${value} subtab`);
 }
 
 const input = (id: string) => must(id) as HTMLInputElement;
@@ -72,9 +89,81 @@ const area = (id: string) => must(id) as unknown as HTMLTextAreaElement;
 const claimIds = () =>
   [...(q("claims-table")?.querySelectorAll("tbody tr") ?? [])].map((r) => r.getAttribute("data-testid"));
 
+describe("the nested subtabs", () => {
+  it("are Raise a claim, Claims (with its count), Compensation balance and the Earlier Alternative-Day credits, one section each", async () => {
+    await openRaise();
+    await waitFor(() => /\(\d+\)/.test(nestedLabels("holiday-nested")[3] ?? ""), "the credits count");
+    expect(nestedLabels("holiday-nested")).toEqual([
+      "Raise a claim",
+      "Claims (3)",
+      "Compensation balance",
+      "Earlier Alternative-Day credits (2)",
+    ]);
+    expect(nestedTab("holiday-nested", "raise").getAttribute("aria-selected")).toBe("true");
+    // only the open section is drawn: Raise has the form and nothing of the other three
+    expect(q("claim-form")).not.toBeNull();
+    for (const other of ["claim-list", "balance-part", "credits-card"]) expect(q(other), other).toBeNull();
+
+    await switchTo("claims", "claims-table");
+    expect(window.location.pathname).toBe(CLAIMS_PATH);
+    expect(q("claim-form")).toBeNull();
+    expect(q("claim-kpis")).not.toBeNull();
+    expect(q("claim-status")).not.toBeNull();
+    expect(q("balance-part")).toBeNull();
+
+    await switchTo("balance", "balance-table");
+    expect(window.location.pathname).toBe(`${HOLIDAY}/balance`);
+    expect(q("claim-list")).toBeNull();
+    expect(q("balance-kpis")).not.toBeNull();
+    expect(q("balance-search")).not.toBeNull();
+    expect(q("credits-card")).toBeNull();
+
+    await switchTo("credits", "credits-card");
+    expect(window.location.pathname).toBe(`${HOLIDAY}/credits`);
+    expect(q("balance-part")).toBeNull();
+  });
+
+  it("do not ask the server again for what they share: the claims once, the credits once", async () => {
+    await openRaise();
+    await waitFor(() => /\(\d+\)/.test(nestedLabels("holiday-nested")[3] ?? ""), "the credits count");
+    await switchTo("claims", "claims-table");
+    await switchTo("credits", "credits-card");
+    await switchTo("claims", "claims-table");
+    const asked = (path: string) => world.requests().filter((r) => r.split("?")[0] === path).length;
+    expect(asked(CLAIMS)).toBe(1);
+    expect(asked("/api/compensation/credits")).toBe(1);
+  });
+
+  it("keep the filters of the page when they switch", async () => {
+    await openRaise(`${RAISE}?hstatus=pending&hmonth=10&hdate=2026-10-11`);
+    await switchTo("claims", "claims-table");
+    expect(params()).toEqual({ hstatus: "pending", hmonth: "10", hdate: "2026-10-11" });
+  });
+
+  it("keep a claim that is half filled in while HR looks at the Claims or the balance", async () => {
+    await openSunday();
+    click(must("claim-select-E21"));
+    click(must("claim-shifts-E21-1"));
+    typeInto(area("claim-reason"), "Dispatch rush");
+    await switchTo("balance", "balance-table");
+    await switchTo("raise", "claim-table");
+    expect(button("claim-select-E21").getAttribute("data-state")).toBe("checked");
+    expect(must("claim-shifts-E21-1").getAttribute("aria-checked")).toBe("true");
+    expect(area("claim-reason").value).toBe("Dispatch rush");
+  });
+
+  it("shows the switched-off notices above the nested subtabs, so every section has them", async () => {
+    world.holidayEnabled = { master: true, holidayWork: false, workflow: true, canRaise: false };
+    await openRaise();
+    expect(q("holiday-off")).not.toBeNull();
+    await switchTo("claims", "claims-table");
+    expect(q("holiday-off")).not.toBeNull();
+  });
+});
+
 describe("how it works", () => {
   it("says only HR raises a claim, the Department Head approves it in Approvals, and then the shifts go to the balance", async () => {
-    await openHoliday();
+    await openRaise();
     const how = text(q("holiday-how"));
     expect(how).toContain("only HR raises a claim here");
     expect(how).toContain("The Department Head approves it in Approvals");
@@ -92,14 +181,14 @@ describe("how it works", () => {
 
 describe("raising a claim", () => {
   it("asks for the date first", async () => {
-    await openHoliday();
+    await openRaise();
     expect(text(q("claim-no-date"))).toContain("Choose the date of the work");
     expect(q("claim-table")).toBeNull();
     expect(input("claim-date").max).toBe("2026-10-14");
   });
 
   it("starts the date at the last Sunday, and lists who worked with their punches", async () => {
-    await openHoliday();
+    await openRaise();
     click(must("claim-last-sunday"));
     expect(params().hdate).toBe("2026-10-11");
     await waitFor(() => !!q("claim-table"), "the people who worked");
@@ -119,7 +208,7 @@ describe("raising a claim", () => {
   });
 
   it("says a weekday is not a Sunday or a holiday, and lists nobody", async () => {
-    await openHoliday(`${HOLIDAY}&hdate=2026-10-13`);
+    await openRaise(`${RAISE}?hdate=2026-10-13`);
     await waitFor(() => !!q("claim-not-claimable"), "the message");
     expect(text(q("claim-not-claimable"))).toContain("neither a Sunday nor a declared holiday");
     expect(q("claim-table")).toBeNull();
@@ -127,7 +216,7 @@ describe("raising a claim", () => {
   });
 
   it("follows the date typed in", async () => {
-    await openHoliday();
+    await openRaise();
     typeInto(input("claim-date"), "2026-10-13");
     await waitFor(() => !!q("claim-not-claimable"), "the message");
     expect(params().hdate).toBe("2026-10-13");
@@ -135,7 +224,7 @@ describe("raising a claim", () => {
 
   it("shows an error with a Retry when who worked cannot be read", async () => {
     world.failing.set(`${CLAIMS}/eligible`, { status: 500 });
-    await openHoliday(`${HOLIDAY}&hdate=2026-10-11`);
+    await openRaise(`${RAISE}?hdate=2026-10-11`);
     await waitFor(() => !!q("claim-eligible-error"), "the error");
     expect(text(q("claim-eligible-error"))).toContain("Could not load who worked that day");
     world.failing.clear();
@@ -184,8 +273,8 @@ describe("raising a claim", () => {
     });
   });
 
-  it("follows the new claims to the month of the work and to every status, so they are on screen", async () => {
-    await openHoliday(`${HOLIDAY}&hdate=2026-10-11&hmonth=9&hstatus=approved`);
+  it("opens Claims on the month of the work and every status after raising, so the new claims are on screen", async () => {
+    await openRaise(`${RAISE}?hdate=2026-10-11&hmonth=9&hstatus=approved`);
     await waitFor(() => !!q("claim-table"), "the people who worked");
     click(must("claim-select-E21"));
     click(must("claim-shifts-E21-1"));
@@ -193,13 +282,18 @@ describe("raising a claim", () => {
     click(must("claim-submit"));
     await waitFor(() => bodiesOf(world, "POST", CLAIMS).length === 1, "the request");
     await waitFor(() => params().hmonth === "10", "the list to move to October");
+    // the raise switched to the Claims nested subtab, with the date of the work kept in the address
+    expect(window.location.pathname).toBe(CLAIMS_PATH);
+    expect(nestedTab("holiday-nested", "claims").getAttribute("aria-selected")).toBe("true");
+    expect(q("claim-form")).toBeNull();
     expect(params().hstatus).toBeUndefined();
+    expect(params().hdate).toBe("2026-10-11");
     await waitFor(() => !!q("claim-row-3100"), "the new claim in the list");
     expect(text(q("claim-row-3100"))).toContain("Fara Khan");
     expect(text(q("claim-row-3100"))).toContain("Waiting for HOD");
   });
 
-  it("clears the form after a claim is raised, and shows who nobody can decide for yet", async () => {
+  it("clears the form after a claim is raised, and shows on Claims who nobody can decide for yet", async () => {
     world.on.set(`POST ${CLAIMS}`, () => ({
       created: 1,
       claims: [],
@@ -211,8 +305,14 @@ describe("raising a claim", () => {
     typeInto(area("claim-reason"), "Dispatch rush");
     click(must("claim-submit"));
     await waitFor(() => !!q("claim-warnings"), "the warning");
+    // the warning is on the Claims subtab, where HR lands
+    expect(window.location.pathname).toBe(CLAIMS_PATH);
     expect(text(q("claim-warnings"))).toContain("Fara Khan has no Department Head assigned");
     expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Raised 1 claim for the Department Head" }));
+    click(must("claim-warnings-dismiss"));
+    expect(q("claim-warnings")).toBeNull();
+    // back on Raise, the form is empty for the next claim
+    await switchTo("raise", "claim-table");
     expect(area("claim-reason").value).toBe("");
     expect(button("claim-select-E21").getAttribute("data-state")).toBe("unchecked");
   });
@@ -349,14 +449,14 @@ describe("the claims", () => {
 
   it("say there are none for a month, and how to get one", async () => {
     world.claims = [];
-    mountPage(HOLIDAY);
+    mountPage(CLAIMS_PATH);
     await waitFor(() => !!q("claims-empty"), "the empty state");
     expect(text(q("claims-empty"))).toContain("No claim for this month and status");
   });
 
   it("show an error with a Retry when they cannot be read", async () => {
     world.failing.set(CLAIMS, { status: 500 });
-    mountPage(HOLIDAY);
+    mountPage(CLAIMS_PATH);
     await waitFor(() => !!q("claims-error"), "the error");
     expect(text(q("claims-error"))).toContain("Could not load the claims");
     world.failing.clear();
@@ -425,6 +525,7 @@ describe("what is switched off", () => {
     click(must("claim-select-E21"));
     expect(button("claim-submit").disabled).toBe(true);
     expect(button("claim-submit").title).toMatch(/switched off in Settings → Compensation/);
+    await switchTo("claims", "claims-table");
     expect(button("claim-withdraw-3001").disabled).toBe(true);
     expect(claimIds()).toHaveLength(3);
   });
@@ -440,6 +541,7 @@ describe("what is switched off", () => {
     expect(button("claim-submit").disabled).toBe(true);
     expect(button("claim-submit").title).toMatch(/approval is switched off in User Management/);
     // a claim already waiting can still be withdrawn
+    await switchTo("claims", "claims-table");
     expect(button("claim-withdraw-3001").disabled).toBe(false);
   });
 
@@ -450,6 +552,7 @@ describe("what is switched off", () => {
     click(must("claim-select-E21"));
     expect(button("claim-submit").disabled).toBe(true);
     expect(button("claim-submit").title).toMatch(/Settings → Payroll/);
+    await switchTo("claims", "claims-table");
     expect(button("claim-withdraw-3001").disabled).toBe(true);
     expect(q("holiday-off")).toBeNull();
   });
@@ -460,8 +563,11 @@ describe("what is switched off", () => {
     lockMutatingControls(document.body);
     await settle();
     expect(button("claim-submit").disabled).toBe(true);
-    expect(button("claim-withdraw-3001").disabled).toBe(true);
     expect(button("claim-last-sunday").disabled).toBe(false);
+    await switchTo("claims", "claims-table");
+    lockMutatingControls(document.body);
+    await settle();
+    expect(button("claim-withdraw-3001").disabled).toBe(true);
     expect((must("claim-status") as HTMLButtonElement).disabled).toBe(false);
   });
 });

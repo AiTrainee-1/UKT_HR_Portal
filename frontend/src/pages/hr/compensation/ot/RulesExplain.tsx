@@ -28,13 +28,17 @@ function SettingsLink({ setting }: { setting: string }) {
 }
 
 /** Type 1: "Worked 1 hour past the shift end: 30 minutes on the next morning's first punch". */
-export function AllowanceRules() {
+export function AllowanceRules({ defaultOpen = false }: { defaultOpen?: boolean }) {
   const { data, isLoading, isError } = useCompensationConfig();
   const rules = (data?.allowanceRules ?? [])
     .filter((r) => r.enabled)
     .sort((a, b) => a.minExtraMinutes - b.minExtraMinutes);
   return (
-    <details className="rounded-xl border border-slate-200 bg-slate-50/60 px-3 py-2" data-testid="rules-type1">
+    <details
+      open={defaultOpen}
+      className="rounded-xl border border-slate-200 bg-slate-50/60 px-3 py-2"
+      data-testid="rules-type1"
+    >
       <Summary>How the allowance is worked out</Summary>
       <div className="mt-2 space-y-2 text-xs text-slate-600">
         {isLoading ? (
@@ -64,11 +68,15 @@ export function AllowanceRules() {
 }
 
 /** Type 2: the ladder of last punch-out times and the shifts each earns. */
-export function ShiftRules() {
+export function ShiftRules({ defaultOpen = false }: { defaultOpen?: boolean }) {
   const { data, isLoading, isError } = useCompensationConfig();
   const rules = (data?.shiftRules ?? []).filter((r) => r.enabled).sort((a, b) => a.sortOrder - b.sortOrder);
   return (
-    <details className="rounded-xl border border-slate-200 bg-slate-50/60 px-3 py-2" data-testid="rules-type2">
+    <details
+      open={defaultOpen}
+      className="rounded-xl border border-slate-200 bg-slate-50/60 px-3 py-2"
+      data-testid="rules-type2"
+    >
       <Summary>How the suggested shifts are worked out</Summary>
       <div className="mt-2 space-y-2 text-xs text-slate-600">
         <p>

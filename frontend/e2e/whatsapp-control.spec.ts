@@ -23,7 +23,13 @@ test("an employee signs in with a WhatsApp OTP, end to end", async ({ request })
   await request.post(`${FAKE}/reset`);
 
   const options = await (await request.get("/api/auth/login-options")).json();
-  expect(options).toEqual({ otpLogin: true, otpReset: true, otpActivate: true, passwordLogin: true });
+  expect(options).toEqual({
+    otpLogin: true,
+    otpReset: true,
+    otpActivate: true,
+    passwordLogin: true,
+    otpChannel: "whatsapp",
+  });
 
   // Ask for a code by Employee Code: it must be WhatsApped to the number on file.
   const ask = await request.post("/api/auth/otp/request", { data: { employeeCode: "E2E001", purpose: "login" } });

@@ -1,17 +1,18 @@
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useSearch } from "wouter";
 import HrLayout from "@/components/HrLayout";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useAuth, permissionLevel } from "@/contexts/AuthContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { lockMutatingControls } from "@/lib/view-only-lock";
 import "./settings/settings-skin.css";
-import { SETTINGS_TAB_MODULE } from "./settings/constants";
+import { settingsTabLevel } from "./settings/access";
 import { SETTINGS_TABS, SETTINGS_TAB_COMPONENTS } from "./settings/tabs";
 import { ALL_SETTINGS } from "./settings/metas";
 import { SettingsNav } from "./settings/kit/SettingsNav";
 import { SettingsSearch } from "./settings/kit/SettingsSearch";
 import { ViewOnlyNotice } from "./settings/kit/SettingBlock";
 import { focusSetting, parseSettingsAddress, settingsAddress } from "./settings/kit/jump";
+import { confirmLeaveTab } from "./settings/kit/leaveGuard";
 import type { SettingMeta } from "./settings/kit/catalog";
 import { ArrowUpRight } from "lucide-react";
 
@@ -23,15 +24,19 @@ export default function Settings() {
   const [, navigate] = useLocation();
   const search = useSearch();
 
-  const tabLevel = useCallback((tab: string) => permissionLevel(user, SETTINGS_TAB_MODULE[tab] ?? "settings"), [user]);
+  const tabLevel = useCallback((tab: string) => settingsTabLevel(user, tab), [user]);
   const visibleTabs = useMemo(() => SETTINGS_TABS.filter((t) => tabLevel(t.id) !== "hidden"), [tabLevel]);
 
   // The tab (and the setting) come from the address, so a link such as /hr/settings?tab=attendance#late-window works.
   const asked = parseSettingsAddress(search, typeof window === "undefined" ? "" : window.location.hash);
   const [settingsTab, setSettingsTabState] = useState<string>(isTab(asked.tab) ? asked.tab : FIRST_TAB);
+  const settingsTabRef = useRef(settingsTab);
+  settingsTabRef.current = settingsTab;
 
   const setSettingsTab = useCallback(
     (id: string, setting?: string | null) => {
+      // a tab with work that is not saved yet (Endpoint Sharing's editor) asks before another tab replaces it
+      if (id !== settingsTabRef.current && !confirmLeaveTab()) return;
       setSettingsTabState(id);
       navigate(settingsAddress(id, setting), { replace: true });
     },
@@ -44,13 +49,14 @@ export default function Settings() {
     if (isTab(next.tab)) setSettingsTabState(next.tab);
   }, [search]);
 
-  // Land on the first tab this role can actually see if the one asked for is hidden for them.
+  // Land on the first tab this role can actually see if the one asked for is hidden for them. (Until the login is known
+  // nothing is hidden or shown yet: a super-admin-only tab asked for in the address must survive the sign-in check.)
   useEffect(() => {
-    if (tabLevel(settingsTab) === "hidden") {
+    if (user && tabLevel(settingsTab) === "hidden") {
       const first = visibleTabs[0];
       if (first) setSettingsTabState(first.id);
     }
-  }, [settingsTab, tabLevel, visibleTabs]);
+  }, [settingsTab, tabLevel, visibleTabs, user]);
 
   // A setting named in the address (or picked in the search) is scrolled to once its tab has drawn it.
   const [wanted, setWanted] = useState<{ id: string; n: number } | null>(
@@ -61,7 +67,10 @@ export default function Settings() {
     return focusSetting(wanted.id);
   }, [wanted]);
 
-  const tab = SETTINGS_TABS.find((t) => t.id === settingsTab) ?? SETTINGS_TABS[0];
+  // The tab drawn: the one asked for, unless it is hidden for this login, and then the first visible one, on the very first
+  // render too (so a direct address of a hidden tab never flashes its content).
+  const shownId = tabLevel(settingsTab) === "hidden" ? (visibleTabs[0]?.id ?? FIRST_TAB) : settingsTab;
+  const tab = SETTINGS_TABS.find((t) => t.id === shownId) ?? SETTINGS_TABS[0];
   const Panel = SETTINGS_TAB_COMPONENTS[tab.id];
   const level = tabLevel(tab.id);
   const isTabViewOnly = level === "view";
@@ -107,7 +116,7 @@ export default function Settings() {
         </div>
 
         <div className="grid grid-cols-[minmax(0,1fr)] gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
-          <SettingsNav tabs={visibleTabs} value={settingsTab} onChange={(id) => setSettingsTab(id)} />
+          <SettingsNav tabs={visibleTabs} value={tab.id} onChange={(id) => setSettingsTab(id)} />
 
           <div
             id="settings-panel"
